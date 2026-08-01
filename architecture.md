@@ -62,11 +62,11 @@ fn process_bar(
     threshold: Probability,
 ) -> Result[OutputPayload, BarError]:
     doc """
-    입력 데이터에서 foo bar를 처리한다.
+    foo 입력을 bar 규칙으로 처리하고 원본 선언 크기와 형식을 기록한 출력을 반환한다.
     """
 
-    ensures Result.Ok(output) => output.width == data.width
-    ensures Result.Ok(output) => output.height == data.height
+    ensures Result.Ok(output) => output.source_size == data.declared_size
+    ensures Result.Ok(output) => output.format == data.format
 
     error BarError.InvalidPayload when data.data.len == 0
     error BarError.ServiceUnavailable
@@ -261,13 +261,14 @@ fn process(data: system.data.InputPayload) -> system.data.OutputPayload
 
 순환 module dependency는 금지한다. dependency graph는 `use`뿐 아니라 type, constant, contract와 enum variant의 모든 fully qualified reference를 포함한다.
 
-Python target은 top-level `cott_runtime`·`_cott_impl`과 마지막 segment가 `_types`로 끝나는 cott module 이름을 예약한다. public cott top-level package나 compiler-owned `cott_runtime`·`_cott_impl`이 CPython 3.11 standard-library module 또는 lock artifact가 제공하는 top-level package와 충돌하면 거부한다. 모든 facade, type module, local implementation copy와 support package의 target path는 injective해야 하며 충돌은 emit 전 hard error다.
+Python target은 top-level `cott_runtime`·`_cott_impl`과 마지막 segment가 `_types`로 끝나는 cott module 이름을 예약한다. public cott top-level package나 compiler-owned `cott_runtime`·`_cott_impl`이 CPython 3.14 standard-library module 또는 lock artifact가 제공하는 top-level package와 충돌하면 거부한다. 모든 facade, type module, local implementation copy와 support package의 target path는 injective해야 하며 충돌은 emit 전 hard error다.
 
 source file 경로는 module path와 정확히 대응하며 module qname은 `py.typed`를 담는 top-level package 아래에 놓이도록 최소 두 segment여야 한다. `module system.process`는 `<project.source>/system/process.cott`에만 올 수 있고 단일-segment module은 거부한다. 중복 module과 한 module path가 다른 path의 strict prefix가 되는 구성은 Python file/package 충돌이므로 거부한다.
 
 `use`는 module 직후의 하나의 contiguous block에만 올 수 있고 source order를 보존한다. 단일 qname은 공개 type 또는 constant, grouped form의 prefix는 module이어야 한다. alias와 re-export는 MVP에 없다. 같은 canonical symbol 중복, 같은 short name을 둘 이상 import하거나 local declaration과 충돌하면 ambiguity error며 fully qualified name을 사용해야 한다. 모든 top-level cott declaration은 공개이고 module 안에서 이름이 유일하다.
 
 ---
+
 ### 5.2 주석
 
 한 줄 주석은 `#`을 사용한다.
@@ -331,11 +332,12 @@ numeric literal은 선언 type이나 typed operand에서 문맥 type을 얻어�
 
 `F32` 값과 문맥상 `F32`인 literal은 생성·statically concrete public boundary에서 IEEE 754 binary32로 반올림한 뒤 저장하고 구현에 전달한다. 이 ABI normalization은 `runtime_validation = "off"`에서도 유지한다. erased `TypeVar` 뒤의 숫자 관계는 정적으로만 검사한다. `F64`는 Python binary64 `float`를 그대로 사용한다.
 
-`Str`은 Unicode scalar sequence이며 활성 runtime validation은 surrogate code point를 거부한다. `Str.len`은 scalar 개수, `Bytes.len`은 byte 개수, 컨테이너의 `.len`은 원소 또는 map 항목 개수다. `off`에서 외부 `str`의 scalar 유효성은 trust declaration이다.
+`Str`은 Unicode scalar sequence이며 활성 runtime validation은 surrogate code point를 거부한다. `Str.len`은 scalar 개수, `Bytes.len`은 byte 개수, 컨테이너의 `.len`은 원소 또는 map 항목 개수이며 모든 `.len` expression의 cott type은 `U64`다. `off`에서 외부 `str`의 scalar 유효성은 trust declaration이다.
 
 `JsonValue`와 `Opaque["tag"]`는 12.5의 명시적 경계 타입이며 일반 원시 타입의 암묵적 대체재가 아니다.
 
 ---
+
 ### 5.4 컨테이너 타입
 
 ```cott
@@ -352,9 +354,9 @@ MVP의 `Tuple`은 정확히 두 원소만 가진다. 다른 arity는 const gener
 예시:
 
 ```cott
-struct Dataset:
-    items: List[InputPayload]
-    labels: Map[InputPayloadId, Label]
+struct Collection:
+    entries: List[User]
+    by_id: Map[UserId, User]
     description: Option[Str]
 ```
 
@@ -372,11 +374,11 @@ List[Dog]는 List[Animal]의 하위 타입이 아니다.
 
 ### 5.5 어휘와 선언 문법
 
-source는 UTF-8이다. identifier는 ASCII `[A-Za-z_][A-Za-z0-9_]*`로 제한한다. module·function·field·parameter는 `snake_case`, type·trait·enum variant는 `UpperCamelCase`, constant는 `UPPER_SNAKE_CASE`다. `module`, `use`, `alias`, `newtype`, `where`, `struct`, `enum`, `trait`, `const`, `fn`, `self`, `result`, `doc`, `requires`, `ensures`, `error`, `when`, `effects`, `true`, `false`, `and`, `or`, `not`은 keyword다. prelude type 이름도 user declaration으로 가릴 수 없다.
+source는 UTF-8이다. identifier는 ASCII `[A-Za-z_][A-Za-z0-9_]*`로 제한한다. module·function·field·parameter는 `snake_case`, type·trait·enum variant는 `UpperCamelCase`, constant는 `UPPER_SNAKE_CASE`다. `module`, `use`, `alias`, `newtype`, `where`, `struct`, `enum`, `trait`, `const`, `fn`, `self`, `doc`, `requires`, `ensures`, `when`, `effects`, `true`, `false`, `and`, `or`, `not`은 keyword다. `result`는 pattern 없는 `ensures` expression scope에서만, `error`는 function clause 시작에서만 예약되는 contextual keyword이므로 field와 payload에서는 사용할 수 있다. prelude type 이름도 user declaration으로 가릴 수 없다.
 
-Python target validation은 CPython 3.11 hard keyword와 단독 `_`를 identifier로 거부하고 `_cott_` prefix 또는 `__`로 시작하거나 끝나는 user name도 예약한다. target projection 뒤 모든 이름에 같은 검사를 적용하므로 emitter가 identifier를 escape하거나 rename하지 않는다.
+Python target validation은 CPython 3.14 hard keyword와 단독 `_`를 identifier로 거부하고 `_cott_` prefix 또는 `__`로 시작하거나 끝나는 user name도 예약한다. target projection 뒤 모든 이름에 같은 검사를 적용하므로 emitter가 identifier를 escape하거나 rename하지 않는다.
 
-일반 문자열은 JSON escape를 사용하는 double-quoted literal이고 `doc`만 triple double quote를 사용한다. 정수는 10진수, float는 소수점 또는 exponent가 있는 10진수이며 빈 괄호 `()`는 `Unit` literal이다. 부호는 literal이 아니라 unary operator다. tab과 semicolon은 금지한다. parser는 일관된 space indentation을 받고 formatter는 4칸으로 정규화한다. `#`부터 newline까지는 comment다.
+일반 문자열은 JSON escape를 사용하는 double-quoted literal이고 `doc`만 triple double quote를 사용한다. 정수는 10진수, float는 소수점 또는 exponent가 있는 10진수이며 빈 괄호 `()`는 `Unit` literal이다. 부호는 literal이 아니라 unary operator다. tab과 semicolon은 금지한다. parser는 일관된 space indentation을 받고 formatter는 4칸으로 정규화한다. `#`부터 newline까지는 comment다. blank 또는 comment-only physical line은 `NEWLINE`, `INDENT`, `DEDENT` token을 만들지 않는다.
 
 다음 EBNF가 MVP의 선언 surface다. `INDENT`와 `DEDENT`는 indentation token이고 `{x}`는 0회 이상, `[x]`는 선택이다.
 
@@ -456,7 +458,7 @@ user type declaration은 같은 module의 forward reference를 사용할 수 있
 
 ```cott
 alias Timestamp = I64
-alias ClassNames = List[Str]
+alias Names = List[Str]
 ```
 
 별칭은 원래 타입과 호환된다.
@@ -519,14 +521,14 @@ MVP에서는 조건을 완전히 정적으로 증명하지 않는다. 대신 다
 5. 순수한 조건으로부터 계약 테스트 입력 전략을 생성한다.
 
 ---
+
 ### 6.4 구조체
 
 ```cott
-struct InputPayload:
+struct Message:
     data: Bytes
-    width: U32
-    height: U32
-    color_space: ColorSpace
+    sequence: U64
+    priority: Priority
 ```
 
 필드는 기본적으로 필수다.
@@ -552,7 +554,7 @@ struct BarOptions:
 
 가변 필드는 기본적으로 제공하지 않는다.
 
-Python 출력은 정확히 `@dataclass(frozen=True, slots=True, kw_only=True)`이며 동등성은 같은 generated class와 field 값으로 결정한다. 불변성은 container와 object graph의 membership을 바꾸지 못한다는 뜻이며 trait로 들어온 external object까지 deep-freeze한다고 주장하지 않는다.
+Python 출력은 정확히 `@dataclass(frozen=True, slots=True, kw_only=True)`이고 generated struct class body는 명시적으로 `__hash__ = None`을 둔다. 동등성은 같은 generated class와 field 값으로 결정한다. 불변성은 container와 object graph의 membership을 바꾸지 못한다는 뜻이며 trait로 들어온 external object까지 deep-freeze한다고 주장하지 않는다.
 
 field default의 계산된 Python value class가 `__hash__ = None`이면 emitter는 그 immutable value를 `<module>_types.py`의 private `Final` canonical instance에 두고 `dataclasses.field(default_factory=lambda: <instance>)`로 낮춘다. 그 밖의 hashable default는 직접 field default로 내보내며 두 방식 모두 같은 keyword-only constructor 값과 IR default 의미를 가진다.
 
@@ -563,10 +565,10 @@ field default의 계산된 Python value class가 `__hash__ = None`이면 emitter
 값만 가지는 열거형:
 
 ```cott
-enum ColorSpace:
-    RGB
-    BGR
-    Gray
+enum Priority:
+    Low
+    Normal
+    High
 ```
 
 데이터를 포함하는 열거형:
@@ -633,6 +635,7 @@ cott generic parameter는 trait에서도 invariant다. PEP 544 checker가 method
 trait method는 top-level cott function이 아니므로 facade, binding, agent generation과 contract test 대상이 아니다. `struct implements Trait`, nominal marker, default implementation, runtime dispatch와 class inheritance는 MVP에서 제공하지 않는다.
 
 ---
+
 ## 8. 제네릭
 
 ### 8.1 기본 제네릭
@@ -678,6 +681,7 @@ MVP에서는 다음 규칙을 적용한다.
 Python runtime은 지워진 `TypeVar`를 복원하거나 호출별로 통합하지 않는다. `List[InputPayload]`처럼 facade 시그니처에 구체화된 중첩 타입은 런타임 검사할 수 있지만 `first[T]`의 입력과 반환 사이 관계는 BasedPyright와 cott 정적 verifier의 보증이며 런타임 검사로 보고하지 않는다.
 
 ---
+
 ## 9. 함수 선언
 
 cott의 함수는 실행 본문을 가지지 않는다.
@@ -693,21 +697,14 @@ cott의 함수는 실행 본문을 가지지 않는다.
 기본 예시:
 
 ```cott
-fn resize(
-    data: InputPayload,
-    width: U32,
-    height: U32,
-) -> Result[InputPayload, ResizeError]:
+fn repeat(data: Bytes, count: U64) -> Result[Bytes, RepeatError]:
     doc """
-    입력 데이터를 지정된 크기로 변경한다.
+    입력 데이터를 지정한 횟수만큼 반복한다.
     """
 
-    requires width > 0
-    requires height > 0
+    requires count > 0
 
-    ensures Result.Ok(resized) => resized.width == width
-    ensures Result.Ok(resized) => resized.height == height
-
+    ensures Result.Ok(output) => output.len == data.len * count
 ```
 
 함수 오버로딩은 MVP에서 금지한다.
@@ -744,24 +741,20 @@ refinement, `requires`, `ensures`, 조건부 `error`는 하나의 정규화된 �
 * 객체 메서드 호출과 임의 Python 함수 호출
 * 상태 변경과 비결정적 표현식
 
-표현식의 모든 이름과 타입은 HIR에서 해석한다. 숫자 literal은 문맥 type을 따르고 연쇄 비교는 각 operand를 한 번 평가하는 short-circuit `and`로 정규화한다. arithmetic과 ordering operand는 같은 numeric type이어야 한다. equality operand는 같은 resolved non-trait cott value type이어야 하며 type parameter, trait 또는 `Opaque`를 transitive하게 포함할 수 없다. boolean operator는 short-circuit하며 모든 refinement, `requires`, `ensures`와 `when`의 최종 type은 `Bool`이어야 한다. MVP contract language에는 function call이 없다.
+표현식의 모든 이름과 타입은 HIR에서 해석한다. 숫자 literal은 문맥 type을 따르고 연쇄 비교는 각 operand를 한 번 평가하는 short-circuit `and`로 정규화한다. 계약 표현식에서 arithmetic·ordering·equality operand의 동일성은 alias를 해소하고 newtype을 carrier type으로 정규화한 뒤 판단한다. arithmetic과 ordering operand는 같은 numeric type이어야 한다. equality operand는 같은 resolved non-trait cott value type이어야 하며 type parameter, trait 또는 `Opaque`를 transitive하게 포함할 수 없다. boolean operator는 short-circuit하며 모든 refinement, `requires`, `ensures`와 `when`의 최종 type은 `Bool`이어야 한다. MVP contract language에는 function call이 없다.
 
 ### 10.2 사전 조건
 
 `requires`는 호출자가 만족해야 할 조건이다.
 
 ```cott
-fn crop(
-    data: InputPayload,
-    x: U32,
-    y: U32,
-    width: U32,
-    height: U32,
-) -> Result[InputPayload, CropError]:
-    requires width > 0
-    requires height > 0
-    requires x + width <= data.width
-    requires y + height <= data.height
+fn slice(
+    values: List[U32],
+    offset: U64,
+    length: U64,
+) -> Result[List[U32], SliceError]:
+    requires length > 0
+    error SliceError.OutOfBounds when offset + length > values.len
 ```
 
 호출자가 사전 조건을 만족하지 못하면 구현을 호출해서는 안 된다. 런타임 검사가 활성화된 경계에서는 항상 `CottContractViolation`을 발생시키며 cott `Result` 오류로 변환하지 않는다. `off`에서는 검사하지 않으며, 사전 조건을 어긴 호출의 결과는 계약 밖이다.
@@ -771,14 +764,13 @@ fn crop(
 `ensures`는 정상 또는 오류 반환 이후 반드시 만족해야 할 조건이다.
 
 ```cott
-ensures Result.Ok(resized) => resized.width == width
-ensures Result.Ok(resized) => resized.height == height
+ensures Result.Ok(part) => part.len == length
 ```
 
 오류 결과에 대한 중첩 pattern도 선언할 수 있다.
 
 ```cott
-ensures Result.Err(CropError.OutOfBounds) => (x + width > data.width or y + height > data.height)
+ensures Result.Err(SliceError.OutOfBounds) => offset + length > values.len
 ```
 
 pattern이 없으면 expression scope는 function argument, constant와 반환값 전체를 가리키는 `result`다. pattern이 있으면 일치하는 반환에서만 expression을 검사하고 scope는 function argument, constant와 그 pattern binding이며 `result`는 사용할 수 없다. 반환 type 검사 후 source order의 모든 applicable `ensures`를 검사한다. MVP에는 호출 전 가변 상태 snapshot인 `old()`를 제공하지 않는다.
@@ -831,7 +823,6 @@ effects [file.write]
 effects [network]
 effects [database.read]
 effects [database.write]
-effects [network]
 effects [clock]
 effects [random]
 effects [process.exit]
@@ -850,7 +841,7 @@ fn normalize_score(value: F32) -> Probability:
     requires 0.0 <= value <= 1.0
 ```
 
-prelude effect 이름은 위 아홉 개다. CPU 계산 자체는 effect가 아니다. 다른 이름은 project manifest에 등록한다.
+prelude effect 이름은 위 여덟 개다. CPU 계산 자체는 effect가 아니다. 다른 이름은 project manifest에 등록한다.
 
 ```toml
 [effects]
@@ -863,6 +854,7 @@ manifest effect key는 qname 문법이고 value는 literal `true`여야 한다. 
 MVP에서 `effects`는 Canonical IR metadata이자 trust declaration이다. cott function에는 실행 body가 없고 Python implementation의 hidden call graph를 분석하지 않으므로 일반 effect propagation을 증명하지 않는다. contract language 자체에는 call이 없다. implementation-level propagation은 v0.3에서 도입한다.
 
 ---
+
 ## 11. 상태를 타입으로 표현하기
 
 cott는 boolean 플래그보다 enum 상태 모델을 우선한다.
@@ -958,6 +950,7 @@ JSON integer는 `I64` 범위여야 하고 float는 유한한 IEEE 754 binary64 �
 Python ABI는 invariant `cott_runtime.Opaque[Literal["tag"]]` frozen wrapper 하나로 고정하고 instance의 literal tag도 runtime에 저장한다. 두 wrapper는 tag가 같고 wrapped object가 `is`로 같을 때만 동등하며 wrapped object의 equality를 호출하지 않고 hash도 제공하지 않는다. `unwrap() -> object`를 제공하며 adapter는 concrete external type으로 명시적으로 `cast`한다. `Any`·`Unknown`과 agent-generated function의 `Opaque`는 허용하지 않는다.
 
 ---
+
 ## 13. 상수
 
 ```cott
@@ -968,7 +961,7 @@ const DEFAULT_THRESHOLD: F32 = 0.5
 상수는 타입 검사 시 사용할 수 있다.
 
 ```cott
-newtype PayloadWidth(U32)
+newtype PayloadSize(U32)
     where 1 <= self <= MAX_PAYLOAD_LIMIT
 ```
 
@@ -986,27 +979,23 @@ const MAX_PAYLOAD_SIZE: U32 = 8192
 newtype Probability(F32)
     where 0.0 <= self <= 1.0
 
-newtype PayloadWidth(U32)
+newtype PayloadSize(U32)
     where 1 <= self <= MAX_PAYLOAD_SIZE
 
-newtype PayloadHeight(U32)
-    where 1 <= self <= MAX_PAYLOAD_SIZE
-
-enum ColorSpace:
-    RGB
-    BGR
-    Gray
+enum PayloadFormat:
+    Raw
+    Text
+    Structured
 
 struct InputPayload:
     data: Bytes
-    width: PayloadWidth
-    height: PayloadHeight
-    color_space: ColorSpace
+    declared_size: PayloadSize
+    format: PayloadFormat
 
 struct OutputPayload:
     data: Bytes
-    width: PayloadWidth
-    height: PayloadHeight
+    source_size: PayloadSize
+    format: PayloadFormat
 
 enum BarError:
     InvalidPayload(reason: Str)
@@ -1022,12 +1011,11 @@ fn process_bar(
     options: BarOptions,
 ) -> Result[OutputPayload, BarError]:
     doc """
-    foo 데이터에서 bar 영역을 처리하고
-    입력 데이터와 같은 크기의 출력 데이터를 반환한다.
+    foo 입력을 bar 규칙으로 처리하고 원본 선언 크기와 형식을 기록한 출력을 반환한다.
     """
 
-    ensures Result.Ok(output) => output.width == data.width
-    ensures Result.Ok(output) => output.height == data.height
+    ensures Result.Ok(output) => output.source_size == data.declared_size
+    ensures Result.Ok(output) => output.format == data.format
 
     error BarError.InvalidPayload when data.data.len == 0
     error BarError.ServiceUnavailable
@@ -1105,9 +1093,9 @@ system.data.InputPayload
 
 ### 15.4 Canonical IR
 
-Canonical IR은 에이전트나 특정 언어 문법에 종속되지 않는 정규 표현이다. 다음 JSON은 필드 형태를 보여 주는 축약 예시다.
+Canonical IR은 에이전트나 특정 언어 문법에 종속되지 않는 정규 표현이다. 다음 JSON은 필드 형태를 보여 주는 비규범 표시 fragment이며 schema-conformant instance가 아니다. `clause_id`, 완전한 span과 resolved type 등 반복 field는 지면상 생략했고, `equal`과 `integer`는 설명용 shorthand다. exact schema tag를 이 예시에서 추정하지 않으며 normative schema와 target은 이 shorthand를 소비하지 않는다.
 
-실제 IR file의 top-level object는 `schema_version`, fully qualified `module`, project-relative `source`, sorted `imports`와 `declarations`를 필수로 가진다. declaration은 공통 `kind`·fully qualified `name`·`public`·`doc`·`span`을, function은 generic parameter·parameter·return type·contract·effect를 추가로 가진다. 아래 object는 반복 field를 생략한 `declarations`의 function fragment다.
+실제 IR file의 top-level object는 `schema_version`, fully qualified `module`, project-relative `source`, sorted `imports`와 `declarations`를 필수로 가진다. declaration은 공통 `kind`·fully qualified `name`·`public`·`doc`·`span`을, function은 generic parameter·parameter·return type·contract·effect를 추가로 가진다.
 
 type node kind는 `primitive`, `named`, `type_parameter`, `list`, `set`, `map`, `tuple2`, `option`, `result`, `opaque`로 닫혀 있다. alias는 IR type에서 제거하고 `named`는 fully qualified declaration과 generic argument를 가진다. expression node는 resolved cott `type`을 필수로 가지며 parameter·field·constant·variant reference는 canonical symbol identity를 저장한다. pattern도 resolved variant·payload type과 binding identity를 가진다.
 
@@ -1154,15 +1142,15 @@ IR JSON은 sorted key, insignificant whitespace 없음, final newline 하나로 
           "left": {
             "kind": "field",
             "base": {"kind": "binding", "name": "output"},
-            "name": "width"
+            "name": "source_size"
           },
           "right": {
             "kind": "field",
             "base": {"kind": "parameter", "name": "data"},
-            "name": "width"
+            "name": "declared_size"
           }
         },
-        "span": {"file": "src/foo/bar.cott", "start": [51, 5], "end": [51, 66]}
+        "span": {"file": "src/foo/bar.cott", "start": [43, 5], "end": [43, 74]}
       },
       {
         "pattern": {
@@ -1175,15 +1163,15 @@ IR JSON은 sorted key, insignificant whitespace 없음, final newline 하나로 
           "left": {
             "kind": "field",
             "base": {"kind": "binding", "name": "output"},
-            "name": "height"
+            "name": "format"
           },
           "right": {
             "kind": "field",
             "base": {"kind": "parameter", "name": "data"},
-            "name": "height"
+            "name": "format"
           }
         },
-        "span": {"file": "src/foo/bar.cott", "start": [52, 5], "end": [52, 68]}
+        "span": {"file": "src/foo/bar.cott", "start": [44, 5], "end": [44, 62]}
       }
     ],
     "errors": [
@@ -1202,19 +1190,19 @@ IR JSON은 sorted key, insignificant whitespace 없음, final newline 하나로 
           },
           "right": {"kind": "integer", "value": "0"}
         },
-        "span": {"file": "src/foo/bar.cott", "start": [54, 5], "end": [54, 67]}
+        "span": {"file": "src/foo/bar.cott", "start": [46, 5], "end": [46, 58]}
       },
       {
         "priority": null,
         "variant": "foo.bar.BarError.ServiceUnavailable",
         "when": null,
-        "span": {"file": "src/foo/bar.cott", "start": [55, 5], "end": [55, 47]}
+        "span": {"file": "src/foo/bar.cott", "start": [47, 5], "end": [47, 38]}
       },
       {
         "priority": null,
         "variant": "foo.bar.BarError.ProcessingFailed",
         "when": null,
-        "span": {"file": "src/foo/bar.cott", "start": [56, 5], "end": [56, 45]}
+        "span": {"file": "src/foo/bar.cott", "start": [48, 5], "end": [48, 36]}
       }
     ]
   },
@@ -1247,7 +1235,7 @@ IR은 다음 목적으로 사용한다.
 
 ## 16. Python 대상 생성
 
-MVP compiler host와 runtime target은 `x86_64` 또는 `arm64` Linux/macOS의 CPython 3.11이다. interpreter의 canonical path, full version, `sys.implementation.cache_tag`, `sys.platform`, normalized `platform.machine()`과 `sysconfig.get_platform()`을 provenance에 기록한다. configured interpreter가 compiler host의 OS family·architecture와 다르거나 다른 Python implementation·minor version이면 거부한다. generated artifact는 configured CPython full patch version에 고정되므로 Python patch upgrade 뒤에는 `cott emit`·full `cott verify`와 package rebuild가 필요하다.
+MVP compiler host와 runtime target은 `x86_64` 또는 `arm64` Linux/macOS의 CPython 3.14이다. interpreter의 canonical path, full version, `sys.implementation.cache_tag`, `sys.platform`, normalized `platform.machine()`과 `sysconfig.get_platform()`을 provenance에 기록한다. configured interpreter가 compiler host의 OS family·architecture와 다르거나 다른 Python implementation·minor version이면 거부한다. generated artifact는 configured CPython full patch version에 고정되므로 Python patch upgrade 뒤에는 `cott emit`·full `cott verify`와 package rebuild가 필요하다.
 
 ### 16.1 기본 생성물
 
@@ -1260,7 +1248,9 @@ generated/
 │   │   ├── __init__.py
 │   │   └── py.typed
 │   ├── _cott_impl/
+│   │   ├── __init__.py
 │   │   └── foo/
+│   │       ├── __init__.py
 │   │       └── bar/
 │   │           ├── __init__.py
 │   │           └── process_bar.py
@@ -1297,7 +1287,7 @@ resolved local binding과 agent implementation module은 source bytes를 canonic
 * `current`: 마지막 성공 apply의 입력·구현·관리 파일 hash, unresolved 집합과 `verified` 상태
 * `last_verified`: 마지막 full verify의 정규화 계약 snapshot, Python 공개 표면과 관리 파일 hash 또는 최초 검증 전 `null`
 
-record의 필수 field를 보여 주는 축약 예시는 다음과 같다.
+record의 필수 field를 보여 주는 다음 JSON은 객체·배열 entry 일부를 지면상 생략한 비규범 fragment이며, 그 자체로 schema-conformant record가 아니다. 실제 `contract_surface`와 `public_python_symbols`는 아래 규칙대로 축약 없이 저장한다.
 
 ```json
 {
@@ -1309,7 +1299,7 @@ record의 필수 field를 보여 주는 축약 예시는 다음과 같다.
     "tools": {
       "compiler": {"version": "0.1.0", "executable": "/canonical/cott", "content_hash": "sha256:..."},
       "runtime": {"version": "0.1.0"},
-      "python": {"implementation": "cpython", "version": "3.11.9", "cache_tag": "cpython-311", "os": "darwin", "machine": "arm64", "platform": "macosx-15.0-arm64", "executable": "/canonical/python", "content_hash": "sha256:..."},
+      "python": {"implementation": "cpython", "version": "3.14.6", "cache_tag": "cpython-314", "os": "darwin", "machine": "arm64", "platform": "macosx-15.0-arm64", "executable": "/canonical/python", "content_hash": "sha256:..."},
       "basedpyright": {"version": "...", "executable": "/canonical/basedpyright", "content_hash": "sha256:..."}
     },
     "ir": {"foo.bar": "sha256:..."},
@@ -1361,6 +1351,7 @@ canonical executable path와 binary hash를 포함하므로 `generation_id`는 �
 실제 byte를 바꾼 `fmt`, `emit`과 부분 generate는 `current.verified = false`로 갱신하되 `last_verified`를 그대로 보존한다. full verify만 두 snapshot을 현재 세대로 함께 갱신한다. 파일 drift는 저장된 bit가 `true`여도 snapshot을 무효화하므로 cott와 배포 gate는 hash를 재계산한다.
 
 ---
+
 ### 16.2 타입 매핑
 
 | cott | Python MVP ABI |
@@ -1408,6 +1399,7 @@ BasedPyright는 `Annotated[int, ...]`의 width 차이만으로 type을 구분하
 cott key admissibility는 5.4의 static classifier가 결정한다. `CottTuple2.__hash__`는 Python tuple처럼 두 runtime 원소에 위임하므로 unhashable 원소면 `TypeError`가 나지만 compiler는 두 component type이 모두 hash-stable인 instantiation만 key position에 허용한다. payload 없는 enum과 허용된 carrier의 newtype은 hashable하다. `CottList`, `CottSet`, `FrozenMap`, struct, payload enum, 표준 union·`JsonValue` variant, `Unit`과 `Opaque`는 `__hash__ = None`이다.
 
 ---
+
 ### 16.3 타입 검사
 
 Python 구현은 compiler가 scratch에 만든 전용 BasedPyright config와 explicit `--project`로 검사한다. config는 exact file set, CPython version·platform, generated root와 tool-only stub root를 고정하고 다른 `extraPaths`를 두지 않는다. user `pyproject.toml`의 BasedPyright 설정은 verification에 사용하지 않는다.
@@ -1416,7 +1408,7 @@ Python 구현은 compiler가 scratch에 만든 전용 BasedPyright config와 exp
 {"typeCheckingMode": "strict", "reportInvalidTypeVarUse": "none"}
 ```
 
-manifest의 interpreter와 type checker executable은 shell 없이 canonical regular-file path로 실행하고 full version·content hash를 provenance에 기록한다. 설정된 interpreter가 CPython 3.11이 아니거나 BasedPyright version이 해당 compiler release가 고정한 closed supported range 밖이면 Python target 검증을 시작하지 않는다. compiler-owned config의 유일한 완화는 7장의 `reportInvalidTypeVarUse`이며 cott static verifier가 대신 검사한다. source의 `type: ignore`·`pyright:` suppression과 checker command/config injection은 거부한다.
+manifest의 interpreter와 type checker executable은 shell 없이 canonical regular-file path로 실행하고 full version·content hash를 provenance에 기록한다. 설정된 interpreter가 CPython 3.14가 아니거나 BasedPyright version이 해당 compiler release가 고정한 closed supported range 밖이면 Python target 검증을 시작하지 않는다. compiler-owned config의 유일한 완화는 7장의 `reportInvalidTypeVarUse`이며 cott static verifier가 대신 검사한다. source의 `type: ignore`·`pyright:` suppression과 checker command/config injection은 거부한다.
 
 interpreter identity probe, BasedPyright version probe·검사 process와 그 runtime child는 compiler-owned containment 안에서 실행한다. 실제 project path는 보이지 않고 staging input, standard library와 locked distribution은 read-only이며 cache·temporary output만 scratch에 쓸 수 있다. network·device와 environment secret을 차단하고 compiler-version-fixed wall timeout, process·memory·open-file ceiling과 stdout·stderr 한도를 적용하며 종료 뒤 descendant를 모두 reap한다. 이 filesystem·process 격리를 강제할 수 없으면 검증을 시작하지 않는다.
 
@@ -1486,6 +1478,7 @@ verification report는 contract symbol과 source-order clause ID마다 `{symbol,
 진단과 JSON 검증 결과에는 구성된 mode에서 각 계약 항목이 실제로 얻은 보증 등급을 포함한다.
 
 ---
+
 ### 16.5 기존 구현 바인딩
 
 라이브러리를 구현 내부에서만 사용한다면 cott에 등록하지 않는다. Python 구현에서 일반적으로 import하고 package와 version은 `pyproject.toml` 및 기존 lockfile로 관리한다.
@@ -1537,7 +1530,7 @@ binding된 함수는 agent 생성 대상에서 제외한다. 나머지 각 함�
 
 ```text
 foo.bar.process_bar
-→ <source>/_cott_impl/foo/bar/process_bar.py
+→ <target.python.source>/_cott_impl/foo/bar/process_bar.py
 → _cott_impl.foo.bar.process_bar:process_bar
 ```
 
@@ -1552,6 +1545,7 @@ MVP binding target은 `target.python.source` 아래 module로 제한하고 proje
 MVP binding 대상은 함수로 제한한다. 외부 struct와 enum은 cott 타입으로 변환하고 외부 객체가 계약 경계를 통과해야 하면 12.5의 `Opaque` 규칙을 따른다.
 
 ---
+
 ### 16.6 공개 facade와 구현 경계
 
 호출자는 구현 위치와 관계없이 항상 cott module 경로를 사용한다.
@@ -1577,6 +1571,7 @@ loader는 target 실행 전에 recorded direct external module의 distribution i
 구현이 해석된 함수만 facade와 `__all__`에 포함한다. 미구현 함수에는 placeholder를 만들지 않고 `current.unresolved`에 기록한다. `cott verify`는 unresolved가 하나라도 있거나 verified facade projection이 전체 IR과 다르면 실패한다.
 
 ---
+
 ## 17. 에이전트 코드 생성 흐름
 
 ### 17.1 생성 입력
@@ -1658,7 +1653,7 @@ content input·transaction destination의 각 path component는 project root han
 
 `.cott`, 모든 transaction destination과 staging payload가 같은 filesystem이 아니거나 그 filesystem이 same-directory atomic rename, exclusive advisory lock, regular file·directory의 durable `fsync`를 제공하지 않으면 multi-file apply를 시작하지 않는다.
 
-lock 획득 직후 다른 입력을 읽기 전에 `.cott/transactions/`를 검사한다. transaction directory는 0개 또는 1개만 허용하며 둘 이상이면 어떤 project mutation도 하지 않고 exit `6`으로 실패한다. journal의 `schema_version`이 현재 compiler와 정확히 다르거나 journal·pre-image가 unreadable·checksum-invalid이면 추측하거나 삭제하지 않고 exit `6`으로 실패한다.
+lock 획득 직후 다른 입력을 읽기 전에 `.cott/transactions/`를 검사한다. transaction directory는 0개 또는 1개만 허용하며 둘 이상이면 application payload 및 기존 journal/state를 변경하지 않고 exit `6`으로 실패한다. 단, lock 획득을 위한 `.cott/lock` state 초기화는 예외다. journal의 `schema_version`이 현재 compiler와 정확히 다르거나 journal·pre-image가 unreadable·checksum-invalid이면 추측하거나 삭제하지 않고 exit `6`으로 실패한다.
 
 1. transaction은 `schema_version`, nonce, 모든 destination의 file kind·mode·content pre-image, sibling temporary post-image, operation 목록·hash와 전체 journal checksum을 `.cott/transactions/<nonce>/`의 immutable journal에 저장한다.
 2. backup file과 immutable journal을 fsync하고 transaction directory와 parent를 fsync한다. 상태는 journal과 분리한 marker이며 각 전이는 새 state와 journal checksum을 sibling temp에 쓰고 file fsync → same-directory atomic rename → transaction directory fsync 순서로 publish한다.
@@ -1677,14 +1672,14 @@ transaction 시작 시 계약, manifest, manifest가 참조하는 rule, lockfile
 staging에는 계약, binding, rule, 기존 구현과 compiler 생성물의 사본을 제공하고 실제 project path는 agent에게 노출하지 않는다. 각 agent process의 workspace write allowlist는 현재 함수 file 하나로 제한한다.
 
 ```text
-<source>/_cott_impl/<module path>/<function>.py
+<target.python.source>/_cott_impl/<module path>/<function>.py
 ```
 
 helper는 같은 함수 파일 안에 둔다. 필요한 `_cott_impl/**/__init__.py`, facade, type module, stub, IR, docs, generated tests와 provenance는 compiler만 쓴다. 같은 파일을 binding과 agent 생성 대상으로 함께 쓰는 구성은 거부한다.
 
 scratch는 workspace diff 대상이 아니며 실행 뒤 폐기한다. agent 실행 후 staging 전체 file list와 diff를 검사한다. `.cott`, manifest, binding, compiler 생성물, 비선택 구현 또는 allowlist 밖 변경은 실패다. agent가 workspace에 만든 cache·temporary file도 위반이다.
 
-compiler-owned 관리 집합은 `generated/python`, `generated/stubs`, `generated/ir`, `generated/docs`, `tests/generated`와 compiler-owned `_cott_impl/**/__init__.py`의 합집합이다. stale 삭제는 현재 command의 ownership 안에서만 수행한다. `emit ir`은 `generated/ir`만, `emit python`과 `generate`는 전체 관리 집합을 소유하며 verify는 전체 집합을 재생성해 비교하되 반영하지 않는다.
+compiler-owned 관리 집합은 `<target.python.generated>`, `<target.python.stubs>`, `<artifact-root>/ir`, `<artifact-root>/docs`, `tests/generated`와 compiler-owned `<target.python.source>/_cott_impl/**/__init__.py`의 합집합이며, generation record는 `<artifact-root>/generation.json`이다. stale 삭제는 현재 command의 ownership 안에서만 수행한다. `emit ir`은 `<artifact-root>/ir`만, `emit python`과 `generate`는 전체 관리 집합을 소유하며 verify는 전체 집합을 재생성해 비교하되 반영하지 않는다.
 
 성공적으로 project source에 승격된 agent 함수 파일은 비결정적이지만 durable implementation source로 취급하며 cott가 자동 삭제하지 않는다. IR에서 더 이상 참조하지 않는 파일은 `cott diff`의 `IMPLEMENTATION STALE`로 보고하되 public facade나 verify 대상에는 포함하지 않는다. 사용자가 명시적으로 삭제한다.
 
@@ -1761,31 +1756,51 @@ def process_bar(data, options):
 
 ## 18. CLI 설계
 
-### 18.1 타입 및 문법 검사
+### 18.1 프로젝트 초기화
+
+```bash
+cott init <path>
+cott init <path> --name <project-name> --no-sync
+cott init <path> --format json
+```
+
+`<path>`는 필수며 absolute·relative path를 모두 허용한다. 기존 directory인 parent를 canonicalize한 뒤 그 안의 final component 하나를 target으로 사용한다. final component는 비어 있거나 `.`·`..`일 수 없고, target이 symlink를 포함해 이미 존재하면 내용과 무관하게 exit `2`다. 따라서 symlink가 포함된 parent path는 canonical parent로 정규화하되 새 target 자체의 symlink·alias collision은 허용하지 않는다. 기본 project name은 target basename을 변환하지 않고 그대로 사용하며, 이 값이 유효하지 않으면 `--name`이 필요하다. name은 `^[a-z](?:[a-z0-9]|-[a-z0-9])*$`를 만족하는 1–64자여야 하므로 trailing·consecutive hyphen을 거부하고 Python distribution name과 module name을 동시에 만족한다. `-`를 `_`로 바꾼 top-level module도 기존 reserved/collision 검사를 통과해야 한다. interactive prompt, `--force`, overwrite, dry-run은 없다.
+
+`init`은 아직 project가 없어서 17.4의 project lock/journal을 쓰지 않는 유일한 명령이다. canonical parent directory handle 아래에 mode `0700` private sibling temporary scaffold를 만들고 target root의 mode `0600` `.cott-init` file에 closed `schema_version`·nonce ownership record를 저장한다. 모든 file을 fsync한 뒤 directory를 bottom-up fsync하고, Linux `renameat2(RENAME_NOREPLACE)` 또는 macOS `renameatx_np(RENAME_EXCL)`에 해당하는 같은-parent atomic no-replace rename으로만 publish한 다음 parent를 fsync한다. publish 전 실패는 init-owned temp를 no-follow로 제거하고 parent를 fsync한다. 경합 `EEXIST`는 이 cleanup까지 성공한 경우에만 exit `2`이며, 다른 scaffold·rename·fsync 실패나 cleanup 실패는 exit `6`이다. publish 뒤에는 uv 실행과 모든 probe를 먼저 완료한다. `.cott-init` unlink가 final commit transition이며, unlink 전 실패는 root file identity와 in-memory nonce가 marker record와 모두 일치하는 init-owned target만 no-follow로 제거하고 parent를 fsync한 뒤 원래 exit code를 반환한다. identity가 달라졌거나 cleanup이 실패하면 target을 보존하고 exit `6`을 반환한다. unlink를 시작한 뒤에는 target을 자동 삭제하지 않는다. unlink 또는 이어지는 target-root fsync가 실패하면 exact completed tree나 ownership-marked completed tree를 보존하고 exit `6`과 수동 확인 경로를 진단하며, 둘 다 성공해야 init이 성공한다. process crash로 남은 ownership-marked temp·target도 다음 init이 자동 삭제하거나 overwrite하지 않고 exit `2`와 수동 확인 경로를 진단한다. uv가 한 번이라도 시작된 뒤 실패하면 선택된 human 또는 JSON diagnostic에 global managed-Python·cache 변경이 남고 rollback되지 않을 수 있음을 반드시 포함한다.
+
+scaffold는 `python/.python-version`에 `3.14`를 쓰고 `python/pyproject.toml`의 `requires-python`을 `>=3.14,<3.15`로 고정하며, 해당 cott compiler release가 지원하는 exact version으로 pin한 BasedPyright를 `python/pyproject.toml`의 dev dependency로 둔다. compiler 지원 정책은 CPython 3.14 minor이고 uv는 해당 supported uv release가 제공하는 최신 3.14 patch(현재 공식 예시는 `3.14.6`)를 설치하거나 기존 managed install을 그 patch로 upgrade한다. `uv.lock`은 Python exact patch를 고정하지 않으며, 실제 설치된 full patch는 이후 generation provenance에 고정한다.
+
+uv executable은 shell 없이 PATH에서 한 번만 canonical regular file로 resolve하고 compiler-supported closed version range인지 검사한다. uv subprocess environment는 empty base에서 compiler-fixed sanitized `PATH`와 허용한 `HOME`·temporary-directory·platform TLS/certificate 변수만 복사하고 inherited `UV_*`, `VIRTUAL_ENV`, `CONDA_PREFIX`는 전부 제외한 뒤 `UV_PYTHON`·`UV_PROJECT_ENVIRONMENT`만 해당 단계에 명시하며 canonical uv를 `--no-config`로 실행한다. `<uv> --no-config python dir`의 canonical managed-install root를 기록한 뒤 다음 순서로 실행한다: `<uv> --no-config python install --upgrade 3.14`; `<uv> --no-config python find --managed-python --system 3.14`가 반환한 canonical path가 그 root 아래인지 확인하고 해당 interpreter를 `-I -c <compiler-fixed-identity-probe>`로 실행해 closed JSON object와 끝 newline만 받아 CPython 3.14 full patch를 검증; project cwd `python/`에서 `UV_PYTHON=<canonical-managed-interpreter>`를 사용하여 `<uv> --no-config lock --managed-python`; 같은 cwd에서 `UV_PYTHON=<canonical-managed-interpreter>`와 `UV_PROJECT_ENVIRONMENT=<canonical-target-absolute>/.venv`로 `<uv> --no-config sync --frozen --managed-python`. 생성된 `python/.python-version`은 이 `--no-config` init 실행이 아니라 이후 일반 uv 호출의 default Python request다. 기본 dev group은 sync되므로 BasedPyright도 설치된다. 기본 sync 뒤에는 root venv의 `.venv/bin/python -I -c <compiler-fixed-identity-probe>`가 같은 closed JSON identity와 CPython full patch를 반환하는지, `.venv/bin/basedpyright --version`이 pin한 compiler-supported exact version인지 확인한다.
+
+`--no-sync`는 Python install·upgrade, lock 및 uv-managed Python probe까지 수행하고 sync와 root venv Python·BasedPyright probe만 생략한다. human 출력은 `/usr/bin/env -i HOME=<home> TMPDIR=<temporary-directory> PATH=<sanitized-path> UV_PYTHON=<canonical-managed-interpreter> UV_PROJECT_ENVIRONMENT=<canonical-target-absolute>/.venv <canonical-uv> --no-config sync --directory <canonical-target-absolute>/python --frozen --managed-python`의 placeholder를 init과 같은 compiler-owned environment allowlist의 실제 값 및 canonical path로 POSIX-shell-escape해 렌더링한다. JSON 출력은 같은 명령을 `severity: "note"`, `span: null` diagnostic의 `help` 원소로 제공한다.
+
+모든 subprocess는 shell 없이 실행하고 stdout/stderr를 drain하되 output은 bounded하게 보관하며 compiler-fixed timeout과 cancel을 적용한다. uv missing/unsupported와 invalid args/path/name은 exit `2`; init의 uv dir·install/upgrade·find·lock·sync, managed/root venv interpreter·BasedPyright probe 실패, timeout 또는 cancel은 exit `5`다.
+
+### 18.2 타입 및 문법 검사
 
 ```bash
 cott check
 cott check src/system/process.cott
 ```
 
-### 18.2 포맷
+### 18.3 포맷
 
 ```bash
 cott fmt
 cott fmt --check
 ```
 
-`cott fmt`는 모든 대상 source를 먼저 parse·format한 뒤 17.4의 project lock과 journal로 old 또는 new complete source snapshot을 반영한다. 실제 byte 변경이 있으면 기존 generation record도 같은 transaction에서 invalidated current로 갱신한다. `cott fmt --check`는 locked snapshot을 읽기만 한다.
+`cott fmt`는 17.4의 project lock을 획득하고 journal을 복구한 뒤 locked source snapshot을 parse·format하여 old 또는 new complete source snapshot을 같은 journal로 반영한다. 실제 byte 변경이 있으면 기존 generation record도 같은 transaction에서 invalidated current로 갱신한다. `cott fmt --check`도 공통 lock 초기화와 journal recovery를 수행하지만 locked snapshot을 읽기만 하며 source, managed artifact 또는 generation record를 반영하지 않는다.
 
-### 18.3 IR 생성
+### 18.4 IR 생성
 
 ```bash
 cott emit ir
 ```
 
-이 명령은 `generated/ir` scope와 `generation.json`만 원자 갱신하고 다른 compiler-owned managed bytes는 그대로 둔다. `current`는 apply 뒤 실제 전체 managed file hash와 `current.verified = false`를 기록하며 `last_verified`를 보존한다.
+이 명령은 `<artifact-root>/ir` scope와 `<artifact-root>/generation.json`만 원자 갱신하고 다른 compiler-owned managed bytes는 그대로 둔다. `current`는 apply 뒤 실제 전체 managed file hash와 `current.verified = false`를 기록하며 `last_verified`를 보존한다.
 
-### 18.4 Python 대상 생성
+### 18.5 Python 대상 생성
 
 ```bash
 cott emit python
@@ -1793,7 +1808,7 @@ cott emit python
 
 이 명령은 agent 없이 compiler-owned 산출물을 staging에서 만들고 원자 갱신한다. 미구현 함수는 facade에서 생략하고 `current.unresolved`에 기록한다. `current.verified = false`로 갱신하지만 `last_verified`와 durable agent implementation file은 보존한다. emitter 자체가 성공하면 exit 0이지만 배포 가능한 결과는 아니다.
 
-### 18.5 구현 생성
+### 18.6 구현 생성
 
 ```bash
 cott generate --agent codex --target python
@@ -1804,7 +1819,7 @@ cott generate foo.bar.process_bar --agent claude --target python
 
 특정 함수 generate에서 agent write 대상은 그 함수별 file뿐이며 apply는 선택 implementation과 전체 compiler-owned 관리 집합을 함께 갱신한다. verified baseline guard는 17.5의 정확한 규칙을 사용한다. 최초 검증 전에는 선택 범위 성공만으로 진행할 수 있다. 결과는 `current.verified = false`며 project 전체 미구현 상태를 별도 진단한다. 배포 gate는 항상 full `cott verify`다.
 
-### 18.6 구현 검증
+### 18.7 구현 검증
 
 ```bash
 cott verify
@@ -1831,14 +1846,14 @@ cott verify
 
 `cott verify`는 result cache를 사용하지 않고 현재 contract·manifest·lock·implementation input에서 expected IR·Python·stub·docs·test artifact를 staging에 다시 만든 뒤 실제 managed file 집합과 byte-for-byte 비교한다. input drift는 새 검증 대상으로 허용하지만 missing·extra·hand-edited managed file은 hard failure이며 `cott emit` 또는 `cott generate`로 먼저 갱신해야 한다. verify는 source와 managed file을 고치지 않고, 시작 snapshot이 실행 중 달라져도 실패한다. 모두 성공한 뒤 `generation.json`만 journal transaction으로 갱신해 같은 snapshot을 `current.verified = true`와 `last_verified`에 기록한다.
 
-### 18.7 변경점 확인
+### 18.8 변경점 확인
 
 ```bash
 cott diff
 cott diff --baseline path/to/generation.json
 ```
 
-기본 baseline은 `generation.json.last_verified`다. 없으면 추측하지 않고 exit `2`로 종료한다. `--baseline`은 다른 generation record snapshot을 명시하며 file이 없거나 unreadable·schema-invalid여도 exit `2`다.
+`cott diff`는 manifest 구성 뒤 cott semantic 분석 전에 baseline을 resolve한다. 기본 baseline은 `<artifact-root>/generation.json`의 `last_verified`다. 없으면 추측하지 않고 exit `2`로 종료한다. `--baseline`은 다른 generation record snapshot을 명시하며 baseline file이 없거나 unreadable·schema-invalid여도 exit `2`다.
 
 출력 예시:
 
@@ -1854,9 +1869,9 @@ CONTRACT NON-BREAKING:
 - public function foo.bar.evaluate_bar added
 
 IMPLEMENTATION:
-- foo.bar.process_bar binding changed
-- foo.data.load_payload implementation content hash changed
-- unreferenced _cott_impl/foo/legacy/legacy_process.py
+- foo.data.load_payload binding changed
+- foo.bar.process_bar implementation content hash changed
+- unreferenced python/_cott_impl/foo/legacy/legacy_process.py
 - dependency lockfile changed
 ```
 
@@ -1866,31 +1881,103 @@ public declaration 제거·rename, signature·generic·type shape·variant·fiel
 
 MVP는 generation result cache를 두지 않고 emit·generate 때마다 target을 결정적으로 다시 만든다. `generation_id`를 구성하는 contract·manifest·rule·target metadata·lock raw hash, compiler·runtime·Python·type-checker identity, implementation identity·source/runtime origin·content hash 중 하나라도 달라지면 새 세대다. `cott verify`도 항상 모든 검사를 실행한다.
 
-### 18.8 Exit code
+### 18.9 Exit code
 
 | code | 의미 |
 | --- | --- |
 | `0` | 요청한 범위 성공 |
-| `2` | CLI 사용법 또는 manifest 구성 오류 |
+| `1` | formatter 비멱등성을 포함한 internal compiler error |
+| `2` | CLI 사용법, init의 uv missing/unsupported·invalid args/path/name, manifest 구성 또는 diff baseline 부재·읽기·schema 오류 |
 | `3` | cott 문법, 이름, 타입 또는 계약 오류 |
 | `4` | 구현 누락·불일치, provenance drift 또는 verify 실패 |
-| `5` | agent 실행 실패, timeout 또는 취소 |
-| `6` | lock, 동시 수정, sandbox 또는 원자적 반영 실패 |
+| `5` | agent 또는 init uv 실행·probe 실패, timeout 또는 취소 |
+| `6` | init filesystem·cleanup·atomic no-replace rename, lock, 동시 수정, sandbox 또는 원자적 반영 실패 |
 | `7` | `cott diff --exit-code`에서 breaking contract 발견 |
 | `8` | `cott fmt --check` format mismatch |
 
 `cott diff`는 기본적으로 차이를 출력하고 0을 반환하며 `--exit-code`에서만 breaking change를 7로 반환한다. `cott emit`의 미구현 진단과 `verified = false`는 emitter 자체가 성공했다면 0이지만 배포 성공을 뜻하지 않는다.
 
-여러 문제가 동시에 있으면 argument·subcommand 오류 `2` → lock·journal recovery `6` → manifest 구성 `2` → cott semantic `3` → implementation·provenance `4` → agent `5` → apply `6` → command-specific diff·format 상태 `7`·`8` 순서에서 처음 실행된 실패 하나를 반환한다. code를 합치거나 더 늦은 오류로 덮어쓰지 않는다.
+여러 문제가 동시에 있으면 argument·subcommand 및 init의 missing/unsupported uv·invalid args/path/name 오류 `2` → init filesystem·cleanup·atomic no-replace rename과 lock·journal recovery `6` → cleanup이 성공한 init target collision `2` → manifest 구성 `2` → diff baseline resolution `2` → cott semantic `3` → implementation·provenance `4` → agent 또는 init uv 실행·probe `5` → formatter 비멱등성 등 internal compiler error `1` → apply `6` → command-specific diff·format 상태 `7`·`8` 순서에서 처음 검출된 실패 하나를 반환한다. code를 합치거나 더 늦은 오류로 덮어쓰지 않는다.
 
 ---
+
 ## 19. 프로젝트 구조
 
+### 19.1 `cott init` 직후 구조
+
+`cott init <path> [--name <name>] [--no-sync]`는 존재하지 않는 새 target에 다음 최소 scaffold를 만든다. `<module>`은 project name에서 derive한 Python-safe module name이다.
+
+이 tree는 성공한 command의 final state다. 실행 중에는 root에 mode `0600` transient `.cott-init` ownership record가 존재하며 final commit에서 제거된다. crash 뒤 이 file이 남은 directory는 ownership-marked incomplete 또는 completed state로 진단하고 자동 삭제·overwrite하거나 정상 project로 취급하지 않는다.
+
 ```text
+<path>/
+├── .gitignore
+├── cott.toml
+├── src/
+│   └── <module>/
+│       └── main.cott
+├── python/
+│   ├── .python-version
+│   ├── pyproject.toml
+│   └── uv.lock                 # --no-sync일 때도 생성
+└── .venv/                      # default frozen sync가 만드는 Python 3.14 environment
+```
+
+`src/<module>/main.cott`의 전체 내용은 final newline을 포함한 `module <module>.main` 한 줄이다. init은 `.cott`, `generated`, `tests`, adapter, implementation, `AGENTS.md`를 만들지 않는다.
+
+생성되는 root `.gitignore`는 다음 machine-local state와 Python cache만 ignore한다. deterministic compiler output 전체를 ignore하지 않는다.
+
+```gitignore
+.cott/
+.venv/
+generated/generation.json
+__pycache__/
+*.py[cod]
+```
+
+생성되는 `cott.toml`은 optional binding·effects·generator table을 만들지 않는다.
+
+```toml
+[project]
+name = "<name>"
+version = "0.1.0"
+source = "src"
+
+[target.python]
+source = "python"
+generated = "generated/python"
+stubs = "generated/stubs"
+lockfile = "python/uv.lock"
+interpreter = ".venv/bin/python"
+type_checker = ".venv/bin/basedpyright"
+runtime_validation = "boundary"
+```
+
+생성되는 `python/.python-version`은 `3.14`이고, `python/pyproject.toml`은 build system 없이 다음 PEP 621 metadata와 uv default dev group만 가진다.
+
+```toml
+[project]
+name = "<name>"
+version = "0.1.0"
+requires-python = ">=3.14,<3.15"
+dependencies = []
+
+[dependency-groups]
+dev = ["basedpyright==<basedpyright-version>"]
+```
+
+`<basedpyright-version>`은 사용 중인 cott compiler release가 고정한 exact supported BasedPyright version을 렌더링하는 template parameter다.
+
+프로젝트가 성장하면 user-added `AGENTS.md`, adapter, implementation은 유지되고 다음처럼 확장된다.
+
+```text
+.gitignore
 cott.toml
+AGENTS.md
 .cott/
 ├── lock
 └── transactions/
+.venv/
 
 src/
 └── foo/
@@ -1932,6 +2019,7 @@ generated/
 └── generation.json
 
 python/
+├── .python-version
 ├── _cott_impl/
 │   ├── __init__.py
 │   └── foo/
@@ -1950,9 +2038,9 @@ tests/
 └── manual/
 ```
 
-`.cott/lock`, `.cott/transactions`와 `generated/generation.json`은 machine-local state며 source control과 배포 package에 포함하지 않는다. release baseline으로 보관한 generation record는 `cott diff --baseline`에 명시할 수 있다.
-manifest 예시:
+`.cott/lock`, `.cott/transactions`와 `<artifact-root>/generation.json`은 machine-local state며 source control과 배포 package에 포함하지 않는다. release baseline으로 보관한 generation record는 `cott diff --baseline`에 명시할 수 있다.
 
+manifest 예시:
 
 ```toml
 [project]
@@ -1981,21 +2069,24 @@ MVP manifest schema는 닫혀 있고 Python target 하나만 허용한다. `[eff
 
 `[project]`의 `name`·`version`·`source`와 `[target.python]`의 `source`·`generated`·`stubs`·`interpreter`·`type_checker`·`runtime_validation`은 필수다. `lockfile`은 아래 dependency 규칙의 조건부 필드이고 `[effects]`, `[target.python.implementations]`, `[generator]`는 선택이다. `[generator]`가 없으면 `timeout_seconds = 900`이고 project coding rule은 없으며, 있으면 `rules`는 선택적인 project-relative regular file이고 `timeout_seconds`는 선택적인 1–3600 정수다.
 
-모든 manifest path는 project-relative normalized path여야 하며 absolute path와 `..`를 거부한다. content file·directory는 symlink일 수 없다. `[project].source`, `[target.python].source`, artifact root, `tests/generated`, `.cott` directory root는 서로 disjoint하며 중첩할 수 없다. `target.python.generated`는 `<artifact-root>/python`, `stubs`는 같은 root의 `stubs`여야 하며 IR·docs·record는 각각 `ir`, `docs`, `generation.json`으로 derive한다. executable path만 symlink를 해소해 canonical regular file로 실행한다.
+모든 manifest path는 project-relative normalized path여야 하며 absolute path와 `..`를 거부한다. content file·directory는 symlink일 수 없다. `[project].source`, `[target.python].source`, artifact root, `tests/generated`, `.cott` directory root는 서로 disjoint하며 중첩할 수 없다. artifact root는 필수 `[target.python].generated`의 parent directory로 derive하고 `generated`의 basename은 반드시 `python`이어야 한다. `[target.python].stubs`는 `<artifact-root>/stubs`여야 하며 IR·docs·record는 각각 `<artifact-root>/ir`, `<artifact-root>/docs`, `<artifact-root>/generation.json`으로 derive한다. executable path만 symlink를 해소해 canonical regular file로 실행한다.
 
 `core.*`는 source tree가 아니라 compiler prelude다. `source`는 `_cott_impl`과 user adapter를 포함하는 durable implementation root이고 `generated`는 public cott module, `cott_runtime`과 verified local implementation copy를 포함하는 단일 runtime·package root다. source에는 cott 공개 path, `*_types` 또는 `cott_runtime`과 충돌하는 module을 둘 수 없다.
 
 runtime과 BasedPyright search path는 generated root 뒤에 standard library와 locked distribution만 둔다. source root와 tool-only stubs는 runtime path에서 제외한다. Python build도 generated root의 runtime file만 포함한다.
 
-interpreter와 type checker path는 project root 기준이며 regular executable로 resolve되어야 한다. target project metadata는 `<target.python.source>/pyproject.toml`로 고정하고 `requires-python`이 CPython 3.11과 호환되어야 한다.
+interpreter와 type checker path는 project root 기준이며 regular executable로 resolve되어야 한다. target project metadata는 `<target.python.source>/pyproject.toml`로 고정하고 `requires-python`이 CPython 3.14와 호환되어야 한다.
 
-binding 또는 agent implementation이 standard library·generated module 밖의 distribution을 하나라도 import하면 lockfile이 필수다. external dependency가 전혀 없을 때만 생략할 수 있다. 존재하는 lockfile은 항상 provenance와 `generation_id`에 포함한다. `generation.json`은 `current`와 `last_verified`, implementation owner·source/runtime origin·content hash와 compiler 관리 집합을 기록한다.
+`cott init`만 uv에 해당 supported uv release가 제공하는 최신 CPython 3.14 patch의 managed install·upgrade, `uv.lock` 생성, default dev group을 포함한 frozen sync를 위임한다. `uv.lock`은 Python exact patch를 고정하지 않으며, 실제 full patch는 이후 generation provenance에 고정한다. `--no-sync`는 sync와 그 결과에 의존하는 root venv Python·BasedPyright probe만 건너뛰며 Python install·upgrade, managed Python probe와 lock 생성은 수행한다. `cott init`의 명시적인 uv 위임을 제외한 compiler/verify command는 dependency를 설치하거나 다시 해석하지 않고 기존 lockfile·provenance 규칙을 따른다. init이 만든 lockfile은 production dependency가 비어 있어도 존재한다; manually authored project에서는 external dependency가 전혀 없을 때만 생략할 수 있다.
 
-MVP가 해석하는 lock format은 supported schema version의 `uv.lock`뿐이다. `pyproject.toml`의 production dependency 선언과 lock의 root metadata가 frozen 상태로 일치해야 하며, 구현이 import하는 모든 distribution은 현재 platform에서 선택된 production dependency closure에 속해야 한다. external distribution은 installed metadata의 name·version·inventory가 그 selected non-editable registry dependency와 일치해야 한다. editable·path·VCS·unhashed source는 거부하고 selected lock hash는 기대 `lock_artifact_hash`, installed metadata·module bytes는 별도 관찰 hash로 기록한다. immutable archive나 검증 가능한 installer receipt가 없으면 둘의 provenance 연결은 신뢰 선언이며 cott는 dependency를 설치하거나 다시 해석하지 않는다.
+binding 또는 agent implementation이 standard library·generated module 밖의 distribution을 하나라도 import하면 lockfile이 필수다. 존재하는 lockfile은 항상 provenance와 `generation_id`에 포함한다. `generation.json`은 `current`와 `last_verified`, implementation owner·source/runtime origin·content hash와 compiler 관리 집합을 기록한다.
+
+MVP가 해석하는 lock format은 supported schema version의 `uv.lock`뿐이다. `pyproject.toml`의 production dependency 선언과 lock의 root metadata가 frozen 상태로 일치해야 하며, 구현이 import하는 모든 distribution은 현재 platform에서 선택된 production dependency closure에 속해야 한다. external distribution은 installed metadata의 name·version·inventory가 그 selected non-editable registry dependency와 일치해야 한다. editable·path·VCS·unhashed source는 거부하고 selected lock hash는 기대 `lock_artifact_hash`, installed metadata·module bytes는 별도 관찰 hash로 기록한다. immutable archive나 검증 가능한 installer receipt가 없으면 둘의 provenance 연결은 신뢰 선언이며, `cott init`의 명시적인 uv 위임을 제외한 compiler/verify command는 dependency를 설치하거나 다시 해석하지 않는다.
 
 agent implementation은 source file로 지속되고 compiler stale file만 자동 정리한다. 변경 command와 같은 project를 사용하는 Python process는 동시에 실행하지 않는다.
 
 ---
+
 ## 20. 진단 메시지
 
 오류 메시지는 단순히 파싱 실패를 알리는 수준에 머물지 않는다.
@@ -2003,10 +2094,10 @@ agent implementation은 source file로 지속되고 compiler stale file만 자�
 ```text
 error[COTT-T102]: incompatible nominal types
 
-  --> src/user.cott:18:15
+  --> python/user.py:18:15
    |
 18 |     load_user(data_id)
-   |               ^^^^^^^^ expected `UserId`, found `InputPayloadId`
+   |               ^^^^^^^ expected `UserId`, found `InputPayloadId`
    |
    = note: `UserId` and `InputPayloadId` both wrap `U64`, but are distinct newtypes
    = help: convert explicitly using `user_id_from_data_id(...)`
@@ -2021,13 +2112,14 @@ error[COTT-T102]: incompatible nominal types
 * 오류 원인
 * 가능한 수정 방법
 
-AI가 진단 결과를 기계적으로 수정할 수 있도록 JSON 형식도 제공한다.
+AI가 진단 결과를 기계적으로 수정할 수 있도록 모든 subcommand는 global `--format json`을 지원한다.
 
 ```bash
 cott check --format json
+cott init <path> --format json
 ```
 
-`--format json`은 stdout에 다음 closed schema의 object 하나와 끝 newline만 쓰고 human prose·색상은 섞지 않는다. diagnostic은 project-relative POSIX path, start byte, source-order, code 순으로 안정 정렬한다.
+`--format json`은 성공 여부와 무관하게 stdout에 다음 closed schema의 object 하나와 끝 newline만 쓰고 human prose·색상은 섞지 않는다. human mode의 stdout/stderr 정보도 JSON mode에서는 `diagnostics`의 `message`·`help`로 표현한다. source span이 있는 diagnostic은 project-relative POSIX path, start byte, source-order, code 순으로 안정 정렬하고, `span: null` diagnostic은 그 뒤에 두며 null-span끼리는 source-order, code, message 순으로 안정 정렬한다.
 
 ```json
 {
@@ -2038,13 +2130,13 @@ cott check --format json
       "severity": "error",
       "message": "incompatible nominal types",
       "span": {
-        "path": "src/user.cott",
+        "path": "python/user.py",
         "start_byte": 412,
-        "end_byte": 420,
+        "end_byte": 419,
         "start_line": 18,
         "start_column": 15,
         "end_line": 18,
-        "end_column": 23
+        "end_column": 22
       },
       "expected": "UserId",
       "actual": "InputPayloadId",
@@ -2068,13 +2160,13 @@ cott는 idempotent한 공식 format 하나만 제공한다.
 * indentation 4 spaces, tab·trailing whitespace 금지
 * token 사이 spacing과 operator 양쪽 한 space
 * module 뒤 빈 줄 하나; contiguous `use` declaration 사이는 붙이고 그 block 뒤와 top-level declaration 사이는 빈 줄 하나; field·variant·같은 clause group은 빈 줄 없이 한 logical line에 하나, non-empty clause group 사이는 빈 줄 하나
-* rendered line이 100 columns를 넘는 parameter·generic·payload list는 item별 line로 나누고 trailing comma를 붙임
-* multiline list 외 trailing comma는 제거
-* 긴 contract expression은 괄호를 추가한 뒤 낮은 precedence operator부터 deterministic하게 나눔
+* parameter·import-name·type-argument·payload·effects comma-list는 rendered line의 Unicode-scalar column 수가 100 이하이면 한 줄로 유지하고, 넘으면 결정적으로 item별 line로 나누며, 이 multiline list에는 grammar가 허용하는 경우에만 trailing comma를 붙임
+* single-line list의 trailing comma와 grammar가 허용하지 않는 trailing comma는 제거
+* contract expression은 Unicode-scalar column 수가 100 이하이면 한 줄로 유지하고, 넘으면 괄호를 추가한 뒤 낮은 precedence operator부터 결정적으로 나눔
 * `doc`, `requires`, `ensures`, `error`, `effects` group order와 각 group 내부 source order 보존
 * comment의 다음 syntax node attachment, literal spelling과 `doc` content 보존
 
-legal breakpoint가 없는 string·qualified name은 100 columns를 넘을 수 있다. parse error가 있으면 file을 쓰지 않는다. `cott fmt --check`는 formatter output과 raw input bytes를 비교하고, 두 번 format한 결과가 한 번 결과와 다르면 compiler bug로 실패한다.
+legal breakpoint가 없는 string·qualified name은 Unicode-scalar column 수가 100을 넘을 수 있다. parse error가 있으면 file을 쓰지 않는다. `cott fmt --check`는 formatter output과 raw input bytes를 비교하고, 두 번 format한 결과가 한 번 결과와 다르면 compiler bug로 실패한다.
 
 ---
 
@@ -2104,6 +2196,8 @@ legal breakpoint가 없는 string·qualified name은 100 columns를 넘을 수 �
 * compiler stale file 자동 삭제와 stale durable implementation 진단
 * `current`·`last_verified` snapshot과 contract/implementation diff
 * formatter, stable CLI exit code와 JSON diagnostics
+* `cott init <path> [--name <name>] [--no-sync]` minimal scaffold와 exact template
+* uv에 위임한 CPython 3.14 최신 patch managed install, lock 생성과 기본 frozen sync
 
 ### 22.2 MVP에서 제외
 
@@ -2123,11 +2217,12 @@ legal breakpoint가 없는 string·qualified name은 100 columns를 넘을 수 �
 * 한 Python environment에 여러 generated cott distribution 설치
 * external struct·enum 직접 binding
 * extension·zip·dynamic Python implementation binding
-* dependency 설치·해결과 package 관리
+* `cott init`의 제한된 uv 위임을 제외한 cott 내장 dependency resolver·package manager와 일반 dependency 설치
 * live Python reader의 transaction snapshot isolation
 * 설치된 wheel 전체의 독립적인 origin 검증
 
 ---
+
 ## 23. MVP 완료 기준
 
 MVP는 다음 조건을 모두 자동 검증할 때 완료다.
@@ -2160,11 +2255,15 @@ MVP는 다음 조건을 모두 자동 검증할 때 완료다.
 26. `cott diff` 기본 baseline은 `last_verified`이며 contract, implementation과 stale implementation을 구분한다.
 27. semantic·implementation input drift가 `generation_id`를 바꾸고 target을 다시 emit하며 verify는 전부 재실행된다.
 28. stale compiler output은 삭제하지만 durable agent source는 자동 삭제하지 않는다.
-29. crash injection을 journal state publish와 각 post-image fsync·rename·delete·commit 단계에 수행해 다음 lock acquisition이 old 또는 new complete snapshot으로 복구한다.
-30. CLI는 format mismatch를 포함해 18.8의 stable exit code를 반환한다.
+29. crash injection을 journal state publish와 각 post-image fsync·rename·delete·commit, rollback restore·fsync·journal cleanup의 재중단 단계에 수행해 반복된 다음 lock acquisition마다 old 또는 new complete snapshot으로 복구한다.
+30. CLI는 format mismatch를 포함해 18.9의 stable exit code를 반환한다.
 31. 배포 gate는 full `cott verify`와 transaction 뒤 시작된 새 Python process만 허용한다.
+32. formatter는 21장의 canonical format, parse-error no-write, 두 번 format의 byte-identical idempotence와 raw-byte `--check`를 검증한다.
+33. JSON diagnostic은 20장의 closed schema, 안정 정렬, 단일 object·끝 newline과 human prose·색상 없는 출력을 검증한다.
+34. `cott init`은 absent target만 허용하고 exact scaffold·template, supported uv release가 제공하는 최신 CPython 3.14 patch managed install·upgrade, lock과 기본 sync, `--no-sync`의 sync 및 root venv Python·BasedPyright probe 생략, atomic collision no-write, publish 전과 final marker commit 전 실패의 ownership-checked cleanup, 가능한 global uv side effect의 human·JSON diagnostic과 stable exit code를 자동 검증한다. init 전용 file·directory fsync, no-replace publish, parent fsync, marker unlink와 temp·target cleanup 각 단계에는 failure·crash injection을 수행한다. crash 뒤에는 absent target, ownership-marked incomplete/complete target 또는 exact markerless completed tree만 허용하며 existing target은 자동 overwrite하지 않는다.
 
 ---
+
 ## 24. 구현 언어 및 내부 구조
 
 cott 컴파일러는 Rust로 구현한다.
@@ -2212,7 +2311,7 @@ formatter
 ### v0.2
 
 * const generic과 variadic tuple
-* 배열 길이와 Tensor shape 타입
+* 배열 길이와 고정 크기 buffer 타입
 * 일반 pattern matching 계약
 * 명시적 trait implementation과 default method
 * Python implementation 자동 비교
@@ -2221,12 +2320,9 @@ formatter
 예시:
 
 ```cott
-struct Tensor[
-    DType,
-    const B: U32,
-    const C: U32,
-    const H: U32,
-    const W: U32,
+struct FixedBuffer[
+    T,
+    const N: U32,
 ]
 ```
 
@@ -2244,11 +2340,11 @@ struct Tensor[
 * 안정된 언어 문법
 * 안정된 IR schema
 * Python 공식 backend
-* 패키지 시스템과 설치된 wheel 검증
+* 패키지 시스템과 설치된 wheel 전체의 독립적인 origin 검증
 * IDE 플러그인
-* 계약 기반 AI 생성 및 검증 파이프라인
 
 ---
+
 ## 26. 핵심 설계 결정 요약
 
 ### 결정 1
@@ -2345,8 +2441,12 @@ BasedPyright 검증은 user config가 아니라 compiler-owned strict config를 
 
 ### 결정 24
 
-MVP generated runtime은 Linux/macOS CPython 3.11과 Python environment당 cott project 하나로 제한한다.
+MVP compiler host와 runtime target은 같은 OS family·architecture의 `x86_64` 또는 `arm64` Linux/macOS CPython 3.14이며, generated artifact는 configured CPython full patch version에 고정되고 Python environment당 cott project 하나다.
 
 ### 결정 25
 
 `generation.json`과 `generation_id`, exact tool·runtime identity와 managed artifact hash는 machine-local state다. cross-machine diff는 ID 자체가 아니라 normalized contract·public symbol, durable implementation content와 normalized lock·dependency identity를 비교한다.
+
+### 결정 26
+
+`cott init`은 absent target에 minimal scaffold를 만들고 uv에 supported Python minor의 최신 patch 설치·lock·sync만 위임한다. cott는 dependency resolver나 package manager가 아니다.
