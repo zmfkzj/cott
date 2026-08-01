@@ -57,30 +57,30 @@ cott는 다음 문제를 해결한다.
 사용자는 다음과 같은 선언을 작성한다.
 
 ```cott
-fn detect_defect(
-    image: Image,
+fn process_bar(
+    data: InputPayload,
     threshold: Probability,
-) -> Result[Mask, DetectError]:
+) -> Result[OutputPayload, BarError]:
     doc """
-    입력 이미지에서 신발 제조 결함을 검출한다.
+    입력 데이터에서 foo bar를 처리한다.
     """
 
-    ensures Result.Ok(mask) => mask.width == image.width
-    ensures Result.Ok(mask) => mask.height == image.height
+    ensures Result.Ok(output) => output.width == data.width
+    ensures Result.Ok(output) => output.height == data.height
 
-    error DetectError.InvalidImage when image.data.len == 0
-    error DetectError.ModelUnavailable
+    error BarError.InvalidPayload when data.data.len == 0
+    error BarError.ServiceUnavailable
 
-    effects [gpu]
+    effects [network]
 ```
 
 AI는 이를 참고하여 Python 구현을 생성한다.
 
 ```python
-def detect_defect(
-    image: Image,
+def process_bar(
+    data: InputPayload,
     threshold: Probability,
-) -> Result[Mask, DetectError]:
+) -> Result[OutputPayload, BarError]:
     ...
 ```
 
@@ -89,7 +89,7 @@ def detect_defect(
 구현이 다음과 같이 계약을 위반하면 cott 검증 과정에서 실패해야 한다.
 
 ```python
-def detect_defect(image: Image, threshold: float) -> Mask:
+def process_bar(data: InputPayload, threshold: float) -> OutputPayload:
     ...
 ```
 
@@ -169,7 +169,7 @@ fn to_f32(value: I32) -> F32
 정상적인 실패는 예외가 아니라 `Result`로 표현한다.
 
 ```cott
-fn load_model(path: Path) -> Result[Model, ModelLoadError]
+fn load_config(path: Path) -> Result[Config, ConfigLoadError]
 ```
 
 값이 없을 수 있는 경우는 `Option`으로 표현한다.
@@ -242,19 +242,19 @@ cott는 Rust 전체가 아니라 다음 개념만 빌린다.
 모든 cott 파일은 하나의 모듈을 선언한다.
 
 ```cott
-module vision.detect
+module system.process
 ```
 
 다른 모듈의 공개 type과 constant는 `use`로 가져온다.
 
 ```cott
-use vision.image.{Image, Mask}
+use system.data.{InputPayload, OutputPayload}
 ```
 
 전체 이름을 직접 사용할 수도 있다.
 
 ```cott
-fn detect(image: vision.image.Image) -> vision.image.Mask
+fn process(data: system.data.InputPayload) -> system.data.OutputPayload
 ```
 
 `Bool`·고정 폭 숫자·`Str`·`Bytes`·`Path`·`Unit`·`Never`, container constructor, `Option`, `Result`, `JsonValue`와 `Opaque`는 compiler prelude 이름으로 항상 scope에 있다. canonical identity는 `core.*`이며 project source가 `core.*` module이나 같은 prelude 이름을 선언할 수 없다. Python에서는 16.1의 `cott_runtime`이 유일한 runtime identity를 제공한다.
@@ -263,7 +263,7 @@ fn detect(image: vision.image.Image) -> vision.image.Mask
 
 Python target은 top-level `cott_runtime`·`_cott_impl`과 마지막 segment가 `_types`로 끝나는 cott module 이름을 예약한다. public cott top-level package나 compiler-owned `cott_runtime`·`_cott_impl`이 CPython 3.11 standard-library module 또는 lock artifact가 제공하는 top-level package와 충돌하면 거부한다. 모든 facade, type module, local implementation copy와 support package의 target path는 injective해야 하며 충돌은 emit 전 hard error다.
 
-source file 경로는 module path와 정확히 대응하며 module qname은 `py.typed`를 담는 top-level package 아래에 놓이도록 최소 두 segment여야 한다. `module vision.detect`는 `<project.source>/vision/detect.cott`에만 올 수 있고 단일-segment module은 거부한다. 중복 module과 한 module path가 다른 path의 strict prefix가 되는 구성은 Python file/package 충돌이므로 거부한다.
+source file 경로는 module path와 정확히 대응하며 module qname은 `py.typed`를 담는 top-level package 아래에 놓이도록 최소 두 segment여야 한다. `module system.process`는 `<project.source>/system/process.cott`에만 올 수 있고 단일-segment module은 거부한다. 중복 module과 한 module path가 다른 path의 strict prefix가 되는 구성은 Python file/package 충돌이므로 거부한다.
 
 `use`는 module 직후의 하나의 contiguous block에만 올 수 있고 source order를 보존한다. 단일 qname은 공개 type 또는 constant, grouped form의 prefix는 module이어야 한다. alias와 re-export는 MVP에 없다. 같은 canonical symbol 중복, 같은 short name을 둘 이상 import하거나 local declaration과 충돌하면 ambiguity error며 fully qualified name을 사용해야 한다. 모든 top-level cott declaration은 공개이고 module 안에서 이름이 유일하다.
 
@@ -273,8 +273,8 @@ source file 경로는 module path와 정확히 대응하며 module qname은 `py.
 한 줄 주석은 `#`을 사용한다.
 
 ```cott
-# 입력 이미지 타입
-struct Image:
+# 입력 데이터 타입
+struct InputPayload:
     data: Bytes
 ```
 
@@ -282,7 +282,7 @@ struct Image:
 
 ```cott
 doc """
-이미지 데이터와 메타데이터를 표현한다.
+입력 데이터와 메타데이터를 표현한다.
 """
 ```
 
@@ -353,8 +353,8 @@ MVP의 `Tuple`은 정확히 두 원소만 가진다. 다른 arity는 const gener
 
 ```cott
 struct Dataset:
-    images: List[Image]
-    labels: Map[ImageId, Label]
+    items: List[InputPayload]
+    labels: Map[InputPayloadId, Label]
     description: Option[Str]
 ```
 
@@ -475,14 +475,14 @@ Timestamp == I64
 
 ```cott
 newtype UserId(U64)
-newtype ImageId(U64)
+newtype InputPayloadId(U64)
 ```
 
 다음 두 타입은 서로 호환되지 않는다.
 
 ```cott
 UserId
-ImageId
+InputPayloadId
 ```
 
 둘 다 내부적으로 `U64`를 사용하더라도 자동 변환되지 않는다.
@@ -522,7 +522,7 @@ MVP에서는 조건을 완전히 정적으로 증명하지 않는다. 대신 다
 ### 6.4 구조체
 
 ```cott
-struct Image:
+struct InputPayload:
     data: Bytes
     width: U32
     height: U32
@@ -543,9 +543,9 @@ struct User:
 필드 기본값은 MVP에서 제한적으로 허용한다.
 
 ```cott
-struct DetectOptions:
+struct BarOptions:
     threshold: Probability = Probability(0.5)
-    use_tta: Bool = false
+    use_cache: Bool = false
 ```
 
 필수 field는 default field보다 먼저 와야 한다. default는 13장의 compile-time constant expression이어야 하며 constructor가 실패하면 compile error다.
@@ -572,10 +572,10 @@ enum ColorSpace:
 데이터를 포함하는 열거형:
 
 ```cott
-enum DetectError:
-    InvalidImage(reason: Str)
-    ModelUnavailable
-    InferenceFailed(message: Str)
+enum BarError:
+    InvalidPayload(reason: Str)
+    ServiceUnavailable
+    ProcessingFailed(message: Str)
 ```
 
 상태를 타입으로 표현할 수도 있다.
@@ -675,7 +675,7 @@ MVP에서는 다음 규칙을 적용한다.
 * bound는 중복 없는 trait type만 허용하고 미해결 type variable과 암묵적인 `Any` 대체는 오류다.
 * 재귀적인 무한 타입은 거부한다.
 
-Python runtime은 지워진 `TypeVar`를 복원하거나 호출별로 통합하지 않는다. `List[Image]`처럼 facade 시그니처에 구체화된 중첩 타입은 런타임 검사할 수 있지만 `first[T]`의 입력과 반환 사이 관계는 BasedPyright와 cott 정적 verifier의 보증이며 런타임 검사로 보고하지 않는다.
+Python runtime은 지워진 `TypeVar`를 복원하거나 호출별로 통합하지 않는다. `List[InputPayload]`처럼 facade 시그니처에 구체화된 중첩 타입은 런타임 검사할 수 있지만 `first[T]`의 입력과 반환 사이 관계는 BasedPyright와 cott 정적 verifier의 보증이며 런타임 검사로 보고하지 않는다.
 
 ---
 ## 9. 함수 선언
@@ -694,12 +694,12 @@ cott의 함수는 실행 본문을 가지지 않는다.
 
 ```cott
 fn resize(
-    image: Image,
+    data: InputPayload,
     width: U32,
     height: U32,
-) -> Result[Image, ResizeError]:
+) -> Result[InputPayload, ResizeError]:
     doc """
-    입력 이미지를 지정된 크기로 변경한다.
+    입력 데이터를 지정된 크기로 변경한다.
     """
 
     requires width > 0
@@ -752,16 +752,16 @@ refinement, `requires`, `ensures`, 조건부 `error`는 하나의 정규화된 �
 
 ```cott
 fn crop(
-    image: Image,
+    data: InputPayload,
     x: U32,
     y: U32,
     width: U32,
     height: U32,
-) -> Result[Image, CropError]:
+) -> Result[InputPayload, CropError]:
     requires width > 0
     requires height > 0
-    requires x + width <= image.width
-    requires y + height <= image.height
+    requires x + width <= data.width
+    requires y + height <= data.height
 ```
 
 호출자가 사전 조건을 만족하지 못하면 구현을 호출해서는 안 된다. 런타임 검사가 활성화된 경계에서는 항상 `CottContractViolation`을 발생시키며 cott `Result` 오류로 변환하지 않는다. `off`에서는 검사하지 않으며, 사전 조건을 어긴 호출의 결과는 계약 밖이다.
@@ -778,7 +778,7 @@ ensures Result.Ok(resized) => resized.height == height
 오류 결과에 대한 중첩 pattern도 선언할 수 있다.
 
 ```cott
-ensures Result.Err(CropError.OutOfBounds) => (x + width > image.width or y + height > image.height)
+ensures Result.Err(CropError.OutOfBounds) => (x + width > data.width or y + height > data.height)
 ```
 
 pattern이 없으면 expression scope는 function argument, constant와 반환값 전체를 가리키는 `result`다. pattern이 있으면 일치하는 반환에서만 expression을 검사하고 scope는 function argument, constant와 그 pattern binding이며 `result`는 사용할 수 없다. 반환 type 검사 후 source order의 모든 applicable `ensures`를 검사한다. MVP에는 호출 전 가변 상태 snapshot인 `old()`를 제공하지 않는다.
@@ -796,15 +796,15 @@ fn append[T](
 `error` 절은 함수가 반환할 수 있는 오류 variant를 완전한 이름으로 선언한다.
 
 ```cott
-enum LoadImageError:
+enum LoadDataError:
     FileNotFound(path: Path)
     UnsupportedFormat(path: Path)
 
-fn load_image(
+fn load_payload(
     path: Path,
-) -> Result[Image, LoadImageError]:
-    error LoadImageError.FileNotFound
-    error LoadImageError.UnsupportedFormat
+) -> Result[InputPayload, LoadDataError]:
+    error LoadDataError.FileNotFound
+    error LoadDataError.UnsupportedFormat
     effects [file.read]
 ```
 
@@ -831,7 +831,7 @@ effects [file.write]
 effects [network]
 effects [database.read]
 effects [database.write]
-effects [gpu]
+effects [network]
 effects [clock]
 effects [random]
 effects [process.exit]
@@ -854,8 +854,8 @@ prelude effect 이름은 위 아홉 개다. CPU 계산 자체는 effect가 아�
 
 ```toml
 [effects]
-"camera.capture" = true
-"model.inference" = true
+"device.read" = true
+"engine.compute" = true
 ```
 
 manifest effect key는 qname 문법이고 value는 literal `true`여야 한다. false·non-boolean value, empty list, unknown name, prelude 재정의와 한 effects list 안의 duplicate는 오류다. Canonical IR은 effect set을 이름순으로 저장한다.
@@ -870,7 +870,7 @@ cott는 boolean 플래그보다 enum 상태 모델을 우선한다.
 권장하지 않는 구조:
 
 ```cott
-struct Model:
+struct Config:
     is_loaded: Bool
     path: Option[Path]
     error: Option[Str]
@@ -879,11 +879,11 @@ struct Model:
 권장 구조:
 
 ```cott
-enum ModelState:
+enum ConfigState:
     Unloaded
     Loading(path: Path)
-    Ready(model: Model)
-    Failed(error: ModelLoadError)
+    Ready(config: Config)
+    Failed(error: ConfigLoadError)
 ```
 
 이 방식은 잘못된 상태 조합을 타입 단계에서 제거한다.
@@ -933,7 +933,7 @@ Python 라이브러리의 예외는 구현 경계에서 cott 오류 타입으로
 try:
     data = path.read_bytes()
 except FileNotFoundError:
-    return Err(error=LoadImageError_FileNotFound(path=path))
+    return Err(error=LoadDataError_FileNotFound(path=path))
 ```
 
 ### 12.5 경계 타입
@@ -961,15 +961,15 @@ Python ABI는 invariant `cott_runtime.Opaque[Literal["tag"]]` frozen wrapper 하
 ## 13. 상수
 
 ```cott
-const MAX_IMAGE_WIDTH: U32 = 8192
+const MAX_PAYLOAD_LIMIT: U32 = 8192
 const DEFAULT_THRESHOLD: F32 = 0.5
 ```
 
 상수는 타입 검사 시 사용할 수 있다.
 
 ```cott
-newtype ImageWidth(U32)
-    where 1 <= self <= MAX_IMAGE_WIDTH
+newtype PayloadWidth(U32)
+    where 1 <= self <= MAX_PAYLOAD_LIMIT
 ```
 
 MVP constant expression은 scalar literal, imported constant 또는 같은 module에서 앞서 선언된 constant, arithmetic·boolean operator, enum singleton과 newtype constructor로 제한한다. struct field default도 같은 scope를 사용하며 다른 field를 참조하지 않는다. compiler가 타입 검사·평가·숫자 정규화·refinement 검사를 마친 canonical value를 IR에 저장하므로 module DAG와 source order상 value dependency도 acyclic하다.
@@ -979,61 +979,61 @@ MVP constant expression은 scalar literal, imported constant 또는 같은 modul
 ## 14. 전체 예시
 
 ```cott
-module shoe.defect
+module foo.bar
 
-const MAX_IMAGE_SIZE: U32 = 8192
+const MAX_PAYLOAD_SIZE: U32 = 8192
 
 newtype Probability(F32)
     where 0.0 <= self <= 1.0
 
-newtype ImageWidth(U32)
-    where 1 <= self <= MAX_IMAGE_SIZE
+newtype PayloadWidth(U32)
+    where 1 <= self <= MAX_PAYLOAD_SIZE
 
-newtype ImageHeight(U32)
-    where 1 <= self <= MAX_IMAGE_SIZE
+newtype PayloadHeight(U32)
+    where 1 <= self <= MAX_PAYLOAD_SIZE
 
 enum ColorSpace:
     RGB
     BGR
     Gray
 
-struct Image:
+struct InputPayload:
     data: Bytes
-    width: ImageWidth
-    height: ImageHeight
+    width: PayloadWidth
+    height: PayloadHeight
     color_space: ColorSpace
 
-struct Mask:
+struct OutputPayload:
     data: Bytes
-    width: ImageWidth
-    height: ImageHeight
+    width: PayloadWidth
+    height: PayloadHeight
 
-enum DetectError:
-    InvalidImage(reason: Str)
-    ModelUnavailable
-    InferenceFailed(message: Str)
+enum BarError:
+    InvalidPayload(reason: Str)
+    ServiceUnavailable
+    ProcessingFailed(message: Str)
 
-struct DetectOptions:
+struct BarOptions:
     threshold: Probability = Probability(0.5)
-    use_tta: Bool = false
+    use_cache: Bool = false
 
-fn detect_defect(
-    image: Image,
-    options: DetectOptions,
-) -> Result[Mask, DetectError]:
+fn process_bar(
+    data: InputPayload,
+    options: BarOptions,
+) -> Result[OutputPayload, BarError]:
     doc """
-    신발 제조 이미지에서 결함 영역을 검출하고
-    입력 이미지와 같은 크기의 마스크를 반환한다.
+    foo 데이터에서 bar 영역을 처리하고
+    입력 데이터와 같은 크기의 출력 데이터를 반환한다.
     """
 
-    ensures Result.Ok(mask) => mask.width == image.width
-    ensures Result.Ok(mask) => mask.height == image.height
+    ensures Result.Ok(output) => output.width == data.width
+    ensures Result.Ok(output) => output.height == data.height
 
-    error DetectError.InvalidImage when image.data.len == 0
-    error DetectError.ModelUnavailable
-    error DetectError.InferenceFailed
+    error BarError.InvalidPayload when data.data.len == 0
+    error BarError.ServiceUnavailable
+    error BarError.ProcessingFailed
 
-    effects [gpu]
+    effects [network]
 ```
 
 ---
@@ -1099,8 +1099,8 @@ HIR은 이름이 해석되고 타입 표현이 정규화된 내부 구조다.
 예를 들어 다음 두 타입 표현은 HIR에서 같은 심볼을 가리킨다.
 
 ```cott
-Image
-vision.image.Image
+InputPayload
+system.data.InputPayload
 ```
 
 ### 15.4 Canonical IR
@@ -1124,21 +1124,21 @@ IR JSON은 sorted key, insignificant whitespace 없음, final newline 하나로 
 ```json
 {
   "kind": "function",
-  "name": "shoe.defect.detect_defect",
+  "name": "foo.bar.process_bar",
   "parameters": [
     {
-      "name": "image",
-      "type": {"kind": "named", "name": "shoe.defect.Image"}
+      "name": "data",
+      "type": {"kind": "named", "name": "foo.bar.InputPayload"}
     },
     {
       "name": "options",
-      "type": {"kind": "named", "name": "shoe.defect.DetectOptions"}
+      "type": {"kind": "named", "name": "foo.bar.BarOptions"}
     }
   ],
   "return_type": {
     "kind": "result",
-    "ok": {"kind": "named", "name": "shoe.defect.Mask"},
-    "error": {"kind": "named", "name": "shoe.defect.DetectError"}
+    "ok": {"kind": "named", "name": "foo.bar.OutputPayload"},
+    "error": {"kind": "named", "name": "foo.bar.BarError"}
   },
   "contracts": {
     "requires": [],
@@ -1147,78 +1147,78 @@ IR JSON은 sorted key, insignificant whitespace 없음, final newline 하나로 
         "pattern": {
           "kind": "variant",
           "name": "core.result.Result.Ok",
-          "arguments": [{"kind": "binding", "name": "mask"}]
+          "arguments": [{"kind": "binding", "name": "output"}]
         },
         "expression": {
           "kind": "equal",
           "left": {
             "kind": "field",
-            "base": {"kind": "binding", "name": "mask"},
+            "base": {"kind": "binding", "name": "output"},
             "name": "width"
           },
           "right": {
             "kind": "field",
-            "base": {"kind": "parameter", "name": "image"},
+            "base": {"kind": "parameter", "name": "data"},
             "name": "width"
           }
         },
-        "span": {"file": "src/shoe/defect.cott", "start": [51, 5], "end": [51, 66]}
+        "span": {"file": "src/foo/bar.cott", "start": [51, 5], "end": [51, 66]}
       },
       {
         "pattern": {
           "kind": "variant",
           "name": "core.result.Result.Ok",
-          "arguments": [{"kind": "binding", "name": "mask"}]
+          "arguments": [{"kind": "binding", "name": "output"}]
         },
         "expression": {
           "kind": "equal",
           "left": {
             "kind": "field",
-            "base": {"kind": "binding", "name": "mask"},
+            "base": {"kind": "binding", "name": "output"},
             "name": "height"
           },
           "right": {
             "kind": "field",
-            "base": {"kind": "parameter", "name": "image"},
+            "base": {"kind": "parameter", "name": "data"},
             "name": "height"
           }
         },
-        "span": {"file": "src/shoe/defect.cott", "start": [52, 5], "end": [52, 68]}
+        "span": {"file": "src/foo/bar.cott", "start": [52, 5], "end": [52, 68]}
       }
     ],
     "errors": [
       {
         "priority": 0,
-        "variant": "shoe.defect.DetectError.InvalidImage",
+        "variant": "foo.bar.BarError.InvalidPayload",
         "when": {
           "kind": "equal",
           "left": {
             "kind": "len",
             "value": {
               "kind": "field",
-              "base": {"kind": "parameter", "name": "image"},
+              "base": {"kind": "parameter", "name": "data"},
               "name": "data"
             }
           },
           "right": {"kind": "integer", "value": "0"}
         },
-        "span": {"file": "src/shoe/defect.cott", "start": [54, 5], "end": [54, 67]}
+        "span": {"file": "src/foo/bar.cott", "start": [54, 5], "end": [54, 67]}
       },
       {
         "priority": null,
-        "variant": "shoe.defect.DetectError.ModelUnavailable",
+        "variant": "foo.bar.BarError.ServiceUnavailable",
         "when": null,
-        "span": {"file": "src/shoe/defect.cott", "start": [55, 5], "end": [55, 47]}
+        "span": {"file": "src/foo/bar.cott", "start": [55, 5], "end": [55, 47]}
       },
       {
         "priority": null,
-        "variant": "shoe.defect.DetectError.InferenceFailed",
+        "variant": "foo.bar.BarError.ProcessingFailed",
         "when": null,
-        "span": {"file": "src/shoe/defect.cott", "start": [56, 5], "end": [56, 45]}
+        "span": {"file": "src/foo/bar.cott", "start": [56, 5], "end": [56, 45]}
       }
     ]
   },
-  "effects": ["gpu"]
+  "effects": ["network"]
 }
 ```
 
@@ -1260,20 +1260,20 @@ generated/
 │   │   ├── __init__.py
 │   │   └── py.typed
 │   ├── _cott_impl/
-│   │   └── shoe/
-│   │       └── defect/
+│   │   └── foo/
+│   │       └── bar/
 │   │           ├── __init__.py
-│   │           └── detect_defect.py
-│   └── shoe/
+│   │           └── process_bar.py
+│   └── foo/
 │       ├── __init__.py
 │       ├── py.typed
-│       ├── defect.py
-│       └── defect_types.py
+│       ├── bar.py
+│       └── bar_types.py
 ├── stubs/
-│   └── shoe/
-│       └── defect.pyi
+│   └── foo/
+│       └── bar.pyi
 ├── ir/
-│   └── shoe.defect.json
+│   └── foo.bar.json
 ├── docs/
 └── generation.json
 ```
@@ -1284,11 +1284,11 @@ MVP는 Python environment 하나에 generated cott project 하나만 설치한�
 
 generated module의 support import와 helper는 reserved `_cott_` prefix를 사용하고 `__all__`에 넣지 않는다. 따라서 class body에서도 name mangling 없이 참조하고 user symbol을 rename하지 않은 채 runtime name 충돌을 피한다.
 
-`generated/python`은 public cott module, `cott_runtime`과 verified local implementation copy를 함께 담는 단일 runtime·package root다. 완전히 타입이 지정된 `defect.py` facade가 공개 계약 표면이며 각 public package는 `py.typed`를 포함한다.
+`generated/python`은 public cott module, `cott_runtime`과 verified local implementation copy를 함께 담는 단일 runtime·package root다. 완전히 타입이 지정된 `bar.py` facade가 공개 계약 표면이며 각 public package는 `py.typed`를 포함한다.
 
 `facade_exports(IR, resolved)`는 `public_python_symbols(IR)`의 모든 비함수 symbol과 이번 세대에 구현이 해석된 공개 함수 symbol의 합집합이다. facade의 `__all__`은 이 집합과 정확히 같다. `verified = true`인 세대에서는 unresolved가 없어 `facade_exports`가 전체 `public_python_symbols`와 같아야 한다. 미구현 함수는 `generation.json.current.unresolved`에 기록한다. `cott_runtime`을 제외한 모든 compiler-owned package `__init__.py`는 비어 있고 re-export하지 않는다.
 
-`defect_types.py`는 구현과 adapter가 공유하는 지원 대상 typing boundary지만 공개 함수의 대체 import 경로는 아니다. `generated/stubs`의 `.pyi`는 도구 산출물이며 runtime import path에 넣지 않는다.
+`bar_types.py`는 구현과 adapter가 공유하는 지원 대상 typing boundary지만 공개 함수의 대체 import 경로는 아니다. `generated/stubs`의 `.pyi`는 도구 산출물이며 runtime import path에 넣지 않는다.
 
 resolved local binding과 agent implementation module은 source bytes를 canonical Python module path 아래에 그대로 복사한다. compiler가 만든 empty parent `__init__.py` 외에는 같은 package의 다른 source를 복사하지 않는다. external distribution module은 복사하지 않는다. source file은 durable 원본, generated copy는 compiler-owned runtime artifact이며 두 hash가 다르면 verify가 실패한다.
 
@@ -1305,38 +1305,38 @@ record의 필수 field를 보여 주는 축약 예시는 다음과 같다.
   "current": {
     "generation_id": "sha256:...",
     "verified": false,
-    "inputs": {"AGENTS.md": "sha256:...", "cott.toml": "sha256:...", "python/pyproject.toml": "sha256:...", "python/uv.lock": "sha256:...", "src/shoe/defect.cott": "sha256:..."},
+    "inputs": {"AGENTS.md": "sha256:...", "cott.toml": "sha256:...", "python/pyproject.toml": "sha256:...", "python/uv.lock": "sha256:...", "src/foo/bar.cott": "sha256:..."},
     "tools": {
       "compiler": {"version": "0.1.0", "executable": "/canonical/cott", "content_hash": "sha256:..."},
       "runtime": {"version": "0.1.0"},
       "python": {"implementation": "cpython", "version": "3.11.9", "cache_tag": "cpython-311", "os": "darwin", "machine": "arm64", "platform": "macosx-15.0-arm64", "executable": "/canonical/python", "content_hash": "sha256:..."},
       "basedpyright": {"version": "...", "executable": "/canonical/basedpyright", "content_hash": "sha256:..."}
     },
-    "ir": {"shoe.defect": "sha256:..."},
-    "contract_surface": {"shoe.defect": {"declarations": [{"kind": "function", "name": "shoe.defect.detect_defect"}]}},
-    "public_python_symbols": {"shoe.defect": ["detect_defect"]},
+    "ir": {"foo.bar": "sha256:..."},
+    "contract_surface": {"foo.bar": {"declarations": [{"kind": "function", "name": "foo.bar.process_bar"}]}},
+    "public_python_symbols": {"foo.bar": ["process_bar"]},
     "implementations": [
       {
-        "cott_symbol": "shoe.defect.detect_defect",
+        "cott_symbol": "foo.bar.process_bar",
         "owner": "agent",
-        "python_symbol": "_cott_impl.shoe.defect.detect_defect:detect_defect",
-        "source_origin": "python/_cott_impl/shoe/defect/detect_defect.py",
-        "runtime_origin": "generated/python/_cott_impl/shoe/defect/detect_defect.py",
+        "python_symbol": "_cott_impl.foo.bar.process_bar:process_bar",
+        "source_origin": "python/_cott_impl/foo/bar/process_bar.py",
+        "runtime_origin": "generated/python/_cott_impl/foo/bar/process_bar.py",
         "content_hash": "sha256:..."
       }
     ],
     "dependencies": [
       {
-        "name": "pillow",
+        "name": "provider",
         "version": "10.4.0",
         "lock_artifact_hash": "sha256:...",
         "installed_metadata_hash": "sha256:...",
-        "imports": {"PIL.Image": {"origin": "PIL/Image.py", "content_hash": "sha256:..."}}
+        "imports": {"provider.InputPayload": {"origin": "provider/InputPayload.py", "content_hash": "sha256:..."}}
       }
     ],
     "managed_files": {
-      "generated/python/_cott_impl/shoe/defect/detect_defect.py": "sha256:...",
-      "generated/python/shoe/defect.py": "sha256:..."
+      "generated/python/_cott_impl/foo/bar/process_bar.py": "sha256:...",
+      "generated/python/foo/bar.py": "sha256:..."
     },
     "unresolved": [],
     "verification": null,
@@ -1393,7 +1393,7 @@ canonical executable path와 binary hash를 포함하므로 `generation_id`는 �
 
 모든 newtype 생성자는 alias를 해소한 carrier ABI를 모든 mode에서 검사하고 statically concrete `F32` path를 exact `float`에서 binary32로 normalize한다. function input·output의 statically concrete `F32`도 모든 mode에서 같은 처리를 한다. 그 밖의 function scalar runtime check가 활성화되면 exact `bool`·`int`·`float`·`str`·`bytes`, integer range와 `Str`의 surrogate 부재를 검사해 `bool`을 integer로, integer를 float로 받지 않는다. newtype carrier의 `Str` scalar 유효성은 생성자가 모든 mode에서 검사한다. `Path` runtime 값은 지원 platform의 exact `pathlib.PosixPath`여야 하며 user subclass는 거부한다.
 
-표준 union variant는 `Ok(value=...)`, `Err(error=...)`, `Some(value=...)`, `Nothing()`으로 고정한다. 사용자 enum의 모든 variant도 keyword-only frozen class다. cott의 `DetectError.InvalidImage`와 `DetectError.ModelUnavailable`은 Python의 `DetectError_InvalidImage(reason=...)`, `DetectError_ModelUnavailable()`가 되고 `DetectError`는 이 class들의 union alias다.
+표준 union variant는 `Ok(value=...)`, `Err(error=...)`, `Some(value=...)`, `Nothing()`으로 고정한다. 사용자 enum의 모든 variant도 keyword-only frozen class다. cott의 `BarError.InvalidPayload`와 `BarError.ServiceUnavailable`은 Python의 `BarError_InvalidPayload(reason=...)`, `BarError_ServiceUnavailable()`가 되고 `BarError`는 이 class들의 union alias다.
 
 `Unit`, `Opaque`, nominal container, standard·`JsonValue`·사용자 enum variant, struct와 newtype의 concrete class는 모두 `@typing.final`이고 runtime validator도 exact class identity를 요구한다. trait `Protocol`만 member-presence 구조 검사를 사용한다.
 
@@ -1494,7 +1494,7 @@ verification report는 contract symbol과 source-order clause ID마다 `{symbol,
 
 ```toml
 [target.python.implementations]
-"shoe.image.load_image" = "my_project.adapters.pillow:load_image"
+"foo.data.load_payload" = "my_project.adapters.provider:load_payload"
 ```
 
 키는 cott 함수의 완전한 이름이고 값은 Python `module:function_name`이다.
@@ -1536,9 +1536,9 @@ cott 함수 매개변수에는 기본값이 없다. 기본값이 필요한 API�
 binding된 함수는 agent 생성 대상에서 제외한다. 나머지 각 함수는 별도 파일에 구현한다.
 
 ```text
-shoe.defect.detect_defect
-→ <source>/_cott_impl/shoe/defect/detect_defect.py
-→ _cott_impl.shoe.defect.detect_defect:detect_defect
+foo.bar.process_bar
+→ <source>/_cott_impl/foo/bar/process_bar.py
+→ _cott_impl.foo.bar.process_bar:process_bar
 ```
 
 function implementation resolution priority는 manifest binding → 위 exact agent file → unresolved다. compatible agent file이 이미 있으면 재사용하고 agent를 호출하지 않는다. selected generate에서 agent file이 없거나 signature가 현재 contract와 불일치하면 regeneration candidate로 staged overwrite할 수 있다. binding 불일치는 항상 hard error며 agent로 대체하지 않는다.
@@ -1557,10 +1557,10 @@ MVP binding 대상은 함수로 제한한다. 외부 struct와 enum은 cott 타�
 호출자는 구현 위치와 관계없이 항상 cott module 경로를 사용한다.
 
 ```python
-from shoe.defect import detect_defect
+from foo.bar import process_bar
 ```
 
-cott는 `generated/python/shoe/defect.py`에 fully typed wrapper를 생성한다. `defect_types.py`가 module 고유 type identity의 원본이고 standard ABI identity는 `cott_runtime`에 있다. implementation과 adapter는 custom type을 type module에서, standard type을 `cott_runtime`에서 import하며 facade를 import하지 않는다.
+cott는 `generated/python/foo/bar.py`에 fully typed wrapper를 생성한다. `bar_types.py`가 module 고유 type identity의 원본이고 standard ABI identity는 `cott_runtime`에 있다. implementation과 adapter는 custom type을 type module에서, standard type을 `cott_runtime`에서 import하며 facade를 import하지 않는다.
 
 각 wrapper에는 project identity·expected `cott_runtime` ABI version, compile-time specialized `runtime_validation`, implementation의 canonical module·symbol, `generated/python` relative `runtime_origin`·content hash, exact CPython full version·cache tag·OS family·architecture와 16.1의 external dependency record를 immutable constant로 embed한다. full `sysconfig` platform string은 generation provenance에만 둔다. durable `source_origin`은 `generation.json`에만 남고 verify가 generated copy와 byte identity를 확인한다. installed package에 project-side record가 없어도 검사는 동작한다.
 
@@ -1745,8 +1745,8 @@ compiler 산출물은 결정적으로 다시 만들 수 있지만 agent implemen
 다음 구현은 거부한다.
 
 ```python
-def detect_defect(image, options):
-    return model(image)
+def process_bar(data, options):
+    return engine(data)
 ```
 
 거부 이유:
@@ -1765,7 +1765,7 @@ def detect_defect(image, options):
 
 ```bash
 cott check
-cott check src/vision/detect.cott
+cott check src/system/process.cott
 ```
 
 ### 18.2 포맷
@@ -1797,7 +1797,7 @@ cott emit python
 
 ```bash
 cott generate --agent codex --target python
-cott generate shoe.defect.detect_defect --agent claude --target python
+cott generate foo.bar.process_bar --agent claude --target python
 ```
 
 선택 범위에 미구현 함수가 있으면 `--agent`가 필수다. 허용 값은 `codex`, `claude`, `omp`다. 모든 선택 함수가 binding되어 있으면 agent를 호출하지 않는다.
@@ -1844,19 +1844,19 @@ cott diff --baseline path/to/generation.json
 
 ```text
 CONTRACT BREAKING:
-- detect_defect return type changed:
-  Result[Mask, DetectError]
-  -> Mask
-- DetectOptions.use_tta default changed:
+- process_bar return type changed:
+  Result[OutputPayload, BarError]
+  -> OutputPayload
+- BarOptions.use_cache default changed:
   false -> true
 
 CONTRACT NON-BREAKING:
-- public function shoe.defect.explain_defect added
+- public function foo.bar.evaluate_bar added
 
 IMPLEMENTATION:
-- shoe.defect.detect_defect binding changed
-- shoe.image.load_image implementation content hash changed
-- unreferenced _cott_impl/shoe/legacy/legacy_detect.py
+- foo.bar.process_bar binding changed
+- foo.data.load_payload implementation content hash changed
+- unreferenced _cott_impl/foo/legacy/legacy_process.py
 - dependency lockfile changed
 ```
 
@@ -1893,55 +1893,55 @@ cott.toml
 └── transactions/
 
 src/
-└── shoe/
-    ├── image.cott
-    └── defect.cott
+└── foo/
+    ├── data.cott
+    └── bar.cott
 
 generated/
 ├── ir/
-│   ├── shoe.image.json
-│   └── shoe.defect.json
+│   ├── foo.data.json
+│   └── foo.bar.json
 ├── python/
 │   ├── cott_runtime/
 │   │   ├── __init__.py
 │   │   └── py.typed
 │   ├── _cott_impl/
 │   │   ├── __init__.py
-│   │   └── shoe/
+│   │   └── foo/
 │   │       ├── __init__.py
-│   │       └── defect/
+│   │       └── bar/
 │   │           ├── __init__.py
-│   │           └── detect_defect.py
+│   │           └── process_bar.py
 │   ├── my_project/
 │   │   ├── __init__.py
 │   │   └── adapters/
 │   │       ├── __init__.py
-│   │       └── pillow.py
-│   └── shoe/
+│   │       └── provider.py
+│   └── foo/
 │       ├── __init__.py
 │       ├── py.typed
-│       ├── image.py
-│       ├── image_types.py
-│       ├── defect.py
-│       └── defect_types.py
+│       ├── data.py
+│       ├── data_types.py
+│       ├── bar.py
+│       └── bar_types.py
 ├── stubs/
-│   └── shoe/
-│       ├── image.pyi
-│       └── defect.pyi
+│   └── foo/
+│       ├── data.pyi
+│       └── bar.pyi
 ├── docs/
 └── generation.json
 
 python/
 ├── _cott_impl/
 │   ├── __init__.py
-│   └── shoe/
+│   └── foo/
 │       ├── __init__.py
-│       └── defect/
+│       └── bar/
 │           ├── __init__.py
-│           └── detect_defect.py
+│           └── process_bar.py
 ├── my_project/
 │   └── adapters/
-│       └── pillow.py
+│       └── provider.py
 ├── pyproject.toml
 └── uv.lock
 
@@ -1956,7 +1956,7 @@ manifest 예시:
 
 ```toml
 [project]
-name = "shoe-inspector"
+name = "foo-app"
 version = "0.1.0"
 source = "src"
 
@@ -1970,7 +1970,7 @@ type_checker = ".venv/bin/basedpyright"
 runtime_validation = "boundary"
 
 [target.python.implementations]
-"shoe.image.load_image" = "my_project.adapters.pillow:load_image"
+"foo.data.load_payload" = "my_project.adapters.provider:load_payload"
 
 [generator]
 rules = "AGENTS.md"
@@ -2005,11 +2005,11 @@ error[COTT-T102]: incompatible nominal types
 
   --> src/user.cott:18:15
    |
-18 |     load_user(image_id)
-   |               ^^^^^^^^ expected `UserId`, found `ImageId`
+18 |     load_user(data_id)
+   |               ^^^^^^^^ expected `UserId`, found `InputPayloadId`
    |
-   = note: `UserId` and `ImageId` both wrap `U64`, but are distinct newtypes
-   = help: convert explicitly using `user_id_from_image_id(...)`
+   = note: `UserId` and `InputPayloadId` both wrap `U64`, but are distinct newtypes
+   = help: convert explicitly using `user_id_from_data_id(...)`
 ```
 
 모든 진단 record는 다음 필드를 가지며 적용할 수 없는 위치·타입은 `null`, 수정 제안이 없으면 빈 배열로 둔다.
@@ -2047,9 +2047,9 @@ cott check --format json
         "end_column": 23
       },
       "expected": "UserId",
-      "actual": "ImageId",
+      "actual": "InputPayloadId",
       "reason": "distinct nominal newtypes",
-      "help": ["convert explicitly using user_id_from_image_id(...)"],
+      "help": ["convert explicitly using user_id_from_data_id(...)"],
       "related": []
     }
   ]
