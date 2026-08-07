@@ -1,0 +1,7 @@
+[project]
+name = "record-echo"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.record_echo.run"

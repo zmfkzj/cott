@@ -1,0 +1,7 @@
+[project]
+name = "invoice-decision"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.invoice_decision.run"

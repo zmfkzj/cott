@@ -1,0 +1,7 @@
+[project]
+name = "transfer-decision"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.transfer_decision.run"

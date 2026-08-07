@@ -1,0 +1,7 @@
+[project]
+name = "message-sequence"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.message_sequence.run"

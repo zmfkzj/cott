@@ -1,0 +1,7 @@
+[project]
+name = "checked-subtract"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.checked_subtract.run"

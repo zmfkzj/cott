@@ -1,0 +1,7 @@
+[project]
+name = "address-validation"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.address_validation.run"

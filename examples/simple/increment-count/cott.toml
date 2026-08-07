@@ -1,0 +1,7 @@
+[project]
+name = "increment-count"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.increment_count.run"

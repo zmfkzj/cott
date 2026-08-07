@@ -1,0 +1,5 @@
+module curriculum.nonempty_name
+
+newtype NonemptyName(Str)
+
+fn run() -> NonemptyName

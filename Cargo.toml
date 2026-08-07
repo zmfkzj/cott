@@ -1,0 +1,10 @@
+[package]
+name = "cott"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+sha2 = "0.10"

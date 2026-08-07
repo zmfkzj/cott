@@ -1,0 +1,12 @@
+module curriculum.transfer_decision
+
+newtype AccountId(U64)
+
+enum TransferDecision:
+    Accepted
+    Rejected(reason: Str)
+
+enum TransferError:
+    InsufficientFunds
+
+fn run() -> Result[TransferDecision, TransferError]

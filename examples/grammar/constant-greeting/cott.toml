@@ -1,0 +1,7 @@
+[project]
+name = "constant-greeting"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.constant_greeting.run"

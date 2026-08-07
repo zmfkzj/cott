@@ -1,0 +1,7 @@
+[project]
+name = "signed-addition"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.signed_addition.run"

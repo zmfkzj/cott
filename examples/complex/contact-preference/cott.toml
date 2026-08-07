@@ -1,0 +1,7 @@
+[project]
+name = "contact-preference"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.contact_preference.run"

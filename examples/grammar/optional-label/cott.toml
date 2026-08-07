@@ -1,0 +1,7 @@
+[project]
+name = "optional-label"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.optional_label.run"

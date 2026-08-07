@@ -1,0 +1,7 @@
+[project]
+name = "profile-summary"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.profile_summary.run"

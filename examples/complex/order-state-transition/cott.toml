@@ -1,0 +1,7 @@
+[project]
+name = "order-state-transition"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.order_state_transition.run"

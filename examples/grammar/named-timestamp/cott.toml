@@ -1,0 +1,7 @@
+[project]
+name = "named-timestamp"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.named_timestamp.run"

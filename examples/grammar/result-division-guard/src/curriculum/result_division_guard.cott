@@ -1,0 +1,6 @@
+module curriculum.result_division_guard
+
+enum DivideError:
+    ZeroDivisor
+
+fn run() -> Result[I32, DivideError]

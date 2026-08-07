@@ -1,0 +1,7 @@
+module curriculum.message_sequence
+
+struct Message:
+    text: Str
+    sequence: U64
+
+fn run() -> Message

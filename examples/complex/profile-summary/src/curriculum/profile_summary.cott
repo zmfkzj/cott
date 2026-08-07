@@ -1,0 +1,8 @@
+module curriculum.profile_summary
+
+struct ProfileSummary:
+    display_name: Str
+    tag_count: U64
+    has_nickname: Bool
+
+fn run() -> ProfileSummary

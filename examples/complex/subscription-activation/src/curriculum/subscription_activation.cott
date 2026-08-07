@@ -1,0 +1,12 @@
+module curriculum.subscription_activation
+
+newtype SubscriptionId(U64)
+
+struct Subscription:
+    id: SubscriptionId
+    active: Bool
+
+enum SubscriptionError:
+    AlreadyActive
+
+fn run() -> Result[Subscription, SubscriptionError]

@@ -1,0 +1,13 @@
+module curriculum.validated_user_card
+
+newtype UserId(U64)
+newtype UserName(Str)
+
+struct UserCard:
+    id: UserId
+    name: UserName
+
+enum CardError:
+    InvalidId
+
+fn run() -> Result[UserCard, CardError]

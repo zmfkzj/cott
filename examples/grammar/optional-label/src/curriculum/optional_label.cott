@@ -1,0 +1,3 @@
+module curriculum.optional_label
+
+fn run() -> Option[Str]

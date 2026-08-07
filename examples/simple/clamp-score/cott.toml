@@ -1,0 +1,7 @@
+[project]
+name = "clamp-score"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.clamp_score.run"

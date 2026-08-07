@@ -1,0 +1,7 @@
+[project]
+name = "validated-user-card"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.validated_user_card.run"

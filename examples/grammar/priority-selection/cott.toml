@@ -1,0 +1,7 @@
+[project]
+name = "priority-selection"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.priority_selection.run"

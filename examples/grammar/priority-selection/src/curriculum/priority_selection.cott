@@ -1,0 +1,7 @@
+module curriculum.priority_selection
+
+enum Priority:
+    High
+    Normal
+
+fn run() -> Priority

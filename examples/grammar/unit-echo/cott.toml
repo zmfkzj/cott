@@ -1,0 +1,7 @@
+[project]
+name = "unit-echo"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.unit_echo.run"

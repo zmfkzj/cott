@@ -1,0 +1,7 @@
+[project]
+name = "result-division-guard"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.result_division_guard.run"

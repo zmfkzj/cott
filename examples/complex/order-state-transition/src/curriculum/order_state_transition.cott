@@ -1,0 +1,10 @@
+module curriculum.order_state_transition
+
+enum OrderState:
+    Pending
+    Paid(receipt: Str)
+
+enum TransitionError:
+    NotPending
+
+fn run() -> Result[OrderState, TransitionError]

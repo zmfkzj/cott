@@ -1,0 +1,7 @@
+[project]
+name = "positive-counter"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.positive_counter.run"

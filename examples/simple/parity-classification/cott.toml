@@ -1,0 +1,7 @@
+[project]
+name = "parity-classification"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.parity_classification.run"

@@ -1,0 +1,7 @@
+[project]
+name = "nonempty-name"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.nonempty_name.run"

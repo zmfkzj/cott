@@ -1,0 +1,12 @@
+module curriculum.access_grant
+
+newtype PrincipalId(U64)
+
+enum AccessGrant:
+    Granted
+    Denied(reason: Str)
+
+enum AccessError:
+    MissingRole
+
+fn run() -> Result[AccessGrant, AccessError]

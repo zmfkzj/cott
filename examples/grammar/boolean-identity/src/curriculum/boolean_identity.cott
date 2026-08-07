@@ -1,0 +1,5 @@
+module curriculum.boolean_identity
+
+alias Flag = Bool
+
+fn run() -> Flag

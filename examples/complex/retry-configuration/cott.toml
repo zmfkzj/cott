@@ -1,0 +1,7 @@
+[project]
+name = "retry-configuration"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.retry_configuration.run"

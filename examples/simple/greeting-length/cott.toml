@@ -1,0 +1,7 @@
+[project]
+name = "greeting-length"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.greeting_length.run"

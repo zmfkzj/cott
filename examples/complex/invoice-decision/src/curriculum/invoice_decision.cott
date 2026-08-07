@@ -1,0 +1,7 @@
+module curriculum.invoice_decision
+
+enum InvoiceDecision:
+    Approved
+    Rejected(reason: Str)
+
+fn run() -> InvoiceDecision

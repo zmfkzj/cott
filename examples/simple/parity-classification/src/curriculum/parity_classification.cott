@@ -1,0 +1,7 @@
+module curriculum.parity_classification
+
+enum Parity:
+    Even
+    Odd
+
+fn run() -> Parity

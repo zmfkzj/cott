@@ -1,0 +1,7 @@
+[project]
+name = "boolean-identity"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.boolean_identity.run"

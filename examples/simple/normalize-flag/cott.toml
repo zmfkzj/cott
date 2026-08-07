@@ -1,0 +1,7 @@
+[project]
+name = "normalize-flag"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.normalize_flag.run"

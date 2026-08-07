@@ -1,0 +1,7 @@
+[project]
+name = "default-nickname"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.default_nickname.run"

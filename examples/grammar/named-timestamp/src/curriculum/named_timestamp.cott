@@ -1,0 +1,5 @@
+module curriculum.named_timestamp
+
+alias Timestamp = I64
+
+fn run() -> Timestamp

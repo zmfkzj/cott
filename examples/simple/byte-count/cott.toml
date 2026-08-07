@@ -1,0 +1,7 @@
+[project]
+name = "byte-count"
+source = "src"
+
+[target.python]
+generated = "generated/python"
+entry = "curriculum.byte_count.run"

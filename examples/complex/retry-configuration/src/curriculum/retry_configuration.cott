@@ -1,0 +1,9 @@
+module curriculum.retry_configuration
+
+newtype RetryCount(U8)
+
+struct RetryConfiguration:
+    attempts: RetryCount
+    backoff_ms: U64
+
+fn run() -> RetryConfiguration
