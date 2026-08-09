@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use cott::binding::{ResolvedBinding, resolve_bindings};
 use cott::compiler::parse_project;
 use cott::hash::sha256_hex;
+use cott::hir::lower;
 use cott::ir::render;
 use cott::project::{discover_sources, load_project};
 use cott::python_emit::emit;
@@ -79,9 +80,10 @@ fn inputs() -> Inputs {
     let project = load_project(&temp.path).expect("manifest should load");
     let sources = discover_sources(&project).expect("source should be discovered");
     let parsed = parse_project(sources).expect("source should parse");
+    let hir = lower(&project.source_dir, parsed.clone()).expect("source should lower");
     let semantic = analyze_project(&project.source_dir, parsed).expect("source should analyze");
-    let ir = render(&semantic);
-    let bindings = resolve_bindings(&project, &semantic).expect("binding should resolve");
+    let bindings = resolve_bindings(&project, &semantic).expect("bindings should resolve");
+    let ir = render(&hir).expect("source should render");
 
     Inputs {
         _temp: temp,

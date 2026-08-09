@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use cott::compiler::{ProjectDiagnostic, SourceFile, parse_project};
+use cott::hir::{HirClauseKind, HirDeclaration, HirType, PrimitiveType, lower};
 use cott::semantic::analyze_project;
 
 fn source(path: &str, text: &str) -> SourceFile {
@@ -10,6 +11,15 @@ fn source(path: &str, text: &str) -> SourceFile {
 fn analyze(sources: impl IntoIterator<Item = SourceFile>) -> cott::semantic::SemanticProject {
     let parsed = parse_project(sources).expect("semantic fixture must parse");
     analyze_project(Path::new("src"), parsed).expect("semantic fixture must validate")
+}
+fn lower_project(sources: impl IntoIterator<Item = SourceFile>) -> cott::hir::HirProject {
+    let parsed = parse_project(sources).expect("owned fixture must parse");
+    lower(Path::new("src"), parsed).expect("owned fixture must lower")
+}
+
+fn lower_diagnostics(sources: impl IntoIterator<Item = SourceFile>) -> Vec<ProjectDiagnostic> {
+    let parsed = parse_project(sources).expect("owned fixture must parse");
+    lower(Path::new("src"), parsed).expect_err("malformed owned fixture must be rejected")
 }
 
 fn diagnostics(sources: impl IntoIterator<Item = SourceFile>) -> Vec<ProjectDiagnostic> {
@@ -164,44 +174,131 @@ fn rejects_alias_and_named_type_cycles() {
             .all(|error| error.path == Path::new("src/cycles.cott"))
     );
 }
+#[test]
+fn reports_malformed_condition_and_reference_in_direct_lowering() {
+    let condition_errors = lower_diagnostics([source(
+        "src/bad.cott",
+        r#"module bad
+
+fn check(value: I32) -> Unit:
+    requires value
+"#,
+    )]);
+    assert!(
+        condition_errors
+            .iter()
+            .all(|error| error.path == Path::new("src/bad.cott"))
+    );
+    assert!(
+        condition_errors
+            .iter()
+            .any(|error| error.diagnostic.message == "contract condition must be boolean")
+    );
+
+    let reference_errors = lower_diagnostics([source(
+        "src/missing.cott",
+        r#"module missing
+
+fn check() -> Unit:
+    error Missing.Bad when true
+"#,
+    )]);
+    assert!(reference_errors.iter().any(|error| {
+        error
+            .diagnostic
+            .message
+            .contains("unknown type or declaration")
+    }));
+}
 
 #[test]
-fn rejects_traits_generics_and_containers() {
-    let errors = diagnostics([source(
-        "src/unsupported.cott",
-        r#"module unsupported
+fn accepts_numeric_operands_in_owned_contract_conditions() {
+    let project = lower_project([source(
+        "src/conditions.cott",
+        r#"module conditions
 
-trait Nope:
-    fn run(self) -> Unit
+fn check(value: I32) -> Unit:
+    requires value > 0
+    ensures value > 0
+"#,
+    )]);
+    assert_eq!(project.modules.len(), 1);
+}
+
+#[test]
+fn accepts_generics_and_containers_in_owned_hir() {
+    let project = lower_project([source(
+        "src/supported.cott",
+        r#"module supported
 
 struct Box[T]:
     value: T
 
 alias Values = List[Bool]
 
-fn generic[T]() -> Unit
+fn generic[T](value: T) -> Values
 "#,
     )]);
-    assert!(!errors.is_empty());
-    assert!(
-        errors
+    let module = &project.modules[0];
+    assert_eq!(
+        module
+            .declarations
             .iter()
-            .all(|error| error.path == Path::new("src/unsupported.cott"))
+            .map(|declaration| declaration.id().as_string())
+            .collect::<Vec<_>>(),
+        ["supported.Box", "supported.Values", "supported.generic"]
+    );
+    let HirDeclaration::Struct(container) = &module.declarations[0] else {
+        panic!("expected generic container");
+    };
+    assert_eq!(
+        container.fields[0].ty,
+        HirType::TypeParameter { name: "T".into() }
+    );
+    let HirDeclaration::Alias(values) = &module.declarations[1] else {
+        panic!("expected container alias");
+    };
+    assert_eq!(
+        values.target,
+        HirType::List {
+            item: Box::new(HirType::Primitive(PrimitiveType::Bool))
+        }
     );
 }
 
 #[test]
-fn rejects_nonempty_contracts_and_effects() {
-    let errors = diagnostics([source(
+fn accepts_nonempty_contracts_and_effects_in_owned_hir() {
+    let project = lower_project([source(
         "src/contracts.cott",
-        "module contracts\nfn guarded() -> Unit:\n    requires true\n    effects [IO]\n",
+        r#"module contracts
+
+enum Error:
+    Bad
+
+fn guarded(value: I32) -> Unit:
+    requires value > 0
+    ensures value > 1
+    error Error.Bad when value == 0
+    effects [IO]
+"#,
     )]);
-    assert!(!errors.is_empty());
-    assert!(
-        errors
-            .iter()
-            .all(|error| error.path == Path::new("src/contracts.cott"))
-    );
+    let HirDeclaration::Function(function) = &project.modules[0].declarations[1] else {
+        panic!("expected guarded function");
+    };
+    assert_eq!(function.contract.clauses.len(), 3);
+    assert!(matches!(
+        &function.contract.clauses[0].kind,
+        HirClauseKind::Requires { .. }
+    ));
+    assert!(matches!(
+        &function.contract.clauses[1].kind,
+        HirClauseKind::Ensures { .. }
+    ));
+    assert!(matches!(
+        &function.contract.clauses[2].kind,
+        HirClauseKind::Error { .. }
+    ));
+    assert_eq!(function.contract.effects[0].key, "IO");
 }
 
 #[test]

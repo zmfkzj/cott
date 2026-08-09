@@ -322,7 +322,16 @@ struct Analyzer {
     resolving: HashSet<SymbolId>,
 }
 
-/// Analyze a parsed project without reading from the filesystem.
+/// Validate parsed syntax and project relationships without constructing the
+/// legacy semantic snapshot. HIR uses this only for shared diagnostics.
+pub(crate) fn validate_parsed_project(
+    source_root: &Path,
+    parsed: &ParsedProject,
+) -> Result<(), Vec<ProjectDiagnostic>> {
+    let mut analyzer = Analyzer::new(source_root, parsed.clone());
+    analyzer.validate_only()
+}
+
 pub fn analyze_project(
     source_root: &Path,
     parsed: ParsedProject,
@@ -382,6 +391,25 @@ impl Analyzer {
             declaration_dependencies: BTreeMap::new(),
             diagnostics,
             resolving: HashSet::new(),
+        }
+    }
+    fn validate_only(&mut self) -> Result<(), Vec<ProjectDiagnostic>> {
+        if self.modules.is_empty() {
+            return Err(vec![ProjectDiagnostic {
+                path: self.source_root.clone(),
+                diagnostic: Diagnostic::new("project contains no parsed sources", Span::new(0, 0)),
+            }]);
+        }
+        self.index_modules();
+        self.index_declarations();
+        self.validate_imports();
+        self.validate_module_cycles();
+        self.validate_declaration_shapes();
+        self.validate_declaration_cycles();
+        if self.diagnostics.values.is_empty() {
+            Ok(())
+        } else {
+            Err(std::mem::replace(&mut self.diagnostics, Diagnostics::new()).finish())
         }
     }
 
@@ -699,6 +727,7 @@ impl Analyzer {
             for declaration in &module.file.declarations {
                 match declaration {
                     Declaration::Alias(value) => {
+                        self.validate_generics(&module, module_index, &[], &value.target);
                         self.collect_type_dependencies(module_index, &value.target, &value.span);
                     }
                     Declaration::Newtype(value) => {
@@ -707,22 +736,12 @@ impl Analyzer {
                             &value.underlying,
                             &value.span,
                         );
-                        if value.where_clause.is_some() {
-                            self.diagnostics.push(
-                                &module,
-                                value.where_clause.as_ref().unwrap().span.clone(),
-                                "newtype refinement clauses are unsupported in the constrained profile",
-                            );
+                        if let Some(refinement) = &value.where_clause {
+                            self.validate_expression(module_index, refinement, &module);
                         }
                     }
                     Declaration::Struct(value) => {
-                        if !value.generics.is_empty() {
-                            self.diagnostics.push(
-                                &module,
-                                value.generics[0].span.clone(),
-                                "user generics are unsupported in the constrained profile",
-                            );
-                        }
+                        self.validate_generic_list(&module, module_index, &value.generics);
                         let mut names = BTreeSet::new();
                         for field in &value.fields {
                             if !valid_snake(&field.name) {
@@ -740,23 +759,14 @@ impl Analyzer {
                                 );
                             }
                             self.collect_type_dependencies(module_index, &field.ty, &field.span);
-                            if field.default.is_some() {
-                                self.diagnostics.push(
-                                    &module,
-                                    field.default.as_ref().unwrap().span().clone(),
-                                    "struct field defaults are unsupported in the constrained profile",
-                                );
+                            if let Some(default) = &field.default {
+                                let ty = self.resolve_type(module_index, &field.ty);
+                                self.resolve_const_expr(module_index, default, &ty);
                             }
                         }
                     }
                     Declaration::Enum(value) => {
-                        if !value.generics.is_empty() {
-                            self.diagnostics.push(
-                                &module,
-                                value.generics[0].span.clone(),
-                                "user generics are unsupported in the constrained profile",
-                            );
-                        }
+                        self.validate_generic_list(&module, module_index, &value.generics);
                         let mut names = BTreeSet::new();
                         for variant in &value.variants {
                             if !valid_type_name(&variant.name) {
@@ -801,28 +811,48 @@ impl Analyzer {
                         }
                     }
                     Declaration::Trait(value) => {
-                        self.diagnostics.push(
-                            &module,
-                            value.span.clone(),
-                            "traits are unsupported in the constrained profile",
-                        );
+                        self.validate_generic_list(&module, module_index, &value.generics);
+                        for method in &value.methods {
+                            for parameter in &method.parameters {
+                                self.collect_type_dependencies(
+                                    module_index,
+                                    &parameter.ty,
+                                    &parameter.span,
+                                );
+                            }
+                            self.collect_type_dependencies(
+                                module_index,
+                                &method.return_type,
+                                &method.span,
+                            );
+                        }
                     }
                     Declaration::Const(value) => {
                         self.collect_type_dependencies(module_index, &value.ty, &value.span);
+                        let ty = self.resolve_type(module_index, &value.ty);
+                        self.resolve_const_expr(module_index, &value.value, &ty);
                     }
                     Declaration::Function(value) => {
-                        if !value.generics.is_empty() {
-                            self.diagnostics.push(
-                                &module,
-                                value.generics[0].span.clone(),
-                                "user generics are unsupported in the constrained profile",
-                            );
-                        }
-                        if !value.parameters.is_empty() {
-                            self.diagnostics.push(
-                                &module,
-                                value.parameters[0].span.clone(),
-                                "only zero-argument public functions are supported",
+                        let mut names = BTreeSet::new();
+                        for parameter in &value.parameters {
+                            if !valid_snake(&parameter.name) {
+                                self.diagnostics.push(
+                                    &module,
+                                    parameter.span.clone(),
+                                    format!("invalid parameter name `{}`", parameter.name),
+                                );
+                            }
+                            if !names.insert(parameter.name.clone()) {
+                                self.diagnostics.push(
+                                    &module,
+                                    parameter.span.clone(),
+                                    format!("duplicate parameter `{}`", parameter.name),
+                                );
+                            }
+                            self.collect_type_dependencies(
+                                module_index,
+                                &parameter.ty,
+                                &parameter.span,
                             );
                         }
                         self.collect_type_dependencies(
@@ -830,31 +860,124 @@ impl Analyzer {
                             &value.return_type,
                             &value.span,
                         );
-                        match &value.body {
-                            FunctionBody::Signature { .. } => {}
-                            FunctionBody::Clauses { clauses, span } => {
-                                if clauses.is_empty() {
-                                    self.diagnostics.push(
-                                        &module,
-                                        span.clone(),
-                                        "function clauses are unsupported in the constrained profile",
-                                    );
-                                }
-                                for clause in clauses {
-                                    let message = match &clause.kind {
-                                        ClauseKind::Effects { .. } => {
-                                            "effects are unsupported in the constrained profile"
+                        if let FunctionBody::Clauses { clauses, .. } = &value.body {
+                            for clause in clauses {
+                                match &clause.kind {
+                                    ClauseKind::Documentation(_) => {}
+                                    ClauseKind::Requires { condition }
+                                    | ClauseKind::Ensures { condition, .. } => {
+                                        self.validate_expression(module_index, condition, &module);
+                                    }
+                                    ClauseKind::Error { error, when } => {
+                                        let enum_path = if error.segments.len() >= 2 {
+                                            ast::QualifiedName::new(
+                                                error.span.clone(),
+                                                error.segments[..error.segments.len() - 1].to_vec(),
+                                            )
+                                        } else {
+                                            error.clone()
+                                        };
+                                        let Some(symbol) = self.resolve_reference(
+                                            module_index,
+                                            &enum_path,
+                                            &clause.span,
+                                            true,
+                                        ) else {
+                                            continue;
+                                        };
+                                        if !self.is_enum(&symbol) {
+                                            self.diagnostics.push(
+                                                &module,
+                                                error.span.clone(),
+                                                "error clause must name an enum variant",
+                                            );
                                         }
-                                        _ => {
-                                            "function contract clauses are unsupported in the constrained profile"
+                                        if let Some(when) = when {
+                                            self.validate_expression(module_index, when, &module);
                                         }
-                                    };
-                                    self.diagnostics.push(&module, clause.span.clone(), message);
+                                    }
+                                    ClauseKind::Effects { effects } => {
+                                        for effect in effects {
+                                            if effect.segments.is_empty() {
+                                                self.diagnostics.push(
+                                                    &module,
+                                                    effect.span.clone(),
+                                                    "effect name cannot be empty",
+                                                );
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+
+    fn validate_generic_list(
+        &mut self,
+        module: &ModuleInput,
+        module_index: usize,
+        generics: &[ast::GenericParam],
+    ) {
+        let mut names = BTreeSet::new();
+        for generic in generics {
+            if !names.insert(generic.name.clone()) {
+                self.diagnostics.push(
+                    module,
+                    generic.span.clone(),
+                    format!("duplicate generic parameter `{}`", generic.name),
+                );
+            }
+            for bound in &generic.bounds {
+                self.collect_type_dependencies(module_index, bound, &generic.span);
+            }
+        }
+    }
+
+    fn validate_generics(
+        &mut self,
+        _module: &ModuleInput,
+        module_index: usize,
+        _generics: &[ast::GenericParam],
+        ty: &ast::Type,
+    ) {
+        self.collect_type_dependencies(module_index, ty, &ty.span);
+    }
+    fn validate_expression(
+        &mut self,
+        module_index: usize,
+        expression: &Expr,
+        module: &ModuleInput,
+    ) {
+        match &expression.kind {
+            ExprKind::Literal(_) => {}
+            ExprKind::Parenthesized(inner) => self.validate_expression(module_index, inner, module),
+            ExprKind::Unary { operand, .. } => {
+                self.validate_expression(module_index, operand, module)
+            }
+            ExprKind::Binary { left, right, .. } => {
+                self.validate_expression(module_index, left, module);
+                self.validate_expression(module_index, right, module);
+            }
+            ExprKind::Comparison { first, rest } => {
+                self.validate_expression(module_index, first, module);
+                for (_, value) in rest {
+                    self.validate_expression(module_index, value, module);
+                }
+            }
+            ExprKind::Name(path) => {
+                self.resolve_reference(module_index, path, &expression.span, false);
+            }
+            ExprKind::Field { base, .. } => self.validate_expression(module_index, base, module),
+            ExprKind::Unit => {
+                self.diagnostics.push(
+                    module,
+                    expression.span.clone(),
+                    "contract condition must be boolean",
+                );
             }
         }
     }
@@ -1138,15 +1261,25 @@ impl Analyzer {
                 self.check_arity(module_index, ty, 0, &name);
                 return ResolvedType::Primitive(primitive);
             }
-            if name == "Option" {
-                self.check_arity(module_index, ty, 1, "Option");
-                let inner = ty
-                    .arguments
-                    .first()
-                    .and_then(type_argument)
-                    .map(|inner| self.resolve_type(module_index, inner))
-                    .unwrap_or(ResolvedType::Primitive(PrimitiveType::Unit));
-                return ResolvedType::Option(Box::new(inner));
+            if matches!(name.as_str(), "F32" | "JsonValue" | "Never") {
+                self.check_arity(module_index, ty, 0, &name);
+                return ResolvedType::Primitive(PrimitiveType::Unit);
+            }
+            if matches!(name.as_str(), "List" | "Set" | "Option") {
+                self.check_arity(module_index, ty, 1, &name);
+                if let Some(inner) = ty.arguments.first().and_then(type_argument) {
+                    let _ = self.resolve_type(module_index, inner);
+                }
+                return ResolvedType::Primitive(PrimitiveType::Unit);
+            }
+            if name == "Map" || name == "Tuple2" {
+                self.check_arity(module_index, ty, 2, &name);
+                for argument in &ty.arguments {
+                    if let Some(inner) = type_argument(argument) {
+                        let _ = self.resolve_type(module_index, inner);
+                    }
+                }
+                return ResolvedType::Primitive(PrimitiveType::Unit);
             }
             if name == "Result" {
                 self.check_arity(module_index, ty, 2, "Result");
@@ -1165,13 +1298,11 @@ impl Analyzer {
                     ResolvedType::Named(symbol) => Some(symbol.clone()),
                     _ => None,
                 });
-                if error_symbol.is_none() {
-                    self.diagnostics.push(
-                        &self.modules[module_index],
-                        ty.span.clone(),
-                        "Result error type must resolve to an enum declaration",
-                    );
-                } else if !self.is_enum(error_symbol.as_ref().unwrap()) {
+                if error_symbol
+                    .as_ref()
+                    .map(|symbol| !self.is_enum(symbol))
+                    .unwrap_or(true)
+                {
                     self.diagnostics.push(
                         &self.modules[module_index],
                         ty.span.clone(),

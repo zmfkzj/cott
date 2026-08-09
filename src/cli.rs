@@ -12,7 +12,7 @@ use crate::binding::{
 };
 use crate::compiler::{ProjectDiagnostic, parse_project};
 use crate::hir::lower;
-use crate::ir::from_hir;
+use crate::ir::render;
 use crate::project::{Project, discover_sources, load_project};
 use crate::python_emit::{Emission, EmitDiagnostic, emit};
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession};
@@ -471,7 +471,7 @@ fn plan(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
             return Err(3);
         }
     };
-    let ir = match from_hir(&hir) {
+    let ir = match render(&hir) {
         Ok(ir) => ir,
         Err(error) => {
             eprintln!("error: {error}");
@@ -543,7 +543,7 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
             return 3;
         }
     };
-    let ir = match from_hir(&hir) {
+    let ir = match render(&hir) {
         Ok(ir) => ir,
         Err(error) => {
             eprintln!("error: {error}");
@@ -626,7 +626,7 @@ fn generate_project(
             return 3;
         }
     };
-    let ir = match from_hir(&hir) {
+    let ir = match render(&hir) {
         Ok(ir) => ir,
         Err(error) => {
             eprintln!("error: {error}");
@@ -691,18 +691,17 @@ fn generate_project(
                 }
             };
             let target = temporary.workspace.join("implementation.py");
-            let module_ir = match ir
-                .modules
-                .iter()
-                .find(|module| module.module == unresolved_binding.module)
-            {
-                Some(module) => module.bytes.clone(),
-                None => {
-                    let _ = fs::remove_dir_all(&temporary.root);
-                    eprintln!("error: selected function has no canonical IR module");
-                    return 1;
-                }
-            };
+            let module_ir =
+                match ir.modules.iter().find(|module| {
+                    module.module.as_string() == unresolved_binding.module.as_string()
+                }) {
+                    Some(module) => module.bytes.clone(),
+                    None => {
+                        let _ = fs::remove_dir_all(&temporary.root);
+                        eprintln!("error: selected function has no canonical IR module");
+                        return 1;
+                    }
+                };
             let fully_qualified = format!(
                 "{}.{}",
                 unresolved_binding.module.as_string(),

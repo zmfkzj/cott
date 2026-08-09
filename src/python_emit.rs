@@ -209,7 +209,7 @@ pub fn emit(
         if let Some(ir_module) = ir
             .modules
             .iter()
-            .find(|candidate| candidate.module == module.id)
+            .find(|candidate| candidate.module.as_string() == module.id.as_string())
         {
             if !exactly_one_newline(&ir_module.bytes) {
                 diagnostics.push(diag(
@@ -222,9 +222,12 @@ pub fn emit(
         }
     }
     for ir_module in &ir.modules {
-        if !modules.contains_key(&ir_module.module) {
+        if !modules
+            .keys()
+            .any(|module| module.as_string() == ir_module.module.as_string())
+        {
             diagnostics.push(diag(
-                ir_path(&ir_module.module),
+                ir_path_dotted(&ir_module.module.as_string()),
                 "canonical IR contains an unknown module",
             ));
         }
@@ -268,7 +271,7 @@ pub fn emit(
         add_file(
             &mut files,
             &mut diagnostics,
-            ir_path(&ir_module.module),
+            ir_path_dotted(&ir_module.module.as_string()),
             finish(ir_module.bytes.clone()),
         );
     }
@@ -1036,6 +1039,17 @@ fn stub_path(module: &ModuleId) -> PathBuf {
 }
 fn ir_path(module: &ModuleId) -> PathBuf {
     prefixed("ir", module_file(module, ".json"))
+}
+fn ir_path_dotted(module: &str) -> PathBuf {
+    let mut path = PathBuf::new();
+    let mut segments = module.split('.');
+    if let Some(last) = segments.next_back() {
+        for segment in segments {
+            path.push(segment);
+        }
+        path.push(format!("{last}.json"));
+    }
+    prefixed("ir", path)
 }
 fn module_file(module: &ModuleId, suffix: &str) -> PathBuf {
     let mut path = PathBuf::new();
