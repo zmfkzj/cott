@@ -136,6 +136,7 @@ pub struct Diagnostic {
 pub enum Severity {
     Error,
     Warning,
+    Note,
 }
 
 impl Diagnostic {

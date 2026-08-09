@@ -2,11 +2,14 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
-use crate::binding::ResolvedBinding;
+use crate::binding::{BindingOwner, ResolvedBinding};
+use crate::contract_test::derive_strategies;
 use crate::hash::sha256_hex;
 use crate::ir::CanonicalIr;
+use crate::manifest::{ProjectConfig, RuntimeValidation};
+use crate::provenance::{GenerationRecord, GenerationSnapshot};
 use crate::python::artifact_plan::PythonArtifactPlan;
 use crate::python_runtime::render_runtime;
 
@@ -21,18 +24,37 @@ pub struct EmitDiagnostic {
 }
 
 pub fn emit(
-    project_name: &str,
+    config: &ProjectConfig,
     plan: &PythonArtifactPlan,
     ir: &CanonicalIr,
     bindings: &[ResolvedBinding],
 ) -> Result<Emission, Vec<EmitDiagnostic>> {
+    let (target_machine, target_platform) = target_python_identity();
     let mut diagnostics = Vec::new();
+    if target_machine == "unknown" {
+        return Err(vec![diag(
+            "generation.json",
+            "unsupported Python target architecture",
+        )]);
+    }
     let mut modules = BTreeMap::<String, _>::new();
     for module in plan.modules() {
         if modules.insert(module.module.clone(), module).is_some() {
             diagnostics.push(diag(
                 module_path(&module.module),
                 "duplicate canonical module",
+            ));
+        }
+        let segments = module.module.split('.').collect::<Vec<_>>();
+        if segments.iter().any(|segment| !valid_python_name(segment))
+            || matches!(segments.first(), Some(&"cott_runtime" | &"_cott_impl"))
+            || segments
+                .last()
+                .is_some_and(|segment| segment.ends_with("_types"))
+        {
+            diagnostics.push(diag(
+                module_path(&module.module),
+                "module name is reserved or is not a valid Python target name",
             ));
         }
     }
@@ -75,6 +97,52 @@ pub fn emit(
                 }
             }
             validate_declaration(&module.module, object, &mut diagnostics);
+        }
+    }
+    for module in modules.values() {
+        let mut projected = BTreeSet::new();
+        for declaration in &module.declarations {
+            let Some(object) = declaration.as_object() else {
+                continue;
+            };
+            if !object
+                .get("public")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let Some(name) = object.get("name").and_then(Value::as_str).map(local_name) else {
+                continue;
+            };
+            if !valid_python_name(name) || python_support_names().contains(&name) {
+                diagnostics.push(diag(
+                    module_path(&module.module),
+                    format!("public symbol `{name}` collides with a Python target support name"),
+                ));
+            }
+            if !projected.insert(name.to_owned()) {
+                diagnostics.push(diag(
+                    module_path(&module.module),
+                    format!("public Python symbol `{name}` collides"),
+                ));
+            }
+            if object.get("kind").and_then(Value::as_str) == Some("enum")
+                && let Some(variants) = object.get("variants").and_then(Value::as_array)
+            {
+                for variant in variants {
+                    let Some(variant) = variant.get("name").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let projected_variant = format!("{name}_{variant}");
+                    if !projected.insert(projected_variant.clone()) {
+                        diagnostics.push(diag(
+                            module_path(&module.module),
+                            format!("public Python symbol `{projected_variant}` collides"),
+                        ));
+                    }
+                }
+            }
         }
     }
     let functions: BTreeSet<(String, String)> = declarations
@@ -136,10 +204,13 @@ pub fn emit(
                 "binding bytes must end in exactly one newline",
             ));
         }
-        if !binding_defines_symbol(&binding.bytes, function) {
+        if !binding_defines_symbol(&binding.bytes, &binding.implementation_function) {
             diagnostics.push(diag(
                 binding.source.clone(),
-                format!("binding does not define symbol {function}"),
+                format!(
+                    "binding does not define symbol {}",
+                    binding.implementation_function
+                ),
             ));
         }
     }
@@ -193,11 +264,30 @@ pub fn emit(
             ));
         }
     }
+    for module in modules.values() {
+        let mut owners = BTreeMap::<String, BTreeSet<String>>::new();
+        for (source, names) in referenced_imports(module, &declarations) {
+            for name in names {
+                owners.entry(name).or_default().insert(source.clone());
+            }
+        }
+        for (name, sources) in owners {
+            if sources.len() > 1 {
+                diagnostics.push(diag(
+                    module_path(&module.module),
+                    format!(
+                        "ambiguous cross-module Python import `{name}` from {}",
+                        sources.into_iter().collect::<Vec<_>>().join(", ")
+                    ),
+                ));
+            }
+        }
+    }
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
     let mut files = BTreeMap::new();
-    for (path, bytes) in render_runtime(project_name) {
+    for (path, bytes) in render_runtime(&config.project.name) {
         add_file(
             &mut files,
             &mut diagnostics,
@@ -211,13 +301,13 @@ pub fn emit(
             &mut files,
             &mut diagnostics,
             type_path(&module.module),
-            finish(render_types(module, &declarations)),
+            finish(render_types(module, &modules, &declarations)),
         );
         add_file(
             &mut files,
             &mut diagnostics,
             facade_path(&module.module),
-            finish(render_facade(module, bindings)),
+            finish(render_facade(module, bindings, &declarations, config)),
         );
         add_file(
             &mut files,
@@ -234,6 +324,32 @@ pub fn emit(
             finish(ir_module.bytes.clone()),
         );
     }
+    match derive_strategies(ir) {
+        Ok(strategies) => {
+            for strategy in strategies {
+                let (module, function) = strategy
+                    .symbol
+                    .rsplit_once('.')
+                    .unwrap_or(("", &strategy.symbol));
+                let mut path = PathBuf::from("tests/generated");
+                for segment in module.split('.').filter(|segment| !segment.is_empty()) {
+                    path.push(segment);
+                }
+                path.push(format!("{function}.json"));
+                match serde_json::to_vec(&strategy) {
+                    Ok(bytes) => add_file(&mut files, &mut diagnostics, path, finish(bytes)),
+                    Err(error) => diagnostics.push(diag(
+                        path,
+                        format!("failed to serialize contract test strategy: {error}"),
+                    )),
+                }
+            }
+        }
+        Err(error) => diagnostics.push(diag(
+            "tests/generated",
+            format!("failed to derive contract test strategies: {error}"),
+        )),
+    }
     for binding in bindings {
         add_file(
             &mut files,
@@ -245,50 +361,138 @@ pub fn emit(
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
-    let mut ordered: Vec<_> = bindings.iter().collect();
-    ordered.sort_by(|a, b| {
-        (a.module.clone(), a.function.clone()).cmp(&(b.module.clone(), b.function.clone()))
-    });
-    let mut metadata = String::from("{\"bindings\":[");
-    for (index, binding) in ordered.iter().enumerate() {
-        if index != 0 {
-            metadata.push(',');
-        }
-        write!(
-            metadata,
-            "{{\"function\":{},\"module\":{},\"path\":{},\"sha256\":{}}}",
-            json_string(&binding.function),
-            json_string(&binding.module),
-            json_string(&path_string(&binding.generated_relative)),
-            json_string(&binding.sha256)
-        )
-        .unwrap();
+    let mut ir_hashes = serde_json::Map::new();
+    for module in &ir.modules {
+        ir_hashes.insert(
+            module.module.as_string(),
+            json!(format!("sha256:{}", sha256_hex(&module.bytes))),
+        );
     }
-    write!(metadata, "],\"managed_files\":{{").unwrap();
-    for (index, (path, bytes)) in files.iter().enumerate() {
-        if index != 0 {
-            metadata.push(',');
-        }
-        write!(
-            metadata,
-            "{}:{}",
-            json_string(&path_string(path)),
-            json_string(&sha256_hex(bytes))
-        )
-        .unwrap();
+    let mut contract_surface = serde_json::Map::new();
+    let mut public_python_symbols = serde_json::Map::new();
+    for module in modules.values() {
+        contract_surface.insert(
+            module.module.clone(),
+            json!({"declarations": module.declarations}),
+        );
+        let mut names = exported_names(module);
+        names.extend(module.declarations.iter().filter_map(|declaration| {
+            let object = declaration.as_object()?;
+            (object.get("kind").and_then(Value::as_str) == Some("function")
+                && object
+                    .get("public")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false))
+            .then(|| {
+                local_name(
+                    object
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                )
+                .to_owned()
+            })
+        }));
+        names.sort();
+        names.dedup();
+        public_python_symbols.insert(module.module.clone(), json!(names));
     }
-    write!(
-        metadata,
-        "}},\"project\":{},\"verified\":false}}",
-        json_string(project_name)
-    )
-    .unwrap();
-    add_file(
-        &mut files,
-        &mut diagnostics,
-        PathBuf::from("generation.json"),
-        finish(metadata.into_bytes()),
-    );
+    let implementation_symbols = bindings
+        .iter()
+        .map(|binding| {
+            let source_module = binding.implementation_module.replace('.', "/");
+            json!({
+                "content_hash": format!("sha256:{}", binding.sha256),
+                "cott_symbol": format!("{}.{}", binding.module, binding.function),
+                "owner": match binding.owner {
+                    BindingOwner::Manifest => "manifest",
+                    BindingOwner::Agent => "agent",
+                },
+                "python_symbol": format!(
+                    "{}:{}",
+                    binding.implementation_module, binding.implementation_function
+                ),
+                "runtime_origin": path_string(
+                    &Path::new(
+                        Path::new(&config.python.generated)
+                            .file_name()
+                            .unwrap_or_default()
+                    )
+                    .join(&binding.generated_relative)
+                ),
+                "source_origin": path_string(
+                    &Path::new(&config.python.source).join(format!("{source_module}.py"))
+                ),
+            })
+        })
+        .collect::<Vec<_>>();
+    let unresolved = functions
+        .iter()
+        .filter(|function| !seen_bindings.contains(function))
+        .map(|(module, function)| format!("{module}.{function}"))
+        .collect::<Vec<_>>();
+    let artifact_prefix = Path::new(&config.python.generated)
+        .parent()
+        .unwrap_or_else(|| Path::new(""));
+    let managed_files = files
+        .iter()
+        .map(|(path, bytes)| {
+            (
+                path_string(&artifact_prefix.join(path)),
+                format!("sha256:{}", sha256_hex(bytes)),
+            )
+        })
+        .collect();
+    let mut snapshot = GenerationSnapshot {
+        generation_id: String::new(),
+        verified: false,
+        inputs: json!({}),
+        tools: json!({
+            "compiler": {"version": env!("CARGO_PKG_VERSION")},
+            "python": {
+                "cache_tag": "cpython-314",
+                "implementation": "cpython",
+                "machine": target_machine,
+                "os": std::env::consts::OS,
+                "platform": target_platform,
+                "version": "3.14.6",
+            },
+            "runtime": {"abi": "1", "version": env!("CARGO_PKG_VERSION")},
+        }),
+        ir: Value::Object(ir_hashes),
+        contract_surface: Value::Object(contract_surface),
+        public_python_symbols: Value::Object(public_python_symbols),
+        implementations: Value::Array(implementation_symbols),
+        dependencies: json!([]),
+        managed_files,
+        unresolved,
+        verification: Value::Null,
+        agent_runs: Vec::new(),
+    };
+    if let Err(error) = snapshot.compute_generation_id() {
+        diagnostics.push(diag(
+            "generation.json",
+            format!("failed to compute generation identity: {error}"),
+        ));
+    } else {
+        let record = GenerationRecord {
+            schema_version: 1,
+            current: snapshot,
+            last_verified: None,
+        };
+        match record.canonical_bytes() {
+            Ok(bytes) => add_file(
+                &mut files,
+                &mut diagnostics,
+                PathBuf::from("generation.json"),
+                bytes,
+            ),
+            Err(error) => diagnostics.push(diag(
+                "generation.json",
+                format!("failed to serialize generation record: {error}"),
+            )),
+        }
+    }
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
@@ -313,12 +517,6 @@ fn validate_declaration(
             if let Some(ty) = required_value(object, "carrier", module, diagnostics) {
                 validate_type(ty, module, diagnostics);
             }
-            if object
-                .get("refinement")
-                .is_some_and(|value| !value.is_null())
-            {
-                unsupported(module, "newtype refinements are unsupported", diagnostics);
-            }
         }
         "struct" => validate_fields(object, "fields", module, diagnostics),
         "enum" => {
@@ -335,6 +533,32 @@ fn validate_declaration(
                 }
             }
         }
+        "trait" => {
+            if let Some(methods) = required_array(object, "methods", module, diagnostics) {
+                for method in methods {
+                    let Some(method) = method.as_object() else {
+                        unsupported(module, "trait method must be an object", diagnostics);
+                        continue;
+                    };
+                    if let Some(parameters) =
+                        required_array(method, "parameters", module, diagnostics)
+                    {
+                        for parameter in parameters {
+                            if let Some(parameter) = parameter.as_object() {
+                                if let Some(ty) =
+                                    required_value(parameter, "type", module, diagnostics)
+                                {
+                                    validate_type(ty, module, diagnostics);
+                                }
+                            }
+                        }
+                    }
+                    if let Some(ty) = required_value(method, "return_type", module, diagnostics) {
+                        validate_type(ty, module, diagnostics);
+                    }
+                }
+            }
+        }
         "const" => {
             if let Some(ty) = required_value(object, "type", module, diagnostics) {
                 validate_type(ty, module, diagnostics);
@@ -347,12 +571,19 @@ fn validate_declaration(
             let Some(parameters) = required_array(object, "parameters", module, diagnostics) else {
                 return;
             };
-            if !parameters.is_empty() {
-                unsupported(
-                    module,
-                    "functions with parameters are unsupported",
-                    diagnostics,
-                );
+            for parameter in parameters {
+                let Some(parameter) = parameter.as_object() else {
+                    unsupported(module, "function parameter must be an object", diagnostics);
+                    continue;
+                };
+                required_string(parameter, "name", module, diagnostics);
+                required_string(parameter, "kind", module, diagnostics);
+                if let Some(ty) = required_value(parameter, "type", module, diagnostics) {
+                    validate_type(ty, module, diagnostics);
+                }
+                if let Some(default) = parameter.get("default").filter(|value| !value.is_null()) {
+                    validate_value(default, module, diagnostics);
+                }
             }
             if let Some(ty) = required_value(object, "return_type", module, diagnostics) {
                 validate_type(ty, module, diagnostics);
@@ -416,7 +647,10 @@ fn validate_type(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnost
                     | "f64"
                     | "str"
                     | "bytes"
+                    | "path"
                     | "unit"
+                    | "json"
+                    | "never"
             ) {
                 unsupported(
                     module,
@@ -427,26 +661,43 @@ fn validate_type(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnost
         }
         "named" => {
             required_string(object, "name", module, diagnostics);
-            if object
-                .get("args")
-                .and_then(Value::as_array)
-                .is_some_and(|args| !args.is_empty())
-            {
-                unsupported(module, "generic named types are unsupported", diagnostics);
+            if let Some(args) = object.get("args").and_then(Value::as_array) {
+                for arg in args {
+                    validate_type(arg, module, diagnostics);
+                }
             }
         }
-        "option" => {
+        "type_parameter" => {
+            required_string(object, "name", module, diagnostics);
+        }
+        "list" | "set" | "option" => {
             if let Some(item) = required_value(object, "item", module, diagnostics) {
                 validate_type(item, module, diagnostics);
             }
         }
+        "map" => {
+            for field in ["key", "value"] {
+                if let Some(item) = required_value(object, field, module, diagnostics) {
+                    validate_type(item, module, diagnostics);
+                }
+            }
+        }
+        "tuple2" => {
+            for field in ["first", "second"] {
+                if let Some(item) = required_value(object, field, module, diagnostics) {
+                    validate_type(item, module, diagnostics);
+                }
+            }
+        }
         "result" => {
-            if let Some(item) = required_value(object, "ok", module, diagnostics) {
-                validate_type(item, module, diagnostics);
+            for field in ["ok", "error"] {
+                if let Some(item) = required_value(object, field, module, diagnostics) {
+                    validate_type(item, module, diagnostics);
+                }
             }
-            if let Some(item) = required_value(object, "error", module, diagnostics) {
-                validate_type(item, module, diagnostics);
-            }
+        }
+        "opaque" => {
+            required_string(object, "tag", module, diagnostics);
         }
         other => unsupported(
             module,
@@ -477,9 +728,63 @@ fn validate_value(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnos
         }
         "unit" => {}
         "bytes" => {
-            if object.get("value").and_then(Value::as_array).is_none() {
+            if object.get("value").and_then(Value::as_str).is_none() {
                 unsupported(module, "byte value is missing", diagnostics);
             }
+        }
+        "option" => {
+            if let Some(value) = object.get("value").filter(|value| !value.is_null()) {
+                validate_value(value, module, diagnostics);
+            }
+        }
+        "result" => {
+            if let Some(value) = required_value(object, "value", module, diagnostics) {
+                validate_value(value, module, diagnostics);
+            }
+        }
+        "list" | "set" => {
+            if let Some(items) = required_array(object, "items", module, diagnostics) {
+                for item in items {
+                    validate_value(item, module, diagnostics);
+                }
+            }
+        }
+        "map" => {
+            if let Some(entries) = required_array(object, "entries", module, diagnostics) {
+                for entry in entries.iter().filter_map(Value::as_array) {
+                    for item in entry {
+                        validate_value(item, module, diagnostics);
+                    }
+                }
+            }
+        }
+        "tuple2" => {
+            for field in ["first", "second"] {
+                if let Some(item) = required_value(object, field, module, diagnostics) {
+                    validate_value(item, module, diagnostics);
+                }
+            }
+        }
+        "named" => {
+            required_string(object, "symbol", module, diagnostics);
+            if let Some(fields) = required_array(object, "fields", module, diagnostics) {
+                for field in fields.iter().filter_map(Value::as_object) {
+                    if let Some(value) = required_value(field, "value", module, diagnostics) {
+                        validate_value(value, module, diagnostics);
+                    }
+                }
+            }
+        }
+        "enum" => {
+            required_string(object, "variant", module, diagnostics);
+            if let Some(fields) = required_array(object, "fields", module, diagnostics) {
+                for field in fields {
+                    validate_value(field, module, diagnostics);
+                }
+            }
+        }
+        "json" => {
+            required_value(object, "value", module, diagnostics);
         }
         other => unsupported(
             module,
@@ -491,16 +796,17 @@ fn validate_value(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnos
 
 fn render_types(
     module: &crate::python::artifact_plan::PythonArtifactModule,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
     declarations: &BTreeMap<String, String>,
 ) -> Vec<u8> {
     let mut out = String::from(
-        "from __future__ import annotations\n\nfrom dataclasses import dataclass\nfrom typing import TypeAlias, Union\n\nfrom cott_runtime import Option, Result, UNIT, Unit\n",
+        "from __future__ import annotations\n\nimport dataclasses as _dataclasses\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import Final, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable\n\nfrom cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_normalize_f32, _cott_validate_abi\n",
     );
     let imports = referenced_imports(module, declarations);
     for (source, names) in &imports {
         writeln!(
             out,
-            "from {}_types import {}",
+            "from {} import {}",
             type_module_name(source),
             names.iter().cloned().collect::<Vec<_>>().join(", ")
         )
@@ -509,8 +815,18 @@ fn render_types(
     if !imports.is_empty() {
         out.push('\n');
     }
+    let has_generics = module.declarations.iter().any(|declaration| {
+        declaration
+            .get("generics")
+            .and_then(Value::as_array)
+            .is_some_and(|generics| !generics.is_empty())
+    });
+    render_generic_typevars(&mut out, module, declarations, false);
+    if has_generics {
+        out.push('\n');
+    }
     for declaration in &module.declarations {
-        render_type_declaration(&mut out, declaration, module, declarations);
+        render_type_declaration(&mut out, declaration, module, modules, declarations);
     }
     let names = exported_names(module);
     writeln!(
@@ -529,9 +845,11 @@ fn render_type_declaration(
     out: &mut String,
     declaration: &Value,
     module: &crate::python::artifact_plan::PythonArtifactModule,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
     declarations: &BTreeMap<String, String>,
 ) {
     let object = declaration.as_object().unwrap();
+    let typevar_names = generic_typevar_names(module, object, false);
     let kind = object.get("kind").and_then(Value::as_str).unwrap();
     let name = local_name(
         object
@@ -539,109 +857,219 @@ fn render_type_declaration(
             .and_then(Value::as_str)
             .unwrap_or_default(),
     );
+    let generics = generic_parameters_with_names(object, &typevar_names);
+    let generic_base = (!generics.is_empty())
+        .then(|| format!("(Generic[{generics}])"))
+        .unwrap_or_default();
+    match kind {
+        "struct" => render_private_defaults(
+            out,
+            name,
+            object,
+            module,
+            modules,
+            declarations,
+            &typevar_names,
+        ),
+        "enum" => {
+            for variant in object
+                .get("variants")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_object)
+            {
+                let owner = format!(
+                    "{name}_{}",
+                    variant
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                );
+                render_private_defaults(
+                    out,
+                    &owner,
+                    variant,
+                    module,
+                    modules,
+                    declarations,
+                    &typevar_names,
+                );
+            }
+        }
+        _ => {}
+    }
     render_doc(out, object.get("doc"));
     match kind {
         "alias" => writeln!(
             out,
             "{name}: TypeAlias = {}\n",
-            render_type(object.get("target").unwrap(), &module.module, declarations)
+            render_type_with_names(
+                object.get("target").unwrap(),
+                &module.module,
+                declarations,
+                &typevar_names,
+            )
         )
         .unwrap(),
-        "newtype" => writeln!(
-            out,
-            "@dataclass(frozen=True, slots=True, kw_only=True)\nclass {name}:\n    value: {}\n",
-            render_type(object.get("carrier").unwrap(), &module.module, declarations)
-        )
-        .unwrap(),
+        "newtype" => {
+            let carrier = render_type_with_names(
+                object.get("carrier").unwrap(),
+                &module.module,
+                declarations,
+                &typevar_names,
+            );
+            writeln!(
+                out,
+                "@final\n@dataclass(frozen=True, slots=True, kw_only=True)\nclass {name}{generic_base}:\n    value: {carrier}\n\n    def __post_init__(self) -> None:\n        object.__setattr__(self, \"value\", _cott_validate_abi(self.value, {carrier}, path=\"$.value\"))"
+            )
+            .unwrap();
+            if let Some(refinement) = object.get("refinement").filter(|value| !value.is_null()) {
+                let condition =
+                    render_contract_expression(refinement).replace("_result", "self.value");
+                let span = serde_json::to_string(refinement.get("span").unwrap())
+                    .expect("span serializes");
+                let symbol = object
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                writeln!(
+                    out,
+                    "        if not ({condition}):\n            raise CottContractViolation({}, symbol={}, phase=\"refinement\", span={span}, expected=\"true\", actual=\"false\")",
+                    json_string(&format!("{name} refinement failed")),
+                    json_string(symbol),
+                )
+                .unwrap();
+            }
+            if !hash_stable_type(
+                object.get("carrier").unwrap(),
+                modules,
+                &mut BTreeSet::new(),
+            ) {
+                out.push_str("\n    __hash__ = None");
+            }
+            out.push('\n');
+        }
         "struct" => {
             writeln!(
                 out,
-                "@dataclass(frozen=True, slots=True, kw_only=True)\nclass {name}:"
+                "@final\n@dataclass(frozen=True, slots=True, kw_only=True)\nclass {name}{generic_base}:"
             )
             .unwrap();
-            let fields = object.get("fields").and_then(Value::as_array).unwrap();
-            if fields.is_empty() {
-                out.push_str("    pass\n\n");
-            } else {
-                for field in fields {
-                    let field = field.as_object().unwrap();
-                    write!(
-                        out,
-                        "    {}: {}",
-                        local_name(
-                            field
-                                .get("name")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                        ),
-                        render_type(field.get("type").unwrap(), &module.module, declarations)
-                    )
-                    .unwrap();
-                    if let Some(value) = field.get("default").filter(|value| !value.is_null()) {
-                        write!(out, " = {}", render_value(value)).unwrap();
-                    }
-                    out.push('\n');
-                }
-                out.push('\n');
-            }
+            out.push_str("    __hash__ = None\n");
+            render_fields(
+                out,
+                object,
+                name,
+                module,
+                modules,
+                declarations,
+                &typevar_names,
+            );
         }
         "enum" => {
             let variants = object.get("variants").and_then(Value::as_array).unwrap();
             for variant in variants {
                 let variant = variant.as_object().unwrap();
-                let variant_name = local_name(
+                let variant_name = format!(
+                    "{name}_{}",
                     variant
                         .get("name")
                         .and_then(Value::as_str)
-                        .unwrap_or_default(),
+                        .unwrap_or_default()
                 );
-                let fields = variant.get("fields").and_then(Value::as_array).unwrap();
                 writeln!(
                     out,
-                    "@dataclass(frozen=True, slots=True, kw_only=True)\nclass {variant_name}:"
+                    "@final\n@dataclass(frozen=True, slots=True, kw_only=True)\nclass {variant_name}{generic_base}:"
                 )
                 .unwrap();
-                if fields.is_empty() {
-                    out.push_str("    pass\n\n");
-                } else {
-                    for field in fields {
-                        let field = field.as_object().unwrap();
-                        writeln!(
-                            out,
-                            "    {}: {}",
-                            local_name(
-                                field
-                                    .get("name")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default()
-                            ),
-                            render_type(field.get("type").unwrap(), &module.module, declarations)
-                        )
-                        .unwrap();
-                    }
-                    out.push('\n');
+                if variant
+                    .get("fields")
+                    .and_then(Value::as_array)
+                    .is_some_and(|fields| !fields.is_empty())
+                {
+                    out.push_str("    __hash__ = None\n");
                 }
+                render_fields(
+                    out,
+                    variant,
+                    &variant_name,
+                    module,
+                    modules,
+                    declarations,
+                    &typevar_names,
+                );
             }
+            let generic_args = (!generics.is_empty())
+                .then(|| format!("[{generics}]"))
+                .unwrap_or_default();
             writeln!(
                 out,
                 "{name}: TypeAlias = Union[{}]\n",
                 variants
                     .iter()
-                    .map(|variant| local_name(
-                        variant
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                    ))
+                    .filter_map(|variant| variant.get("name").and_then(Value::as_str))
+                    .map(|variant| format!("{name}_{variant}{generic_args}"))
                     .collect::<Vec<_>>()
                     .join(", ")
             )
             .unwrap();
         }
+        "trait" => {
+            let base = if generics.is_empty() {
+                "Protocol".to_owned()
+            } else {
+                format!("Protocol[{generics}]")
+            };
+            writeln!(out, "@runtime_checkable\nclass {name}({base}):").unwrap();
+            let methods = object.get("methods").and_then(Value::as_array).unwrap();
+            if methods.is_empty() {
+                out.push_str("    pass\n\n");
+            } else {
+                for method in methods {
+                    let method = method.as_object().unwrap();
+                    let method_name = local_name(
+                        method
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                    );
+                    let typevar_names = generic_typevar_names(module, object, false);
+                    let (signature, _, _) = render_function_parameters_with_names(
+                        method,
+                        &module.module,
+                        declarations,
+                        &typevar_names,
+                    );
+                    let signature = if signature.is_empty() {
+                        "self".to_owned()
+                    } else {
+                        format!("self, {signature}")
+                    };
+                    let return_type = render_type_with_names(
+                        method.get("return_type").unwrap(),
+                        &module.module,
+                        declarations,
+                        &typevar_names,
+                    );
+                    writeln!(
+                        out,
+                        "    def {method_name}({signature}) -> {return_type}:\n        ...\n"
+                    )
+                    .unwrap();
+                }
+                out.push('\n');
+            }
+        }
         "const" => writeln!(
             out,
-            "{name}: {} = {}\n",
-            render_type(object.get("type").unwrap(), &module.module, declarations),
+            "{name}: Final[{}] = {}\n",
+            render_type_with_names(
+                object.get("type").unwrap(),
+                &module.module,
+                declarations,
+                &typevar_names,
+            ),
             render_value(object.get("value").unwrap())
         )
         .unwrap(),
@@ -649,72 +1077,302 @@ fn render_type_declaration(
         _ => {}
     }
 }
-fn render_facade(
-    module: &crate::python::artifact_plan::PythonArtifactModule,
-    bindings: &[ResolvedBinding],
-) -> Vec<u8> {
-    let mut out =
-        String::from("from __future__ import annotations\n\nfrom cott_runtime import _cott_load\n");
-    let names = exported_names(module);
-    if !names.is_empty() {
-        writeln!(
-            out,
-            "\nfrom {} import {}",
-            type_module_name(&module.module),
-            names.join(", ")
-        )
-        .unwrap();
-    }
-    let mut exported = names;
+
+fn generic_parameters_with_names(
+    object: &serde_json::Map<String, Value>,
+    names: &BTreeMap<String, String>,
+) -> String {
+    object
+        .get("generics")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|generic| generic.get("name").and_then(Value::as_str))
+        .map(|name| names.get(name).cloned().unwrap_or_else(|| name.to_owned()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+fn generic_specs<'a>(
+    module: &'a crate::python::artifact_plan::PythonArtifactModule,
+    functions_only: bool,
+) -> BTreeMap<String, Vec<&'a Value>> {
+    let mut specs = BTreeMap::new();
     for declaration in &module.declarations {
-        let object = declaration.as_object().unwrap();
-        if object.get("kind").and_then(Value::as_str) != Some("function") {
+        let Some(object) = declaration.as_object() else {
+            continue;
+        };
+        if functions_only && object.get("kind").and_then(Value::as_str) != Some("function") {
             continue;
         }
-        let function = local_name(
+        for generic in object
+            .get("generics")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(name) = generic.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let bounds = generic
+                .get("bounds")
+                .and_then(Value::as_array)
+                .map(|bounds| bounds.iter().collect())
+                .unwrap_or_default();
+            specs.entry(name.to_owned()).or_insert(bounds);
+        }
+    }
+    specs
+}
+
+fn generic_typevar_name(
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    object: &serde_json::Map<String, Value>,
+    name: &str,
+    functions_only: bool,
+) -> String {
+    let mut signatures = BTreeSet::new();
+    for declaration in &module.declarations {
+        let Some(candidate) = declaration.as_object() else {
+            continue;
+        };
+        if (functions_only && candidate.get("kind").and_then(Value::as_str) != Some("function"))
+            || (!functions_only
+                && candidate.get("kind").and_then(Value::as_str) == Some("function"))
+        {
+            continue;
+        }
+        for generic in candidate
+            .get("generics")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|generic| generic.get("name").and_then(Value::as_str) == Some(name))
+        {
+            signatures.insert(
+                serde_json::to_string(generic.get("bounds").unwrap_or(&Value::Null))
+                    .expect("generic bounds serialize"),
+            );
+        }
+    }
+    if signatures.len() <= 1 {
+        return name.to_owned();
+    }
+    format!(
+        "_cott_{}_{}",
+        local_name(
             object
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("generic")
+        ),
+        name
+    )
+}
+
+fn generic_typevar_names(
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    object: &serde_json::Map<String, Value>,
+    functions_only: bool,
+) -> BTreeMap<String, String> {
+    object
+        .get("generics")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|generic| {
+            let name = generic.get("name").and_then(Value::as_str)?;
+            Some((
+                name.to_owned(),
+                generic_typevar_name(module, object, name, functions_only),
+            ))
+        })
+        .collect()
+}
+
+fn render_generic_typevars(
+    out: &mut String,
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    declarations: &BTreeMap<String, String>,
+    functions_only: bool,
+) {
+    let mut rendered = BTreeSet::new();
+    for declaration in &module.declarations {
+        let Some(object) = declaration.as_object() else {
+            continue;
+        };
+        if (functions_only && object.get("kind").and_then(Value::as_str) != Some("function"))
+            || (!functions_only && object.get("kind").and_then(Value::as_str) == Some("function"))
+        {
+            continue;
+        }
+        for generic in object
+            .get("generics")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(name) = generic.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let bounds = generic
+                .get("bounds")
+                .and_then(Value::as_array)
+                .map(|bounds| bounds.iter().collect::<Vec<_>>())
+                .unwrap_or_default();
+            let typevar = generic_typevar_name(module, object, name, functions_only);
+            if !rendered.insert(typevar.clone()) {
+                continue;
+            }
+            if bounds.len() > 1 {
+                let protocol = format!("_cott_{typevar}_Bounds");
+                let bases = bounds
+                    .iter()
+                    .map(|bound| render_type(bound, &module.module, declarations))
+                    .chain(std::iter::once("Protocol".to_owned()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                writeln!(out, "class {protocol}({bases}):\n    pass\n").unwrap();
+            }
+            let declaration = match bounds.as_slice() {
+                [bound] => format!(
+                    ", bound={}",
+                    render_type(bound, &module.module, declarations)
+                ),
+                [_first, ..] => format!(", bound=_cott_{typevar}_Bounds"),
+                [] => String::new(),
+            };
+            writeln!(
+                out,
+                "{typevar} = TypeVar({}{declaration})",
+                json_string(&typevar)
+            )
+            .unwrap();
+        }
+    }
+}
+
+fn render_private_defaults(
+    out: &mut String,
+    owner: &str,
+    object: &serde_json::Map<String, Value>,
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+    declarations: &BTreeMap<String, String>,
+    typevar_names: &BTreeMap<String, String>,
+) {
+    for field in object
+        .get("fields")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+    {
+        let Some(value) = field.get("default").filter(|value| !value.is_null()) else {
+            continue;
+        };
+        if python_default_hashable_type(field.get("type").unwrap(), modules, &mut BTreeSet::new()) {
+            continue;
+        }
+        let field_name = local_name(
+            field
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or_default(),
         );
-        if let Some(binding) = bindings.iter().find(|binding| {
-            binding.module == module.module && local_name(&binding.function) == function
-        }) {
-            writeln!(
-                out,
-                "\n{function} = _cott_load({}, {}, {})",
-                json_string(&path_string(&binding.generated_relative)),
-                json_string(&binding.sha256),
-                json_string(function)
+        writeln!(
+            out,
+            "_cott_default_{owner}_{field_name}: Final[{}] = {}",
+            render_type_with_names(
+                field.get("type").unwrap(),
+                &module.module,
+                declarations,
+                typevar_names,
+            ),
+            render_value(value),
+        )
+        .unwrap();
+    }
+}
+
+fn render_fields(
+    out: &mut String,
+    object: &serde_json::Map<String, Value>,
+    owner: &str,
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+    declarations: &BTreeMap<String, String>,
+    typevar_names: &BTreeMap<String, String>,
+) {
+    let fields = object.get("fields").and_then(Value::as_array).unwrap();
+    if fields.is_empty() {
+        out.push_str("    pass\n\n");
+        return;
+    }
+    for field in fields {
+        let field = field.as_object().unwrap();
+        write!(
+            out,
+            "    {}: {}",
+            local_name(
+                field
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            ),
+            render_type_with_names(
+                field.get("type").unwrap(),
+                &module.module,
+                declarations,
+                typevar_names,
             )
-            .unwrap();
-            if object
-                .get("public")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                exported.push(function.to_owned());
+        )
+        .unwrap();
+        if let Some(value) = field.get("default").filter(|value| !value.is_null()) {
+            if python_default_hashable_type(
+                field.get("type").unwrap(),
+                modules,
+                &mut BTreeSet::new(),
+            ) {
+                write!(out, " = {}", render_value(value)).unwrap();
+            } else {
+                let field_name = local_name(
+                    field
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                );
+                write!(
+                    out,
+                    " = _dataclasses.field(default_factory=lambda: _cott_default_{owner}_{field_name})"
+                )
+                .unwrap();
             }
         }
+        out.push('\n');
     }
-    writeln!(
-        out,
-        "\n__all__ = [{}]",
-        exported
-            .iter()
-            .map(|name| json_string(name))
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
-    .unwrap();
-    out.into_bytes()
+    out.push('\n');
 }
-fn render_stub(
+fn render_function_typevars(
+    out: &mut String,
     module: &crate::python::artifact_plan::PythonArtifactModule,
     declarations: &BTreeMap<String, String>,
+) {
+    if generic_specs(module, true).is_empty() {
+        return;
+    }
+    out.push('\n');
+    render_generic_typevars(out, module, declarations, true);
+}
+fn render_facade(
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+
+    bindings: &[ResolvedBinding],
+    declarations: &BTreeMap<String, String>,
+    config: &ProjectConfig,
 ) -> Vec<u8> {
-    let mut out =
-        String::from("from __future__ import annotations\n\nfrom typing import TypeAlias, Union\n");
+    let mut out = String::from(
+        "from __future__ import annotations\n\nimport dataclasses as _dataclasses\nfrom pathlib import Path\nfrom typing import Literal, Never, Protocol, TypeVar\n\nfrom cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi\n",
+    );
     let names = exported_names(module);
     if !names.is_empty() {
         writeln!(
@@ -728,15 +1386,635 @@ fn render_stub(
     for (source, names) in referenced_imports(module, declarations) {
         writeln!(
             out,
-            "from {}_types import {}",
+            "from {} import {}",
             type_module_name(&source),
             names.into_iter().collect::<Vec<_>>().join(", ")
         )
         .unwrap();
     }
+    render_function_typevars(&mut out, module, declarations);
+    let boundary = config.python.runtime_validation == RuntimeValidation::Boundary;
+    let test_only = config.python.runtime_validation == RuntimeValidation::TestOnly;
+    if test_only {
+        out.push_str(
+            "\n_cott_test_context = False\n\ndef _cott_set_test_context(active: bool) -> None:\n    global _cott_test_context\n    _cott_test_context = active\n",
+        );
+    }
+    let mut exported = names;
     for declaration in &module.declarations {
         let object = declaration.as_object().unwrap();
-        let kind = object.get("kind").and_then(Value::as_str).unwrap();
+        if object.get("kind").and_then(Value::as_str) != Some("function") {
+            continue;
+        }
+        let function = local_name(
+            object
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        );
+        let cott_symbol = object
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let function_span =
+            serde_json::to_string(object.get("span").unwrap()).expect("span serializes");
+        let Some(binding) = bindings.iter().find(|binding| {
+            binding.module == module.module && local_name(&binding.function) == function
+        }) else {
+            continue;
+        };
+        let typevar_names = generic_typevar_names(module, object, true);
+        let (signature, call, parameters) = render_function_parameters_with_names(
+            object,
+            &module.module,
+            declarations,
+            &typevar_names,
+        );
+        let return_type = render_type_with_names(
+            object.get("return_type").unwrap(),
+            &module.module,
+            declarations,
+            &typevar_names,
+        );
+        writeln!(out, "\ndef {function}({signature}) -> {return_type}:").unwrap();
+        render_indented_doc(&mut out, object.get("doc"));
+        for (name, ty) in &parameters {
+            let path = json_string(&format!("$.{name}"));
+            if boundary {
+                writeln!(
+                    out,
+                    "    {name} = _cott_validate_abi({name}, {ty}, path={path})"
+                )
+                .unwrap();
+            } else if test_only {
+                writeln!(
+                    out,
+                    "    {name} = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)({name}, {ty}, path={path})"
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    out,
+                    "    {name} = _cott_normalize_f32_abi({name}, {ty}, path={path})"
+                )
+                .unwrap();
+            }
+        }
+        if boundary {
+            render_preconditions(&mut out, object, function);
+        } else if test_only {
+            render_test_only_contract(&mut out, object, function, true);
+        }
+        let never = object
+            .get("return_type")
+            .and_then(Value::as_object)
+            .is_some_and(|ty| {
+                ty.get("kind").and_then(Value::as_str) == Some("primitive")
+                    && ty.get("name").and_then(Value::as_str) == Some("never")
+            });
+        let allows_exit = never
+            && object
+                .get("contract")
+                .and_then(Value::as_object)
+                .and_then(|contract| contract.get("effects"))
+                .and_then(Value::as_array)
+                .is_some_and(|effects| {
+                    effects.iter().any(|effect| {
+                        effect.get("key").and_then(Value::as_str) == Some("process.exit")
+                    })
+                });
+        out.push_str("    try:\n");
+        writeln!(
+            out,
+            "        _implementation = _cott_load({}, {}, {}, expected_project_name={}, expected_cott_symbol={})",
+            json_string(&path_string(&binding.generated_relative)),
+            json_string(&binding.sha256),
+            json_string(&binding.implementation_function),
+            json_string(&config.project.name),
+            json_string(&format!("{}.{}", module.module, function)),
+        )
+        .unwrap();
+        writeln!(out, "        _result = _implementation({call})").unwrap();
+        writeln!(
+            out,
+            "    except CottContractViolation as _error:\n        if _error.symbol is None or _error.symbol == \"_cott_load\":\n            _error.symbol = {}\n        if _error.span is None:\n            _error.span = {function_span}\n        raise",
+            json_string(cott_symbol),
+        )
+        .unwrap();
+        if allows_exit {
+            out.push_str("    except SystemExit:\n        raise\n");
+        } else {
+            writeln!(
+                out,
+                "    except SystemExit as _error:\n        raise CottContractViolation(\"implementation raised SystemExit\", symbol={}, phase=\"implementation-call\", span={function_span}, expected=\"ordinary return or declared Never process.exit\", actual=\"SystemExit\") from _error",
+                json_string(cott_symbol),
+            )
+            .unwrap();
+        }
+        writeln!(
+            out,
+            "    except Exception as _error:\n        raise CottContractViolation(\"implementation raised an undeclared exception\", symbol={}, phase=\"implementation-call\", span={function_span}, expected=\"declared Result error or ordinary return\", actual=type(_error).__name__) from _error",
+            json_string(cott_symbol),
+        )
+        .unwrap();
+        if never {
+            writeln!(
+                out,
+                "    raise CottContractViolation(\"Never function returned\", symbol={}, phase=\"return\", span={function_span}, expected=\"Never\", actual=repr(_result))",
+                json_string(cott_symbol),
+            )
+            .unwrap();
+        } else {
+            if boundary {
+                writeln!(
+                    out,
+                    "    _result = _cott_validate_abi(_result, {return_type}, path=\"$.return\")"
+                )
+                .unwrap();
+                render_postconditions(&mut out, object, function);
+            } else if test_only {
+                writeln!(
+                    out,
+                    "    _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, {return_type}, path=\"$.return\")"
+                )
+                .unwrap();
+                render_test_only_contract(&mut out, object, function, false);
+            } else {
+                writeln!(
+                    out,
+                    "    _result = _cott_normalize_f32_abi(_result, {return_type}, path=\"$.return\")"
+                )
+                .unwrap();
+            }
+            out.push_str("    return _result\n");
+        }
+        if object
+            .get("public")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            exported.push(function.to_owned());
+        }
+    }
+    exported.sort();
+    writeln!(
+        out,
+        "\n__all__ = [{}]",
+        exported
+            .iter()
+            .map(|name| json_string(name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+    .unwrap();
+    out.into_bytes()
+}
+
+fn render_function_parameters_with_names(
+    object: &serde_json::Map<String, Value>,
+    module: &str,
+    declarations: &BTreeMap<String, String>,
+    typevar_names: &BTreeMap<String, String>,
+) -> (String, String, Vec<(String, String)>) {
+    let mut signature = Vec::new();
+    let mut call = Vec::new();
+    let mut typed = Vec::new();
+    let mut keyword_marker = false;
+    for parameter in object
+        .get("parameters")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let name = parameter
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let kind = parameter
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("positional");
+        if kind == "keyword_only" && !keyword_marker {
+            signature.push("*".to_owned());
+            keyword_marker = true;
+        }
+        let ty = render_type_with_names(
+            parameter.get("type").unwrap(),
+            module,
+            declarations,
+            typevar_names,
+        );
+        signature.push(format!("{name}: {ty}"));
+        if kind == "keyword_only" {
+            call.push(format!("{name}={name}"));
+        } else {
+            call.push(name.to_owned());
+        }
+        typed.push((name.to_owned(), ty));
+    }
+    (signature.join(", "), call.join(", "), typed)
+}
+
+fn render_indented_doc(out: &mut String, value: Option<&Value>) {
+    if let Some(text) = value
+        .and_then(Value::as_object)
+        .and_then(|doc| doc.get("text"))
+        .and_then(Value::as_str)
+    {
+        writeln!(
+            out,
+            "    \"\"\"{}\"\"\"",
+            text.replace('\\', "\\\\").replace("\"\"\"", "\\\"\\\"\\\"")
+        )
+        .unwrap();
+    }
+}
+fn render_test_only_contract(
+    out: &mut String,
+    function: &serde_json::Map<String, Value>,
+    local_function: &str,
+    preconditions: bool,
+) {
+    let mut block = String::new();
+    if preconditions {
+        render_preconditions(&mut block, function, local_function);
+    } else {
+        render_postconditions(&mut block, function, local_function);
+    }
+    if block.is_empty() {
+        return;
+    }
+    out.push_str("    if _cott_test_context:\n");
+    for line in block.split_inclusive('\n') {
+        out.push_str("    ");
+        out.push_str(line);
+    }
+}
+
+fn render_preconditions(
+    out: &mut String,
+    function: &serde_json::Map<String, Value>,
+    _local_function: &str,
+) {
+    let clauses = function
+        .get("contract")
+        .and_then(Value::as_object)
+        .and_then(|contract| contract.get("clauses"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for clause in clauses {
+        if clause.get("kind").and_then(Value::as_str) != Some("requires") {
+            continue;
+        }
+        let expression = render_contract_expression(clause.get("expression").unwrap());
+        let label = clause_label(clause);
+        let span = serde_json::to_string(clause.get("span").unwrap()).expect("span serializes");
+        let symbol = function
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        writeln!(
+            out,
+            "    if not ({expression}):\n        raise CottContractViolation(\"requires clause failed\", symbol={}, clause={}, phase=\"requires\", span={span}, expected=\"true\", actual=\"false\")",
+            json_string(symbol),
+            json_string(&label),
+        )
+        .unwrap();
+    }
+    if clauses
+        .iter()
+        .any(|clause| clause.get("kind").and_then(Value::as_str) == Some("error"))
+    {
+        out.push_str("    _expected_error = None\n    _expected_error_span = None\n    _expected_error_clause = None\n");
+        for clause in clauses {
+            if clause.get("kind").and_then(Value::as_str) != Some("error") {
+                continue;
+            }
+            let Some(condition) = clause.get("when").filter(|value| !value.is_null()) else {
+                continue;
+            };
+            let variant = enum_variant_name(
+                clause
+                    .get("variant")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
+            let span = serde_json::to_string(clause.get("span").unwrap()).expect("span serializes");
+            let label = clause_label(clause);
+            writeln!(
+                out,
+                "    if _expected_error is None and ({}):\n        _expected_error = {variant}\n        _expected_error_span = {span}\n        _expected_error_clause = {}",
+                render_contract_expression(condition),
+                json_string(&label),
+            )
+            .unwrap();
+        }
+    }
+}
+
+fn render_postconditions(
+    out: &mut String,
+    function: &serde_json::Map<String, Value>,
+    _local_function: &str,
+) {
+    let clauses = function
+        .get("contract")
+        .and_then(Value::as_object)
+        .and_then(|contract| contract.get("clauses"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let symbol = function
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let function_span =
+        serde_json::to_string(function.get("span").unwrap()).expect("span serializes");
+    let errors = clauses
+        .iter()
+        .filter(|clause| clause.get("kind").and_then(Value::as_str) == Some("error"))
+        .collect::<Vec<_>>();
+    if !errors.is_empty() {
+        let unconditional = errors
+            .iter()
+            .filter(|clause| clause.get("when").is_none_or(Value::is_null))
+            .filter_map(|clause| clause.get("variant").and_then(Value::as_str))
+            .map(enum_variant_name)
+            .collect::<Vec<_>>();
+        let allowed = if unconditional.is_empty() {
+            "()".to_owned()
+        } else {
+            format!("({},)", unconditional.join(", "))
+        };
+        writeln!(
+            out,
+            "    if type(_result) is Err:\n        if _expected_error is not None:\n            if type(_result.error) is not _expected_error:\n                raise CottContractViolation(\"conditional error clause failed\", symbol={}, clause=_expected_error_clause, phase=\"error\", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)\n        elif type(_result.error) not in {allowed}:\n            raise CottContractViolation(\"returned error is not allowed\", symbol={}, phase=\"error\", span={function_span}, expected=\"declared unconditional error variant\", actual=type(_result.error).__name__)\n    elif _expected_error is not None:\n        raise CottContractViolation(\"expected conditional error was not returned\", symbol={}, clause=_expected_error_clause, phase=\"error\", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)",
+            json_string(symbol),
+            json_string(symbol),
+            json_string(symbol),
+        )
+        .unwrap();
+    }
+    for clause in clauses {
+        if clause.get("kind").and_then(Value::as_str) != Some("ensures") {
+            continue;
+        }
+        let label = clause_label(clause);
+        let span = serde_json::to_string(clause.get("span").unwrap()).expect("span serializes");
+        let expression = render_contract_expression(clause.get("expression").unwrap());
+        let pattern = clause.get("pattern").filter(|value| !value.is_null());
+        if let Some(pattern) = pattern {
+            let (guard, bindings) = render_pattern(pattern, "_result");
+            writeln!(out, "    if {guard}:").unwrap();
+            for binding in bindings {
+                writeln!(out, "        {binding}").unwrap();
+            }
+            writeln!(
+                out,
+                "        if not ({expression}):\n            raise CottContractViolation(\"ensures clause failed\", symbol={}, clause={}, phase=\"ensures\", span={span}, expected=\"true\", actual=\"false\")",
+                json_string(symbol),
+                json_string(&label),
+            )
+            .unwrap();
+        } else {
+            writeln!(
+                out,
+                "    if not ({expression}):\n        raise CottContractViolation(\"ensures clause failed\", symbol={}, clause={}, phase=\"ensures\", span={span}, expected=\"true\", actual=\"false\")",
+                json_string(symbol),
+                json_string(&label),
+            )
+            .unwrap();
+        }
+    }
+}
+
+fn clause_label(clause: &Value) -> String {
+    format!(
+        "{}:{}",
+        clause
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("clause"),
+        clause
+            .get("clause_id")
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
+    )
+}
+
+fn render_pattern(pattern: &Value, value: &str) -> (String, Vec<String>) {
+    let kind = pattern
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match kind {
+        "wildcard" => ("True".to_owned(), Vec::new()),
+        "binding" => (
+            "True".to_owned(),
+            vec![format!(
+                "{} = {value}",
+                pattern
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("_binding")
+            )],
+        ),
+        "variant" => {
+            let symbol = pattern
+                .get("symbol")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let variant = if symbol.split('.').count() >= 3 {
+                enum_variant_name(symbol)
+            } else {
+                local_name(symbol).to_owned()
+            };
+            let mut guards = vec![format!("type({value}) is {variant}")];
+            let mut bindings = Vec::new();
+            for (index, argument) in pattern
+                .get("arguments")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                let field = match variant.as_str() {
+                    "Ok" | "Some" => format!("{value}.value"),
+                    "Err" => format!("{value}.error"),
+                    _ => format!(
+                        "getattr({value}, _dataclasses.fields(type({value}))[{index}].name)"
+                    ),
+                };
+                let (guard, nested) = render_pattern(argument, &field);
+                guards.push(guard);
+                bindings.extend(nested);
+            }
+            (guards.join(" and "), bindings)
+        }
+        _ => ("False".to_owned(), Vec::new()),
+    }
+}
+
+fn render_contract_expression(expression: &Value) -> String {
+    let kind = expression
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match kind {
+        "literal" => render_value(expression.get("value").unwrap()),
+        "parameter_ref" | "binding_ref" | "constant_ref" => local_name(
+            expression
+                .get("symbol")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        )
+        .to_owned(),
+        "enum_singleton_ref" => format!(
+            "{}()",
+            enum_variant_name(
+                expression
+                    .get("symbol")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            )
+        ),
+        "self_ref" => "_result".to_owned(),
+        "field" => format!(
+            "({}).{}",
+            render_contract_expression(expression.get("base").unwrap()),
+            expression
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        ),
+        "len" => format!(
+            "len({})",
+            render_contract_expression(expression.get("value").unwrap())
+        ),
+        "unary" => {
+            let op = match expression.get("op").and_then(Value::as_str) {
+                Some("not") => "not ",
+                Some("minus") => "-",
+                _ => "+",
+            };
+            let rendered = format!(
+                "({op}{})",
+                render_contract_expression(expression.get("operand").unwrap())
+            );
+            normalize_contract_f32(expression, rendered)
+        }
+        "binary" => {
+            let left = render_contract_expression(expression.get("left").unwrap());
+            let right = render_contract_expression(expression.get("right").unwrap());
+            let rendered = match expression.get("op").and_then(Value::as_str) {
+                Some("remainder") => format!("_cott_euclidean_mod({left}, {right})"),
+                op => {
+                    let op = match op {
+                        Some("or") => "or",
+                        Some("and") => "and",
+                        Some("subtract") => "-",
+                        Some("multiply") => "*",
+                        Some("divide") => "/",
+                        _ => "+",
+                    };
+                    format!("({left} {op} {right})")
+                }
+            };
+            normalize_contract_f32(expression, rendered)
+        }
+        "comparison_chain" => {
+            let operands = expression
+                .get("operands")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(render_contract_expression)
+                .collect::<Vec<_>>();
+            let operators = expression
+                .get("operators")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|operator| match operator.as_str() {
+                    Some("not_equal") => "!=",
+                    Some("less") => "<",
+                    Some("less_equal") => "<=",
+                    Some("greater") => ">",
+                    Some("greater_equal") => ">=",
+                    _ => "==",
+                })
+                .collect::<Vec<_>>();
+            let mut rendered = String::from("(");
+            if let Some(first) = operands.first() {
+                rendered.push_str(first);
+                for (operator, operand) in operators.iter().zip(operands.iter().skip(1)) {
+                    write!(rendered, " {operator} {operand}").unwrap();
+                }
+            }
+            rendered.push(')');
+            rendered
+        }
+        _ => "False".to_owned(),
+    }
+}
+fn normalize_contract_f32(expression: &Value, rendered: String) -> String {
+    if expression
+        .get("type")
+        .and_then(Value::as_object)
+        .is_some_and(|ty| {
+            ty.get("kind").and_then(Value::as_str) == Some("primitive")
+                && ty.get("name").and_then(Value::as_str) == Some("f32")
+        })
+    {
+        format!("_cott_normalize_f32({rendered})")
+    } else {
+        rendered
+    }
+}
+
+fn render_stub(
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    declarations: &BTreeMap<String, String>,
+) -> Vec<u8> {
+    let mut out = String::from(
+        "from __future__ import annotations\n\nfrom pathlib import Path\nfrom typing import Literal, Never, Protocol, TypeVar\n\nfrom cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit\n",
+    );
+    let names = exported_names(module);
+    if !names.is_empty() {
+        writeln!(
+            out,
+            "\nfrom {} import {}",
+            type_module_name(&module.module),
+            names
+                .iter()
+                .map(|name| format!("{name} as {name}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+        .unwrap();
+    }
+    for (source, names) in referenced_imports(module, declarations) {
+        writeln!(
+            out,
+            "from {} import {}",
+            type_module_name(&source),
+            names.into_iter().collect::<Vec<_>>().join(", ")
+        )
+        .unwrap();
+    }
+    render_function_typevars(&mut out, module, declarations);
+    let mut exported = names;
+    for declaration in &module.declarations {
+        let object = declaration.as_object().unwrap();
+        if object.get("kind").and_then(Value::as_str) != Some("function")
+            || !object
+                .get("public")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        {
+            continue;
+        }
         let name = local_name(
             object
                 .get("name")
@@ -744,96 +2022,205 @@ fn render_stub(
                 .unwrap_or_default(),
         );
         render_doc(&mut out, object.get("doc"));
-        match kind {
-            "alias" => writeln!(
-                out,
-                "{name}: TypeAlias = {}\n",
-                render_type(object.get("target").unwrap(), &module.module, declarations)
-            )
-            .unwrap(),
-            "newtype" | "struct" => writeln!(out, "class {name}: ...\n").unwrap(),
-            "enum" => {
-                let variants = object.get("variants").and_then(Value::as_array).unwrap();
-                writeln!(
-                    out,
-                    "{name}: TypeAlias = Union[{}]\n",
-                    variants
-                        .iter()
-                        .map(|v| local_name(
-                            v.get("name").and_then(Value::as_str).unwrap_or_default()
-                        ))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-                .unwrap();
-            }
-            "const" => writeln!(
-                out,
-                "{name}: {}\n",
-                render_type(object.get("type").unwrap(), &module.module, declarations)
-            )
-            .unwrap(),
-            "function" => writeln!(
-                out,
-                "def {name}() -> {}: ...\n",
-                render_type(
-                    object.get("return_type").unwrap(),
-                    &module.module,
-                    declarations
-                )
-            )
-            .unwrap(),
-            _ => {}
-        }
+        let typevar_names = generic_typevar_names(module, object, true);
+        let (signature, _, _) = render_function_parameters_with_names(
+            object,
+            &module.module,
+            declarations,
+            &typevar_names,
+        );
+        let return_type = render_type_with_names(
+            object.get("return_type").unwrap(),
+            &module.module,
+            declarations,
+            &typevar_names,
+        );
+        writeln!(out, "def {name}({signature}) -> {return_type}: ...\n").unwrap();
+        exported.push(name.to_owned());
     }
+    exported.sort();
+    writeln!(
+        out,
+        "__all__ = [{}]",
+        exported
+            .iter()
+            .map(|name| json_string(name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+    .unwrap();
     out.into_bytes()
 }
-fn render_type(value: &Value, _module: &str, _declarations: &BTreeMap<String, String>) -> String {
+fn render_type(value: &Value, module: &str, declarations: &BTreeMap<String, String>) -> String {
+    render_type_with_names(value, module, declarations, &BTreeMap::new())
+}
+
+fn render_type_with_names(
+    value: &Value,
+    module: &str,
+    declarations: &BTreeMap<String, String>,
+    typevar_names: &BTreeMap<String, String>,
+) -> String {
     let object = value.as_object().unwrap();
     match object.get("kind").and_then(Value::as_str).unwrap() {
         "primitive" => match object.get("name").and_then(Value::as_str).unwrap() {
             "bool" => "bool",
-            "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => "int",
-            "f32" | "f64" => "float",
+            "i8" => "I8",
+            "i16" => "I16",
+            "i32" => "I32",
+            "i64" => "I64",
+            "u8" => "U8",
+            "u16" => "U16",
+            "u32" => "U32",
+            "u64" => "U64",
+            "f32" => "F32",
+            "f64" => "F64",
             "str" => "str",
             "bytes" => "bytes",
+            "path" => "Path",
             "unit" => "Unit",
-            other => other,
+            "json" => "JsonValue",
+            "never" => "Never",
+            _ => "object",
         }
         .into(),
-        "named" => local_name(
-            object
+        "named" => {
+            let name = local_name(
+                object
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
+            let args = object
+                .get("args")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|argument| {
+                    render_type_with_names(argument, module, declarations, typevar_names)
+                })
+                .collect::<Vec<_>>();
+            if args.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{name}[{}]", args.join(", "))
+            }
+        }
+        "type_parameter" => {
+            let name = object
                 .get("name")
                 .and_then(Value::as_str)
-                .unwrap_or_default(),
-        )
-        .into(),
+                .unwrap_or("object");
+            typevar_names
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| name.to_owned())
+        }
+        "list" => format!(
+            "CottList[{}]",
+            render_type_with_names(
+                object.get("item").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            )
+        ),
+        "set" => format!(
+            "CottSet[{}]",
+            render_type_with_names(
+                object.get("item").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            )
+        ),
+        "map" => format!(
+            "FrozenMap[{}, {}]",
+            render_type_with_names(
+                object.get("key").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            ),
+            render_type_with_names(
+                object.get("value").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            )
+        ),
+        "tuple2" => format!(
+            "CottTuple2[{}, {}]",
+            render_type_with_names(
+                object.get("first").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            ),
+            render_type_with_names(
+                object.get("second").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            )
+        ),
         "option" => format!(
             "Option[{}]",
-            render_type(object.get("item").unwrap(), _module, _declarations)
+            render_type_with_names(
+                object.get("item").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            )
         ),
         "result" => format!(
             "Result[{}, {}]",
-            render_type(object.get("ok").unwrap(), _module, _declarations),
-            render_type(object.get("error").unwrap(), _module, _declarations)
+            render_type_with_names(
+                object.get("ok").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            ),
+            render_type_with_names(
+                object.get("error").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            )
         ),
-        _ => "typing.Any".into(),
+        "opaque" => format!(
+            "Opaque[Literal[{}]]",
+            json_string(
+                object
+                    .get("tag")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            )
+        ),
+        _ => "object".into(),
     }
 }
 fn render_value(value: &Value) -> String {
     let object = value.as_object().unwrap();
     match object.get("kind").and_then(Value::as_str).unwrap() {
-        "bool" => object.get("value").unwrap().to_string(),
-        "integer" | "string" => object
+        "bool" => {
+            if object.get("value").and_then(Value::as_bool) == Some(true) {
+                "True".into()
+            } else {
+                "False".into()
+            }
+        }
+        "integer" => object
             .get("value")
-            .map(|value| {
-                if value.is_string() {
-                    json_string(value.as_str().unwrap())
-                } else {
-                    value.to_string()
-                }
-            })
-            .unwrap_or_default(),
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        "string" => json_string(
+            object
+                .get("value")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        ),
         "f32" => float_bits(
             object
                 .get("bits")
@@ -849,19 +2236,146 @@ fn render_value(value: &Value) -> String {
             false,
         ),
         "bytes" => format!(
-            "bytes([{}])",
-            object
-                .get("value")
-                .and_then(Value::as_array)
-                .map(|values| values
-                    .iter()
-                    .map(Value::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", "))
-                .unwrap_or_default()
+            "bytes.fromhex({})",
+            json_string(
+                object
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            )
         ),
         "unit" => "UNIT".into(),
+        "option" => object
+            .get("value")
+            .filter(|value| !value.is_null())
+            .map(|value| format!("Some(value={})", render_value(value)))
+            .unwrap_or_else(|| "Nothing()".into()),
+        "result" => {
+            let constructor = if object.get("ok").and_then(Value::as_bool) == Some(true) {
+                "Ok"
+            } else {
+                "Err"
+            };
+            let field = if constructor == "Ok" {
+                "value"
+            } else {
+                "error"
+            };
+            format!(
+                "{constructor}({field}={})",
+                render_value(object.get("value").unwrap())
+            )
+        }
+        "list" => format!(
+            "CottList(values=[{}])",
+            render_value_items(object.get("items"))
+        ),
+        "set" => format!(
+            "CottSet(values=[{}])",
+            render_value_items(object.get("items"))
+        ),
+        "map" => format!(
+            "FrozenMap(values={{{}}})",
+            object
+                .get("entries")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_array)
+                .filter(|entry| entry.len() == 2)
+                .map(|entry| format!("{}: {}", render_value(&entry[0]), render_value(&entry[1])))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        "tuple2" => format!(
+            "CottTuple2(first={}, second={})",
+            render_value(object.get("first").unwrap()),
+            render_value(object.get("second").unwrap())
+        ),
+        "named" => format!(
+            "{}({})",
+            local_name(
+                object
+                    .get("symbol")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            ),
+            object
+                .get("fields")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_object)
+                .map(|field| format!(
+                    "{}={}",
+                    field
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    render_value(field.get("value").unwrap())
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        "enum" => {
+            let variant = enum_variant_name(
+                object
+                    .get("variant")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
+            let values = render_value_items(object.get("fields"));
+            if values.is_empty() {
+                format!("{variant}()")
+            } else {
+                format!(
+                    "{variant}(**{{_field.name: _value for _field, _value in zip(_dataclasses.fields({variant}), ({values},))}})"
+                )
+            }
+        }
+        "json" => render_json_value(object.get("value").unwrap()),
         _ => "None".into(),
+    }
+}
+
+fn render_value_items(value: Option<&Value>) -> String {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(render_value)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn render_json_value(value: &Value) -> String {
+    match value {
+        Value::Null => "JsonNull()".into(),
+        Value::Bool(value) => format!(
+            "JsonBoolean(value={})",
+            if *value { "True" } else { "False" }
+        ),
+        Value::Number(value) if value.is_i64() || value.is_u64() => {
+            format!("JsonInteger(value={value})")
+        }
+        Value::Number(value) => format!("JsonFloat(value={value})"),
+        Value::String(value) => format!("JsonString(value={})", json_string(value)),
+        Value::Array(values) => format!(
+            "JsonArray(value=CottList(values=[{}]))",
+            values
+                .iter()
+                .map(render_json_value)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Object(values) => format!(
+            "JsonObject(value=FrozenMap(values={{{}}}))",
+            values
+                .iter()
+                .map(|(key, value)| format!("{}: {}", json_string(key), render_json_value(value)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 fn float_bits(bits: &str, single: bool) -> String {
@@ -910,34 +2424,92 @@ fn referenced_imports(
         for ty in declaration_types(object, kind) {
             collect_named(ty, &module.module, declarations, &mut imports);
         }
-        if matches!(kind, "struct" | "enum") {
-            if let Some(groups) = object
-                .get(if kind == "struct" {
-                    "fields"
-                } else {
-                    "variants"
-                })
+        for generic in object
+            .get("generics")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(bounds) = generic.get("bounds") {
+                collect_references(bounds, &module.module, declarations, &mut imports);
+            }
+        }
+        if kind == "function" {
+            for parameter in object
+                .get("parameters")
                 .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
             {
-                for group in groups {
-                    let fields = if kind == "struct" {
-                        Some(group)
-                    } else {
-                        group.get("fields")
-                    };
-                    if let Some(fields) = fields.and_then(Value::as_array) {
-                        for field in fields {
-                            if let Some(ty) = field.get("type") {
-                                collect_named(ty, &module.module, declarations, &mut imports);
-                            }
-                        }
+                if let Some(ty) = parameter.get("type") {
+                    collect_named(ty, &module.module, declarations, &mut imports);
+                }
+                if let Some(default) = parameter.get("default") {
+                    collect_references(default, &module.module, declarations, &mut imports);
+                }
+            }
+            if let Some(contract) = object.get("contract") {
+                collect_references(contract, &module.module, declarations, &mut imports);
+            }
+        }
+        if kind == "trait" {
+            for method in object
+                .get("methods")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                for parameter in method
+                    .get("parameters")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(ty) = parameter.get("type") {
+                        collect_named(ty, &module.module, declarations, &mut imports);
                     }
                 }
+                if let Some(ty) = method.get("return_type") {
+                    collect_named(ty, &module.module, declarations, &mut imports);
+                }
+            }
+        }
+        if let Some(groups) = object
+            .get(if kind == "struct" {
+                "fields"
+            } else {
+                "variants"
+            })
+            .and_then(Value::as_array)
+        {
+            let mut fields = Vec::new();
+            if kind == "struct" {
+                fields.extend(groups.iter());
+            } else {
+                for variant in groups {
+                    if let Some(variant_fields) = variant.get("fields").and_then(Value::as_array) {
+                        fields.extend(variant_fields);
+                    }
+                }
+            }
+            for field in fields {
+                if let Some(ty) = field.get("type") {
+                    collect_named(ty, &module.module, declarations, &mut imports);
+                }
+                if let Some(default) = field.get("default") {
+                    collect_references(default, &module.module, declarations, &mut imports);
+                }
+            }
+        }
+        if kind == "newtype" {
+            if let Some(refinement) = object.get("refinement") {
+                collect_references(refinement, &module.module, declarations, &mut imports);
             }
         }
     }
     imports
 }
+
 fn declaration_types<'a>(object: &'a serde_json::Map<String, Value>, kind: &str) -> Vec<&'a Value> {
     match kind {
         "alias" => object.get("target").into_iter().collect(),
@@ -947,6 +2519,92 @@ fn declaration_types<'a>(object: &'a serde_json::Map<String, Value>, kind: &str)
         _ => Vec::new(),
     }
 }
+
+fn collect_references(
+    value: &Value,
+    module: &str,
+    declarations: &BTreeMap<String, String>,
+    imports: &mut BTreeMap<String, BTreeSet<String>>,
+) {
+    let Some(object) = value.as_object() else {
+        if let Some(values) = value.as_array() {
+            for value in values {
+                collect_references(value, module, declarations, imports);
+            }
+        }
+        return;
+    };
+    match object
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+    {
+        "named" => {
+            collect_named(value, module, declarations, imports);
+            if let Some(symbol) = object.get("symbol").and_then(Value::as_str) {
+                collect_symbol(symbol, module, declarations, imports, false);
+            }
+        }
+        "constant_ref" => {
+            if let Some(symbol) = object.get("symbol").and_then(Value::as_str) {
+                collect_symbol(symbol, module, declarations, imports, false);
+            }
+        }
+        "enum_singleton_ref" => {
+            if let Some(symbol) = object.get("symbol").and_then(Value::as_str) {
+                collect_symbol(symbol, module, declarations, imports, true);
+            }
+        }
+        "variant" => {
+            if let Some(symbol) = object.get("symbol").and_then(Value::as_str) {
+                collect_symbol(symbol, module, declarations, imports, true);
+            }
+        }
+        _ => {}
+    }
+    for child in object.values() {
+        collect_references(child, module, declarations, imports);
+    }
+}
+
+fn collect_symbol(
+    symbol: &str,
+    module: &str,
+    declarations: &BTreeMap<String, String>,
+    imports: &mut BTreeMap<String, BTreeSet<String>>,
+    enum_variant: bool,
+) {
+    if enum_variant {
+        let Some((owner, _)) = symbol.rsplit_once('.') else {
+            return;
+        };
+        if declarations.get(owner).map(String::as_str) != Some("enum") {
+            return;
+        }
+        let Some((source, _)) = owner.rsplit_once('.') else {
+            return;
+        };
+        if source != module {
+            imports
+                .entry(source.to_owned())
+                .or_default()
+                .insert(enum_variant_name(symbol));
+        }
+    } else if let Some((source, local)) = symbol.rsplit_once('.') {
+        if source != module
+            && matches!(
+                declarations.get(symbol).map(String::as_str),
+                Some("alias" | "newtype" | "struct" | "enum" | "trait" | "const")
+            )
+        {
+            imports
+                .entry(source.to_owned())
+                .or_default()
+                .insert(local.to_owned());
+        }
+    }
+}
+
 fn collect_named(
     value: &Value,
     module: &str,
@@ -963,32 +2621,41 @@ fn collect_named(
     {
         "named" => {
             if let Some(name) = object.get("name").and_then(Value::as_str) {
-                if let Some((source, local)) = name.rsplit_once('.') {
-                    if source != module
-                        && matches!(
-                            declarations.get(name).map(String::as_str),
-                            Some("alias" | "newtype" | "struct" | "enum")
-                        )
-                    {
-                        imports
-                            .entry(source.to_owned())
-                            .or_default()
-                            .insert(local.to_owned());
-                    }
-                }
+                collect_symbol(name, module, declarations, imports, false);
+            }
+            for argument in object
+                .get("args")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                collect_named(argument, module, declarations, imports);
             }
         }
-        "option" => {
+        "list" | "set" | "option" => {
             if let Some(item) = object.get("item") {
                 collect_named(item, module, declarations, imports);
             }
         }
-        "result" => {
-            if let Some(item) = object.get("ok") {
-                collect_named(item, module, declarations, imports);
+        "map" => {
+            for key in ["key", "value"] {
+                if let Some(value) = object.get(key) {
+                    collect_named(value, module, declarations, imports);
+                }
             }
-            if let Some(item) = object.get("error") {
-                collect_named(item, module, declarations, imports);
+        }
+        "tuple2" => {
+            for key in ["first", "second"] {
+                if let Some(value) = object.get(key) {
+                    collect_named(value, module, declarations, imports);
+                }
+            }
+        }
+        "result" => {
+            for key in ["ok", "error"] {
+                if let Some(value) = object.get(key) {
+                    collect_named(value, module, declarations, imports);
+                }
             }
         }
         _ => {}
@@ -1038,31 +2705,62 @@ fn validate_named(
         _ => {}
     }
 }
+fn target_python_identity() -> (&'static str, &'static str) {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => ("x86_64", "linux-x86_64"),
+        ("linux", "aarch64") => ("arm64", "linux-aarch64"),
+        ("macos", "x86_64") => ("x86_64", "macosx-unknown-x86_64"),
+        ("macos", "aarch64") => ("arm64", "macosx-unknown-arm64"),
+        _ => ("unknown", "unknown"),
+    }
+}
 fn exported_names(module: &crate::python::artifact_plan::PythonArtifactModule) -> Vec<String> {
-    module
-        .declarations
-        .iter()
-        .filter_map(|declaration| {
-            let object = declaration.as_object()?;
-            if !object
-                .get("public")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                return None;
-            }
-            let kind = object.get("kind").and_then(Value::as_str)?;
-            (kind != "function").then(|| {
-                local_name(
-                    object
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                )
-                .to_owned()
-            })
-        })
-        .collect()
+    let mut names = Vec::new();
+    for declaration in &module.declarations {
+        let Some(object) = declaration.as_object() else {
+            continue;
+        };
+        if !object
+            .get("public")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            || object.get("kind").and_then(Value::as_str) == Some("function")
+        {
+            continue;
+        }
+        names.push(
+            local_name(
+                object
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+            .to_owned(),
+        );
+        if object.get("kind").and_then(Value::as_str) == Some("enum") {
+            names.extend(
+                object
+                    .get("variants")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|variant| variant.get("name").and_then(Value::as_str))
+                    .map(|variant| {
+                        format!(
+                            "{}_{variant}",
+                            local_name(
+                                object
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                            )
+                        )
+                    }),
+            );
+        }
+    }
+    names.sort();
+    names
 }
 fn render_doc(out: &mut String, value: Option<&Value>) {
     if let Some(text) = value
@@ -1075,6 +2773,99 @@ fn render_doc(out: &mut String, value: Option<&Value>) {
         out.push_str("\"\"\"\n");
     }
 }
+fn enum_variant_name(symbol: &str) -> String {
+    let mut segments = symbol.rsplit('.');
+    let variant = segments.next().unwrap_or_default();
+    let enumeration = segments.next().unwrap_or_default();
+    format!("{enumeration}_{variant}")
+}
+fn hash_stable_type(
+    value: &Value,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+    visiting: &mut BTreeSet<String>,
+) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    match object.get("kind").and_then(Value::as_str) {
+        Some("primitive") => matches!(
+            object.get("name").and_then(Value::as_str),
+            Some(
+                "bool"
+                    | "i8"
+                    | "i16"
+                    | "i32"
+                    | "i64"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "str"
+                    | "bytes"
+                    | "path"
+            )
+        ),
+        Some("type_parameter") => false,
+        Some("tuple2") => {
+            hash_stable_type(object.get("first").unwrap(), modules, visiting)
+                && hash_stable_type(object.get("second").unwrap(), modules, visiting)
+        }
+        Some("named") => {
+            let Some(symbol) = object.get("name").and_then(Value::as_str) else {
+                return false;
+            };
+            if !visiting.insert(symbol.to_owned()) {
+                return false;
+            }
+            let stable = modules
+                .values()
+                .flat_map(|module| &module.declarations)
+                .filter_map(Value::as_object)
+                .find(|declaration| declaration.get("name").and_then(Value::as_str) == Some(symbol))
+                .is_some_and(
+                    |declaration| match declaration.get("kind").and_then(Value::as_str) {
+                        Some("newtype") => {
+                            hash_stable_type(declaration.get("carrier").unwrap(), modules, visiting)
+                        }
+                        Some("enum") => declaration
+                            .get("variants")
+                            .and_then(Value::as_array)
+                            .is_some_and(|variants| {
+                                variants.iter().all(|variant| {
+                                    variant
+                                        .get("fields")
+                                        .and_then(Value::as_array)
+                                        .is_some_and(Vec::is_empty)
+                                })
+                            }),
+                        _ => false,
+                    },
+                );
+            visiting.remove(symbol);
+            stable
+        }
+        _ => false,
+    }
+}
+fn python_default_hashable_type(
+    value: &Value,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+    visiting: &mut BTreeSet<String>,
+) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    match object.get("kind").and_then(Value::as_str) {
+        Some("primitive") => !matches!(
+            object.get("name").and_then(Value::as_str),
+            Some("never" | "unit" | "json_value")
+        ),
+        Some("tuple2") => true,
+        Some("named") => hash_stable_type(value, modules, visiting),
+        _ => false,
+    }
+}
+
 fn add_file(
     files: &mut BTreeMap<PathBuf, Vec<u8>>,
     diagnostics: &mut Vec<EmitDiagnostic>,
@@ -1196,6 +2987,102 @@ fn module_file(module: &str, suffix: &str) -> PathBuf {
 fn type_module_name(module: &str) -> String {
     format!("{}_types", module)
 }
+fn valid_python_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let identifier = matches!(chars.next(), Some('_' | 'a'..='z' | 'A'..='Z'))
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric());
+    identifier
+        && !name.starts_with("_cott_")
+        && !(name.starts_with("__") && name.ends_with("__"))
+        && !matches!(
+            name,
+            "False"
+                | "None"
+                | "True"
+                | "and"
+                | "as"
+                | "assert"
+                | "async"
+                | "await"
+                | "break"
+                | "class"
+                | "continue"
+                | "def"
+                | "del"
+                | "elif"
+                | "else"
+                | "except"
+                | "finally"
+                | "for"
+                | "from"
+                | "global"
+                | "if"
+                | "import"
+                | "in"
+                | "is"
+                | "lambda"
+                | "nonlocal"
+                | "not"
+                | "or"
+                | "pass"
+                | "raise"
+                | "return"
+                | "try"
+                | "while"
+                | "with"
+                | "yield"
+        )
+}
+
+fn python_support_names() -> &'static [&'static str] {
+    &[
+        "CottContractViolation",
+        "CottList",
+        "CottSet",
+        "CottTuple2",
+        "Err",
+        "F32",
+        "F64",
+        "Final",
+        "FrozenMap",
+        "Generic",
+        "I8",
+        "I16",
+        "I32",
+        "I64",
+        "JsonArray",
+        "JsonBoolean",
+        "JsonFloat",
+        "JsonInteger",
+        "JsonNull",
+        "JsonObject",
+        "JsonString",
+        "JsonValue",
+        "Literal",
+        "Never",
+        "Nothing",
+        "Ok",
+        "Opaque",
+        "Option",
+        "Path",
+        "Protocol",
+        "Result",
+        "Some",
+        "TypeAlias",
+        "TypeVar",
+        "U8",
+        "U16",
+        "U32",
+        "U64",
+        "UNIT",
+        "Union",
+        "Unit",
+        "dataclass",
+        "final",
+        "runtime_checkable",
+    ]
+}
+
 fn module_path(module: &str) -> PathBuf {
     PathBuf::from(module)
 }

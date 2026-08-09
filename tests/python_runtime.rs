@@ -75,8 +75,37 @@ fn generated_runtime_exercises_abi_and_provenance_loader() {
     let bad_hash = sha256_hex(bad);
 
     let script = format!(
-        r#"from cott_runtime import *
-from cott_runtime import _cott_load, _cott_normalize_scalar
+        r#"from pathlib import Path
+import dataclasses
+import hashlib
+import json
+import platform
+import sys
+import sysconfig
+from typing import Generic, Literal, TypeVar
+
+import cott_runtime as _runtime
+from cott_runtime import *
+from cott_runtime import _cott_load, _cott_normalize_f32_abi, _cott_normalize_scalar, _cott_validate_abi
+
+_T = TypeVar("_T")
+@dataclasses.dataclass(frozen=True)
+class Box(Generic[_T]):
+    value: _T
+normalized = _cott_normalize_f32_abi(Box(1.234567), Box[F32])
+assert normalized.value == _runtime._cott_normalize_f32(1.234567)
+
+_good = dict(cott_symbol="demo.run", owner="manifest", python_symbol="_cott_impl.demo.run:run", source_origin="python/demo.py", runtime_origin="_cott_impl/demo/run.py", content_hash="sha256:{good_hash}")
+_bad = dict(cott_symbol="demo.bad", owner="manifest", python_symbol="_cott_impl.demo.bad:bad", source_origin="python/demo.py", runtime_origin="_cott_impl/demo/bad.py", content_hash="sha256:{bad_hash}")
+_current = dict(generation_id="", verified=True, inputs={{}}, tools=dict(
+    python=dict(implementation=sys.implementation.name, version=platform.python_version(), cache_tag=sys.implementation.cache_tag, os=sys.platform, machine=platform.machine(), platform=sysconfig.get_platform(), executable=str(Path(sys.executable).resolve()), content_hash="sha256:"+hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest()),
+    runtime=dict(abi=_runtime._COTT_RUNTIME_ABI, version=_runtime._COTT_RUNTIME_VERSION),
+), ir={{}}, contract_surface={{}}, public_python_symbols={{}}, implementations=[_good, _bad], dependencies=[], managed_files={{}}, unresolved=[], verification=None, agent_runs=[])
+_identity = dict(_current)
+for _key in ("generation_id", "verified", "verification", "agent_runs"):
+    _identity.pop(_key)
+_current["generation_id"] = "sha256:" + hashlib.sha256(json.dumps(_identity, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n").hexdigest()
+Path("generation.json").write_text(json.dumps(dict(schema_version=1, current=_current, last_verified=None), sort_keys=True, separators=(",", ":")) + "\n")
 
 assert I8.__metadata__[0] == CottInt("signed", 8)
 assert U64.__metadata__[0] == CottInt("unsigned", 64)
@@ -88,6 +117,22 @@ assert CottTuple2(first=1, second="x")[0] == 1
 assert hash(CottTuple2(first=1, second="x"))
 assert Unit() is UNIT
 assert Nothing() == Nothing()
+assert _cott_validate_abi(Path("/tmp"), Path) == Path("/tmp")
+assert _cott_validate_abi(Opaque(tag="token", value=object()), Opaque[Literal["token"]]).tag == "token"
+try:
+    _cott_validate_abi(Opaque(tag="other", value=object()), Opaque[Literal["token"]])
+except CottContractViolation as error:
+    assert error.phase == "validation"
+else:
+    raise AssertionError("mismatched Opaque tag was accepted")
+class DerivedPath(type(Path())):
+    pass
+try:
+    _cott_validate_abi(DerivedPath("/tmp"), Path)
+except CottContractViolation:
+    pass
+else:
+    raise AssertionError("Path subclass was accepted")
 
 run = _cott_load("_cott_impl/demo/run.py", "{good_hash}", "run", "demo")
 assert run() == 7
@@ -97,6 +142,22 @@ except CottContractViolation as error:
     assert error.phase == "facade-import"
 else:
     raise AssertionError("project mismatch was accepted")
+_original_generation = Path("generation.json").read_text()
+_mutated = json.loads(_original_generation)
+_mutated["current"]["tools"]["python"]["version"] = "0.0.0"
+_mutated_identity = dict(_mutated["current"])
+for _key in ("generation_id", "verified", "verification", "agent_runs"):
+    _mutated_identity.pop(_key)
+_mutated["current"]["generation_id"] = "sha256:" + hashlib.sha256(json.dumps(_mutated_identity, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n").hexdigest()
+Path("generation.json").write_text(json.dumps(_mutated, sort_keys=True, separators=(",", ":")) + "\n")
+try:
+    _cott_load("_cott_impl/demo/bad.py", "{bad_hash}", "bad", "demo")
+except CottContractViolation as error:
+    assert error.phase == "provenance"
+else:
+    raise AssertionError("runtime identity mismatch was accepted")
+finally:
+    Path("generation.json").write_text(_original_generation)
 try:
     _cott_load("_cott_impl/demo/run.py", "{{:064x}}", "run", "demo")
 except CottContractViolation as error:

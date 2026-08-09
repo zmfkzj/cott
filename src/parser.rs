@@ -1055,6 +1055,13 @@ impl Parser {
                     }
                 }
             }
+            TokenKind::Keyword(Keyword::SelfValue) => {
+                let token = self.bump();
+                Expr {
+                    span: token.span.clone(),
+                    kind: ExprKind::Name(QualifiedName::new(token.span, vec!["self".to_owned()])),
+                }
+            }
             TokenKind::Name(n) => {
                 let t = self.bump();
                 let q = self.parse_qname_after(n, t.span.clone());

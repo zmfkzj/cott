@@ -1,5 +1,5 @@
-from cott_runtime import Some
+from cott_runtime import Option, Some
 
 
-def run() -> Some[str]:
+def run() -> Option[str]:
     return Some(value="enabled")

@@ -89,3 +89,61 @@ fn rejects_snapshot_drift_before_writing() {
     );
     assert!(!temp.path.join("output").exists());
 }
+
+#[test]
+fn rejects_hard_linked_inputs_and_lock_files() {
+    let temp = Temp::new();
+    fs::write(temp.path.join("input"), b"value\n").expect("input");
+    fs::hard_link(temp.path.join("input"), temp.path.join("alias")).expect("hard link");
+    assert!(
+        InputSnapshot::capture(&temp.path, [PathBuf::from("input")]).is_err(),
+        "multiply linked input must be rejected"
+    );
+
+    fs::remove_file(temp.path.join("alias")).expect("remove alias");
+    drop(ProjectSession::acquire(&temp.path).expect("initial session"));
+    fs::hard_link(
+        temp.path.join(".cott/lock"),
+        temp.path.join(".cott/lock-alias"),
+    )
+    .expect("lock hard link");
+    assert!(
+        ProjectSession::acquire(&temp.path).is_err(),
+        "multiply linked lock must be rejected"
+    );
+}
+
+#[test]
+fn rejects_symlinked_path_components() {
+    let temp = Temp::new();
+    fs::create_dir(temp.path.join("real")).expect("real directory");
+    fs::write(temp.path.join("real/input"), b"value\n").expect("input");
+    std::os::unix::fs::symlink("real", temp.path.join("linked")).expect("directory symlink");
+    assert!(
+        InputSnapshot::capture(&temp.path, [PathBuf::from("linked/input")]).is_err(),
+        "symlinked parent must be rejected"
+    );
+}
+
+#[test]
+fn corrupt_or_multiple_journals_are_preserved_for_manual_recovery() {
+    let temp = Temp::new();
+    drop(ProjectSession::acquire(&temp.path).expect("initial session"));
+    let transactions = temp.path.join(".cott/transactions");
+    let first = transactions.join("first");
+    fs::create_dir(&first).expect("first journal");
+    fs::write(first.join("journal.json"), b"not json\n").expect("corrupt journal");
+    let bytes = fs::read(first.join("journal.json")).expect("journal bytes");
+    assert!(ProjectSession::acquire(&temp.path).is_err());
+    assert_eq!(
+        fs::read(first.join("journal.json")).expect("preserved journal"),
+        bytes
+    );
+
+    fs::remove_dir_all(&first).expect("remove corrupt fixture");
+    fs::create_dir(transactions.join("one")).expect("journal one");
+    fs::create_dir(transactions.join("two")).expect("journal two");
+    assert!(ProjectSession::acquire(&temp.path).is_err());
+    assert!(transactions.join("one").exists());
+    assert!(transactions.join("two").exists());
+}

@@ -1,6 +1,6 @@
-from cott_runtime import Ok
-from curriculum.access_grant_types import Granted
+from cott_runtime import Ok, Result
+from curriculum.access_grant_types import AccessError, AccessGrant, AccessGrant_Granted
 
 
-def run() -> Ok[Granted]:
-    return Ok(value=Granted())
+def run() -> Result[AccessGrant, AccessError]:
+    return Ok(value=AccessGrant_Granted())

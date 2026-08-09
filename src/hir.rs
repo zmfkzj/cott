@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use crate::ast::{
     self, BinaryOp, ClauseKind, CompareOp, ConstExpr, Declaration, Expr, ExprKind, FunctionBody,
@@ -69,6 +70,7 @@ pub enum PrimitiveType {
     F64,
     Str,
     Bytes,
+    Path,
     Unit,
     JsonValue,
     Never,
@@ -352,6 +354,7 @@ impl HirDeclaration {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HirModule {
     pub source: PathBuf,
+    pub source_bytes: Arc<[u8]>,
     pub id: ModuleId,
     pub imports: Vec<HirImport>,
     pub declarations: Vec<HirDeclaration>,
@@ -498,11 +501,12 @@ pub enum HirValue {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OwnedDeclKind {
+    Alias,
     Type { generics: usize },
-    Enum,
+    Enum { generics: usize },
     Const,
     Function,
-    Trait,
+    Trait { generics: usize },
 }
 
 struct OwnedLower<'a> {
@@ -511,6 +515,9 @@ struct OwnedLower<'a> {
     declarations: HashMap<SymbolId, OwnedDeclKind>,
     imports: Vec<HashMap<String, SymbolId>>,
     errors: Vec<ProjectDiagnostic>,
+    resolving_aliases: HashSet<SymbolId>,
+    constant_values: HashMap<SymbolId, HirValue>,
+    resolving_constants: HashSet<SymbolId>,
 }
 
 impl<'a> OwnedLower<'a> {
@@ -524,7 +531,7 @@ impl<'a> OwnedLower<'a> {
         for (index, source) in parsed.sources.iter().enumerate() {
             for declaration in &source.syntax.declarations {
                 let (name, kind) = match declaration {
-                    Declaration::Alias(v) => (&v.name, OwnedDeclKind::Type { generics: 0 }),
+                    Declaration::Alias(v) => (&v.name, OwnedDeclKind::Alias),
                     Declaration::Newtype(v) => (&v.name, OwnedDeclKind::Type { generics: 0 }),
                     Declaration::Struct(v) => (
                         &v.name,
@@ -532,8 +539,18 @@ impl<'a> OwnedLower<'a> {
                             generics: v.generics.len(),
                         },
                     ),
-                    Declaration::Enum(v) => (&v.name, OwnedDeclKind::Enum),
-                    Declaration::Trait(v) => (&v.name, OwnedDeclKind::Trait),
+                    Declaration::Enum(v) => (
+                        &v.name,
+                        OwnedDeclKind::Enum {
+                            generics: v.generics.len(),
+                        },
+                    ),
+                    Declaration::Trait(v) => (
+                        &v.name,
+                        OwnedDeclKind::Trait {
+                            generics: v.generics.len(),
+                        },
+                    ),
                     Declaration::Const(v) => (&v.name, OwnedDeclKind::Const),
                     Declaration::Function(v) => (&v.name, OwnedDeclKind::Function),
                 };
@@ -546,6 +563,9 @@ impl<'a> OwnedLower<'a> {
             declarations,
             imports: vec![HashMap::new(); parsed.sources.len()],
             errors: Vec::new(),
+            constant_values: HashMap::new(),
+            resolving_constants: HashSet::new(),
+            resolving_aliases: HashSet::new(),
         };
         for index in 0..out.parsed.sources.len() {
             let uses = out.parsed.sources[index].syntax.uses.clone();
@@ -576,16 +596,11 @@ impl<'a> OwnedLower<'a> {
         });
     }
 
-    fn resolve(
-        &mut self,
-        module: usize,
-        path: &ast::QualifiedName,
-        span: &Span,
-    ) -> Option<SymbolId> {
+    fn lookup(&self, module: usize, path: &ast::QualifiedName) -> Option<SymbolId> {
         let name = path.segments.last()?.clone();
-        let symbol = if path.segments.len() == 1 {
+        if path.segments.len() == 1 {
             self.imports[module].get(&name).cloned().or_else(|| {
-                let candidate = SymbolId::new(self.modules[module].clone(), name.clone());
+                let candidate = SymbolId::new(self.modules[module].clone(), name);
                 self.declarations
                     .contains_key(&candidate)
                     .then_some(candidate)
@@ -593,12 +608,21 @@ impl<'a> OwnedLower<'a> {
         } else {
             let candidate = SymbolId::new(
                 ModuleId::new(path.segments[..path.segments.len() - 1].to_vec()),
-                name.clone(),
+                name,
             );
             self.declarations
                 .contains_key(&candidate)
                 .then_some(candidate)
-        };
+        }
+    }
+
+    fn resolve(
+        &mut self,
+        module: usize,
+        path: &ast::QualifiedName,
+        span: &Span,
+    ) -> Option<SymbolId> {
+        let symbol = self.lookup(module, path);
         if symbol.is_none() {
             self.error(
                 module,
@@ -621,9 +645,192 @@ impl<'a> OwnedLower<'a> {
             );
         }
     }
+    fn newtype_carrier(&mut self, symbol: &SymbolId) -> Option<HirType> {
+        let source_index = self
+            .modules
+            .iter()
+            .position(|module| module == &symbol.module)?;
+        let underlying = self.parsed.sources[source_index]
+            .syntax
+            .declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                Declaration::Newtype(value) if value.name == symbol.name => {
+                    Some(value.underlying.clone())
+                }
+                _ => None,
+            })?;
+        Some(self.ty(source_index, &underlying, &HashSet::new()))
+    }
+
+    fn expression_compat_type(&mut self, ty: &HirType) -> HirType {
+        fn resolve(
+            lower: &mut OwnedLower<'_>,
+            ty: &HirType,
+            seen: &mut HashSet<SymbolId>,
+        ) -> HirType {
+            match ty {
+                HirType::Named { symbol, args }
+                    if lower.declarations.get(symbol)
+                        == Some(&OwnedDeclKind::Type { generics: 0 })
+                        && seen.insert(symbol.clone()) =>
+                {
+                    if let Some(carrier) = lower.newtype_carrier(symbol) {
+                        let resolved = resolve(lower, &carrier, seen);
+                        seen.remove(symbol);
+                        return resolved;
+                    }
+                    HirType::Named {
+                        symbol: symbol.clone(),
+                        args: args.iter().map(|arg| resolve(lower, arg, seen)).collect(),
+                    }
+                }
+                HirType::Named { symbol, args } => HirType::Named {
+                    symbol: symbol.clone(),
+                    args: args.iter().map(|arg| resolve(lower, arg, seen)).collect(),
+                },
+                HirType::List { item } => HirType::List {
+                    item: Box::new(resolve(lower, item, seen)),
+                },
+                HirType::Set { item } => HirType::Set {
+                    item: Box::new(resolve(lower, item, seen)),
+                },
+                HirType::Map { key, value } => HirType::Map {
+                    key: Box::new(resolve(lower, key, seen)),
+                    value: Box::new(resolve(lower, value, seen)),
+                },
+                HirType::Tuple2 { first, second } => HirType::Tuple2 {
+                    first: Box::new(resolve(lower, first, seen)),
+                    second: Box::new(resolve(lower, second, seen)),
+                },
+                HirType::Option { item } => HirType::Option {
+                    item: Box::new(resolve(lower, item, seen)),
+                },
+                HirType::Result { ok, error } => HirType::Result {
+                    ok: Box::new(resolve(lower, ok, seen)),
+                    error: Box::new(resolve(lower, error, seen)),
+                },
+                _ => ty.clone(),
+            }
+        }
+
+        resolve(self, ty, &mut HashSet::new())
+    }
+
+    fn transparent_expression(&mut self, mut expression: HirExpr) -> HirExpr {
+        loop {
+            let HirType::Named { symbol, .. } = &expression.ty else {
+                return expression;
+            };
+            if self.newtype_carrier(symbol).is_none()
+                || !matches!(
+                    &expression.kind,
+                    HirExprKind::ParameterRef(_)
+                        | HirExprKind::BindingRef(_)
+                        | HirExprKind::SelfRef
+                        | HirExprKind::ConstantRef(_)
+                        | HirExprKind::Field { .. }
+                )
+            {
+                return expression;
+            }
+            let carrier = self.newtype_carrier(symbol).unwrap();
+            expression = HirExpr {
+                span: expression.span.clone(),
+                ty: carrier,
+                reference: None,
+                kind: HirExprKind::Field {
+                    base: Box::new(expression),
+                    name: "value".to_owned(),
+                },
+            };
+        }
+    }
 }
 
 impl<'a> OwnedLower<'a> {
+    fn alias_target(&self, symbol: &SymbolId) -> Option<(usize, ast::Type)> {
+        let index = self
+            .modules
+            .iter()
+            .position(|module| module == &symbol.module)?;
+        self.parsed.sources[index]
+            .syntax
+            .declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                Declaration::Alias(value) if value.name == symbol.name => {
+                    Some((index, value.target.clone()))
+                }
+                _ => None,
+            })
+    }
+
+    fn constant_type(&mut self, symbol: &SymbolId) -> Option<HirType> {
+        let index = self
+            .modules
+            .iter()
+            .position(|module| module == &symbol.module)?;
+        let ty = self.parsed.sources[index]
+            .syntax
+            .declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                Declaration::Const(value) if value.name == symbol.name => Some(value.ty.clone()),
+                _ => None,
+            })?;
+        Some(self.ty(index, &ty, &HashSet::new()))
+    }
+
+    fn enum_variant(
+        &self,
+        module: usize,
+        path: &ast::QualifiedName,
+    ) -> Option<(SymbolId, HirType)> {
+        if path.segments.len() < 2 {
+            return None;
+        }
+        let enum_path = ast::QualifiedName::new(
+            path.span.clone(),
+            path.segments[..path.segments.len() - 1].to_vec(),
+        );
+        let enum_symbol = self.lookup(module, &enum_path)?;
+        if !matches!(
+            self.declarations.get(&enum_symbol),
+            Some(OwnedDeclKind::Enum { .. })
+        ) {
+            return None;
+        }
+        let index = self
+            .modules
+            .iter()
+            .position(|candidate| candidate == &enum_symbol.module)?;
+        let variant = path.segments.last()?;
+        let exists = self.parsed.sources[index]
+            .syntax
+            .declarations
+            .iter()
+            .any(|declaration| {
+                matches!(
+                    declaration,
+                    Declaration::Enum(value)
+                        if value.name == enum_symbol.name
+                            && value.variants.iter().any(|item| &item.name == variant)
+                )
+            });
+        exists.then(|| {
+            (
+                SymbolId::new(
+                    enum_symbol.module.clone(),
+                    format!("{}.{}", enum_symbol.name, variant),
+                ),
+                HirType::Named {
+                    symbol: enum_symbol,
+                    args: Vec::new(),
+                },
+            )
+        })
+    }
     fn ty(&mut self, module: usize, value: &ast::Type, generics: &HashSet<String>) -> HirType {
         let name = value.path.segments.last().cloned().unwrap_or_default();
         if value.path.segments.len() == 1 {
@@ -634,9 +841,37 @@ impl<'a> OwnedLower<'a> {
                 self.arity(module, value, 0, &name);
                 return HirType::Primitive(primitive);
             }
+            if name == "Opaque" {
+                self.arity(module, value, 1, &name);
+                return match value.arguments.first().map(|argument| &argument.kind) {
+                    Some(TypeArgKind::String(tag)) if valid_opaque_tag(tag) => {
+                        HirType::Opaque { tag: tag.clone() }
+                    }
+                    Some(TypeArgKind::String(_)) => {
+                        self.error(
+                            module,
+                            value.span.clone(),
+                            "Opaque tag must match [a-z][a-z0-9._-]{0,63}",
+                        );
+                        HirType::Opaque {
+                            tag: "invalid".into(),
+                        }
+                    }
+                    _ => {
+                        self.error(
+                            module,
+                            value.span.clone(),
+                            "Opaque expects one string literal argument",
+                        );
+                        HirType::Opaque {
+                            tag: "invalid".into(),
+                        }
+                    }
+                };
+            }
             let expected = match name.as_str() {
                 "List" | "Set" | "Option" => Some(1),
-                "Map" | "Tuple2" | "Result" => Some(2),
+                "Map" | "Tuple" | "Result" => Some(2),
                 _ => None,
             };
             if let Some(expected) = expected {
@@ -688,7 +923,7 @@ impl<'a> OwnedLower<'a> {
                             tag: "missing".into(),
                         })),
                     },
-                    "Tuple2" => HirType::Tuple2 {
+                    "Tuple" => HirType::Tuple2 {
                         first: Box::new(args.first().cloned().unwrap_or_else(|| HirType::Opaque {
                             tag: "missing".into(),
                         })),
@@ -700,7 +935,7 @@ impl<'a> OwnedLower<'a> {
                         let error = args.get(1).cloned().unwrap_or_else(|| HirType::Opaque {
                             tag: "missing".into(),
                         });
-                        if !matches!(&error, HirType::Named { symbol, .. } if self.declarations.get(symbol) == Some(&OwnedDeclKind::Enum))
+                        if !matches!(&error, HirType::Named { symbol, .. } if matches!(self.declarations.get(symbol), Some(OwnedDeclKind::Enum { .. })))
                         {
                             self.error(
                                 module,
@@ -726,8 +961,27 @@ impl<'a> OwnedLower<'a> {
                 tag: value.path.segments.join("."),
             };
         };
+        if self.declarations.get(&symbol) == Some(&OwnedDeclKind::Alias) {
+            if !self.resolving_aliases.insert(symbol.clone()) {
+                return HirType::Opaque {
+                    tag: "alias-cycle".into(),
+                };
+            }
+            let resolved = self
+                .alias_target(&symbol)
+                .map(|(alias_module, target)| self.ty(alias_module, &target, generics))
+                .unwrap_or_else(|| HirType::Opaque {
+                    tag: "invalid-alias".into(),
+                });
+            self.resolving_aliases.remove(&symbol);
+            return resolved;
+        }
         let expected = match self.declarations.get(&symbol).copied() {
-            Some(OwnedDeclKind::Type { generics }) => generics,
+            Some(
+                OwnedDeclKind::Type { generics }
+                | OwnedDeclKind::Enum { generics }
+                | OwnedDeclKind::Trait { generics },
+            ) => generics,
             _ => 0,
         };
         self.arity(module, value, expected, &symbol.as_string());
@@ -770,41 +1024,558 @@ impl<'a> OwnedLower<'a> {
             .collect()
     }
 
-    fn value(&mut self, module: usize, value: &ConstExpr) -> Option<HirValue> {
-        match value {
-            ConstExpr::Constructor { span, .. } => {
+    fn constant_value(&mut self, symbol: &SymbolId) -> Option<HirValue> {
+        if let Some(value) = self.constant_values.get(symbol) {
+            return Some(value.clone());
+        }
+        let module = self
+            .modules
+            .iter()
+            .position(|candidate| candidate == &symbol.module)?;
+        let declaration = self.parsed.sources[module]
+            .syntax
+            .declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                Declaration::Const(value) if value.name == symbol.name => Some(value.clone()),
+                _ => None,
+            })?;
+        if !self.resolving_constants.insert(symbol.clone()) {
+            self.error(
+                module,
+                declaration.span,
+                format!("constant dependency cycle through `{}`", symbol.as_string()),
+            );
+            return None;
+        }
+        let expected = self.ty(module, &declaration.ty, &HashSet::new());
+        let value = self.value(module, &declaration.value, &expected);
+        self.resolving_constants.remove(symbol);
+        if let Some(value) = &value {
+            if !hir_value_matches_type(value, &expected) {
                 self.error(
                     module,
-                    span.clone(),
-                    "constructors are unsupported in literal constants",
+                    declaration.value.span().clone(),
+                    "constant value does not match its declared type",
                 );
-                None
+                return None;
             }
-            ConstExpr::Expression(expression) => match &expression.kind {
-                ExprKind::Literal(literal) => Some(match &literal.kind {
-                    LiteralKind::Bool(value) => HirValue::Bool(*value),
-                    LiteralKind::Integer(value) => HirValue::Integer(value.clone()),
-                    LiteralKind::Float(value) => HirValue::F64 {
-                        bits: value
-                            .parse::<f64>()
-                            .map(|v| format!("{:016x}", v.to_bits()))
-                            .unwrap_or_default(),
-                    },
-                    LiteralKind::String(value) => HirValue::String(value.clone()),
-                }),
-                ExprKind::Unit => Some(HirValue::Unit),
-                ExprKind::Parenthesized(inner) => {
-                    self.value(module, &ConstExpr::Expression((**inner).clone()))
+            self.constant_values.insert(symbol.clone(), value.clone());
+        }
+        value
+    }
+
+    fn value(&mut self, module: usize, value: &ConstExpr, expected: &HirType) -> Option<HirValue> {
+        match value {
+            ConstExpr::Constructor {
+                span,
+                path,
+                argument,
+            } => {
+                let Some(symbol) = self.resolve(module, path, span) else {
+                    return None;
+                };
+                if self.declarations.get(&symbol) != Some(&OwnedDeclKind::Type { generics: 0 }) {
+                    self.error(
+                        module,
+                        span.clone(),
+                        "constant constructor must name a newtype",
+                    );
+                    return None;
                 }
-                _ => {
+                let source_module = self
+                    .modules
+                    .iter()
+                    .position(|candidate| candidate == &symbol.module)?;
+                let (carrier, refinement) = self.parsed.sources[source_module]
+                    .syntax
+                    .declarations
+                    .iter()
+                    .find_map(|declaration| match declaration {
+                        Declaration::Newtype(value) if value.name == symbol.name => {
+                            Some((value.underlying.clone(), value.where_clause.clone()))
+                        }
+                        _ => None,
+                    })?;
+                let carrier = self.ty(source_module, &carrier, &HashSet::new());
+                let argument = self.value(module, argument, &carrier)?;
+                if !hir_value_matches_type(&argument, &carrier) {
+                    self.error(
+                        module,
+                        span.clone(),
+                        "newtype constructor argument does not match its carrier type",
+                    );
+                    return None;
+                }
+                if !matches!(expected, HirType::Named { symbol: target, .. } if target == &symbol) {
+                    self.error(
+                        module,
+                        span.clone(),
+                        "newtype constructor does not match the declared constant type",
+                    );
+                }
+                if let Some(refinement) = refinement {
+                    let mut env = HashMap::new();
+                    env.insert(
+                        "self".to_owned(),
+                        (
+                            SymbolId::new(symbol.module.clone(), "self"),
+                            carrier.clone(),
+                            false,
+                        ),
+                    );
+                    let refinement = self.expr(source_module, &refinement, &env);
+                    if self.eval_hir_constant(&refinement, Some(&argument))
+                        != Some(HirValue::Bool(true))
+                    {
+                        self.error(
+                            module,
+                            span.clone(),
+                            "newtype constant does not satisfy its refinement",
+                        );
+                        return None;
+                    }
+                }
+                Some(HirValue::Named {
+                    symbol,
+                    fields: vec![("value".to_owned(), argument)],
+                })
+            }
+            ConstExpr::Expression(expression) => {
+                self.constant_expression(module, expression, expected)
+            }
+        }
+    }
+
+    fn constant_expression(
+        &mut self,
+        module: usize,
+        expression: &Expr,
+        expected: &HirType,
+    ) -> Option<HirValue> {
+        match &expression.kind {
+            ExprKind::Literal(literal) => match &literal.kind {
+                LiteralKind::Bool(value) => Some(HirValue::Bool(*value)),
+                LiteralKind::Integer(value) => Some(HirValue::Integer(value.clone())),
+                LiteralKind::Float(value) => {
+                    let parsed = value.parse::<f64>().ok()?;
+                    if matches!(expected, HirType::Primitive(PrimitiveType::F32)) {
+                        Some(HirValue::F32 {
+                            bits: format!("{:08x}", (parsed as f32).to_bits()),
+                        })
+                    } else {
+                        Some(HirValue::F64 {
+                            bits: format!("{:016x}", parsed.to_bits()),
+                        })
+                    }
+                }
+                LiteralKind::String(value) => Some(HirValue::String(value.clone())),
+            },
+            ExprKind::Unit => Some(HirValue::Unit),
+            ExprKind::Parenthesized(inner) => self.constant_expression(module, inner, expected),
+            ExprKind::Name(path) => {
+                if let Some(symbol) = self.lookup(module, path)
+                    && self.declarations.get(&symbol) == Some(&OwnedDeclKind::Const)
+                {
+                    return self.constant_value(&symbol);
+                }
+                self.enum_variant(module, path)
+                    .map(|(variant, _)| HirValue::Enum {
+                        variant,
+                        fields: Vec::new(),
+                    })
+                    .or_else(|| {
+                        self.error(
+                            module,
+                            expression.span.clone(),
+                            "unknown constant reference",
+                        );
+                        None
+                    })
+            }
+            ExprKind::Unary { op, operand } => {
+                let value = self.constant_expression(module, operand, expected)?;
+                eval_const_unary(*op, value).or_else(|| {
                     self.error(
                         module,
                         expression.span.clone(),
-                        "constants must be typed literals",
+                        "invalid constant unary operation",
                     );
                     None
+                })
+            }
+            ExprKind::Binary { left, op, right } => {
+                let left = self.constant_expression(module, left, expected)?;
+                let right = self.constant_expression(module, right, expected)?;
+                eval_const_binary(left, *op, right).or_else(|| {
+                    self.error(
+                        module,
+                        expression.span.clone(),
+                        "invalid constant binary operation",
+                    );
+                    None
+                })
+            }
+            ExprKind::Comparison { first, rest } => {
+                let mut left = self.constant_expression(module, first, expected)?;
+                for (op, right) in rest {
+                    let right = self.constant_expression(module, right, expected)?;
+                    if !eval_const_compare(&left, *op, &right)? {
+                        return Some(HirValue::Bool(false));
+                    }
+                    left = right;
                 }
+                Some(HirValue::Bool(true))
+            }
+            ExprKind::Field { .. } => {
+                self.error(
+                    module,
+                    expression.span.clone(),
+                    "field access is not allowed in constant expressions",
+                );
+                None
+            }
+        }
+    }
+
+    fn eval_hir_constant(
+        &mut self,
+        expression: &HirExpr,
+        self_value: Option<&HirValue>,
+    ) -> Option<HirValue> {
+        match &expression.kind {
+            HirExprKind::Literal(value) => Some(value.clone()),
+            HirExprKind::SelfRef => self_value.cloned(),
+            HirExprKind::ConstantRef(symbol) => self.constant_value(symbol),
+            HirExprKind::Unary { op, operand } => eval_const_unary(
+                match op {
+                    HirUnaryOp::Not => UnaryOp::Not,
+                    HirUnaryOp::Plus => UnaryOp::Plus,
+                    HirUnaryOp::Minus => UnaryOp::Minus,
+                },
+                self.eval_hir_constant(operand, self_value)?,
+            ),
+            HirExprKind::Binary { op, left, right } => eval_const_binary(
+                self.eval_hir_constant(left, self_value)?,
+                match op {
+                    HirBinaryOp::Or => BinaryOp::Or,
+                    HirBinaryOp::And => BinaryOp::And,
+                    HirBinaryOp::Add => BinaryOp::Add,
+                    HirBinaryOp::Subtract => BinaryOp::Subtract,
+                    HirBinaryOp::Multiply => BinaryOp::Multiply,
+                    HirBinaryOp::Divide => BinaryOp::Divide,
+                    HirBinaryOp::Remainder => BinaryOp::Remainder,
+                },
+                self.eval_hir_constant(right, self_value)?,
+            ),
+            HirExprKind::ComparisonChain {
+                operands,
+                operators,
+            } => {
+                let mut values = operands
+                    .iter()
+                    .map(|operand| self.eval_hir_constant(operand, self_value))
+                    .collect::<Option<Vec<_>>>()?
+                    .into_iter();
+                let mut left = values.next()?;
+                for (operator, right) in operators.iter().zip(values) {
+                    let operator = match operator {
+                        HirCompareOp::Equal => CompareOp::Equal,
+                        HirCompareOp::NotEqual => CompareOp::NotEqual,
+                        HirCompareOp::Less => CompareOp::Less,
+                        HirCompareOp::LessEqual => CompareOp::LessEqual,
+                        HirCompareOp::Greater => CompareOp::Greater,
+                        HirCompareOp::GreaterEqual => CompareOp::GreaterEqual,
+                    };
+                    if !eval_const_compare(&left, operator, &right)? {
+                        return Some(HirValue::Bool(false));
+                    }
+                    left = right;
+                }
+                Some(HirValue::Bool(true))
+            }
+            HirExprKind::Len { value } => match self.eval_hir_constant(value, self_value)? {
+                HirValue::String(value) => {
+                    Some(HirValue::Integer(value.chars().count().to_string()))
+                }
+                HirValue::Bytes(value) => Some(HirValue::Integer(value.len().to_string())),
+                HirValue::List(value) => Some(HirValue::Integer(value.len().to_string())),
+                _ => None,
             },
+            HirExprKind::Field { base, name } => match self.eval_hir_constant(base, self_value)? {
+                HirValue::Named { fields, .. } => fields
+                    .into_iter()
+                    .find_map(|(field, value)| (field == *name).then_some(value)),
+                _ => None,
+            },
+            HirExprKind::ParameterRef(_)
+            | HirExprKind::BindingRef(_)
+            | HirExprKind::EnumSingletonRef(_) => None,
+        }
+    }
+}
+
+fn eval_const_unary(op: UnaryOp, value: HirValue) -> Option<HirValue> {
+    match (op, value) {
+        (UnaryOp::Not, HirValue::Bool(value)) => Some(HirValue::Bool(!value)),
+        (
+            UnaryOp::Plus,
+            value @ (HirValue::Integer(_) | HirValue::F32 { .. } | HirValue::F64 { .. }),
+        ) => Some(value),
+        (UnaryOp::Minus, HirValue::Integer(value)) => value
+            .parse::<i128>()
+            .ok()?
+            .checked_neg()
+            .map(|value| HirValue::Integer(value.to_string())),
+        (UnaryOp::Minus, HirValue::F32 { bits }) => Some(HirValue::F32 {
+            bits: format!(
+                "{:08x}",
+                (-f32::from_bits(u32::from_str_radix(&bits, 16).ok()?)).to_bits()
+            ),
+        }),
+        (UnaryOp::Minus, HirValue::F64 { bits }) => Some(HirValue::F64 {
+            bits: format!(
+                "{:016x}",
+                (-f64::from_bits(u64::from_str_radix(&bits, 16).ok()?)).to_bits()
+            ),
+        }),
+        _ => None,
+    }
+}
+
+fn eval_const_binary(left: HirValue, op: BinaryOp, right: HirValue) -> Option<HirValue> {
+    match (left, right) {
+        (HirValue::Bool(left), HirValue::Bool(right)) => match op {
+            BinaryOp::And => Some(HirValue::Bool(left && right)),
+            BinaryOp::Or => Some(HirValue::Bool(left || right)),
+            _ => None,
+        },
+        (HirValue::Integer(left), HirValue::Integer(right)) => {
+            let left = left.parse::<i128>().ok()?;
+            let right = right.parse::<i128>().ok()?;
+            let value = match op {
+                BinaryOp::Add => left.checked_add(right),
+                BinaryOp::Subtract => left.checked_sub(right),
+                BinaryOp::Multiply => left.checked_mul(right),
+                BinaryOp::Remainder => left.checked_rem_euclid(right),
+                _ => None,
+            }?;
+            Some(HirValue::Integer(value.to_string()))
+        }
+        (HirValue::F32 { bits: left }, HirValue::F32 { bits: right }) => {
+            let left = f32::from_bits(u32::from_str_radix(&left, 16).ok()?);
+            let right = f32::from_bits(u32::from_str_radix(&right, 16).ok()?);
+            let value = match op {
+                BinaryOp::Add => left + right,
+                BinaryOp::Subtract => left - right,
+                BinaryOp::Multiply => left * right,
+                BinaryOp::Divide => left / right,
+                BinaryOp::Remainder => left % right,
+                _ => return None,
+            };
+            value.is_finite().then(|| HirValue::F32 {
+                bits: format!("{:08x}", value.to_bits()),
+            })
+        }
+        (HirValue::F64 { bits: left }, HirValue::F64 { bits: right }) => {
+            let left = f64::from_bits(u64::from_str_radix(&left, 16).ok()?);
+            let right = f64::from_bits(u64::from_str_radix(&right, 16).ok()?);
+            let value = match op {
+                BinaryOp::Add => left + right,
+                BinaryOp::Subtract => left - right,
+                BinaryOp::Multiply => left * right,
+                BinaryOp::Divide => left / right,
+                BinaryOp::Remainder => left % right,
+                _ => return None,
+            };
+            value.is_finite().then(|| HirValue::F64 {
+                bits: format!("{:016x}", value.to_bits()),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn hir_value_matches_type(value: &HirValue, ty: &HirType) -> bool {
+    match (value, ty) {
+        (HirValue::Bool(_), HirType::Primitive(PrimitiveType::Bool)) => true,
+        (HirValue::Integer(value), HirType::Primitive(primitive)) => {
+            let Ok(value) = value.parse::<i128>() else {
+                return false;
+            };
+            match primitive {
+                PrimitiveType::I8 => i8::try_from(value).is_ok(),
+                PrimitiveType::I16 => i16::try_from(value).is_ok(),
+                PrimitiveType::I32 => i32::try_from(value).is_ok(),
+                PrimitiveType::I64 => i64::try_from(value).is_ok(),
+                PrimitiveType::U8 => u8::try_from(value).is_ok(),
+                PrimitiveType::U16 => u16::try_from(value).is_ok(),
+                PrimitiveType::U32 => u32::try_from(value).is_ok(),
+                PrimitiveType::U64 => u64::try_from(value).is_ok(),
+                _ => false,
+            }
+        }
+        (HirValue::F32 { bits }, HirType::Primitive(PrimitiveType::F32)) => {
+            u32::from_str_radix(bits, 16)
+                .ok()
+                .map(f32::from_bits)
+                .is_some_and(f32::is_finite)
+        }
+        (HirValue::F64 { bits }, HirType::Primitive(PrimitiveType::F64)) => {
+            u64::from_str_radix(bits, 16)
+                .ok()
+                .map(f64::from_bits)
+                .is_some_and(f64::is_finite)
+        }
+        (HirValue::String(_), HirType::Primitive(PrimitiveType::Str))
+        | (HirValue::Bytes(_), HirType::Primitive(PrimitiveType::Bytes))
+        | (HirValue::Unit, HirType::Primitive(PrimitiveType::Unit)) => true,
+        (HirValue::Named { symbol, .. }, HirType::Named { symbol: ty, .. }) => symbol == ty,
+        (HirValue::Enum { variant, .. }, HirType::Named { symbol, .. }) => {
+            variant.module == symbol.module
+                && variant
+                    .name
+                    .strip_prefix(&format!("{}.", symbol.name))
+                    .is_some()
+        }
+        _ => false,
+    }
+}
+
+fn eval_const_compare(left: &HirValue, op: CompareOp, right: &HirValue) -> Option<bool> {
+    let numeric = const_number(left).zip(const_number(right));
+    let ordering = if let Some((left, right)) = numeric {
+        left.partial_cmp(&right)
+    } else {
+        None
+    };
+    Some(match op {
+        CompareOp::Equal => ordering.map_or(left == right, std::cmp::Ordering::is_eq),
+        CompareOp::NotEqual => ordering.map_or(left != right, |value| !value.is_eq()),
+        CompareOp::Less => ordering?.is_lt(),
+        CompareOp::LessEqual => ordering?.is_le(),
+        CompareOp::Greater => ordering?.is_gt(),
+        CompareOp::GreaterEqual => ordering?.is_ge(),
+    })
+}
+
+fn const_number(value: &HirValue) -> Option<f64> {
+    match value {
+        HirValue::Integer(value) => value.parse::<f64>().ok(),
+        HirValue::F32 { bits } => Some(f32::from_bits(u32::from_str_radix(bits, 16).ok()?) as f64),
+        HirValue::F64 { bits } => Some(f64::from_bits(u64::from_str_radix(bits, 16).ok()?)),
+        _ => None,
+    }
+}
+
+fn valid_opaque_tag(tag: &str) -> bool {
+    (1..=64).contains(&tag.len())
+        && tag
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| match (index, byte) {
+                (0, b'a'..=b'z') => true,
+                (_, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-') => true,
+                _ => false,
+            })
+}
+fn contains_opaque(ty: &HirType) -> bool {
+    match ty {
+        HirType::Opaque { .. } => true,
+        HirType::Named { args, .. } => args.iter().any(contains_opaque),
+        HirType::List { item } | HirType::Set { item } | HirType::Option { item } => {
+            contains_opaque(item)
+        }
+        HirType::Map { key, value } => contains_opaque(key) || contains_opaque(value),
+        HirType::Tuple2 { first, second } => contains_opaque(first) || contains_opaque(second),
+        HirType::Result { ok, error } => contains_opaque(ok) || contains_opaque(error),
+        HirType::Primitive(_) | HirType::TypeParameter { .. } => false,
+    }
+}
+
+fn is_opaque_boundary(ty: &HirType) -> bool {
+    match ty {
+        HirType::Opaque { .. } => true,
+        HirType::Option { item } => matches!(item.as_ref(), HirType::Opaque { .. }),
+        HirType::Result { ok, error } => {
+            matches!(ok.as_ref(), HirType::Opaque { .. }) && !contains_opaque(error)
+        }
+        _ => false,
+    }
+}
+
+fn validate_opaque_boundaries(modules: &[HirModule], errors: &mut Vec<ProjectDiagnostic>) {
+    let mut report = |module: &HirModule, span: &Span, message: &str| {
+        errors.push(ProjectDiagnostic {
+            path: module.source.clone(),
+            diagnostic: Diagnostic::new(message, span.clone()),
+        });
+    };
+    for module in modules {
+        for declaration in &module.declarations {
+            match declaration {
+                HirDeclaration::Alias(value) if contains_opaque(&value.target) => report(
+                    module,
+                    &value.span,
+                    "Opaque is allowed only as a manifest-bound function boundary",
+                ),
+                HirDeclaration::Newtype(value) if contains_opaque(&value.carrier) => {
+                    report(module, &value.span, "Opaque cannot be a newtype carrier")
+                }
+                HirDeclaration::Struct(value)
+                    if value.fields.iter().any(|field| contains_opaque(&field.ty)) =>
+                {
+                    report(module, &value.span, "Opaque cannot occur in a struct field")
+                }
+                HirDeclaration::Enum(value)
+                    if value
+                        .variants
+                        .iter()
+                        .flat_map(|variant| &variant.fields)
+                        .any(|field| contains_opaque(&field.ty)) =>
+                {
+                    report(
+                        module,
+                        &value.span,
+                        "Opaque cannot occur in an enum payload",
+                    )
+                }
+                HirDeclaration::Trait(value)
+                    if value.methods.iter().any(|method| {
+                        contains_opaque(&method.return_type)
+                            || method
+                                .parameters
+                                .iter()
+                                .any(|parameter| contains_opaque(&parameter.ty))
+                    }) =>
+                {
+                    report(module, &value.span, "Opaque cannot occur in a trait")
+                }
+                HirDeclaration::Const(value) if contains_opaque(&value.ty) => {
+                    report(module, &value.span, "Opaque cannot be a constant type")
+                }
+                HirDeclaration::Function(value) => {
+                    for parameter in &value.parameters {
+                        if contains_opaque(&parameter.ty) && !is_opaque_boundary(&parameter.ty) {
+                            report(
+                                module,
+                                &parameter.span,
+                                "Opaque must be a direct function boundary type",
+                            );
+                        }
+                    }
+                    if contains_opaque(&value.return_type)
+                        && !is_opaque_boundary(&value.return_type)
+                    {
+                        report(
+                            module,
+                            &value.span,
+                            "Opaque must be a direct function boundary type",
+                        );
+                    }
+                }
+                _ => {}
+            }
         }
     }
 }
@@ -824,6 +1595,7 @@ fn owned_primitive(name: &str) -> Option<PrimitiveType> {
         "F64" => PrimitiveType::F64,
         "Str" => PrimitiveType::Str,
         "Bytes" => PrimitiveType::Bytes,
+        "Path" => PrimitiveType::Path,
         "Unit" => PrimitiveType::Unit,
         "JsonValue" => PrimitiveType::JsonValue,
         "Never" => PrimitiveType::Never,
@@ -846,6 +1618,15 @@ fn owned_is_numeric(ty: &HirType) -> bool {
                 | PrimitiveType::F32
                 | PrimitiveType::F64
         )
+    )
+}
+fn owned_len_allowed(ty: &HirType) -> bool {
+    matches!(
+        ty,
+        HirType::Primitive(PrimitiveType::Str | PrimitiveType::Bytes)
+            | HirType::List { .. }
+            | HirType::Set { .. }
+            | HirType::Map { .. }
     )
 }
 
@@ -875,11 +1656,9 @@ fn owned_comparison_compatible(left: &HirType, right: &HirType, op: CompareOp) -
     }
     match op {
         CompareOp::Less | CompareOp::LessEqual | CompareOp::Greater | CompareOp::GreaterEqual => {
-            owned_is_numeric(left) && owned_is_numeric(right)
+            owned_is_numeric(left) && left == right
         }
-        CompareOp::Equal | CompareOp::NotEqual => {
-            (owned_is_numeric(left) && owned_is_numeric(right)) || left == right
-        }
+        CompareOp::Equal | CompareOp::NotEqual => left == right,
     }
 }
 
@@ -891,8 +1670,75 @@ fn owned_binary_is_logical(op: BinaryOp) -> bool {
     matches!(op, BinaryOp::Or | BinaryOp::And)
 }
 
-fn owned_binary_is_numeric_compatible(left: &HirType, right: &HirType) -> bool {
-    owned_is_numeric(left) && owned_is_numeric(right)
+fn owned_numeric_literal_expression(value: &Expr) -> bool {
+    match &value.kind {
+        ExprKind::Literal(literal)
+            if matches!(
+                literal.kind,
+                LiteralKind::Integer(_) | LiteralKind::Float(_)
+            ) =>
+        {
+            true
+        }
+        ExprKind::Parenthesized(inner) => owned_numeric_literal_expression(inner),
+        ExprKind::Unary {
+            op: UnaryOp::Plus | UnaryOp::Minus,
+            operand,
+        } => owned_numeric_literal_expression(operand),
+        ExprKind::Binary { left, op, right }
+            if !owned_binary_is_logical(*op)
+                && owned_numeric_literal_expression(left)
+                && owned_numeric_literal_expression(right) =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
+fn owned_retype_numeric_literal(value: &mut HirExpr, target: &HirType) {
+    match &mut value.kind {
+        HirExprKind::Literal(HirValue::Integer(_)) if owned_is_numeric(target) => {
+            value.ty = target.clone();
+        }
+        HirExprKind::Literal(HirValue::F64 { bits })
+            if matches!(
+                target,
+                HirType::Primitive(PrimitiveType::F32 | PrimitiveType::F64)
+            ) =>
+        {
+            if matches!(target, HirType::Primitive(PrimitiveType::F32))
+                && let Ok(bits) = u64::from_str_radix(bits, 16)
+            {
+                value.kind = HirExprKind::Literal(HirValue::F32 {
+                    bits: format!("{:08x}", (f64::from_bits(bits) as f32).to_bits()),
+                });
+            }
+            value.ty = target.clone();
+        }
+        HirExprKind::Unary { operand, .. } => {
+            owned_retype_numeric_literal(operand, target);
+            value.ty = target.clone();
+        }
+        HirExprKind::Binary { left, right, .. } => {
+            owned_retype_numeric_literal(left, target);
+            owned_retype_numeric_literal(right, target);
+            value.ty = target.clone();
+        }
+        _ => {}
+    }
+}
+fn owned_value_is_zero(value: &HirValue) -> bool {
+    match value {
+        HirValue::Integer(value) => value.parse::<i128>() == Ok(0),
+        HirValue::F32 { bits } => {
+            u32::from_str_radix(bits, 16).is_ok_and(|bits| f32::from_bits(bits) == 0.0)
+        }
+        HirValue::F64 { bits } => {
+            u64::from_str_radix(bits, 16).is_ok_and(|bits| f64::from_bits(bits) == 0.0)
+        }
+        _ => false,
+    }
 }
 
 impl<'a> OwnedLower<'a> {
@@ -900,7 +1746,7 @@ impl<'a> OwnedLower<'a> {
         &mut self,
         module: usize,
         value: &Expr,
-        env: &HashMap<String, (SymbolId, HirType)>,
+        env: &HashMap<String, (SymbolId, HirType, bool)>,
     ) -> HirExpr {
         let (kind, ty, reference) = match &value.kind {
             ExprKind::Literal(literal) => {
@@ -935,21 +1781,92 @@ impl<'a> OwnedLower<'a> {
             ),
             ExprKind::Name(path) => {
                 let name = path.segments.last().cloned().unwrap_or_default();
-                if let Some((symbol, ty)) = env.get(&name) {
-                    (
-                        HirExprKind::ParameterRef(symbol.clone()),
-                        ty.clone(),
-                        Some(HirReference::Parameter(symbol.clone())),
-                    )
-                } else if let Some(symbol) = self.resolve(module, path, &value.span) {
-                    match self.declarations.get(&symbol).copied() {
-                        Some(OwnedDeclKind::Const) => (
-                            HirExprKind::ConstantRef(symbol.clone()),
-                            HirType::Opaque {
-                                tag: "constant".into(),
+                if path.segments.len() > 1 {
+                    if let Some((symbol, ty, binding)) = env.get(&path.segments[0]).cloned() {
+                        let mut expression = HirExpr {
+                            span: value.span.clone(),
+                            ty,
+                            reference: if binding {
+                                Some(HirReference::Binding(symbol.clone()))
+                            } else {
+                                Some(HirReference::Parameter(symbol.clone()))
                             },
-                            Some(HirReference::Constant(symbol)),
-                        ),
+                            kind: if path.segments[0] == "result" || path.segments[0] == "self" {
+                                HirExprKind::SelfRef
+                            } else if binding {
+                                HirExprKind::BindingRef(symbol)
+                            } else {
+                                HirExprKind::ParameterRef(symbol)
+                            },
+                        };
+                        for field in path.segments.iter().skip(1) {
+                            if field == "len" {
+                                let valid = owned_len_allowed(&expression.ty);
+                                if !valid {
+                                    self.error(
+                                        module,
+                                        value.span.clone(),
+                                        "length is only defined for strings, bytes, lists, sets, and maps",
+                                    );
+                                }
+                                expression = HirExpr {
+                                    span: value.span.clone(),
+                                    ty: if valid {
+                                        HirType::Primitive(PrimitiveType::U64)
+                                    } else {
+                                        owned_invalid_expr_type("invalid-len")
+                                    },
+                                    reference: None,
+                                    kind: HirExprKind::Len {
+                                        value: Box::new(expression),
+                                    },
+                                };
+                            } else {
+                                let ty = self
+                                    .named_field_type(&expression.ty, field)
+                                    .unwrap_or_else(|| HirType::Opaque { tag: field.clone() });
+                                expression = HirExpr {
+                                    span: value.span.clone(),
+                                    ty,
+                                    reference: None,
+                                    kind: HirExprKind::Field {
+                                        base: Box::new(expression),
+                                        name: field.clone(),
+                                    },
+                                };
+                            }
+                        }
+                        return expression;
+                    }
+                }
+                if let Some((symbol, ty, binding)) = env.get(&name) {
+                    if name == "result" || name == "self" {
+                        (HirExprKind::SelfRef, ty.clone(), None)
+                    } else if *binding {
+                        (
+                            HirExprKind::BindingRef(symbol.clone()),
+                            ty.clone(),
+                            Some(HirReference::Binding(symbol.clone())),
+                        )
+                    } else {
+                        (
+                            HirExprKind::ParameterRef(symbol.clone()),
+                            ty.clone(),
+                            Some(HirReference::Parameter(symbol.clone())),
+                        )
+                    }
+                } else if let Some(symbol) = self.lookup(module, path) {
+                    match self.declarations.get(&symbol).copied() {
+                        Some(OwnedDeclKind::Const) => {
+                            let ty = self
+                                .constant_type(&symbol)
+                                .unwrap_or_else(|| owned_invalid_expr_type("constant"));
+                            (
+                                HirExprKind::ConstantRef(symbol.clone()),
+                                ty,
+                                Some(HirReference::Constant(symbol)),
+                            )
+                        }
                         _ => (
                             HirExprKind::EnumSingletonRef(symbol.clone()),
                             HirType::Named {
@@ -959,7 +1876,18 @@ impl<'a> OwnedLower<'a> {
                             Some(HirReference::EnumSingleton(symbol)),
                         ),
                     }
+                } else if let Some((symbol, ty)) = self.enum_variant(module, path) {
+                    (
+                        HirExprKind::EnumSingletonRef(symbol.clone()),
+                        ty,
+                        Some(HirReference::EnumSingleton(symbol)),
+                    )
                 } else {
+                    self.error(
+                        module,
+                        value.span.clone(),
+                        format!("unknown type or declaration `{}`", path.segments.join(".")),
+                    );
                     (
                         HirExprKind::Literal(HirValue::Unit),
                         HirType::Opaque {
@@ -980,26 +1908,73 @@ impl<'a> OwnedLower<'a> {
             }
             ExprKind::Field { base, name } => {
                 let base = self.expr(module, base, env);
-                let ty = if name == "len" {
-                    HirType::Primitive(PrimitiveType::I64)
+                if name == "len" {
+                    let valid = owned_len_allowed(&base.ty);
+                    if !valid {
+                        self.error(
+                            module,
+                            value.span.clone(),
+                            "length is only defined for strings, bytes, lists, sets, and maps",
+                        );
+                    }
+                    (
+                        HirExprKind::Len {
+                            value: Box::new(base),
+                        },
+                        if valid {
+                            HirType::Primitive(PrimitiveType::U64)
+                        } else {
+                            owned_invalid_expr_type("invalid-len")
+                        },
+                        None,
+                    )
                 } else {
-                    HirType::Opaque { tag: name.clone() }
-                };
-                (
-                    HirExprKind::Field {
-                        base: Box::new(base),
-                        name: name.clone(),
-                    },
-                    ty,
-                    None,
-                )
+                    let ty = self
+                        .named_field_type(&base.ty, name)
+                        .unwrap_or_else(|| HirType::Opaque { tag: name.clone() });
+                    (
+                        HirExprKind::Field {
+                            base: Box::new(base),
+                            name: name.clone(),
+                        },
+                        ty,
+                        None,
+                    )
+                }
             }
             ExprKind::Unary { op, operand } => {
                 let operand = self.expr(module, operand, env);
-                let ty = if matches!(op, UnaryOp::Not) {
-                    HirType::Primitive(PrimitiveType::Bool)
+                let operand = self.transparent_expression(operand);
+                let valid = match op {
+                    UnaryOp::Not => operand.ty == HirType::Primitive(PrimitiveType::Bool),
+                    UnaryOp::Plus => owned_is_numeric(&operand.ty),
+                    UnaryOp::Minus => matches!(
+                        operand.ty,
+                        HirType::Primitive(
+                            PrimitiveType::I8
+                                | PrimitiveType::I16
+                                | PrimitiveType::I32
+                                | PrimitiveType::I64
+                                | PrimitiveType::F32
+                                | PrimitiveType::F64
+                        )
+                    ),
+                };
+                if !valid {
+                    self.error(
+                        module,
+                        value.span.clone(),
+                        "unary operator is incompatible with its operand",
+                    );
+                }
+                let ty = if valid {
+                    if matches!(op, UnaryOp::Not) {
+                        HirType::Primitive(PrimitiveType::Bool)
+                    } else {
+                        operand.ty.clone()
+                    }
                 } else {
-                    operand.ty.clone()
+                    owned_invalid_expr_type("invalid-unary")
                 };
                 (
                     HirExprKind::Unary {
@@ -1015,22 +1990,79 @@ impl<'a> OwnedLower<'a> {
                 )
             }
             ExprKind::Binary { left, op, right } => {
-                let left = self.expr(module, left, env);
-                let right = self.expr(module, right, env);
-                let valid = if owned_binary_is_logical(*op) {
-                    left.ty == HirType::Primitive(PrimitiveType::Bool)
-                        && right.ty == HirType::Primitive(PrimitiveType::Bool)
-                } else {
-                    owned_binary_is_numeric_compatible(&left.ty, &right.ty)
-                };
-                if !valid {
+                let mut left_value = self.expr(module, left, env);
+                let mut right_value = self.expr(module, right, env);
+                let mut left_compat = self.expression_compat_type(&left_value.ty);
+                let mut right_compat = self.expression_compat_type(&right_value.ty);
+                if owned_numeric_literal_expression(left)
+                    && !owned_numeric_literal_expression(right)
+                    && owned_is_numeric(&right_compat)
+                {
+                    owned_retype_numeric_literal(&mut left_value, &right_compat);
+                } else if owned_numeric_literal_expression(right)
+                    && !owned_numeric_literal_expression(left)
+                    && owned_is_numeric(&left_compat)
+                {
+                    owned_retype_numeric_literal(&mut right_value, &left_compat);
+                }
+                if !owned_numeric_literal_expression(left) {
+                    left_value = self.transparent_expression(left_value);
+                }
+                if !owned_numeric_literal_expression(right) {
+                    right_value = self.transparent_expression(right_value);
+                }
+                left_compat = self.expression_compat_type(&left_value.ty);
+                right_compat = self.expression_compat_type(&right_value.ty);
+                let zero_divisor = matches!(op, BinaryOp::Divide | BinaryOp::Remainder)
+                    && self
+                        .eval_hir_constant(&right_value, None)
+                        .is_some_and(|value| owned_value_is_zero(&value));
+                if zero_divisor {
+                    self.error(
+                        module,
+                        right.span.clone(),
+                        "division or remainder by a compile-time zero divisor",
+                    );
+                }
+                let valid = !zero_divisor
+                    && match op {
+                        BinaryOp::Or | BinaryOp::And => {
+                            left_value.ty == HirType::Primitive(PrimitiveType::Bool)
+                                && right_value.ty == HirType::Primitive(PrimitiveType::Bool)
+                        }
+                        BinaryOp::Divide => {
+                            left_compat == right_compat
+                                && matches!(
+                                    left_compat,
+                                    HirType::Primitive(PrimitiveType::F32 | PrimitiveType::F64)
+                                )
+                        }
+                        BinaryOp::Remainder => {
+                            left_compat == right_compat
+                                && matches!(
+                                    left_compat,
+                                    HirType::Primitive(
+                                        PrimitiveType::I8
+                                            | PrimitiveType::I16
+                                            | PrimitiveType::I32
+                                            | PrimitiveType::I64
+                                            | PrimitiveType::U8
+                                            | PrimitiveType::U16
+                                            | PrimitiveType::U32
+                                            | PrimitiveType::U64
+                                    )
+                                )
+                        }
+                        _ => owned_is_numeric(&left_compat) && left_compat == right_compat,
+                    };
+                if !valid && !zero_divisor {
                     self.error(
                         module,
                         value.span.clone(),
                         if owned_binary_is_logical(*op) {
                             "logical operator requires boolean operands"
                         } else {
-                            "arithmetic operator requires numeric operands"
+                            "arithmetic operands must have the same compatible numeric type"
                         },
                     );
                 }
@@ -1038,7 +2070,7 @@ impl<'a> OwnedLower<'a> {
                     if owned_binary_is_logical(*op) {
                         HirType::Primitive(PrimitiveType::Bool)
                     } else {
-                        left.ty.clone()
+                        left_value.ty.clone()
                     }
                 } else {
                     owned_invalid_expr_type("invalid-binary")
@@ -1055,44 +2087,79 @@ impl<'a> OwnedLower<'a> {
                 (
                     HirExprKind::Binary {
                         op,
-                        left: Box::new(left),
-                        right: Box::new(right),
+                        left: Box::new(left_value),
+                        right: Box::new(right_value),
                     },
                     ty,
                     None,
                 )
             }
             ExprKind::Comparison { first, rest } => {
-                let first = self.expr(module, first, env);
-                let mut operands = vec![first];
-                let mut valid = true;
+                let raw_operands = std::iter::once(first.as_ref())
+                    .chain(rest.iter().map(|(_, expression)| expression))
+                    .collect::<Vec<_>>();
+                let mut operands = raw_operands
+                    .iter()
+                    .map(|expression| self.expr(module, expression, env))
+                    .collect::<Vec<_>>();
+                let initial_compat = operands
+                    .iter()
+                    .map(|operand| self.expression_compat_type(&operand.ty))
+                    .collect::<Vec<_>>();
+                let context = raw_operands
+                    .iter()
+                    .zip(initial_compat.iter())
+                    .find(|(expression, ty)| {
+                        !owned_numeric_literal_expression(expression) && owned_is_numeric(ty)
+                    })
+                    .map(|(_, ty)| ty.clone());
+                if let Some(context) = &context {
+                    for (expression, operand) in raw_operands.iter().zip(&mut operands) {
+                        if owned_numeric_literal_expression(expression) {
+                            owned_retype_numeric_literal(operand, context);
+                        }
+                    }
+                }
+                let compat_types = operands
+                    .iter()
+                    .map(|operand| self.expression_compat_type(&operand.ty))
+                    .collect::<Vec<_>>();
+                for (expression, operand) in raw_operands.iter().zip(&mut operands) {
+                    if !owned_numeric_literal_expression(expression) {
+                        *operand = self.transparent_expression(operand.clone());
+                    }
+                }
+                let mut valid = context.is_some()
+                    || !raw_operands
+                        .iter()
+                        .all(|expression| owned_numeric_literal_expression(expression));
                 let operators = rest
                     .iter()
-                    .map(|(op, expression)| {
-                        let operand = self.expr(module, expression, env);
-                        if !owned_comparison_compatible(
-                            &operands[operands.len() - 1].ty,
-                            &operand.ty,
-                            *op,
-                        ) {
-                            valid = false;
-                            self.error(
-                                module,
-                                value.span.clone(),
-                                "comparison operands are incompatible or unsupported",
-                            );
-                        }
-                        operands.push(operand);
-                        match op {
-                            CompareOp::Equal => HirCompareOp::Equal,
-                            CompareOp::NotEqual => HirCompareOp::NotEqual,
-                            CompareOp::Less => HirCompareOp::Less,
-                            CompareOp::LessEqual => HirCompareOp::LessEqual,
-                            CompareOp::Greater => HirCompareOp::Greater,
-                            CompareOp::GreaterEqual => HirCompareOp::GreaterEqual,
-                        }
+                    .map(|(op, _)| match op {
+                        CompareOp::Equal => HirCompareOp::Equal,
+                        CompareOp::NotEqual => HirCompareOp::NotEqual,
+                        CompareOp::Less => HirCompareOp::Less,
+                        CompareOp::LessEqual => HirCompareOp::LessEqual,
+                        CompareOp::Greater => HirCompareOp::Greater,
+                        CompareOp::GreaterEqual => HirCompareOp::GreaterEqual,
                     })
-                    .collect();
+                    .collect::<Vec<_>>();
+                for (index, (op, _)) in rest.iter().enumerate() {
+                    if !owned_comparison_compatible(
+                        &compat_types[index],
+                        &compat_types[index + 1],
+                        *op,
+                    ) {
+                        valid = false;
+                    }
+                }
+                if !valid {
+                    self.error(
+                        module,
+                        value.span.clone(),
+                        "comparison operands require the same resolved type and numeric literals require context",
+                    );
+                }
                 (
                     HirExprKind::ComparisonChain {
                         operands,
@@ -1117,6 +2184,50 @@ impl<'a> OwnedLower<'a> {
 }
 
 impl<'a> OwnedLower<'a> {
+    fn named_field_type(&mut self, ty: &HirType, field_name: &str) -> Option<HirType> {
+        let HirType::Named { symbol, args } = ty else {
+            return None;
+        };
+        let source_index = self
+            .modules
+            .iter()
+            .position(|module| module == &symbol.module)?;
+        let (field_type, generics) = {
+            let declarations = &self.parsed.sources[source_index].syntax.declarations;
+            declarations
+                .iter()
+                .find_map(|declaration| match declaration {
+                    Declaration::Struct(value) if value.name == symbol.name => value
+                        .fields
+                        .iter()
+                        .find(|field| field.name == field_name)
+                        .map(|field| {
+                            (
+                                field.ty.clone(),
+                                value
+                                    .generics
+                                    .iter()
+                                    .map(|generic| generic.name.clone())
+                                    .collect::<Vec<_>>(),
+                            )
+                        }),
+                    Declaration::Newtype(value)
+                        if value.name == symbol.name && field_name == "value" =>
+                    {
+                        Some((value.underlying.clone(), Vec::new()))
+                    }
+                    _ => None,
+                })?
+        };
+        let generic_set = generics.iter().cloned().collect::<HashSet<_>>();
+        let lowered = self.ty(source_index, &field_type, &generic_set);
+        let substitutions = generics
+            .into_iter()
+            .zip(args.iter().cloned())
+            .collect::<HashMap<_, _>>();
+        Some(substitute_hir_type(lowered, &substitutions))
+    }
+
     fn field(
         &mut self,
         module: usize,
@@ -1124,23 +2235,26 @@ impl<'a> OwnedLower<'a> {
         generics: &HashSet<String>,
         order: usize,
     ) -> HirField {
-        if let Some(default) = &field.default {
-            if !owned_default_compatible(&field.ty, default) {
-                self.error(
-                    module,
-                    default.span().clone(),
-                    "default value does not match its declared type",
-                );
-            }
+        let ty = self.ty(module, &field.ty, generics);
+        let default = field
+            .default
+            .as_ref()
+            .and_then(|value| self.value(module, value, &ty));
+        if default
+            .as_ref()
+            .is_some_and(|value| !hir_value_matches_type(value, &ty))
+        {
+            self.error(
+                module,
+                field.default.as_ref().unwrap().span().clone(),
+                "default value does not match its declared type",
+            );
         }
         HirField {
             span: field.span.clone(),
             name: field.name.clone(),
-            ty: self.ty(module, &field.ty, generics),
-            default: field
-                .default
-                .as_ref()
-                .and_then(|value| self.value(module, value)),
+            ty,
+            default,
             source_order: order,
         }
     }
@@ -1162,11 +2276,80 @@ impl<'a> OwnedLower<'a> {
         }
     }
 
+    fn error_variant(
+        &mut self,
+        module: usize,
+        path: &ast::QualifiedName,
+    ) -> Option<(SymbolId, SymbolId)> {
+        if path.segments.len() < 2 {
+            self.error(
+                module,
+                path.span.clone(),
+                "error clause must name an enum variant",
+            );
+            return None;
+        }
+        let prefix = ast::QualifiedName::new(
+            path.span.clone(),
+            path.segments[..path.segments.len() - 1].to_vec(),
+        );
+        let Some(owner) = self.resolve(module, &prefix, &path.span) else {
+            return None;
+        };
+        if !matches!(
+            self.declarations.get(&owner),
+            Some(OwnedDeclKind::Enum { .. })
+        ) {
+            self.error(
+                module,
+                path.span.clone(),
+                "error clause variant owner must be an enum",
+            );
+            return None;
+        }
+        let Some(source_index) = self
+            .modules
+            .iter()
+            .position(|candidate| candidate == &owner.module)
+        else {
+            return None;
+        };
+        let variant_name = path.segments.last().cloned().unwrap_or_default();
+        let exists = self.parsed.sources[source_index]
+            .syntax
+            .declarations
+            .iter()
+            .any(|declaration| {
+                matches!(
+                    declaration,
+                    Declaration::Enum(value)
+                        if value.name == owner.name
+                            && value.variants.iter().any(|variant| variant.name == variant_name)
+                )
+            });
+        if !exists {
+            self.error(
+                module,
+                path.span.clone(),
+                format!("unknown enum variant `{}`", path.segments.join(".")),
+            );
+            return None;
+        }
+        Some((
+            SymbolId::new(
+                owner.module.clone(),
+                format!("{}.{}", owner.name, variant_name),
+            ),
+            owner,
+        ))
+    }
+
     fn contract(
         &mut self,
         module: usize,
         body: &FunctionBody,
-        env: &HashMap<String, (SymbolId, HirType)>,
+        env: &HashMap<String, (SymbolId, HirType, bool)>,
+        return_type: &HirType,
     ) -> (HirContract, Option<HirDoc>) {
         let mut contract = HirContract::default();
         let mut doc = None;
@@ -1197,7 +2380,21 @@ impl<'a> OwnedLower<'a> {
                     });
                 }
                 ClauseKind::Ensures { pattern, condition } => {
-                    let expression = self.expr(module, condition, env);
+                    let mut clause_env = env.clone();
+                    let pattern = if let Some(pattern) = pattern {
+                        Some(self.pattern(module, pattern, return_type, &mut clause_env))
+                    } else {
+                        clause_env.insert(
+                            "result".to_owned(),
+                            (
+                                SymbolId::new(self.modules[module].clone(), "result"),
+                                return_type.clone(),
+                                false,
+                            ),
+                        );
+                        None
+                    };
+                    let expression = self.expr(module, condition, &clause_env);
                     if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
                         self.error(
                             module,
@@ -1205,9 +2402,6 @@ impl<'a> OwnedLower<'a> {
                             "contract condition must be boolean",
                         );
                     }
-                    let pattern = pattern
-                        .as_ref()
-                        .map(|pattern| self.pattern(module, pattern, env));
                     contract.clauses.push(HirClause {
                         clause_id: clause_id as u32,
                         span: clause.span.clone(),
@@ -1218,28 +2412,27 @@ impl<'a> OwnedLower<'a> {
                     });
                 }
                 ClauseKind::Error { error, when } => {
-                    let variant = if error.segments.len() >= 2 {
-                        let enum_path = ast::QualifiedName::new(
+                    let resolved = self.error_variant(module, error);
+                    let valid_return = matches!(
+                        return_type,
+                        HirType::Result { error: expected, .. }
+                            if resolved.as_ref().is_some_and(|(_, owner)| {
+                                matches!(expected.as_ref(), HirType::Named { symbol, .. } if symbol == owner)
+                            })
+                    );
+                    if !matches!(return_type, HirType::Result { .. }) {
+                        self.error(
+                            module,
                             error.span.clone(),
-                            error.segments[..error.segments.len() - 1].to_vec(),
+                            "error clauses require a Result return type",
                         );
-                        let enum_id = self
-                            .resolve(module, &enum_path, &error.span)
-                            .unwrap_or_else(|| {
-                                SymbolId::new(
-                                    self.modules[module].clone(),
-                                    error.segments[error.segments.len() - 2].clone(),
-                                )
-                            });
-                        SymbolId::new(
-                            enum_id.module,
-                            format!("{}.{}", enum_id.name, error.segments.last().unwrap()),
-                        )
-                    } else {
-                        self.resolve(module, error, &error.span).unwrap_or_else(|| {
-                            SymbolId::new(self.modules[module].clone(), error.segments.join("."))
-                        })
-                    };
+                    } else if resolved.is_some() && !valid_return {
+                        self.error(
+                            module,
+                            error.span.clone(),
+                            "error clause variant does not belong to the Result error type",
+                        );
+                    }
                     let when = when.as_ref().map(|value| {
                         let expression = self.expr(module, value, env);
                         if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
@@ -1251,15 +2444,17 @@ impl<'a> OwnedLower<'a> {
                         }
                         expression
                     });
-                    contract.clauses.push(HirClause {
-                        clause_id: clause_id as u32,
-                        span: clause.span.clone(),
-                        kind: HirClauseKind::Error {
-                            variant,
-                            priority: None,
-                            when,
-                        },
-                    });
+                    if let Some((variant, _)) = resolved.filter(|_| valid_return) {
+                        contract.clauses.push(HirClause {
+                            clause_id: clause_id as u32,
+                            span: clause.span.clone(),
+                            kind: HirClauseKind::Error {
+                                variant,
+                                priority: None,
+                                when,
+                            },
+                        });
+                    }
                 }
                 ClauseKind::Effects { effects } => {
                     for (source_order, effect) in effects.iter().enumerate() {
@@ -1275,27 +2470,204 @@ impl<'a> OwnedLower<'a> {
         (contract, doc)
     }
 
+    fn pattern_argument_types(
+        &mut self,
+        module: usize,
+        expected: &HirType,
+        path: &ast::QualifiedName,
+        count: usize,
+    ) -> Option<(SymbolId, Vec<HirType>)> {
+        let name = path.segments.last().map(String::as_str).unwrap_or_default();
+        if matches!(
+            path.segments.as_slice(),
+            [container, _] if container == "Result" || container == "Option"
+        ) {
+            let (symbol, payload) = match (path.segments[0].as_str(), name, expected) {
+                ("Result", "Ok", HirType::Result { ok, .. }) => (
+                    SymbolId::new(ModuleId::new(Vec::new()), "Result.Ok"),
+                    vec![(**ok).clone()],
+                ),
+                ("Result", "Err", HirType::Result { error, .. }) => (
+                    SymbolId::new(ModuleId::new(Vec::new()), "Result.Err"),
+                    vec![(**error).clone()],
+                ),
+                ("Option", "Some", HirType::Option { item }) => (
+                    SymbolId::new(ModuleId::new(Vec::new()), "Option.Some"),
+                    vec![(**item).clone()],
+                ),
+                ("Option", "Nothing", HirType::Option { .. }) => (
+                    SymbolId::new(ModuleId::new(Vec::new()), "Option.Nothing"),
+                    Vec::new(),
+                ),
+                ("Result" | "Option", _, _) => {
+                    self.error(
+                        module,
+                        path.span.clone(),
+                        format!(
+                            "pattern `{}` does not belong to the declared return type",
+                            path.segments.join(".")
+                        ),
+                    );
+                    return None;
+                }
+                _ => unreachable!(),
+            };
+            if payload.len() != count {
+                self.error(
+                    module,
+                    path.span.clone(),
+                    format!(
+                        "pattern `{}` expects {} argument(s), got {}",
+                        path.segments.join("."),
+                        payload.len(),
+                        count
+                    ),
+                );
+                return None;
+            }
+            return Some((symbol, payload));
+        }
+
+        let HirType::Named {
+            symbol: expected_owner,
+            args,
+        } = expected
+        else {
+            self.error(
+                module,
+                path.span.clone(),
+                format!(
+                    "pattern `{}` does not belong to the declared return type",
+                    path.segments.join(".")
+                ),
+            );
+            return None;
+        };
+        if path.segments.len() < 2 {
+            self.error(
+                module,
+                path.span.clone(),
+                "nominal patterns must name an enum variant",
+            );
+            return None;
+        }
+        let prefix = ast::QualifiedName::new(
+            path.span.clone(),
+            path.segments[..path.segments.len() - 1].to_vec(),
+        );
+        let Some(owner) = self.resolve(module, &prefix, &path.span) else {
+            return None;
+        };
+        if &owner != expected_owner
+            || !matches!(
+                self.declarations.get(&owner),
+                Some(OwnedDeclKind::Enum { .. })
+            )
+        {
+            self.error(
+                module,
+                path.span.clone(),
+                format!(
+                    "pattern `{}` does not belong to the declared return type",
+                    path.segments.join(".")
+                ),
+            );
+            return None;
+        }
+        let Some(source_index) = self
+            .modules
+            .iter()
+            .position(|candidate| candidate == &owner.module)
+        else {
+            return None;
+        };
+        let variant_name = name;
+        let Some((field_types, generic_names)) = self.parsed.sources[source_index]
+            .syntax
+            .declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                Declaration::Enum(value) if value.name == owner.name => value
+                    .variants
+                    .iter()
+                    .find(|variant| variant.name == variant_name)
+                    .map(|variant| {
+                        (
+                            variant
+                                .parameters
+                                .iter()
+                                .map(|field| field.ty.clone())
+                                .collect::<Vec<_>>(),
+                            value
+                                .generics
+                                .iter()
+                                .map(|generic| generic.name.clone())
+                                .collect::<Vec<_>>(),
+                        )
+                    }),
+                _ => None,
+            })
+        else {
+            self.error(
+                module,
+                path.span.clone(),
+                format!("unknown enum variant `{}`", path.segments.join(".")),
+            );
+            return None;
+        };
+        if field_types.len() != count {
+            self.error(
+                module,
+                path.span.clone(),
+                format!(
+                    "pattern `{}` expects {} argument(s), got {}",
+                    path.segments.join("."),
+                    field_types.len(),
+                    count
+                ),
+            );
+            return None;
+        }
+        let generic_set = generic_names.iter().cloned().collect::<HashSet<_>>();
+        let substitutions = generic_names
+            .into_iter()
+            .zip(args.iter().cloned())
+            .collect::<HashMap<_, _>>();
+        let fields = field_types
+            .iter()
+            .map(|field| {
+                let ty = self.ty(source_index, field, &generic_set);
+                substitute_hir_type(ty, &substitutions)
+            })
+            .collect();
+        Some((
+            SymbolId::new(
+                owner.module.clone(),
+                format!("{}.{}", owner.name, variant_name),
+            ),
+            fields,
+        ))
+    }
+
     fn pattern(
         &mut self,
         module: usize,
         pattern: &ast::Pattern,
-        env: &HashMap<String, (SymbolId, HirType)>,
+        expected: &HirType,
+        env: &mut HashMap<String, (SymbolId, HirType, bool)>,
     ) -> HirPattern {
         match &pattern.kind {
             PatternKind::Wildcard => HirPattern {
                 span: pattern.span.clone(),
-                ty: HirType::Opaque {
-                    tag: "pattern".into(),
-                },
+                ty: expected.clone(),
                 kind: HirPatternKind::Wildcard,
             },
             PatternKind::Binding(name) => {
                 let symbol = SymbolId::new(self.modules[module].clone(), name.clone());
+                env.insert(name.clone(), (symbol.clone(), expected.clone(), true));
                 HirPattern {
                     span: pattern.span.clone(),
-                    ty: HirType::Opaque {
-                        tag: "pattern".into(),
-                    },
+                    ty: expected.clone(),
                     kind: HirPatternKind::Binding {
                         symbol,
                         name: name.clone(),
@@ -1303,21 +2675,24 @@ impl<'a> OwnedLower<'a> {
                 }
             }
             PatternKind::Variant { path, arguments } => {
-                let symbol = self
-                    .resolve(module, path, &pattern.span)
-                    .unwrap_or_else(|| {
-                        SymbolId::new(self.modules[module].clone(), path.segments.join("."))
-                    });
+                let Some((symbol, argument_types)) =
+                    self.pattern_argument_types(module, expected, path, arguments.len())
+                else {
+                    return HirPattern {
+                        span: pattern.span.clone(),
+                        ty: expected.clone(),
+                        kind: HirPatternKind::Wildcard,
+                    };
+                };
                 HirPattern {
                     span: pattern.span.clone(),
-                    ty: HirType::Opaque {
-                        tag: "variant".into(),
-                    },
+                    ty: expected.clone(),
                     kind: HirPatternKind::Variant {
                         symbol,
                         arguments: arguments
                             .iter()
-                            .map(|value| self.pattern(module, value, env))
+                            .zip(argument_types.iter())
+                            .map(|(value, ty)| self.pattern(module, value, ty, env))
                             .collect(),
                     },
                 }
@@ -1345,22 +2720,34 @@ impl<'a> OwnedLower<'a> {
                 public: true,
                 source_order: order,
             }),
-            Declaration::Newtype(value) => HirDeclaration::Newtype(HirNewtype {
-                id: id_for(&value.name),
-                span: value.span.clone(),
-                doc: value.doc.as_ref().map(|v| HirDoc {
-                    span: v.span.clone(),
-                    text: v.text.clone(),
-                }),
-                generics: Vec::new(),
-                carrier: self.ty(module, &value.underlying, &HashSet::new()),
-                refinement: value
-                    .where_clause
-                    .as_ref()
-                    .map(|v| self.expr(module, v, &HashMap::new())),
-                public: true,
-                source_order: order,
-            }),
+            Declaration::Newtype(value) => {
+                let carrier = self.ty(module, &value.underlying, &HashSet::new());
+                let mut env = HashMap::new();
+                env.insert(
+                    "self".to_owned(),
+                    (
+                        SymbolId::new(module_id.clone(), "self"),
+                        carrier.clone(),
+                        false,
+                    ),
+                );
+                HirDeclaration::Newtype(HirNewtype {
+                    id: id_for(&value.name),
+                    span: value.span.clone(),
+                    doc: value.doc.as_ref().map(|v| HirDoc {
+                        span: v.span.clone(),
+                        text: v.text.clone(),
+                    }),
+                    generics: Vec::new(),
+                    carrier,
+                    refinement: value
+                        .where_clause
+                        .as_ref()
+                        .map(|v| self.expr(module, v, &env)),
+                    public: true,
+                    source_order: order,
+                })
+            }
             Declaration::Struct(value) => {
                 let names = value
                     .generics
@@ -1474,22 +2861,18 @@ impl<'a> OwnedLower<'a> {
                 })
             }
             Declaration::Const(value) => {
-                if !owned_default_compatible(&value.ty, &value.value) {
-                    self.error(
-                        module,
-                        value.value.span().clone(),
-                        "constant literal does not match its declared type",
-                    );
-                }
+                let id = id_for(&value.name);
+                let ty = self.ty(module, &value.ty, &HashSet::new());
+                let constant_value = self.constant_value(&id).unwrap_or(HirValue::Unit);
                 HirDeclaration::Const(HirConst {
-                    id: id_for(&value.name),
+                    id,
                     span: value.span.clone(),
                     doc: value.doc.as_ref().map(|v| HirDoc {
                         span: v.span.clone(),
                         text: v.text.clone(),
                     }),
-                    ty: self.ty(module, &value.ty, &HashSet::new()),
-                    value: self.value(module, &value.value).unwrap_or(HirValue::Unit),
+                    ty,
+                    value: constant_value,
                     public: true,
                     source_order: order,
                 })
@@ -1513,19 +2896,21 @@ impl<'a> OwnedLower<'a> {
                             (
                                 SymbolId::new(id.module.clone(), p.name.clone()),
                                 parameter.ty.clone(),
+                                false,
                             ),
                         );
                         parameter
                     })
                     .collect::<Vec<_>>();
-                let (contract, doc) = self.contract(module, &value.body, &env);
+                let return_type = self.ty(module, &value.return_type, &names);
+                let (contract, doc) = self.contract(module, &value.body, &env, &return_type);
                 HirDeclaration::Function(HirFunction {
                     id,
                     span: value.span.clone(),
                     doc,
                     generics: self.generics(module, &value.generics),
                     parameters,
-                    return_type: self.ty(module, &value.return_type, &names),
+                    return_type,
                     contract,
                     body: None,
                     public: true,
@@ -1561,11 +2946,50 @@ impl<'a> OwnedLower<'a> {
             .collect();
         HirModule {
             source: source.path,
+            source_bytes: source.cst.source,
             id: self.modules[index].clone(),
             imports,
             declarations,
             source_order: index,
         }
+    }
+}
+
+fn substitute_hir_type(ty: HirType, substitutions: &HashMap<String, HirType>) -> HirType {
+    match ty {
+        HirType::TypeParameter { name } => substitutions
+            .get(&name)
+            .cloned()
+            .unwrap_or(HirType::TypeParameter { name }),
+        HirType::Named { symbol, args } => HirType::Named {
+            symbol,
+            args: args
+                .into_iter()
+                .map(|arg| substitute_hir_type(arg, substitutions))
+                .collect(),
+        },
+        HirType::List { item } => HirType::List {
+            item: Box::new(substitute_hir_type(*item, substitutions)),
+        },
+        HirType::Set { item } => HirType::Set {
+            item: Box::new(substitute_hir_type(*item, substitutions)),
+        },
+        HirType::Map { key, value } => HirType::Map {
+            key: Box::new(substitute_hir_type(*key, substitutions)),
+            value: Box::new(substitute_hir_type(*value, substitutions)),
+        },
+        HirType::Tuple2 { first, second } => HirType::Tuple2 {
+            first: Box::new(substitute_hir_type(*first, substitutions)),
+            second: Box::new(substitute_hir_type(*second, substitutions)),
+        },
+        HirType::Option { item } => HirType::Option {
+            item: Box::new(substitute_hir_type(*item, substitutions)),
+        },
+        HirType::Result { ok, error } => HirType::Result {
+            ok: Box::new(substitute_hir_type(*ok, substitutions)),
+            error: Box::new(substitute_hir_type(*error, substitutions)),
+        },
+        other => other,
     }
 }
 
@@ -1611,48 +3035,6 @@ fn owned_module_path(root: &Path, source: &Path) -> Result<Vec<String>, String> 
         Ok(segments)
     }
 }
-fn owned_default_compatible(ty: &ast::Type, value: &ConstExpr) -> bool {
-    let kind = match value {
-        ConstExpr::Expression(expression) => match &expression.kind {
-            ExprKind::Literal(literal) => &literal.kind,
-            ExprKind::Unit => return ty.path.segments == ["Unit"],
-            ExprKind::Parenthesized(inner) => {
-                return owned_default_compatible(ty, &ConstExpr::Expression((**inner).clone()));
-            }
-            _ => return false,
-        },
-        ConstExpr::Constructor { .. } => return true,
-    };
-    match kind {
-        LiteralKind::Bool(_) => ty.path.segments == ["Bool"],
-        LiteralKind::Integer(value) => {
-            let Some(number) = value.parse::<i128>().ok() else {
-                return false;
-            };
-            match ty.path.segments.last().map(String::as_str) {
-                Some("I8") => (-128..=127).contains(&number),
-                Some("I16") => (-32_768..=32_767).contains(&number),
-                Some("I32") => (-2_147_483_648..=2_147_483_647).contains(&number),
-                Some("I64") => {
-                    (-9_223_372_036_854_775_808..=9_223_372_036_854_775_807).contains(&number)
-                }
-                Some("U8") => (0..=255).contains(&number),
-                Some("U16") => (0..=65_535).contains(&number),
-                Some("U32") => (0..=4_294_967_295).contains(&number),
-                Some("U64") => (0..=18_446_744_073_709_551_615).contains(&number),
-                _ => false,
-            }
-        }
-        LiteralKind::Float(value) => {
-            value.parse::<f64>().ok().is_some_and(f64::is_finite)
-                && matches!(
-                    ty.path.segments.last().map(String::as_str),
-                    Some("F32" | "F64")
-                )
-        }
-        LiteralKind::String(_) => ty.path.segments == ["Str"],
-    }
-}
 
 fn owned_type_paths(value: &ast::Type, out: &mut Vec<ast::QualifiedName>) {
     out.push(value.path.clone());
@@ -1661,6 +3043,190 @@ fn owned_type_paths(value: &ast::Type, out: &mut Vec<ast::QualifiedName>) {
             owned_type_paths(inner, out);
         }
     }
+}
+fn owned_visit_type<F: FnMut(&ast::QualifiedName)>(value: &ast::Type, visit: &mut F) {
+    visit(&value.path);
+    for argument in &value.arguments {
+        if let TypeArgKind::Type(inner) = &argument.kind {
+            owned_visit_type(inner, visit);
+        }
+    }
+}
+
+fn owned_visit_expr<F: FnMut(&ast::QualifiedName)>(value: &ast::Expr, visit: &mut F) {
+    match &value.kind {
+        ExprKind::Name(path) => visit(path),
+        ExprKind::Parenthesized(inner) | ExprKind::Unary { operand: inner, .. } => {
+            owned_visit_expr(inner, visit);
+        }
+        ExprKind::Binary { left, right, .. } => {
+            owned_visit_expr(left, visit);
+            owned_visit_expr(right, visit);
+        }
+        ExprKind::Comparison { first, rest } => {
+            owned_visit_expr(first, visit);
+            for (_, expression) in rest {
+                owned_visit_expr(expression, visit);
+            }
+        }
+        ExprKind::Field { base, .. } => owned_visit_expr(base, visit),
+        ExprKind::Literal(_) | ExprKind::Unit => {}
+    }
+}
+
+fn owned_visit_pattern<F: FnMut(&ast::QualifiedName)>(value: &ast::Pattern, visit: &mut F) {
+    if let PatternKind::Variant { path, arguments } = &value.kind {
+        visit(path);
+        for argument in arguments {
+            owned_visit_pattern(argument, visit);
+        }
+    }
+}
+
+fn owned_visit_const_expr<F: FnMut(&ast::QualifiedName)>(value: &ast::ConstExpr, visit: &mut F) {
+    match value {
+        ast::ConstExpr::Expression(expression) => owned_visit_expr(expression, visit),
+        ast::ConstExpr::Constructor { path, argument, .. } => {
+            visit(path);
+            owned_visit_const_expr(argument, visit);
+        }
+    }
+}
+
+fn owned_visit_clause<F: FnMut(&ast::QualifiedName)>(value: &ast::Clause, visit: &mut F) {
+    match &value.kind {
+        ast::ClauseKind::Requires { condition } => owned_visit_expr(condition, visit),
+        ast::ClauseKind::Ensures { pattern, condition } => {
+            if let Some(pattern) = pattern {
+                owned_visit_pattern(pattern, visit);
+            }
+            owned_visit_expr(condition, visit);
+        }
+        ast::ClauseKind::Error { error, when } => {
+            visit(error);
+            if let Some(when) = when {
+                owned_visit_expr(when, visit);
+            }
+        }
+        ast::ClauseKind::Effects { .. } | ast::ClauseKind::Documentation(_) => {}
+    }
+}
+
+fn owned_visit_parameter<F: FnMut(&ast::QualifiedName)>(value: &ast::Parameter, visit: &mut F) {
+    owned_visit_type(&value.ty, visit);
+}
+
+fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
+    declaration: &ast::Declaration,
+    mut visit: F,
+) {
+    match declaration {
+        Declaration::Alias(value) => owned_visit_type(&value.target, &mut visit),
+        Declaration::Newtype(value) => {
+            owned_visit_type(&value.underlying, &mut visit);
+            if let Some(refinement) = &value.where_clause {
+                owned_visit_expr(refinement, &mut visit);
+            }
+        }
+        Declaration::Struct(value) => {
+            for generic in &value.generics {
+                for bound in &generic.bounds {
+                    owned_visit_type(bound, &mut visit);
+                }
+            }
+            for field in &value.fields {
+                owned_visit_type(&field.ty, &mut visit);
+                if let Some(default) = &field.default {
+                    owned_visit_const_expr(default, &mut visit);
+                }
+            }
+        }
+        Declaration::Enum(value) => {
+            for generic in &value.generics {
+                for bound in &generic.bounds {
+                    owned_visit_type(bound, &mut visit);
+                }
+            }
+            for variant in &value.variants {
+                for parameter in &variant.parameters {
+                    owned_visit_parameter(parameter, &mut visit);
+                }
+            }
+        }
+        Declaration::Trait(value) => {
+            for generic in &value.generics {
+                for bound in &generic.bounds {
+                    owned_visit_type(bound, &mut visit);
+                }
+            }
+            for method in &value.methods {
+                for parameter in &method.parameters {
+                    owned_visit_parameter(parameter, &mut visit);
+                }
+                owned_visit_type(&method.return_type, &mut visit);
+            }
+        }
+        Declaration::Const(value) => {
+            owned_visit_type(&value.ty, &mut visit);
+            owned_visit_const_expr(&value.value, &mut visit);
+        }
+        Declaration::Function(value) => {
+            for generic in &value.generics {
+                for bound in &generic.bounds {
+                    owned_visit_type(bound, &mut visit);
+                }
+            }
+            for parameter in &value.parameters {
+                owned_visit_parameter(parameter, &mut visit);
+            }
+            owned_visit_type(&value.return_type, &mut visit);
+            if let ast::FunctionBody::Clauses { clauses, .. } = &value.body {
+                for clause in clauses {
+                    owned_visit_clause(clause, &mut visit);
+                }
+            }
+        }
+    }
+}
+fn owned_qualified_owner(
+    path: &ast::QualifiedName,
+    declarations: &BTreeMap<SymbolId, usize>,
+    parsed: &ParsedProject,
+) -> Option<usize> {
+    if path.segments.len() < 2 {
+        return None;
+    }
+    let name = path.segments.last()?.clone();
+    let module = ModuleId::new(path.segments[..path.segments.len() - 1].to_vec());
+    let target = SymbolId::new(module, name.clone());
+    if let Some(index) = declarations.get(&target) {
+        return Some(*index);
+    }
+    if path.segments.len() < 3 {
+        return None;
+    }
+    let enum_module = ModuleId::new(path.segments[..path.segments.len() - 2].to_vec());
+    let enum_name = path.segments[path.segments.len() - 2].clone();
+    let enum_symbol = SymbolId::new(enum_module, enum_name);
+    let Some(index) = declarations.get(&enum_symbol).copied() else {
+        return None;
+    };
+    parsed.sources[index]
+        .syntax
+        .declarations
+        .iter()
+        .any(|declaration| {
+            matches!(
+                declaration,
+                Declaration::Enum(value)
+                    if value.name == enum_symbol.name
+                        && value
+                            .variants
+                            .iter()
+                            .any(|variant| variant.name == name)
+            )
+        })
+        .then_some(index)
 }
 
 fn owned_valid_snake(value: &str) -> bool {
@@ -1689,7 +3255,7 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
                 Declaration::Newtype(value) => (&value.name, true),
                 Declaration::Struct(value) => (&value.name, true),
                 Declaration::Enum(value) => (&value.name, true),
-                Declaration::Trait(value) => (&value.name, false),
+                Declaration::Trait(value) => (&value.name, true),
                 Declaration::Const(value) => (&value.name, false),
                 Declaration::Function(value) => (&value.name, false),
             };
@@ -1707,7 +3273,12 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
                     format!("invalid name `{name}` for declaration"),
                 );
             }
-            if owned_primitive(name).is_some() || matches!(name.as_str(), "Option" | "Result") {
+            if owned_primitive(name).is_some()
+                || matches!(
+                    name.as_str(),
+                    "List" | "Set" | "Map" | "Tuple" | "Option" | "Result" | "Opaque"
+                )
+            {
                 report(
                     declaration.span().clone(),
                     format!("declaration `{name}` collides with a prelude type"),
@@ -1841,6 +3412,19 @@ fn owned_preflight(
                 path: source.path.clone(),
                 diagnostic: Diagnostic::new(
                     "module path segments must use snake_case",
+                    source.syntax.module.path.span.clone(),
+                ),
+            });
+        }
+        if module
+            .segments
+            .first()
+            .is_some_and(|segment| segment == "core")
+        {
+            errors.push(ProjectDiagnostic {
+                path: source.path.clone(),
+                diagnostic: Diagnostic::new(
+                    "module root `core` is reserved for the compiler prelude",
                     source.syntax.module.path.span.clone(),
                 ),
             });
@@ -2094,6 +3678,18 @@ fn owned_preflight(
             }
         }
     }
+    // Qualified references own their dependency even without a `use` declaration.
+    for (module_index, source) in parsed.sources.iter().enumerate() {
+        for declaration in &source.syntax.declarations {
+            owned_visit_declaration(declaration, |path| {
+                if let Some(owner) = owned_qualified_owner(path, &declarations, parsed) {
+                    if owner != module_index {
+                        dependencies[module_index].insert(owner);
+                    }
+                }
+            });
+        }
+    }
     fn visit(
         index: usize,
         dependencies: &[BTreeSet<usize>],
@@ -2142,10 +3738,218 @@ fn owned_preflight(
     }
 }
 
-/// not used as the source of any HIR field.
+fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiagnostic>) {
+    fn declaration<'a>(modules: &'a [HirModule], symbol: &SymbolId) -> Option<&'a HirDeclaration> {
+        modules
+            .iter()
+            .flat_map(|module| &module.declarations)
+            .find(|declaration| declaration.id() == symbol)
+    }
+
+    fn stable(ty: &HirType, modules: &[HirModule], visiting: &mut BTreeSet<SymbolId>) -> bool {
+        match ty {
+            HirType::Primitive(
+                PrimitiveType::Bool
+                | PrimitiveType::I8
+                | PrimitiveType::I16
+                | PrimitiveType::I32
+                | PrimitiveType::I64
+                | PrimitiveType::U8
+                | PrimitiveType::U16
+                | PrimitiveType::U32
+                | PrimitiveType::U64
+                | PrimitiveType::Str
+                | PrimitiveType::Bytes
+                | PrimitiveType::Path,
+            ) => true,
+            HirType::Tuple2 { first, second } => {
+                stable(first, modules, visiting) && stable(second, modules, visiting)
+            }
+            HirType::Named { symbol, args } if visiting.insert(symbol.clone()) => {
+                let result = match declaration(modules, symbol) {
+                    Some(HirDeclaration::Newtype(value)) => {
+                        let substitutions = value
+                            .generics
+                            .iter()
+                            .map(|generic| generic.name.clone())
+                            .zip(args.iter().cloned())
+                            .collect::<HashMap<_, _>>();
+                        stable(
+                            &substitute_hir_type(value.carrier.clone(), &substitutions),
+                            modules,
+                            visiting,
+                        )
+                    }
+                    Some(HirDeclaration::Enum(value)) => value
+                        .variants
+                        .iter()
+                        .all(|variant| variant.fields.is_empty()),
+                    _ => false,
+                };
+                visiting.remove(symbol);
+                result
+            }
+            _ => false,
+        }
+    }
+
+    fn visit(
+        ty: &HirType,
+        modules: &[HirModule],
+        path: &Path,
+        span: &Span,
+        errors: &mut Vec<ProjectDiagnostic>,
+    ) {
+        match ty {
+            HirType::Set { item } => {
+                if !stable(item, modules, &mut BTreeSet::new()) {
+                    errors.push(ProjectDiagnostic {
+                        path: path.to_path_buf(),
+                        diagnostic: Diagnostic::new(
+                            "Set item type must be hash-stable",
+                            span.clone(),
+                        ),
+                    });
+                }
+                visit(item, modules, path, span, errors);
+            }
+            HirType::Map { key, value } => {
+                if !stable(key, modules, &mut BTreeSet::new()) {
+                    errors.push(ProjectDiagnostic {
+                        path: path.to_path_buf(),
+                        diagnostic: Diagnostic::new(
+                            "Map key type must be hash-stable",
+                            span.clone(),
+                        ),
+                    });
+                }
+                visit(key, modules, path, span, errors);
+                visit(value, modules, path, span, errors);
+            }
+            HirType::List { item } | HirType::Option { item } => {
+                visit(item, modules, path, span, errors);
+            }
+            HirType::Tuple2 { first, second } => {
+                visit(first, modules, path, span, errors);
+                visit(second, modules, path, span, errors);
+            }
+            HirType::Result { ok, error } => {
+                visit(ok, modules, path, span, errors);
+                visit(error, modules, path, span, errors);
+            }
+            HirType::Named { args, .. } => {
+                for argument in args {
+                    visit(argument, modules, path, span, errors);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for module in modules {
+        for declaration in &module.declarations {
+            let span = declaration.span();
+            let mut types = Vec::new();
+            match declaration {
+                HirDeclaration::Alias(value) => types.push(&value.target),
+                HirDeclaration::Newtype(value) => types.push(&value.carrier),
+                HirDeclaration::Struct(value) => {
+                    types.extend(value.fields.iter().map(|field| &field.ty));
+                }
+                HirDeclaration::Enum(value) => {
+                    types.extend(
+                        value
+                            .variants
+                            .iter()
+                            .flat_map(|variant| &variant.fields)
+                            .map(|field| &field.ty),
+                    );
+                }
+                HirDeclaration::Trait(value) => {
+                    for method in &value.methods {
+                        types.extend(method.parameters.iter().map(|parameter| &parameter.ty));
+                        types.push(&method.return_type);
+                    }
+                }
+                HirDeclaration::Const(value) => types.push(&value.ty),
+                HirDeclaration::Function(value) => {
+                    types.extend(value.parameters.iter().map(|parameter| &parameter.ty));
+                    types.push(&value.return_type);
+                }
+            }
+            for ty in types {
+                visit(ty, modules, &module.source, span, errors);
+            }
+        }
+    }
+}
+
+fn validate_effects(
+    modules: &[HirModule],
+    custom: &BTreeSet<String>,
+    errors: &mut Vec<ProjectDiagnostic>,
+) {
+    let builtins = [
+        "file.read",
+        "file.write",
+        "network",
+        "database.read",
+        "database.write",
+        "clock",
+        "random",
+        "process.exit",
+    ];
+    for module in modules {
+        let contracts = module
+            .declarations
+            .iter()
+            .flat_map(|declaration| match declaration {
+                HirDeclaration::Function(value) => vec![&value.contract],
+                HirDeclaration::Trait(value) => value
+                    .methods
+                    .iter()
+                    .map(|method| &method.contract)
+                    .collect(),
+                _ => Vec::new(),
+            });
+        for contract in contracts {
+            let mut seen = BTreeSet::new();
+            for effect in &contract.effects {
+                if !builtins.contains(&effect.key.as_str()) && !custom.contains(&effect.key) {
+                    errors.push(ProjectDiagnostic {
+                        path: module.source.clone(),
+                        diagnostic: Diagnostic::new(
+                            format!("unknown effect `{}`", effect.key),
+                            effect.span.clone(),
+                        ),
+                    });
+                }
+                if !seen.insert(&effect.key) {
+                    errors.push(ProjectDiagnostic {
+                        path: module.source.clone(),
+                        diagnostic: Diagnostic::new(
+                            format!("duplicate effect `{}`", effect.key),
+                            effect.span.clone(),
+                        ),
+                    });
+                }
+            }
+        }
+    }
+}
+
 pub fn lower(
     source_root: &Path,
     parsed: ParsedProject,
+) -> Result<HirProject, Vec<ProjectDiagnostic>> {
+    lower_with_effects(source_root, parsed, &BTreeSet::new())
+}
+
+/// Lower with the custom effect keys declared by the project manifest.
+pub fn lower_with_effects(
+    source_root: &Path,
+    parsed: ParsedProject,
+    custom_effects: &BTreeSet<String>,
 ) -> Result<HirProject, Vec<ProjectDiagnostic>> {
     let mut errors = owned_preflight(source_root, &parsed)
         .err()
@@ -2155,6 +3959,15 @@ pub fn lower(
         .map(|index| lowerer.module(index))
         .collect::<Vec<_>>();
     errors.extend(lowerer.errors);
+    if errors.is_empty() {
+        validate_opaque_boundaries(&modules, &mut errors);
+    }
+    if errors.is_empty() {
+        validate_hash_stable_keys(&modules, &mut errors);
+    }
+    if errors.is_empty() {
+        validate_effects(&modules, custom_effects, &mut errors);
+    }
     if errors.is_empty() {
         Ok(HirProject::new(modules))
     } else {

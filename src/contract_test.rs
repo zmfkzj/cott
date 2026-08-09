@@ -1,10 +1,18 @@
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::hash::sha256_hex;
 use crate::ir::CanonicalIr;
+use crate::manifest::RuntimeValidation;
+use crate::sandbox::{BindMounts, NetworkAccess, ResourceLimits, SandboxSpec, run};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -128,6 +136,112 @@ pub fn derive_strategies(ir: &CanonicalIr) -> Result<Vec<ContractTestStrategy>, 
         }
     }
     Ok(strategies)
+}
+
+pub fn execute_contract_tests(
+    interpreter: &Path,
+    generated_root: &Path,
+    ir: &CanonicalIr,
+    runtime_validation: RuntimeValidation,
+    scope: Option<&BTreeSet<String>>,
+) -> Result<Value, String> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let strategies = derive_strategies(ir)?
+        .into_iter()
+        .filter(|strategy| scope.is_none_or(|scope| scope.contains(&strategy.symbol)))
+        .collect::<Vec<_>>();
+    let modules = ir
+        .modules
+        .iter()
+        .map(|module| crate::ir::load(&module.bytes))
+        .collect::<Result<Vec<_>, _>>()?;
+    let request = serde_json::json!({
+        "modules": modules,
+        "runtime_validation": match runtime_validation {
+            RuntimeValidation::Off => "off",
+            RuntimeValidation::Boundary => "boundary",
+            RuntimeValidation::TestOnly => "test-only",
+        },
+        "strategies": strategies,
+    });
+    let stdin = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let scratch = std::env::temp_dir().join(format!(
+        "cott-contract-test-{}-{nonce}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&scratch).map_err(|error| {
+        format!(
+            "create contract-test scratch {}: {error}",
+            scratch.display()
+        )
+    })?;
+    let mut read_only = vec![
+        generated_root
+            .parent()
+            .unwrap_or(generated_root)
+            .to_path_buf(),
+    ];
+    if !interpreter.starts_with("/usr")
+        && !interpreter.starts_with("/bin")
+        && !interpreter.starts_with("/lib")
+        && let Some(environment) = interpreter.parent().and_then(Path::parent)
+    {
+        read_only.push(environment.to_path_buf());
+    }
+    let result = run(&SandboxSpec {
+        program: interpreter.to_path_buf(),
+        arguments: vec![
+            "-c".to_owned(),
+            include_str!("contract_runner.py").to_owned(),
+        ],
+        cwd: generated_root.to_path_buf(),
+        environment: BTreeMap::from([
+            ("HOME".to_owned(), scratch.display().to_string()),
+            ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
+            ("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned()),
+            ("PYTHONHASHSEED".to_owned(), "0".to_owned()),
+            (
+                "PYTHONPATH".to_owned(),
+                generated_root.display().to_string(),
+            ),
+            ("TMPDIR".to_owned(), scratch.display().to_string()),
+        ]),
+        stdin,
+        binds: BindMounts {
+            read_only,
+            writable: vec![scratch.clone()],
+        },
+        network: NetworkAccess::Disabled,
+        limits: ResourceLimits::contract_test(),
+    });
+    let cleanup = fs::remove_dir_all(&scratch);
+    if let Err(error) = cleanup {
+        return Err(format!(
+            "remove contract-test scratch {}: {error}",
+            scratch.display()
+        ));
+    }
+    let completed = result.map_err(|error| error.to_string())?;
+    if completed.status != Some(0) {
+        return Err(format!(
+            "contract test process exited {:?}: {}",
+            completed.status,
+            String::from_utf8_lossy(&completed.stderr).trim()
+        ));
+    }
+    if !completed.stderr.is_empty() {
+        return Err(format!(
+            "contract test process wrote stderr: {}",
+            String::from_utf8_lossy(&completed.stderr).trim()
+        ));
+    }
+    serde_json::from_slice(&completed.stdout)
+        .map_err(|error| format!("invalid contract-test report: {error}"))
 }
 
 fn required_field<'a>(value: &'a Value, field: &str) -> Result<&'a Value, String> {

@@ -1,3 +1,47 @@
 module foo.bar
 
-fn process_bar() -> Unit
+const MAX_PAYLOAD_SIZE: U32 = 8192
+
+newtype Probability(F32)
+    where 0.0 <= self <= 1.0
+
+newtype PayloadSize(U32)
+    where 1 <= self <= MAX_PAYLOAD_SIZE
+
+enum PayloadFormat:
+    Raw
+    Text
+    Structured
+
+struct InputPayload:
+    data: Bytes
+    declared_size: PayloadSize
+    format: PayloadFormat
+
+struct OutputPayload:
+    data: Bytes
+    source_size: PayloadSize
+    format: PayloadFormat
+
+enum BarError:
+    InvalidPayload(reason: Str)
+    ServiceUnavailable
+    ProcessingFailed(message: Str)
+
+struct BarOptions:
+    threshold: Probability = Probability(0.5)
+    use_cache: Bool = false
+
+fn process_bar(data: InputPayload, options: BarOptions) -> Result[OutputPayload, BarError]:
+    doc """
+    foo 입력을 bar 규칙으로 처리하고 원본 선언 크기와 형식을 기록한 출력을 반환한다.
+    """
+
+    ensures Result.Ok(output) => output.source_size == data.declared_size
+    ensures Result.Ok(output) => output.format == data.format
+
+    error BarError.InvalidPayload when data.data.len == 0
+    error BarError.ServiceUnavailable
+    error BarError.ProcessingFailed
+
+    effects [network]

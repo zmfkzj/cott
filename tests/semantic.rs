@@ -1,7 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use cott::compiler::{ProjectDiagnostic, SourceFile, parse_project};
-use cott::hir::{HirClauseKind, HirDeclaration, HirType, PrimitiveType, lower};
+use cott::hir::{
+    HirClauseKind, HirDeclaration, HirPatternKind, HirType, ModuleId, PrimitiveType, SymbolId,
+    lower, lower_with_effects,
+};
 
 fn source(path: &str, text: &str) -> SourceFile {
     SourceFile::new(PathBuf::from(path), text)
@@ -269,11 +272,11 @@ fn accepts_nonempty_contracts_and_effects_in_owned_hir() {
 enum Error:
     Bad
 
-fn guarded(value: I32) -> Unit:
+fn guarded(value: I32) -> Result[I32, Error]:
     requires value > 0
     ensures value > 1
     error Error.Bad when value == 0
-    effects [IO]
+    effects [network]
 "#,
     )]);
     let HirDeclaration::Function(function) = &project.modules[0].declarations[1] else {
@@ -292,7 +295,7 @@ fn guarded(value: I32) -> Unit:
         &function.contract.clauses[2].kind,
         HirClauseKind::Error { .. }
     ));
-    assert_eq!(function.contract.effects[0].key, "IO");
+    assert_eq!(function.contract.effects[0].key, "network");
 }
 
 #[test]
@@ -305,4 +308,276 @@ fn reports_cross_file_diagnostics_in_input_order() {
         paths(&errors),
         [Path::new("src/zeta.cott"), Path::new("src/alpha.cott"),]
     );
+}
+
+#[test]
+fn effects_are_closed_except_for_manifest_registered_keys() {
+    let text = "module custom_effect\n\nfn run() -> Unit:\n    effects [engine.compute]\n";
+    let errors = lower_diagnostics([source("src/custom_effect.cott", text)]);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.diagnostic.message == "unknown effect `engine.compute`")
+    );
+
+    let parsed = parse_project([source("src/custom_effect.cott", text)]).expect("effect source");
+    let custom = std::collections::BTreeSet::from(["engine.compute".to_owned()]);
+    lower_with_effects(Path::new("src"), parsed, &custom)
+        .expect("manifest-registered effect should lower");
+}
+
+#[test]
+fn accepts_builtin_and_nominal_ensures_patterns_with_canonical_bindings() {
+    let project = lower_project([source(
+        "src/patterns.cott",
+        r#"module patterns
+
+enum Failure:
+    Bad
+
+enum Shape:
+    Pair(left: I32, right: Bool)
+    Empty
+
+fn result(value: I32) -> Result[I32, Failure]:
+    ensures Result.Ok(ok) => ok > 0
+    ensures Result.Err(failure) => true
+
+fn option(value: I32) -> Option[I32]:
+    ensures Option.Some(item) => item > 0
+    ensures Option.Nothing => true
+
+fn nominal() -> Shape:
+    ensures Shape.Pair(left, right) => left > 0
+    ensures Shape.Empty => true
+"#,
+    )]);
+
+    let function = |name: &str| {
+        project.modules[0]
+            .declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                HirDeclaration::Function(value) if value.id.name == name => Some(value),
+                _ => None,
+            })
+            .expect("function should lower")
+    };
+    let result = function("result");
+    let HirClauseKind::Ensures {
+        pattern: Some(ok), ..
+    } = &result.contract.clauses[0].kind
+    else {
+        panic!("expected Result.Ok pattern");
+    };
+    let HirPatternKind::Variant {
+        symbol: ok_symbol,
+        arguments: ok_arguments,
+    } = &ok.kind
+    else {
+        panic!("expected Result.Ok variant");
+    };
+    assert_eq!(ok_symbol.as_string(), "Result.Ok");
+    assert_eq!(ok_arguments[0].ty, HirType::Primitive(PrimitiveType::I32));
+    let HirClauseKind::Ensures {
+        pattern: Some(err), ..
+    } = &result.contract.clauses[1].kind
+    else {
+        panic!("expected Result.Err pattern");
+    };
+    let HirPatternKind::Variant {
+        symbol: err_symbol,
+        arguments: err_arguments,
+    } = &err.kind
+    else {
+        panic!("expected Result.Err variant");
+    };
+    assert_eq!(err_symbol.as_string(), "Result.Err");
+    assert_eq!(
+        err_arguments[0].ty,
+        HirType::Named {
+            symbol: SymbolId::new(ModuleId::new(vec!["patterns".into()]), "Failure"),
+            args: Vec::new(),
+        }
+    );
+
+    let option = function("option");
+    let HirClauseKind::Ensures {
+        pattern: Some(some),
+        ..
+    } = &option.contract.clauses[0].kind
+    else {
+        panic!("expected Option.Some pattern");
+    };
+    let HirPatternKind::Variant {
+        symbol: some_symbol,
+        arguments: some_arguments,
+    } = &some.kind
+    else {
+        panic!("expected Option.Some variant");
+    };
+    assert_eq!(some_symbol.as_string(), "Option.Some");
+    assert_eq!(some_arguments[0].ty, HirType::Primitive(PrimitiveType::I32));
+    let HirClauseKind::Ensures {
+        pattern: Some(nothing),
+        ..
+    } = &option.contract.clauses[1].kind
+    else {
+        panic!("expected Option.Nothing pattern");
+    };
+    let HirPatternKind::Variant {
+        symbol: nothing_symbol,
+        arguments: nothing_arguments,
+    } = &nothing.kind
+    else {
+        panic!("expected Option.Nothing variant");
+    };
+    assert_eq!(nothing_symbol.as_string(), "Option.Nothing");
+    assert!(nothing_arguments.is_empty());
+
+    let nominal = function("nominal");
+    let HirClauseKind::Ensures {
+        pattern: Some(pair),
+        ..
+    } = &nominal.contract.clauses[0].kind
+    else {
+        panic!("expected Shape.Pair pattern");
+    };
+    let HirPatternKind::Variant {
+        symbol: pair_symbol,
+        arguments: pair_arguments,
+    } = &pair.kind
+    else {
+        panic!("expected Shape.Pair variant");
+    };
+    assert_eq!(pair_symbol.as_string(), "patterns.Shape.Pair");
+    assert_eq!(pair_arguments.len(), 2);
+    assert_eq!(pair_arguments[0].ty, HirType::Primitive(PrimitiveType::I32));
+    assert_eq!(
+        pair_arguments[1].ty,
+        HirType::Primitive(PrimitiveType::Bool)
+    );
+}
+
+#[test]
+fn rejects_error_clauses_with_invalid_result_or_variant_identity() {
+    let errors = lower_diagnostics([source(
+        "src/bad_clauses.cott",
+        r#"module bad_clauses
+
+enum Failure:
+    Bad
+
+enum Other:
+    Bad
+
+fn not_result() -> I32:
+    error Failure.Bad
+
+fn unrelated() -> Result[I32, Failure]:
+    error Other.Bad
+
+fn missing() -> Result[I32, Failure]:
+    error Failure.Missing
+"#,
+    )]);
+    assert!(errors.len() >= 3);
+    assert!(errors.iter().all(|error| {
+        error.path == Path::new("src/bad_clauses.cott")
+            && error.diagnostic.span.start < error.diagnostic.span.end
+    }));
+}
+#[test]
+fn preserves_cross_module_clause_variant_identity() {
+    let project = lower_project([
+        source(
+            "src/base.cott",
+            r#"module base
+
+enum Failure:
+    Bad
+
+enum Shape:
+    Value(number: I32)
+"#,
+        ),
+        source(
+            "src/consumer.cott",
+            r#"module consumer
+use base.{Failure, Shape}
+
+fn run(value: I32) -> Result[Shape, Failure]:
+    ensures Result.Ok(result) => true
+    error Failure.Bad
+
+fn shape() -> Shape:
+    ensures Shape.Value(number) => number > 0
+"#,
+        ),
+    ]);
+
+    let run = project.modules[1]
+        .declarations
+        .iter()
+        .find_map(|declaration| match declaration {
+            HirDeclaration::Function(value) if value.id.name == "run" => Some(value),
+            _ => None,
+        })
+        .expect("run function should lower");
+    let HirClauseKind::Error { variant, .. } = &run.contract.clauses[1].kind else {
+        panic!("expected error clause");
+    };
+    assert_eq!(variant.as_string(), "base.Failure.Bad");
+
+    let shape = project.modules[1]
+        .declarations
+        .iter()
+        .find_map(|declaration| match declaration {
+            HirDeclaration::Function(value) if value.id.name == "shape" => Some(value),
+            _ => None,
+        })
+        .expect("shape function should lower");
+    let HirClauseKind::Ensures {
+        pattern: Some(pattern),
+        ..
+    } = &shape.contract.clauses[0].kind
+    else {
+        panic!("expected nominal pattern");
+    };
+    let HirPatternKind::Variant { symbol, arguments } = &pattern.kind else {
+        panic!("expected nominal variant");
+    };
+    assert_eq!(symbol.as_string(), "base.Shape.Value");
+    assert_eq!(arguments[0].ty, HirType::Primitive(PrimitiveType::I32));
+}
+
+#[test]
+fn rejects_ensures_patterns_with_wrong_shape_or_payload_arity() {
+    let errors = lower_diagnostics([source(
+        "src/bad_patterns.cott",
+        r#"module bad_patterns
+
+enum Failure:
+    Bad
+
+enum Shape:
+    Pair(left: I32, right: Bool)
+    Empty
+
+fn wrong_builtin() -> Result[I32, Failure]:
+    ensures Option.Some(value) => true
+    ensures Result.Ok(first, second) => true
+    ensures Result.Err() => true
+
+fn wrong_nominal() -> Shape:
+    ensures Shape.Pair(value) => true
+    ensures Shape.Empty(extra) => true
+    ensures Shape.Unknown => true
+"#,
+    )]);
+    assert!(errors.len() >= 6);
+    assert!(errors.iter().all(|error| {
+        error.path == Path::new("src/bad_patterns.cott")
+            && error.diagnostic.span.start < error.diagnostic.span.end
+    }));
 }

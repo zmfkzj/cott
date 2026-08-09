@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::collections::BTreeMap;
+use std::fs::{self, OpenOptions};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::hash::sha256_hex;
 use crate::sandbox::{BindMounts, NetworkAccess, ResourceLimits, SandboxSpec, run};
@@ -89,6 +89,8 @@ pub struct AgentRunCandidate {
     pub stderr: Vec<u8>,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
+    pub duration_ms: u64,
+    pub environment_names: Vec<String>,
 }
 
 pub fn render_prompt(
@@ -134,38 +136,31 @@ pub fn run_agent(
     let spec = adapter(kind);
     let executable = fs::canonicalize(&executable)
         .map_err(|error| format!("resolve {} executable: {error}", spec.executable_name))?;
-    let sandbox_executable = workspace.join(".cott-agent-executable");
-    fs::copy(&executable, &sandbox_executable).map_err(|error| {
-        format!(
-            "copy {} executable into workspace: {error}",
+    let metadata = fs::symlink_metadata(&executable)
+        .map_err(|error| format!("stat {} executable: {error}", spec.executable_name))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.nlink() != 1 {
+        return Err(format!(
+            "{} executable must be a regular single-link file",
             spec.executable_name
-        )
-    })?;
-    fs::set_permissions(
-        &sandbox_executable,
-        fs::metadata(&executable)
-            .map_err(|error| format!("stat {} executable: {error}", spec.executable_name))?
-            .permissions(),
-    )
-    .map_err(|error| {
-        format!(
-            "set copied {} executable mode: {error}",
-            spec.executable_name
-        )
-    })?;
-    let allowed_workspace_paths = fs::read_dir(workspace)
-        .map_err(|error| format!("read agent workspace: {error}"))?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<Result<BTreeSet<_>, _>>()
-        .map_err(|error| format!("read agent workspace entry: {error}"))?;
+        ));
+    }
+    let executable_bytes = fs::read(&executable)
+        .map_err(|error| format!("read {} executable: {error}", spec.executable_name))?;
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target)
+        .map_err(|error| format!("create isolated agent target {}: {error}", target.display()))?;
+    let workspace_before = workspace_snapshot(workspace)?;
     let version = run_process(
-        &sandbox_executable,
+        &executable,
         spec.version_argv.iter().map(ToString::to_string).collect(),
         workspace,
         scratch,
         Vec::new(),
         false,
         Some(kind),
+        None,
         timeout_seconds,
     )?;
     let version_text = String::from_utf8_lossy(&version.stdout).trim().to_owned();
@@ -232,26 +227,37 @@ pub fn run_agent(
     } else {
         Vec::new()
     };
+    let started = Instant::now();
     let completed = run_process(
-        &sandbox_executable,
+        &executable,
         arguments,
         workspace,
         scratch,
         stdin,
         true,
         Some(kind),
+        Some(target),
         timeout_seconds,
     )?;
-    for entry in
-        fs::read_dir(workspace).map_err(|error| format!("read agent workspace: {error}"))?
+    let duration_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    if fs::read(&executable)
+        .map_err(|error| format!("re-read {} executable: {error}", spec.executable_name))?
+        != executable_bytes
     {
-        let entry = entry.map_err(|error| format!("read agent workspace entry: {error}"))?;
-        if !allowed_workspace_paths.contains(&entry.path()) && entry.path() != target {
-            return Err(format!(
-                "agent modified an unauthorized workspace path: {}",
-                entry.path().display()
-            ));
-        }
+        return Err(format!(
+            "{} executable changed during generation",
+            spec.executable_name
+        ));
+    }
+    let target_relative = target
+        .strip_prefix(workspace)
+        .map_err(|_| "agent target escaped workspace")?;
+    let mut before = workspace_before;
+    let mut after = workspace_snapshot(workspace)?;
+    before.remove(target_relative);
+    after.remove(target_relative);
+    if before != after {
+        return Err("agent modified an unauthorized workspace path".to_owned());
     }
     if completed.timed_out || completed.status != Some(0) {
         return Err(format!("{} failed", spec.executable_name));
@@ -266,20 +272,114 @@ pub fn run_agent(
     }
     let implementation = fs::read(target)
         .map_err(|error| format!("read agent target {}: {error}", target.display()))?;
+    if implementation.is_empty() {
+        return Err(format!("agent did not write target {}", target.display()));
+    }
     Ok(AgentRunCandidate {
         implementation,
         executable: executable.clone(),
-        executable_hash: format!(
-            "sha256:{}",
-            sha256_hex(&fs::read(&executable).map_err(|error| error.to_string())?)
-        ),
+        executable_hash: format!("sha256:{}", sha256_hex(&executable_bytes)),
         adapter_version: spec.exact_version.to_owned(),
         prompt_hash: format!("sha256:{}", sha256_hex(&prompt)),
         stdout: completed.stdout,
         stderr: completed.stderr,
         exit_code: completed.status,
         timed_out: completed.timed_out,
+        duration_ms,
+        environment_names: agent_environment_names(kind),
     })
+}
+
+fn workspace_snapshot(root: &Path) -> Result<BTreeMap<PathBuf, (u8, u32, u64, String)>, String> {
+    let mut snapshot = BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let mut entries = fs::read_dir(&directory)
+            .map_err(|error| format!("read agent workspace {}: {error}", directory.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("read agent workspace entry: {error}"))?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| "agent workspace path escaped root")?
+                .to_path_buf();
+            let metadata = fs::symlink_metadata(&path)
+                .map_err(|error| format!("stat agent workspace {}: {error}", path.display()))?;
+            if metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "agent workspace contains a symlink: {}",
+                    path.display()
+                ));
+            }
+            if metadata.is_dir() {
+                snapshot.insert(relative, (1, metadata.mode(), 0, String::new()));
+                pending.push(path);
+            } else if metadata.is_file() && metadata.nlink() == 1 {
+                let bytes = fs::read(&path)
+                    .map_err(|error| format!("read agent workspace {}: {error}", path.display()))?;
+                snapshot.insert(
+                    relative,
+                    (0, metadata.mode(), bytes.len() as u64, sha256_hex(&bytes)),
+                );
+            } else {
+                return Err(format!(
+                    "agent workspace entry is not a regular single-link file: {}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(snapshot)
+}
+
+fn agent_environment_names(kind: AgentKind) -> Vec<String> {
+    let mut names = vec![
+        "HOME".to_owned(),
+        "PATH".to_owned(),
+        "PYTHONDONTWRITEBYTECODE".to_owned(),
+        "TMPDIR".to_owned(),
+    ];
+    for name in [
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "NO_PROXY",
+    ] {
+        if std::env::var_os(name).is_some() {
+            names.push(name.to_owned());
+        }
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    match kind {
+        AgentKind::Codex => {
+            for name in ["CODEX_API_KEY", "CODEX_ACCESS_TOKEN"] {
+                if std::env::var_os(name).is_some() {
+                    names.push(name.to_owned());
+                }
+            }
+            if std::env::var_os("CODEX_HOME")
+                .map(PathBuf::from)
+                .or_else(|| home.map(|home| home.join(".codex")))
+                .is_some_and(|path| path.is_dir())
+            {
+                names.push("CODEX_HOME".to_owned());
+            }
+        }
+        AgentKind::Omp => {
+            if std::env::var_os("PI_CODING_AGENT_DIR")
+                .map(PathBuf::from)
+                .or_else(|| home.map(|home| home.join(".omp/agent")))
+                .is_some_and(|path| path.is_dir())
+            {
+                names.push("PI_CODING_AGENT_DIR".to_owned());
+            }
+        }
+    }
+    names.sort();
+    names
 }
 
 fn run_process(
@@ -290,22 +390,56 @@ fn run_process(
     stdin: Vec<u8>,
     network: bool,
     credential_kind: Option<AgentKind>,
+    writable_target: Option<&Path>,
     timeout_seconds: u16,
 ) -> Result<crate::sandbox::CompletedProcess, String> {
+    let mut read_only = vec![executable.to_path_buf()];
     let mut environment = BTreeMap::from([
         ("HOME".to_owned(), scratch.display().to_string()),
         ("TMPDIR".to_owned(), scratch.display().to_string()),
         ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
         ("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned()),
     ]);
+    for name in [
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "NO_PROXY",
+    ] {
+        if let Some(value) = std::env::var_os(name) {
+            let value = value
+                .into_string()
+                .map_err(|_| format!("{name} is not valid UTF-8"))?;
+            if matches!(name, "SSL_CERT_FILE" | "SSL_CERT_DIR") {
+                let path = fs::canonicalize(&value)
+                    .map_err(|error| format!("resolve {name} `{value}`: {error}"))?;
+                read_only.push(path);
+            }
+            environment.insert(name.to_owned(), value);
+        }
+    }
     if let Some(kind) = credential_kind {
         let home = std::env::var_os("HOME").map(PathBuf::from);
         match kind {
             AgentKind::Codex => {
+                for name in ["CODEX_API_KEY", "CODEX_ACCESS_TOKEN"] {
+                    if let Some(value) = std::env::var_os(name) {
+                        environment.insert(
+                            name.to_owned(),
+                            value
+                                .into_string()
+                                .map_err(|_| format!("{name} is not valid UTF-8"))?,
+                        );
+                    }
+                }
                 let credential_root = std::env::var_os("CODEX_HOME")
                     .map(PathBuf::from)
                     .or_else(|| home.map(|home| home.join(".codex")));
                 if let Some(root) = credential_root.filter(|root| root.is_dir()) {
+                    let root = fs::canonicalize(root)
+                        .map_err(|error| format!("resolve CODEX_HOME: {error}"))?;
+                    read_only.push(root.clone());
                     environment.insert("CODEX_HOME".to_owned(), root.display().to_string());
                 }
             }
@@ -314,10 +448,29 @@ fn run_process(
                     .map(PathBuf::from)
                     .or_else(|| home.map(|home| home.join(".omp/agent")));
                 if let Some(root) = credential_root.filter(|root| root.is_dir()) {
+                    let root = fs::canonicalize(root)
+                        .map_err(|error| format!("resolve PI_CODING_AGENT_DIR: {error}"))?;
+                    read_only.push(root.clone());
                     environment
                         .insert("PI_CODING_AGENT_DIR".to_owned(), root.display().to_string());
                 }
             }
+        }
+    }
+    read_only.push(workspace.to_path_buf());
+    let mut writable = vec![scratch.to_path_buf()];
+    if let Some(target) = writable_target {
+        writable.push(target.to_path_buf());
+    }
+    if credential_kind == Some(AgentKind::Omp) {
+        let argument_bytes = arguments.iter().map(|value| value.len() + 1).sum::<usize>()
+            + environment
+                .iter()
+                .map(|(name, value)| name.len() + value.len() + 2)
+                .sum::<usize>();
+        let argument_max = unsafe { libc::sysconf(libc::_SC_ARG_MAX) };
+        if argument_max <= 0 || argument_bytes.saturating_add(64 * 1024) > argument_max as usize {
+            return Err("OMP prompt exceeds the host argument-size limit".to_owned());
         }
     }
     run(&SandboxSpec {
@@ -327,8 +480,8 @@ fn run_process(
         environment,
         stdin,
         binds: BindMounts {
-            read_only: Vec::new(),
-            writable: vec![workspace.to_path_buf(), scratch.to_path_buf()],
+            read_only,
+            writable,
         },
         network: if network {
             NetworkAccess::Enabled
@@ -343,6 +496,7 @@ fn run_process(
             file_size_bytes: 64 * 1024 * 1024,
             wall_time: Duration::from_secs(timeout_seconds.into()),
             stream_limit_bytes: 16 * 1024 * 1024,
+            writable_bytes: 64 * 1024 * 1024,
         },
     })
     .map_err(|error| error.to_string())

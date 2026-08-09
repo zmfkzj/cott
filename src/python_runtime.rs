@@ -5,24 +5,34 @@ const RUNTIME_INIT_TEMPLATE: &str = r#"# Cott's compiler-owned Python runtime.
 # This module intentionally depends only on Python's standard library.
 from __future__ import annotations
 
+import dataclasses as _dataclasses
+import ast as _ast
 import hashlib as _hashlib
+import importlib.metadata as _metadata
+import json as _json
 import math as _math
 import os as _os
+import platform as _platform
 import stat as _stat
 import struct as _struct
 import sys as _sys
+import sysconfig as _sysconfig
 import threading as _threading
 import types as _types
 from collections.abc import Iterable, Mapping, Sequence, Set
 from dataclasses import dataclass
 from pathlib import Path as _Path
-from typing import Annotated, Any, Generic, Literal, Never, TypeAlias, TypeVar, Union, get_args as _get_args, get_origin as _get_origin, final as _final
+from typing import Annotated, Any, Generic, Literal, Never, TypeAlias, TypeVar, Union, get_args as _get_args, get_origin as _get_origin, get_type_hints as _get_type_hints, final as _final
+_COTT_PATH_TYPE = type(_Path())
+
+
 
 
 # The compiler embeds this value in every generated runtime.
 PROJECT_NAME = __COTT_PROJECT_NAME_LITERAL__
 _COTT_PROJECT_NAME = PROJECT_NAME
 _COTT_RUNTIME_ABI = "1"
+_COTT_RUNTIME_VERSION = __COTT_RUNTIME_VERSION_LITERAL__
 
 
 _T = TypeVar("_T")
@@ -85,6 +95,11 @@ def _cott_normalize_f32(value: object) -> float:
     if not _math.isfinite(normalized):
         raise CottContractViolation("float is outside binary32 range", phase="validation")
     return normalized
+
+def _cott_euclidean_mod(left: int, right: int) -> int:
+    if right == 0:
+        raise CottContractViolation("integer remainder divisor is zero", phase="contract-expression")
+    return left % abs(right)
 
 
 def _cott_normalize_scalar(value: object, annotation: object) -> object:
@@ -258,17 +273,21 @@ class CottTuple2(Sequence[_T1], Generic[_T1, _T2]):
 
 
 @_final
+@dataclass(frozen=True, slots=True, kw_only=True, eq=False, repr=False)
 class Opaque(Generic[_T]):
-    __slots__ = ("tag", "value")
     __hash__ = None
+    tag: str
+    value: _T
 
-    def __init__(self, *, tag: str, value: _T) -> None:
-        if type(tag) is not str or not tag:
+    def __post_init__(self) -> None:
+        if type(self.tag) is not str or not self.tag:
             raise CottContractViolation("opaque tag must be a non-empty str", phase="validation")
-        self.tag, self.value = tag, value
+
+    def unwrap(self) -> object:
+        return self.value
 
     def __eq__(self, other: object) -> bool:
-        return type(other) is Opaque and self.tag == other.tag and self.value == other.value
+        return type(other) is Opaque and self.tag == other.tag and self.value is other.value
 
     def __repr__(self) -> str:
         return f"Opaque(tag={self.tag!r}, value={self.value!r})"
@@ -376,6 +395,22 @@ def _cott_validate_json(value: object) -> None:
     raise CottContractViolation("value is not a JsonValue", phase="validation")
 
 
+def _cott_substitute_type(annotation: object, substitutions: dict[object, object]) -> object:
+    replacement = substitutions.get(annotation)
+    if replacement is not None:
+        return replacement
+    args = _get_args(annotation)
+    if not args:
+        return annotation
+    replaced = tuple(_cott_substitute_type(item, substitutions) for item in args)
+    if replaced == args:
+        return annotation
+    copier = getattr(annotation, "copy_with", None)
+    if copier is not None:
+        return copier(replaced)
+    return annotation
+
+
 def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") -> object:
     """Validate an ABI value recursively and normalize concrete numeric aliases."""
     origin = _get_origin(annotation)
@@ -383,15 +418,31 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") ->
     if origin is Annotated:
         normalized = _cott_normalize_scalar(value, annotation)
         return _cott_validate_abi(normalized, args[0], path=path)
-    if origin in (Union,):
+    if origin in (Union, _types.UnionType):
         for candidate in args:
             try:
                 return _cott_validate_abi(value, candidate, path=path)
             except CottContractViolation:
                 pass
         raise CottContractViolation(f"{path} does not match ABI union", phase="validation")
+    if origin is Literal:
+        if any(type(value) is type(candidate) and value == candidate for candidate in args):
+            return value
+        raise CottContractViolation(f"{path} does not match ABI literal", phase="validation")
     if annotation is Any:
         return value
+    if isinstance(annotation, TypeVar):
+        return value
+    protocol = origin if isinstance(origin, type) and getattr(origin, "_is_protocol", False) else annotation
+    if isinstance(protocol, type) and getattr(protocol, "_is_protocol", False):
+        missing = [
+            name
+            for name, member in protocol.__dict__.items()
+            if not name.startswith("_") and callable(member) and not hasattr(value, name)
+        ]
+        if not missing:
+            return value
+        raise CottContractViolation(f"{path} does not implement trait members: {', '.join(missing)}", phase="validation")
     if annotation is Never:
         raise CottContractViolation(f"{path} cannot contain Never", phase="validation")
     if annotation is bool and type(value) is bool:
@@ -404,41 +455,136 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") ->
         return value
     if annotation is bytes and type(value) is bytes:
         return value
-    if isinstance(annotation, type) and type(value) is annotation:
-        if annotation is JsonArray or annotation is JsonObject:
-            _cott_validate_json(value)
+    if annotation is _Path and type(value) is _COTT_PATH_TYPE:
+        return value
+    if origin is Some and type(value) is Some:
+        return Some(value=_cott_validate_abi(value.value, args[0] if args else Any, path=path))
+    if origin is Ok and type(value) is Ok:
+        return Ok(value=_cott_validate_abi(value.value, args[0] if args else Any, path=path))
+    if origin is Err and type(value) is Err:
+        return Err(error=_cott_validate_abi(value.error, args[0] if args else Any, path=path))
+    if origin is Opaque and type(value) is Opaque:
+        tags = _get_args(args[0]) if args and _get_origin(args[0]) is Literal else ()
+        if len(tags) != 1 or type(tags[0]) is not str or value.tag != tags[0]:
+            raise CottContractViolation(f"{path} has the wrong opaque tag", phase="validation")
         return value
     if origin is CottList and type(value) is CottList:
         item_type = args[0] if args else Any
-        for item in value:
-            _cott_validate_abi(item, item_type, path=path)
-        return value
+        return CottList(values=(_cott_validate_abi(item, item_type, path=path) for item in value))
     if origin is CottSet and type(value) is CottSet:
         item_type = args[0] if args else Any
-        for item in value:
-            _cott_validate_abi(item, item_type, path=path)
-        return value
+        return CottSet(values=(_cott_validate_abi(item, item_type, path=path) for item in value))
     if origin is FrozenMap and type(value) is FrozenMap:
         key_type, item_type = args if len(args) == 2 else (Any, Any)
-        for key, item in value.items():
-            _cott_validate_abi(key, key_type, path=path)
-            _cott_validate_abi(item, item_type, path=path)
-        return value
+        return FrozenMap(values={
+            _cott_validate_abi(key, key_type, path=path): _cott_validate_abi(item, item_type, path=path)
+            for key, item in value.items()
+        })
     if origin is CottTuple2 and type(value) is CottTuple2:
-        if args:
-            _cott_validate_abi(value.first, args[0], path=path)
-            _cott_validate_abi(value.second, args[1], path=path)
+        first_type, second_type = args if len(args) == 2 else (Any, Any)
+        return CottTuple2(
+            first=_cott_validate_abi(value.first, first_type, path=path),
+            second=_cott_validate_abi(value.second, second_type, path=path),
+        )
+    nominal = origin if isinstance(origin, type) and _dataclasses.is_dataclass(origin) else annotation
+    if isinstance(nominal, type) and type(value) is nominal:
+        if nominal is JsonArray or nominal is JsonObject:
+            _cott_validate_json(value)
+            return value
+        if _dataclasses.is_dataclass(nominal):
+            substitutions = dict(zip(getattr(nominal, "__parameters__", ()), args))
+            hints = _get_type_hints(nominal, include_extras=True)
+            return nominal(**{
+                field.name: _cott_validate_abi(
+                    getattr(value, field.name),
+                    _cott_substitute_type(hints.get(field.name, Any), substitutions),
+                    path=f"{path}.{field.name}",
+                )
+                for field in _dataclasses.fields(nominal)
+            })
         return value
     raise CottContractViolation(f"{path} does not match ABI type", phase="validation")
+
+
+def _cott_normalize_f32_abi(value: object, annotation: object, *, path: str = "$") -> object:
+    """Normalize every concretely typed F32 while leaving other validation disabled."""
+    origin = _get_origin(annotation)
+    args = _get_args(annotation)
+    if origin is Annotated:
+        metadata = next((item for item in args[1:] if isinstance(item, CottFloat)), None)
+        return _cott_normalize_f32(value) if metadata is not None and metadata.bits == 32 else value
+    if origin in (Union, _types.UnionType):
+        for candidate in args:
+            candidate_origin = _get_origin(candidate)
+            if (candidate_origin is not None and type(value) is candidate_origin) or (
+                isinstance(candidate, type) and type(value) is candidate
+            ):
+                return _cott_normalize_f32_abi(value, candidate, path=path)
+        return value
+    if origin is Some and type(value) is Some:
+        return Some(value=_cott_normalize_f32_abi(value.value, args[0] if args else Any, path=path))
+    if origin is Ok and type(value) is Ok:
+        return Ok(value=_cott_normalize_f32_abi(value.value, args[0] if args else Any, path=path))
+    if origin is Err and type(value) is Err:
+        return Err(error=_cott_normalize_f32_abi(value.error, args[0] if args else Any, path=path))
+    if origin is CottList and type(value) is CottList:
+        return CottList(values=(_cott_normalize_f32_abi(item, args[0], path=path) for item in value))
+    if origin is CottSet and type(value) is CottSet:
+        return CottSet(values=(_cott_normalize_f32_abi(item, args[0], path=path) for item in value))
+    if origin is FrozenMap and type(value) is FrozenMap:
+        return FrozenMap(values={
+            _cott_normalize_f32_abi(key, args[0], path=path): _cott_normalize_f32_abi(item, args[1], path=path)
+            for key, item in value.items()
+        })
+    if origin is CottTuple2 and type(value) is CottTuple2:
+        return CottTuple2(
+            first=_cott_normalize_f32_abi(value.first, args[0], path=path),
+            second=_cott_normalize_f32_abi(value.second, args[1], path=path),
+        )
+    nominal = origin if isinstance(origin, type) and _dataclasses.is_dataclass(origin) else annotation
+    if isinstance(nominal, type) and type(value) is nominal and _dataclasses.is_dataclass(nominal):
+        substitutions = dict(zip(getattr(nominal, "__parameters__", ()), args))
+        hints = _get_type_hints(nominal, include_extras=True)
+        return nominal(**{
+            field.name: _cott_normalize_f32_abi(
+                getattr(value, field.name),
+                _cott_substitute_type(hints.get(field.name, Any), substitutions),
+                path=f"{path}.{field.name}",
+            )
+            for field in _dataclasses.fields(nominal)
+        })
+    return value
 
 
 class CottContractViolation(Exception):
     """Raised when a generated contract or provenance check is violated."""
 
-    def __init__(self, message: str, *, function: str | None = None, clause: str | None = None, phase: str | None = None) -> None:
-        self.message, self.function, self.clause, self.phase = message, function, clause, phase
+    def __init__(
+        self,
+        message: str,
+        *,
+        symbol: str | None = None,
+        phase: str | None = None,
+        span: dict[str, int] | None = None,
+        expected: str | None = None,
+        actual: str | None = None,
+        clause: str | None = None,
+    ) -> None:
+        self.message = message
+        self.symbol = symbol
+        self.phase = phase
+        self.span = span
+        self.expected = expected
+        self.actual = actual
+        self.clause = clause
         detail = message
-        for label, value in (("function", function), ("clause", clause), ("phase", phase)):
+        for label, value in (
+            ("symbol", symbol),
+            ("phase", phase),
+            ("clause", clause),
+            ("expected", expected),
+            ("actual", actual),
+        ):
             if value is not None:
                 detail += f" [{label}={value}]"
         super().__init__(detail)
@@ -458,9 +604,7 @@ def _cott_check_project_identity(expected_project_name: str | None, *, phase: st
             f"project identity mismatch: expected {expected_project_name!r}, runtime is {PROJECT_NAME!r}",
             phase=phase,
         )
-
-
-_COTT_MODULE_CACHE: dict[str, tuple[_types.ModuleType, str]] = {}
+_COTT_MODULE_CACHE: dict[str, tuple[_types.ModuleType, str, str]] = {}
 _COTT_LOAD_LOCK = _threading.RLock()
 
 
@@ -476,18 +620,209 @@ if not any(type(finder) is _CottImplementationImportBlocker for finder in _sys.m
 
 
 def _cott_violation(message: str, *, phase: str = "provenance") -> CottContractViolation:
-    return CottContractViolation(message, function="_cott_load", phase=phase)
+    return CottContractViolation(message, symbol="_cott_load", phase=phase)
 
 
-def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_name: str | None = None, *, expected_project_name: str | None = None):
-    """Verify and lazily load one generated implementation symbol."""
+def _cott_regular_file_bytes(path: _Path, label: str) -> bytes:
+    try:
+        resolved = path.resolve(strict=True)
+        if resolved != path:
+            raise _cott_violation(f"{label} contains a symlink")
+        metadata = path.stat()
+        if not _stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise _cott_violation(f"{label} is not a regular file")
+        return path.read_bytes()
+    except CottContractViolation:
+        raise
+    except (OSError, ValueError) as error:
+        raise _cott_violation(f"unable to read {label}: {error}") from error
+
+
+def _cott_sha256(value: bytes) -> str:
+    return "sha256:" + _hashlib.sha256(value).hexdigest()
+
+
+def _cott_expected_digest(value: object, label: str) -> str:
+    if type(value) is not str:
+        raise _cott_violation(f"{label} must be a SHA-256 string")
+    digest = value.removeprefix("sha256:")
+    if len(digest) != 64 or any(char not in "0123456789abcdefABCDEF" for char in digest):
+        raise _cott_violation(f"{label} must be a SHA-256 hex string")
+    return "sha256:" + digest.lower()
+
+
+def _cott_validate_python_tools(tools: object) -> None:
+    if type(tools) is not dict or type(tools.get("python")) is not dict:
+        raise _cott_violation("generation record omitted Python tool provenance")
+    recorded = tools["python"]
+    expected = {
+        "implementation": _sys.implementation.name,
+        "version": _platform.python_version(),
+        "cache_tag": _sys.implementation.cache_tag,
+        "os": _sys.platform,
+        "machine": _platform.machine(),
+        "platform": _sysconfig.get_platform(),
+    }
+    for key, actual in expected.items():
+        if recorded.get(key) != actual:
+            raise _cott_violation(f"Python runtime {key} mismatch")
+    has_executable = "executable" in recorded
+    has_hash = "content_hash" in recorded
+    if has_executable != has_hash:
+        raise _cott_violation("Python executable provenance is incomplete")
+    if has_executable:
+        try:
+            runtime_executable = _Path(_sys.executable).resolve(strict=True)
+            if _Path(recorded["executable"]).resolve(strict=True) != runtime_executable:
+                raise _cott_violation("Python executable path mismatch")
+        except CottContractViolation:
+            raise
+        except (OSError, TypeError, ValueError) as error:
+            raise _cott_violation(f"invalid Python executable provenance: {error}") from error
+        executable_hash = _cott_expected_digest(recorded.get("content_hash"), "Python executable hash")
+        executable = _cott_regular_file_bytes(runtime_executable, "Python executable")
+        if _cott_sha256(executable) != executable_hash:
+            raise _cott_violation("Python executable hash mismatch")
+    runtime = tools.get("runtime")
+    if type(runtime) is not dict or runtime.get("abi") != _COTT_RUNTIME_ABI or runtime.get("version") != _COTT_RUNTIME_VERSION:
+        raise _cott_violation("Cott runtime ABI or version mismatch")
+
+
+def _cott_required_distributions(source: bytes, root: _Path) -> set[str]:
+    try:
+        tree = _ast.parse(source)
+    except SyntaxError as error:
+        raise _cott_violation(f"implementation source is not valid Python: {error}") from error
+    modules = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Import):
+            modules.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, _ast.ImportFrom) and node.level == 0 and node.module:
+            modules.add(node.module.split(".", 1)[0])
+    modules -= set(_sys.stdlib_module_names) | {"cott_runtime", "_cott_impl"}
+    modules = {
+        module
+        for module in modules
+        if not module.endswith("_types")
+        and not (root / f"{module}.py").is_file()
+        and not (root / module / "__init__.py").is_file()
+        and not (root / "_cott_impl" / f"{module}.py").is_file()
+    }
+    owners = _metadata.packages_distributions()
+    required = set()
+    for module in sorted(modules):
+        distributions = owners.get(module, [])
+        if len(distributions) != 1:
+            raise _cott_violation(f"external import {module!r} has ambiguous distribution ownership")
+        required.add(distributions[0].lower().replace("_", "-"))
+    return required
+
+
+def _cott_validate_dependencies(dependencies: object, source: bytes, root: _Path) -> None:
+
+
+    required = _cott_required_distributions(source, root)
+    if type(dependencies) is not list:
+        raise _cott_violation("generation dependencies must be an array")
+    recorded_names = {
+        dependency.get("name")
+        for dependency in dependencies
+        if type(dependency) is dict and type(dependency.get("name")) is str
+    }
+    if not required.issubset(recorded_names):
+        raise _cott_violation("implementation external dependencies lack provenance")
+    for dependency in dependencies:
+        if type(dependency) is not dict:
+            raise _cott_violation("generation dependency is not an object")
+        name = dependency.get("name")
+        version = dependency.get("version")
+        installed = dependency.get("installed")
+        if type(name) is not str or type(version) is not str or type(installed) is not dict:
+            raise _cott_violation("dependency is missing installed provenance")
+        try:
+            distribution = _metadata.distribution(name)
+            actual_name = distribution.metadata.get("Name")
+            actual_version = distribution.version
+            metadata = distribution.read_text("METADATA")
+        except Exception as error:
+            raise _cott_violation(f"unable to inspect dependency {name!r}: {error}") from error
+        normalized = actual_name.lower().replace("_", "-") if type(actual_name) is str else ""
+        if normalized != name or actual_version != version or installed.get("version") != version:
+            raise _cott_violation(f"dependency {name!r} identity mismatch")
+        expected_metadata = _cott_expected_digest(installed.get("metadata_hash"), f"dependency {name} METADATA hash")
+        if metadata is None or _cott_sha256(metadata.encode()) != expected_metadata:
+            raise _cott_violation(f"dependency {name!r} METADATA hash mismatch")
+        origins = installed.get("origins")
+        if type(origins) is not list or not origins:
+            raise _cott_violation(f"dependency {name!r} omitted regular-file provenance")
+        for origin in origins:
+            if type(origin) is not dict or type(origin.get("path")) is not str:
+                raise _cott_violation(f"dependency {name!r} has invalid file provenance")
+            origin_path = origin["path"]
+            if origin_path.startswith("/") or "\\" in origin_path:
+                raise _cott_violation(f"dependency {name!r} has an invalid origin path")
+            origin_parts = origin_path.split("/")
+            if any(part in ("", ".", "..") for part in origin_parts):
+                raise _cott_violation(f"dependency {name!r} has an invalid origin path")
+            candidate = distribution.locate_file(origin_path)
+            if candidate.is_symlink():
+                raise _cott_violation(f"dependency {name!r} origin is a symlink")
+            expected = _cott_expected_digest(origin.get("content_hash"), f"dependency {name} file hash")
+            actual = _cott_sha256(_cott_regular_file_bytes(candidate, f"dependency {name} file"))
+            if actual != expected:
+                raise _cott_violation(f"dependency {name!r} file hash mismatch")
+def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symbol: str, project: str | None, cott_symbol: str | None, source: bytes) -> str:
+    artifact_root = root.parent if root.name == "python" else root
+    generation_path = artifact_root / "generation.json"
+    current_record = _json.loads(_cott_regular_file_bytes(generation_path, "generation record"))
+    if type(current_record) is not dict or current_record.get("schema_version") != 1 or type(current_record.get("current")) is not dict:
+        raise _cott_violation("generation record is malformed")
+    current = current_record["current"]
+    generation_id = current.get("generation_id")
+    if type(generation_id) is not str:
+        raise _cott_violation("generation identity is missing")
+    identity = dict(current)
+    for key in ("generation_id", "verified", "verification", "agent_runs"):
+        identity.pop(key, None)
+    expected_id = _cott_sha256(
+        _json.dumps(identity, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+    )
+    if generation_id != expected_id:
+        raise _cott_violation("generation identity mismatch")
+    _cott_validate_python_tools(current.get("tools"))
+    _cott_validate_dependencies(current.get("dependencies"), source, root)
+    implementations = current.get("implementations")
+    if type(implementations) is not list:
+        raise _cott_violation("generation implementations must be an array")
+    selected_origin = (("python/" if root.name == "python" else "") + relative_path)
+    selected_python_symbol = f"{relative_path[:-3].replace('/', '.')}:{symbol}"
+    matches = []
+    for implementation in implementations:
+        if type(implementation) is not dict:
+            continue
+        if (
+            implementation.get("runtime_origin") == selected_origin
+            and implementation.get("python_symbol") == selected_python_symbol
+            and _cott_expected_digest(implementation.get("content_hash"), "implementation content hash") == digest
+            and (cott_symbol is None or implementation.get("cott_symbol") == cott_symbol)
+        ):
+            matches.append(implementation)
+    if len(matches) != 1:
+        raise _cott_violation("selected implementation does not match generation provenance")
+    return generation_id
+
+
+def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_name: str | None = None, *, expected_project_name: str | None = None, expected_cott_symbol: str | None = None):
     if project_name is not None and expected_project_name is not None and project_name != expected_project_name:
         raise _cott_violation("conflicting project identities", phase="facade-import")
-    _cott_check_project_identity(project_name if expected_project_name is None else expected_project_name, phase="facade-import")
+    expected_project = project_name if expected_project_name is None else expected_project_name
+    _cott_check_project_identity(expected_project, phase="facade-import")
     if type(relative_path) is not str or type(expected_sha256) is not str:
         raise _cott_violation("binding path and hash must be strings")
     if type(symbol) is not str or not symbol.isidentifier():
         raise _cott_violation("binding symbol must be an identifier")
+    if expected_cott_symbol is not None and (type(expected_cott_symbol) is not str or not expected_cott_symbol):
+        raise _cott_violation("Cott symbol must be a string")
     if not relative_path or "\\" in relative_path:
         raise _cott_violation("binding path must be a normalized relative POSIX path")
     parts = relative_path.split("/")
@@ -496,42 +831,20 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
     if any(not part.isidentifier() for part in parts[:-1]) or not parts[-1].endswith(".py") or parts[-1] == "__init__.py" or not parts[-1][:-3].isidentifier():
         raise _cott_violation("binding path contains an invalid module name")
     module_name = ".".join(parts)[:-3]
-    digest_input = expected_sha256.removeprefix("sha256:")
-    if len(digest_input) != 64 or any(char not in "0123456789abcdefABCDEF" for char in digest_input):
-        raise _cott_violation("binding hash must be SHA-256 hex")
+    digest_input = _cott_expected_digest(expected_sha256, "binding hash")
     root = _Path(__file__).resolve().parent.parent
     path = root.joinpath(*parts)
-    try:
-        resolved = path.resolve(strict=True)
-        resolved.relative_to(root)
-        if resolved != path:
-            raise _cott_violation("binding path contains a symlink")
-        flags = _os.O_RDONLY | getattr(_os, "O_NOFOLLOW", 0)
-        fd = _os.open(path, flags)
-        try:
-            metadata = _os.fstat(fd)
-            if not _stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-                raise _cott_violation("binding is not a regular file")
-            with _os.fdopen(fd, "rb") as stream:
-                fd = -1
-                source = stream.read()
-        finally:
-            if fd != -1:
-                _os.close(fd)
-    except CottContractViolation:
-        raise
-    except (OSError, ValueError) as error:
-        raise _cott_violation(f"unable to read binding {relative_path}: {error}") from error
-
-    digest = _hashlib.sha256(source).hexdigest()
-    if digest != digest_input.lower():
+    source = _cott_regular_file_bytes(path, f"binding {relative_path}")
+    digest = _cott_sha256(source)
+    if digest != digest_input:
         raise _cott_violation(f"binding hash mismatch for {relative_path}")
+    generation_id = _cott_validate_generation(root, relative_path, digest, symbol, expected_project, expected_cott_symbol, source)
 
     with _COTT_LOAD_LOCK:
         cached = _COTT_MODULE_CACHE.get(module_name)
         if cached is not None:
-            module, cached_digest = cached
-            if cached_digest != digest or _sys.modules.get(module_name) is not module:
+            module, cached_digest, cached_generation = cached
+            if cached_digest != digest or cached_generation != generation_id or _sys.modules.get(module_name) is not module:
                 raise _cott_violation(f"canonical module cache conflict for {module_name}")
             try:
                 return getattr(module, symbol)
@@ -558,7 +871,7 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
             if _sys.modules.get(module_name) is module:
                 del _sys.modules[module_name]
             raise _cott_violation(f"failed to load binding {relative_path}: {error}", phase="implementation-load") from error
-        _COTT_MODULE_CACHE[module_name] = (module, digest)
+        _COTT_MODULE_CACHE[module_name] = (module, digest, generation_id)
         try:
             return getattr(module, symbol)
         except AttributeError as error:
@@ -601,10 +914,15 @@ fn python_string_literal(value: &str) -> String {
 
 /// Render the compiler-owned, stdlib-only Python runtime files.
 pub fn render_runtime(project_name: &str) -> BTreeMap<PathBuf, Vec<u8>> {
-    let source = RUNTIME_INIT_TEMPLATE.replace(
-        "__COTT_PROJECT_NAME_LITERAL__",
-        &python_string_literal(project_name),
-    );
+    let source = RUNTIME_INIT_TEMPLATE
+        .replace(
+            "__COTT_PROJECT_NAME_LITERAL__",
+            &python_string_literal(project_name),
+        )
+        .replace(
+            "__COTT_RUNTIME_VERSION_LITERAL__",
+            &python_string_literal(env!("CARGO_PKG_VERSION")),
+        );
     let mut files = BTreeMap::new();
     files.insert(
         PathBuf::from("cott_runtime/__init__.py"),

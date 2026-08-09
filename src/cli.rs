@@ -1,24 +1,71 @@
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::ffi::OsString;
-use std::fs;
+use std::ffi::{CString, OsString};
+use std::fs::{self, DirBuilder, File, OpenOptions};
+use std::io::{Read, Write};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command as ProcessCommand;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command as ProcessCommand, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub use crate::agent::AgentKind;
-use crate::agent::{adapter, render_prompt, run_agent};
-use crate::binding::{
-    ResolvedBinding, resolve_bindings, resolve_implementations, validate_candidate,
-};
+use crate::agent::{AgentRunCandidate, adapter, render_prompt, run_agent};
+use crate::binding::{ResolvedBinding, resolve_implementations, validate_candidate};
 use crate::compiler::{ProjectDiagnostic, parse_project};
-use crate::hir::lower;
+use crate::diagnostics::{
+    Diagnostic, DiagnosticReport, Severity, SourceMap, SourceSpan, Span, code,
+};
+use crate::hash::sha256_hex;
+use crate::hir::lower_with_effects;
 use crate::ir::render;
 use crate::project::{ProjectPaths, discover_sources_from_paths, load_config_with_paths};
+use crate::provenance::{AgentRun, AgentStatus, GenerationRecord, StreamDigest};
 use crate::python::artifact_plan::PythonArtifactPlan;
 use crate::python_emit::{Emission, EmitDiagnostic, emit};
+use crate::python_verify::verify_python;
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession};
 
 const USAGE: &str = "Usage:\n  cott init <path> [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python [--project <dir>] [--format json]\n  cott generate [<fully.qualified.function>] --agent codex|omp --target python [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n";
+
+#[cfg(test)]
+thread_local! {
+    static INIT_FAULT: RefCell<Option<&'static str>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn arm_init_fault(name: &'static str) {
+    INIT_FAULT.with(|fault| *fault.borrow_mut() = Some(name));
+}
+
+#[cfg(test)]
+fn clear_init_fault() {
+    INIT_FAULT.with(|fault| *fault.borrow_mut() = None);
+}
+
+fn init_fault(name: &'static str) -> Result<(), String> {
+    #[cfg(test)]
+    {
+        let injected = INIT_FAULT.with(|fault| {
+            let mut fault = fault.borrow_mut();
+            if fault.as_ref().is_some_and(|expected| *expected == name) {
+                *fault = None;
+                true
+            } else {
+                false
+            }
+        });
+        if injected {
+            return Err(format!("injected init filesystem fault: {name}"));
+        }
+    }
+    let _ = name;
+    Ok(())
+}
 
 /// Runs the command line interface. Parsing is intentionally closed: unknown,
 /// duplicate, or context-invalid options are usage errors before project I/O.
@@ -26,6 +73,27 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
     let mut arguments = arguments.into_iter();
     let _program = arguments.next();
     let arguments: Vec<OsString> = arguments.collect();
+    let json_formats = arguments
+        .windows(2)
+        .filter(|pair| pair[0] == "--format" && pair[1] == "json")
+        .count();
+    if json_formats > 1 {
+        let report = DiagnosticReport {
+            diagnostics: vec![Diagnostic::error(
+                code::CLI_USAGE,
+                "duplicate option",
+                Span::new(0, 0),
+            )],
+        };
+        let bytes = report
+            .canonical_json(&SourceMap::default())
+            .expect("diagnostic report is serializable");
+        let _ = std::io::stdout().write_all(&bytes);
+        return 2;
+    }
+    if json_formats == 1 {
+        return run_json(arguments);
+    }
 
     match parse_command(&arguments) {
         Ok(Command::Help) => {
@@ -36,8 +104,8 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
             path,
             name,
             no_sync,
-            ..
-        }) => init_project(path, name, no_sync),
+            format,
+        }) => init_project(path, name, no_sync, format),
         Ok(Command::Check {
             source, project, ..
         }) => check_project(project, source),
@@ -97,6 +165,130 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
             2
         }
     }
+}
+
+fn run_json(arguments: Vec<OsString>) -> i32 {
+    let mut human_arguments = Vec::with_capacity(arguments.len());
+    let mut index = 0;
+    while index < arguments.len() {
+        if arguments[index] == "--format"
+            && arguments
+                .get(index + 1)
+                .is_some_and(|value| value == "json")
+        {
+            index += 2;
+        } else {
+            human_arguments.push(arguments[index].clone());
+            index += 1;
+        }
+    }
+    let init_no_sync = human_arguments.first().is_some_and(|value| value == "init")
+        && human_arguments.iter().any(|value| value == "--no-sync");
+    let project_paths = json_project_paths(&human_arguments);
+    let output = match std::env::current_exe().and_then(|executable| {
+        ProcessCommand::new(executable)
+            .args(&human_arguments)
+            .output()
+    }) {
+        Ok(output) => output,
+        Err(error) => {
+            let report = DiagnosticReport {
+                diagnostics: vec![Diagnostic::error(
+                    code::INTERNAL,
+                    format!("execute JSON-mode command: {error}"),
+                    Span::new(0, 0),
+                )],
+            };
+            let bytes = report
+                .canonical_json(&SourceMap::default())
+                .expect("diagnostic report is serializable");
+            let _ = std::io::stdout().write_all(&bytes);
+            return 1;
+        }
+    };
+    let exit_code = output.status.code().unwrap_or(1);
+    let error_code = match exit_code {
+        2 => code::CLI_USAGE,
+        3 => code::SYNTAX,
+        4 => code::PYTHON,
+        5 => code::AGENT,
+        6 => code::FILESYSTEM,
+        1 => code::INTERNAL,
+        _ => code::CONTRACT,
+    };
+    let mut diagnostics = Vec::new();
+    let mut sources = SourceMap::default();
+    let mut source_ids = BTreeMap::new();
+    for (source_order, line) in String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .enumerate()
+    {
+        let body = line.strip_prefix("error: ").unwrap_or(line);
+        let mut diagnostic = Diagnostic::error(error_code, body, Span::new(0, 0));
+        diagnostic.source_order = source_order;
+        if let Some(paths) = &project_paths
+            && let Some((location, message)) = body.rsplit_once(": ")
+            && let Some((path, range)) = location.rsplit_once(':')
+            && let Some((start, end)) = range.split_once('-')
+            && let (Ok(start), Ok(end)) = (start.parse::<usize>(), end.parse::<usize>())
+        {
+            let relative = PathBuf::from(path);
+            let absolute = paths.source_dir.join(&relative);
+            if let Ok(bytes) = fs::read(&absolute) {
+                let source_root = paths
+                    .source_dir
+                    .strip_prefix(&paths.root)
+                    .unwrap_or(&paths.source_dir);
+                let file = *source_ids
+                    .entry(relative.clone())
+                    .or_insert_with(|| sources.add(source_root.join(&relative), bytes));
+                diagnostic.message = message.to_owned();
+                diagnostic.span = Span::new(start, end);
+                diagnostic.source_span = Some(SourceSpan {
+                    file,
+                    start_byte: start,
+                    end_byte: end,
+                });
+            }
+        }
+        diagnostics.push(diagnostic);
+    }
+    let offset = diagnostics.len();
+    for (source_order, line) in String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .enumerate()
+    {
+        let mut diagnostic = if init_no_sync {
+            let mut diagnostic = Diagnostic::error(
+                code::NAME,
+                "run the frozen Python environment sync",
+                Span::new(0, 0),
+            );
+            diagnostic.help.push(line.to_owned());
+            diagnostic
+        } else {
+            Diagnostic::error(code::CONTRACT, line, Span::new(0, 0))
+        };
+        diagnostic.severity = Severity::Note;
+        diagnostic.source_order = offset + source_order;
+        diagnostics.push(diagnostic);
+    }
+    let bytes = DiagnosticReport { diagnostics }
+        .canonical_json(&sources)
+        .expect("diagnostic report is serializable");
+    let _ = std::io::stdout().write_all(&bytes);
+    exit_code
+}
+
+fn json_project_paths(arguments: &[OsString]) -> Option<ProjectPaths> {
+    let root = arguments
+        .windows(2)
+        .find(|pair| pair[0] == "--project")
+        .map(|pair| PathBuf::from(&pair[1]))
+        .or_else(|| std::env::current_dir().ok())?;
+    load_config_with_paths(&root).ok().map(|(_, paths)| paths)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -424,20 +616,29 @@ fn parse_diff(values: &[OsString]) -> Result<Command, &'static str> {
 }
 
 struct PlannedProject {
+    session: ProjectSession,
+    config: crate::manifest::ProjectConfig,
     paths: ProjectPaths,
+    ir: crate::ir::CanonicalIr,
     emission: Emission,
+    input_snapshot: InputSnapshot,
 }
 fn plan(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
-    let root = match project_argument {
-        Some(path) => path,
-        None => match std::env::current_dir() {
-            Ok(path) => path,
-            Err(error) => {
-                eprintln!("error: failed to determine current directory: {error}");
-                return Err(2);
-            }
-        },
+    let Ok(root) = project_root(project_argument) else {
+        return Err(2);
     };
+    let session = match ProjectSession::acquire(&root) {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return Err(6);
+        }
+    };
+    plan_with_session(session)
+}
+
+fn plan_with_session(session: ProjectSession) -> Result<PlannedProject, i32> {
+    let root = session.root().to_path_buf();
     let (config, paths) = match load_config_with_paths(&root) {
         Ok(config) => config,
         Err(error) => {
@@ -456,6 +657,13 @@ fn plan(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
             return Err(2);
         }
     };
+    let mut input_hashes = match collect_input_hashes(&config, &paths, &sources) {
+        Ok(inputs) => inputs,
+        Err(message) => {
+            eprintln!("error: {message}");
+            return Err(2);
+        }
+    };
     let parsed = match parse_project(sources) {
         Ok(parsed) => parsed,
         Err(diagnostics) => {
@@ -463,7 +671,8 @@ fn plan(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
             return Err(3);
         }
     };
-    let hir = match lower(&paths.source_dir, parsed) {
+    let custom_effects = config.effects.keys().cloned().collect();
+    let hir = match lower_with_effects(&paths.source_dir, parsed, &custom_effects) {
         Ok(hir) => hir,
         Err(diagnostics) => {
             print_project_diagnostics(&diagnostics);
@@ -484,8 +693,8 @@ fn plan(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
             return Err(1);
         }
     };
-    let bindings = match resolve_bindings(&config, &paths, &plan) {
-        Ok(bindings) => bindings,
+    let resolution = match resolve_implementations(&config, &paths, &plan) {
+        Ok(resolution) => resolution,
         Err(diagnostics) => {
             for diagnostic in diagnostics {
                 eprintln!(
@@ -497,35 +706,403 @@ fn plan(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
             return Err(4);
         }
     };
-    let emission = match emit(&config.project.name, &plan, &ir, &bindings) {
+    if let Some(stale) = resolution.stale.first() {
+        eprintln!(
+            "error: {}: stale durable agent implementation",
+            display_path(&paths.root, stale)
+        );
+        return Err(4);
+    }
+    let bindings = resolution.resolved;
+    add_binding_input_hashes(&paths, &bindings, &mut input_hashes);
+    let input_snapshot = match capture_expected_inputs(&paths, &input_hashes, []) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return Err(6);
+        }
+    };
+    let mut emission = match emit(&config, &plan, &ir, &bindings) {
         Ok(emission) => emission,
         Err(diagnostics) => {
             print_emit_diagnostics(&paths, &diagnostics);
             return Err(4);
         }
     };
-    Ok(PlannedProject { paths, emission })
+    if let Err(message) = enrich_generation_record(&paths, input_hashes, &mut emission) {
+        eprintln!("error: {message}");
+        return Err(4);
+    }
+    Ok(PlannedProject {
+        session,
+        config,
+        paths,
+        ir,
+        emission,
+        input_snapshot,
+    })
+}
+fn collect_input_hashes(
+    config: &crate::manifest::ProjectConfig,
+    paths: &ProjectPaths,
+    sources: &[crate::compiler::SourceFile],
+) -> Result<BTreeMap<String, String>, String> {
+    let mut files = vec![paths.manifest.clone()];
+    files.extend(
+        sources
+            .iter()
+            .map(|source| paths.source_dir.join(&source.path)),
+    );
+    if let Some(lockfile) = &paths.lockfile {
+        files.push(lockfile.clone());
+    }
+    for path in [
+        paths.root.join("AGENTS.md"),
+        paths.python_source_dir.join("pyproject.toml"),
+    ] {
+        if path.exists() {
+            files.push(path);
+        }
+    }
+    if let Some(rules) = &config.generator.rules {
+        files.push(paths.root.join(rules));
+    }
+    files.sort();
+    files.dedup();
+    files
+        .into_iter()
+        .map(|path| {
+            let bytes = fs::read(&path)
+                .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+            let relative = path
+                .strip_prefix(&paths.root)
+                .map_err(|_| format!("input is outside project root: {}", path.display()))?;
+            Ok((
+                relative.to_string_lossy().replace('\\', "/"),
+                format!("sha256:{}", sha256_hex(&bytes)),
+            ))
+        })
+        .collect()
+}
+
+fn add_binding_input_hashes(
+    paths: &ProjectPaths,
+    bindings: &[ResolvedBinding],
+    inputs: &mut BTreeMap<String, String>,
+) {
+    for binding in bindings {
+        if let Ok(relative) = binding.source.strip_prefix(&paths.root) {
+            inputs.insert(
+                relative.to_string_lossy().replace('\\', "/"),
+                format!("sha256:{}", binding.sha256),
+            );
+        }
+    }
+}
+
+fn capture_expected_inputs(
+    paths: &ProjectPaths,
+    hashes: &BTreeMap<String, String>,
+    extra: impl IntoIterator<Item = PathBuf>,
+) -> Result<InputSnapshot, crate::transaction::TransactionError> {
+    InputSnapshot::capture_expected(
+        &paths.root,
+        hashes
+            .iter()
+            .map(|(path, hash)| (PathBuf::from(path), hash.clone())),
+        extra,
+    )
+}
+
+fn enrich_generation_record(
+    paths: &ProjectPaths,
+    inputs: BTreeMap<String, String>,
+    emission: &mut Emission,
+) -> Result<(), String> {
+    let bytes = emission
+        .files
+        .get(Path::new("generation.json"))
+        .ok_or_else(|| "emission omitted generation.json".to_owned())?;
+    let mut record = GenerationRecord::parse(bytes)
+        .map_err(|error| format!("invalid planned generation record: {error}"))?;
+    let mut dependencies = dependency_records(paths)?;
+    let existing_path = artifact_root_for_paths(paths)?.join("generation.json");
+    if existing_path.exists() {
+        let existing = fs::read(&existing_path).map_err(|error| {
+            format!(
+                "failed to read existing generation record {}: {error}",
+                existing_path.display()
+            )
+        })?;
+        let existing = GenerationRecord::parse(&existing).map_err(|error| {
+            format!(
+                "invalid existing generation record {}: {error}",
+                existing_path.display()
+            )
+        })?;
+        merge_dependency_evidence(&mut dependencies, &existing.current.dependencies);
+        record.last_verified = existing.last_verified;
+        record.current.agent_runs = existing
+            .current
+            .agent_runs
+            .into_iter()
+            .filter(|run| {
+                record
+                    .current
+                    .implementations
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|implementation| {
+                        implementation
+                            .get("cott_symbol")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(run.symbol.as_str())
+                            && implementation
+                                .get("content_hash")
+                                .and_then(serde_json::Value::as_str)
+                                .is_some_and(|hash| {
+                                    hash == run.implementation_hash
+                                        || hash.strip_prefix("sha256:")
+                                            == Some(run.implementation_hash.as_str())
+                                })
+                    })
+            })
+            .collect();
+    }
+    record.current.inputs =
+        serde_json::to_value(inputs).map_err(|error| format!("serialize input hashes: {error}"))?;
+    record.current.dependencies = dependencies;
+    record.current.compute_generation_id()?;
+    emission
+        .files
+        .insert(PathBuf::from("generation.json"), record.canonical_bytes()?);
+    Ok(())
+}
+
+fn merge_dependency_evidence(current: &mut serde_json::Value, existing: &serde_json::Value) {
+    let Some(current) = current.as_array_mut() else {
+        return;
+    };
+    let Some(existing) = existing.as_array() else {
+        return;
+    };
+    for dependency in current {
+        let Some(previous) = existing.iter().find(|previous| {
+            ["name", "version", "lock_hash", "artifacts"]
+                .into_iter()
+                .all(|field| previous.get(field) == dependency.get(field))
+        }) else {
+            continue;
+        };
+        if let Some(installed) = previous.get("installed") {
+            dependency
+                .as_object_mut()
+                .expect("dependency is an object")
+                .insert("installed".to_owned(), installed.clone());
+        }
+    }
+}
+
+fn dependency_records(paths: &ProjectPaths) -> Result<serde_json::Value, String> {
+    let Some(path) = &paths.lockfile else {
+        return Ok(serde_json::Value::Array(Vec::new()));
+    };
+    let bytes = fs::read(path)
+        .map_err(|error| format!("failed to read lockfile {}: {error}", path.display()))?;
+    let lock: toml::Value = toml::from_str(
+        std::str::from_utf8(&bytes)
+            .map_err(|_| format!("lockfile {} is not UTF-8", path.display()))?,
+    )
+    .map_err(|error| format!("invalid uv lockfile {}: {error}", path.display()))?;
+    let lock_hash = format!("sha256:{}", sha256_hex(&bytes));
+    let mut packages = lock
+        .get("package")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|package| {
+            let name = package.get("name")?.as_str()?;
+            let version = package.get("version")?.as_str()?;
+            let mut artifacts = package
+                .get("wheels")
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|wheel| wheel.get("hash").and_then(toml::Value::as_str))
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            if let Some(hash) = package
+                .get("sdist")
+                .and_then(|sdist| sdist.get("hash"))
+                .and_then(toml::Value::as_str)
+            {
+                artifacts.push(hash.to_owned());
+            }
+            artifacts.sort();
+            artifacts.dedup();
+            Some(serde_json::json!({
+                "artifacts": artifacts,
+                "lock_hash": lock_hash,
+                "name": name.to_ascii_lowercase().replace('_', "-"),
+                "version": version,
+            }))
+        })
+        .collect::<Vec<_>>();
+    packages.sort_by(|left, right| {
+        (
+            left.get("name").and_then(serde_json::Value::as_str),
+            left.get("version").and_then(serde_json::Value::as_str),
+        )
+            .cmp(&(
+                right.get("name").and_then(serde_json::Value::as_str),
+                right.get("version").and_then(serde_json::Value::as_str),
+            ))
+    });
+    Ok(serde_json::Value::Array(packages))
+}
+
+fn verified_baseline_guard(
+    paths: &ProjectPaths,
+    inputs: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let generation = artifact_root_for_paths(paths)?.join("generation.json");
+    let bytes = match fs::read(&generation) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "read verified baseline {}: {error}",
+                generation.display()
+            ));
+        }
+    };
+    let record = GenerationRecord::parse(&bytes).map_err(|error| {
+        format!(
+            "invalid verified baseline {}: {error}",
+            generation.display()
+        )
+    })?;
+    let Some(baseline) = record.last_verified else {
+        return Ok(());
+    };
+    let baseline_inputs = baseline
+        .inputs
+        .as_object()
+        .ok_or("verified baseline inputs are not an object")?;
+    let changed_inputs = baseline_inputs
+        .iter()
+        .any(|(path, hash)| inputs.get(path).map(String::as_str) != hash.as_str())
+        || inputs
+            .keys()
+            .any(|path| !baseline_inputs.contains_key(path));
+    if changed_inputs {
+        return Err(
+            "verified baseline inputs changed; run `cott emit python` and `cott verify` before generation"
+                .to_owned(),
+        );
+    }
+    for (relative, expected) in &baseline.managed_files {
+        let bytes = fs::read(paths.root.join(relative))
+            .map_err(|_| format!("verified baseline managed file is missing: {relative}"))?;
+        if expected != &format!("sha256:{}", sha256_hex(&bytes)) {
+            return Err(format!(
+                "verified baseline managed file changed: {relative}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn add_agent_runs(
+    emission: &mut Emission,
+    runs: Vec<(String, AgentKind, AgentRunCandidate)>,
+) -> Result<(), String> {
+    if runs.is_empty() {
+        return Ok(());
+    }
+    let bytes = emission
+        .files
+        .get(Path::new("generation.json"))
+        .ok_or_else(|| "emission omitted generation.json".to_owned())?;
+    let mut record = GenerationRecord::parse(bytes)?;
+    let replaced = runs
+        .iter()
+        .map(|(symbol, _, _)| symbol.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    record
+        .current
+        .agent_runs
+        .retain(|run| !replaced.contains(run.symbol.as_str()));
+    for (symbol, kind, candidate) in runs {
+        let spec = adapter(kind);
+        let stream = |bytes: &[u8]| StreamDigest {
+            bytes: bytes.len() as u64,
+            sha256: format!("sha256:{}", sha256_hex(bytes)),
+            truncated: false,
+        };
+        record.current.agent_runs.push(AgentRun {
+            symbol,
+            adapter: match kind {
+                AgentKind::Codex => "codex",
+                AgentKind::Omp => "omp",
+            }
+            .to_owned(),
+            adapter_version: candidate.adapter_version,
+            argv_template: spec.argv_template.iter().map(ToString::to_string).collect(),
+            executable: candidate.executable.display().to_string(),
+            executable_hash: candidate.executable_hash,
+            prompt_hash: candidate.prompt_hash,
+            implementation_hash: format!("sha256:{}", sha256_hex(&candidate.implementation)),
+            environment_names: candidate.environment_names,
+            duration_ms: candidate.duration_ms,
+            status: AgentStatus {
+                exit_code: candidate.exit_code,
+                signal: None,
+                timed_out: candidate.timed_out,
+                cancelled: false,
+            },
+            stdout: stream(&candidate.stdout),
+            stderr: stream(&candidate.stderr),
+        });
+    }
+    record
+        .current
+        .agent_runs
+        .sort_by(|left, right| left.symbol.cmp(&right.symbol));
+    record.current.compute_generation_id()?;
+    emission
+        .files
+        .insert(PathBuf::from("generation.json"), record.canonical_bytes()?);
+    Ok(())
 }
 fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
     let Ok(root) = project_root(project_argument) else {
         return 2;
     };
-    let (_, paths) = match load_config_with_paths(&root) {
-        Ok(config) => config,
-        Err(error) => {
-            eprintln!("error: {error}");
-            return 2;
-        }
-    };
-    let session = match ProjectSession::acquire(&paths.root) {
+    let session = match ProjectSession::acquire(&root) {
         Ok(session) => session,
         Err(error) => {
             eprintln!("error: {error}");
             return 6;
         }
     };
+    let (config, paths) = match load_config_with_paths(session.root()) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 2;
+        }
+    };
     let sources = match discover_sources_from_paths(&paths) {
         Ok(sources) => sources,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 2;
+        }
+    };
+    let input_hashes = match collect_input_hashes(&config, &paths, &sources) {
+        Ok(inputs) => inputs,
         Err(error) => {
             eprintln!("error: {error}");
             return 2;
@@ -538,7 +1115,8 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
             return 3;
         }
     };
-    let hir = match lower(&paths.source_dir, parsed) {
+    let custom_effects = config.effects.keys().cloned().collect();
+    let hir = match lower_with_effects(&paths.source_dir, parsed, &custom_effects) {
         Ok(hir) => hir,
         Err(diagnostics) => {
             print_project_diagnostics(&diagnostics);
@@ -552,6 +1130,31 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
             return 1;
         }
     };
+    let artifact_plan = match PythonArtifactPlan::from_ir(&ir) {
+        Ok(plan) => plan,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 1;
+        }
+    };
+    let mut emission = match emit(&config, &artifact_plan, &ir, &[]) {
+        Ok(emission) => emission,
+        Err(diagnostics) => {
+            print_emit_diagnostics(&paths, &diagnostics);
+            return 4;
+        }
+    };
+    let input_snapshot = match capture_expected_inputs(&paths, &input_hashes, []) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 6;
+        }
+    };
+    if let Err(error) = enrich_generation_record(&paths, input_hashes, &mut emission) {
+        eprintln!("error: {error}");
+        return 4;
+    }
     let artifact_root = match artifact_root_for_paths(&paths) {
         Ok(path) => path,
         Err(error) => {
@@ -562,28 +1165,118 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
     let relative_root = artifact_root
         .strip_prefix(&paths.root)
         .expect("artifact root is project-relative");
-    let mut paths_to_write = Vec::new();
+    let actual = match fs::symlink_metadata(&artifact_root) {
+        Ok(_) => match collect_tree(&artifact_root) {
+            Ok(files) => files,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return 4;
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+        Err(error) => {
+            eprintln!("error: inspect artifact root: {error}");
+            return 4;
+        }
+    };
+    let expected_ir = emission
+        .files
+        .iter()
+        .filter(|(path, _)| path.starts_with("ir"))
+        .map(|(path, bytes)| (path.clone(), bytes.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut record = match emission.files.get(Path::new("generation.json")) {
+        Some(bytes) => match GenerationRecord::parse(bytes) {
+            Ok(record) => record,
+            Err(error) => {
+                eprintln!("error: invalid planned generation record: {error}");
+                return 1;
+            }
+        },
+        None => {
+            eprintln!("error: compiler omitted generation.json");
+            return 1;
+        }
+    };
+    let mut managed_files = actual
+        .iter()
+        .filter(|(path, _)| path.as_path() != Path::new("generation.json"))
+        .map(|(path, bytes)| {
+            (
+                relative_root
+                    .join(path)
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+                format!("sha256:{}", sha256_hex(bytes)),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    managed_files.retain(|path, _| {
+        !Path::new(path)
+            .strip_prefix(relative_root)
+            .is_ok_and(|relative| relative.starts_with("ir"))
+    });
+    for (path, bytes) in &expected_ir {
+        managed_files.insert(
+            relative_root
+                .join(path)
+                .to_string_lossy()
+                .replace('\\', "/"),
+            format!("sha256:{}", sha256_hex(bytes)),
+        );
+    }
+    record.current.managed_files = managed_files;
+    record.current.verified = false;
+    record.current.verification = serde_json::Value::Null;
+    if let Err(error) = record.current.compute_generation_id() {
+        eprintln!("error: compute IR generation identity: {error}");
+        return 1;
+    }
+    let generation_bytes = match record.canonical_bytes() {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("error: serialize IR generation record: {error}");
+            return 1;
+        }
+    };
     let mut changes = ChangeSet::default();
-    for module in ir.modules {
-        let path = relative_root
-            .join("ir")
-            .join(format!("{}.json", module.module.as_string()));
-        let current = fs::read(paths.root.join(&path)).ok();
-        if current.as_deref() != Some(&module.bytes) {
-            paths_to_write.push(path.clone());
+    let mut paths_to_write = Vec::new();
+    for (path, bytes) in &expected_ir {
+        if actual.get(path) != Some(bytes) {
+            let relative = relative_root.join(path);
+            paths_to_write.push(relative.clone());
             changes.operations.push(Operation::Write {
-                path,
-                bytes: module.bytes,
+                path: relative,
+                bytes: bytes.clone(),
             });
         }
     }
-    let snapshot = match InputSnapshot::capture(&paths.root, paths_to_write) {
+    for path in actual
+        .keys()
+        .filter(|path| path.starts_with("ir") && !expected_ir.contains_key(*path))
+    {
+        let relative = relative_root.join(path);
+        paths_to_write.push(relative.clone());
+        changes
+            .operations
+            .push(Operation::Remove { path: relative });
+    }
+    let generation_path = relative_root.join("generation.json");
+    paths_to_write.push(generation_path.clone());
+    changes.operations.push(Operation::Write {
+        path: generation_path,
+        bytes: generation_bytes,
+    });
+    changes.generation_record_last = true;
+    let output_snapshot = match InputSnapshot::capture(&paths.root, paths_to_write) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             eprintln!("error: {error}");
             return 6;
         }
     };
+    let mut snapshot = input_snapshot;
+    snapshot.merge_missing(output_snapshot);
     match session.apply(&snapshot, &changes) {
         Ok(()) => 0,
         Err(error) => {
@@ -600,6 +1293,14 @@ fn generate_project(
     let Ok(root) = project_root(project_argument) else {
         return 2;
     };
+    let session = match ProjectSession::acquire(&root) {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 6;
+        }
+    };
+    let root = session.root().to_path_buf();
     let (config, paths) = match load_config_with_paths(&root) {
         Ok(config) => config,
         Err(error) => {
@@ -614,6 +1315,13 @@ fn generate_project(
             return 2;
         }
     };
+    let mut input_hashes = match collect_input_hashes(&config, &paths, &sources) {
+        Ok(inputs) => inputs,
+        Err(message) => {
+            eprintln!("error: {message}");
+            return 2;
+        }
+    };
     let parsed = match parse_project(sources) {
         Ok(parsed) => parsed,
         Err(diagnostics) => {
@@ -621,7 +1329,8 @@ fn generate_project(
             return 3;
         }
     };
-    let hir = match lower(&paths.source_dir, parsed) {
+    let custom_effects = config.effects.keys().cloned().collect();
+    let hir = match lower_with_effects(&paths.source_dir, parsed, &custom_effects) {
         Ok(hir) => hir,
         Err(diagnostics) => {
             print_project_diagnostics(&diagnostics);
@@ -670,12 +1379,47 @@ fn generate_project(
     }
     unresolved.sort_by_key(|binding| format!("{}.{}", binding.module, binding.function));
     let mut bindings = resolution.resolved;
+    add_binding_input_hashes(&paths, &bindings, &mut input_hashes);
+    let candidate_paths = match unresolved
+        .iter()
+        .map(|binding| {
+            binding
+                .source
+                .strip_prefix(&paths.root)
+                .map(Path::to_path_buf)
+                .map_err(|_| {
+                    format!(
+                        "implementation path escaped project root: {}",
+                        binding.source.display()
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 6;
+        }
+    };
+    let input_snapshot = match capture_expected_inputs(&paths, &input_hashes, candidate_paths) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 6;
+        }
+    };
     let mut durable_sources = Vec::new();
+    let mut generated_runs = Vec::new();
     if !unresolved.is_empty() {
         let Some(agent) = agent else {
             eprintln!("error: unresolved selected function requires `--agent codex|omp`");
             return 2;
         };
+        if let Err(error) = verified_baseline_guard(&paths, &input_hashes) {
+            eprintln!("error: {error}");
+            return 4;
+        }
         let executable = match resolve_executable(adapter(agent).executable_name) {
             Ok(path) => path,
             Err(error) => {
@@ -708,45 +1452,74 @@ fn generate_project(
                 "{}.{}",
                 unresolved_binding.module, unresolved_binding.function
             );
-            let result = render_prompt(
-                &fully_qualified,
-                &module_ir,
-                "",
-                "",
-                "",
-                None,
-                None,
-                &target,
-            )
-            .and_then(|prompt| {
-                run_agent(
-                    agent,
-                    executable.clone(),
-                    &temporary.workspace,
-                    &temporary.scratch,
-                    &target,
-                    prompt,
-                    900,
-                )
-            })
-            .and_then(|candidate| {
-                validate_candidate(
-                    &config,
-                    &paths,
-                    &plan,
-                    &unresolved_binding.function,
-                    &candidate.implementation,
-                )
-                .map(|_| candidate.implementation)
-            });
+            let bound_symbols = bindings
+                .iter()
+                .map(|binding| format!("{}.{}", binding.module, binding.function))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let binding_context = bindings
+                .iter()
+                .map(|binding| {
+                    format!(
+                        "# {}\n{}",
+                        binding.source.display(),
+                        String::from_utf8_lossy(&binding.bytes)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let target_rules = "CPython 3.14.6, fully annotated Python. Define exactly the requested top-level function. Use generated <module>_types symbols and cott_runtime ABI types. Do not use pass, ellipsis, dynamic import, eval, exec, compile, suppressions, agent operations, or external imports not present in the lockfile.";
+            let project_rules = config
+                .generator
+                .rules
+                .as_ref()
+                .map(|path| fs::read(paths.root.join(path)))
+                .transpose()
+                .map_err(|error| error.to_string());
+            let result = project_rules
+                .and_then(|project_rules| {
+                    render_prompt(
+                        &fully_qualified,
+                        &module_ir,
+                        &binding_context,
+                        target_rules,
+                        &bound_symbols,
+                        None,
+                        project_rules.as_deref(),
+                        &target,
+                    )
+                })
+                .and_then(|prompt| {
+                    run_agent(
+                        agent,
+                        executable.clone(),
+                        &temporary.workspace,
+                        &temporary.scratch,
+                        &target,
+                        prompt,
+                        config.generator.timeout_seconds,
+                    )
+                })
+                .and_then(|candidate| {
+                    validate_candidate(
+                        &config,
+                        &paths,
+                        &plan,
+                        &unresolved_binding.function,
+                        &candidate.implementation,
+                    )
+                    .map(|_| candidate)
+                });
             let _ = fs::remove_dir_all(&temporary.root);
-            let bytes = match result {
-                Ok(bytes) => bytes,
+            let candidate = match result {
+                Ok(candidate) => candidate,
                 Err(error) => {
                     eprintln!("error: agent generation for `{fully_qualified}` failed: {error}");
                     return 5;
                 }
             };
+            let bytes = candidate.implementation.clone();
+            generated_runs.push((fully_qualified, agent, candidate));
             let generated_relative = unresolved_binding
                 .source
                 .strip_prefix(&paths.python_source_dir)
@@ -759,8 +1532,14 @@ fn generate_project(
                 .to_path_buf();
             durable_sources.push((relative_source, bytes.clone()));
             bindings.push(ResolvedBinding {
-                module: unresolved_binding.module,
-                function: unresolved_binding.function,
+                module: unresolved_binding.module.clone(),
+                function: unresolved_binding.function.clone(),
+                implementation_module: format!(
+                    "_cott_impl.{}.{}",
+                    unresolved_binding.module, unresolved_binding.function
+                ),
+                implementation_function: unresolved_binding.function,
+                owner: crate::binding::BindingOwner::Agent,
                 source: unresolved_binding.source,
                 generated_relative,
                 sha256: crate::hash::sha256_hex(&bytes),
@@ -768,20 +1547,97 @@ fn generate_project(
             });
         }
     }
-    let emission = match emit(&config.project.name, &plan, &ir, &bindings) {
+    add_binding_input_hashes(&paths, &bindings, &mut input_hashes);
+    let mut emission = match emit(&config, &plan, &ir, &bindings) {
         Ok(emission) => emission,
         Err(diagnostics) => {
             print_emit_diagnostics(&paths, &diagnostics);
             return 4;
         }
     };
-    match publish_with_sources(&PlannedProject { paths, emission }, &durable_sources) {
+    if let Err(message) = enrich_generation_record(&paths, input_hashes, &mut emission) {
+        eprintln!("error: {message}");
+        return 4;
+    }
+    let generated_scope = generated_runs
+        .iter()
+        .map(|(symbol, _, _)| symbol.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    if let Err(message) = add_agent_runs(&mut emission, generated_runs) {
+        eprintln!("error: {message}");
+        return 4;
+    }
+    if !generated_scope.is_empty() {
+        let staged = match materialize_candidate_artifacts(&emission) {
+            Ok(path) => path,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return 6;
+            }
+        };
+        let validation = verify_python(&config, &paths, &staged, &ir, Some(&generated_scope));
+        let cleanup = fs::remove_dir_all(&staged);
+        if let Err(error) = cleanup {
+            eprintln!(
+                "error: remove candidate staging {}: {error}",
+                staged.display()
+            );
+            return 6;
+        }
+        if let Err(error) = validation {
+            eprintln!("error: generated candidate validation failed: {error}");
+            return 5;
+        }
+    }
+    match publish_with_sources(
+        &PlannedProject {
+            session,
+            config,
+            paths,
+            ir,
+            emission,
+            input_snapshot,
+        },
+        &durable_sources,
+    ) {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("error: {error}");
             6
         }
     }
+}
+
+fn materialize_candidate_artifacts(emission: &Emission) -> Result<PathBuf, String> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("cott-candidate-{}-{nonce}", std::process::id()));
+    fs::create_dir(&root)
+        .map_err(|error| format!("create candidate staging {}: {error}", root.display()))?;
+    for (relative, bytes) in &emission.files {
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            let _ = fs::remove_dir_all(&root);
+            return Err(format!(
+                "candidate artifact has unsafe path {}",
+                relative.display()
+            ));
+        }
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!("create candidate directory {}: {error}", parent.display())
+            })?;
+        }
+        fs::write(&path, bytes)
+            .map_err(|error| format!("write candidate artifact {}: {error}", path.display()))?;
+    }
+    Ok(root)
 }
 
 struct AgentWorkspace {
@@ -813,14 +1669,29 @@ fn diff_project(
     baseline: Option<PathBuf>,
     exit_code: bool,
 ) -> i32 {
-    let plan = match plan(project_argument) {
-        Ok(plan) => plan,
-        Err(code) => return code,
+    let Ok(root) = project_root(project_argument) else {
+        return 2;
     };
-    let baseline = match baseline {
+    let session = match ProjectSession::acquire(&root) {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 6;
+        }
+    };
+    let root = session.root().to_path_buf();
+    let (_, paths) = match load_config_with_paths(&root) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 2;
+        }
+    };
+    let explicit_baseline = baseline.is_some();
+    let baseline_path = match baseline {
         Some(path) if path.is_absolute() => path,
-        Some(path) => plan.paths.root.join(path),
-        None => match artifact_root_for_paths(&plan.paths) {
+        Some(path) => paths.root.join(path),
+        None => match artifact_root_for_paths(&paths) {
             Ok(root) => root.join("generation.json"),
             Err(error) => {
                 eprintln!("error: {error}");
@@ -828,27 +1699,283 @@ fn diff_project(
             }
         },
     };
-    let baseline_bytes = match fs::read(&baseline) {
+    let baseline_bytes = match fs::read(&baseline_path) {
         Ok(bytes) => bytes,
         Err(error) => {
-            eprintln!("error: read diff baseline {}: {error}", baseline.display());
+            eprintln!(
+                "error: read diff baseline {}: {error}",
+                baseline_path.display()
+            );
             return 2;
         }
     };
-    let expected = match plan.emission.files.get(Path::new("generation.json")) {
-        Some(bytes) => bytes,
-        None => {
-            eprintln!("error: compiler did not produce generation.json");
+    let baseline_record = match GenerationRecord::parse(&baseline_bytes) {
+        Ok(record) => record,
+        Err(error) => {
+            eprintln!(
+                "error: invalid diff baseline {}: {error}",
+                baseline_path.display()
+            );
+            return 2;
+        }
+    };
+    let baseline_snapshot = if explicit_baseline {
+        baseline_record.current
+    } else {
+        let Some(snapshot) = baseline_record.last_verified else {
+            eprintln!("error: default diff baseline has no last_verified snapshot");
+            return 2;
+        };
+        snapshot
+    };
+    let plan = match plan_with_session(session) {
+        Ok(plan) => plan,
+        Err(code) => return code,
+    };
+    let current_bytes = plan
+        .emission
+        .files
+        .get(Path::new("generation.json"))
+        .expect("compiler emits generation.json");
+    let current = match GenerationRecord::parse(current_bytes) {
+        Ok(record) => record.current,
+        Err(error) => {
+            eprintln!("error: invalid compiler generation record: {error}");
             return 1;
         }
     };
-    if baseline_bytes == *expected {
+    let report = generation_diff(&baseline_snapshot, &current);
+    if report.lines.is_empty() {
         println!("NO CHANGE");
-        0
     } else {
-        println!("IMPLEMENTATION: generation output differs");
-        if exit_code { 7 } else { 0 }
+        for (section, lines) in report.lines {
+            println!("{section}:");
+            for line in lines {
+                println!("- {line}");
+            }
+        }
     }
+    if exit_code && report.breaking { 7 } else { 0 }
+}
+
+struct DiffReport {
+    breaking: bool,
+    lines: BTreeMap<&'static str, Vec<String>>,
+}
+
+fn generation_diff(
+    baseline: &crate::provenance::GenerationSnapshot,
+    current: &crate::provenance::GenerationSnapshot,
+) -> DiffReport {
+    let mut lines = BTreeMap::<&'static str, Vec<String>>::new();
+    let old = declarations_by_name(&baseline.contract_surface);
+    let new = declarations_by_name(&current.contract_surface);
+    let mut breaking = false;
+    for (name, declaration) in &old {
+        match new.get(name) {
+            None => {
+                breaking = true;
+                lines
+                    .entry("CONTRACT BREAKING")
+                    .or_default()
+                    .push(format!("{name} was removed"));
+            }
+            Some(updated)
+                if normalized_declaration(declaration) != normalized_declaration(updated) =>
+            {
+                breaking = true;
+                lines
+                    .entry("CONTRACT BREAKING")
+                    .or_default()
+                    .push(format!("{name} contract changed"));
+            }
+            Some(updated) if declaration != updated => {
+                lines
+                    .entry("DOCUMENTATION")
+                    .or_default()
+                    .push(format!("{name} documentation changed"));
+            }
+            Some(_) => {}
+        }
+    }
+    for name in new.keys().filter(|name| !old.contains_key(*name)) {
+        lines
+            .entry("CONTRACT NON-BREAKING")
+            .or_default()
+            .push(format!("{name} was added"));
+    }
+    let old_symbols = symbol_sets(&baseline.public_python_symbols);
+    let new_symbols = symbol_sets(&current.public_python_symbols);
+    for (module, symbols) in &old_symbols {
+        for symbol in symbols.iter().filter(|symbol| {
+            !new_symbols
+                .get(module)
+                .is_some_and(|new| new.contains(*symbol))
+        }) {
+            breaking = true;
+            lines
+                .entry("CONTRACT BREAKING")
+                .or_default()
+                .push(format!("{module}.{symbol} Python symbol was removed"));
+        }
+    }
+    compare_implementations(
+        &baseline.implementations,
+        &current.implementations,
+        &mut lines,
+    );
+    if baseline.dependencies != current.dependencies {
+        lines
+            .entry("DEPENDENCY")
+            .or_default()
+            .push("normalized dependency identity changed".to_owned());
+    }
+    for (name, hash) in input_hashes(&baseline.inputs) {
+        if current.inputs.get(&name) != Some(&hash)
+            && !name.ends_with(".cott")
+            && !name.ends_with(".py")
+        {
+            lines
+                .entry("IMPLEMENTATION")
+                .or_default()
+                .push(format!("{name} input changed"));
+        }
+    }
+    for name in input_hashes(&current.inputs)
+        .keys()
+        .filter(|name| baseline.inputs.get(*name).is_none())
+    {
+        if !name.ends_with(".cott") && !name.ends_with(".py") {
+            lines
+                .entry("IMPLEMENTATION")
+                .or_default()
+                .push(format!("{name} input was added"));
+        }
+    }
+    for tool in ["compiler", "runtime"] {
+        let old = baseline
+            .tools
+            .get(tool)
+            .and_then(|value| value.get("version"));
+        let new = current
+            .tools
+            .get(tool)
+            .and_then(|value| value.get("version"));
+        if old != new {
+            lines
+                .entry("TOOLCHAIN")
+                .or_default()
+                .push(format!("{tool} version changed"));
+        }
+    }
+    for values in lines.values_mut() {
+        values.sort();
+        values.dedup();
+    }
+    DiffReport { breaking, lines }
+}
+
+fn declarations_by_name(value: &serde_json::Value) -> BTreeMap<String, serde_json::Value> {
+    value
+        .as_object()
+        .into_iter()
+        .flat_map(|modules| modules.values())
+        .filter_map(|module| {
+            module
+                .get("declarations")
+                .and_then(serde_json::Value::as_array)
+        })
+        .flatten()
+        .filter_map(|declaration| {
+            Some((
+                declaration.get("name")?.as_str()?.to_owned(),
+                declaration.clone(),
+            ))
+        })
+        .collect()
+}
+
+fn normalized_declaration(value: &serde_json::Value) -> serde_json::Value {
+    fn strip(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(object) => {
+                object.remove("doc");
+                object.remove("span");
+                object.remove("source_order");
+                for value in object.values_mut() {
+                    strip(value);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    strip(value);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut value = value.clone();
+    strip(&mut value);
+    value
+}
+
+fn symbol_sets(value: &serde_json::Value) -> BTreeMap<String, std::collections::BTreeSet<String>> {
+    value
+        .as_object()
+        .into_iter()
+        .flat_map(|modules| modules.iter())
+        .map(|(module, symbols)| {
+            (
+                module.clone(),
+                symbols
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn compare_implementations(
+    baseline: &serde_json::Value,
+    current: &serde_json::Value,
+    lines: &mut BTreeMap<&'static str, Vec<String>>,
+) {
+    let index = |value: &serde_json::Value| {
+        value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|implementation| {
+                Some((
+                    implementation.get("cott_symbol")?.as_str()?.to_owned(),
+                    implementation.clone(),
+                ))
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    let old = index(baseline);
+    let new = index(current);
+    for symbol in old.keys().chain(new.keys()) {
+        if old.get(symbol) != new.get(symbol) {
+            lines
+                .entry("IMPLEMENTATION")
+                .or_default()
+                .push(format!("{symbol} implementation changed"));
+        }
+    }
+}
+
+fn input_hashes(value: &serde_json::Value) -> BTreeMap<String, serde_json::Value> {
+    value
+        .as_object()
+        .into_iter()
+        .flat_map(|inputs| inputs.iter())
+        .map(|(name, hash)| (name.clone(), hash.clone()))
+        .collect()
 }
 
 fn resolve_executable(name: &str) -> Result<PathBuf, String> {
@@ -857,7 +1984,8 @@ fn resolve_executable(name: &str) -> Result<PathBuf, String> {
     for directory in std::env::split_paths(&path) {
         let candidate = directory.join(name);
         if fs::metadata(&candidate).is_ok_and(|metadata| metadata.is_file()) {
-            return Ok(candidate);
+            return fs::canonicalize(&candidate)
+                .map_err(|error| format!("canonicalize {}: {error}", candidate.display()));
         }
     }
     Err(format!("{name} executable was not found on PATH"))
@@ -888,7 +2016,14 @@ fn check_project(project_argument: Option<PathBuf>, selected: Option<PathBuf>) -
     let Ok(root) = project_root(project_argument) else {
         return 2;
     };
-    let (_, paths) = match load_config_with_paths(&root) {
+    let session = match ProjectSession::acquire(&root) {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 6;
+        }
+    };
+    let (config, paths) = match load_config_with_paths(session.root()) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("error: {error}");
@@ -922,7 +2057,8 @@ fn check_project(project_argument: Option<PathBuf>, selected: Option<PathBuf>) -
             return 3;
         }
     };
-    match lower(&paths.source_dir, parsed) {
+    let custom_effects = config.effects.keys().cloned().collect();
+    match lower_with_effects(&paths.source_dir, parsed, &custom_effects) {
         Ok(_) => 0,
         Err(diagnostics) => {
             print_project_diagnostics(&diagnostics);
@@ -930,8 +2066,8 @@ fn check_project(project_argument: Option<PathBuf>, selected: Option<PathBuf>) -
         }
     }
 }
-fn init_project(path: PathBuf, name: Option<String>, no_sync: bool) -> i32 {
-    let target = if path.is_absolute() {
+fn init_project(path: PathBuf, name: Option<String>, no_sync: bool, format: OutputFormat) -> i32 {
+    let absolute = if path.is_absolute() {
         path
     } else {
         match std::env::current_dir() {
@@ -942,29 +2078,73 @@ fn init_project(path: PathBuf, name: Option<String>, no_sync: bool) -> i32 {
             }
         }
     };
-    let project_name = name.or_else(|| {
-        target
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(ToOwned::to_owned)
-    });
+    let Some(final_name) = absolute.file_name().filter(|name| !name.is_empty()) else {
+        eprintln!("error: init path must have one non-empty final component");
+        return 2;
+    };
+    if !matches!(
+        absolute.components().next_back(),
+        Some(Component::Normal(_))
+    ) {
+        eprintln!("error: init path must not end in `.` or `..`");
+        return 2;
+    }
+    let Some(parent) = absolute.parent() else {
+        eprintln!("error: init path has no parent");
+        return 2;
+    };
+    let parent = match fs::canonicalize(parent) {
+        Ok(parent) if parent.is_dir() => parent,
+        Ok(_) => {
+            eprintln!("error: init parent is not a directory");
+            return 2;
+        }
+        Err(error) => {
+            eprintln!("error: resolve init parent {}: {error}", parent.display());
+            return 2;
+        }
+    };
+    let target = parent.join(final_name);
+    let project_name = name.or_else(|| final_name.to_str().map(ToOwned::to_owned));
     let Some(project_name) = project_name.filter(|name| valid_project_name(name)) else {
         eprintln!("error: init project name must be lowercase kebab-case");
         return 2;
     };
-    if target.exists() {
+    if fs::symlink_metadata(&target).is_ok() {
         eprintln!("error: init target already exists: {}", target.display());
         return 2;
     }
     let uv = match resolve_executable("uv") {
-        Ok(uv) => uv,
+        Ok(path) => path,
         Err(error) => {
             eprintln!("error: {error}");
             return 2;
         }
     };
-    let version = match ProcessCommand::new(&uv).arg("--version").output() {
-        Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+    let environment = match uv_environment(&uv) {
+        Ok(environment) => environment,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 2;
+        }
+    };
+    let version = match run_clean(
+        &uv,
+        &["--version"],
+        &parent,
+        &environment,
+        Duration::from_secs(30),
+    ) {
+        Ok(output) if output.status == Some(0) => {
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        }
+        Ok(output) => {
+            eprintln!(
+                "error: probe uv failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            return 2;
+        }
         Err(error) => {
             eprintln!("error: probe uv: {error}");
             return 2;
@@ -974,40 +2154,544 @@ fn init_project(path: PathBuf, name: Option<String>, no_sync: bool) -> i32 {
         eprintln!("error: cott 0.1 requires uv 0.12.3, found `{version}`");
         return 2;
     }
-    let module = project_name.replace('-', "_");
-    let result = (|| -> Result<(), std::io::Error> {
-        fs::create_dir_all(target.join("src").join(&module))?;
-        fs::create_dir_all(target.join("python"))?;
-        fs::write(
-            target.join("cott.toml"),
-            format!(
-                "[project]\nname = \"{project_name}\"\nversion = \"0.1.0\"\nsource = \"src\"\n\n[target.python]\nsource = \"python\"\ngenerated = \"generated/python\"\nstubs = \"generated/stubs\"\ninterpreter = \".venv/bin/python\"\ntype_checker = \".venv/bin/basedpyright\"\nruntime_validation = \"boundary\"\n"
-            ),
-        )?;
-        fs::write(
-            target.join("src").join(&module).join("main.cott"),
-            format!("module {module}.main\n"),
-        )?;
-        fs::write(target.join("python/.python-version"), "3.14\n")?;
-        fs::write(
-            target.join("python/pyproject.toml"),
-            format!(
-                "[project]\nname = \"{project_name}\"\nversion = \"0.1.0\"\nrequires-python = \">=3.14,<3.15\"\ndependencies = []\n\n[dependency-groups]\ndev = [\"basedpyright==1.39.9\"]\n"
-            ),
-        )
-    })();
-    if let Err(error) = result {
-        let _ = fs::remove_dir_all(&target);
-        eprintln!("error: create init scaffold: {error}");
+
+    let nonce = format!(
+        "{:x}-{:x}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos())
+    );
+    let temporary = parent.join(format!(".cott-init-{nonce}"));
+    let marker = format!(
+        "{{\"nonce\":{},\"schema_version\":1}}\n",
+        serde_json::json!(nonce)
+    );
+    let scaffold = publish_init_scaffold(
+        &temporary,
+        &target,
+        &parent,
+        &project_name,
+        marker.as_bytes(),
+    );
+    if let Err(error) = scaffold {
+        let collision = error.starts_with("init target already exists:");
+        let cleanup = remove_owned_init_temp(&temporary, marker.as_bytes(), &parent);
+        if let Err(cleanup) = cleanup {
+            eprintln!("error: {error}; cleanup failed: {cleanup}");
+            return 6;
+        }
+        eprintln!("error: {error}");
+        return if collision { 2 } else { 6 };
+    }
+
+    let uv_result = initialize_python(&uv, &target, &environment, no_sync);
+    let managed_interpreter = match uv_result {
+        Ok(interpreter) => interpreter,
+        Err(error) => {
+            let cleanup = remove_owned_init(&target, marker.as_bytes(), &parent);
+            if let Err(cleanup) = cleanup {
+                eprintln!("error: {error}; init cleanup failed: {cleanup}");
+                return 6;
+            }
+            eprintln!("error: {error}");
+            return 5;
+        }
+    };
+    if let Err(error) = commit_init(&target, marker.as_bytes(), &parent) {
+        eprintln!("error: commit init scaffold: {error}");
         return 6;
     }
     if no_sync {
-        println!(
-            "uv --no-config sync --directory {}/python --frozen --managed-python",
-            target.display()
-        );
+        print_sync_note(&format, &uv, &target, &managed_interpreter, &environment);
     }
     0
+}
+
+fn matching_init_marker(directory: &Path, marker: &[u8]) -> bool {
+    let path = directory.join(".cott-init");
+    fs::symlink_metadata(&path).is_ok_and(|metadata| {
+        metadata.is_file()
+            && metadata.nlink() == 1
+            && fs::read(&path).is_ok_and(|bytes| bytes == marker)
+    })
+}
+
+fn publish_init_scaffold(
+    temporary: &Path,
+    target: &Path,
+    parent: &Path,
+    project_name: &str,
+    marker: &[u8],
+) -> Result<(), String> {
+    let module = project_name.replace('-', "_");
+    DirBuilder::new()
+        .mode(0o700)
+        .create(temporary)
+        .map_err(|error| format!("create private init scaffold: {error}"))?;
+    fs::create_dir_all(temporary.join("src").join(&module))
+        .map_err(|error| format!("create source scaffold: {error}"))?;
+    fs::create_dir_all(temporary.join("python"))
+        .map_err(|error| format!("create Python scaffold: {error}"))?;
+    write_private(&temporary.join(".cott-init"), marker)?;
+    write_private(
+        &temporary.join(".gitignore"),
+        b".cott/\n.venv/\ngenerated/generation.json\n__pycache__/\n*.py[cod]\n",
+    )?;
+    write_private(
+        &temporary.join("cott.toml"),
+        format!(
+            "[project]\nname = \"{project_name}\"\nversion = \"0.1.0\"\nsource = \"src\"\n\n[target.python]\nsource = \"python\"\ngenerated = \"generated/python\"\nstubs = \"generated/stubs\"\nlockfile = \"python/uv.lock\"\ninterpreter = \".venv/bin/python\"\ntype_checker = \".venv/bin/basedpyright\"\nruntime_validation = \"boundary\"\n"
+        )
+        .as_bytes(),
+    )?;
+    write_private(
+        &temporary.join("src").join(&module).join("main.cott"),
+        format!("module {module}.main\n").as_bytes(),
+    )?;
+    write_private(&temporary.join("python/.python-version"), b"3.14\n")?;
+    write_private(
+        &temporary.join("python/pyproject.toml"),
+        format!(
+            "[project]\nname = \"{project_name}\"\nversion = \"0.1.0\"\nrequires-python = \">=3.14,<3.15\"\ndependencies = []\n\n[dependency-groups]\ndev = [\"basedpyright==1.39.9\"]\n"
+        )
+        .as_bytes(),
+    )?;
+    sync_tree(temporary)?;
+    rename_noreplace(temporary, target)?;
+    sync_parent(parent, "init.publish.parent_fsync")
+}
+
+fn sync_parent(parent: &Path, fault_name: &'static str) -> Result<(), String> {
+    init_fault(fault_name)?;
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("sync init parent: {error}"))
+}
+
+fn commit_init(target: &Path, marker: &[u8], parent: &Path) -> Result<(), String> {
+    if !matching_init_marker(target, marker) {
+        return Err("refusing to commit init target without matching ownership marker".to_owned());
+    }
+    init_fault("init.commit.marker_unlink")?;
+    fs::remove_file(target.join(".cott-init"))
+        .map_err(|error| format!("remove init ownership marker: {error}"))?;
+    init_fault("init.commit.target_fsync")?;
+    File::open(target)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("sync committed init target: {error}"))?;
+    sync_parent(parent, "init.commit.parent_fsync")
+}
+
+fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|error| format!("create scaffold file {}: {error}", path.display()))?;
+    file.write_all(bytes)
+        .map_err(|error| format!("write scaffold file {}: {error}", path.display()))?;
+    init_fault("init.scaffold.file_fsync")?;
+    file.sync_all()
+        .map_err(|error| format!("write scaffold file {}: {error}", path.display()))
+}
+
+fn sync_tree(path: &Path) -> Result<(), String> {
+    let mut entries = fs::read_dir(path)
+        .map_err(|error| format!("read scaffold directory {}: {error}", path.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("read scaffold directory {}: {error}", path.display()))?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let metadata = fs::symlink_metadata(entry.path())
+            .map_err(|error| format!("inspect scaffold {}: {error}", entry.path().display()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "scaffold contains a symlink: {}",
+                entry.path().display()
+            ));
+        }
+        if metadata.is_dir() {
+            sync_tree(&entry.path())?;
+        } else if metadata.is_file() {
+            init_fault("init.scaffold.tree_file_fsync")?;
+            File::open(entry.path())
+                .and_then(|file| file.sync_all())
+                .map_err(|error| format!("sync scaffold file: {error}"))?;
+        } else {
+            return Err(format!(
+                "scaffold contains a special file: {}",
+                entry.path().display()
+            ));
+        }
+    }
+    init_fault("init.scaffold.directory_fsync")?;
+    File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("sync scaffold directory {}: {error}", path.display()))
+}
+
+fn rename_noreplace(source: &Path, target: &Path) -> Result<(), String> {
+    let source = CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| "init temporary path contains NUL".to_owned())?;
+    let target_bytes = target.as_os_str().as_bytes();
+    let target_c =
+        CString::new(target_bytes).map_err(|_| "init target path contains NUL".to_owned())?;
+    init_fault("init.publish.noreplace")?;
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            target_c.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            Err(format!(
+                "init target already exists: {}",
+                String::from_utf8_lossy(target_bytes)
+            ))
+        } else {
+            Err(format!("atomically publish init scaffold: {error}"))
+        }
+    }
+}
+
+fn remove_owned_init_temp(temporary: &Path, marker: &[u8], parent: &Path) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(temporary) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("inspect init temporary scaffold: {error}")),
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || !matching_init_marker(temporary, marker)
+    {
+        return Err(
+            "refusing to remove init temporary without matching ownership marker".to_owned(),
+        );
+    }
+    init_fault("init.cleanup.temp_remove")?;
+    fs::remove_dir_all(temporary)
+        .map_err(|error| format!("remove init temporary scaffold: {error}"))?;
+    sync_parent(parent, "init.cleanup.temp_parent_fsync")
+}
+
+fn remove_owned_init(target: &Path, marker: &[u8], parent: &Path) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("inspect failed init target: {error}")),
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || !matching_init_marker(target, marker)
+    {
+        return Err("refusing to remove init target without matching ownership marker".to_owned());
+    }
+    init_fault("init.cleanup.target_remove")?;
+    fs::remove_dir_all(target).map_err(|error| format!("remove failed init target: {error}"))?;
+    sync_parent(parent, "init.cleanup.target_parent_fsync")
+}
+
+fn uv_environment(uv: &Path) -> Result<BTreeMap<String, OsString>, String> {
+    let home = std::env::var_os("HOME").ok_or("HOME is required for uv")?;
+    let path = std::env::join_paths([
+        uv.parent().unwrap_or_else(|| Path::new("/usr/bin")),
+        Path::new("/usr/bin"),
+        Path::new("/bin"),
+    ])
+    .map_err(|error| format!("construct sanitized PATH: {error}"))?;
+    let mut environment = BTreeMap::from([
+        ("HOME".to_owned(), home),
+        ("PATH".to_owned(), path),
+        ("TMPDIR".to_owned(), std::env::temp_dir().into_os_string()),
+    ]);
+    for name in [
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+    ] {
+        if let Some(value) = std::env::var_os(name) {
+            environment.insert(name.to_owned(), value);
+        }
+    }
+    Ok(environment)
+}
+
+fn initialize_python(
+    uv: &Path,
+    target: &Path,
+    base_environment: &BTreeMap<String, OsString>,
+    no_sync: bool,
+) -> Result<PathBuf, String> {
+    let run_uv = |arguments: &[&str], environment: &BTreeMap<String, OsString>| {
+        run_clean(uv, arguments, target, environment, Duration::from_secs(900)).and_then(|output| {
+            if output.status == Some(0) {
+                Ok(output)
+            } else {
+                Err(format!(
+                    "uv {} failed: {}",
+                    arguments.join(" "),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ))
+            }
+        })
+    };
+    let root_output = run_uv(&["--no-config", "python", "dir"], base_environment)?;
+    let managed_root = fs::canonicalize(String::from_utf8_lossy(&root_output.stdout).trim())
+        .map_err(|error| format!("resolve uv managed Python root: {error}"))?;
+    run_uv(
+        &["--no-config", "python", "install", "--upgrade", "3.14"],
+        base_environment,
+    )?;
+    let interpreter_output = run_uv(
+        &[
+            "--no-config",
+            "python",
+            "find",
+            "--managed-python",
+            "--system",
+            "3.14",
+        ],
+        base_environment,
+    )?;
+    let interpreter = fs::canonicalize(String::from_utf8_lossy(&interpreter_output.stdout).trim())
+        .map_err(|error| format!("resolve uv managed interpreter: {error}"))?;
+    if !interpreter.starts_with(&managed_root) {
+        return Err("uv selected an interpreter outside its managed Python root".to_owned());
+    }
+    probe_python(&interpreter, target, base_environment)?;
+    let mut environment = base_environment.clone();
+    environment.insert("UV_PYTHON".to_owned(), interpreter.clone().into_os_string());
+    environment.insert(
+        "UV_PROJECT_ENVIRONMENT".to_owned(),
+        target.join(".venv").into_os_string(),
+    );
+    run_uv(
+        &[
+            "--no-config",
+            "lock",
+            "--directory",
+            target
+                .join("python")
+                .to_str()
+                .ok_or("init path is not UTF-8")?,
+        ],
+        &environment,
+    )?;
+    let lockfile = target.join("python/uv.lock");
+    let lock_metadata = fs::symlink_metadata(&lockfile)
+        .map_err(|error| format!("uv did not create {}: {error}", lockfile.display()))?;
+    if lock_metadata.file_type().is_symlink() || !lock_metadata.is_file() {
+        return Err("uv lock output is not a regular file".to_owned());
+    }
+    if !no_sync {
+        run_uv(
+            &[
+                "--no-config",
+                "sync",
+                "--directory",
+                target
+                    .join("python")
+                    .to_str()
+                    .ok_or("init path is not UTF-8")?,
+                "--frozen",
+                "--managed-python",
+            ],
+            &environment,
+        )?;
+        probe_python(&target.join(".venv/bin/python"), target, &environment)?;
+        let checker = run_clean(
+            &target.join(".venv/bin/basedpyright"),
+            &["--version"],
+            target,
+            &environment,
+            Duration::from_secs(30),
+        )?;
+        if checker.status != Some(0)
+            || !matches!(
+                String::from_utf8_lossy(&checker.stdout).trim(),
+                "basedpyright 1.39.9" | "1.39.9"
+            )
+        {
+            return Err("root BasedPyright probe did not report 1.39.9".to_owned());
+        }
+    }
+    Ok(interpreter)
+}
+
+fn probe_python(
+    interpreter: &Path,
+    cwd: &Path,
+    environment: &BTreeMap<String, OsString>,
+) -> Result<(), String> {
+    let output = run_clean(
+        interpreter,
+        &[
+            "-I",
+            "-c",
+            "import platform,sys; print(sys.implementation.name, platform.python_version())",
+        ],
+        cwd,
+        environment,
+        Duration::from_secs(30),
+    )?;
+    if output.status == Some(0)
+        && String::from_utf8_lossy(&output.stdout).trim() == "cpython 3.14.6"
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "Python probe requires CPython 3.14.6: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+struct BoundedOutput {
+    status: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+fn run_clean(
+    program: &Path,
+    arguments: &[&str],
+    cwd: &Path,
+    environment: &BTreeMap<String, OsString>,
+    timeout: Duration,
+) -> Result<BoundedOutput, String> {
+    let mut command = ProcessCommand::new(program);
+    command
+        .args(arguments)
+        .current_dir(cwd)
+        .env_clear()
+        .envs(environment)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("start {}: {error}", program.display()))?;
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let drain = |mut stream: Box<dyn Read + Send>| {
+        let mut bytes = Vec::new();
+        stream
+            .by_ref()
+            .take(16 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
+    };
+    let stdout = thread::spawn(move || drain(Box::new(stdout)));
+    let stderr = thread::spawn(move || drain(Box::new(stderr)));
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.code(),
+            Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                unsafe {
+                    libc::kill(-(child.id() as i32), libc::SIGKILL);
+                }
+                let _ = child.wait();
+                return Err(format!("{} timed out", program.display()));
+            }
+            Err(error) => return Err(format!("wait for {}: {error}", program.display())),
+        }
+    };
+    let stdout = stdout
+        .join()
+        .map_err(|_| "stdout drain panicked".to_owned())?
+        .map_err(|error| format!("read stdout: {error}"))?;
+    let stderr = stderr
+        .join()
+        .map_err(|_| "stderr drain panicked".to_owned())?
+        .map_err(|error| format!("read stderr: {error}"))?;
+    if stdout.len() > 16 * 1024 * 1024 || stderr.len() > 16 * 1024 * 1024 {
+        return Err(format!("{} output exceeded 16 MiB", program.display()));
+    }
+    Ok(BoundedOutput {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn print_sync_note(
+    format: &OutputFormat,
+    uv: &Path,
+    target: &Path,
+    interpreter: &Path,
+    base_environment: &BTreeMap<String, OsString>,
+) {
+    let mut environment = base_environment.clone();
+    environment.insert("UV_PYTHON".to_owned(), interpreter.into());
+    environment.insert(
+        "UV_PROJECT_ENVIRONMENT".to_owned(),
+        target.join(".venv").into_os_string(),
+    );
+    let mut words = vec!["/usr/bin/env".to_owned(), "-i".to_owned()];
+    words.extend(
+        environment
+            .iter()
+            .map(|(name, value)| shell_word(&format!("{name}={}", value.to_string_lossy()))),
+    );
+    words.extend([
+        shell_word(&uv.display().to_string()),
+        "--no-config".to_owned(),
+        "sync".to_owned(),
+        "--directory".to_owned(),
+        shell_word(&target.join("python").display().to_string()),
+        "--frozen".to_owned(),
+        "--managed-python".to_owned(),
+    ]);
+    let command = words.join(" ");
+    match format {
+        OutputFormat::Human => println!("{command}"),
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::json!({
+                "diagnostics": [{
+                    "code": crate::diagnostics::code::NAME,
+                    "help": [command],
+                    "message": "run the frozen Python environment sync",
+                    "severity": "note",
+                    "span": null,
+                }],
+                "schema_version": 1,
+            })
+        ),
+    }
+}
+
+fn shell_word(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_@%+=:,./-".contains(&byte))
+    {
+        value.to_owned()
+    } else {
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
+    }
 }
 
 fn valid_project_name(value: &str) -> bool {
@@ -1026,18 +2710,18 @@ fn format_project(project_argument: Option<PathBuf>, check: bool) -> i32 {
     let Ok(root) = project_root(project_argument) else {
         return 2;
     };
-    let (_, paths) = match load_config_with_paths(&root) {
-        Ok(config) => config,
-        Err(error) => {
-            eprintln!("error: {error}");
-            return 2;
-        }
-    };
-    let session = match ProjectSession::acquire(&paths.root) {
+    let session = match ProjectSession::acquire(&root) {
         Ok(session) => session,
         Err(error) => {
             eprintln!("error: {error}");
             return 6;
+        }
+    };
+    let (config, paths) = match load_config_with_paths(session.root()) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 2;
         }
     };
     let sources = match discover_sources_from_paths(&paths) {
@@ -1045,6 +2729,20 @@ fn format_project(project_argument: Option<PathBuf>, check: bool) -> i32 {
         Err(error) => {
             eprintln!("error: {error}");
             return 2;
+        }
+    };
+    let input_hashes = match collect_input_hashes(&config, &paths, &sources) {
+        Ok(inputs) => inputs,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 2;
+        }
+    };
+    let input_snapshot = match capture_expected_inputs(&paths, &input_hashes, []) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 6;
         }
     };
     let parsed = match parse_project(sources) {
@@ -1057,6 +2755,7 @@ fn format_project(project_argument: Option<PathBuf>, check: bool) -> i32 {
     let mut changes = ChangeSet::default();
     let mut paths_to_write = Vec::new();
     let mut differs = false;
+    let mut formatted_inputs = BTreeMap::new();
     for source in parsed.sources {
         let bytes = match crate::formatter::format(&source.cst, &source.syntax) {
             Ok(bytes) => bytes,
@@ -1083,6 +2782,10 @@ fn format_project(project_argument: Option<PathBuf>, check: bool) -> i32 {
         if current != bytes {
             differs = true;
             if !check {
+                formatted_inputs.insert(
+                    relative.to_string_lossy().replace('\\', "/"),
+                    format!("sha256:{}", sha256_hex(&bytes)),
+                );
                 paths_to_write.push(relative.clone());
                 changes.operations.push(Operation::Write {
                     path: relative,
@@ -1094,13 +2797,62 @@ fn format_project(project_argument: Option<PathBuf>, check: bool) -> i32 {
     if check {
         return if differs { 8 } else { 0 };
     }
-    let snapshot = match InputSnapshot::capture(&paths.root, paths_to_write) {
+    if differs {
+        if let Ok(artifact_root) = artifact_root_for_paths(&paths) {
+            let generation = artifact_root.join("generation.json");
+            if generation.exists() {
+                let mut record = match fs::read(&generation)
+                    .map_err(|error| error.to_string())
+                    .and_then(|bytes| GenerationRecord::parse(&bytes))
+                {
+                    Ok(record) => record,
+                    Err(error) => {
+                        eprintln!("error: invalidate generation record: {error}");
+                        return 4;
+                    }
+                };
+                let Some(inputs) = record.current.inputs.as_object_mut() else {
+                    eprintln!("error: generation inputs are not an object");
+                    return 4;
+                };
+                for (path, hash) in formatted_inputs {
+                    inputs.insert(path, serde_json::Value::String(hash));
+                }
+                record.current.verified = false;
+                record.current.verification = serde_json::Value::Null;
+                if let Err(error) = record.current.compute_generation_id() {
+                    eprintln!("error: invalidate generation identity: {error}");
+                    return 4;
+                }
+                let bytes = match record.canonical_bytes() {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        eprintln!("error: serialize invalidated generation record: {error}");
+                        return 4;
+                    }
+                };
+                let relative = generation
+                    .strip_prefix(&paths.root)
+                    .expect("generation record is project-relative")
+                    .to_path_buf();
+                paths_to_write.push(relative.clone());
+                changes.operations.push(Operation::Write {
+                    path: relative,
+                    bytes,
+                });
+                changes.generation_record_last = true;
+            }
+        }
+    }
+    let output_snapshot = match InputSnapshot::capture(&paths.root, paths_to_write) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             eprintln!("error: {error}");
             return 6;
         }
     };
+    let mut snapshot = input_snapshot;
+    snapshot.merge_missing(output_snapshot);
     match session.apply(&snapshot, &changes) {
         Ok(()) => 0,
         Err(error) => {
@@ -1177,7 +2929,7 @@ fn publish_with_sources(
             ));
         }
     }
-    let session = ProjectSession::acquire(&plan.paths.root).map_err(|error| error.to_string())?;
+    let session = &plan.session;
     let relative_root = artifact_root
         .strip_prefix(&plan.paths.root)
         .map_err(|_| "artifact root escaped project root".to_owned())?;
@@ -1211,8 +2963,10 @@ fn publish_with_sources(
         }
         paths.insert(path.clone(), ());
     }
-    let snapshot = InputSnapshot::capture(&plan.paths.root, paths.into_keys())
+    let output_snapshot = InputSnapshot::capture(&plan.paths.root, paths.into_keys())
         .map_err(|error| error.to_string())?;
+    let mut snapshot = plan.input_snapshot.clone();
+    snapshot.merge_missing(output_snapshot);
     let mut changes = ChangeSet::default();
     for (path, bytes) in &plan.emission.files {
         if actual.get(path) != Some(bytes) {
@@ -1258,9 +3012,13 @@ fn safe_relative_path(path: &Path) -> bool {
 }
 fn verify(plan: &PlannedProject) -> Result<(), Vec<String>> {
     let artifact_root = artifact_root_for_paths(&plan.paths).map_err(|message| vec![message])?;
+    let session = &plan.session;
     let actual = collect_tree(&artifact_root).map_err(|message| vec![message])?;
     let mut mismatches = Vec::new();
     for (path, expected) in &plan.emission.files {
+        if path == Path::new("generation.json") {
+            continue;
+        }
         match actual.get(path) {
             Some(actual) if actual == expected => {}
             Some(_) => mismatches.push(format!("managed artifact differs: {}", path.display())),
@@ -1268,17 +3026,88 @@ fn verify(plan: &PlannedProject) -> Result<(), Vec<String>> {
         }
     }
     for path in actual.keys() {
-        if !plan.emission.files.contains_key(path) {
+        if path != Path::new("generation.json") && !plan.emission.files.contains_key(path) {
             mismatches.push(format!("unexpected managed artifact: {}", path.display()));
         }
     }
-    if mismatches.is_empty() {
-        Ok(())
-    } else {
-        Err(mismatches)
+    let expected_record = plan
+        .emission
+        .files
+        .get(Path::new("generation.json"))
+        .ok_or_else(|| vec!["planned generation record is missing".to_owned()])
+        .and_then(|bytes| {
+            GenerationRecord::parse(bytes)
+                .map_err(|error| vec![format!("invalid planned generation record: {error}")])
+        })?;
+    let actual_record = actual
+        .get(Path::new("generation.json"))
+        .ok_or_else(|| vec!["missing managed artifact: generation.json".to_owned()])
+        .and_then(|bytes| {
+            GenerationRecord::parse(bytes)
+                .map_err(|error| vec![format!("invalid managed generation record: {error}")])
+        })?;
+    if comparable_snapshot(&actual_record.current) != comparable_snapshot(&expected_record.current)
+    {
+        mismatches
+            .push("generation record does not describe the current compiler inputs".to_owned());
     }
+    if !expected_record.current.unresolved.is_empty() {
+        mismatches.push(format!(
+            "unresolved implementations: {}",
+            expected_record.current.unresolved.join(", ")
+        ));
+    }
+    if !mismatches.is_empty() {
+        return Err(mismatches);
+    }
+    let evidence = verify_python(&plan.config, &plan.paths, &artifact_root, &plan.ir, None)
+        .map_err(|message| vec![message])?;
+    let mut record = expected_record;
+    record.current.tools = evidence.tools;
+    record.current.dependencies = evidence.dependencies;
+    record.current.verified = true;
+    record.current.verification = evidence.report;
+    record
+        .current
+        .compute_generation_id()
+        .map_err(|message| vec![message])?;
+    record.last_verified = Some(record.current.clone());
+    let bytes = record.canonical_bytes().map_err(|message| vec![message])?;
+    let relative = artifact_root
+        .strip_prefix(&plan.paths.root)
+        .map_err(|_| vec!["artifact root escaped project root".to_owned()])?
+        .join("generation.json");
+    let output_snapshot = InputSnapshot::capture(&plan.paths.root, [relative.clone()])
+        .map_err(|error| vec![error.to_string()])?;
+    let mut snapshot = plan.input_snapshot.clone();
+    snapshot.merge_missing(output_snapshot);
+    let mut changes = ChangeSet::default();
+    changes.operations.push(Operation::Write {
+        path: relative,
+        bytes,
+    });
+    changes.generation_record_last = true;
+    session
+        .apply(&snapshot, &changes)
+        .map_err(|error| vec![error.to_string()])
 }
 
+fn comparable_snapshot(snapshot: &crate::provenance::GenerationSnapshot) -> serde_json::Value {
+    let mut value = serde_json::to_value(snapshot).expect("generation snapshot serializes");
+    let object = value
+        .as_object_mut()
+        .expect("generation snapshot is an object");
+    for field in [
+        "agent_runs",
+        "generation_id",
+        "tools",
+        "verification",
+        "verified",
+    ] {
+        object.remove(field);
+    }
+    value
+}
 fn collect_tree(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
     let metadata = fs::symlink_metadata(root).map_err(|error| {
         format!(
@@ -1377,4 +3206,221 @@ fn validate_python_bytecode_cache(directory: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod init_publication_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    struct Fixture {
+        root: PathBuf,
+        parent: PathBuf,
+        temporary: PathBuf,
+        target: PathBuf,
+        marker: Vec<u8>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let id = NEXT.fetch_add(1, Ordering::Relaxed);
+            let root =
+                std::env::temp_dir().join(format!("cott-init-fault-{}-{id}", std::process::id()));
+            fs::create_dir_all(&root).expect("fixture root");
+            let parent = root.join("parent");
+            fs::create_dir(&parent).expect("fixture parent");
+            let temporary = parent.join(".cott-init-test");
+            let target = parent.join("demo-app");
+            Self {
+                root,
+                parent,
+                temporary,
+                target,
+                marker: b"{\"nonce\":\"test\",\"schema_version\":1}\n".to_vec(),
+            }
+        }
+
+        fn expected(&self, marker: bool) -> BTreeMap<PathBuf, Vec<u8>> {
+            let mut tree = BTreeMap::from([
+                (
+                    PathBuf::from(".gitignore"),
+                    b".cott/\n.venv/\ngenerated/generation.json\n__pycache__/\n*.py[cod]\n"
+                        .to_vec(),
+                ),
+                (
+                    PathBuf::from("cott.toml"),
+                    b"[project]\nname = \"demo-app\"\nversion = \"0.1.0\"\nsource = \"src\"\n\n[target.python]\nsource = \"python\"\ngenerated = \"generated/python\"\nstubs = \"generated/stubs\"\nlockfile = \"python/uv.lock\"\ninterpreter = \".venv/bin/python\"\ntype_checker = \".venv/bin/basedpyright\"\nruntime_validation = \"boundary\"\n"
+                        .to_vec(),
+                ),
+                (
+                    PathBuf::from("python/.python-version"),
+                    b"3.14\n".to_vec(),
+                ),
+                (
+                    PathBuf::from("python/pyproject.toml"),
+                    b"[project]\nname = \"demo-app\"\nversion = \"0.1.0\"\nrequires-python = \">=3.14,<3.15\"\ndependencies = []\n\n[dependency-groups]\ndev = [\"basedpyright==1.39.9\"]\n"
+                        .to_vec(),
+                ),
+                (
+                    PathBuf::from("src/demo_app/main.cott"),
+                    b"module demo_app.main\n".to_vec(),
+                ),
+            ]);
+            if marker {
+                tree.insert(PathBuf::from(".cott-init"), self.marker.clone());
+            }
+            tree
+        }
+
+        fn publish(&self) -> Result<(), String> {
+            publish_init_scaffold(
+                &self.temporary,
+                &self.target,
+                &self.parent,
+                "demo-app",
+                &self.marker,
+            )
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            clear_init_fault();
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn assert_tree(path: &Path, expected: BTreeMap<PathBuf, Vec<u8>>) {
+        assert_eq!(collect_tree(path).expect("tree"), expected);
+    }
+
+    #[test]
+    fn scaffold_file_and_directory_fsync_faults_leave_no_target() {
+        for fault in [
+            "init.scaffold.file_fsync",
+            "init.scaffold.tree_file_fsync",
+            "init.scaffold.directory_fsync",
+        ] {
+            let fixture = Fixture::new();
+            arm_init_fault(fault);
+            assert!(fixture.publish().is_err(), "{fault}");
+            assert!(!fixture.target.exists());
+            clear_init_fault();
+            remove_owned_init_temp(&fixture.temporary, &fixture.marker, &fixture.parent)
+                .expect("owned temp cleanup");
+            assert!(!fixture.temporary.exists());
+        }
+    }
+
+    #[test]
+    fn no_replace_publish_fault_and_collision_preserve_foreign_target() {
+        let fixture = Fixture::new();
+        arm_init_fault("init.publish.noreplace");
+        assert!(fixture.publish().is_err());
+        clear_init_fault();
+        remove_owned_init_temp(&fixture.temporary, &fixture.marker, &fixture.parent)
+            .expect("owned temp cleanup");
+        assert!(!fixture.target.exists());
+
+        let fixture = Fixture::new();
+        fs::create_dir(&fixture.target).expect("foreign target");
+        fs::write(fixture.target.join("foreign"), b"keep").expect("foreign file");
+        assert!(fixture.publish().is_err());
+        remove_owned_init_temp(&fixture.temporary, &fixture.marker, &fixture.parent)
+            .expect("owned temp cleanup");
+        assert_tree(
+            &fixture.target,
+            BTreeMap::from([(PathBuf::from("foreign"), b"keep".to_vec())]),
+        );
+    }
+
+    #[test]
+    fn publish_parent_fsync_fault_leaves_owned_incomplete_target_then_cleans() {
+        let fixture = Fixture::new();
+        arm_init_fault("init.publish.parent_fsync");
+        assert!(fixture.publish().is_err());
+        assert_tree(&fixture.target, fixture.expected(true));
+        clear_init_fault();
+        remove_owned_init(&fixture.target, &fixture.marker, &fixture.parent)
+            .expect("owned target cleanup");
+        assert!(!fixture.target.exists());
+    }
+
+    #[test]
+    fn temp_cleanup_remove_and_parent_fsync_are_retryable() {
+        for fault in ["init.cleanup.temp_remove", "init.cleanup.temp_parent_fsync"] {
+            let fixture = Fixture::new();
+            arm_init_fault("init.publish.noreplace");
+            assert!(fixture.publish().is_err());
+            clear_init_fault();
+            arm_init_fault(fault);
+            assert!(
+                remove_owned_init_temp(&fixture.temporary, &fixture.marker, &fixture.parent)
+                    .is_err()
+            );
+            if fault == "init.cleanup.temp_remove" {
+                assert_tree(&fixture.temporary, fixture.expected(true));
+            } else {
+                assert!(!fixture.temporary.exists());
+            }
+            clear_init_fault();
+            remove_owned_init_temp(&fixture.temporary, &fixture.marker, &fixture.parent)
+                .expect("retry temp cleanup");
+            assert!(!fixture.temporary.exists());
+        }
+    }
+
+    #[test]
+    fn target_cleanup_remove_and_parent_fsync_are_ownership_checked_and_retryable() {
+        for fault in [
+            "init.cleanup.target_remove",
+            "init.cleanup.target_parent_fsync",
+        ] {
+            let fixture = Fixture::new();
+            fixture.publish().expect("publish");
+            arm_init_fault(fault);
+            assert!(remove_owned_init(&fixture.target, &fixture.marker, &fixture.parent).is_err());
+            if fault == "init.cleanup.target_remove" {
+                assert_tree(&fixture.target, fixture.expected(true));
+            } else {
+                assert!(!fixture.target.exists());
+            }
+            clear_init_fault();
+            remove_owned_init(&fixture.target, &fixture.marker, &fixture.parent)
+                .expect("retry target cleanup");
+            assert!(!fixture.target.exists());
+        }
+
+        let fixture = Fixture::new();
+        fs::create_dir(&fixture.target).expect("foreign target");
+        fs::write(fixture.target.join(".cott-init"), b"foreign").expect("foreign marker");
+        assert!(remove_owned_init(&fixture.target, &fixture.marker, &fixture.parent).is_err());
+        assert!(fixture.target.exists());
+    }
+
+    #[test]
+    fn final_commit_faults_preserve_exact_ownership_states_and_resume() {
+        for fault in [
+            "init.commit.marker_unlink",
+            "init.commit.target_fsync",
+            "init.commit.parent_fsync",
+        ] {
+            let fixture = Fixture::new();
+            fixture.publish().expect("publish");
+            arm_init_fault(fault);
+            assert!(commit_init(&fixture.target, &fixture.marker, &fixture.parent).is_err());
+            clear_init_fault();
+            if fault == "init.commit.marker_unlink" {
+                assert_tree(&fixture.target, fixture.expected(true));
+                commit_init(&fixture.target, &fixture.marker, &fixture.parent)
+                    .expect("retry commit");
+            } else {
+                assert_tree(&fixture.target, fixture.expected(false));
+            }
+            assert_tree(&fixture.target, fixture.expected(false));
+        }
+    }
 }

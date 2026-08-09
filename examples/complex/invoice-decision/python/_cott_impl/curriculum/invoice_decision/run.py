@@ -1,5 +1,5 @@
-from curriculum.invoice_decision_types import Rejected
+from curriculum.invoice_decision_types import InvoiceDecision, InvoiceDecision_Rejected
 
 
-def run() -> Rejected:
-    return Rejected(reason="missing tax id")
+def run() -> InvoiceDecision:
+    return InvoiceDecision_Rejected(reason="missing tax id")

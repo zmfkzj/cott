@@ -6,29 +6,28 @@
 shapes; a durable typed Python binding supplies implementation; generated Python facades are the
 only public import path.
 
-`architecture.md` is the authoritative v0.1 design. The committed implementation is a deliberately
-smaller Profile-P slice: parsing, constrained semantic analysis, canonical IR, binding validation,
-Python emission, and exact generated-tree verification. Do not present unimplemented design commands
-as available.
+`architecture.md` is the authoritative and implemented v0.1 contract. Do not add behavior outside
+that closed contract or present a partial compatibility profile as an alternate source of truth.
 
 ## Architecture & Data Flow
 
 ```text
-cott emit python / verify
-  → project manifest + source discovery
-  → parser → constrained semantic analyzer → canonical IR
-  → durable Python binding validation + SHA-256 identity
-  → in-memory Python artifact plan
-  → staged publish, or byte-for-byte verification
+cott check / fmt / emit / generate / verify / diff
+  → closed manifest + symlink-safe source discovery
+  → lossless CST → AST → complete HIR → canonical IR
+  → binding or scoped agent implementation validation
+  → deterministic Python, stub, test, and provenance plan
+  → journaled publish, exact verification, or semantic diff
 ```
 
-- `src/project.rs` owns the closed `cott.toml` parser, project paths, and symlink-safe source discovery.
-- `src/parser.rs`, `src/lexer.rs`, `src/ast.rs`, and `src/semantic.rs` turn source into the constrained
-  semantic model; `src/ir.rs` renders deterministic canonical JSON.
-- `src/binding.rs` accepts exactly one regular UTF-8 implementation per public function and records its
-  bytes plus SHA-256 identity.
-- `src/python_runtime.rs` renders the stdlib-only runtime. `src/python_emit.rs` produces the complete
-  deterministic artifact map. `src/cli.rs` owns CLI grammar, staging publication, and verification.
+- `src/manifest.rs` and `src/project.rs` own the closed manifest, paths, and source discovery.
+- `src/syntax.rs`, `src/lexer.rs`, `src/parser.rs`, `src/ast.rs`, `src/hir.rs`, and `src/formatter.rs`
+  implement the source pipeline; `src/ir.rs` renders and validates canonical JSON.
+- `src/binding.rs` resolves manifest and durable agent implementations with byte identity.
+- `src/python_emit.rs`, `src/python_runtime.rs`, `src/python_verify.rs`, and
+  `src/contract_test.rs` own the target ABI and verification pipeline.
+- `src/agent.rs`, `src/sandbox.rs`, `src/transaction.rs`, and `src/cli.rs` own external execution,
+  crash-safe publication, command grammar, and exit codes.
 - Generated artifact paths are compiler-owned. Never hand-edit `generated/`; modify `.cott` or
   `python/_cott_impl/**/run.py`, then re-emit.
 
@@ -40,10 +39,10 @@ cott emit python / verify
 | `tests/` | Rust integration tests; use public APIs or the built `cott` binary |
 | `examples/grammar/` | Ten standalone declaration/ABI examples |
 | `examples/simple/` | Ten standalone deterministic programs |
-| `examples/complex/` | Ten standalone composed-data examples |
+| `examples/complex/` | Eleven standalone composed-data examples, including unresolved `process-bar` generation fixture |
 | `examples/**/src/curriculum/*.cott` | Authoritative example contracts |
 | `examples/**/python/_cott_impl/curriculum/*/run.py` | Durable example bindings |
-| `architecture.md` | Future/full design; not a claim of implemented behavior |
+| `architecture.md` | Normative implemented v0.1 contract |
 
 Each example is an independent project with `cott.toml`, `src/`, and `python/_cott_impl/`.
 
@@ -53,28 +52,30 @@ Each example is an independent project with `cott.toml`, `src/`, and `python/_co
 cargo fmt --check
 cargo test
 cargo run -- --help
-cargo run -- emit python --project examples/grammar/boolean-identity
-cargo run -- verify --project examples/grammar/boolean-identity
-cd examples/grammar/boolean-identity/generated/python
-python3 -m curriculum.boolean_identity
+cargo run -- check --project examples/grammar/boolean-identity
+cargo run -- emit ir --project examples/grammar/boolean-identity
 ```
 
-The only implemented command forms are:
+The implemented command forms are:
 
 ```text
-cott emit python [--project <dir>]
-cott verify [--project <dir>]
+cott init <path> [--name <name>] [--no-sync] [--format json]
+cott check [<source.cott>] [--project <dir>] [--format json]
+cott fmt [--check] [--project <dir>] [--format json]
+cott emit ir|python [--project <dir>] [--format json]
+cott generate [<fully.qualified.function>] --agent codex|omp --target python [--project <dir>] [--format json]
+cott verify [--project <dir>] [--format json]
+cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]
 ```
 
-`emit python` builds a complete plan before replacing `generated/`. `verify` rebuilds the plan and
-fails on missing, extra, or changed managed files; it does not rewrite them. `init`, `check`, `fmt`,
-`emit ir`, `generate`, and `diff` remain unimplemented.
+`emit` and `generate` publish through the project transaction and leave `current.verified = false`.
+`verify` rebuilds and checks the complete target without a cache, then updates only provenance.
 
 ## Code Conventions & Common Patterns
 
 ### Rust
 
-- Format with `cargo fmt`; stay dependency-light. The only current dependency is `sha2`.
+- Format with `cargo fmt`; remain dependency-light and reuse stdlib before adding crates.
 - Prefer deterministic structures (`BTreeMap`/`BTreeSet`) for externally visible ordering and artifact
   plans. Preserve source/module/declaration order where the semantic model owns it.
 - Return structured, path-attached diagnostics instead of panicking for user input.
@@ -82,60 +83,54 @@ fails on missing, extra, or changed managed files; it does not rewrite them. `in
   and partial publication. Keep output staging/publishing in `src/cli.rs`.
 - Keep public data types simple (`Clone`, `Debug`, `Eq`, `PartialEq`) when tests need observable values.
 
-### Cott Profile-P
+### Cott v0.1
 
-- A source file has one module; the module name matches its source-relative path. Use two segments for
-  examples, e.g. `src/curriculum/boolean_identity.cott` → `module curriculum.boolean_identity`.
-- The current semantic profile supports aliases, newtypes without refinements, structs without defaults,
-  enums, literal constants, `Option`, `Result`, and **signature-only zero-argument** public functions.
-- It currently rejects function parameters, clauses (`requires`, `ensures`, `error`, `effects`), traits,
-  user generics, newtype refinements, and field defaults. Do not fake support in examples or docs.
-- Use explicit types. `Option[T]` represents absence and `Result[T, ErrorEnum]` represents expected
-  failure. Error types in `Result` must be local enum declarations.
+- A source file has one module whose name injectively matches its source-relative path.
+- Supported types include fixed-width numeric types, `Path`, `Unit`, `Never`, `JsonValue`,
+  constrained `Opaque`, nominal and generic user types, and closed standard containers.
+- Supported declarations include aliases, refined newtypes, immutable structs with constant defaults,
+  payload enums, structural traits, typed constants, and public function signatures.
+- Functions support parameters, generics and bounds, `requires`, `ensures`, conditional `error`, and
+  the closed `effects` vocabulary. Contract expressions are typed in HIR and enforced by generated
+  wrappers according to `runtime_validation`.
 
 ### Python Bindings
 
-- A binding lives at `python/_cott_impl/<module path>/<function>.py` and defines exactly one annotated
-  top-level `def function() -> ...:`. It must end in exactly one newline.
-- Imports may use the standard library, `cott_runtime`, or that project’s exact generated
-  `<module>_types` module. Relative/star/project-local facade/external imports are rejected.
-- Do not use placeholders (`pass`, `...`, `NotImplementedError`), async, dynamic import, `eval`, `exec`,
-  `compile`, or agent operations in bindings.
-- Instantiate nominal structs/newtypes/enums through generated `*_types` imports; return `Ok`, `Err`,
-  `Some`, `Nothing`, or `UNIT` from `cott_runtime` where the contract requires them.
+- A manifest binding names an implementation with `module:function`; generated implementations live
+  at `python/_cott_impl/<module path>/<function>.py`. Each file defines exactly one fully annotated
+  top-level function and ends in one newline.
+- Imports may use the standard library, `cott_runtime`, exact generated `*_types` modules, or a
+  uniquely owned distribution selected by `uv.lock`. Relative, star, facade, and dynamic imports are
+  rejected.
+- Do not use placeholders, async, reflection, dynamic compilation, suppressions, or agent operations.
+- Instantiate nominal values through generated type modules and standard ABI values through
+  `cott_runtime`.
+- User enum variants are imported as `<Enum>_<Variant>`; the `<Enum>` name is the union alias.
 
 ## Important Files
 
 - `Cargo.toml` — Rust package metadata; `src/main.rs` is the binary bridge.
 - `src/cli.rs` — supported command grammar, exit-code mapping, staged publish, exact verification.
-- `src/project.rs` — closed manifest and source-discovery contract.
-- `src/semantic.rs` — Profile-P acceptance/rejection rules.
-- `src/python_emit.rs` and `src/python_runtime.rs` — generated Python ABI and artifact layout.
-- `README.md` — runnable examples, current limits, and observed outputs.
+- `src/manifest.rs` / `src/project.rs` — manifest and path trust boundary.
+- `src/hir.rs` / `src/ir.rs` — semantic source of truth and canonical serialization.
+- `src/python_emit.rs` / `src/python_runtime.rs` — target ABI and managed artifact layout.
+- `src/python_verify.rs` / `src/contract_test.rs` — checker, runtime, dependency, and contract evidence.
+- `src/agent.rs` / `src/sandbox.rs` — pinned provider adapters and containment.
+- `src/transaction.rs` / `src/cli.rs` — journaled mutation, commands, output, and exit codes.
 
 ## Runtime/Tooling Preferences
 
-- Use the committed Rust toolchain through Cargo; do not add dependencies for parsing, CLI handling, or
-  filesystem traversal when the standard library suffices.
-- Generated Python uses only the standard library. The compiler does not install, choose, or manage a
-  Python interpreter.
-- `architecture.md` specifies a future CPython 3.14/`uv`/BasedPyright workflow. Those tools are not part
-  of the current implementation and must not be made implicit in tests or commands.
+- Use the committed Rust toolchain through Cargo.
+- The Python target is CPython 3.14.6 with BasedPyright 1.39.9; init and lock operations use uv 0.12.3.
+- Generated runtime code is standard-library-only. Project implementations may use lock-selected
+  external distributions whose installed identity and files verify exactly.
 
 ## Testing & QA
 
 - Run `cargo fmt --check` and `cargo test` after code changes.
-- Add tests for externally observable contracts: diagnostics, exact artifact paths/bytes, command exit
-  codes, output-tree preservation, and generated-runtime behavior.
-- `tests/cli.rs` has a conditional `python3` smoke test for a generated module; do not make Rust tests
-  require a Python installation when the behavior can be covered without it.
-- For example changes, emit, verify, and run the entry module with a supplied Python:
-
-  ```bash
-  cargo run -- emit python --project examples/<category>/<slug>
-  cargo run -- verify --project examples/<category>/<slug>
-  (cd examples/<category>/<slug>/generated/python && python3 -m curriculum.<slug>)
-  ```
-
-  Remove locally generated example `generated/` directories after smoke testing unless managed output is
-  explicitly part of the requested change.
+- Test observable contracts: diagnostics, canonical bytes, signatures and wrappers, provenance,
+  sandboxing, transactions, exit codes, and output-tree preservation.
+- Python verification tests use explicit fake pinned tool wrappers where a real CPython 3.14.6
+  environment is unavailable.
+- Remove locally generated example `generated/` and `.cott/` state after smoke testing unless the
+  request explicitly includes managed output.

@@ -16,7 +16,48 @@
       "required": ["generation_id", "verified", "inputs", "tools", "ir", "contract_surface", "public_python_symbols", "implementations", "dependencies", "managed_files", "unresolved", "verification", "agent_runs"],
       "additionalProperties": false,
       "properties": {
-        "generation_id": {"type": "string"}, "verified": {"type": "boolean"}, "inputs": {"type": "object"}, "tools": {"type": "object"}, "ir": {"type": "object"}, "contract_surface": {"type": "object"}, "public_python_symbols": {"type": "array"}, "implementations": {"type": "object"}, "dependencies": {"type": "array"}, "managed_files": {"type": "object"}, "unresolved": {"type": "array"}, "verification": {"type": "object"}, "agent_runs": {"type": "array"}
+        "generation_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "verified": {"type": "boolean"},
+        "inputs": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}},
+        "tools": {"type": "object"},
+        "ir": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}},
+        "contract_surface": {"type": "object"},
+        "public_python_symbols": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+        "implementations": {"type": "array", "items": {"$ref": "#/$defs/implementation"}},
+        "dependencies": {"type": "array", "items": {"$ref": "#/$defs/dependency"}},
+        "managed_files": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}},
+        "unresolved": {"type": "array", "items": {"type": "string"}},
+        "verification": {"anyOf": [{"type": "object"}, {"type": "null"}]},
+        "agent_runs": {"type": "array"}
+      }
+    },
+    "implementation": {
+      "type": "object",
+      "required": ["cott_symbol", "owner", "python_symbol", "source_origin", "runtime_origin", "content_hash"],
+      "additionalProperties": false,
+      "properties": {
+        "cott_symbol": {"type": "string"},
+        "owner": {"enum": ["manifest", "agent"]},
+        "python_symbol": {"type": "string"},
+        "source_origin": {"type": "string"},
+        "runtime_origin": {"type": "string"},
+        "content_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "dependency": {
+      "type": "object",
+      "required": ["name", "version", "lock_hash", "artifacts"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1},
+        "lock_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "artifacts": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "uniqueItems": true
+        },
+        "installed": {"type": "object"}
       }
     }
   }

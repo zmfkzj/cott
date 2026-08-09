@@ -2,6 +2,8 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 /// Trusted filesystem paths derived from the normative project configuration.
@@ -107,7 +109,7 @@ fn read_config(
         path: manifest.clone(),
         source,
     })?;
-    if !manifest_meta.is_file() {
+    if !manifest_meta.is_file() || manifest_meta.nlink() != 1 {
         return Err(ProjectError::InvalidManifest {
             path: manifest.clone(),
             message: "manifest is not a regular file".to_owned(),
@@ -213,11 +215,14 @@ fn derive_project_paths(
     let stubs_dir = root.join(stubs);
 
     ensure_no_symlinks(&source_dir)?;
-    ensure_directory_if_present(&python_source_dir, "python source directory")?;
+    ensure_target_metadata(&python_source_dir.join("pyproject.toml"), config)?;
     ensure_directory_if_present(&generated_dir, "generated directory")?;
     ensure_directory_if_present(&stubs_dir, "stubs directory")?;
     if let Some(lockfile) = &lockfile {
-        ensure_no_symlinks(lockfile)?;
+        ensure_regular_input(lockfile, "lockfile")?;
+    }
+    if let Some(rules) = &config.generator.rules {
+        ensure_regular_input(&root.join(rules), "generator rules")?;
     }
 
     let source_meta = fs::symlink_metadata(&source_dir).map_err(|source| ProjectError::Io {
@@ -315,10 +320,14 @@ fn collect_sources(
         })?;
         if metadata.file_type().is_symlink() {
             return Err(ProjectError::Symlink { path });
-        }
-        if metadata.is_dir() {
+        } else if metadata.is_dir() {
             collect_sources(root, &path, files)?;
         } else if metadata.is_file() && path.extension() == Some(OsStr::new("cott")) {
+            if metadata.nlink() != 1 {
+                return Err(ProjectError::InvalidProject {
+                    message: "source files must be regular single-link files",
+                });
+            }
             let relative = path
                 .strip_prefix(root)
                 .map_err(|_| ProjectError::InvalidProject {
@@ -371,4 +380,222 @@ fn ensure_directory_if_present(path: &Path, label: &'static str) -> Result<(), P
             source,
         }),
     }
+}
+
+fn ensure_regular_input(path: &Path, label: &'static str) -> Result<(), ProjectError> {
+    ensure_no_symlinks(path)?;
+    let metadata = fs::symlink_metadata(path).map_err(|source| ProjectError::Io {
+        operation: "stat project input",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.is_file() || metadata.nlink() != 1 {
+        return Err(ProjectError::InvalidProject { message: label });
+    }
+    Ok(())
+}
+fn ensure_target_metadata(
+    path: &Path,
+    config: &crate::manifest::ProjectConfig,
+) -> Result<(), ProjectError> {
+    ensure_no_symlinks(path)?;
+    let metadata = fs::symlink_metadata(path).map_err(|source| ProjectError::Io {
+        operation: "stat target project metadata",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    #[cfg(unix)]
+    let single_link = metadata.nlink() == 1;
+    #[cfg(not(unix))]
+    let single_link = true;
+    if !metadata.is_file() || !single_link {
+        return Err(ProjectError::InvalidManifest {
+            path: path.to_path_buf(),
+            message: "target project metadata must be a regular single-link file".to_owned(),
+        });
+    }
+    let bytes = fs::read(path).map_err(|source| ProjectError::Io {
+        operation: "read target project metadata",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| ProjectError::InvalidManifest {
+        path: path.to_path_buf(),
+        message: "target project metadata is not UTF-8".to_owned(),
+    })?;
+    let value: toml::Value =
+        toml::from_str(text).map_err(|error| ProjectError::InvalidManifest {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    let project = value
+        .get("project")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| ProjectError::InvalidManifest {
+            path: path.to_path_buf(),
+            message: "target project metadata has no [project] table".to_owned(),
+        })?;
+    let string = |field: &str| {
+        project
+            .get(field)
+            .and_then(toml::Value::as_str)
+            .ok_or_else(|| ProjectError::InvalidManifest {
+                path: path.to_path_buf(),
+                message: format!("target project metadata project.{field} must be a string"),
+            })
+    };
+    let target_name = string("name")?;
+    if !valid_distribution_name(target_name)
+        || normalize_distribution_name(target_name) != config.project.name
+    {
+        return Err(ProjectError::InvalidManifest {
+            path: path.to_path_buf(),
+            message: "target project name does not match cott project name".to_owned(),
+        });
+    }
+    if string("version")? != config.project.version {
+        return Err(ProjectError::InvalidManifest {
+            path: path.to_path_buf(),
+            message: "target project version does not match cott project version".to_owned(),
+        });
+    }
+    if !requires_python_allows_314(string("requires-python")?) {
+        return Err(ProjectError::InvalidManifest {
+            path: path.to_path_buf(),
+            message: "target project requires-python is not compatible with CPython 3.14.6"
+                .to_owned(),
+        });
+    }
+    if project.get("dynamic").is_some_and(|dynamic| {
+        dynamic.as_array().is_some_and(|fields| {
+            fields.iter().any(|field| {
+                field
+                    .as_str()
+                    .is_some_and(|field| matches!(field, "dependencies" | "requires-python"))
+            })
+        })
+    }) {
+        return Err(ProjectError::InvalidManifest {
+            path: path.to_path_buf(),
+            message: "target dependencies and requires-python must not be dynamic".to_owned(),
+        });
+    }
+    let dependencies = project
+        .get("dependencies")
+        .and_then(toml::Value::as_array)
+        .ok_or_else(|| ProjectError::InvalidManifest {
+            path: path.to_path_buf(),
+            message: "target project dependencies must be an array".to_owned(),
+        })?;
+    if dependencies.iter().any(|dependency| !dependency.is_str()) {
+        return Err(ProjectError::InvalidManifest {
+            path: path.to_path_buf(),
+            message: "target project dependencies must contain strings".to_owned(),
+        });
+    }
+    if !dependencies.is_empty() && config.python.lockfile.is_none() {
+        return Err(ProjectError::InvalidManifest {
+            path: path.to_path_buf(),
+            message: "target project dependencies require target.python.lockfile".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn normalize_distribution_name(value: &str) -> String {
+    let mut normalized = String::new();
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            normalized.push(character.to_ascii_lowercase());
+        } else if matches!(character, '-' | '_' | '.') && !normalized.ends_with('-') {
+            normalized.push('-');
+        }
+    }
+    normalized.trim_matches('-').to_owned()
+}
+
+fn valid_distribution_name(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+}
+
+fn requires_python_allows_314(specifier: &str) -> bool {
+    let target = [3_u64, 14, 6];
+    let mut saw_clause = false;
+    for clause in specifier.split(',').map(str::trim) {
+        if clause.is_empty() {
+            return false;
+        }
+        saw_clause = true;
+        let Some((operator, version)) = ["==", "!=", ">=", "<=", "~=", ">", "<"]
+            .into_iter()
+            .find_map(|operator| clause.strip_prefix(operator).map(|value| (operator, value)))
+        else {
+            return false;
+        };
+        if version.ends_with(".*") {
+            let prefix = &version[..version.len() - 2];
+            let parts = prefix
+                .split('.')
+                .map(str::parse::<u64>)
+                .collect::<Result<Vec<_>, _>>();
+            let Ok(parts) = parts else {
+                return false;
+            };
+            let matches = parts
+                .iter()
+                .enumerate()
+                .all(|(index, value)| target.get(index).is_some_and(|target| target == value));
+            if (operator == "==" && !matches) || (operator == "!=" && matches) {
+                return false;
+            }
+            if !matches!(operator, "==" | "!=") {
+                return false;
+            }
+            continue;
+        }
+        let parts = version
+            .split('.')
+            .map(str::parse::<u64>)
+            .collect::<Result<Vec<_>, _>>();
+        let Ok(parts) = parts else {
+            return false;
+        };
+        if parts.is_empty() || parts.len() > 3 {
+            return false;
+        }
+        let mut compared = [0_u64; 3];
+        compared[..parts.len()].copy_from_slice(&parts);
+        let matches = match operator {
+            "==" => target == compared,
+            "!=" => target != compared,
+            ">=" => target >= compared,
+            "<=" => target <= compared,
+            ">" => target > compared,
+            "<" => target < compared,
+            "~=" => {
+                if target < compared {
+                    false
+                } else if parts.len() <= 2 {
+                    target[0] == compared[0]
+                } else {
+                    target[..2] == compared[..2]
+                }
+            }
+            _ => false,
+        };
+        if !matches {
+            return false;
+        }
+    }
+    saw_clause
 }

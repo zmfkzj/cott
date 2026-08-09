@@ -134,12 +134,16 @@ fn renders_deterministic_owned_hir_modules() {
     assert!(api.contains(r#""kind":"option""#));
     assert!(api.contains(r#""kind":"result""#));
     assert!(api.contains(r#""text":"alias-doc""#));
+    assert!(api.contains(r#""start_byte":"#));
+    assert!(api.contains(r#""start_line":"#));
+    assert!(api.contains(r#""start_column":"#));
 }
 
 #[test]
 fn hand_built_hir_needs_no_semantic_snapshot() {
     let project = HirProject::new(vec![HirModule {
         source: PathBuf::from("src/empty.cott"),
+        source_bytes: std::sync::Arc::from(&b"module empty\n"[..]),
         id: ModuleId::new(vec!["empty".into()]),
         imports: Vec::new(),
         declarations: Vec::new(),

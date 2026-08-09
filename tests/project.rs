@@ -59,10 +59,21 @@ fn manifest(root: &Path, contents: &str) {
     fs::write(root.join("cott.toml"), contents).expect("manifest should be writable");
 }
 
+fn target_metadata(root: &Path) {
+    fs::create_dir_all(root.join("python")).expect("Python source directory");
+    fs::write(
+        root.join("python/pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nrequires-python = \">=3.14,<3.15\"\ndependencies = []\n",
+    )
+    .expect("target project metadata should be writable");
+    fs::write(root.join("uv.lock"), "version = 1\n").expect("lockfile should be writable");
+}
+
 fn valid_project() -> TempDir {
     let temp = TempDir::new();
     manifest(&temp.path, NORMATIVE_MANIFEST);
     fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    target_metadata(&temp.path);
     temp
 }
 
@@ -71,6 +82,7 @@ fn derives_normative_project_paths_from_config() {
     let temp = TempDir::new();
     manifest(&temp.path, NORMATIVE_MANIFEST);
     fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    target_metadata(&temp.path);
 
     let (config, paths) =
         load_config_with_paths(&temp.path).expect("normative manifest should load");
@@ -83,6 +95,23 @@ fn derives_normative_project_paths_from_config() {
     assert_eq!(paths.generated_dir, temp.path.join("generated/python"));
     assert_eq!(paths.stubs_dir, temp.path.join("generated/stubs"));
     assert_eq!(paths.lockfile, Some(temp.path.join("uv.lock")));
+}
+
+#[test]
+fn requires_matching_target_project_metadata() {
+    let temp = valid_project();
+    fs::remove_file(temp.path.join("python/pyproject.toml")).expect("remove metadata");
+    let error = load_config_with_paths(&temp.path).expect_err("missing metadata must fail");
+    assert!(error.to_string().contains("target project metadata"));
+
+    target_metadata(&temp.path);
+    fs::write(
+        temp.path.join("python/pyproject.toml"),
+        "[project]\nname = \"other\"\nversion = \"0.1.0\"\nrequires-python = \">=3.14,<3.15\"\ndependencies = []\n",
+    )
+    .expect("replace metadata");
+    let error = load_config_with_paths(&temp.path).expect_err("mismatched metadata must fail");
+    assert!(error.to_string().contains("name does not match"));
 }
 
 #[test]

@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -32,11 +33,6 @@ pub fn render(project: &HirProject) -> Result<CanonicalIr, String> {
         validate(&module.bytes)?;
     }
     Ok(ir)
-}
-
-/// Compatibility spelling for callers that already use the HIR-specific name.
-pub fn from_hir(project: &HirProject) -> Result<CanonicalIr, String> {
-    render(project)
 }
 
 pub fn load(bytes: &[u8]) -> Result<Value, String> {
@@ -76,7 +72,7 @@ fn validate(bytes: &[u8]) -> Result<(), String> {
 }
 
 fn render_module(module: &HirModule) -> CanonicalModule {
-    let mut json = Json::new();
+    let mut json = Json::new(&module.source_bytes);
     json.object_start();
     json.key("declarations");
     json.array_start();
@@ -90,11 +86,18 @@ fn render_module(module: &HirModule) -> CanonicalModule {
     json.comma();
     json.key("imports");
     json.array_start();
-    for (index, import) in module.imports.iter().enumerate() {
+    let mut imports = module
+        .imports
+        .iter()
+        .map(|import| import.symbol.as_string())
+        .collect::<Vec<_>>();
+    imports.sort();
+    imports.dedup();
+    for (index, import) in imports.iter().enumerate() {
         if index != 0 {
             json.comma();
         }
-        json.string(&import.symbol.as_string());
+        json.string(import);
     }
     json.array_end();
     json.comma();
@@ -542,16 +545,29 @@ fn render_doc(json: &mut Json, doc: Option<&HirDoc>) {
         None => json.null(),
     }
 }
-fn render_span(json: &mut Json, span: &Span) {
+fn render_span(json: &mut Json<'_>, span: &Span) {
+    let (start_line, start_column) = json.location(span.start);
+    let (end_line, end_column) = json.location(span.end);
     json.object_start();
-    json.key("end");
+    json.key("end_byte");
     json.number_usize(span.end);
     json.comma();
-    json.key("start");
+    json.key("end_column");
+    json.number_usize(end_column);
+    json.comma();
+    json.key("end_line");
+    json.number_usize(end_line);
+    json.comma();
+    json.key("start_byte");
     json.number_usize(span.start);
+    json.comma();
+    json.key("start_column");
+    json.number_usize(start_column);
+    json.comma();
+    json.key("start_line");
+    json.number_usize(start_line);
     json.object_end();
 }
-
 fn render_contract(json: &mut Json, contract: &HirContract) {
     json.object_start();
     json.key("clauses");
@@ -566,7 +582,9 @@ fn render_contract(json: &mut Json, contract: &HirContract) {
     json.comma();
     json.key("effects");
     json.array_start();
-    for (i, effect) in contract.effects.iter().enumerate() {
+    let mut effects = contract.effects.iter().collect::<Vec<_>>();
+    effects.sort_by(|left, right| left.key.cmp(&right.key));
+    for (i, effect) in effects.into_iter().enumerate() {
         if i != 0 {
             json.comma();
         }
@@ -880,14 +898,11 @@ fn render_value(json: &mut Json, value: &HirValue) {
             json.string("bytes");
             json.comma();
             json.key("value");
-            json.array_start();
-            for (i, byte) in value.iter().enumerate() {
-                if i != 0 {
-                    json.comma();
-                }
-                json.number_u8(*byte);
+            let mut hex = String::with_capacity(value.len() * 2);
+            for byte in value {
+                write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
             }
-            json.array_end();
+            json.string(&hex);
         }
         HirValue::Unit => {
             json.key("kind");
@@ -1027,6 +1042,7 @@ fn primitive_name(value: PrimitiveType) -> &'static str {
         PrimitiveType::F64 => "f64",
         PrimitiveType::Str => "str",
         PrimitiveType::Bytes => "bytes",
+        PrimitiveType::Path => "path",
         PrimitiveType::Unit => "unit",
         PrimitiveType::JsonValue => "json",
         PrimitiveType::Never => "never",
@@ -1072,12 +1088,31 @@ fn source_string(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-struct Json {
+struct Json<'a> {
     bytes: Vec<u8>,
+    source: &'a [u8],
 }
-impl Json {
-    fn new() -> Self {
-        Self { bytes: Vec::new() }
+impl<'a> Json<'a> {
+    fn new(source: &'a [u8]) -> Self {
+        Self {
+            bytes: Vec::new(),
+            source,
+        }
+    }
+    fn location(&self, offset: usize) -> (usize, usize) {
+        let offset = offset.min(self.source.len());
+        let before = &self.source[..offset];
+        let line_start = before
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |index| index + 1);
+        let line = before.iter().filter(|byte| **byte == b'\n').count() + 1;
+        let column = std::str::from_utf8(&self.source[line_start..offset])
+            .expect("Cott source is UTF-8")
+            .chars()
+            .count()
+            + 1;
+        (line, column)
     }
     fn object_start(&mut self) {
         self.bytes.push(b'{');
@@ -1113,9 +1148,6 @@ impl Json {
         self.number(&value.to_string());
     }
     fn number_u32(&mut self, value: u32) {
-        self.number(&value.to_string());
-    }
-    fn number_u8(&mut self, value: u8) {
         self.number(&value.to_string());
     }
     fn boolean(&mut self, value: bool) {

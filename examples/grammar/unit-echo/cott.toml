@@ -10,3 +10,6 @@ stubs = "generated/stubs"
 interpreter = ".venv/bin/python"
 type_checker = ".venv/bin/basedpyright"
 runtime_validation = "boundary"
+
+[target.python.implementations]
+"curriculum.unit_echo.run" = "_cott_impl.curriculum.unit_echo.run:run"

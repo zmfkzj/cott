@@ -23,7 +23,7 @@ pub struct GenerationSnapshot {
     pub tools: Value,
     pub ir: Value,
     pub contract_surface: Value,
-    pub public_python_symbols: Vec<String>,
+    pub public_python_symbols: Value,
     pub implementations: Value,
     pub dependencies: Value,
     pub managed_files: BTreeMap<String, String>,
@@ -83,6 +83,7 @@ impl GenerationSnapshot {
 
 impl GenerationRecord {
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        self.validate_identities()?;
         let value = serde_json::to_value(self).map_err(|error| error.to_string())?;
         validate(&value)?;
         canonical_json(&value)
@@ -91,7 +92,33 @@ impl GenerationRecord {
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         let value: Value = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
         validate(&value)?;
-        serde_json::from_value(value).map_err(|error| error.to_string())
+        let record: Self = serde_json::from_value(value).map_err(|error| error.to_string())?;
+        record.validate_identities()?;
+        Ok(record)
+    }
+
+    fn validate_identities(&self) -> Result<(), String> {
+        validate_snapshot_identity(&self.current)?;
+        if let Some(snapshot) = &self.last_verified {
+            if !snapshot.verified {
+                return Err("last_verified snapshot is not verified".to_owned());
+            }
+            validate_snapshot_identity(snapshot)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_snapshot_identity(snapshot: &GenerationSnapshot) -> Result<(), String> {
+    let mut expected = snapshot.clone();
+    expected.compute_generation_id()?;
+    if expected.generation_id == snapshot.generation_id {
+        Ok(())
+    } else {
+        Err(format!(
+            "generation identity mismatch: expected {}, got {}",
+            expected.generation_id, snapshot.generation_id
+        ))
     }
 }
 

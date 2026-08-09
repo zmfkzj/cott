@@ -1,5 +1,5 @@
-from cott_runtime import Nothing
+from cott_runtime import Nothing, Option
 
 
-def run() -> Nothing:
+def run() -> Option[str]:
     return Nothing()

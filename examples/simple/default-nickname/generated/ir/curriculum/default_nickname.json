@@ -1,1 +1,0 @@
-{"declarations":[{"doc":null,"kind":"function","name":"curriculum.default_nickname.run","parameters":[],"return_type":{"item":{"kind":"primitive","name":"str"},"kind":"option"},"span":{"end":60,"start":36}}],"imports":[],"module":"curriculum.default_nickname","schema_version":1,"source":"curriculum/default_nickname.cott"}

@@ -35,7 +35,7 @@ const EXAMPLES: &[(&str, &str, &str)] = &[
     (
         "grammar/priority-selection",
         "curriculum.priority_selection",
-        "High()\n",
+        "Priority_High()\n",
     ),
     (
         "grammar/optional-label",
@@ -45,7 +45,7 @@ const EXAMPLES: &[(&str, &str, &str)] = &[
     (
         "grammar/result-division-guard",
         "curriculum.result_division_guard",
-        "Err(error=ZeroDivisor())\n",
+        "Err(error=DivideError_ZeroDivisor())\n",
     ),
     ("grammar/unit-echo", "curriculum.unit_echo", "UNIT\n"),
     (
@@ -87,7 +87,7 @@ const EXAMPLES: &[(&str, &str, &str)] = &[
     (
         "simple/parity-classification",
         "curriculum.parity_classification",
-        "Odd()\n",
+        "Parity_Odd()\n",
     ),
     (
         "simple/checked-subtract",
@@ -112,7 +112,7 @@ const EXAMPLES: &[(&str, &str, &str)] = &[
     (
         "complex/order-state-transition",
         "curriculum.order_state_transition",
-        "Ok(value=Paid(receipt='r1'))\n",
+        "Ok(value=OrderState_Paid(receipt='r1'))\n",
     ),
     (
         "complex/profile-summary",
@@ -122,7 +122,7 @@ const EXAMPLES: &[(&str, &str, &str)] = &[
     (
         "complex/transfer-decision",
         "curriculum.transfer_decision",
-        "Ok(value=Accepted())\n",
+        "Ok(value=TransferDecision_Accepted())\n",
     ),
     (
         "complex/address-validation",
@@ -132,7 +132,7 @@ const EXAMPLES: &[(&str, &str, &str)] = &[
     (
         "complex/contact-preference",
         "curriculum.contact_preference",
-        "Email()\n",
+        "ContactPreference_Email()\n",
     ),
     (
         "complex/subscription-activation",
@@ -142,12 +142,12 @@ const EXAMPLES: &[(&str, &str, &str)] = &[
     (
         "complex/invoice-decision",
         "curriculum.invoice_decision",
-        "Rejected(reason='missing tax id')\n",
+        "InvoiceDecision_Rejected(reason='missing tax id')\n",
     ),
     (
         "complex/access-grant",
         "curriculum.access_grant",
-        "Ok(value=Granted())\n",
+        "Ok(value=AccessGrant_Granted())\n",
     ),
 ];
 
@@ -184,7 +184,43 @@ fn copied_project(example: &str) -> TempDir {
         .join("examples")
         .join(example);
     copy_tree(&source, &temp.path);
+    install_fake_python_tools(&temp.path);
     temp
+}
+
+fn install_fake_python_tools(root: &Path) {
+    let bin = root.join(".venv/bin");
+    fs::create_dir_all(&bin).expect("fake Python tool directory");
+    let python = bin.join("python");
+    fs::write(
+        &python,
+        r#"#!/bin/sh
+if [ "$1" = "-c" ]; then
+  case "$2" in
+    *"sysconfig; print(json.dumps"*)
+      printf '%s\n' '{"cache_tag":"cpython-314","implementation":"cpython","machine":"x86_64","os":"linux","platform":"linux-x86_64","version":"3.14.6"}'
+      exit 0
+      ;;
+  esac
+fi
+exec /usr/bin/python3 "$@"
+"#,
+    )
+    .expect("fake Python interpreter");
+    let checker = bin.join("basedpyright");
+    fs::write(
+        &checker,
+        "#!/bin/sh\n[ \"$1\" = \"--version\" ] && echo 'basedpyright 1.39.9'\nexit 0\n",
+    )
+    .expect("fake BasedPyright");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for executable in [python, checker] {
+            fs::set_permissions(executable, fs::Permissions::from_mode(0o755))
+                .expect("make fake Python tool executable");
+        }
+    }
 }
 
 fn copy_tree(source: &Path, destination: &Path) {
@@ -216,6 +252,32 @@ fn cott(root: &Path, arguments: &[&str]) -> Output {
         .arg(root)
         .output()
         .expect("cott should run")
+}
+
+fn retarget_generation_to_host_python(root: &Path) -> Vec<u8> {
+    let generation = root.join("generated/generation.json");
+    let original = fs::read(&generation).expect("generation record");
+    let script = r#"import hashlib,json,pathlib,platform,sys,sysconfig
+p=pathlib.Path("generated/generation.json")
+r=json.loads(p.read_bytes())
+e=pathlib.Path(sys.executable).resolve()
+r["current"]["tools"]["python"]={"cache_tag":sys.implementation.cache_tag,"content_hash":"sha256:"+hashlib.sha256(e.read_bytes()).hexdigest(),"executable":str(e),"implementation":sys.implementation.name,"machine":platform.machine(),"os":sys.platform,"platform":sysconfig.get_platform(),"version":platform.python_version()}
+i=dict(r["current"])
+for k in ("generation_id","verified","verification","agent_runs"): i.pop(k,None)
+r["current"]["generation_id"]="sha256:"+hashlib.sha256(json.dumps(i,ensure_ascii=False,separators=(",",":"),sort_keys=True).encode()+b"\n").hexdigest()
+p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True)+"\n")
+"#;
+    let output = Command::new("python3")
+        .args(["-c", script])
+        .current_dir(root)
+        .output()
+        .expect("host Python should retarget test provenance");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    original
 }
 
 #[test]
@@ -258,6 +320,7 @@ fn every_documented_example_runs_when_python3_is_available() {
             "{example} failed to emit: {}",
             String::from_utf8_lossy(&emitted.stderr)
         );
+        let generation = retarget_generation_to_host_python(&project.path);
         let output = Command::new("python3")
             .args([
                 "-c",
@@ -266,6 +329,8 @@ fn every_documented_example_runs_when_python3_is_available() {
             .current_dir(project.path.join("generated/python"))
             .output()
             .expect("generated example should run");
+        fs::write(project.path.join("generated/generation.json"), generation)
+            .expect("restore verified generation record");
         assert!(
             output.status.success(),
             "{example} failed to run: {}",

@@ -7,7 +7,7 @@ use serde::Deserialize;
 pub struct ProjectConfig {
     pub project: ProjectMetadata,
     pub python: PythonTarget,
-    pub effects: BTreeMap<String, EffectConfig>,
+    pub effects: BTreeMap<String, bool>,
     pub generator: GeneratorConfig,
 }
 
@@ -25,7 +25,7 @@ struct RawManifest {
     project: ProjectMetadata,
     target: Target,
     #[serde(default)]
-    effects: BTreeMap<String, EffectConfig>,
+    effects: BTreeMap<String, bool>,
     #[serde(default)]
     generator: GeneratorConfig,
 }
@@ -57,13 +57,6 @@ pub enum RuntimeValidation {
     Off,
     Boundary,
     TestOnly,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct EffectConfig {
-    #[serde(default)]
-    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -127,26 +120,84 @@ impl ProjectConfig {
                 ManifestError::new(path, format!("target.python.lockfile {message}"))
             })?;
         }
+        if let Some(rules) = &self.generator.rules {
+            normalized_relative_path(rules).map_err(|message| {
+                ManifestError::new(path, format!("generator.rules {message}"))
+            })?;
+        }
         if self.generator.timeout_seconds == 0 || self.generator.timeout_seconds > 3600 {
             return Err(ManifestError::new(
                 path,
                 "generator.timeout_seconds must be 1..=3600",
             ));
         }
-        let paths = [
-            &self.project.source,
-            &self.python.source,
-            &self.python.generated,
-            &self.python.stubs,
+        let generated = Path::new(&self.python.generated);
+        let Some(artifact_root) = generated
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        else {
+            return Err(ManifestError::new(
+                path,
+                "target.python.generated must be `<artifact-root>/python`",
+            ));
+        };
+        if generated.file_name().and_then(|name| name.to_str()) != Some("python")
+            || Path::new(&self.python.stubs) != artifact_root.join("stubs")
+        {
+            return Err(ManifestError::new(
+                path,
+                "target.python.generated and stubs must be `<artifact-root>/python` and `<artifact-root>/stubs`",
+            ));
+        }
+        let roots = [
+            Path::new(&self.project.source),
+            Path::new(&self.python.source),
+            artifact_root,
+            Path::new("tests/generated"),
+            Path::new(".cott"),
         ];
-        for (index, left) in paths.iter().enumerate() {
-            for right in paths.iter().skip(index + 1) {
-                if overlaps(left, right) {
+        for (index, left) in roots.iter().enumerate() {
+            for right in roots.iter().skip(index + 1) {
+                if path_overlaps(left, right) {
                     return Err(ManifestError::new(
                         path,
-                        format!("managed path overlap: {left} and {right}"),
+                        format!(
+                            "managed path overlap: {} and {}",
+                            left.display(),
+                            right.display()
+                        ),
                     ));
                 }
+            }
+        }
+        const PRELUDE_EFFECTS: [&str; 8] = [
+            "file.read",
+            "file.write",
+            "network",
+            "database.read",
+            "database.write",
+            "clock",
+            "random",
+            "process.exit",
+        ];
+        for (name, enabled) in &self.effects {
+            if !enabled || !valid_qname(name) || PRELUDE_EFFECTS.contains(&name.as_str()) {
+                return Err(ManifestError::new(
+                    path,
+                    format!("effect `{name}` must be a custom qname with literal value true"),
+                ));
+            }
+        }
+        for (symbol, target) in &self.python.implementations {
+            let valid_target = target
+                .split_once(':')
+                .is_some_and(|(module, name)| valid_qname(module) && valid_identifier(name))
+                && target.matches(':').count() == 1;
+            if !valid_qname(symbol) || !valid_target {
+                return Err(ManifestError::new(
+                    path,
+                    format!("invalid implementation binding `{symbol}` = `{target}`"),
+                ));
             }
         }
         Ok(())
@@ -168,10 +219,20 @@ pub fn normalized_relative_path(value: &str) -> Result<PathBuf, &'static str> {
     Ok(path.to_path_buf())
 }
 
-fn overlaps(left: &str, right: &str) -> bool {
-    let left = Path::new(left);
-    let right = Path::new(right);
+fn path_overlaps(left: &Path, right: &Path) -> bool {
     left == right || left.starts_with(right) || right.starts_with(left)
+}
+
+fn valid_qname(value: &str) -> bool {
+    value.split('.').all(valid_identifier)
+}
+
+fn valid_identifier(value: &str) -> bool {
+    let mut chars = value.bytes();
+    chars
+        .next()
+        .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+        && chars.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

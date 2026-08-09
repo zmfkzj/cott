@@ -1626,6 +1626,13 @@ cott는 17.1의 입력을 하나의 구현 지시로 구성하여 선택된 인�
 
 compiler release마다 adapter별 exact supported CLI version과 exact argv template를 고정한다. v0.1은 Codex CLI `0.147.0`, OMP `17.2.12`만 허용한다. executable은 `PATH`에서 한 번 resolve하고 version probe부터 아래와 같은 containment에서 실행한다. version output이 정확히 일치하지 않거나 해석 불가능하면 본 실행 전에 실패한다.
 
+v0.1의 exact main-process argv template는 다음과 같다. 각 항목은 shell 재해석 없이 별도 argv다. `<workspace>`·`<scratch>/omp.yaml`·`<seconds>`와 `<prompt>`만 run별 값으로 치환한다.
+
+* Codex: `codex exec --strict-config --ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox workspace-write --color never --cd <workspace> -`; prompt bytes는 stdin으로 전달한다.
+* OMP: `omp -p --cwd <workspace> --no-session --no-rules --no-skills --no-extensions --no-lsp --no-pty --no-title --tools read,grep,glob,edit,write --approval-mode yolo --max-time <seconds>s --config <scratch>/omp.yaml <prompt>`; prompt는 마지막 단일 argv다.
+
+공통 environment name은 `HOME`, `PATH`, `PYTHONDONTWRITEBYTECODE`, `TMPDIR`이며 host에 존재할 때만 `SSL_CERT_FILE`, `SSL_CERT_DIR`, `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`를 추가한다. Codex는 존재하는 `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `CODEX_HOME`만, OMP는 존재하는 `PI_CODING_AGENT_DIR`만 추가한다. 그 밖의 host environment는 전달하지 않는다.
+
 * shell을 사용하지 않고 executable과 각 인자를 분리하여 실행한다.
 * 실행 전에 executable의 canonical regular-file path, version과 content hash를 기록한다.
 * 작업 디렉터리는 17.4의 격리된 staging workspace다.

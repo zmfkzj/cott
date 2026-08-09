@@ -1,5 +1,5 @@
-from curriculum.parity_classification_types import Odd
+from curriculum.parity_classification_types import Parity, Parity_Odd
 
 
-def run() -> Odd:
-    return Odd()
+def run() -> Parity:
+    return Parity_Odd()

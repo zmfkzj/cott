@@ -26,7 +26,14 @@ fn strategy_has_fixed_deterministic_limits() {
 }
 
 fn span() -> Value {
-    json!({"start": 0, "end": 1})
+    json!({
+        "end_byte": 1,
+        "end_column": 2,
+        "end_line": 1,
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+    })
 }
 
 fn literal_expression() -> Value {

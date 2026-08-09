@@ -37,6 +37,7 @@ fn output_over_limit_is_failure() {
             file_size_bytes: 16 * 1024 * 1024,
             wall_time: Duration::from_secs(2),
             stream_limit_bytes: 8,
+            writable_bytes: 1024 * 1024,
         },
     });
     match result {
