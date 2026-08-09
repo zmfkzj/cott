@@ -4,12 +4,12 @@ use std::path::{Path, PathBuf};
 
 use crate::hash::sha256_hex;
 use crate::project::Project;
-use crate::semantic::{SemanticDeclaration, SemanticProject};
+use crate::python::artifact_plan::PythonArtifactPlan;
 
 /// A validated implementation binding and its byte identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedBinding {
-    pub module: crate::semantic::ModuleId,
+    pub module: String,
     pub function: String,
     pub source: PathBuf,
     pub generated_relative: PathBuf,
@@ -34,17 +34,17 @@ pub struct ImplementationResolution {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnresolvedBinding {
-    pub module: crate::semantic::ModuleId,
+    pub module: String,
     pub function: String,
     pub source: PathBuf,
 }
 
-/// Resolves every semantic function to the corresponding Python implementation.
+/// Resolves every canonical planned function to the corresponding Python implementation.
 pub fn resolve_bindings(
     project: &Project,
-    semantic: &SemanticProject,
+    plan: &PythonArtifactPlan,
 ) -> Result<Vec<ResolvedBinding>, Vec<BindingDiagnostic>> {
-    let resolution = resolve_implementations(project, semantic)?;
+    let resolution = resolve_implementations(project, plan)?;
     if resolution.unresolved.is_empty() {
         Ok(resolution.resolved)
     } else {
@@ -61,53 +61,49 @@ pub fn resolve_bindings(
 
 pub fn resolve_implementations(
     project: &Project,
-    semantic: &SemanticProject,
+    plan: &PythonArtifactPlan,
 ) -> Result<ImplementationResolution, Vec<BindingDiagnostic>> {
     let mut resolved = Vec::new();
     let mut unresolved = Vec::new();
     let mut diagnostics = Vec::new();
-    let local_imports = local_import_roots(project, semantic);
-    let generated_type_modules = generated_type_modules(semantic);
-    for module in &semantic.modules {
-        for declaration in &module.declarations {
-            let SemanticDeclaration::Function(function) = declaration else {
-                continue;
-            };
-            let mut source = project.implementation_dir.clone();
-            let mut generated = PathBuf::from("_cott_impl");
-            for segment in &module.id.segments {
-                source.push(segment);
-                generated.push(segment);
-            }
-            source.push(format!("{}.py", function.id.name));
-            generated.push(format!("{}.py", function.id.name));
-            if !source.exists() {
-                unresolved.push(UnresolvedBinding {
-                    module: module.id.clone(),
-                    function: function.id.name.clone(),
-                    source,
-                });
-                continue;
-            }
-            match read_binding(
-                &source,
-                &function.id.name,
-                &local_imports,
-                &generated_type_modules,
-            ) {
-                Ok(bytes) => resolved.push(ResolvedBinding {
-                    module: module.id.clone(),
-                    function: function.id.name.clone(),
-                    source,
-                    generated_relative: generated,
-                    sha256: sha256_hex(&bytes),
-                    bytes,
-                }),
-                Err(message) => diagnostics.push(BindingDiagnostic {
-                    path: source,
-                    message,
-                }),
-            }
+    let local_imports = local_import_roots(project, plan);
+    let generated_type_modules = generated_type_modules(plan);
+    for callable in plan.callable_functions() {
+        let function = callable
+            .function
+            .rsplit('.')
+            .next()
+            .unwrap_or(&callable.function)
+            .to_owned();
+        let mut source = project.implementation_dir.clone();
+        let mut generated = PathBuf::from("_cott_impl");
+        for segment in callable.module.split('.') {
+            source.push(segment);
+            generated.push(segment);
+        }
+        source.push(format!("{function}.py"));
+        generated.push(format!("{function}.py"));
+        if !source.exists() {
+            unresolved.push(UnresolvedBinding {
+                module: callable.module,
+                function,
+                source,
+            });
+            continue;
+        }
+        match read_binding(&source, &function, &local_imports, &generated_type_modules) {
+            Ok(bytes) => resolved.push(ResolvedBinding {
+                module: callable.module,
+                function,
+                source,
+                generated_relative: generated,
+                sha256: sha256_hex(&bytes),
+                bytes,
+            }),
+            Err(message) => diagnostics.push(BindingDiagnostic {
+                path: source,
+                message,
+            }),
         }
     }
     if diagnostics.is_empty() {
@@ -122,35 +118,35 @@ pub fn resolve_implementations(
 
 pub fn validate_candidate(
     project: &Project,
-    semantic: &SemanticProject,
+    plan: &PythonArtifactPlan,
     function: &str,
     bytes: &[u8],
 ) -> Result<(), String> {
     let source =
         std::str::from_utf8(bytes).map_err(|_| "binding source is not valid UTF-8".to_owned())?;
+    let function = function.rsplit('.').next().unwrap_or(function);
     validate_source(
         source,
         function,
-        &local_import_roots(project, semantic),
-        &generated_type_modules(semantic),
+        &local_import_roots(project, plan),
+        &generated_type_modules(plan),
     )
 }
 
-fn local_import_roots(project: &Project, semantic: &SemanticProject) -> HashSet<String> {
+fn local_import_roots(project: &Project, plan: &PythonArtifactPlan) -> HashSet<String> {
     let mut roots = HashSet::from([String::from("_cott_impl"), project.name.clone()]);
-    for module in &semantic.modules {
-        if let Some(root) = module.id.segments.first() {
-            roots.insert(root.clone());
+    for module in plan.modules() {
+        if let Some(root) = module.module.split('.').next() {
+            roots.insert(root.to_owned());
         }
     }
     roots
 }
 
-fn generated_type_modules(semantic: &SemanticProject) -> HashSet<String> {
-    semantic
-        .modules
+fn generated_type_modules(plan: &PythonArtifactPlan) -> HashSet<String> {
+    plan.modules()
         .iter()
-        .map(|module| format!("{}_types", module.id.as_string()))
+        .map(|module| format!("{}_types", module.module))
         .collect()
 }
 

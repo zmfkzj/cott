@@ -40,7 +40,7 @@ const EXAMPLES: &[(&str, &str, &str)] = &[
     (
         "grammar/optional-label",
         "curriculum.optional_label",
-        "Some(value=\"enabled\")\n",
+        "Some(value='enabled')\n",
     ),
     (
         "grammar/result-division-guard",
@@ -51,7 +51,7 @@ const EXAMPLES: &[(&str, &str, &str)] = &[
     (
         "grammar/constant-greeting",
         "curriculum.constant_greeting",
-        "\"hello\"\n",
+        "hello\n",
     ),
     (
         "simple/normalize-flag",
@@ -259,7 +259,10 @@ fn every_documented_example_runs_when_python3_is_available() {
             String::from_utf8_lossy(&emitted.stderr)
         );
         let output = Command::new("python3")
-            .args(["-m", module])
+            .args([
+                "-c",
+                &format!("import importlib; print(importlib.import_module('{module}').run())"),
+            ])
             .current_dir(project.path.join("generated/python"))
             .output()
             .expect("generated example should run");

@@ -124,7 +124,6 @@ fn emits_complete_tree_and_verifies_exact_bytes() {
         "generated/python/app_types.py",
         "generated/python/cott_runtime/__init__.py",
         "generated/python/_cott_impl/app/run.py",
-        "generated/python/__main__.py",
         "generated/stubs/app.pyi",
         "generated/ir/app.json",
         "generated/generation.json",
@@ -134,6 +133,7 @@ fn emits_complete_tree_and_verifies_exact_bytes() {
             "missing generated artifact {path}"
         );
     }
+    assert!(!project.path.join("generated/python/__main__.py").exists());
 
     let verified = cott(&project.path, &["verify"]);
     assert!(
@@ -329,7 +329,7 @@ fn init_scaffolds_a_normative_project_with_pinned_uv() {
     assert!(manifest.contains("runtime_validation = \"boundary\""));
 }
 #[test]
-fn runs_generated_entry_module_when_python3_is_available() {
+fn runs_generated_facade_when_python3_is_available() {
     let usable_python = Command::new("python3")
         .args([
             "-c",
@@ -349,10 +349,10 @@ fn runs_generated_entry_module_when_python3_is_available() {
         String::from_utf8_lossy(&emitted.stderr)
     );
     let output = Command::new("python3")
-        .args(["-m", "app"])
+        .args(["-c", "from app import run; print(run())"])
         .current_dir(project.path.join("generated/python"))
         .output()
-        .expect("generated entry module should run");
+        .expect("generated facade should run");
 
     assert!(
         output.status.success(),

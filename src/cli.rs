@@ -17,6 +17,7 @@ use crate::project::{
     Project, ProjectPaths, discover_sources, discover_sources_from_paths, load_config_with_paths,
     load_project,
 };
+use crate::python::artifact_plan::PythonArtifactPlan;
 use crate::python_emit::{Emission, EmitDiagnostic, emit};
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession};
 
@@ -481,11 +482,14 @@ fn plan(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
             return Err(1);
         }
     };
-    let Some(semantic) = hir.legacy() else {
-        eprintln!("error: legacy binding bridge unavailable");
-        return Err(1);
+    let plan = match PythonArtifactPlan::from_ir(&ir) {
+        Ok(plan) => plan,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return Err(1);
+        }
     };
-    let bindings = match resolve_bindings(&project, semantic) {
+    let bindings = match resolve_bindings(&project, &plan) {
         Ok(bindings) => bindings,
         Err(diagnostics) => {
             for diagnostic in diagnostics {
@@ -498,7 +502,7 @@ fn plan(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
             return Err(4);
         }
     };
-    let emission = match emit(&project, semantic, &ir, &bindings) {
+    let emission = match emit(&project.name, &plan, &ir, &bindings) {
         Ok(emission) => emission,
         Err(diagnostics) => {
             print_emit_diagnostics(&project, &diagnostics);
@@ -636,11 +640,14 @@ fn generate_project(
             return 1;
         }
     };
-    let Some(semantic) = hir.legacy() else {
-        eprintln!("error: legacy binding bridge unavailable");
-        return 1;
+    let plan = match PythonArtifactPlan::from_ir(&ir) {
+        Ok(plan) => plan,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 1;
+        }
     };
-    let resolution = match resolve_implementations(&project, semantic) {
+    let resolution = match resolve_implementations(&project, &plan) {
         Ok(resolution) => resolution,
         Err(diagnostics) => {
             print_binding_diagnostics(&project, diagnostics);
@@ -652,25 +659,21 @@ fn generate_project(
         .unresolved
         .into_iter()
         .filter(|binding| {
-            requested.is_none_or(|symbol| {
-                symbol == format!("{}.{}", binding.module.as_string(), binding.function)
-            })
+            requested
+                .is_none_or(|symbol| symbol == format!("{}.{}", binding.module, binding.function))
         })
         .collect::<Vec<_>>();
     if let Some(symbol) = requested {
-        let known = hir.modules.iter().any(|module| {
-            module.declarations.iter().any(|declaration| {
-                matches!(declaration, crate::hir::HirDeclaration::Function(function)
-                    if function.id.as_string() == symbol)
-            })
-        });
+        let known = plan
+            .callable_functions()
+            .iter()
+            .any(|function| function.function == symbol);
         if !known {
             eprintln!("error: unknown function `{symbol}`");
             return 2;
         }
     }
-    unresolved
-        .sort_by_key(|binding| format!("{}.{}", binding.module.as_string(), binding.function));
+    unresolved.sort_by_key(|binding| format!("{}.{}", binding.module, binding.function));
     let mut bindings = resolution.resolved;
     let mut durable_sources = Vec::new();
     if !unresolved.is_empty() {
@@ -694,21 +697,21 @@ fn generate_project(
                 }
             };
             let target = temporary.workspace.join("implementation.py");
-            let module_ir =
-                match ir.modules.iter().find(|module| {
-                    module.module.as_string() == unresolved_binding.module.as_string()
-                }) {
-                    Some(module) => module.bytes.clone(),
-                    None => {
-                        let _ = fs::remove_dir_all(&temporary.root);
-                        eprintln!("error: selected function has no canonical IR module");
-                        return 1;
-                    }
-                };
+            let module_ir = match ir
+                .modules
+                .iter()
+                .find(|module| module.module.as_string() == unresolved_binding.module)
+            {
+                Some(module) => module.bytes.clone(),
+                None => {
+                    let _ = fs::remove_dir_all(&temporary.root);
+                    eprintln!("error: selected function has no canonical IR module");
+                    return 1;
+                }
+            };
             let fully_qualified = format!(
                 "{}.{}",
-                unresolved_binding.module.as_string(),
-                unresolved_binding.function
+                unresolved_binding.module, unresolved_binding.function
             );
             let result = render_prompt(
                 &fully_qualified,
@@ -734,7 +737,7 @@ fn generate_project(
             .and_then(|candidate| {
                 validate_candidate(
                     &project,
-                    &semantic,
+                    &plan,
                     &unresolved_binding.function,
                     &candidate.implementation,
                 )
@@ -749,7 +752,7 @@ fn generate_project(
                 }
             };
             let mut generated_relative = PathBuf::from("_cott_impl");
-            for segment in &unresolved_binding.module.segments {
+            for segment in unresolved_binding.module.split('.') {
                 generated_relative.push(segment);
             }
             generated_relative.push(format!("{}.py", unresolved_binding.function));
@@ -769,7 +772,7 @@ fn generate_project(
             });
         }
     }
-    let emission = match emit(&project, &semantic, &ir, &bindings) {
+    let emission = match emit(&project.name, &plan, &ir, &bindings) {
         Ok(emission) => emission,
         Err(diagnostics) => {
             print_emit_diagnostics(&project, &diagnostics);
