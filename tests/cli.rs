@@ -31,15 +31,6 @@ impl Drop for TempDir {
     }
 }
 
-const MANIFEST: &str = r#"[project]
-name = "demo"
-source = "src"
-
-[target.python]
-generated = "generated/python"
-entry = "app.run"
-"#;
-
 const NORMATIVE_MANIFEST: &str = r#"[project]
 name = "demo"
 version = "0.1.0"
@@ -59,7 +50,8 @@ const BINDING: &str = "def run() -> int:\n    return 7\n";
 
 fn project() -> TempDir {
     let temp = TempDir::new();
-    fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest should be writable");
+    fs::write(temp.path.join("cott.toml"), NORMATIVE_MANIFEST)
+        .expect("manifest should be writable");
     fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
     fs::write(temp.path.join("src/app.cott"), SOURCE).expect("source should be writable");
     fs::create_dir_all(temp.path.join("python/_cott_impl/app"))

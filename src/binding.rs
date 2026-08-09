@@ -3,7 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::hash::sha256_hex;
-use crate::project::Project;
+use crate::manifest::ProjectConfig;
+use crate::project::ProjectPaths;
 use crate::python::artifact_plan::PythonArtifactPlan;
 
 /// A validated implementation binding and its byte identity.
@@ -41,10 +42,11 @@ pub struct UnresolvedBinding {
 
 /// Resolves every canonical planned function to the corresponding Python implementation.
 pub fn resolve_bindings(
-    project: &Project,
+    config: &ProjectConfig,
+    paths: &ProjectPaths,
     plan: &PythonArtifactPlan,
 ) -> Result<Vec<ResolvedBinding>, Vec<BindingDiagnostic>> {
-    let resolution = resolve_implementations(project, plan)?;
+    let resolution = resolve_implementations(config, paths, plan)?;
     if resolution.unresolved.is_empty() {
         Ok(resolution.resolved)
     } else {
@@ -60,13 +62,14 @@ pub fn resolve_bindings(
 }
 
 pub fn resolve_implementations(
-    project: &Project,
+    config: &ProjectConfig,
+    paths: &ProjectPaths,
     plan: &PythonArtifactPlan,
 ) -> Result<ImplementationResolution, Vec<BindingDiagnostic>> {
     let mut resolved = Vec::new();
     let mut unresolved = Vec::new();
     let mut diagnostics = Vec::new();
-    let local_imports = local_import_roots(project, plan);
+    let local_imports = local_import_roots(config, plan);
     let generated_type_modules = generated_type_modules(plan);
     for callable in plan.callable_functions() {
         let function = callable
@@ -75,9 +78,16 @@ pub fn resolve_implementations(
             .next()
             .unwrap_or(&callable.function)
             .to_owned();
-        let mut source = project.implementation_dir.clone();
+        let mut source = paths.python_source_dir.join("_cott_impl");
         let mut generated = PathBuf::from("_cott_impl");
-        for segment in callable.module.split('.') {
+        let Some(segments) = module_segments(&callable.module) else {
+            diagnostics.push(BindingDiagnostic {
+                path: paths.python_source_dir.clone(),
+                message: format!("invalid canonical module path `{}`", callable.module),
+            });
+            continue;
+        };
+        for segment in segments {
             source.push(segment);
             generated.push(segment);
         }
@@ -117,7 +127,8 @@ pub fn resolve_implementations(
 }
 
 pub fn validate_candidate(
-    project: &Project,
+    config: &ProjectConfig,
+    _paths: &ProjectPaths,
     plan: &PythonArtifactPlan,
     function: &str,
     bytes: &[u8],
@@ -128,19 +139,32 @@ pub fn validate_candidate(
     validate_source(
         source,
         function,
-        &local_import_roots(project, plan),
+        &local_import_roots(config, plan),
         &generated_type_modules(plan),
     )
 }
 
-fn local_import_roots(project: &Project, plan: &PythonArtifactPlan) -> HashSet<String> {
-    let mut roots = HashSet::from([String::from("_cott_impl"), project.name.clone()]);
+fn local_import_roots(config: &ProjectConfig, plan: &PythonArtifactPlan) -> HashSet<String> {
+    let mut roots = HashSet::from([String::from("_cott_impl"), config.project.name.clone()]);
     for module in plan.modules() {
         if let Some(root) = module.module.split('.').next() {
             roots.insert(root.to_owned());
         }
     }
     roots
+}
+
+fn module_segments(module: &str) -> Option<Vec<&str>> {
+    let segments = module.split('.').collect::<Vec<_>>();
+    (!segments.is_empty()
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && *segment != "."
+                && *segment != ".."
+                && !segment.contains('/')
+                && !segment.contains('\\')
+        }))
+    .then_some(segments)
 }
 
 fn generated_type_modules(plan: &PythonArtifactPlan) -> HashSet<String> {

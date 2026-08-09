@@ -3,12 +3,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use cott::project::{discover_sources_from_paths, load_config_with_paths};
 #[cfg(unix)]
 use std::ffi::CString;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
-
-use cott::project::{discover_sources, load_config_with_paths, load_project};
 
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -40,16 +39,6 @@ impl Drop for TempDir {
     }
 }
 
-const VALID_MANIFEST: &str = r#"
-[project]
-name = "demo"
-source = "src"
-
-[target.python]
-generated = "generated/python"
-entry = "module.function"
-"#;
-
 const NORMATIVE_MANIFEST: &str = r#"
 [project]
 name = "demo"
@@ -72,25 +61,9 @@ fn manifest(root: &Path, contents: &str) {
 
 fn valid_project() -> TempDir {
     let temp = TempDir::new();
-    manifest(&temp.path, VALID_MANIFEST);
+    manifest(&temp.path, NORMATIVE_MANIFEST);
     fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
     temp
-}
-
-#[test]
-fn loads_the_closed_manifest_and_derives_project_paths() {
-    let temp = valid_project();
-    let project = load_project(&temp.path).expect("valid manifest should load");
-
-    assert_eq!(project.root, temp.path);
-    assert_eq!(project.name, "demo");
-    assert_eq!(project.source_dir, temp.path.join("src"));
-    assert_eq!(project.generated_dir, temp.path.join("generated/python"));
-    assert_eq!(
-        project.implementation_dir,
-        temp.path.join("python/_cott_impl")
-    );
-    assert_eq!(project.entry, "module.function");
 }
 
 #[test]
@@ -113,7 +86,7 @@ fn derives_normative_project_paths_from_config() {
 }
 
 #[test]
-fn normative_loader_rejects_legacy_entry() {
+fn normative_loader_rejects_entry_as_an_unknown_field() {
     let temp = TempDir::new();
     manifest(
         &temp.path,
@@ -124,7 +97,10 @@ fn normative_loader_rejects_legacy_entry() {
     );
     fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
 
-    assert!(load_config_with_paths(&temp.path).is_err());
+    let error = load_config_with_paths(&temp.path)
+        .expect_err("legacy entry must be rejected by the closed manifest");
+    let message = error.to_string();
+    assert!(message.contains("unknown field") && message.contains("entry"));
 }
 
 #[cfg(unix)]
@@ -156,8 +132,8 @@ fn discovers_nested_sources_in_lexical_order() {
     fs::write(temp.path.join("src/ignored.txt"), "not a source\n")
         .expect("non-source should be writable");
 
-    let project = load_project(&temp.path).expect("valid manifest should load");
-    let sources = discover_sources(&project).expect("source files should be discovered");
+    let (_, paths) = load_config_with_paths(&temp.path).expect("normative manifest should load");
+    let sources = discover_sources_from_paths(&paths).expect("source files should be discovered");
 
     assert_eq!(
         sources
@@ -178,19 +154,10 @@ fn rejects_unknown_manifest_fields() {
     let temp = valid_project();
     manifest(
         &temp.path,
-        r#"
-[project]
-name = "demo"
-source = "src"
-unknown = true
-
-[target.python]
-generated = "generated/python"
-entry = "module.function"
-"#,
+        &NORMATIVE_MANIFEST.replace("name = \"demo\"", "name = \"demo\"\nunknown = true"),
     );
 
-    assert!(load_project(&temp.path).is_err());
+    assert!(load_config_with_paths(&temp.path).is_err());
 }
 
 #[test]
@@ -198,17 +165,10 @@ fn rejects_missing_manifest_fields() {
     let temp = valid_project();
     manifest(
         &temp.path,
-        r#"
-[project]
-name = "demo"
-
-[target.python]
-generated = "generated/python"
-entry = "module.function"
-"#,
+        &NORMATIVE_MANIFEST.replace("\nsource = \"src\"", ""),
     );
 
-    assert!(load_project(&temp.path).is_err());
+    assert!(load_config_with_paths(&temp.path).is_err());
 }
 
 #[test]
@@ -216,52 +176,49 @@ fn rejects_duplicate_manifest_fields() {
     let temp = valid_project();
     manifest(
         &temp.path,
-        r#"
-[project]
-name = "demo"
-name = "again"
-source = "src"
-
-[target.python]
-generated = "generated/python"
-entry = "module.function"
-"#,
+        &NORMATIVE_MANIFEST.replace("name = \"demo\"", "name = \"demo\"\nname = \"again\""),
     );
 
-    assert!(load_project(&temp.path).is_err());
+    assert!(load_config_with_paths(&temp.path).is_err());
 }
 
 #[test]
 fn rejects_unsafe_and_overlapping_paths() {
     for source in ["", ".", "..", "../src", "/absolute/src"] {
         let temp = valid_project();
-        let contents = format!(
-            "[project]\nname = \"demo\"\nsource = \"{source}\"\n\n[target.python]\ngenerated = \"generated/python\"\nentry = \"module.function\"\n"
-        );
+        let contents =
+            NORMATIVE_MANIFEST.replace("source = \"src\"", &format!("source = \"{source}\""));
         manifest(&temp.path, &contents);
-        assert!(load_project(&temp.path).is_err(), "source path: {source:?}");
+        assert!(
+            load_config_with_paths(&temp.path).is_err(),
+            "source path: {source:?}"
+        );
     }
 
     for generated in ["", ".", "..", "../generated", "/absolute/generated"] {
         let temp = valid_project();
-        let contents = format!(
-            "[project]\nname = \"demo\"\nsource = \"src\"\n\n[target.python]\ngenerated = \"{generated}\"\nentry = \"module.function\"\n"
+        let contents = NORMATIVE_MANIFEST.replace(
+            "generated = \"generated/python\"",
+            &format!("generated = \"{generated}\""),
         );
         manifest(&temp.path, &contents);
         assert!(
-            load_project(&temp.path).is_err(),
+            load_config_with_paths(&temp.path).is_err(),
             "generated path: {generated:?}"
         );
     }
 
     for (source, generated) in [("build", "build/python"), ("build", "build")] {
         let temp = valid_project();
-        let contents = format!(
-            "[project]\nname = \"demo\"\nsource = \"{source}\"\n\n[target.python]\ngenerated = \"{generated}\"\nentry = \"module.function\"\n"
-        );
+        let contents = NORMATIVE_MANIFEST
+            .replace("source = \"src\"", &format!("source = \"{source}\""))
+            .replace(
+                "generated = \"generated/python\"",
+                &format!("generated = \"{generated}\""),
+            );
         manifest(&temp.path, &contents);
         assert!(
-            load_project(&temp.path).is_err(),
+            load_config_with_paths(&temp.path).is_err(),
             "source/generated paths: {source:?}/{generated:?}"
         );
     }
@@ -270,9 +227,9 @@ fn rejects_unsafe_and_overlapping_paths() {
 #[test]
 fn rejects_an_empty_source_directory() {
     let temp = valid_project();
-    let project = load_project(&temp.path).expect("valid manifest should load");
+    let (_, paths) = load_config_with_paths(&temp.path).expect("normative manifest should load");
 
-    assert!(discover_sources(&project).is_err());
+    assert!(discover_sources_from_paths(&paths).is_err());
 }
 
 #[cfg(unix)]
@@ -296,7 +253,6 @@ fn symlink_file(_link: &Path, _target: &Path) -> io::Result<()> {
 #[test]
 fn rejects_a_source_symlink_when_the_platform_supports_symlinks() {
     let temp = valid_project();
-    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
     fs::write(temp.path.join("real.cott"), "module real\n").expect("source should be writable");
     if symlink_file(
         &temp.path.join("src/link.cott"),
@@ -307,6 +263,6 @@ fn rejects_a_source_symlink_when_the_platform_supports_symlinks() {
         return;
     }
 
-    let project = load_project(&temp.path).expect("valid manifest should load");
-    assert!(discover_sources(&project).is_err());
+    let (_, paths) = load_config_with_paths(&temp.path).expect("normative manifest should load");
+    assert!(discover_sources_from_paths(&paths).is_err());
 }

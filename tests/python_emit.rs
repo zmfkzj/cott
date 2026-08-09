@@ -7,7 +7,8 @@ use cott::binding::{ResolvedBinding, resolve_bindings};
 use cott::compiler::parse_project;
 use cott::hir::lower;
 use cott::ir::render;
-use cott::project::{discover_sources, load_project};
+use cott::manifest::ProjectConfig;
+use cott::project::{ProjectPaths, discover_sources_from_paths, load_config_with_paths};
 use cott::python::artifact_plan::PythonArtifactPlan;
 use cott::python_emit::emit;
 
@@ -39,11 +40,16 @@ impl Drop for TempDir {
 
 const MANIFEST: &str = r#"[project]
 name = "demo"
+version = "0.1.0"
 source = "src"
 
 [target.python]
+source = "python"
 generated = "generated/python"
-entry = "app.run"
+stubs = "generated/stubs"
+interpreter = ".venv/bin/python"
+type_checker = ".venv/bin/basedpyright"
+runtime_validation = "boundary"
 "#;
 const SOURCE: &str = r#"module app
 
@@ -56,7 +62,8 @@ const BINDING: &[u8] = b"def run() -> int:\n    return 7\n";
 
 struct Inputs {
     _temp: TempDir,
-    project: cott::project::Project,
+    config: ProjectConfig,
+    paths: ProjectPaths,
     plan: PythonArtifactPlan,
     ir: cott::ir::CanonicalIr,
     bindings: Vec<ResolvedBinding>,
@@ -70,16 +77,17 @@ fn inputs() -> Inputs {
     fs::write(temp.path.join("src/app.cott"), SOURCE).expect("source should be writable");
     fs::write(temp.path.join("python/_cott_impl/app/run.py"), BINDING)
         .expect("binding should be writable");
-    let project = load_project(&temp.path).expect("manifest should load");
-    let sources = discover_sources(&project).expect("source should be discovered");
+    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let sources = discover_sources_from_paths(&paths).expect("source should be discovered");
     let parsed = parse_project(sources).expect("source should parse");
-    let hir = lower(&project.source_dir, parsed).expect("source should lower");
+    let hir = lower(&paths.source_dir, parsed).expect("source should lower");
     let ir = render(&hir).expect("source should render");
     let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
-    let bindings = resolve_bindings(&project, &plan).expect("bindings should resolve");
+    let bindings = resolve_bindings(&config, &paths, &plan).expect("bindings should resolve");
     Inputs {
         _temp: temp,
-        project,
+        config,
+        paths,
         plan,
         ir,
         bindings,
@@ -96,14 +104,14 @@ fn bytes<'a>(files: &'a std::collections::BTreeMap<PathBuf, Vec<u8>>, path: &str
 fn emits_complete_deterministic_python_artifact_tree() {
     let inputs = inputs();
     let first = emit(
-        &inputs.project.name,
+        &inputs.config.project.name,
         &inputs.plan,
         &inputs.ir,
         &inputs.bindings,
     )
     .expect("valid Profile-P inputs should emit");
     let second = emit(
-        &inputs.project.name,
+        &inputs.config.project.name,
         &inputs.plan,
         &inputs.ir,
         &inputs.bindings,
@@ -143,7 +151,7 @@ fn emits_complete_deterministic_python_artifact_tree() {
 #[test]
 fn unresolved_functions_are_omitted_from_facade_exports() {
     let inputs = inputs();
-    let emitted = emit(&inputs.project.name, &inputs.plan, &inputs.ir, &[])
+    let emitted = emit(&inputs.config.project.name, &inputs.plan, &inputs.ir, &[])
         .expect("unresolved bindings do not block emission");
     let facade = String::from_utf8_lossy(bytes(&emitted.files, "python/app.py"));
     assert!(facade.contains("from cott_runtime import _cott_load"));
@@ -158,8 +166,13 @@ fn rejects_mismatched_resolved_binding_with_diagnostic() {
     let inputs = inputs();
     let mut bindings = inputs.bindings.clone();
     bindings[0].function = String::from("not_run");
-    let diagnostics = emit(&inputs.project.name, &inputs.plan, &inputs.ir, &bindings)
-        .expect_err("mismatched binding must be rejected");
+    let diagnostics = emit(
+        &inputs.config.project.name,
+        &inputs.plan,
+        &inputs.ir,
+        &bindings,
+    )
+    .expect_err("mismatched binding must be rejected");
     assert!(
         diagnostics
             .iter()

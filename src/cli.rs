@@ -13,10 +13,7 @@ use crate::binding::{
 use crate::compiler::{ProjectDiagnostic, parse_project};
 use crate::hir::lower;
 use crate::ir::render;
-use crate::project::{
-    Project, ProjectPaths, discover_sources, discover_sources_from_paths, load_config_with_paths,
-    load_project,
-};
+use crate::project::{ProjectPaths, discover_sources_from_paths, load_config_with_paths};
 use crate::python::artifact_plan::PythonArtifactPlan;
 use crate::python_emit::{Emission, EmitDiagnostic, emit};
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession};
@@ -57,7 +54,7 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
         }) => match plan(project) {
             Ok(plan) => match publish(&plan) {
                 Ok(()) => {
-                    println!("{}", generated_path(&plan.project));
+                    println!("{}", generated_path(&plan.paths));
                     0
                 }
                 Err(message) => {
@@ -82,7 +79,7 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
         Ok(Command::Verify { project, .. }) => match plan(project) {
             Ok(plan) => match verify(&plan) {
                 Ok(()) => {
-                    println!("verified {}", generated_path(&plan.project));
+                    println!("verified {}", generated_path(&plan.paths));
                     0
                 }
                 Err(messages) => {
@@ -427,10 +424,9 @@ fn parse_diff(values: &[OsString]) -> Result<Command, &'static str> {
 }
 
 struct PlannedProject {
-    project: Project,
+    paths: ProjectPaths,
     emission: Emission,
 }
-
 fn plan(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
     let root = match project_argument {
         Some(path) => path,
@@ -442,19 +438,18 @@ fn plan(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
             }
         },
     };
-    let project = match load_project(&root) {
-        Ok(project) => project,
-
+    let (config, paths) = match load_config_with_paths(&root) {
+        Ok(config) => config,
         Err(error) => {
             eprintln!("error: {error}");
             return Err(2);
         }
     };
-    if let Err(message) = artifact_root(&project) {
+    if let Err(message) = artifact_root_for_paths(&paths) {
         eprintln!("error: {message}");
         return Err(2);
     }
-    let sources = match discover_sources(&project) {
+    let sources = match discover_sources_from_paths(&paths) {
         Ok(sources) => sources,
         Err(error) => {
             eprintln!("error: {error}");
@@ -468,7 +463,7 @@ fn plan(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
             return Err(3);
         }
     };
-    let hir = match lower(&project.source_dir, parsed) {
+    let hir = match lower(&paths.source_dir, parsed) {
         Ok(hir) => hir,
         Err(diagnostics) => {
             print_project_diagnostics(&diagnostics);
@@ -489,27 +484,27 @@ fn plan(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
             return Err(1);
         }
     };
-    let bindings = match resolve_bindings(&project, &plan) {
+    let bindings = match resolve_bindings(&config, &paths, &plan) {
         Ok(bindings) => bindings,
         Err(diagnostics) => {
             for diagnostic in diagnostics {
                 eprintln!(
                     "error: {}: {}",
-                    display_path(&project.root, &diagnostic.path),
+                    display_path(&paths.root, &diagnostic.path),
                     diagnostic.message
                 );
             }
             return Err(4);
         }
     };
-    let emission = match emit(&project.name, &plan, &ir, &bindings) {
+    let emission = match emit(&config.project.name, &plan, &ir, &bindings) {
         Ok(emission) => emission,
         Err(diagnostics) => {
-            print_emit_diagnostics(&project, &diagnostics);
+            print_emit_diagnostics(&paths, &diagnostics);
             return Err(4);
         }
     };
-    Ok(PlannedProject { project, emission })
+    Ok(PlannedProject { paths, emission })
 }
 fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
     let Ok(root) = project_root(project_argument) else {
@@ -605,14 +600,14 @@ fn generate_project(
     let Ok(root) = project_root(project_argument) else {
         return 2;
     };
-    let project = match load_project(&root) {
-        Ok(project) => project,
+    let (config, paths) = match load_config_with_paths(&root) {
+        Ok(config) => config,
         Err(error) => {
             eprintln!("error: {error}");
             return 2;
         }
     };
-    let sources = match discover_sources(&project) {
+    let sources = match discover_sources_from_paths(&paths) {
         Ok(sources) => sources,
         Err(error) => {
             eprintln!("error: {error}");
@@ -626,7 +621,7 @@ fn generate_project(
             return 3;
         }
     };
-    let hir = match lower(&project.source_dir, parsed) {
+    let hir = match lower(&paths.source_dir, parsed) {
         Ok(hir) => hir,
         Err(diagnostics) => {
             print_project_diagnostics(&diagnostics);
@@ -647,10 +642,10 @@ fn generate_project(
             return 1;
         }
     };
-    let resolution = match resolve_implementations(&project, &plan) {
+    let resolution = match resolve_implementations(&config, &paths, &plan) {
         Ok(resolution) => resolution,
         Err(diagnostics) => {
-            print_binding_diagnostics(&project, diagnostics);
+            print_binding_diagnostics(&paths, diagnostics);
             return 4;
         }
     };
@@ -736,7 +731,8 @@ fn generate_project(
             })
             .and_then(|candidate| {
                 validate_candidate(
-                    &project,
+                    &config,
+                    &paths,
                     &plan,
                     &unresolved_binding.function,
                     &candidate.implementation,
@@ -751,14 +747,14 @@ fn generate_project(
                     return 5;
                 }
             };
-            let mut generated_relative = PathBuf::from("_cott_impl");
-            for segment in unresolved_binding.module.split('.') {
-                generated_relative.push(segment);
-            }
-            generated_relative.push(format!("{}.py", unresolved_binding.function));
+            let generated_relative = unresolved_binding
+                .source
+                .strip_prefix(&paths.python_source_dir)
+                .expect("implementation path is rooted at Python source")
+                .to_path_buf();
             let relative_source = unresolved_binding
                 .source
-                .strip_prefix(&project.root)
+                .strip_prefix(&paths.root)
                 .expect("implementation path is project-relative")
                 .to_path_buf();
             durable_sources.push((relative_source, bytes.clone()));
@@ -772,14 +768,14 @@ fn generate_project(
             });
         }
     }
-    let emission = match emit(&project.name, &plan, &ir, &bindings) {
+    let emission = match emit(&config.project.name, &plan, &ir, &bindings) {
         Ok(emission) => emission,
         Err(diagnostics) => {
-            print_emit_diagnostics(&project, &diagnostics);
+            print_emit_diagnostics(&paths, &diagnostics);
             return 4;
         }
     };
-    match publish_with_sources(&PlannedProject { project, emission }, &durable_sources) {
+    match publish_with_sources(&PlannedProject { paths, emission }, &durable_sources) {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("error: {error}");
@@ -823,8 +819,8 @@ fn diff_project(
     };
     let baseline = match baseline {
         Some(path) if path.is_absolute() => path,
-        Some(path) => plan.project.root.join(path),
-        None => match artifact_root(&plan.project) {
+        Some(path) => plan.paths.root.join(path),
+        None => match artifact_root_for_paths(&plan.paths) {
             Ok(root) => root.join("generation.json"),
             Err(error) => {
                 eprintln!("error: {error}");
@@ -868,13 +864,13 @@ fn resolve_executable(name: &str) -> Result<PathBuf, String> {
 }
 
 fn print_binding_diagnostics(
-    project: &Project,
+    paths: &ProjectPaths,
     diagnostics: Vec<crate::binding::BindingDiagnostic>,
 ) {
     for diagnostic in diagnostics {
         eprintln!(
             "error: {}: {}",
-            display_path(&project.root, &diagnostic.path),
+            display_path(&paths.root, &diagnostic.path),
             diagnostic.message
         );
     }
@@ -1126,11 +1122,11 @@ fn print_project_diagnostics(diagnostics: &[ProjectDiagnostic]) {
     }
 }
 
-fn print_emit_diagnostics(project: &Project, diagnostics: &[EmitDiagnostic]) {
+fn print_emit_diagnostics(paths: &ProjectPaths, diagnostics: &[EmitDiagnostic]) {
     for diagnostic in diagnostics {
         eprintln!(
             "error: {}: {}",
-            display_path(&project.root, &diagnostic.path),
+            display_path(&paths.root, &diagnostic.path),
             diagnostic.message
         );
     }
@@ -1141,10 +1137,6 @@ fn display_path(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .display()
         .to_string()
-}
-
-fn artifact_root(project: &Project) -> Result<PathBuf, String> {
-    artifact_root_at(&project.root, &project.generated_dir)
 }
 
 fn artifact_root_for_paths(project: &ProjectPaths) -> Result<PathBuf, String> {
@@ -1164,8 +1156,8 @@ fn artifact_root_at(root_dir: &Path, generated_dir: &Path) -> Result<PathBuf, St
     Ok(root.to_path_buf())
 }
 
-fn generated_path(project: &Project) -> String {
-    display_path(&project.root, &project.generated_dir)
+fn generated_path(paths: &ProjectPaths) -> String {
+    display_path(&paths.root, &paths.generated_dir)
 }
 
 fn publish(plan: &PlannedProject) -> Result<(), String> {
@@ -1176,7 +1168,7 @@ fn publish_with_sources(
     plan: &PlannedProject,
     sources: &[(PathBuf, Vec<u8>)],
 ) -> Result<(), String> {
-    let artifact_root = artifact_root(&plan.project)?;
+    let artifact_root = artifact_root_for_paths(&plan.paths)?;
     if let Ok(metadata) = fs::symlink_metadata(&artifact_root) {
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(format!(
@@ -1185,9 +1177,9 @@ fn publish_with_sources(
             ));
         }
     }
-    let session = ProjectSession::acquire(&plan.project.root).map_err(|error| error.to_string())?;
+    let session = ProjectSession::acquire(&plan.paths.root).map_err(|error| error.to_string())?;
     let relative_root = artifact_root
-        .strip_prefix(&plan.project.root)
+        .strip_prefix(&plan.paths.root)
         .map_err(|_| "artifact root escaped project root".to_owned())?;
     let actual = match fs::symlink_metadata(&artifact_root) {
         Ok(_) => collect_tree(&artifact_root)?,
@@ -1219,7 +1211,7 @@ fn publish_with_sources(
         }
         paths.insert(path.clone(), ());
     }
-    let snapshot = InputSnapshot::capture(&plan.project.root, paths.into_keys())
+    let snapshot = InputSnapshot::capture(&plan.paths.root, paths.into_keys())
         .map_err(|error| error.to_string())?;
     let mut changes = ChangeSet::default();
     for (path, bytes) in &plan.emission.files {
@@ -1231,7 +1223,7 @@ fn publish_with_sources(
         }
     }
     for (path, bytes) in sources {
-        let current = fs::read(plan.project.root.join(path)).ok();
+        let current = fs::read(plan.paths.root.join(path)).ok();
         if current.as_deref() != Some(bytes) {
             changes.operations.push(Operation::Write {
                 path: path.clone(),
@@ -1265,7 +1257,7 @@ fn safe_relative_path(path: &Path) -> bool {
             .all(|component| matches!(component, Component::Normal(_)))
 }
 fn verify(plan: &PlannedProject) -> Result<(), Vec<String>> {
-    let artifact_root = artifact_root(&plan.project).map_err(|message| vec![message])?;
+    let artifact_root = artifact_root_for_paths(&plan.paths).map_err(|message| vec![message])?;
     let actual = collect_tree(&artifact_root).map_err(|message| vec![message])?;
     let mut mismatches = Vec::new();
     for (path, expected) in &plan.emission.files {
@@ -1322,9 +1314,9 @@ fn collect_tree_at(
             directory.display()
         )
     })?;
-    entries.sort_by_key(|entry| entry.file_name());
-    for entry in entries {
-        let path = entry.path();
+    entries.sort_by_key(|dir_entry| dir_entry.file_name());
+    for dir_entry in entries {
+        let path = dir_entry.path();
         let metadata = fs::symlink_metadata(&path)
             .map_err(|error| format!("failed to inspect artifact {}: {error}", path.display()))?;
         if metadata.file_type().is_symlink() {
@@ -1334,7 +1326,7 @@ fn collect_tree_at(
             ));
         }
         if metadata.is_dir() {
-            if entry.file_name() == "__pycache__" {
+            if dir_entry.file_name() == "__pycache__" {
                 validate_python_bytecode_cache(&path)?;
             } else {
                 collect_tree_at(root, &path, files)?;
@@ -1364,14 +1356,14 @@ fn validate_python_bytecode_cache(directory: &Path) -> Result<(), String> {
             directory.display()
         )
     })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| {
+    for cache_entry in entries {
+        let cache_entry = cache_entry.map_err(|error| {
             format!(
                 "failed to read Python bytecode cache {}: {error}",
                 directory.display()
             )
         })?;
-        let path = entry.path();
+        let path = cache_entry.path();
         let metadata = fs::symlink_metadata(&path)
             .map_err(|error| format!("failed to inspect artifact {}: {error}", path.display()))?;
         if metadata.file_type().is_symlink()

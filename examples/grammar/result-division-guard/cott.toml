@@ -1,7 +1,12 @@
 [project]
 name = "result-division-guard"
+version = "0.1.0"
 source = "src"
 
 [target.python]
+source = "python"
 generated = "generated/python"
-entry = "curriculum.result_division_guard.run"
+stubs = "generated/stubs"
+interpreter = ".venv/bin/python"
+type_checker = ".venv/bin/basedpyright"
+runtime_validation = "boundary"

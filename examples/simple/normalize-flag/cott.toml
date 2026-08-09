@@ -1,7 +1,12 @@
 [project]
 name = "normalize-flag"
+version = "0.1.0"
 source = "src"
 
 [target.python]
+source = "python"
 generated = "generated/python"
-entry = "curriculum.normalize_flag.run"
+stubs = "generated/stubs"
+interpreter = ".venv/bin/python"
+type_checker = ".venv/bin/basedpyright"
+runtime_validation = "boundary"
