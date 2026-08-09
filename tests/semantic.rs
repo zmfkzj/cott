@@ -2,16 +2,11 @@ use std::path::{Path, PathBuf};
 
 use cott::compiler::{ProjectDiagnostic, SourceFile, parse_project};
 use cott::hir::{HirClauseKind, HirDeclaration, HirType, PrimitiveType, lower};
-use cott::semantic::analyze_project;
 
 fn source(path: &str, text: &str) -> SourceFile {
     SourceFile::new(PathBuf::from(path), text)
 }
 
-fn analyze(sources: impl IntoIterator<Item = SourceFile>) -> cott::semantic::SemanticProject {
-    let parsed = parse_project(sources).expect("semantic fixture must parse");
-    analyze_project(Path::new("src"), parsed).expect("semantic fixture must validate")
-}
 fn lower_project(sources: impl IntoIterator<Item = SourceFile>) -> cott::hir::HirProject {
     let parsed = parse_project(sources).expect("owned fixture must parse");
     lower(Path::new("src"), parsed).expect("owned fixture must lower")
@@ -21,10 +16,9 @@ fn lower_diagnostics(sources: impl IntoIterator<Item = SourceFile>) -> Vec<Proje
     let parsed = parse_project(sources).expect("owned fixture must parse");
     lower(Path::new("src"), parsed).expect_err("malformed owned fixture must be rejected")
 }
-
 fn diagnostics(sources: impl IntoIterator<Item = SourceFile>) -> Vec<ProjectDiagnostic> {
-    let parsed = parse_project(sources).expect("semantic fixture must parse");
-    analyze_project(Path::new("src"), parsed).expect_err("semantic fixture must be rejected")
+    let parsed = parse_project(sources).expect("HIR fixture must parse");
+    lower(Path::new("src"), parsed).expect_err("HIR fixture must be rejected")
 }
 
 fn paths(errors: &[ProjectDiagnostic]) -> Vec<&Path> {
@@ -33,7 +27,7 @@ fn paths(errors: &[ProjectDiagnostic]) -> Vec<&Path> {
 
 #[test]
 fn resolves_valid_multi_module_types_imports_and_declarations() {
-    let project = analyze([
+    let project = lower_project([
         source(
             "src/types/core.cott",
             r#"module types.core

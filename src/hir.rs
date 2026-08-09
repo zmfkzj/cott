@@ -1,11 +1,9 @@
 //! Owned, target-independent high-level intermediate representation.
 //!
-//! This module deliberately contains no semantic aliases.  The temporary
-//! [`lower`] bridge retains the old analyzer for callers that have not moved
-//! to the HIR pipeline yet; every type below is owned by this module.
+//! Lowering and structural validation live entirely in this module.
 
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::path::{Component, Path, PathBuf};
 
 use crate::ast::{
     self, BinaryOp, ClauseKind, CompareOp, ConstExpr, Declaration, Expr, ExprKind, FunctionBody,
@@ -363,22 +361,11 @@ pub struct HirModule {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HirProject {
     pub modules: Vec<HirModule>,
-    /// Temporary bridge for old emitters. New passes must consume `modules`.
-    legacy: Option<crate::semantic::SemanticProject>,
 }
 
 impl HirProject {
     pub fn new(modules: Vec<HirModule>) -> Self {
-        Self {
-            modules,
-            legacy: None,
-        }
-    }
-
-    /// Explicitly exposes the retained legacy snapshot to the few consumers
-    /// that still use the pre-HIR emitter and binding APIs.
-    pub(crate) fn legacy(&self) -> Option<&crate::semantic::SemanticProject> {
-        self.legacy.as_ref()
+        Self { modules }
     }
 }
 
@@ -1137,6 +1124,15 @@ impl<'a> OwnedLower<'a> {
         generics: &HashSet<String>,
         order: usize,
     ) -> HirField {
+        if let Some(default) = &field.default {
+            if !owned_default_compatible(&field.ty, default) {
+                self.error(
+                    module,
+                    default.span().clone(),
+                    "default value does not match its declared type",
+                );
+            }
+        }
         HirField {
             span: field.span.clone(),
             name: field.name.clone(),
@@ -1477,18 +1473,27 @@ impl<'a> OwnedLower<'a> {
                     source_order: order,
                 })
             }
-            Declaration::Const(value) => HirDeclaration::Const(HirConst {
-                id: id_for(&value.name),
-                span: value.span.clone(),
-                doc: value.doc.as_ref().map(|v| HirDoc {
-                    span: v.span.clone(),
-                    text: v.text.clone(),
-                }),
-                ty: self.ty(module, &value.ty, &HashSet::new()),
-                value: self.value(module, &value.value).unwrap_or(HirValue::Unit),
-                public: true,
-                source_order: order,
-            }),
+            Declaration::Const(value) => {
+                if !owned_default_compatible(&value.ty, &value.value) {
+                    self.error(
+                        module,
+                        value.value.span().clone(),
+                        "constant literal does not match its declared type",
+                    );
+                }
+                HirDeclaration::Const(HirConst {
+                    id: id_for(&value.name),
+                    span: value.span.clone(),
+                    doc: value.doc.as_ref().map(|v| HirDoc {
+                        span: v.span.clone(),
+                        text: v.text.clone(),
+                    }),
+                    ty: self.ty(module, &value.ty, &HashSet::new()),
+                    value: self.value(module, &value.value).unwrap_or(HirValue::Unit),
+                    public: true,
+                    source_order: order,
+                })
+            }
             Declaration::Function(value) => {
                 let names = value
                     .generics
@@ -1564,21 +1569,606 @@ impl<'a> OwnedLower<'a> {
     }
 }
 
-/// Lower parsed syntax directly into the owned HIR. Legacy semantic data is
+fn owned_module_path(root: &Path, source: &Path) -> Result<Vec<String>, String> {
+    let relative = if source.is_absolute() {
+        source
+            .strip_prefix(root)
+            .map_err(|_| "source path is outside the supplied source root".to_owned())?
+    } else if !root.as_os_str().is_empty() {
+        source.strip_prefix(root).unwrap_or(source)
+    } else {
+        source
+    };
+    let mut components = relative.components();
+    let mut segments = Vec::new();
+    while let Some(component) = components.next() {
+        match component {
+            Component::Normal(value) => {
+                let value = value
+                    .to_str()
+                    .ok_or_else(|| "source path is not valid UTF-8".to_owned())?;
+                if components.clone().next().is_none() {
+                    let stem = value
+                        .strip_suffix(".cott")
+                        .ok_or_else(|| "source path must end in `.cott`".to_owned())?;
+                    if stem.is_empty() {
+                        return Err("source path has an empty module name".to_owned());
+                    }
+                    segments.push(stem.to_owned());
+                } else {
+                    segments.push(value.to_owned());
+                }
+            }
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err("source path must be inside the supplied source root".to_owned());
+            }
+        }
+    }
+    if segments.is_empty() {
+        Err("source path has no module components".to_owned())
+    } else {
+        Ok(segments)
+    }
+}
+fn owned_default_compatible(ty: &ast::Type, value: &ConstExpr) -> bool {
+    let kind = match value {
+        ConstExpr::Expression(expression) => match &expression.kind {
+            ExprKind::Literal(literal) => &literal.kind,
+            ExprKind::Unit => return ty.path.segments == ["Unit"],
+            ExprKind::Parenthesized(inner) => {
+                return owned_default_compatible(ty, &ConstExpr::Expression((**inner).clone()));
+            }
+            _ => return false,
+        },
+        ConstExpr::Constructor { .. } => return true,
+    };
+    match kind {
+        LiteralKind::Bool(_) => ty.path.segments == ["Bool"],
+        LiteralKind::Integer(value) => {
+            let Some(number) = value.parse::<i128>().ok() else {
+                return false;
+            };
+            match ty.path.segments.last().map(String::as_str) {
+                Some("I8") => (-128..=127).contains(&number),
+                Some("I16") => (-32_768..=32_767).contains(&number),
+                Some("I32") => (-2_147_483_648..=2_147_483_647).contains(&number),
+                Some("I64") => {
+                    (-9_223_372_036_854_775_808..=9_223_372_036_854_775_807).contains(&number)
+                }
+                Some("U8") => (0..=255).contains(&number),
+                Some("U16") => (0..=65_535).contains(&number),
+                Some("U32") => (0..=4_294_967_295).contains(&number),
+                Some("U64") => (0..=18_446_744_073_709_551_615).contains(&number),
+                _ => false,
+            }
+        }
+        LiteralKind::Float(value) => {
+            value.parse::<f64>().ok().is_some_and(f64::is_finite)
+                && matches!(
+                    ty.path.segments.last().map(String::as_str),
+                    Some("F32" | "F64")
+                )
+        }
+        LiteralKind::String(_) => ty.path.segments == ["Str"],
+    }
+}
+
+fn owned_type_paths(value: &ast::Type, out: &mut Vec<ast::QualifiedName>) {
+    out.push(value.path.clone());
+    for argument in &value.arguments {
+        if let TypeArgKind::Type(inner) = &argument.kind {
+            owned_type_paths(inner, out);
+        }
+    }
+}
+
+fn owned_valid_snake(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some('_' | 'a'..='z'))
+        && chars.all(|ch| ch == '_' || ch.is_ascii_lowercase() || ch.is_ascii_digit())
+        && value != "_"
+}
+
+fn owned_valid_type_name(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some('A'..='Z')) && chars.all(|ch| ch.is_ascii_alphanumeric())
+}
+
+fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic>) {
+    for source in &parsed.sources {
+        let mut report = |span: Span, message: String| {
+            errors.push(ProjectDiagnostic {
+                path: source.path.clone(),
+                diagnostic: Diagnostic::new(message, span),
+            });
+        };
+        for declaration in &source.syntax.declarations {
+            let (name, type_decl) = match declaration {
+                Declaration::Alias(value) => (&value.name, true),
+                Declaration::Newtype(value) => (&value.name, true),
+                Declaration::Struct(value) => (&value.name, true),
+                Declaration::Enum(value) => (&value.name, true),
+                Declaration::Trait(value) => (&value.name, false),
+                Declaration::Const(value) => (&value.name, false),
+                Declaration::Function(value) => (&value.name, false),
+            };
+            if (type_decl && !owned_valid_type_name(name))
+                || (!type_decl
+                    && !owned_valid_snake(name)
+                    && !(matches!(declaration, Declaration::Const(_))
+                        && name
+                            .chars()
+                            .next()
+                            .is_some_and(|ch| ch == '_' || ch.is_ascii_uppercase())))
+            {
+                report(
+                    declaration.span().clone(),
+                    format!("invalid name `{name}` for declaration"),
+                );
+            }
+            if owned_primitive(name).is_some() || matches!(name.as_str(), "Option" | "Result") {
+                report(
+                    declaration.span().clone(),
+                    format!("declaration `{name}` collides with a prelude type"),
+                );
+            }
+            let generics = match declaration {
+                Declaration::Struct(value) => Some(&value.generics),
+                Declaration::Enum(value) => Some(&value.generics),
+                Declaration::Trait(value) => Some(&value.generics),
+                Declaration::Function(value) => Some(&value.generics),
+                _ => None,
+            };
+            if let Some(generics) = generics {
+                let mut names = BTreeSet::new();
+                for generic in generics {
+                    if !names.insert(&generic.name) {
+                        report(
+                            generic.span.clone(),
+                            format!("duplicate generic parameter `{}`", generic.name),
+                        );
+                    }
+                }
+            }
+            match declaration {
+                Declaration::Struct(value) => {
+                    let mut names = BTreeSet::new();
+                    for field in &value.fields {
+                        if !owned_valid_snake(&field.name) {
+                            report(
+                                field.span.clone(),
+                                format!("invalid field name `{}`", field.name),
+                            );
+                        }
+                        if !names.insert(&field.name) {
+                            report(
+                                field.span.clone(),
+                                format!("duplicate field `{}`", field.name),
+                            );
+                        }
+                    }
+                }
+                Declaration::Enum(value) => {
+                    let mut variants = BTreeSet::new();
+                    for variant in &value.variants {
+                        if !owned_valid_type_name(&variant.name) {
+                            report(
+                                variant.span.clone(),
+                                format!("invalid enum variant name `{}`", variant.name),
+                            );
+                        }
+                        if !variants.insert(&variant.name) {
+                            report(
+                                variant.span.clone(),
+                                format!("duplicate enum variant `{}`", variant.name),
+                            );
+                        }
+                        let mut parameters = BTreeSet::new();
+                        for parameter in &variant.parameters {
+                            if !owned_valid_snake(&parameter.name) {
+                                report(
+                                    parameter.span.clone(),
+                                    format!("invalid variant parameter name `{}`", parameter.name),
+                                );
+                            }
+                            if !parameters.insert(&parameter.name) {
+                                report(
+                                    parameter.span.clone(),
+                                    format!("duplicate variant parameter `{}`", parameter.name),
+                                );
+                            }
+                        }
+                    }
+                }
+                Declaration::Function(value) => {
+                    let mut parameters = BTreeSet::new();
+                    for parameter in &value.parameters {
+                        if !owned_valid_snake(&parameter.name) {
+                            report(
+                                parameter.span.clone(),
+                                format!("invalid parameter name `{}`", parameter.name),
+                            );
+                        }
+                        if !parameters.insert(&parameter.name) {
+                            report(
+                                parameter.span.clone(),
+                                format!("duplicate parameter `{}`", parameter.name),
+                            );
+                        }
+                    }
+                }
+                Declaration::Trait(value) => {
+                    for method in &value.methods {
+                        let mut parameters = BTreeSet::new();
+                        for parameter in &method.parameters {
+                            if !owned_valid_snake(&parameter.name) {
+                                report(
+                                    parameter.span.clone(),
+                                    format!("invalid parameter name `{}`", parameter.name),
+                                );
+                            }
+                            if !parameters.insert(&parameter.name) {
+                                report(
+                                    parameter.span.clone(),
+                                    format!("duplicate parameter `{}`", parameter.name),
+                                );
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn owned_preflight(
+    source_root: &Path,
+    parsed: &ParsedProject,
+) -> Result<(), Vec<ProjectDiagnostic>> {
+    let mut errors = Vec::new();
+    owned_shape_checks(parsed, &mut errors);
+    let mut modules = Vec::new();
+    for source in &parsed.sources {
+        let module = ModuleId::new(source.syntax.module.path.segments.clone());
+        if module
+            .segments
+            .iter()
+            .any(|segment| !owned_valid_snake(segment))
+        {
+            errors.push(ProjectDiagnostic {
+                path: source.path.clone(),
+                diagnostic: Diagnostic::new(
+                    "module path segments must use snake_case",
+                    source.syntax.module.path.span.clone(),
+                ),
+            });
+        }
+        match owned_module_path(source_root, &source.path) {
+            Ok(expected) if expected == module.segments => {}
+            Ok(expected) => errors.push(ProjectDiagnostic {
+                path: source.path.clone(),
+                diagnostic: Diagnostic::new(
+                    format!(
+                        "module declaration `{}` does not match source path module `{}`",
+                        module.as_string(),
+                        expected.join(".")
+                    ),
+                    source.syntax.module.path.span.clone(),
+                ),
+            }),
+            Err(message) => errors.push(ProjectDiagnostic {
+                path: source.path.clone(),
+                diagnostic: Diagnostic::new(message, source.syntax.module.span.clone()),
+            }),
+        }
+        modules.push(module);
+    }
+    let mut module_by_id = BTreeMap::new();
+    for (index, module) in modules.iter().enumerate() {
+        if let Some(previous) = module_by_id.insert(module.clone(), index) {
+            errors.push(ProjectDiagnostic {
+                path: parsed.sources[index].path.clone(),
+                diagnostic: Diagnostic::new(
+                    format!(
+                        "duplicate module `{}` (already defined by source {})",
+                        module.as_string(),
+                        previous + 1
+                    ),
+                    parsed.sources[index].syntax.module.span.clone(),
+                ),
+            });
+        }
+    }
+    for (index, module) in modules.iter().enumerate() {
+        for (longer_index, longer) in modules.iter().enumerate() {
+            if index == longer_index || module == longer {
+                continue;
+            }
+            if module.segments.len() < longer.segments.len()
+                && longer.segments.starts_with(&module.segments)
+            {
+                errors.push(ProjectDiagnostic {
+                    path: parsed.sources[longer_index].path.clone(),
+                    diagnostic: Diagnostic::new(
+                        format!(
+                            "module `{}` is a strict prefix of `{}`",
+                            module.as_string(),
+                            longer.as_string()
+                        ),
+                        parsed.sources[longer_index].syntax.module.path.span.clone(),
+                    ),
+                });
+            }
+        }
+    }
+    let mut declarations = BTreeMap::<SymbolId, usize>::new();
+    for (module_index, source) in parsed.sources.iter().enumerate() {
+        let Some(module) = modules.get(module_index) else {
+            continue;
+        };
+        let first_declaration = source.syntax.declarations.first().map(Declaration::span);
+        for use_decl in &source.syntax.uses {
+            if first_declaration
+                .map(|span| use_decl.span.start > span.start)
+                .unwrap_or(false)
+            {
+                errors.push(ProjectDiagnostic { path: source.path.clone(), diagnostic: Diagnostic::new("imports must form one contiguous block immediately after the module declaration", use_decl.span.clone()) });
+            }
+        }
+        for declaration in &source.syntax.declarations {
+            let name = match declaration {
+                Declaration::Alias(v) => &v.name,
+                Declaration::Newtype(v) => &v.name,
+                Declaration::Struct(v) => &v.name,
+                Declaration::Enum(v) => &v.name,
+                Declaration::Trait(v) => &v.name,
+                Declaration::Const(v) => &v.name,
+                Declaration::Function(v) => &v.name,
+            };
+            let id = SymbolId::new(module.clone(), name.clone());
+            if declarations.insert(id.clone(), module_index).is_some() {
+                errors.push(ProjectDiagnostic {
+                    path: source.path.clone(),
+                    diagnostic: Diagnostic::new(
+                        format!("duplicate declaration `{}`", id.as_string()),
+                        declaration.span().clone(),
+                    ),
+                });
+            }
+        }
+    }
+    let mut type_dependencies = BTreeMap::<SymbolId, BTreeSet<SymbolId>>::new();
+    for (module_index, source) in parsed.sources.iter().enumerate() {
+        let Some(module) = modules.get(module_index) else {
+            continue;
+        };
+        for declaration in &source.syntax.declarations {
+            let (name, types): (&String, Vec<&ast::Type>) = match declaration {
+                Declaration::Alias(v) => (&v.name, vec![&v.target]),
+                Declaration::Newtype(v) => (&v.name, vec![&v.underlying]),
+                Declaration::Struct(v) => (&v.name, v.fields.iter().map(|f| &f.ty).collect()),
+                Declaration::Enum(v) => (
+                    &v.name,
+                    v.variants
+                        .iter()
+                        .flat_map(|v| v.parameters.iter().map(|p| &p.ty))
+                        .collect(),
+                ),
+                _ => continue,
+            };
+            let current = SymbolId::new(module.clone(), name.clone());
+            let mut paths = Vec::new();
+            for ty in types {
+                owned_type_paths(ty, &mut paths);
+            }
+            for path in paths {
+                let target_name = path.segments.last().cloned().unwrap_or_default();
+                let target = if path.segments.len() == 1 {
+                    SymbolId::new(module.clone(), target_name)
+                } else {
+                    SymbolId::new(
+                        ModuleId::new(path.segments[..path.segments.len() - 1].to_vec()),
+                        target_name,
+                    )
+                };
+                if declarations.contains_key(&target) {
+                    type_dependencies
+                        .entry(current.clone())
+                        .or_default()
+                        .insert(target);
+                }
+            }
+        }
+    }
+    fn visit_type_cycle(
+        symbol: &SymbolId,
+        deps: &BTreeMap<SymbolId, BTreeSet<SymbolId>>,
+        state: &mut HashMap<SymbolId, u8>,
+        declarations: &BTreeMap<SymbolId, usize>,
+        parsed: &ParsedProject,
+        errors: &mut Vec<ProjectDiagnostic>,
+    ) {
+        if state.get(symbol) == Some(&2) {
+            return;
+        }
+        if state.get(symbol) == Some(&1) {
+            if let Some(index) = declarations.get(symbol) {
+                errors.push(ProjectDiagnostic {
+                    path: parsed.sources[*index].path.clone(),
+                    diagnostic: Diagnostic::new(
+                        format!("cyclic type reference involving `{}`", symbol.as_string()),
+                        parsed.sources[*index].syntax.module.span.clone(),
+                    ),
+                });
+            }
+            return;
+        }
+        state.insert(symbol.clone(), 1);
+        if let Some(children) = deps.get(symbol) {
+            for child in children {
+                visit_type_cycle(child, deps, state, declarations, parsed, errors);
+            }
+        }
+        state.insert(symbol.clone(), 2);
+    }
+    let mut type_state = HashMap::new();
+    for symbol in type_dependencies.keys() {
+        visit_type_cycle(
+            symbol,
+            &type_dependencies,
+            &mut type_state,
+            &declarations,
+            parsed,
+            &mut errors,
+        );
+    }
+    let mut imports = vec![BTreeMap::<String, SymbolId>::new(); parsed.sources.len()];
+    let mut dependencies = vec![BTreeSet::new(); parsed.sources.len()];
+    for (module_index, source) in parsed.sources.iter().enumerate() {
+        let Some(current) = modules.get(module_index) else {
+            continue;
+        };
+        for use_decl in &source.syntax.uses {
+            let (target_module, names) = match &use_decl.names {
+                Some(names) => (ModuleId::new(use_decl.path.segments.clone()), names.clone()),
+                None if use_decl.path.segments.len() >= 2 => (
+                    ModuleId::new(
+                        use_decl.path.segments[..use_decl.path.segments.len() - 1].to_vec(),
+                    ),
+                    vec![use_decl.path.segments.last().cloned().unwrap_or_default()],
+                ),
+                None => {
+                    errors.push(ProjectDiagnostic {
+                        path: source.path.clone(),
+                        diagnostic: Diagnostic::new(
+                            "a single import must name a public type declaration",
+                            use_decl.span.clone(),
+                        ),
+                    });
+                    continue;
+                }
+            };
+            let Some(&target_index) = module_by_id.get(&target_module) else {
+                errors.push(ProjectDiagnostic {
+                    path: source.path.clone(),
+                    diagnostic: Diagnostic::new(
+                        format!("unknown imported module `{}`", target_module.as_string()),
+                        use_decl.span.clone(),
+                    ),
+                });
+                continue;
+            };
+            dependencies[module_index].insert(target_index);
+            for name in names {
+                let target = SymbolId::new(target_module.clone(), name.clone());
+                if !declarations.contains_key(&target) {
+                    errors.push(ProjectDiagnostic {
+                        path: source.path.clone(),
+                        diagnostic: Diagnostic::new(
+                            format!("unknown imported declaration `{}`", target.as_string()),
+                            use_decl.span.clone(),
+                        ),
+                    });
+                } else if declarations
+                    .get(&SymbolId::new(current.clone(), name.clone()))
+                    .is_some()
+                {
+                    errors.push(ProjectDiagnostic {
+                        path: source.path.clone(),
+                        diagnostic: Diagnostic::new(
+                            format!("import `{name}` collides with a local declaration"),
+                            use_decl.span.clone(),
+                        ),
+                    });
+                } else if imports[module_index].insert(name.clone(), target).is_some() {
+                    errors.push(ProjectDiagnostic {
+                        path: source.path.clone(),
+                        diagnostic: Diagnostic::new(
+                            format!("duplicate import `{name}`"),
+                            use_decl.span.clone(),
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    fn visit(
+        index: usize,
+        dependencies: &[BTreeSet<usize>],
+        state: &mut [u8],
+        parsed: &ParsedProject,
+        errors: &mut Vec<ProjectDiagnostic>,
+    ) {
+        if state[index] == 2 {
+            return;
+        }
+        if state[index] == 1 {
+            errors.push(ProjectDiagnostic {
+                path: parsed.sources[index].path.clone(),
+                diagnostic: Diagnostic::new(
+                    "cyclic module import/reference dependency",
+                    parsed.sources[index].syntax.module.span.clone(),
+                ),
+            });
+            return;
+        }
+        state[index] = 1;
+        for &dependency in &dependencies[index] {
+            visit(dependency, dependencies, state, parsed, errors);
+        }
+        state[index] = 2;
+    }
+    let mut state = vec![0; parsed.sources.len()];
+    for index in 0..parsed.sources.len() {
+        visit(index, &dependencies, &mut state, parsed, &mut errors);
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        errors.sort_by_key(|error| {
+            (
+                parsed
+                    .sources
+                    .iter()
+                    .position(|source| source.path == error.path)
+                    .unwrap_or(usize::MAX),
+                error.diagnostic.span.start,
+                error.diagnostic.span.end,
+            )
+        });
+        Err(errors)
+    }
+}
+
 /// not used as the source of any HIR field.
 pub fn lower(
     source_root: &Path,
     parsed: ParsedProject,
 ) -> Result<HirProject, Vec<ProjectDiagnostic>> {
-    crate::semantic::validate_parsed_project(source_root, &parsed)?;
+    let mut errors = owned_preflight(source_root, &parsed)
+        .err()
+        .unwrap_or_default();
     let mut lowerer = OwnedLower::new(&parsed);
     let modules = (0..parsed.sources.len())
         .map(|index| lowerer.module(index))
         .collect::<Vec<_>>();
-    if lowerer.errors.is_empty() {
-        let legacy = crate::semantic::analyze_project(source_root, parsed).ok();
-        Ok(HirProject { modules, legacy })
+    errors.extend(lowerer.errors);
+    if errors.is_empty() {
+        Ok(HirProject::new(modules))
     } else {
-        Err(lowerer.errors)
+        errors.sort_by_key(|error| {
+            (
+                parsed
+                    .sources
+                    .iter()
+                    .position(|source| source.path == error.path)
+                    .unwrap_or(usize::MAX),
+                error.diagnostic.span.start,
+                error.diagnostic.span.end,
+            )
+        });
+        Err(errors)
     }
 }

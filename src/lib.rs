@@ -20,5 +20,4 @@ pub mod python;
 pub mod python_emit;
 pub mod python_runtime;
 pub mod sandbox;
-pub mod semantic;
 pub mod transaction;
