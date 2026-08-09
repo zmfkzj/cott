@@ -34,3 +34,30 @@ fn rejects_unknown_manifest_fields() {
     let invalid = VALID.replace("source = \"src\"", "source = \"src\"\nentry = \"app.run\"");
     assert!(ProjectConfig::parse(Path::new("cott.toml"), &invalid).is_err());
 }
+
+#[test]
+fn parses_process_bar_normative_manifest_without_legacy_entry() {
+    let path = Path::new("examples/complex/process-bar/cott.toml");
+    let text = std::fs::read_to_string(path).expect("process-bar manifest should exist");
+    assert!(
+        !text
+            .lines()
+            .any(|line| line.trim_start().starts_with("entry =")),
+        "process-bar manifest must not use the legacy entry key"
+    );
+
+    let manifest = ProjectConfig::parse(path, &text).expect("manifest should parse");
+    assert_eq!(manifest.project.version, "0.1.0");
+    assert_eq!(manifest.python.source, "python");
+    assert_eq!(manifest.python.generated, "generated/python");
+    assert_eq!(manifest.python.stubs, "generated/stubs");
+    assert_eq!(
+        manifest.python.runtime_validation,
+        RuntimeValidation::Boundary
+    );
+    assert!(
+        !Path::new("examples/complex/process-bar/python/_cott_impl/foo/bar/process_bar.py")
+            .exists(),
+        "process-bar fixture must begin without a durable implementation"
+    );
+}

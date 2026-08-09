@@ -31,10 +31,16 @@ pub fn render(project: &SemanticProject) -> CanonicalIr {
     }
 }
 
-/// Lowers target-independent HIR and validates each canonical module against
-/// the embedded Draft 2020-12 schema before a target can consume it.
+/// Renders the retained legacy snapshot behind a lowered HIR project and
+/// validates each canonical module against the embedded schema. Hand-built HIR
+/// is intentionally not coerced into semantic types.
 pub fn from_hir(project: &crate::hir::HirProject) -> Result<CanonicalIr, String> {
-    let ir = render(project);
+    let Some(legacy) = project.legacy() else {
+        return Err(String::from(
+            "canonical IR rendering is not available for a hand-built HIR project",
+        ));
+    };
+    let ir = render(legacy);
     for module in &ir.modules {
         validate(&module.bytes)?;
     }

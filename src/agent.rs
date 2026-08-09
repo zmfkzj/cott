@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::hash::sha256_hex;
-use crate::sandbox::{SandboxSpec, run};
+use crate::sandbox::{BindMounts, NetworkAccess, ResourceLimits, SandboxSpec, run};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AgentKind {
@@ -326,11 +326,24 @@ fn run_process(
         cwd: workspace.to_path_buf(),
         environment,
         stdin,
-        writable: vec![workspace.to_path_buf(), scratch.to_path_buf()],
-        network,
-        timeout: Duration::from_secs(timeout_seconds.into()),
-        address_space_bytes: 4 * 1024 * 1024 * 1024,
-        process_limit: 64,
+        binds: BindMounts {
+            read_only: Vec::new(),
+            writable: vec![workspace.to_path_buf(), scratch.to_path_buf()],
+        },
+        network: if network {
+            NetworkAccess::Enabled
+        } else {
+            NetworkAccess::Disabled
+        },
+        limits: ResourceLimits {
+            cpu_time: Duration::from_secs(timeout_seconds.into()),
+            address_space_bytes: 4 * 1024 * 1024 * 1024,
+            process_count: 64,
+            open_files: 256,
+            file_size_bytes: 64 * 1024 * 1024,
+            wall_time: Duration::from_secs(timeout_seconds.into()),
+            stream_limit_bytes: 16 * 1024 * 1024,
+        },
     })
     .map_err(|error| error.to_string())
 }

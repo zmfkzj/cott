@@ -464,21 +464,25 @@ fn plan(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
             return Err(3);
         }
     };
-    let semantic = match lower(&project.source_dir, parsed) {
-        Ok(semantic) => semantic,
+    let hir = match lower(&project.source_dir, parsed) {
+        Ok(hir) => hir,
         Err(diagnostics) => {
             print_project_diagnostics(&diagnostics);
             return Err(3);
         }
     };
-    let ir = match from_hir(&semantic) {
+    let ir = match from_hir(&hir) {
         Ok(ir) => ir,
         Err(error) => {
             eprintln!("error: {error}");
             return Err(1);
         }
     };
-    let bindings = match resolve_bindings(&project, &semantic) {
+    let Some(semantic) = hir.legacy() else {
+        eprintln!("error: legacy binding bridge unavailable");
+        return Err(1);
+    };
+    let bindings = match resolve_bindings(&project, semantic) {
         Ok(bindings) => bindings,
         Err(diagnostics) => {
             for diagnostic in diagnostics {
@@ -491,7 +495,7 @@ fn plan(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
             return Err(4);
         }
     };
-    let emission = match emit(&project, &semantic, &ir, &bindings) {
+    let emission = match emit(&project, semantic, &ir, &bindings) {
         Ok(emission) => emission,
         Err(diagnostics) => {
             print_emit_diagnostics(&project, &diagnostics);
@@ -615,21 +619,25 @@ fn generate_project(
             return 3;
         }
     };
-    let semantic = match lower(&project.source_dir, parsed) {
-        Ok(semantic) => semantic,
+    let hir = match lower(&project.source_dir, parsed) {
+        Ok(hir) => hir,
         Err(diagnostics) => {
             print_project_diagnostics(&diagnostics);
             return 3;
         }
     };
-    let ir = match from_hir(&semantic) {
+    let ir = match from_hir(&hir) {
         Ok(ir) => ir,
         Err(error) => {
             eprintln!("error: {error}");
             return 1;
         }
     };
-    let resolution = match resolve_implementations(&project, &semantic) {
+    let Some(semantic) = hir.legacy() else {
+        eprintln!("error: legacy binding bridge unavailable");
+        return 1;
+    };
+    let resolution = match resolve_implementations(&project, semantic) {
         Ok(resolution) => resolution,
         Err(diagnostics) => {
             print_binding_diagnostics(&project, diagnostics);
@@ -647,9 +655,9 @@ fn generate_project(
         })
         .collect::<Vec<_>>();
     if let Some(symbol) = requested {
-        let known = semantic.modules.iter().any(|module| {
+        let known = hir.modules.iter().any(|module| {
             module.declarations.iter().any(|declaration| {
-                matches!(declaration, crate::semantic::SemanticDeclaration::Function(function)
+                matches!(declaration, crate::hir::HirDeclaration::Function(function)
                     if function.id.as_string() == symbol)
             })
         });
