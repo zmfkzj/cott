@@ -1,0 +1,1 @@
+{"declarations":[{"doc":null,"kind":"function","name":"curriculum.optional_label.run","parameters":[],"return_type":{"item":{"kind":"primitive","name":"str"},"kind":"option"},"span":{"end":58,"start":34}}],"imports":[],"module":"curriculum.optional_label","schema_version":1,"source":"curriculum/optional_label.cott"}

@@ -133,23 +133,6 @@ fn syntax_errors_leave_existing_artifacts_untouched() {
 }
 
 #[test]
-fn accepts_only_the_implemented_command_surface() {
-    let help = Command::new(env!("CARGO_BIN_EXE_cott"))
-        .arg("--help")
-        .output()
-        .expect("cott should run");
-    assert!(help.status.success());
-    assert!(String::from_utf8_lossy(&help.stdout).contains("cott emit python"));
-
-    let rejected = Command::new(env!("CARGO_BIN_EXE_cott"))
-        .arg("check")
-        .output()
-        .expect("cott should run");
-    assert_eq!(rejected.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&rejected.stderr).contains("unsupported command"));
-}
-
-#[test]
 fn permits_exact_generated_type_imports_in_bindings() {
     let project = project();
     fs::write(
@@ -173,6 +156,137 @@ fn permits_exact_generated_type_imports_in_bindings() {
     assert!(project.path.join("generated/python/app_types.py").is_file());
 }
 
+#[test]
+fn generate_requires_an_agent_only_for_unresolved_functions() {
+    let project = project();
+    fs::remove_file(project.path.join("python/_cott_impl/app/run.py"))
+        .expect("binding should be removable");
+
+    let output = cott(&project.path, &["generate", "--target", "python"]);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("requires `--agent codex|omp`"));
+}
+
+#[test]
+fn generate_promotes_a_sandboxed_omp_candidate_with_artifacts() {
+    let project = project();
+    fs::remove_file(project.path.join("python/_cott_impl/app/run.py"))
+        .expect("binding should be removable");
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    let omp = tools.join("omp");
+    fs::write(&omp, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo omp/17.2.12; exit 0; fi\nprintf 'def run() -> int:\\n    return 7\\n' > implementation.py\n")
+        .expect("write fake OMP");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&omp, fs::Permissions::from_mode(0o755))
+            .expect("make fake OMP executable");
+    }
+    let path = std::env::join_paths([tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("PATH");
+    let output = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .args([
+            "generate",
+            "--agent",
+            "omp",
+            "--target",
+            "python",
+            "--project",
+        ])
+        .arg(&project.path)
+        .env("PATH", path)
+        .output()
+        .expect("cott should run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(project.path.join("python/_cott_impl/app/run.py"))
+            .expect("durable candidate"),
+        "def run() -> int:\n    return 7\n"
+    );
+    assert!(project.path.join("generated/python/app.py").is_file());
+}
+
+#[test]
+fn generate_promotes_a_sandboxed_codex_candidate_with_artifacts() {
+    let project = project();
+    fs::remove_file(project.path.join("python/_cott_impl/app/run.py"))
+        .expect("binding should be removable");
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    let codex = tools.join("codex");
+    fs::write(&codex, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo codex-cli 0.147.0; exit 0; fi\ncat >/dev/null\nprintf 'def run() -> int:\\n    return 7\\n' > implementation.py\n")
+        .expect("write fake Codex");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o755))
+            .expect("make fake Codex executable");
+    }
+    let path = std::env::join_paths([tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("PATH");
+    let output = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .args([
+            "generate",
+            "--agent",
+            "codex",
+            "--target",
+            "python",
+            "--project",
+        ])
+        .arg(&project.path)
+        .env("PATH", path)
+        .output()
+        .expect("cott should run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(project.path.join("python/_cott_impl/app/run.py"))
+            .expect("durable candidate"),
+        "def run() -> int:\n    return 7\n"
+    );
+}
+
+#[test]
+fn init_scaffolds_a_normative_project_with_pinned_uv() {
+    let temp = TempDir::new();
+    let tools = temp.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    let uv = tools.join("uv");
+    fs::write(&uv, "#!/bin/sh\necho 'uv 0.12.3'\n").expect("write fake uv");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&uv, fs::Permissions::from_mode(0o755))
+            .expect("make fake uv executable");
+    }
+    let target = temp.path.join("new-app");
+    let path = std::env::join_paths([tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("PATH");
+    let output = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .args(["init"])
+        .arg(&target)
+        .env("PATH", path)
+        .output()
+        .expect("cott should run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(target.join("src/new_app/main.cott").is_file());
+    let manifest = fs::read_to_string(target.join("cott.toml")).expect("manifest");
+    assert!(manifest.contains("version = \"0.1.0\""));
+    assert!(manifest.contains("runtime_validation = \"boundary\""));
+}
 #[test]
 fn runs_generated_entry_module_when_python3_is_available() {
     let usable_python = Command::new("python3")

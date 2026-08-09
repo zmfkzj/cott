@@ -203,6 +203,30 @@ pub fn load_project(root: &Path) -> Result<Project, ProjectError> {
     })
 }
 
+/// Loads the normative v0.1 manifest without deriving legacy compiler paths.
+/// New command pipelines use this closed model; `load_project` remains only
+/// while checked-in Profile-P fixtures are migrated.
+pub fn load_config(root: &Path) -> Result<crate::manifest::ProjectConfig, ProjectError> {
+    let root = fs::canonicalize(root).map_err(|source| ProjectError::Io {
+        operation: "canonicalize project root",
+        path: root.to_path_buf(),
+        source,
+    })?;
+    let path = root.join("cott.toml");
+    ensure_no_symlinks(&path)?;
+    let bytes = fs::read_to_string(&path).map_err(|source| ProjectError::Io {
+        operation: "read manifest",
+        path: path.clone(),
+        source,
+    })?;
+    crate::manifest::ProjectConfig::parse(&path, &bytes).map_err(|error| {
+        ProjectError::InvalidManifest {
+            path,
+            message: error.message,
+        }
+    })
+}
+
 /// Reads all regular `.cott` files under `project.source_dir` in source-relative lexical order.
 pub fn discover_sources(
     project: &Project,

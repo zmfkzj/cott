@@ -1,15 +1,24 @@
+pub mod agent;
 pub mod ast;
 pub mod binding;
 pub mod cli;
 pub mod compiler;
+pub mod contract_test;
 pub mod diagnostics;
+pub mod formatter;
 pub mod hash;
+pub mod hir;
 pub mod ir;
 pub mod lexer;
+pub mod manifest;
 pub mod syntax;
 
 pub mod parser;
 pub mod project;
+pub mod provenance;
+pub mod python;
 pub mod python_emit;
 pub mod python_runtime;
+pub mod sandbox;
 pub mod semantic;
+pub mod transaction;

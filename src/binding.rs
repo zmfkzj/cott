@@ -24,12 +24,47 @@ pub struct BindingDiagnostic {
     pub message: String,
 }
 
+/// Resolution separates absent durable sources from invalid sources so
+/// `generate` can supply only truly unresolved functions to an agent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImplementationResolution {
+    pub resolved: Vec<ResolvedBinding>,
+    pub unresolved: Vec<UnresolvedBinding>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnresolvedBinding {
+    pub module: crate::semantic::ModuleId,
+    pub function: String,
+    pub source: PathBuf,
+}
+
 /// Resolves every semantic function to the corresponding Python implementation.
 pub fn resolve_bindings(
     project: &Project,
     semantic: &SemanticProject,
 ) -> Result<Vec<ResolvedBinding>, Vec<BindingDiagnostic>> {
-    let mut bindings = Vec::new();
+    let resolution = resolve_implementations(project, semantic)?;
+    if resolution.unresolved.is_empty() {
+        Ok(resolution.resolved)
+    } else {
+        Err(resolution
+            .unresolved
+            .into_iter()
+            .map(|binding| BindingDiagnostic {
+                path: binding.source,
+                message: "missing implementation binding".to_owned(),
+            })
+            .collect())
+    }
+}
+
+pub fn resolve_implementations(
+    project: &Project,
+    semantic: &SemanticProject,
+) -> Result<ImplementationResolution, Vec<BindingDiagnostic>> {
+    let mut resolved = Vec::new();
+    let mut unresolved = Vec::new();
     let mut diagnostics = Vec::new();
     let local_imports = local_import_roots(project, semantic);
     let generated_type_modules = generated_type_modules(semantic);
@@ -38,7 +73,6 @@ pub fn resolve_bindings(
             let SemanticDeclaration::Function(function) = declaration else {
                 continue;
             };
-
             let mut source = project.implementation_dir.clone();
             let mut generated = PathBuf::from("_cott_impl");
             for segment in &module.id.segments {
@@ -47,14 +81,21 @@ pub fn resolve_bindings(
             }
             source.push(format!("{}.py", function.id.name));
             generated.push(format!("{}.py", function.id.name));
-
+            if !source.exists() {
+                unresolved.push(UnresolvedBinding {
+                    module: module.id.clone(),
+                    function: function.id.name.clone(),
+                    source,
+                });
+                continue;
+            }
             match read_binding(
                 &source,
                 &function.id.name,
                 &local_imports,
                 &generated_type_modules,
             ) {
-                Ok(bytes) => bindings.push(ResolvedBinding {
+                Ok(bytes) => resolved.push(ResolvedBinding {
                     module: module.id.clone(),
                     function: function.id.name.clone(),
                     source,
@@ -69,12 +110,30 @@ pub fn resolve_bindings(
             }
         }
     }
-
     if diagnostics.is_empty() {
-        Ok(bindings)
+        Ok(ImplementationResolution {
+            resolved,
+            unresolved,
+        })
     } else {
         Err(diagnostics)
     }
+}
+
+pub fn validate_candidate(
+    project: &Project,
+    semantic: &SemanticProject,
+    function: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let source =
+        std::str::from_utf8(bytes).map_err(|_| "binding source is not valid UTF-8".to_owned())?;
+    validate_source(
+        source,
+        function,
+        &local_import_roots(project, semantic),
+        &generated_type_modules(semantic),
+    )
 }
 
 fn local_import_roots(project: &Project, semantic: &SemanticProject) -> HashSet<String> {

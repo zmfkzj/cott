@@ -335,7 +335,8 @@ impl Analyzer {
     fn new(source_root: &Path, parsed: ParsedProject) -> Self {
         let mut diagnostics = Diagnostics::new();
         let mut modules = Vec::new();
-        for (source_index, ParsedSource { path, syntax }) in parsed.sources.into_iter().enumerate()
+        for (source_index, ParsedSource { path, syntax, .. }) in
+            parsed.sources.into_iter().enumerate()
         {
             match module_path(source_root, &path) {
                 Ok(segments) => {

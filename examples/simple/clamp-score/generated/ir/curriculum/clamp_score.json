@@ -1,0 +1,1 @@
+{"declarations":[{"doc":null,"kind":"function","name":"curriculum.clamp_score.run","parameters":[],"return_type":{"kind":"primitive","name":"f64"},"span":{"end":47,"start":31}}],"imports":[],"module":"curriculum.clamp_score","schema_version":1,"source":"curriculum/clamp_score.cott"}

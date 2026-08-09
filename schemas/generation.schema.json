@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cott.dev/schema/generation/v1",
+  "title": "cott generation record",
+  "type": "object",
+  "required": ["schema_version", "current", "last_verified"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "current": {"$ref": "#/$defs/snapshot"},
+    "last_verified": {"anyOf": [{"$ref": "#/$defs/snapshot"}, {"type": "null"}]}
+  },
+  "$defs": {
+    "snapshot": {
+      "type": "object",
+      "required": ["generation_id", "verified", "inputs", "tools", "ir", "contract_surface", "public_python_symbols", "implementations", "dependencies", "managed_files", "unresolved", "verification", "agent_runs"],
+      "additionalProperties": false,
+      "properties": {
+        "generation_id": {"type": "string"}, "verified": {"type": "boolean"}, "inputs": {"type": "object"}, "tools": {"type": "object"}, "ir": {"type": "object"}, "contract_surface": {"type": "object"}, "public_python_symbols": {"type": "array"}, "implementations": {"type": "object"}, "dependencies": {"type": "array"}, "managed_files": {"type": "object"}, "unresolved": {"type": "array"}, "verification": {"type": "object"}, "agent_runs": {"type": "array"}
+      }
+    }
+  }
+}

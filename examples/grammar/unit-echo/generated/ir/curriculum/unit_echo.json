@@ -1,0 +1,1 @@
+{"declarations":[{"doc":null,"kind":"function","name":"curriculum.unit_echo.run","parameters":[],"return_type":{"kind":"primitive","name":"unit"},"span":{"end":46,"start":29}}],"imports":[],"module":"curriculum.unit_echo","schema_version":1,"source":"curriculum/unit_echo.cott"}

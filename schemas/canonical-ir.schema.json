@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cott.dev/schema/canonical-ir/v1",
+  "title": "cott Canonical IR",
+  "type": "object",
+  "required": ["schema_version", "module", "source", "imports", "declarations"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "module": {"type": "string"},
+    "source": {"type": "string"},
+    "imports": {"type": "array", "items": {"type": "string"}},
+    "declarations": {"type": "array", "items": {"type": "object"}}
+  }
+}

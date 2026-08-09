@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::diagnostics::Span;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,5 +74,22 @@ pub struct Token {
 impl Token {
     pub const fn new(kind: TokenKind, span: Span) -> Self {
         Self { kind, span }
+    }
+}
+
+/// Lossless lexical view. `source` preserves every input byte, including
+/// comments and trivia that the grammar intentionally skips.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Cst {
+    pub source: Arc<[u8]>,
+    pub tokens: Vec<Token>,
+}
+
+impl Cst {
+    pub fn parse(source: &str) -> Result<Self, Vec<crate::diagnostics::Diagnostic>> {
+        Ok(Self {
+            source: Arc::from(source.as_bytes()),
+            tokens: crate::lexer::lex(source)?,
+        })
     }
 }

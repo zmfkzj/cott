@@ -1,0 +1,1 @@
+{"declarations":[{"doc":null,"kind":"function","name":"curriculum.normalize_flag.run","parameters":[],"return_type":{"kind":"primitive","name":"bool"},"span":{"end":51,"start":34}}],"imports":[],"module":"curriculum.normalize_flag","schema_version":1,"source":"curriculum/normalize_flag.cott"}

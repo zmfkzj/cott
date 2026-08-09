@@ -1,14 +1,13 @@
 use crate::ast::*;
 use crate::diagnostics::{Diagnostic, Span};
-use crate::lexer;
-use crate::syntax::{Keyword, Token, TokenKind};
+use crate::syntax::{Cst, Keyword, Token, TokenKind};
 
 pub fn parse(source: &str) -> Result<File, Vec<Diagnostic>> {
-    let tokens = match lexer::lex(source) {
-        Ok(tokens) => tokens,
-        Err(errors) => return Err(errors),
-    };
-    Parser::new(tokens).file()
+    parse_cst(&Cst::parse(source)?)
+}
+
+pub fn parse_cst(cst: &Cst) -> Result<File, Vec<Diagnostic>> {
+    Parser::new(cst.tokens.clone()).file()
 }
 
 struct Parser {

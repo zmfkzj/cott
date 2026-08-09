@@ -1,3 +1,7 @@
+use std::sync::LazyLock;
+
+use serde_json::Value;
+
 use std::path::{Path, PathBuf};
 
 use crate::diagnostics::Span;
@@ -27,12 +31,62 @@ pub fn render(project: &SemanticProject) -> CanonicalIr {
     }
 }
 
+/// Lowers target-independent HIR and validates each canonical module against
+/// the embedded Draft 2020-12 schema before a target can consume it.
+pub fn from_hir(project: &crate::hir::HirProject) -> Result<CanonicalIr, String> {
+    let ir = render(project);
+    for module in &ir.modules {
+        validate(&module.bytes)?;
+    }
+    Ok(ir)
+}
+
+/// Validates and loads one canonical module document.
+pub fn load(bytes: &[u8]) -> Result<Value, String> {
+    validate(bytes)?;
+    serde_json::from_slice(bytes).map_err(|error| format!("invalid canonical IR JSON: {error}"))
+}
+
+/// Renders one JSON value with deterministic compact whitespace and one LF.
+pub fn canonical_bytes(value: &Value) -> Result<Vec<u8>, String> {
+    let mut bytes =
+        serde_json::to_vec(value).map_err(|error| format!("serialize canonical IR: {error}"))?;
+    bytes.push(b'\n');
+    validate(&bytes)?;
+    Ok(bytes)
+}
+fn validate(bytes: &[u8]) -> Result<(), String> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|error| format!("invalid canonical IR JSON: {error}"))?;
+    static SCHEMA: LazyLock<Value> = LazyLock::new(|| {
+        serde_json::from_str(include_str!("../schemas/canonical-ir.schema.json"))
+            .expect("embedded canonical IR schema is valid JSON")
+    });
+    let validator = jsonschema::validator_for(&SCHEMA)
+        .map_err(|error| format!("invalid embedded canonical IR schema: {error}"))?;
+    let errors = validator
+        .iter_errors(&value)
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "canonical IR schema violation: {}",
+            errors.join("; ")
+        ))
+    }
+}
+
 fn render_module(module: &SemanticModule) -> CanonicalModule {
     let mut json = Json::new();
     json.object_start();
     json.key("declarations");
     json.array_start();
-    for declaration in &module.declarations {
+    for (index, declaration) in module.declarations.iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
         render_declaration(&mut json, declaration);
     }
     json.array_end();

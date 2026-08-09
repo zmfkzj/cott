@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cott.dev/schema/diagnostics/v1",
+  "title": "cott diagnostic report",
+  "type": "object",
+  "required": ["schema_version", "diagnostics"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}}
+  },
+  "$defs": {
+    "diagnostic": {
+      "type": "object",
+      "required": ["code", "severity", "message", "span", "expected", "actual", "reason", "help", "related", "source_order"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {"type": "string", "pattern": "^COTT-[CSNTKPAFI][0-9]{3}$"}, "severity": {"enum": ["error", "warning"]}, "message": {"type": "string"}, "span": {"type": ["object", "null"]}, "expected": {"type": ["string", "null"]}, "actual": {"type": ["string", "null"]}, "reason": {"type": ["string", "null"]}, "help": {"type": "array", "items": {"type": "string"}}, "related": {"type": "array", "items": {"type": "object"}}, "source_order": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

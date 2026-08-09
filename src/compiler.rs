@@ -21,6 +21,7 @@ impl SourceFile {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParsedSource {
     pub path: PathBuf,
+    pub cst: crate::syntax::Cst,
     pub syntax: crate::ast::File,
 }
 
@@ -45,8 +46,10 @@ pub fn parse_project(
     let mut errors = Vec::new();
 
     for SourceFile { path, text } in sources {
-        match crate::parser::parse(&text) {
-            Ok(syntax) => parsed.push(ParsedSource { path, syntax }),
+        let parsed_file = crate::syntax::Cst::parse(&text)
+            .and_then(|cst| crate::parser::parse_cst(&cst).map(|syntax| (cst, syntax)));
+        match parsed_file {
+            Ok((cst, syntax)) => parsed.push(ParsedSource { path, cst, syntax }),
             Err(diagnostics) => {
                 errors.extend(diagnostics.into_iter().map(|diagnostic| ProjectDiagnostic {
                     path: path.clone(),

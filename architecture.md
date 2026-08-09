@@ -5,6 +5,12 @@
 **파일 확장자:** `.cott`
 **CLI 명령:** `cott`
 
+
+## 0.1 v0.1 릴리스 호환성
+
+이 문서의 v0.1 구현은 CPython `3.14.6`, BasedPyright `1.39.9`, uv `0.12.3`, Codex CLI `0.147.0`, OMP `17.2.12`만 지원한다. 이후 tool version은 이 표, adapter probe golden test와 compatibility test를 함께 변경한 release에서만 지원한다. 지원 범위를 semver range로 넓히지 않는다.
+
+`emit python`과 `verify`는 agent를 호출하지 않는다. agent 호출은 `generate`에서만 조건부로 수행한다. 기존 project command의 `--project <dir>`은 subcommand 뒤 어느 위치에서나 한 번만 허용하며 기본은 현재 directory다. `init`은 target path를 받고 `--project`를 거부한다.
 ---
 
 ## 1. 개요
@@ -1109,6 +1115,8 @@ declaration, field, parameter와 contract clause array는 source order를 보존
 
 IR JSON은 sorted key, insignificant whitespace 없음, final newline 하나로 canonicalize하고 schema version을 `generation_id`에 포함한다.
 
+v0.1의 normative schema는 repository의 `schemas/canonical-ir.schema.json`, `schemas/generation.schema.json`, `schemas/diagnostics.schema.json`, `schemas/contract-test.schema.json`이다. 모두 JSON Schema Draft 2020-12, version `1`이며 compiler binary가 `include_str!`로 embed한다. IR·generation·diagnostic·contract strategy writer와 reader는 해당 schema를 동시에 검증한다.
+
 ```json
 {
   "kind": "function",
@@ -1266,7 +1274,9 @@ generated/
 │   └── foo.bar.json
 ├── docs/
 └── generation.json
+
 ```
+`tests/generated/<module path>/<function>.json`은 compiler가 실행하는 deterministic managed contract-test strategy다. 닫힌 object는 `{"schema_version":1,"symbol":<FQN>,"seed":"sha256:<hex>","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure"|"effectful"|"never","clause_ids":[<source-order IDs>]}`이며 generated Python source가 해석하지 않는다.
 
 `cott_runtime`은 numeric alias `I8`…`U64`·`F32`·`F64`, generic alias `Option`·`Result`, `Ok`·`Err`·`Some`·`Nothing`, `Unit`·`UNIT`, `Opaque`, nominal container, numeric metadata, `JsonValue` union·variant와 `CottContractViolation`의 유일한 runtime identity 원본이다. 각 `<module>_types.py`는 그 cott module의 user type·constant만 정의한다. standard ABI type은 `cott_runtime`에서 직접 import하며 module별로 re-export하지 않는다. compiler-owned support package는 Canonical IR 밖 관리 file로 허용한다.
 
@@ -1408,7 +1418,7 @@ Python 구현은 compiler가 scratch에 만든 전용 BasedPyright config와 exp
 {"typeCheckingMode": "strict", "reportInvalidTypeVarUse": "none"}
 ```
 
-manifest의 interpreter와 type checker executable은 shell 없이 canonical regular-file path로 실행하고 full version·content hash를 provenance에 기록한다. 설정된 interpreter가 CPython 3.14가 아니거나 BasedPyright version이 해당 compiler release가 고정한 closed supported range 밖이면 Python target 검증을 시작하지 않는다. compiler-owned config의 유일한 완화는 7장의 `reportInvalidTypeVarUse`이며 cott static verifier가 대신 검사한다. source의 `type: ignore`·`pyright:` suppression과 checker command/config injection은 거부한다.
+manifest의 interpreter와 type checker executable은 shell 없이 canonical regular-file path로 실행하고 full version·content hash를 provenance에 기록한다. 설정된 interpreter가 정확히 CPython `3.14.6`이 아니거나 BasedPyright version이 정확히 `1.39.9`가 아니면 Python target 검증을 시작하지 않는다. compiler-owned config의 유일한 완화는 7장의 `reportInvalidTypeVarUse`이며 cott static verifier가 대신 검사한다. source의 `type: ignore`·`pyright:` suppression과 checker command/config injection은 거부한다.
 
 interpreter identity probe, BasedPyright version probe·검사 process와 그 runtime child는 compiler-owned containment 안에서 실행한다. 실제 project path는 보이지 않고 staging input, standard library와 locked distribution은 read-only이며 cache·temporary output만 scratch에 쓸 수 있다. network·device와 environment secret을 차단하고 compiler-version-fixed wall timeout, process·memory·open-file ceiling과 stdout·stderr 한도를 적용하며 종료 뒤 descendant를 모두 reap한다. 이 filesystem·process 격리를 강제할 수 없으면 검증을 시작하지 않는다.
 
@@ -1595,12 +1605,11 @@ loader는 target 실행 전에 recorded direct external module의 distribution i
 
 `cott generate`는 미구현 함수를 생성할 때 사용자가 `--agent`로 지정한 에이전트를 사용한다. cott는 모델 제공자 API를 직접 호출하거나 에이전트를 자동 선택하지 않는다.
 
-MVP는 다음 세 가지 에이전트와 각 에이전트가 제공하는 CLI 인터페이스만 지원한다.
+MVP는 다음 두 가지 에이전트와 각 에이전트가 제공하는 CLI 인터페이스만 지원한다.
 
 | `--agent` 값 | 호출 인터페이스 |
 | ------------- | --------------- |
 | `codex`       | `codex exec`    |
-| `claude`      | `claude -p`     |
 | `omp`         | `omp -p`        |
 
 cott는 17.1의 입력을 하나의 구현 지시로 구성하여 선택된 인터페이스에 전달한다. 구현 지시에는 최소한 다음 내용을 명시한다.
@@ -1615,7 +1624,7 @@ cott는 17.1의 입력을 하나의 구현 지시로 구성하여 선택된 인�
 
 각 에이전트 adapter는 실행 파일, prompt 전달 방식, 작업 디렉터리, 환경 변수, 종료 상태를 명시한다.
 
-compiler version마다 adapter별 supported CLI version range와 exact argv template를 고정한다. executable은 `PATH`에서 한 번 resolve하고 version probe부터 아래와 같은 containment에서 실행한다. version output이 범위 밖이거나 해석 불가능하면 본 실행 전에 실패한다.
+compiler release마다 adapter별 exact supported CLI version과 exact argv template를 고정한다. v0.1은 Codex CLI `0.147.0`, OMP `17.2.12`만 허용한다. executable은 `PATH`에서 한 번 resolve하고 version probe부터 아래와 같은 containment에서 실행한다. version output이 정확히 일치하지 않거나 해석 불가능하면 본 실행 전에 실패한다.
 
 * shell을 사용하지 않고 executable과 각 인자를 분리하여 실행한다.
 * 실행 전에 executable의 canonical regular-file path, version과 content hash를 기록한다.
@@ -1768,9 +1777,9 @@ cott init <path> --format json
 
 `init`은 아직 project가 없어서 17.4의 project lock/journal을 쓰지 않는 유일한 명령이다. canonical parent directory handle 아래에 mode `0700` private sibling temporary scaffold를 만들고 target root의 mode `0600` `.cott-init` file에 closed `schema_version`·nonce ownership record를 저장한다. 모든 file을 fsync한 뒤 directory를 bottom-up fsync하고, Linux `renameat2(RENAME_NOREPLACE)` 또는 macOS `renameatx_np(RENAME_EXCL)`에 해당하는 같은-parent atomic no-replace rename으로만 publish한 다음 parent를 fsync한다. publish 전 실패는 init-owned temp를 no-follow로 제거하고 parent를 fsync한다. 경합 `EEXIST`는 이 cleanup까지 성공한 경우에만 exit `2`이며, 다른 scaffold·rename·fsync 실패나 cleanup 실패는 exit `6`이다. publish 뒤에는 uv 실행과 모든 probe를 먼저 완료한다. `.cott-init` unlink가 final commit transition이며, unlink 전 실패는 root file identity와 in-memory nonce가 marker record와 모두 일치하는 init-owned target만 no-follow로 제거하고 parent를 fsync한 뒤 원래 exit code를 반환한다. identity가 달라졌거나 cleanup이 실패하면 target을 보존하고 exit `6`을 반환한다. unlink를 시작한 뒤에는 target을 자동 삭제하지 않는다. unlink 또는 이어지는 target-root fsync가 실패하면 exact completed tree나 ownership-marked completed tree를 보존하고 exit `6`과 수동 확인 경로를 진단하며, 둘 다 성공해야 init이 성공한다. process crash로 남은 ownership-marked temp·target도 다음 init이 자동 삭제하거나 overwrite하지 않고 exit `2`와 수동 확인 경로를 진단한다. uv가 한 번이라도 시작된 뒤 실패하면 선택된 human 또는 JSON diagnostic에 global managed-Python·cache 변경이 남고 rollback되지 않을 수 있음을 반드시 포함한다.
 
-scaffold는 `python/.python-version`에 `3.14`를 쓰고 `python/pyproject.toml`의 `requires-python`을 `>=3.14,<3.15`로 고정하며, 해당 cott compiler release가 지원하는 exact version으로 pin한 BasedPyright를 `python/pyproject.toml`의 dev dependency로 둔다. compiler 지원 정책은 CPython 3.14 minor이고 uv는 해당 supported uv release가 제공하는 최신 3.14 patch(현재 공식 예시는 `3.14.6`)를 설치하거나 기존 managed install을 그 patch로 upgrade한다. `uv.lock`은 Python exact patch를 고정하지 않으며, 실제 설치된 full patch는 이후 generation provenance에 고정한다.
+scaffold는 `python/.python-version`에 `3.14`를 쓰고 `python/pyproject.toml`의 `requires-python`을 `>=3.14,<3.15`로 고정하며 BasedPyright `1.39.9`를 dev dependency로 pin한다. v0.1은 CPython `3.14.6`과 uv `0.12.3`만 지원하며, init은 정확히 그 managed CPython patch를 설치·probe한다. `uv.lock`은 Python exact patch를 고정하지 않으며, 실제 설치된 full patch는 이후 generation provenance에 고정한다.
 
-uv executable은 shell 없이 PATH에서 한 번만 canonical regular file로 resolve하고 compiler-supported closed version range인지 검사한다. uv subprocess environment는 empty base에서 compiler-fixed sanitized `PATH`와 허용한 `HOME`·temporary-directory·platform TLS/certificate 변수만 복사하고 inherited `UV_*`, `VIRTUAL_ENV`, `CONDA_PREFIX`는 전부 제외한 뒤 `UV_PYTHON`·`UV_PROJECT_ENVIRONMENT`만 해당 단계에 명시하며 canonical uv를 `--no-config`로 실행한다. `<uv> --no-config python dir`의 canonical managed-install root를 기록한 뒤 다음 순서로 실행한다: `<uv> --no-config python install --upgrade 3.14`; `<uv> --no-config python find --managed-python --system 3.14`가 반환한 canonical path가 그 root 아래인지 확인하고 해당 interpreter를 `-I -c <compiler-fixed-identity-probe>`로 실행해 closed JSON object와 끝 newline만 받아 CPython 3.14 full patch를 검증; project cwd `python/`에서 `UV_PYTHON=<canonical-managed-interpreter>`를 사용하여 `<uv> --no-config lock --managed-python`; 같은 cwd에서 `UV_PYTHON=<canonical-managed-interpreter>`와 `UV_PROJECT_ENVIRONMENT=<canonical-target-absolute>/.venv`로 `<uv> --no-config sync --frozen --managed-python`. 생성된 `python/.python-version`은 이 `--no-config` init 실행이 아니라 이후 일반 uv 호출의 default Python request다. 기본 dev group은 sync되므로 BasedPyright도 설치된다. 기본 sync 뒤에는 root venv의 `.venv/bin/python -I -c <compiler-fixed-identity-probe>`가 같은 closed JSON identity와 CPython full patch를 반환하는지, `.venv/bin/basedpyright --version`이 pin한 compiler-supported exact version인지 확인한다.
+uv executable은 shell 없이 PATH에서 한 번만 canonical regular file로 resolve하고 version `0.12.3`인지 검사한다. uv subprocess environment는 empty base에서 compiler-fixed sanitized `PATH`와 허용한 `HOME`·temporary-directory·platform TLS/certificate 변수만 복사하고 inherited `UV_*`, `VIRTUAL_ENV`, `CONDA_PREFIX`는 전부 제외한 뒤 `UV_PYTHON`·`UV_PROJECT_ENVIRONMENT`만 해당 단계에 명시하며 canonical uv를 `--no-config`로 실행한다. `<uv> --no-config python dir`의 canonical managed-install root를 기록한 뒤 다음 순서로 실행한다: `<uv> --no-config python install --upgrade 3.14`; `<uv> --no-config python find --managed-python --system 3.14`가 반환한 canonical path가 그 root 아래인지 확인하고 해당 interpreter를 `-I -c <compiler-fixed-identity-probe>`로 실행해 CPython `3.14.6`을 검증; project cwd `python/`에서 lock, sync 순서를 수행한다.
 
 `--no-sync`는 Python install·upgrade, lock 및 uv-managed Python probe까지 수행하고 sync와 root venv Python·BasedPyright probe만 생략한다. human 출력은 `/usr/bin/env -i HOME=<home> TMPDIR=<temporary-directory> PATH=<sanitized-path> UV_PYTHON=<canonical-managed-interpreter> UV_PROJECT_ENVIRONMENT=<canonical-target-absolute>/.venv <canonical-uv> --no-config sync --directory <canonical-target-absolute>/python --frozen --managed-python`의 placeholder를 init과 같은 compiler-owned environment allowlist의 실제 값 및 canonical path로 POSIX-shell-escape해 렌더링한다. JSON 출력은 같은 명령을 `severity: "note"`, `span: null` diagnostic의 `help` 원소로 제공한다.
 
@@ -1812,11 +1821,10 @@ cott emit python
 
 ```bash
 cott generate --agent codex --target python
-cott generate foo.bar.process_bar --agent claude --target python
+cott generate foo.bar.process_bar --agent omp --target python
 ```
 
-선택 범위에 미구현 함수가 있으면 `--agent`가 필수다. 허용 값은 `codex`, `claude`, `omp`다. 모든 선택 함수가 binding되어 있으면 agent를 호출하지 않는다.
-
+선택 범위에 미구현 함수가 있으면 `--agent`가 필수다. 허용 값은 `codex`, `omp`다. 모든 선택 함수가 binding되어 있으면 agent를 호출하지 않는다.
 특정 함수 generate에서 agent write 대상은 그 함수별 file뿐이며 apply는 선택 implementation과 전체 compiler-owned 관리 집합을 함께 갱신한다. verified baseline guard는 17.5의 정확한 규칙을 사용한다. 최초 검증 전에는 선택 범위 성공만으로 진행할 수 있다. 결과는 `current.verified = false`며 project 전체 미구현 상태를 별도 진단한다. 배포 gate는 항상 full `cott verify`다.
 
 ### 18.7 구현 검증
@@ -2190,9 +2198,7 @@ legal breakpoint가 없는 string·qualified name은 Unicode-scalar column 수�
 * `off`, `boundary`, `test-only` mode와 항목별 보증 등급
 * compiler source에서 정적으로 해석하고 generated runtime copy로 고정하는 project-local plain top-level Python binding
 * single-identity verified loader와 embedded implementation provenance
-* user-selected Codex CLI, Claude Code 또는 OMP CLI를 통한 함수별 구현 생성
-* filesystem·effect sandbox, staging, scratch와 function별 write allowlist
-* process lock, durable journal, hash 재확인과 crash rollback
+* user-selected Codex CLI 또는 OMP CLI를 통한 함수별 구현 생성
 * compiler stale file 자동 삭제와 stale durable implementation 진단
 * `current`·`last_verified` snapshot과 contract/implementation diff
 * formatter, stable CLI exit code와 JSON diagnostics
@@ -2401,9 +2407,7 @@ binding은 import 없이 staged type module에 대해 정적으로 해석한다.
 
 ### 결정 14
 
-`cott generate`는 user-selected Codex CLI, Claude Code 또는 OMP CLI를 함수별 process로, shell 없이 single-file write sandbox staging에서 호출한다.
-
-### 결정 15
+`cott generate`는 user-selected Codex CLI 또는 OMP CLI를 함수별 process로, shell 없이 single-file write sandbox staging에서 호출한다.
 
 agent는 실제 project를 쓰지 않고 선택 function file만 변경한다. scratch와 cache는 workspace 밖으로 격리한다.
 
