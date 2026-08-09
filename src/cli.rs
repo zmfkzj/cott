@@ -13,7 +13,10 @@ use crate::binding::{
 use crate::compiler::{ProjectDiagnostic, parse_project};
 use crate::hir::lower;
 use crate::ir::render;
-use crate::project::{Project, discover_sources, load_project};
+use crate::project::{
+    Project, ProjectPaths, discover_sources, discover_sources_from_paths, load_config_with_paths,
+    load_project,
+};
 use crate::python_emit::{Emission, EmitDiagnostic, emit};
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession};
 
@@ -508,21 +511,21 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
     let Ok(root) = project_root(project_argument) else {
         return 2;
     };
-    let project = match load_project(&root) {
-        Ok(project) => project,
+    let (_, paths) = match load_config_with_paths(&root) {
+        Ok(config) => config,
         Err(error) => {
             eprintln!("error: {error}");
             return 2;
         }
     };
-    let session = match ProjectSession::acquire(&project.root) {
+    let session = match ProjectSession::acquire(&paths.root) {
         Ok(session) => session,
         Err(error) => {
             eprintln!("error: {error}");
             return 6;
         }
     };
-    let sources = match discover_sources(&project) {
+    let sources = match discover_sources_from_paths(&paths) {
         Ok(sources) => sources,
         Err(error) => {
             eprintln!("error: {error}");
@@ -536,7 +539,7 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
             return 3;
         }
     };
-    let hir = match lower(&project.source_dir, parsed) {
+    let hir = match lower(&paths.source_dir, parsed) {
         Ok(hir) => hir,
         Err(diagnostics) => {
             print_project_diagnostics(&diagnostics);
@@ -550,7 +553,7 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
             return 1;
         }
     };
-    let artifact_root = match artifact_root(&project) {
+    let artifact_root = match artifact_root_for_paths(&paths) {
         Ok(path) => path,
         Err(error) => {
             eprintln!("error: {error}");
@@ -558,24 +561,24 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
         }
     };
     let relative_root = artifact_root
-        .strip_prefix(&project.root)
+        .strip_prefix(&paths.root)
         .expect("artifact root is project-relative");
-    let mut paths = Vec::new();
+    let mut paths_to_write = Vec::new();
     let mut changes = ChangeSet::default();
     for module in ir.modules {
         let path = relative_root
             .join("ir")
             .join(format!("{}.json", module.module.as_string()));
-        let current = fs::read(project.root.join(&path)).ok();
+        let current = fs::read(paths.root.join(&path)).ok();
         if current.as_deref() != Some(&module.bytes) {
-            paths.push(path.clone());
+            paths_to_write.push(path.clone());
             changes.operations.push(Operation::Write {
                 path,
                 bytes: module.bytes,
             });
         }
     }
-    let snapshot = match InputSnapshot::capture(&project.root, paths) {
+    let snapshot = match InputSnapshot::capture(&paths.root, paths_to_write) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             eprintln!("error: {error}");
@@ -882,24 +885,23 @@ fn project_root(project: Option<PathBuf>) -> Result<PathBuf, i32> {
             2
         })
 }
-
 fn check_project(project_argument: Option<PathBuf>, selected: Option<PathBuf>) -> i32 {
     let Ok(root) = project_root(project_argument) else {
         return 2;
     };
-    let project = match load_project(&root) {
-        Ok(project) => project,
+    let (_, paths) = match load_config_with_paths(&root) {
+        Ok(config) => config,
         Err(error) => {
             eprintln!("error: {error}");
             return 2;
         }
     };
     if let Some(selected) = selected {
-        let selected = project.root.join(selected);
+        let selected = paths.root.join(selected);
         let valid = selected
             .extension()
             .is_some_and(|extension| extension == "cott")
-            && selected.starts_with(&project.source_dir)
+            && selected.starts_with(&paths.source_dir)
             && fs::symlink_metadata(&selected)
                 .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink());
         if !valid {
@@ -907,7 +909,7 @@ fn check_project(project_argument: Option<PathBuf>, selected: Option<PathBuf>) -
             return 2;
         }
     }
-    let sources = match discover_sources(&project) {
+    let sources = match discover_sources_from_paths(&paths) {
         Ok(sources) => sources,
         Err(error) => {
             eprintln!("error: {error}");
@@ -921,7 +923,7 @@ fn check_project(project_argument: Option<PathBuf>, selected: Option<PathBuf>) -
             return 3;
         }
     };
-    match lower(&project.source_dir, parsed) {
+    match lower(&paths.source_dir, parsed) {
         Ok(_) => 0,
         Err(diagnostics) => {
             print_project_diagnostics(&diagnostics);
@@ -1025,21 +1027,21 @@ fn format_project(project_argument: Option<PathBuf>, check: bool) -> i32 {
     let Ok(root) = project_root(project_argument) else {
         return 2;
     };
-    let project = match load_project(&root) {
-        Ok(project) => project,
+    let (_, paths) = match load_config_with_paths(&root) {
+        Ok(config) => config,
         Err(error) => {
             eprintln!("error: {error}");
             return 2;
         }
     };
-    let session = match ProjectSession::acquire(&project.root) {
+    let session = match ProjectSession::acquire(&paths.root) {
         Ok(session) => session,
         Err(error) => {
             eprintln!("error: {error}");
             return 6;
         }
     };
-    let sources = match discover_sources(&project) {
+    let sources = match discover_sources_from_paths(&paths) {
         Ok(sources) => sources,
         Err(error) => {
             eprintln!("error: {error}");
@@ -1054,7 +1056,7 @@ fn format_project(project_argument: Option<PathBuf>, check: bool) -> i32 {
         }
     };
     let mut changes = ChangeSet::default();
-    let mut paths = Vec::new();
+    let mut paths_to_write = Vec::new();
     let mut differs = false;
     for source in parsed.sources {
         let bytes = match crate::formatter::format(&source.cst, &source.syntax) {
@@ -1067,12 +1069,12 @@ fn format_project(project_argument: Option<PathBuf>, check: bool) -> i32 {
                 return 3;
             }
         };
-        let relative = project
+        let relative = paths
             .source_dir
-            .strip_prefix(&project.root)
+            .strip_prefix(&paths.root)
             .expect("project source is rooted")
             .join(&source.path);
-        let current = match fs::read(project.root.join(&relative)) {
+        let current = match fs::read(paths.root.join(&relative)) {
             Ok(bytes) => bytes,
             Err(error) => {
                 eprintln!("error: read source {}: {error}", relative.display());
@@ -1082,7 +1084,7 @@ fn format_project(project_argument: Option<PathBuf>, check: bool) -> i32 {
         if current != bytes {
             differs = true;
             if !check {
-                paths.push(relative.clone());
+                paths_to_write.push(relative.clone());
                 changes.operations.push(Operation::Write {
                     path: relative,
                     bytes,
@@ -1093,7 +1095,7 @@ fn format_project(project_argument: Option<PathBuf>, check: bool) -> i32 {
     if check {
         return if differs { 8 } else { 0 };
     }
-    let snapshot = match InputSnapshot::capture(&project.root, paths) {
+    let snapshot = match InputSnapshot::capture(&paths.root, paths_to_write) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             eprintln!("error: {error}");
@@ -1139,18 +1141,21 @@ fn display_path(root: &Path, path: &Path) -> String {
 }
 
 fn artifact_root(project: &Project) -> Result<PathBuf, String> {
-    if project
-        .generated_dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        != Some("python")
-    {
+    artifact_root_at(&project.root, &project.generated_dir)
+}
+
+fn artifact_root_for_paths(project: &ProjectPaths) -> Result<PathBuf, String> {
+    artifact_root_at(&project.root, &project.generated_dir)
+}
+
+fn artifact_root_at(root_dir: &Path, generated_dir: &Path) -> Result<PathBuf, String> {
+    if generated_dir.file_name().and_then(|name| name.to_str()) != Some("python") {
         return Err("target.python.generated must end in `python`".to_owned());
     }
-    let Some(root) = project.generated_dir.parent() else {
+    let Some(root) = generated_dir.parent() else {
         return Err("target.python.generated has no artifact root".to_owned());
     };
-    if root == project.root {
+    if root == root_dir {
         return Err("target.python.generated must be beneath an artifact root".to_owned());
     }
     Ok(root.to_path_buf())

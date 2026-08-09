@@ -3,7 +3,12 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cott::project::{discover_sources, load_project};
+#[cfg(unix)]
+use std::ffi::CString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+
+use cott::project::{discover_sources, load_config_with_paths, load_project};
 
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -45,6 +50,22 @@ generated = "generated/python"
 entry = "module.function"
 "#;
 
+const NORMATIVE_MANIFEST: &str = r#"
+[project]
+name = "demo"
+version = "0.1.0"
+source = "src"
+
+[target.python]
+source = "python"
+generated = "generated/python"
+stubs = "generated/stubs"
+lockfile = "uv.lock"
+interpreter = ".venv/bin/python"
+type_checker = ".venv/bin/basedpyright"
+runtime_validation = "boundary"
+"#;
+
 fn manifest(root: &Path, contents: &str) {
     fs::write(root.join("cott.toml"), contents).expect("manifest should be writable");
 }
@@ -70,6 +91,53 @@ fn loads_the_closed_manifest_and_derives_project_paths() {
         temp.path.join("python/_cott_impl")
     );
     assert_eq!(project.entry, "module.function");
+}
+
+#[test]
+fn derives_normative_project_paths_from_config() {
+    let temp = TempDir::new();
+    manifest(&temp.path, NORMATIVE_MANIFEST);
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+
+    let (config, paths) =
+        load_config_with_paths(&temp.path).expect("normative manifest should load");
+
+    assert_eq!(config.project.source, "src");
+    assert_eq!(paths.root, temp.path);
+    assert_eq!(paths.manifest, temp.path.join("cott.toml"));
+    assert_eq!(paths.source_dir, temp.path.join("src"));
+    assert_eq!(paths.python_source_dir, temp.path.join("python"));
+    assert_eq!(paths.generated_dir, temp.path.join("generated/python"));
+    assert_eq!(paths.stubs_dir, temp.path.join("generated/stubs"));
+    assert_eq!(paths.lockfile, Some(temp.path.join("uv.lock")));
+}
+
+#[test]
+fn normative_loader_rejects_legacy_entry() {
+    let temp = TempDir::new();
+    manifest(
+        &temp.path,
+        &NORMATIVE_MANIFEST.replace(
+            "source = \"python\"",
+            "source = \"python\"\nentry = \"app.run\"",
+        ),
+    );
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+
+    assert!(load_config_with_paths(&temp.path).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn normative_loader_rejects_a_non_regular_manifest() {
+    let temp = TempDir::new();
+    let manifest = temp.path.join("cott.toml");
+    let manifest = CString::new(manifest.as_os_str().as_bytes())
+        .expect("temporary manifest path should not contain NUL");
+    let result = unsafe { libc::mkfifo(manifest.as_ptr(), 0o600) };
+    assert_eq!(result, 0, "manifest FIFO should be creatable");
+
+    assert!(load_config_with_paths(&temp.path).is_err());
 }
 
 #[test]

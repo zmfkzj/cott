@@ -40,6 +40,20 @@ generated = "generated/python"
 entry = "app.run"
 "#;
 
+const NORMATIVE_MANIFEST: &str = r#"[project]
+name = "demo"
+version = "0.1.0"
+source = "src"
+
+[target.python]
+source = "python"
+generated = "generated/python"
+stubs = "generated/stubs"
+interpreter = ".venv/bin/python"
+type_checker = ".venv/bin/basedpyright"
+runtime_validation = "boundary"
+"#;
+
 const SOURCE: &str = "module app\n\nfn run() -> I32\n";
 const BINDING: &str = "def run() -> int:\n    return 7\n";
 
@@ -55,6 +69,15 @@ fn project() -> TempDir {
     temp
 }
 
+fn normative_project() -> TempDir {
+    let temp = TempDir::new();
+    fs::write(temp.path.join("cott.toml"), NORMATIVE_MANIFEST)
+        .expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    fs::write(temp.path.join("src/app.cott"), SOURCE).expect("source should be writable");
+    temp
+}
+
 fn cott(root: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_cott"))
         .args(arguments)
@@ -62,6 +85,24 @@ fn cott(root: &Path, arguments: &[&str]) -> Output {
         .arg(root)
         .output()
         .expect("cott should run")
+}
+#[test]
+fn source_commands_accept_the_normative_manifest_without_entry() {
+    let project = normative_project();
+
+    for arguments in [
+        &["check", "--format", "json"][..],
+        &["fmt"][..],
+        &["emit", "ir"][..],
+    ] {
+        let output = cott(&project.path, arguments);
+        assert!(
+            output.status.success(),
+            "{arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(project.path.join("generated/ir/app.json").is_file());
 }
 
 #[test]
