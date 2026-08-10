@@ -1412,7 +1412,7 @@ cott key admissibility는 5.4의 static classifier가 결정한다. `CottTuple2.
 
 ### 16.3 타입 검사
 
-Python 구현은 compiler가 scratch에 만든 전용 BasedPyright config와 explicit `--project`로 검사한다. config는 exact file set, CPython version·platform, generated root와 tool-only stub root를 고정하고 다른 `extraPaths`를 두지 않는다. user `pyproject.toml`의 BasedPyright 설정은 verification에 사용하지 않는다.
+Python 구현은 compiler가 scratch에 만든 전용 BasedPyright config와 explicit `--project`로 검사한다. config의 `include`는 resolved `_cott_impl/**/*.py` exact file set이며 compiler-owned generated root는 import/type resolution용 `extraPaths`, tool-only stub root는 `stubPath`로만 고정한다. runtime·facade·`*_types`의 compiler-owned bytes는 emitter golden test와 cott static verifier가 검사하고 BasedPyright diagnostic 대상에는 넣지 않는다. user `pyproject.toml`의 BasedPyright 설정은 verification에 사용하지 않는다.
 
 ```json
 {"typeCheckingMode": "strict", "reportInvalidTypeVarUse": "none"}
@@ -1514,7 +1514,7 @@ MVP target은 regular `.py`에 선언된 decorator 없는 top-level synchronous 
 
 module top-level node는 optional docstring, `from __future__ import annotations`, absolute import, invariant `TypeVar` 선언, literal로 초기화한 `Final[bool | int | float | str | bytes]`와 undecorated synchronous function definition만 허용한다. class·type alias 정의는 거부한다. 모든 Python-local helper signature도 concrete하게 typed되어야 하며 function body의 nested import·`global`·`nonlocal`과 그 밖의 executable top-level statement는 거부한다.
 
-target과 Python-local helper에서 optional docstring을 제외한 body가 `pass` 또는 `...`뿐인 placeholder와 `NotImplementedError`를 직접 발생시키는 코드는 정적 해석 단계에서 거부한다. 이 규칙은 `.pyi` stub의 ellipsis에는 적용하지 않는다.
+target과 Python-local helper에서 optional docstring을 제외한 body가 `pass` 또는 `...`뿐인 placeholder, value placeholder로 대입·반환하는 `...`, `NotImplementedError`를 직접 발생시키는 코드는 정적 해석 단계에서 거부한다. 일반 `.py` type annotation의 `tuple[T, ...]`와 `.pyi` stub의 ellipsis는 placeholder가 아니다.
 
 static verifier는 module 전체 AST의 import를 수집한다. generated `cott_runtime`·`*_types`, CPython standard library와 lockfile에 고정된 external distribution 외 project-local composition의 유일한 예외는 `from <exact cott module> import <declared public function>[, ...]` 형태의 absolute import다. module은 현재 Canonical IR의 cott module qname과 정확히 같고 각 imported name은 그 module이 선언한 public function이어야 하며 `as` alias를 사용할 수 없다. cott facade의 module import, parent package를 통한 module import, type·constant·그 밖의 symbol import, star·relative import와 모든 `_cott_impl` import는 거부한다. 그 밖의 project-local module, `importlib`·`__import__` 등 dynamic import, `eval`·`exec`·`compile`, `builtins`·`__builtins__` reflection과 `__file__`·`__path__`·`__spec__`·`__loader__`·`__package__` 의존도 거부한다. 선언되지 않은 Python-local helper는 같은 file에 두고 복잡한 library API는 최소 typed adapter로 감싼다.
 
@@ -1591,7 +1591,7 @@ loader는 target 실행 전에 recorded direct external module의 distribution i
 
 `examples/grammar/checked-add`만 manifest binding syntax를 가르치는 lesson이다. 이 project만 `[target.python.implementations]` mapping과 `python/cott_bindings/<cott module>/<function>.py`의 authored source를 checkout에 둔다. 16.5의 manifest binding과 source/runtime provenance 규칙은 일반 product feature로 계속 지원하지만 다른 유지 example의 authoring model은 아니다.
 
-나머지 40개 curriculum project와 `examples/complex/process-bar`는 checkout에서 implementation mapping, authored `cott_bindings` function source와 미리 만든 `_cott_impl` function source가 모두 없는 fully unresolved 상태로 시작한다. `cott emit python`은 agent를 호출하지 않고 이 unresolved metadata를 materialize한다. `cott generate --agent <agent> --target python`은 각 미구현 function의 Cott contract와 직접 참조 helper contract로 prompt를 만들고 function별 durable `python/_cott_impl/<cott module>/<function>.py`를 생성한다. 생성 뒤 composition도 위 exact facade 경계를 통과하며 모든 public function이 생성되어야 `cott verify`가 유효하다. `process-bar`는 이 동일한 unresolved-to-generated 흐름의 integration fixture이지 authored-binding 예외가 아니다.
+나머지 40개 curriculum project와 `examples/complex/process-bar`에는 implementation mapping이나 authored `cott_bindings` function source가 없다. checkout에 유지하는 `python/_cott_impl/<cott module>/<function>.py`와 `generated/` tree는 모두 실제 `cott generate --agent <agent> --target python` 성공 결과여야 하며 generation record의 matching `agent_runs` provenance를 보존한다. 이 generated function source를 제거한 clean contract state에서 `cott emit python`은 agent를 호출하지 않고 unresolved metadata만 materialize하고, `cott generate`는 각 미구현 function의 Cott contract와 직접 참조 helper contract로 prompt를 만들어 function별 durable source를 다시 생성한다. 생성 뒤 composition도 위 exact facade 경계를 통과하며 모든 public function이 생성되어야 `cott verify`가 유효하다. `process-bar`는 이 동일한 unresolved-to-generated 흐름의 integration fixture이지 authored-binding 예외가 아니다.
 
 유지되는 curriculum은 generic `run` function, forwarding alias, direct implementation-to-implementation call, duplicated validation, nominal-wrapper-only helper를 금지한다.
 
@@ -1653,7 +1653,7 @@ v0.1의 exact main-process argv template는 다음과 같다. 각 항목은 shel
 * shell을 사용하지 않고 executable과 각 인자를 분리하여 실행한다.
 * 실행 전에 executable의 canonical regular-file path, version과 content hash를 기록한다.
 * 작업 디렉터리는 17.4의 격리된 staging workspace다.
-* 실제 project root는 agent sandbox namespace에서 보이지 않는다. 대상 계약, 직접 참조 helper 계약, 필요한 binding·rule·기존 구현과 compiler-owned facade는 staging의 read-only copy로만 제공하고 현재 implementation file과 별도 scratch directory만 쓸 수 있다. adapter executable·runtime library와 adapter별 credential path만 project 밖에서 read-only로 열며, 이 sandbox를 강제할 수 없는 platform에서는 agent generate를 거부한다.
+* 실제 project root는 agent sandbox namespace에서 보이지 않는다. 대상 계약, 직접 참조 helper 계약, 필요한 binding·rule·기존 구현과 compiler-owned facade는 staging의 read-only copy로만 제공하고 현재 implementation file과 별도 scratch directory만 쓸 수 있다. Codex credential path와 OMP native-addon cache만 project 밖에서 read-only로 열며, OMP의 `config.yml`과 `agent.db`는 매 실행 scratch로 복사하고 원본 credential directory는 열지 않는다. 이 sandbox를 강제할 수 없는 platform에서는 agent generate를 거부한다.
 * prompt는 adapter가 지원하는 stdin 또는 단일 argv 값으로 전달하며 shell 문자열로 조합하지 않는다. 운영체제 인자 크기 한도를 넘으면 실행 전에 오류로 거부한다.
 * 환경 변수는 compiler version에 고정된 adapter별 name allowlist만 전달한다. secret value는 기록하지 않고 전달한 name만 기록한다.
 * `PYTHONDONTWRITEBYTECODE=1`을 설정하고 `TMPDIR`, type checker·test cache와 agent 임시 상태를 scratch directory로 보낸다.
@@ -1661,7 +1661,7 @@ v0.1의 exact main-process argv template는 다음과 같다. 각 항목은 shel
 * containment에는 compiler version이 고정한 process·CPU·memory·open-file·writable-byte ceiling을 적용하고 candidate implementation file은 최대 1 MiB로 제한한다. 어떤 ceiling이라도 넘으면 agent 실패다.
 * stdout·stderr는 끝까지 drain하며 전체 byte count·SHA-256와 truncation 여부를 계산하고 사용자에게 stream별 최대 1 MiB만 보여 준다. generation record에는 raw output을 넣지 않고 이 metadata, exit code, 실행 시간, adapter·executable path·version·content hash·prompt hash만 남긴다.
 
-에이전트가 0이 아닌 상태로 종료되거나 timeout되면 staging과 scratch 변경을 폐기한다. stdout의 code block은 구현으로 채택하지 않으며 허용된 implementation file의 최종 bytes만 후보 입력이다. 0으로 종료해도 target symbol이 없거나 file이 바뀌지 않아 unresolved면 실패한다.
+에이전트가 0이 아닌 상태로 종료되거나 timeout되면 staging과 scratch 변경을 폐기한다. stdout의 code block은 구현으로 채택하지 않으며 허용된 implementation file의 최종 bytes만 후보 입력이다. compiler는 그 후보의 끝 LF를 정확히 하나로 정규화한 뒤 검증·hash·publication하며 그 밖의 bytes는 바꾸지 않는다. 0으로 종료해도 target symbol이 없거나 file이 바뀌지 않아 unresolved면 실패한다.
 
 ### 17.3 에이전트가 변경할 수 없는 요소
 

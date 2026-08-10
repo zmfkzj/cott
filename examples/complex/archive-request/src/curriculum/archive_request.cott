@@ -43,14 +43,14 @@ fn compose_archive_plan(canonical_url: Str, include_html: Bool, include_media: B
 
 fn plan_archive(request: ArchiveRequest) -> Result[ArchivePlan, ArchiveRequestError]:
     doc """
-    Canonicalize the request URL, validate that at least one capture kind is
-    selected, and compose the resulting archive plan. InvalidUrl takes
-    priority over EmptySelection.
+    Reject a request with neither capture kind selected as EmptySelection before
+    canonicalizing its URL. Otherwise canonicalize the URL and compose the plan;
+    malformed URLs return InvalidUrl.
     """
 
     ensures Result.Ok(plan) => plan.canonical_url.len > 0 and plan.captures.len > 0
 
-    error ArchiveRequestError.InvalidUrl
     error ArchiveRequestError.EmptySelection when (not request.include_html and not request.include_media)
+    error ArchiveRequestError.InvalidUrl
 
     effects []

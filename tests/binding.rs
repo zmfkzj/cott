@@ -141,6 +141,33 @@ fn candidate_validation_public_api_uses_only_the_canonical_plan() {
 }
 
 #[test]
+fn allows_ellipsis_in_a_local_tuple_annotation() {
+    let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "run",
+        b"def run() -> object:\n    values: tuple[int, ...] = ()\n    return None\n",
+    )
+    .expect("type ellipsis is not a placeholder");
+}
+
+#[test]
+fn rejects_an_ellipsis_placeholder_statement() {
+    let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    let error = validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "run",
+        b"def run() -> object:\n    ...\n",
+    )
+    .expect_err("placeholder must fail");
+    assert!(error.contains("ellipsis placeholder"));
+}
+
+#[test]
 fn allows_public_function_imports_from_the_exact_canonical_facade() {
     let mut fixture = fixture("module api.service\n\nfn helper() -> Unit\nfn run() -> Unit\n");
     let source = b"from api.service import helper\n\ndef run() -> object:\n    return helper()\n";

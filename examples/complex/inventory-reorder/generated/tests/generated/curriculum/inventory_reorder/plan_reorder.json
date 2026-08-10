@@ -1,0 +1,1 @@
+{"schema_version":1,"symbol":"curriculum.inventory_reorder.plan_reorder","seed":"sha256:c746ae1d3131b3fae0424fb3faf648d36ba475e60b2af7bb6756809b745aafc4","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1","ensures:2","error:3","error:4","error:5"]}

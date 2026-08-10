@@ -1,0 +1,1 @@
+{"schema_version":1,"symbol":"curriculum.textfile_analysis.extract_casefolded_words","seed":"sha256:8cf238e76cbf4e15429f2e789a697bd096f9ec8e34374df4f09e257d9fb152c8","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1"]}

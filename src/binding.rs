@@ -705,7 +705,10 @@ fn validate_source(
             _ => {}
         }
     }
-    if masked.contains("...") {
+    if masked.lines().any(|line| {
+        let line = line.trim();
+        line == "..." || line == "return ..." || line.ends_with("= ...") || line.ends_with(": ...")
+    }) {
         add_error(String::from("ellipsis placeholder '...' is not allowed"));
     }
     inspect_imports(

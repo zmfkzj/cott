@@ -1,0 +1,1 @@
+{"schema_version":1,"symbol":"curriculum.stock_record.value_stock_record","seed":"sha256:ee361409890271db512bdfaa887441bf0286771aa8d613c3734d2a84c10b8c94","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1","error:2","error:3","error:4","error:5","error:6"]}

@@ -249,9 +249,16 @@ fn codex_golden_argv_stdin_environment_and_target_write() {
 #[test]
 fn omp_golden_argv_prompt_environment_and_target_write() {
     let (_temp, workspace, scratch, target) = fixture();
-    let executable = fake_adapter(&workspace, "omp/17.2.12", &capture_body(None));
+    let body = format!(
+        "printf isolated > \"$PI_CODING_AGENT_DIR/write-test\"\n{}",
+        capture_body(None)
+    );
+    let executable = fake_adapter(&workspace, "omp/17.2.12", &body);
     let _lock = _hold_env_lock();
     let _environment = EnvRestore::controlled(&scratch, &executable);
+    let omp_home = scratch.join("omp-home");
+    fs::write(omp_home.join("config.yml"), "model: test\n").expect("OMP config");
+    fs::write(omp_home.join("agent.db"), "credentials").expect("OMP credential database");
     let prompt = b"omp prompt $(touch sibling.py)";
     let Some(result) = run_or_skip(
         AgentKind::Omp,
@@ -323,6 +330,37 @@ fn omp_golden_argv_prompt_environment_and_target_write() {
     let metadata = fs::symlink_metadata(&target).expect("target metadata");
     assert!(metadata.is_file() && !metadata.file_type().is_symlink() && metadata.nlink() == 1);
     assert!(!workspace.join("sibling.py").exists());
+    assert_eq!(
+        fs::read_to_string(scratch.join("omp-agent/write-test")).expect("isolated OMP write"),
+        "isolated"
+    );
+    assert!(!omp_home.join("write-test").exists());
+}
+
+#[test]
+fn normalizes_agent_candidate_to_one_trailing_newline() {
+    let (_temp, workspace, scratch, target) = fixture();
+    let executable = fake_adapter(
+        &workspace,
+        "omp/17.2.12",
+        "printf 'def run() -> object:\\n    return None\\n\\n' > implementation.py",
+    );
+    let _lock = _hold_env_lock();
+    let _environment = EnvRestore::controlled(&scratch, &executable);
+    let Some(result) = run_or_skip(
+        AgentKind::Omp,
+        executable,
+        &workspace,
+        &scratch,
+        &target,
+        b"prompt",
+    ) else {
+        return;
+    };
+    assert_eq!(
+        result.expect("OMP run").implementation,
+        b"def run() -> object:\n    return None\n"
+    );
 }
 
 #[test]

@@ -1454,7 +1454,7 @@ fn generate_project(
             );
             let bound_symbols = bindings
                 .iter()
-                .map(|binding| format!("{}.{}", binding.module, binding.function))
+                .map(|binding| format!("from {} import {}", binding.module, binding.function))
                 .collect::<Vec<_>>()
                 .join("\n");
             let binding_context = bindings
@@ -1468,7 +1468,10 @@ fn generate_project(
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            let target_rules = "CPython 3.14.6, fully annotated Python. Define exactly the requested top-level function. Use generated <module>_types symbols and cott_runtime ABI types. Do not use pass, ellipsis, dynamic import, eval, exec, compile, suppressions, agent operations, or external imports not present in the lockfile.";
+            let target_rules = format!(
+                "CPython 3.14.6, fully annotated Python. The file's top level may contain only imports and exactly the requested function; put constants and helpers inside that function. Import only names the function actually references. Keep the complete `def` signature on one physical line and end the file with exactly one newline. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, CottList, CottSet, FrozenMap, and CottTuple2 from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict/tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float values: never call an alias such as I64 and never access `.value` on one. Path ABI values are pathlib.Path objects, never strings. Construct contract containers with `CottList(values=iterable)`, `CottSet(values=iterable)`, `FrozenMap(values=mapping)`, and `CottTuple2(first=value, second=value)`. CottList and CottSet expose len/iteration/membership, and CottList exposes indexing; neither exposes a public `.values` attribute. Explicitly annotate empty local work collections, for example `seen: set[str] = set()`. Import generated nominal types only from the exact module `{}_types`. Generated structs use `Struct(field=value)`, newtypes use `Newtype(value=value)`, and enum variants use separate keyword-only classes named `Enum_Variant`; never use `Enum.Variant`. Narrow enum unions with `isinstance` only while multiple variants remain, then handle the final variant in `else` without a redundant test; never test an already-exact parameter type. Use `Ok(value=value)`, `Err(error=error)`, `Some(value=value)`, `Nothing()`, and `UNIT` as return values. Copy every line in BOUND SYMBOLS IMPORT RULES exactly when calling a sibling; never append the function name to its module path. Do not use pass, ellipsis anywhere, dynamic import, eval, exec, compile, suppressions, agent operations, or external imports not present in the lockfile.",
+                unresolved_binding.module
+            );
             let project_rules = config
                 .generator
                 .rules
@@ -1482,7 +1485,7 @@ fn generate_project(
                         &fully_qualified,
                         &module_ir,
                         &binding_context,
-                        target_rules,
+                        &target_rules,
                         &bound_symbols,
                         None,
                         project_rules.as_deref(),

@@ -1,0 +1,1 @@
+{"schema_version":1,"symbol":"curriculum.split_file.validate_split_request","seed":"sha256:f15559bc636e04c0b50c0457a3ff7a2dbb3215d8f98d108fed8bee115e175cbc","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["error:1","error:2"]}

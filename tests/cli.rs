@@ -83,7 +83,7 @@ exec /usr/bin/python3 "$@"
     let checker = bin.join("basedpyright");
     fs::write(
         &checker,
-        "#!/bin/sh\n[ \"$1\" = \"--version\" ] && echo 'basedpyright 1.39.9'\nexit 0\n",
+        "#!/bin/sh\n[ \"$1\" = \"--version\" ] && printf 'basedpyright 1.39.9\\nbased on pyright 1.1.411\\n'\nexit 0\n",
     )
     .expect("fake BasedPyright");
     #[cfg(unix)]

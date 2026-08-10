@@ -1,0 +1,1 @@
+{"schema_version":1,"symbol":"curriculum.currency_converter.convert_currency","seed":"sha256:89b08110cea8646c279e832ecf2373f96aa1e59e5c33c60c896f093939ad2d82","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1","error:2","error:3","error:4","error:5","error:6","error:7","error:8","error:9"]}

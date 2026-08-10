@@ -1,0 +1,1 @@
+{"schema_version":1,"symbol":"curriculum.archive_request.canonicalize_archive_url","seed":"sha256:9c6ffb956f106d2edb73841d15a3a7dead0c72c0e175fc67e5361c35d6526904","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1","error:2"]}

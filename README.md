@@ -16,10 +16,10 @@ The maintained curriculum has 41 projects:
 3. **Complex — 16 projects:** generate meaningful validation, transformation, and aggregation
    stages that compose through generated facades.
 
-`grammar/checked-add` is the only manifest-binding lesson. The other 40 curriculum projects start
-with their `.cott` contracts, `python/pyproject.toml`, and no authored implementation. They do not
-have a `[target.python.implementations]` table, `python/cott_bindings/`, or pre-created
-`python/_cott_impl/` source.
+`grammar/checked-add` is the only manifest-binding lesson. The other 40 curriculum projects have no
+`[target.python.implementations]` table or `python/cott_bindings/` source. Their committed
+`python/_cott_impl/` implementations and `generated/` trees are outputs created by `cott generate`
+and retained so the generated code and provenance can be inspected directly.
 
 The commands below use an installed `cott` binary and run from the repository root. In a source
 checkout, `cargo run --` can replace `cott`. Each example's Python environment can be provisioned
@@ -75,14 +75,16 @@ This is the only curriculum project with an authored `cott_bindings` tree or imp
 
 ## Generate every other example from `.cott`
 
-An unbound example begins like this:
+The repository retains each successful generation result:
 
 ```text
 examples/<level>/<project>/
 ├── cott.toml
 ├── src/curriculum/<module>.cott
-└── python/
-    └── pyproject.toml
+├── python/
+│   ├── pyproject.toml
+│   └── _cott_impl/<exact Cott module path>/<function>.py
+└── generated/
 ```
 
 Use the same generation-first sequence for every project except `checked-add`:
@@ -95,6 +97,9 @@ cott generate --agent omp --target python --project examples/<level>/<project>
 cott verify --project examples/<level>/<project>
 ```
 
+This sequence is idempotent on the committed examples: `generate` invokes an agent only for
+functions still listed in `current.unresolved`; already accepted durable implementations are reused.
+
 `cott emit python` is a planning step. It never invokes an agent: it emits compiler-owned metadata,
 records every missing function in `current.unresolved`, and omits unresolved functions from the
 public facade. A successful emit is therefore not yet a deployable result.
@@ -106,10 +111,10 @@ unresolved public function. Accepted implementations become durable source at:
 python/_cott_impl/<exact Cott module path>/<function>.py
 ```
 
-Those files are created by `cott generate`, not authored or pre-seeded by the examples, and survive
-later emission. The compiler also publishes checked public modules below `generated/python/`.
-`cott verify` is the full-project gate and is meaningful only after all required functions have been
-generated.
+Those files are created by `cott generate`, not handwritten as bindings, and are committed here for
+inspection. They survive later emission. The compiler also publishes checked public modules below
+`generated/python/`. `cott verify` is the full-project gate and succeeds only after every required
+function has an accepted implementation.
 
 Composition does not bypass contracts. If a generated final function calls a generated helper, it
 imports the helper from the exact public Cott facade:
@@ -124,14 +129,15 @@ every edge.
 
 ### Generated grammar leaf
 
-`module-export-snapshot` starts only with
-`src/curriculum/module_export_snapshot.cott` and declares the leaf `build_snapshot`.
+`module-export-snapshot` declares the leaf `build_snapshot` in
+`src/curriculum/module_export_snapshot.cott`; its accepted generated implementation is retained next
+to the contract.
 
 ```bash
 project=examples/grammar/module-export-snapshot
 cott check --project "$project"
 cott fmt --check --project "$project"
-cott emit python --project "$project"       # build_snapshot is unresolved; no agent runs
+cott emit python --project "$project"       # refreshes output; the durable implementation stays resolved
 cott generate --agent omp --target python --project "$project"
 cott verify --project "$project"
 PYTHONPATH="$project/generated/python" "$project/.venv/bin/python" -c \
@@ -150,15 +156,15 @@ Generation creates
 group_filenames → classify_filename
 ```
 
-Its checkout contains the `.cott` declaration but neither implementation file. Generation creates
-one durable `_cott_impl` file per function, and the generated `group_filenames` implementation calls
-`classify_filename` through `curriculum.alphabetical_file_groups`.
+Its checkout retains one generated `_cott_impl` file per function. The generated
+`group_filenames` implementation calls `classify_filename` through
+`curriculum.alphabetical_file_groups`.
 
 ```bash
 project=examples/simple/alphabetical-file-groups
 cott check --project "$project"
 cott fmt --check --project "$project"
-cott emit python --project "$project"       # both functions are unresolved; no agent runs
+cott emit python --project "$project"       # refreshes output; both implementations stay resolved
 cott generate --agent omp --target python --project "$project"
 cott verify --project "$project"
 PYTHONPATH="$project/generated/python" "$project/.venv/bin/python" -c \
@@ -176,7 +182,7 @@ propagates the first declared error unchanged.
 build_page → render_page_html → escape_page_text
 ```
 
-All three start unresolved. The agent generates three durable files below
+Generation produced and retained three durable files below
 `python/_cott_impl/curriculum/page_build/`; the generated intermediate and final implementations
 import their dependencies from `curriculum.page_build`.
 
@@ -184,7 +190,7 @@ import their dependencies from `curriculum.page_build`.
 project=examples/complex/page-build
 cott check --project "$project"
 cott fmt --check --project "$project"
-cott emit python --project "$project"       # all three functions are unresolved; no agent runs
+cott emit python --project "$project"       # refreshes output; all three implementations stay resolved
 cott generate --agent omp --target python --project "$project"
 cott verify --project "$project"
 PYTHONPATH="$project/generated/python" "$project/.venv/bin/python" -c \
@@ -265,15 +271,15 @@ integration fixture for generating an entire composed module:
 process_bar → validate_payload, process_payload_bytes, build_output
 ```
 
-The fixture begins with `src/foo/bar.cott`, `python/pyproject.toml`, and all four functions
-unresolved. It has no implementation mapping, `cott_bindings` source, or pre-created
-`python/_cott_impl/foo/bar/` files.
+The fixture has no implementation mapping or `cott_bindings` source. Its four accepted generated
+implementations are retained below `python/_cott_impl/foo/bar/` alongside the contract and
+compiler-owned output tree.
 
 ```bash
 project=examples/complex/process-bar
 cott check --project "$project"
 cott fmt --check --project "$project"
-cott emit python --project "$project"       # records four unresolved functions; no agent runs
+cott emit python --project "$project"       # refreshes output; all four implementations stay resolved
 cott generate --agent omp --target python --project "$project"
 cott verify --project "$project"
 ```

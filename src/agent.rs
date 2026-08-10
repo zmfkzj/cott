@@ -260,7 +260,12 @@ pub fn run_agent(
         return Err("agent modified an unauthorized workspace path".to_owned());
     }
     if completed.timed_out || completed.status != Some(0) {
-        return Err(format!("{} failed", spec.executable_name));
+        return Err(format!(
+            "{} failed with status {:?}: {}",
+            spec.executable_name,
+            completed.status,
+            String::from_utf8_lossy(&completed.stderr).trim()
+        ));
     }
     let metadata = fs::symlink_metadata(target)
         .map_err(|error| format!("agent did not write target {}: {error}", target.display()))?;
@@ -270,11 +275,15 @@ pub fn run_agent(
     if metadata.len() > 1024 * 1024 {
         return Err("agent implementation exceeds 1 MiB".to_owned());
     }
-    let implementation = fs::read(target)
+    let mut implementation = fs::read(target)
         .map_err(|error| format!("read agent target {}: {error}", target.display()))?;
     if implementation.is_empty() {
         return Err(format!("agent did not write target {}", target.display()));
     }
+    while implementation.last() == Some(&b'\n') {
+        implementation.pop();
+    }
+    implementation.push(b'\n');
     Ok(AgentRunCandidate {
         implementation,
         executable: executable.clone(),
@@ -446,15 +455,43 @@ fn run_process(
             AgentKind::Omp => {
                 let credential_root = std::env::var_os("PI_CODING_AGENT_DIR")
                     .map(PathBuf::from)
-                    .or_else(|| home.map(|home| home.join(".omp/agent")));
-                if let Some(root) = credential_root.filter(|root| root.is_dir()) {
-                    let root = fs::canonicalize(root)
-                        .map_err(|error| format!("resolve PI_CODING_AGENT_DIR: {error}"))?;
-                    read_only.push(root.clone());
-                    environment
-                        .insert("PI_CODING_AGENT_DIR".to_owned(), root.display().to_string());
+                    .or_else(|| home.as_ref().map(|home| home.join(".omp/agent")));
+                if network {
+                    if let Some(root) = credential_root.filter(|root| root.is_dir()) {
+                        let isolated = scratch.join("omp-agent");
+                        fs::create_dir_all(&isolated)
+                            .map_err(|error| format!("create isolated OMP state: {error}"))?;
+                        for name in ["config.yml", "agent.db"] {
+                            let source = root.join(name);
+                            if source.is_file() {
+                                fs::copy(&source, isolated.join(name)).map_err(|error| {
+                                    format!("copy isolated OMP state `{name}`: {error}")
+                                })?;
+                            }
+                        }
+                        environment.insert(
+                            "PI_CODING_AGENT_DIR".to_owned(),
+                            isolated.display().to_string(),
+                        );
+                    }
+                    if let Some(home) = home {
+                        let natives = home.join(".omp/natives");
+                        if natives.is_dir() {
+                            read_only.push(
+                                fs::canonicalize(&natives).map_err(|error| {
+                                    format!("resolve OMP native addons: {error}")
+                                })?,
+                            );
+                            environment.insert("HOME".to_owned(), home.display().to_string());
+                        }
+                    }
                 }
             }
+        }
+    }
+    if network {
+        if let Ok(resolver) = fs::canonicalize("/etc/resolv.conf") {
+            read_only.push(resolver);
         }
     }
     read_only.push(workspace.to_path_buf());
@@ -473,6 +510,16 @@ fn run_process(
             return Err("OMP prompt exceeds the host argument-size limit".to_owned());
         }
     }
+    let address_space_bytes = if credential_kind == Some(AgentKind::Omp) {
+        128 * 1024 * 1024 * 1024
+    } else {
+        4 * 1024 * 1024 * 1024
+    };
+    let writable_bytes = if credential_kind == Some(AgentKind::Omp) {
+        512 * 1024 * 1024
+    } else {
+        64 * 1024 * 1024
+    };
     run(&SandboxSpec {
         program: executable.to_path_buf(),
         arguments,
@@ -490,13 +537,13 @@ fn run_process(
         },
         limits: ResourceLimits {
             cpu_time: Duration::from_secs(timeout_seconds.into()),
-            address_space_bytes: 4 * 1024 * 1024 * 1024,
+            address_space_bytes,
             process_count: 64,
             open_files: 256,
-            file_size_bytes: 64 * 1024 * 1024,
+            file_size_bytes: writable_bytes,
             wall_time: Duration::from_secs(timeout_seconds.into()),
             stream_limit_bytes: 16 * 1024 * 1024,
-            writable_bytes: 64 * 1024 * 1024,
+            writable_bytes,
         },
     })
     .map_err(|error| error.to_string())

@@ -19,10 +19,10 @@ import sys as _sys
 import sysconfig as _sysconfig
 import threading as _threading
 import types as _types
-from collections.abc import Iterable, Mapping, Sequence, Set
+from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass
 from pathlib import Path as _Path
-from typing import Annotated, Any, Generic, Literal, Never, TypeAlias, TypeVar, Union, get_args as _get_args, get_origin as _get_origin, get_type_hints as _get_type_hints, final as _final
+from typing import Annotated, Any, Generic, Literal, Never, TypeAlias, TypeVar, Union, get_args as _get_args, get_origin as _get_origin, get_type_hints as _get_type_hints, final as _final, overload
 _COTT_PATH_TYPE = type(_Path())
 
 
@@ -177,10 +177,16 @@ class CottList(Sequence[_T], Generic[_T]):
     def __len__(self) -> int:
         return len(self._values)
 
+    @overload
+    def __getitem__(self, index: int) -> _T: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> tuple[_T, ...]: ...
+
     def __getitem__(self, index: int | slice) -> _T | tuple[_T, ...]:
         return self._values[index]
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[_T]:
         return iter(self._values)
 
     def __eq__(self, other: object) -> bool:
@@ -240,7 +246,7 @@ class FrozenMap(Mapping[_K, _V], Generic[_K, _V]):
 
 
 @_final
-class CottTuple2(Sequence[_T1], Generic[_T1, _T2]):
+class CottTuple2(Sequence[Union[_T1, _T2]], Generic[_T1, _T2]):
     __slots__ = ("_values",)
     def __hash__(self) -> int:
         return hash(self._values)
@@ -259,10 +265,22 @@ class CottTuple2(Sequence[_T1], Generic[_T1, _T2]):
     def __len__(self) -> Literal[2]:
         return 2
 
-    def __getitem__(self, index: int | slice) -> _T1 | _T2 | tuple[_T1 | _T2, ...]:
+    @overload
+    def __getitem__(self, index: Literal[0]) -> _T1: ...
+
+    @overload
+    def __getitem__(self, index: Literal[1]) -> _T2: ...
+
+    @overload
+    def __getitem__(self, index: int) -> Union[_T1, _T2]: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> tuple[Union[_T1, _T2], ...]: ...
+
+    def __getitem__(self, index: int | slice) -> Union[_T1, _T2, tuple[Union[_T1, _T2], ...]]:
         return self._values[index]
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Union[_T1, _T2]]:
         return iter(self._values)
 
     def __eq__(self, other: object) -> bool:

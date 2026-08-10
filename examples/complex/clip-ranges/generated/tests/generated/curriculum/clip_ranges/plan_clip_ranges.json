@@ -1,0 +1,1 @@
+{"schema_version":1,"symbol":"curriculum.clip_ranges.plan_clip_ranges","seed":"sha256:a0d717090227f03f710400cfed23a11ff0d5a8316176a1eee1e3c6405726c6c6","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1","ensures:2","error:3","error:4","error:5","error:6"]}

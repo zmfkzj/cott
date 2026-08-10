@@ -342,7 +342,7 @@ exec /usr/bin/python3 "$@"
     let checker = bin.join("basedpyright");
     fs::write(
         &checker,
-        "#!/bin/sh\n[ \"$1\" = \"--version\" ] && echo 'basedpyright 1.39.9'\nexit 0\n",
+        "#!/bin/sh\n[ \"$1\" = \"--version\" ] && printf 'basedpyright 1.39.9\\nbased on pyright 1.1.411\\n'\nexit 0\n",
     )
     .expect("fake BasedPyright");
     #[cfg(unix)]
@@ -639,18 +639,32 @@ fn every_documented_example_emits_and_verifies() {
                     .path
                     .join("python/cott_bindings/curriculum/checked_add/checked_add.py")]
             );
+            assert!(durable_implementations.is_empty());
         } else {
             assert!(
                 cott_bindings.is_empty(),
                 "{} has authored cott_bindings sources: {cott_bindings:?}",
                 example.path
             );
+            let module_path = example.module.replace('.', "/");
+            let mut expected = example
+                .public_functions
+                .iter()
+                .map(|function| {
+                    project
+                        .path
+                        .join("python/_cott_impl")
+                        .join(&module_path)
+                        .join(format!("{function}.py"))
+                })
+                .collect::<Vec<_>>();
+            expected.sort();
+            assert_eq!(
+                durable_implementations, expected,
+                "{} has the wrong generated implementation set",
+                example.path
+            );
         }
-        assert!(
-            durable_implementations.is_empty(),
-            "{} has pre-authored durable implementations: {durable_implementations:?}",
-            example.path
-        );
 
         let formatted = cott(&project.path, &["fmt", "--check"]);
         assert!(
@@ -673,74 +687,67 @@ fn every_documented_example_emits_and_verifies() {
             example.path,
             String::from_utf8_lossy(&emitted.stderr)
         );
-        assert_public_projection(&project.path, example, checked_add);
+        assert_public_projection(&project.path, example, true);
 
         let generation: serde_json::Value = serde_json::from_slice(
             &fs::read(project.path.join("generated/generation.json"))
                 .expect("generation record should be readable"),
         )
         .expect("generation record should be JSON");
-        assert_eq!(generation["current"]["agent_runs"], serde_json::json!([]));
+        let implementations = generation["current"]["implementations"]
+            .as_array()
+            .expect("implementations should be an array");
+        assert_eq!(implementations.len(), example.public_functions.len());
+        let expected_symbols = example
+            .public_functions
+            .iter()
+            .map(|function| format!("{}.{}", example.module, function))
+            .collect::<BTreeSet<_>>();
+        let implementation_symbols = implementations
+            .iter()
+            .map(|implementation| {
+                implementation["cott_symbol"]
+                    .as_str()
+                    .expect("implementation should name its Cott symbol")
+                    .to_owned()
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(implementation_symbols, expected_symbols);
+        assert_eq!(generation["current"]["unresolved"], serde_json::json!([]));
 
         if checked_add {
-            let implementations = generation["current"]["implementations"]
-                .as_array()
-                .expect("implementations should be an array");
-            assert_eq!(implementations.len(), 1);
-            assert_eq!(
-                implementations[0]["cott_symbol"],
-                "curriculum.checked_add.checked_add"
-            );
+            assert_eq!(generation["current"]["agent_runs"], serde_json::json!([]));
             assert_eq!(implementations[0]["owner"], "manifest");
             assert_eq!(
                 implementations[0]["source_origin"],
                 "python/cott_bindings/curriculum/checked_add/checked_add.py"
             );
-            assert_eq!(generation["current"]["unresolved"], serde_json::json!([]));
-
-            let verified = cott(&project.path, &["verify"]);
+        } else {
             assert!(
-                verified.status.success(),
-                "{} failed to verify: {}",
-                example.path,
-                String::from_utf8_lossy(&verified.stderr)
+                implementations
+                    .iter()
+                    .all(|implementation| implementation["owner"] == "agent")
             );
-            continue;
+            let agent_symbols = generation["current"]["agent_runs"]
+                .as_array()
+                .expect("agent_runs should be an array")
+                .iter()
+                .map(|run| {
+                    run["symbol"]
+                        .as_str()
+                        .expect("agent run should name its Cott symbol")
+                        .to_owned()
+                })
+                .collect::<BTreeSet<_>>();
+            assert_eq!(agent_symbols, expected_symbols);
         }
-
-        assert_eq!(
-            generation["current"]["implementations"],
-            serde_json::json!([]),
-            "{} unexpectedly materialized implementations",
-            example.path
-        );
-        let mut unresolved = example
-            .public_functions
-            .iter()
-            .map(|function| format!("{}.{}", example.module, function))
-            .collect::<Vec<_>>();
-        unresolved.sort();
-        assert_eq!(
-            generation["current"]["unresolved"],
-            serde_json::json!(&unresolved),
-            "{} emitted the wrong unresolved set",
-            example.path
-        );
 
         let verified = cott(&project.path, &["verify"]);
         assert!(
-            !verified.status.success(),
-            "{} unexpectedly verified",
-            example.path
-        );
-        assert_eq!(
-            String::from_utf8(verified.stderr).expect("verify stderr must be UTF-8"),
-            format!(
-                "error: unresolved implementations: {}\n",
-                unresolved.join(", ")
-            ),
-            "{} verify failed for a reason other than unresolved implementations",
-            example.path
+            verified.status.success(),
+            "{} failed to verify: {}",
+            example.path,
+            String::from_utf8_lossy(&verified.stderr)
         );
     }
 }

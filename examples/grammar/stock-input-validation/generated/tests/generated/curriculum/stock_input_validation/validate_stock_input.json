@@ -1,0 +1,1 @@
+{"schema_version":1,"symbol":"curriculum.stock_input_validation.validate_stock_input","seed":"sha256:0c68a40a440c9f2e4c77582c2ae9d4cbd029b89cab51a3692864554dee104767","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["error:1","error:2","error:3","error:4"]}

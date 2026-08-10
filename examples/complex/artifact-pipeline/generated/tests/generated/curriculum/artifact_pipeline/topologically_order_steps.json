@@ -1,0 +1,1 @@
+{"schema_version":1,"symbol":"curriculum.artifact_pipeline.topologically_order_steps","seed":"sha256:44370f235d0e9c35d4d0f1cf9c9ba17cca85ff98f5f1ba0c5aff6439a9238ca2","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1","error:2","error:3","error:4","error:5","error:6"]}

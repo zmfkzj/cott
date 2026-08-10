@@ -1,0 +1,1 @@
+{"schema_version":1,"symbol":"curriculum.calculate_age.summarize_age","seed":"sha256:35b056086e6621f2bdfd9c57e36661fbad7b1f30ba00a0a88f5085533485676a","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1","ensures:2","ensures:3","ensures:4","error:5","error:6","error:7"]}

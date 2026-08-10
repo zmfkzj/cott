@@ -1,0 +1,1 @@
+{"schema_version":1,"symbol":"curriculum.billing_system.calculate_bill","seed":"sha256:99940c656d8102aaf84568005f76c1798426d2f95c33d90f835e699b56f4daec","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1","error:2","error:3","error:4"]}

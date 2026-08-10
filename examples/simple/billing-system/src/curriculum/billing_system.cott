@@ -57,7 +57,7 @@ fn calculate_bill(
     drinks: List[Quantity],
 ) -> Result[BillTotals, BillingError]:
     doc """
-    Validate the bill through validate_bill_lines, then calculate exact-cent subtotals and independently rounded taxes from the fixed catalog. Medical and grocery tax are 5 percent; drinks tax is 10 percent. Each tax is rounded to the nearest cent with ties to the even cent, and returned F64 fields are cent amounts divided by 100.
+    Validate the bill through validate_bill_lines, then calculate exact-cent subtotals and independently rounded taxes from this catalog of unit prices in cents: medical has Sanitizer 200, Mask 500, HandGloves 1200, Dettol 3000, Newsprin 500, and ThermalGun 1500; grocery has Rice 1000, FoodOil 1000, Wheat 1000, Daal 600, Flour 800, and Maggi 500; drinks has Sprite 1000, Limka 1000, Mazza 1000, Coke 1000, Fanta 1000, and MountainDuo 1000. Medical and grocery tax are 5 percent; drinks tax is 10 percent. Each tax is rounded to the nearest cent with ties to the even cent, and returned F64 fields are cent amounts divided by 100.
     
     A validation error is returned unchanged. On success, the total is the sum of all three subtotals and all three rounded taxes.
     """

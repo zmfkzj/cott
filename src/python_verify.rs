@@ -121,7 +121,8 @@ fn verify_in_scratch(
     let checker_version = String::from_utf8_lossy(&checker_probe.stdout)
         .trim()
         .to_owned();
-    if checker_version != "basedpyright 1.39.9" && checker_version != "1.39.9" {
+    let checker_version_line = checker_version.lines().next().unwrap_or_default();
+    if checker_version_line != "basedpyright 1.39.9" && checker_version_line != "1.39.9" {
         return Err(format!(
             "Python target requires BasedPyright 1.39.9, got `{checker_version}`"
         ));
@@ -152,7 +153,7 @@ fn verify_in_scratch(
     let checker_config = json!({
         "exclude": [generated_root.join("__pycache__")],
         "extraPaths": [generated_root],
-        "include": [generated_root],
+        "include": [generated_root.join("_cott_impl")],
         "pythonPlatform": python_platform,
         "pythonVersion": "3.14",
         "reportInvalidTypeVarUse": "none",
@@ -451,10 +452,18 @@ fn require_success(
     if completed.status == Some(0) && completed.stderr.is_empty() {
         Ok(())
     } else {
+        let stdout = String::from_utf8_lossy(&completed.stdout);
+        let stderr = String::from_utf8_lossy(&completed.stderr);
         Err(format!(
-            "{label} failed with status {:?}: {}",
+            "{label} failed with status {:?}: {}{}{}",
             completed.status,
-            String::from_utf8_lossy(&completed.stderr).trim()
+            stdout.trim(),
+            if stdout.is_empty() || stderr.is_empty() {
+                ""
+            } else {
+                "\n"
+            },
+            stderr.trim()
         ))
     }
 }
@@ -494,7 +503,7 @@ fn process(
         network: NetworkAccess::Disabled,
         limits: ResourceLimits {
             cpu_time: Duration::from_secs(120),
-            address_space_bytes: 2 * 1024 * 1024 * 1024,
+            address_space_bytes: 16 * 1024 * 1024 * 1024,
             process_count: 64,
             open_files: 256,
             file_size_bytes: 128 * 1024 * 1024,

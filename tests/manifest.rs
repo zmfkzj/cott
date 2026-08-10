@@ -63,15 +63,17 @@ fn parses_process_bar_normative_manifest_without_legacy_entry() {
         "process_payload_bytes.py",
         "validate_payload.py",
     ] {
-        for root in ["cott_bindings", "_cott_impl"] {
-            assert!(
-                !Path::new("examples/complex/process-bar/python")
-                    .join(root)
-                    .join("foo/bar")
-                    .join(implementation)
-                    .exists(),
-                "{implementation} must begin unresolved under {root}"
-            );
-        }
+        assert!(
+            !Path::new("examples/complex/process-bar/python/cott_bindings/foo/bar")
+                .join(implementation)
+                .exists(),
+            "{implementation} must not be manifest-authored"
+        );
+        assert!(
+            Path::new("examples/complex/process-bar/python/_cott_impl/foo/bar")
+                .join(implementation)
+                .is_file(),
+            "{implementation} must be generated durably"
+        );
     }
 }

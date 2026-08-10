@@ -1,0 +1,1 @@
+{"schema_version":1,"symbol":"curriculum.expense_split.settle_balances","seed":"sha256:b8206b6962e3352a3e5a0e0e6e5426d53a8cdb524a932b6d89933eb859020b0e","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1"]}
