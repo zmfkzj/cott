@@ -688,25 +688,29 @@ def _cott_validate_python_tools(tools: object) -> None:
         raise _cott_violation("Cott runtime ABI or version mismatch")
 
 
-def _cott_required_distributions(source: bytes, root: _Path) -> set[str]:
+def _cott_required_distributions(source: bytes, public_python_symbols: object) -> set[str]:
     try:
         tree = _ast.parse(source)
     except SyntaxError as error:
         raise _cott_violation(f"implementation source is not valid Python: {error}") from error
-    modules = set()
+    if type(public_python_symbols) is not dict:
+        raise _cott_violation("generation public Python symbols must be an object")
+    project_modules = set()
+    for module in public_python_symbols:
+        if type(module) is not str or not module or any(not part.isidentifier() for part in module.split(".")):
+            raise _cott_violation("generation contains an invalid public Python module")
+        project_modules.update((module, f"{module}_types"))
+    imports = set()
     for node in _ast.walk(tree):
         if isinstance(node, _ast.Import):
-            modules.update(alias.name.split(".", 1)[0] for alias in node.names)
+            imports.update(alias.name for alias in node.names)
         elif isinstance(node, _ast.ImportFrom) and node.level == 0 and node.module:
-            modules.add(node.module.split(".", 1)[0])
-    modules -= set(_sys.stdlib_module_names) | {"cott_runtime", "_cott_impl"}
+            imports.add(node.module)
+    stdlib = set(_sys.stdlib_module_names) | {"cott_runtime", "_cott_impl"}
     modules = {
-        module
-        for module in modules
-        if not module.endswith("_types")
-        and not (root / f"{module}.py").is_file()
-        and not (root / module / "__init__.py").is_file()
-        and not (root / "_cott_impl" / f"{module}.py").is_file()
+        module.split(".", 1)[0]
+        for module in imports
+        if module not in project_modules and module.split(".", 1)[0] not in stdlib
     }
     owners = _metadata.packages_distributions()
     required = set()
@@ -718,10 +722,8 @@ def _cott_required_distributions(source: bytes, root: _Path) -> set[str]:
     return required
 
 
-def _cott_validate_dependencies(dependencies: object, source: bytes, root: _Path) -> None:
-
-
-    required = _cott_required_distributions(source, root)
+def _cott_validate_dependencies(dependencies: object, source: bytes, public_python_symbols: object) -> None:
+    required = _cott_required_distributions(source, public_python_symbols)
     if type(dependencies) is not list:
         raise _cott_violation("generation dependencies must be an array")
     recorded_names = {
@@ -790,7 +792,7 @@ def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symb
     if generation_id != expected_id:
         raise _cott_violation("generation identity mismatch")
     _cott_validate_python_tools(current.get("tools"))
-    _cott_validate_dependencies(current.get("dependencies"), source, root)
+    _cott_validate_dependencies(current.get("dependencies"), source, current.get("public_python_symbols"))
     implementations = current.get("implementations")
     if type(implementations) is not list:
         raise _cott_violation("generation implementations must be an array")

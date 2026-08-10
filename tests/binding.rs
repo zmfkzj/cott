@@ -59,16 +59,16 @@ fn fixture(source: &str) -> Fixture {
 }
 
 #[test]
-fn resolves_canonical_planned_function_without_semantic_project() {
+fn accepts_cott_bindings_manifest_source_namespace() {
     let mut fixture = fixture("module api.service\n\nfn run() -> Unit\n");
     fixture.config.python.implementations.insert(
         "api.service.run".to_owned(),
-        "_cott_impl.api.service.run:run".to_owned(),
+        "cott_bindings.api.service.run:run".to_owned(),
     );
     let path = fixture
         .paths
         .python_source_dir
-        .join("_cott_impl/api/service/run.py");
+        .join("cott_bindings/api/service/run.py");
     fs::create_dir_all(path.parent().expect("binding has parent")).unwrap();
     fs::write(&path, b"def run() -> object:\n    return None\n").unwrap();
 
@@ -103,12 +103,12 @@ fn reports_unresolved_canonical_planned_function() {
     let mut fixture = fixture("module api.service\n\nfn run() -> Unit\nfn missing() -> Unit\n");
     fixture.config.python.implementations.insert(
         "api.service.run".to_owned(),
-        "_cott_impl.api.service.run:run".to_owned(),
+        "cott_bindings.api.service.run:run".to_owned(),
     );
     let path = fixture
         .paths
         .python_source_dir
-        .join("_cott_impl/api/service/run.py");
+        .join("cott_bindings/api/service/run.py");
     fs::create_dir_all(path.parent().expect("binding has parent")).unwrap();
     fs::write(&path, b"def run() -> object:\n    return None\n").unwrap();
 
@@ -141,19 +141,109 @@ fn candidate_validation_public_api_uses_only_the_canonical_plan() {
 }
 
 #[test]
+fn allows_public_function_imports_from_the_exact_canonical_facade() {
+    let mut fixture = fixture("module api.service\n\nfn helper() -> Unit\nfn run() -> Unit\n");
+    let source = b"from api.service import helper\n\ndef run() -> object:\n    return helper()\n";
+
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        source,
+    )
+    .expect("agent candidate may import a declared sibling function");
+
+    fixture.config.python.implementations.insert(
+        "api.service.run".to_owned(),
+        "cott_bindings.api.service.run:run".to_owned(),
+    );
+    let path = fixture
+        .paths
+        .python_source_dir
+        .join("cott_bindings/api/service/run.py");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, source).unwrap();
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("manifest binding may import a declared sibling function");
+    assert_eq!(resolution.resolved.len(), 1);
+    assert_eq!(resolution.resolved[0].function, "run");
+}
+
+#[test]
+fn rejects_non_function_and_non_explicit_facade_imports() {
+    let fixture = fixture(
+        "module api.service\n\nalias Count = I32\nconst LIMIT: I32 = 1\nfn helper() -> Unit\nfn run() -> Unit\n",
+    );
+    let cases: &[(&[u8], &str)] = &[
+        (
+            b"from api.service import helper as renamed\n\ndef run() -> object:\n    return renamed()\n",
+            "import aliases are not allowed",
+        ),
+        (
+            b"import api.service\n\ndef run() -> object:\n    return None\n",
+            "project-local import 'api.service' is not allowed",
+        ),
+        (
+            b"from api import helper\n\ndef run() -> object:\n    return None\n",
+            "project-local import 'api' is not allowed",
+        ),
+        (
+            b"from api.service import Count\n\ndef run() -> object:\n    return None\n",
+            "project-local import 'api.service.Count' is not allowed",
+        ),
+        (
+            b"from api.service import LIMIT\n\ndef run() -> object:\n    return None\n",
+            "project-local import 'api.service.LIMIT' is not allowed",
+        ),
+        (
+            b"from api.service import missing\n\ndef run() -> object:\n    return None\n",
+            "project-local import 'api.service.missing' is not allowed",
+        ),
+        (
+            b"from .service import helper\n\ndef run() -> object:\n    return helper()\n",
+            "relative imports are not allowed",
+        ),
+        (
+            b"from api.service import *\n\ndef run() -> object:\n    return None\n",
+            "star imports are not allowed",
+        ),
+        (
+            b"from _cott_impl.api.service.run import run\n\ndef run() -> object:\n    return None\n",
+            "project-local import '_cott_impl.api.service.run' is not allowed",
+        ),
+        (
+            b"from cott_bindings.api.service.helper import helper\n\ndef run() -> object:\n    return helper()\n",
+            "project-local import 'cott_bindings.api.service.helper' is not allowed",
+        ),
+    ];
+    for (source, expected) in cases {
+        let error = validate_candidate(
+            &fixture.config,
+            &fixture.paths,
+            &fixture.plan,
+            "api.service.run",
+            source,
+        )
+        .unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
 fn manifest_binding_precedes_the_agent_path() {
     let mut fixture = fixture("module api.service\n\nfn run() -> Unit\n");
     fixture.config.python.implementations.insert(
         "api.service.run".to_owned(),
-        "adapters.service:execute".to_owned(),
+        "cott_bindings.api.service.run:execute".to_owned(),
     );
-    let manifest_path = fixture.paths.python_source_dir.join("adapters/service.py");
+    let manifest_path = fixture
+        .paths
+        .python_source_dir
+        .join("cott_bindings/api/service/run.py");
     fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
-    fs::write(
-        &manifest_path,
-        b"def execute() -> object:\n    return None\n",
-    )
-    .unwrap();
+    let bytes = b"def execute() -> object:\n    return None\n";
+    fs::write(&manifest_path, bytes).unwrap();
     let agent_path = fixture
         .paths
         .python_source_dir
@@ -165,6 +255,10 @@ fn manifest_binding_precedes_the_agent_path() {
         resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan).unwrap();
     assert_eq!(resolution.resolved.len(), 1);
     assert_eq!(resolution.resolved[0].source, manifest_path);
+    assert_eq!(
+        resolution.resolved[0].implementation_module,
+        "cott_bindings.api.service.run"
+    );
     assert_eq!(resolution.resolved[0].implementation_function, "execute");
     assert_eq!(
         resolution.resolved[0].owner,
@@ -172,8 +266,10 @@ fn manifest_binding_precedes_the_agent_path() {
     );
     assert_eq!(
         resolution.resolved[0].generated_relative,
-        PathBuf::from("adapters/service.py")
+        PathBuf::from("_cott_impl/api/service/run.py")
     );
+    assert_eq!(resolution.resolved[0].bytes, bytes);
+    assert_eq!(resolution.resolved[0].sha256, cott::hash::sha256_hex(bytes));
 }
 
 #[test]
@@ -181,17 +277,18 @@ fn reports_unreferenced_durable_implementations_as_stale() {
     let mut fixture = fixture("module api.service\n\nfn run() -> Unit\n");
     fixture.config.python.implementations.insert(
         "api.service.run".to_owned(),
-        "_cott_impl.api.service.run:run".to_owned(),
+        "cott_bindings.api.service.run:run".to_owned(),
     );
     let run = fixture
         .paths
         .python_source_dir
-        .join("_cott_impl/api/service/run.py");
+        .join("cott_bindings/api/service/run.py");
     let stale = fixture
         .paths
         .python_source_dir
         .join("_cott_impl/api/service/old.py");
     fs::create_dir_all(run.parent().unwrap()).unwrap();
+    fs::create_dir_all(stale.parent().unwrap()).unwrap();
     fs::write(&run, b"def run() -> object:\n    return None\n").unwrap();
     fs::write(&stale, b"def old() -> object:\n    return None\n").unwrap();
 
@@ -205,7 +302,7 @@ fn rejects_stale_manifest_binding_keys() {
     let mut fixture = fixture("module api.service\n\nfn run() -> Unit\n");
     fixture.config.python.implementations.insert(
         "api.service.removed".to_owned(),
-        "adapters.service:execute".to_owned(),
+        "cott_bindings.api.service.removed:execute".to_owned(),
     );
 
     let diagnostics =
@@ -270,4 +367,55 @@ fn accepts_only_import_roots_selected_in_uv_lock() {
         error,
         "external distribution import 'unlocked_package' is not selected in uv.lock"
     );
+}
+
+#[test]
+fn rejects_reserved_and_non_authored_manifest_module_roots() {
+    let mut fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    let lockfile = fixture.root.join("uv.lock");
+    fs::write(
+        &lockfile,
+        "[[package]]\nname = \"demo\"\ndependencies = [{ name = \"locked-package\" }]\n\n[[package]]\nname = \"locked-package\"\n",
+    )
+    .unwrap();
+    fixture.paths.lockfile = Some(lockfile);
+
+    let cases = [
+        (
+            "_cott_impl.api.service.run:run",
+            "root `_cott_impl` is reserved",
+        ),
+        (
+            "cott_runtime.binding:run",
+            "root `cott_runtime` is reserved",
+        ),
+        ("api.service:run", "root `api` is a public Cott facade"),
+        (
+            "api.service_types:run",
+            "generated `*_types` modules cannot own",
+        ),
+        (
+            "pathlib.binding:run",
+            "root `pathlib` is reserved for the Python standard library",
+        ),
+        (
+            "locked_package.binding:run",
+            "root `locked_package` is selected as a locked distribution",
+        ),
+        ("adapters.service:run", "must be below `cott_bindings`"),
+    ];
+    for (target, expected) in cases {
+        fixture
+            .config
+            .python
+            .implementations
+            .insert("api.service.run".to_owned(), target.to_owned());
+        let diagnostics =
+            resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan).unwrap_err();
+        assert!(
+            diagnostics[0].message.contains(expected),
+            "{}",
+            diagnostics[0].message
+        );
+    }
 }

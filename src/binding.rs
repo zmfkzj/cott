@@ -107,6 +107,7 @@ pub fn resolve_implementations(
 
     let local_imports = local_import_roots(config, plan);
     let generated_type_modules = generated_type_modules(plan);
+    let allowed_facade_imports = allowed_facade_imports(plan);
     let locked_imports = match locked_import_roots(paths, &config.project.name) {
         Ok(imports) => imports,
         Err(message) => {
@@ -160,12 +161,22 @@ pub fn resolve_implementations(
             agent_source.push(segment);
         }
         agent_source.push(format!("{function}.py"));
+        let generated_relative = agent_source
+            .strip_prefix(&paths.python_source_dir)
+            .expect("canonical implementation is rooted at Python source")
+            .to_path_buf();
         expected_agent_files.insert(agent_source.clone());
 
         let (source, implementation_module, implementation_function, owner) = if let Some(target) =
             config.python.implementations.get(&symbol)
         {
-            match manifest_target(paths, target) {
+            match manifest_target(
+                paths,
+                target,
+                &local_imports,
+                &generated_type_modules,
+                &locked_imports,
+            ) {
                 Ok((source, module, function)) => {
                     (source, module, function, BindingOwner::Manifest)
                 }
@@ -214,17 +225,13 @@ pub fn resolve_implementations(
             continue;
         };
 
-        let generated_relative = source
-            .strip_prefix(&paths.python_source_dir)
-            .expect("resolved implementation is rooted at Python source")
-            .to_path_buf();
-
         match read_binding(
             &source,
             &implementation_function,
             &callable.declaration,
             &local_imports,
             &generated_type_modules,
+            &allowed_facade_imports,
             &locked_imports,
         ) {
             Ok(bytes) => resolved.push(ResolvedBinding {
@@ -332,13 +339,52 @@ fn json_contains_opaque(value: &serde_json::Value) -> bool {
 fn manifest_target(
     paths: &ProjectPaths,
     target: &str,
-) -> Result<(PathBuf, String, String), &'static str> {
+    local_imports: &HashSet<String>,
+    generated_type_modules: &HashSet<String>,
+    locked_imports: &HashSet<String>,
+) -> Result<(PathBuf, String, String), String> {
     let Some((module, function)) = target.split_once(':') else {
-        return Err("must use `module:function` syntax");
+        return Err("must use `module:function` syntax".to_owned());
     };
     if target.matches(':').count() != 1 || !valid_dotted_name(module) || !valid_identifier(function)
     {
-        return Err("must name a dotted Python module and simple function");
+        return Err("must name a dotted Python module and simple function".to_owned());
+    }
+    if generated_type_modules.iter().any(|generated| {
+        module == generated.as_str()
+            || module
+                .strip_prefix(generated.as_str())
+                .is_some_and(|suffix| suffix.starts_with('.'))
+    }) {
+        return Err("generated `*_types` modules cannot own manifest implementations".to_owned());
+    }
+    let root = module
+        .split('.')
+        .next()
+        .expect("validated module has a root");
+    if root == "_cott_impl" {
+        return Err(
+            "module root `_cott_impl` is reserved for generated implementations".to_owned(),
+        );
+    }
+    if root == "cott_runtime" {
+        return Err("module root `cott_runtime` is reserved for the runtime".to_owned());
+    }
+    if root != "cott_bindings" && local_imports.contains(root) {
+        return Err(format!("module root `{root}` is a public Cott facade"));
+    }
+    if stdlib_modules().contains(root) {
+        return Err(format!(
+            "module root `{root}` is reserved for the Python standard library"
+        ));
+    }
+    if locked_imports.contains(root) {
+        return Err(format!(
+            "module root `{root}` is selected as a locked distribution"
+        ));
+    }
+    if !module.starts_with("cott_bindings.") {
+        return Err("manifest implementation modules must be below `cott_bindings`".to_owned());
     }
     let mut source = paths.python_source_dir.clone();
     for segment in module.split('.') {
@@ -457,18 +503,37 @@ pub fn validate_candidate(
         &callable.declaration,
         &local_import_roots(config, plan),
         &generated_type_modules(plan),
+        &allowed_facade_imports(plan),
         &locked_import_roots(paths, &config.project.name)?,
     )
 }
 
 fn local_import_roots(config: &ProjectConfig, plan: &PythonArtifactPlan) -> HashSet<String> {
-    let mut roots = HashSet::from([String::from("_cott_impl"), config.project.name.clone()]);
+    let mut roots = HashSet::from([
+        String::from("_cott_impl"),
+        String::from("cott_bindings"),
+        config.project.name.clone(),
+    ]);
     for module in plan.modules() {
         if let Some(root) = module.module.split('.').next() {
             roots.insert(root.to_owned());
         }
     }
     roots
+}
+
+fn allowed_facade_imports(plan: &PythonArtifactPlan) -> BTreeMap<String, BTreeSet<String>> {
+    let mut imports = BTreeMap::<String, BTreeSet<String>>::new();
+    for callable in plan.public_callable_functions() {
+        let function = callable
+            .function
+            .rsplit('.')
+            .next()
+            .unwrap_or(&callable.function)
+            .to_owned();
+        imports.entry(callable.module).or_default().insert(function);
+    }
+    imports
 }
 
 fn module_segments(module: &str) -> Option<Vec<&str>> {
@@ -562,6 +627,7 @@ fn read_binding(
     declaration: &serde_json::Value,
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
+    allowed_facade_imports: &BTreeMap<String, BTreeSet<String>>,
     locked_imports: &HashSet<String>,
 ) -> Result<Vec<u8>, String> {
     let metadata = fs::symlink_metadata(path)
@@ -581,6 +647,7 @@ fn read_binding(
         declaration,
         local_imports,
         generated_type_modules,
+        allowed_facade_imports,
         locked_imports,
     )?;
     Ok(bytes)
@@ -592,6 +659,7 @@ fn validate_source(
     declaration: &serde_json::Value,
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
+    allowed_facade_imports: &BTreeMap<String, BTreeSet<String>>,
     locked_imports: &HashSet<String>,
 ) -> Result<(), String> {
     let masked = mask_python(source);
@@ -644,6 +712,7 @@ fn validate_source(
         &masked,
         local_imports,
         generated_type_modules,
+        allowed_facade_imports,
         locked_imports,
         &mut add_error,
     );
@@ -888,6 +957,7 @@ fn inspect_imports(
     source: &str,
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
+    allowed_facade_imports: &BTreeMap<String, BTreeSet<String>>,
     locked_imports: &HashSet<String>,
     add_error: &mut impl FnMut(String),
 ) {
@@ -905,6 +975,7 @@ fn inspect_imports(
                     rest,
                     local_imports,
                     generated_type_modules,
+                    None,
                     locked_imports,
                     add_error,
                 );
@@ -925,6 +996,7 @@ fn inspect_imports(
                 imported,
                 local_imports,
                 generated_type_modules,
+                allowed_facade_imports.get(module),
                 locked_imports,
                 add_error,
             );
@@ -940,6 +1012,7 @@ fn inspect_import_target(
     imported: &str,
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
+    allowed_facade_functions: Option<&BTreeSet<String>>,
     locked_imports: &HashSet<String>,
     add_error: &mut impl FnMut(String),
 ) {
@@ -954,15 +1027,26 @@ fn inspect_import_target(
     if imported.split_whitespace().any(|word| word == "*") {
         add_error(String::from("star imports are not allowed"));
     }
+    if let Some(functions) = allowed_facade_functions {
+        for item in imported.split(',').map(str::trim) {
+            if item.split_whitespace().count() != 1 {
+                add_error(String::from("import aliases are not allowed"));
+            } else if !functions.contains(item) {
+                add_error(format!(
+                    "project-local import '{module}.{item}' is not allowed"
+                ));
+            }
+        }
+        return;
+    }
     let root = module.split('.').next().unwrap_or(module);
-    if generated_type_modules.contains(module)
-        || root == "cott_runtime"
-        || stdlib_modules().contains(root)
-    {
+    if generated_type_modules.contains(module) {
         return;
     }
     if local_imports.contains(root) {
         add_error(format!("project-local import '{module}' is not allowed"));
+    } else if root == "cott_runtime" || stdlib_modules().contains(root) {
+        return;
     } else if !locked_imports.contains(root) {
         add_error(format!(
             "external distribution import '{module}' is not selected in uv.lock"

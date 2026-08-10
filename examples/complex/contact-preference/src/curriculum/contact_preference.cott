@@ -1,7 +1,0 @@
-module curriculum.contact_preference
-
-enum ContactPreference:
-    Email
-    Sms
-
-fn run() -> ContactPreference

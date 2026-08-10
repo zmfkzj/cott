@@ -1,5 +1,0 @@
-module curriculum.greeting_length
-
-const GREETING: Str = "cott"
-
-fn run() -> U64

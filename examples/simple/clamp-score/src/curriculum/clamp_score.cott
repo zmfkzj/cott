@@ -1,3 +1,0 @@
-module curriculum.clamp_score
-
-fn run() -> F64

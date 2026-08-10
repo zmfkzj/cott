@@ -1,0 +1,41 @@
+module curriculum.color_quantization
+
+struct Rgb:
+    red: U8
+    green: U8
+    blue: U8
+
+struct QuantizeRequest:
+    pixels: List[Rgb]
+    max_colors: U8
+
+struct Palette:
+    colors: List[Rgb]
+
+enum ColorQuantizationError:
+    EmptyPixels
+    ZeroMaxColors
+
+fn rank_palette_colors(pixels: List[Rgb], max_colors: U8) -> List[Rgb]:
+    doc """
+    Count exact RGB values and return at most max_colors distinct colors,
+    ordered by descending frequency and then ascending red, green, and blue
+    components. Empty pixels or a zero limit produces an empty list.
+    """
+
+    ensures result.len <= pixels.len
+
+    effects []
+
+fn quantize_colors(request: QuantizeRequest) -> Result[Palette, ColorQuantizationError]:
+    doc """
+    Reject an empty pixel collection before a zero color limit, then call
+    rank_palette_colors and construct the resulting palette.
+    """
+
+    ensures Result.Ok(palette) => palette.colors.len > 0
+
+    error ColorQuantizationError.EmptyPixels when request.pixels.len == 0
+    error ColorQuantizationError.ZeroMaxColors when request.max_colors == 0
+
+    effects []

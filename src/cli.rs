@@ -1547,6 +1547,9 @@ fn generate_project(
             });
         }
     }
+    bindings.sort_by(|left, right| {
+        (&left.module, &left.function).cmp(&(&right.module, &right.function))
+    });
     add_binding_input_hashes(&paths, &bindings, &mut input_hashes);
     let mut emission = match emit(&config, &plan, &ir, &bindings) {
         Ok(emission) => emission,

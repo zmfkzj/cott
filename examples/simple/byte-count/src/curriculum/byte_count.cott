@@ -1,7 +1,0 @@
-module curriculum.byte_count
-
-struct ByteCount:
-    data: Bytes
-    count: U64
-
-fn run() -> ByteCount

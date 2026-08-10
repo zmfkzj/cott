@@ -1,0 +1,67 @@
+module curriculum.tic_tac_toe
+
+enum Cell:
+    Empty
+    X
+    O
+
+enum Player:
+    X
+    O
+
+enum Outcome:
+    InProgress
+    XWins
+    OWins
+    Draw
+
+struct MoveResult:
+    board: List[Cell]
+    next_player: Player
+    outcome: Outcome
+
+enum MoveError:
+    InvalidBoard
+    InvalidPosition
+    InvalidTurn
+    Terminal
+    Occupied
+
+fn validate_board_state(board: List[Cell]) -> Result[Unit, MoveError]:
+    doc """
+    Validate the shape, mark counts, and winning lines of a three-by-three
+    board. InvalidBoard is returned when the board does not have nine cells,
+    the mark counts are impossible, both players have won, or a winner's mark
+    count is inconsistent with that player having moved last.
+    """
+
+    error MoveError.InvalidBoard when board.len != 9
+    error MoveError.InvalidBoard
+
+fn apply_tic_tac_toe_move(
+    board: List[Cell],
+    player: Player,
+    position: I64,
+) -> Result[MoveResult, MoveError]:
+    doc """
+    Apply one move to a row-major three-by-three board. InvalidBoard for a
+    non-nine-cell board precedes InvalidPosition for a position outside 0
+    through 8. validate_board_state then rejects inconsistent counts or wins;
+    InvalidTurn, Terminal, and Occupied follow in that order.
+    
+    X moves first. Before X moves the X and O counts are equal; before O moves
+    there is exactly one more X. Winning lines are (0,1,2), (3,4,5), (6,7,8),
+    (0,3,6), (1,4,7), (2,5,8), (0,4,8), and (2,4,6). A new win yields XWins
+    or OWins, a full board without a winner yields Draw, and every other move
+    yields InProgress. The returned board is a new immutable list, and
+    next_player is the other player even after a win or draw.
+    """
+
+    ensures Result.Ok(moved) => moved.board.len == 9
+
+    error MoveError.InvalidBoard when board.len != 9
+    error MoveError.InvalidPosition when position < 0 or position > 8
+    error MoveError.InvalidBoard
+    error MoveError.InvalidTurn
+    error MoveError.Terminal
+    error MoveError.Occupied

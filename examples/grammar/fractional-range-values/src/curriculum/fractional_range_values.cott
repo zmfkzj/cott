@@ -1,0 +1,37 @@
+module curriculum.fractional_range_values
+
+newtype PositiveStep(F64)
+    where self > 0.0
+
+newtype OutputLimit(U32)
+    where 1 <= self <= 10000
+
+enum FractionalRangeError:
+    NonFiniteInput
+    StepDoesNotAdvance
+    OutputLimitExceeded
+
+fn build_bounded_range(
+    start: F64,
+    stop: F64,
+    step: PositiveStep,
+    limit: OutputLimit,
+) -> Result[List[F64], FractionalRangeError]:
+    doc """
+    Constructs an ascending finite sequence of binary64 values. The start is
+    included when start is less than stop; stop is always excluded. If start is
+    greater than or equal to stop, the result is an empty list.
+    
+    The function first rejects a non-finite start, stop, or step with
+    NonFiniteInput. Each candidate is computed directly as start plus index
+    times step, with binary64 round-to-nearest, ties-to-even after the
+    multiplication and addition. A candidate equal to or above stop ends the
+    sequence. A candidate that does not exceed the preceding rounded value
+    produces StepDoesNotAdvance. After limit values, the next candidate is
+    checked only for termination; if it is still below stop,
+    OutputLimitExceeded takes precedence.
+    """
+
+    error FractionalRangeError.NonFiniteInput
+    error FractionalRangeError.StepDoesNotAdvance
+    error FractionalRangeError.OutputLimitExceeded

@@ -1,0 +1,63 @@
+module curriculum.experiment_ranking
+
+struct RunMetric:
+    run_id: Str
+    score: F64
+
+struct RankingRequest:
+    runs: List[RunMetric]
+    higher_is_better: Bool
+
+struct Ranking:
+    ordered_run_ids: List[Str]
+    best_run_id: Str
+
+enum ExperimentRankingError:
+    EmptyRuns
+    BlankRunId
+    NonFiniteScore
+    DuplicateRunId
+
+fn order_run_ids(
+    runs: List[RunMetric],
+    higher_is_better: Bool,
+) -> Result[List[Str], ExperimentRankingError]:
+    doc """
+    Validate and deterministically order experiment runs.
+    
+    Empty input is rejected first. Runs are then validated in input order;
+    within each run, a blank run_id is reported before a non-finite score and
+    before a duplicate run_id. Duplicate identifiers are compared exactly
+    without trimming.
+    
+    When higher_is_better is true, larger scores rank first; otherwise smaller
+    scores rank first. Equal scores are ordered by ascending run_id. Ok
+    contains every input run_id exactly once.
+    """
+
+    ensures Result.Ok(ordered_ids) => ordered_ids.len == runs.len
+    ensures Result.Ok(ordered_ids) => ordered_ids.len > 0
+
+    error ExperimentRankingError.EmptyRuns when runs.len == 0
+    error ExperimentRankingError.BlankRunId
+    error ExperimentRankingError.NonFiniteScore
+    error ExperimentRankingError.DuplicateRunId
+
+    effects []
+
+fn rank_experiments(request: RankingRequest) -> Result[Ranking, ExperimentRankingError]:
+    doc """
+    Order the request's runs with order_run_ids, propagate its first validation
+    error unchanged, and build a ranking whose best_run_id is the first
+    identifier in the successful order.
+    """
+
+    ensures Result.Ok(ranking) => ranking.ordered_run_ids.len == request.runs.len
+    ensures Result.Ok(ranking) => ranking.ordered_run_ids.len > 0
+
+    error ExperimentRankingError.EmptyRuns when request.runs.len == 0
+    error ExperimentRankingError.BlankRunId
+    error ExperimentRankingError.NonFiniteScore
+    error ExperimentRankingError.DuplicateRunId
+
+    effects []

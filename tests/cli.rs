@@ -110,7 +110,7 @@ type_checker = ".venv/bin/basedpyright"
 runtime_validation = "boundary"
 
 [target.python.implementations]
-"app.run" = "_cott_impl.app.run:run"
+"app.run" = "cott_bindings.app.run:run"
 "#;
 const SOURCE: &str = "module app\n\nfn run() -> I32\n";
 const BINDING: &str = "from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n";
@@ -129,16 +129,16 @@ fn project() -> TempDir {
     fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
     fs::write(temp.path.join("src/app.cott"), SOURCE).expect("source should be writable");
     write_target_metadata(&temp.path);
-    fs::create_dir_all(temp.path.join("python/_cott_impl/app"))
+    fs::create_dir_all(temp.path.join("python/cott_bindings/app"))
         .expect("implementation directory should be writable");
-    fs::write(temp.path.join("python/_cott_impl/app/run.py"), BINDING)
+    fs::write(temp.path.join("python/cott_bindings/app/run.py"), BINDING)
         .expect("binding should be writable");
     install_fake_python_tools(&temp.path);
     temp
 }
 
 fn make_unresolved(project: &TempDir) {
-    fs::remove_file(project.path.join("python/_cott_impl/app/run.py"))
+    fs::remove_file(project.path.join("python/cott_bindings/app/run.py"))
         .expect("binding should be removable");
     let manifest = fs::read_to_string(project.path.join("cott.toml")).expect("manifest");
     let manifest = manifest
@@ -285,7 +285,7 @@ fn permits_exact_generated_type_imports_in_bindings() {
     )
     .expect("typed source should be writable");
     fs::write(
-        project.path.join("python/_cott_impl/app/run.py"),
+        project.path.join("python/cott_bindings/app/run.py"),
         "from app_types import Card\n\n\ndef run() -> Card:\n    return Card(title=\"typed\")\n",
     )
     .expect("typed binding should be writable");
@@ -365,7 +365,7 @@ fn process_bar_generation_records_unresolved_and_verified_transitions() {
         project.path.join("src/foo/bar.cott"),
     )
     .expect("process-bar source should be copied");
-    fs::create_dir(project.path.join("python")).expect("Python source directory");
+    fs::create_dir(project.path.join("python")).expect("target source directory");
     fs::copy(
         fixture.join("python/pyproject.toml"),
         project.path.join("python/pyproject.toml"),
@@ -379,22 +379,39 @@ fn process_bar_generation_records_unresolved_and_verified_transitions() {
         "{}",
         String::from_utf8_lossy(&emitted.stderr)
     );
-    assert!(
-        !project
-            .path
-            .join("python/_cott_impl/foo/bar/process_bar.py")
-            .exists()
-    );
+    for implementation in [
+        "build_output.py",
+        "process_bar.py",
+        "process_payload_bytes.py",
+        "validate_payload.py",
+    ] {
+        for root in [
+            "python/_cott_impl/foo/bar",
+            "generated/python/_cott_impl/foo/bar",
+        ] {
+            assert!(
+                !project.path.join(root).join(implementation).exists(),
+                "{implementation} must begin unresolved under {root}"
+            );
+        }
+    }
     let initial: serde_json::Value = serde_json::from_slice(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("initial generation record"),
     )
     .expect("initial generation JSON");
     assert_eq!(initial["current"]["verified"], false);
+    assert_eq!(initial["current"]["implementations"], serde_json::json!([]));
     assert_eq!(
         initial["current"]["unresolved"],
-        serde_json::json!(["foo.bar.process_bar"])
+        serde_json::json!([
+            "foo.bar.build_output",
+            "foo.bar.process_bar",
+            "foo.bar.process_payload_bytes",
+            "foo.bar.validate_payload"
+        ])
     );
+    assert_eq!(initial["current"]["agent_runs"], serde_json::json!([]));
     assert!(initial["last_verified"].is_null());
 
     let tools = project.path.join("tools");
@@ -407,8 +424,28 @@ if [ "$1" = "--version" ]; then
   echo omp/17.2.12
   exit 0
 fi
-printf '%s\n' 'from cott_runtime import Err, Ok, Result' 'from foo.bar_types import BarError, BarError_InvalidPayload, BarOptions, InputPayload, OutputPayload' '' '' 'def process_bar(data: InputPayload, options: BarOptions) -> Result[OutputPayload, BarError]:' '    if len(data.data) == 0:' '        return Err(error=BarError_InvalidPayload(reason="empty payload"))' '    return Ok(value=OutputPayload(data=data.data, source_size=data.declared_size, format=data.format))' > implementation.py
-printf '%s\n' 'agent-run=1'
+case "$*" in
+  *"Symbol: foo.bar.build_output"*)
+    printf '%s\n' 'from foo.bar_types import OutputPayload, PayloadFormat, PayloadSize' '' '' 'def build_output(data: bytes, source_size: PayloadSize, format: PayloadFormat) -> OutputPayload:' '    return OutputPayload(data=data, source_size=source_size, format=format)' > implementation.py
+    printf '%s\n' 'agent-run=build_output'
+    ;;
+  *"Symbol: foo.bar.process_bar"*)
+    printf '%s\n' 'from cott_runtime import Err, Ok, Result' 'from foo.bar import build_output, process_payload_bytes, validate_payload' 'from foo.bar_types import BarError, BarOptions, InputPayload, OutputPayload' '' '' 'def process_bar(data: InputPayload, options: BarOptions) -> Result[OutputPayload, BarError]:' '    validated = validate_payload(data)' '    if isinstance(validated, Err):' '        return Err(error=validated.error)' '    processed = process_payload_bytes(validated.value.data, options)' '    if isinstance(processed, Err):' '        return Err(error=processed.error)' '    return Ok(' '        value=build_output(' '            processed.value,' '            validated.value.declared_size,' '            validated.value.format,' '        )' '    )' > implementation.py
+    printf '%s\n' 'agent-run=process_bar'
+    ;;
+  *"Symbol: foo.bar.process_payload_bytes"*)
+    printf '%s\n' 'from cott_runtime import Ok, Result' 'from foo.bar_types import BarError, BarOptions' '' '' 'def process_payload_bytes(data: bytes, options: BarOptions) -> Result[bytes, BarError]:' '    return Ok(value=data)' > implementation.py
+    printf '%s\n' 'agent-run=process_payload_bytes'
+    ;;
+  *"Symbol: foo.bar.validate_payload"*)
+    printf '%s\n' 'from cott_runtime import Err, Ok, Result' 'from foo.bar_types import BarError, BarError_InvalidPayload, InputPayload' '' '' 'def validate_payload(data: InputPayload) -> Result[InputPayload, BarError]:' '    if len(data.data) == 0:' '        return Err(error=BarError_InvalidPayload(reason="empty payload"))' '    return Ok(value=data)' > implementation.py
+    printf '%s\n' 'agent-run=validate_payload'
+    ;;
+  *)
+    printf '%s\n' 'unexpected process-bar agent prompt' >&2
+    exit 64
+    ;;
+esac
 "#,
     )
     .expect("write fake OMP");
@@ -421,26 +458,7 @@ printf '%s\n' 'agent-run=1'
     let path = std::env::join_paths([tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
         .expect("PATH");
     let before_generate = file_snapshot(&project.path);
-    let selected = Command::new(env!("CARGO_BIN_EXE_cott"))
-        .args([
-            "generate",
-            "foo.bar.process_bar",
-            "--agent",
-            "omp",
-            "--target",
-            "python",
-            "--project",
-        ])
-        .arg(&project.path)
-        .env("PATH", &path)
-        .output()
-        .expect("selected generate should run");
-    assert!(
-        selected.status.success(),
-        "{}",
-        String::from_utf8_lossy(&selected.stderr)
-    );
-    let all = Command::new(env!("CARGO_BIN_EXE_cott"))
+    let generated_all = Command::new(env!("CARGO_BIN_EXE_cott"))
         .args([
             "generate",
             "--agent",
@@ -452,23 +470,39 @@ printf '%s\n' 'agent-run=1'
         .arg(&project.path)
         .env("PATH", &path)
         .output()
-        .expect("all generate should run");
+        .expect("unscoped generate should run");
     assert!(
-        all.status.success(),
+        generated_all.status.success(),
         "{}",
-        String::from_utf8_lossy(&all.stderr)
+        String::from_utf8_lossy(&generated_all.stderr)
     );
 
-    let implementation = fs::read_to_string(
-        project
-            .path
-            .join("python/_cott_impl/foo/bar/process_bar.py"),
-    )
-    .expect("durable process-bar implementation");
-    assert_eq!(
-        implementation,
-        "from cott_runtime import Err, Ok, Result\nfrom foo.bar_types import BarError, BarError_InvalidPayload, BarOptions, InputPayload, OutputPayload\n\n\ndef process_bar(data: InputPayload, options: BarOptions) -> Result[OutputPayload, BarError]:\n    if len(data.data) == 0:\n        return Err(error=BarError_InvalidPayload(reason=\"empty payload\"))\n    return Ok(value=OutputPayload(data=data.data, source_size=data.declared_size, format=data.format))\n"
-    );
+    let expected_bindings = [
+        (
+            "python/_cott_impl/foo/bar/build_output.py",
+            "from foo.bar_types import OutputPayload, PayloadFormat, PayloadSize\n\n\ndef build_output(data: bytes, source_size: PayloadSize, format: PayloadFormat) -> OutputPayload:\n    return OutputPayload(data=data, source_size=source_size, format=format)\n",
+        ),
+        (
+            "python/_cott_impl/foo/bar/process_bar.py",
+            "from cott_runtime import Err, Ok, Result\nfrom foo.bar import build_output, process_payload_bytes, validate_payload\nfrom foo.bar_types import BarError, BarOptions, InputPayload, OutputPayload\n\n\ndef process_bar(data: InputPayload, options: BarOptions) -> Result[OutputPayload, BarError]:\n    validated = validate_payload(data)\n    if isinstance(validated, Err):\n        return Err(error=validated.error)\n    processed = process_payload_bytes(validated.value.data, options)\n    if isinstance(processed, Err):\n        return Err(error=processed.error)\n    return Ok(\n        value=build_output(\n            processed.value,\n            validated.value.declared_size,\n            validated.value.format,\n        )\n    )\n",
+        ),
+        (
+            "python/_cott_impl/foo/bar/process_payload_bytes.py",
+            "from cott_runtime import Ok, Result\nfrom foo.bar_types import BarError, BarOptions\n\n\ndef process_payload_bytes(data: bytes, options: BarOptions) -> Result[bytes, BarError]:\n    return Ok(value=data)\n",
+        ),
+        (
+            "python/_cott_impl/foo/bar/validate_payload.py",
+            "from cott_runtime import Err, Ok, Result\nfrom foo.bar_types import BarError, BarError_InvalidPayload, InputPayload\n\n\ndef validate_payload(data: InputPayload) -> Result[InputPayload, BarError]:\n    if len(data.data) == 0:\n        return Err(error=BarError_InvalidPayload(reason=\"empty payload\"))\n    return Ok(value=data)\n",
+        ),
+    ];
+    for (relative, expected) in expected_bindings {
+        assert_eq!(
+            fs::read_to_string(project.path.join(relative))
+                .unwrap_or_else(|error| panic!("durable helper {relative}: {error}")),
+            expected
+        );
+    }
+
     let generated: serde_json::Value = serde_json::from_slice(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("generated generation record"),
@@ -476,15 +510,99 @@ printf '%s\n' 'agent-run=1'
     .expect("generated generation JSON");
     assert_eq!(generated["current"]["verified"], false);
     assert_eq!(generated["current"]["unresolved"], serde_json::json!([]));
+    assert_eq!(
+        generated["current"]["implementations"]
+            .as_array()
+            .expect("generated implementations")
+            .iter()
+            .map(|implementation| {
+                (
+                    implementation["cott_symbol"].as_str().expect("Cott symbol"),
+                    implementation["owner"].as_str().expect("owner"),
+                )
+            })
+            .collect::<Vec<_>>(),
+        [
+            ("foo.bar.build_output", "agent"),
+            ("foo.bar.process_bar", "agent"),
+            ("foo.bar.process_payload_bytes", "agent"),
+            ("foo.bar.validate_payload", "agent"),
+        ]
+    );
     assert!(generated["last_verified"].is_null());
     let agent_runs = generated["current"]["agent_runs"].clone();
-    assert_eq!(agent_runs.as_array().expect("agent runs").len(), 1);
-    assert_eq!(generated["current"]["agent_runs"][0]["adapter"], "omp");
+    let run_summaries = agent_runs
+        .as_array()
+        .expect("agent runs")
+        .iter()
+        .map(|run| {
+            serde_json::json!({
+                "symbol": run["symbol"],
+                "adapter": run["adapter"],
+                "adapter_version": run["adapter_version"],
+                "status": run["status"],
+                "stdout_bytes": run["stdout"]["bytes"],
+                "stderr_bytes": run["stderr"]["bytes"],
+            })
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
-        generated["current"]["agent_runs"][0]["adapter_version"],
-        "17.2.12"
+        serde_json::Value::Array(run_summaries),
+        serde_json::json!([
+            {
+                "symbol": "foo.bar.build_output",
+                "adapter": "omp",
+                "adapter_version": "17.2.12",
+                "status": {
+                    "exit_code": 0,
+                    "signal": null,
+                    "timed_out": false,
+                    "cancelled": false
+                },
+                "stdout_bytes": 23,
+                "stderr_bytes": 0
+            },
+            {
+                "symbol": "foo.bar.process_bar",
+                "adapter": "omp",
+                "adapter_version": "17.2.12",
+                "status": {
+                    "exit_code": 0,
+                    "signal": null,
+                    "timed_out": false,
+                    "cancelled": false
+                },
+                "stdout_bytes": 22,
+                "stderr_bytes": 0
+            },
+            {
+                "symbol": "foo.bar.process_payload_bytes",
+                "adapter": "omp",
+                "adapter_version": "17.2.12",
+                "status": {
+                    "exit_code": 0,
+                    "signal": null,
+                    "timed_out": false,
+                    "cancelled": false
+                },
+                "stdout_bytes": 32,
+                "stderr_bytes": 0
+            },
+            {
+                "symbol": "foo.bar.validate_payload",
+                "adapter": "omp",
+                "adapter_version": "17.2.12",
+                "status": {
+                    "exit_code": 0,
+                    "signal": null,
+                    "timed_out": false,
+                    "cancelled": false
+                },
+                "stdout_bytes": 27,
+                "stderr_bytes": 0
+            }
+        ])
     );
-    assert_eq!(generated["current"]["agent_runs"][0]["stdout"]["bytes"], 12);
 
     let after_generate = file_snapshot(&project.path);
     let mut changed = before_generate
@@ -501,8 +619,16 @@ printf '%s\n' 'agent-run=1'
         .map(PathBuf::from)
         .collect::<std::collections::BTreeSet<_>>();
     expected.insert(PathBuf::from("generated/generation.json"));
-    expected.insert(PathBuf::from("python/_cott_impl/foo/bar/process_bar.py"));
-    assert!(changed.remove(Path::new("python/_cott_impl/foo/bar/process_bar.py")));
+    for implementation in [
+        "build_output.py",
+        "process_bar.py",
+        "process_payload_bytes.py",
+        "validate_payload.py",
+    ] {
+        let implementation = PathBuf::from("python/_cott_impl/foo/bar").join(implementation);
+        expected.insert(implementation.clone());
+        assert!(changed.remove(&implementation));
+    }
     assert!(
         changed.iter().all(|path| expected.contains(path)),
         "unexpected changed files: {changed:?}"
@@ -521,6 +647,10 @@ printf '%s\n' 'agent-run=1'
     .expect("verified generation JSON");
     assert_eq!(verified_record["current"]["verified"], true);
     assert_eq!(verified_record["current"], verified_record["last_verified"]);
+    assert_eq!(
+        verified_record["current"]["implementations"],
+        generated["current"]["implementations"]
+    );
     assert_eq!(verified_record["current"]["agent_runs"], agent_runs);
 
     let diff = cott(&project.path, &["diff"]);
@@ -733,10 +863,10 @@ type_checker = ".venv/bin/basedpyright"
 runtime_validation = "boundary"
 
 [target.python.implementations]
-"app.bounded" = "_cott_impl.app.bounded:bounded"
-"app.guarded" = "_cott_impl.app.guarded:guarded"
-"app.terminate" = "_cott_impl.app.terminate:terminate"
-"app.abort" = "_cott_impl.app.abort:abort"
+"app.bounded" = "cott_bindings.app.bounded:bounded"
+"app.guarded" = "cott_bindings.app.guarded:guarded"
+"app.terminate" = "cott_bindings.app.terminate:terminate"
+"app.abort" = "cott_bindings.app.abort:abort"
 "#,
     )
     .expect("manifest should be writable");
@@ -824,7 +954,7 @@ def abort(code: I32) -> Unit:
     for (function, source) in implementations {
         let path = project
             .path
-            .join("python/_cott_impl/app")
+            .join("python/cott_bindings/app")
             .join(format!("{function}.py"));
         fs::create_dir_all(path.parent().expect("implementation parent"))
             .expect("implementation directory should be writable");

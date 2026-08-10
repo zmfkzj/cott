@@ -1,6 +1,0 @@
-module curriculum.checked_subtract
-
-enum CountError:
-    Underflow
-
-fn run() -> Result[U64, CountError]

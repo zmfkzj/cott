@@ -1,3 +1,0 @@
-module curriculum.default_nickname
-
-fn run() -> Option[Str]

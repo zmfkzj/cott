@@ -55,9 +55,23 @@ fn parses_process_bar_normative_manifest_without_legacy_entry() {
         manifest.python.runtime_validation,
         RuntimeValidation::Boundary
     );
-    assert!(
-        !Path::new("examples/complex/process-bar/python/_cott_impl/foo/bar/process_bar.py")
-            .exists(),
-        "process-bar fixture must begin without a durable implementation"
-    );
+    assert!(!text.contains("[target.python.implementations]"));
+    assert!(manifest.python.implementations.is_empty());
+    for implementation in [
+        "build_output.py",
+        "process_bar.py",
+        "process_payload_bytes.py",
+        "validate_payload.py",
+    ] {
+        for root in ["cott_bindings", "_cott_impl"] {
+            assert!(
+                !Path::new("examples/complex/process-bar/python")
+                    .join(root)
+                    .join("foo/bar")
+                    .join(implementation)
+                    .exists(),
+                "{implementation} must begin unresolved under {root}"
+            );
+        }
+    }
 }

@@ -1,5 +1,0 @@
-module curriculum.increment_count
-
-const START: U64 = 41
-
-fn run() -> U64

@@ -1,5 +1,0 @@
-module curriculum.constant_greeting
-
-const GREETING: Str = "hello"
-
-fn run() -> Str

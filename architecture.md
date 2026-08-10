@@ -857,7 +857,7 @@ prelude effect 이름은 위 여덟 개다. CPU 계산 자체는 effect가 아�
 
 manifest effect key는 qname 문법이고 value는 literal `true`여야 한다. false·non-boolean value, empty list, unknown name, prelude 재정의와 한 effects list 안의 duplicate는 오류다. Canonical IR은 effect set을 이름순으로 저장한다.
 
-MVP에서 `effects`는 Canonical IR metadata이자 trust declaration이다. cott function에는 실행 body가 없고 Python implementation의 hidden call graph를 분석하지 않으므로 일반 effect propagation을 증명하지 않는다. contract language 자체에는 call이 없다. implementation-level propagation은 v0.3에서 도입한다.
+MVP에서 `effects`는 Canonical IR metadata이자 trust declaration이다. cott function에는 실행 body가 없고 contract language의 expression에도 call이 없다. Python implementation은 16.5.1의 공개 cott facade를 통해 다른 선언 함수를 호출할 수 있지만 compiler는 그 call graph에서 effect를 전파하지 않는다. 따라서 caller는 직접·간접 helper의 effect를 포함한 자신의 전체 effect set을 선언할 책임이 있으며 MVP는 이를 신뢰한다. implementation-level effect propagation 검사는 v0.3에서 도입한다.
 
 ---
 
@@ -1352,7 +1352,7 @@ project-owned path는 project-relative POSIX path이고 dependency import origin
 
 canonical executable path와 binary hash를 포함하므로 `generation_id`는 같은 machine·tool installation의 generation instance identity이지 cross-machine reproducible build ID가 아니다. portable 비교는 Canonical IR, `contract_surface`, `public_python_symbols`, durable implementation content hash와 normalized lock·dependency identity를 사용한다. exact tool·runtime identity와 machine-specific constant를 embed한 managed artifact hash는 같은 target environment 안에서만 비교한다. `generation.json`은 machine-local state이고 wheel에 포함하지 않는다.
 
-`dependencies`는 허용된 external import마다 normalized distribution name·version, 현재 platform에서 lock이 선택한 `lock_artifact_hash`, 관찰한 installed metadata content hash와 distribution-relative module origin·content hash를 기록한다. lock artifact hash는 기대값이고 immutable archive나 검증 가능한 installer receipt가 없는 MVP 설치 환경에서 installed bytes가 그 archive에서 왔음을 증명하지 않는다. 이 연결은 명시적 신뢰 선언이며 loader는 verify가 관찰해 고정한 installed bytes를 검사한다. generated module과 standard library는 제외하며 후자는 exact CPython provenance로 고정한다. project-local import는 16.5.1에 따라 허용하지 않는다.
+`dependencies`는 허용된 external import마다 normalized distribution name·version, 현재 platform에서 lock이 선택한 `lock_artifact_hash`, 관찰한 installed metadata content hash와 distribution-relative module origin·content hash를 기록한다. lock artifact hash는 기대값이고 immutable archive나 검증 가능한 installer receipt가 없는 MVP 설치 환경에서 installed bytes가 그 archive에서 왔음을 증명하지 않는다. 이 연결은 명시적 신뢰 선언이며 loader는 verify가 관찰해 고정한 installed bytes를 검사한다. generated module과 standard library는 제외하며 후자는 exact CPython provenance로 고정한다. 16.5.1의 직접 cott facade function import도 external dependency가 아니며 implementation AST와 Canonical IR에 대해 별도로 검증한다. 그 밖의 project-local import는 허용하지 않는다.
 
 `contract_surface`와 `public_python_symbols`는 축약 없이 필수다. 전자는 span·source path·implementation 정보를 제외하되 declaration kind·name·public, generic, resolved type shape, field·variant·default·constant value·refinement, ordered contract clause·effect와 `doc`을 보존하는 module별 canonical diff projection이다. 후자는 15.4의 전체 target symbol을 module별로 정렬해 저장한다. `facade_exports`는 이 집합과 `implementations`·`unresolved`에서 결정적으로 유도하므로 별도 저장하지 않는다. 따라서 외부에 보관한 `last_verified` record만으로도 이전 artifact 없이 contract·documentation breaking 분류와 partial-generate surface guard를 수행할 수 있다.
 
@@ -1477,7 +1477,7 @@ validator는 alias를 해소하고 cott_runtime nominal class, struct·enum fiel
 
 자동 test input은 모든 refinement와 `requires`를 만족해야 한다. generator는 IR hash를 seed로 경계값 우선 64개 candidate를 만들고 container 길이 0–3, enum variant와 recursive `JsonValue` 깊이 4로 제한한다. `requires`를 통과한 case만 실행하며 위반 candidate는 폐기한다. 미구체화 function `TypeVar`·trait·`Opaque` 입력이나 유효 case를 만들지 못한 절은 `미관찰`이다.
 
-자동 계약 테스트는 `effects`가 없고 반환 type이 `Never`가 아닌 함수만 함수별 별도 CPython process의 deny-by-default OS sandbox에서 실행한다. `Never` 함수는 자동 호출하지 않고 clause별 `미관찰` reason을 기록한다. sandbox를 구현 코드 import 전에 적용하고 read는 staging generated root·exact interpreter standard library·locked distribution과 dynamic-loader runtime으로 제한한다. filesystem write는 폐기할 process-private scratch만 허용하고 network, device, subprocess와 environment secret은 차단한다. `PYTHONDONTWRITEBYTECODE=1`, fixed `PYTHONHASHSEED`와 scratch `TMPDIR`을 사용하며 stdout·stderr는 pipe로 수집한다. process tree wall timeout은 30초, stream별 보존 한도는 1 MiB다. timeout·비정상 종료·한도 초과는 verify 실패이며 sandbox를 강제할 수 없는 platform에서도 실패한다. effectful 함수는 자동 실행하지 않고 `신뢰 선언`으로 보고한다.
+자동 계약 테스트는 caller에 선언된 `effects`가 없고 반환 type이 `Never`가 아닌 함수만 함수별 별도 CPython process의 deny-by-default OS sandbox에서 실행한다. facade helper의 effect는 MVP에서 caller로 자동 전파하지 않으므로 이 분류도 caller 선언을 신뢰하며, 누락된 effect가 실제 동작을 허용하도록 sandbox를 완화하지 않는다. `Never` 함수는 자동 호출하지 않고 clause별 `미관찰` reason을 기록한다. sandbox를 구현 코드 import 전에 적용하고 read는 staging generated root·exact interpreter standard library·locked distribution과 dynamic-loader runtime으로 제한한다. filesystem write는 폐기할 process-private scratch만 허용하고 network, device, subprocess와 environment secret은 차단한다. `PYTHONDONTWRITEBYTECODE=1`, fixed `PYTHONHASHSEED`와 scratch `TMPDIR`을 사용하며 stdout·stderr는 pipe로 수집한다. process tree wall timeout은 30초, stream별 보존 한도는 1 MiB다. timeout·비정상 종료·한도 초과는 verify 실패이며 sandbox를 강제할 수 없는 platform에서도 실패한다. effectful 함수는 자동 실행하지 않고 `신뢰 선언`으로 보고한다.
 
 contract test runner는 candidate마다 staged facade symbol을 loader·wrapper 경로로 호출한 뒤 같은 typed IR evaluator로 `requires`, 반환 type, conditional `error`와 `ensures`를 독립 판정한다. `test-only` project에서는 runner만 test context를 활성화하고, 다른 configured production mode도 바꾸지 않는다. 따라서 `off`도 실제 facade를 통과해 실행된 pure case의 테스트 관찰 evidence를 얻지만 설치된 facade의 optional production check가 활성화되었다고 보고하지 않는다. facade를 통과하지 않은 실행은 테스트 관찰로 기록하지 않는다.
 
@@ -1510,13 +1510,13 @@ manifest binding key는 현재 IR의 public function을 정확히 가리켜야 �
 
 `cott check`, `cott emit`, `cott generate`, `cott verify`는 Python source와 stub을 import 없이 정적으로 해석한다. 타입 판정은 이번 transaction에서 staging에 생성한 `*_types.py`를 기준으로 한다.
 
-MVP target은 regular `.py`에 선언된 decorator 없는 top-level synchronous function과 simple function name으로 제한한다. target의 coroutine, generator, overload, variadic parameter와 descriptor, extension·zip·custom loader는 거부한다. helper와 아래 허용된 module initialization은 implementation bytes의 일부지만 선언된 effect를 증명한다고 보지 않는다.
+MVP target은 regular `.py`에 선언된 decorator 없는 top-level synchronous function과 simple function name으로 제한한다. target의 coroutine, generator, overload, variadic parameter와 descriptor, extension·zip·custom loader는 거부한다. Python-local helper와 아래 허용된 module initialization은 implementation bytes의 일부지만 선언된 effect를 증명한다고 보지 않는다.
 
-module top-level node는 optional docstring, `from __future__ import annotations`, absolute import, invariant `TypeVar` 선언, literal로 초기화한 `Final[bool | int | float | str | bytes]`와 undecorated synchronous function definition만 허용한다. class·type alias 정의는 거부한다. 모든 helper signature도 concrete하게 typed되어야 하며 function body의 nested import·`global`·`nonlocal`과 그 밖의 executable top-level statement는 거부한다.
+module top-level node는 optional docstring, `from __future__ import annotations`, absolute import, invariant `TypeVar` 선언, literal로 초기화한 `Final[bool | int | float | str | bytes]`와 undecorated synchronous function definition만 허용한다. class·type alias 정의는 거부한다. 모든 Python-local helper signature도 concrete하게 typed되어야 하며 function body의 nested import·`global`·`nonlocal`과 그 밖의 executable top-level statement는 거부한다.
 
-target과 helper에서 optional docstring을 제외한 body가 `pass` 또는 `...`뿐인 placeholder와 `NotImplementedError`를 직접 발생시키는 코드는 정적 해석 단계에서 거부한다. 이 규칙은 `.pyi` stub의 ellipsis에는 적용하지 않는다.
+target과 Python-local helper에서 optional docstring을 제외한 body가 `pass` 또는 `...`뿐인 placeholder와 `NotImplementedError`를 직접 발생시키는 코드는 정적 해석 단계에서 거부한다. 이 규칙은 `.pyi` stub의 ellipsis에는 적용하지 않는다.
 
-static verifier는 module 전체 AST의 import를 수집한다. generated `cott_runtime`·`*_types`, CPython standard library와 lockfile에 고정된 external distribution만 허용한다. star import, relative import, 다른 project-local module, `importlib`·`__import__` 등 dynamic import, `eval`·`exec`·`compile`, `builtins`·`__builtins__` reflection과 `__file__`·`__path__`·`__spec__`·`__loader__`·`__package__` 의존은 거부한다. local helper는 같은 file에 두고 복잡한 library API는 최소 typed adapter로 감싼다.
+static verifier는 module 전체 AST의 import를 수집한다. generated `cott_runtime`·`*_types`, CPython standard library와 lockfile에 고정된 external distribution 외 project-local composition의 유일한 예외는 `from <exact cott module> import <declared public function>[, ...]` 형태의 absolute import다. module은 현재 Canonical IR의 cott module qname과 정확히 같고 각 imported name은 그 module이 선언한 public function이어야 하며 `as` alias를 사용할 수 없다. cott facade의 module import, parent package를 통한 module import, type·constant·그 밖의 symbol import, star·relative import와 모든 `_cott_impl` import는 거부한다. 그 밖의 project-local module, `importlib`·`__import__` 등 dynamic import, `eval`·`exec`·`compile`, `builtins`·`__builtins__` reflection과 `__file__`·`__path__`·`__spec__`·`__loader__`·`__package__` 의존도 거부한다. 선언되지 않은 Python-local helper는 같은 file에 두고 복잡한 library API는 최소 typed adapter로 감싼다.
 
 target annotation은 exact builtin `bool`·`str`·`bytes`, `pathlib.Path`, imported generated type, `cott_runtime` ABI alias, `typing.Never`·`Literal`과 cott generic parameter를 조합한 `Name`·`Attribute`·subscript·union AST만 허용한다. explicit string-literal annotation, user type alias와 annotation call은 거부한다. `from __future__ import annotations`만 future import로 허용하고 runtime verifier는 static AST 검사가 끝난 module에 `typing.get_type_hints(include_extras=True)`를 적용한다. generic function은 module-level `T = TypeVar("T", bound=...)`의 invariant form만 허용하며 name·bound를 cott generic parameter와 구조적으로 비교한다.
 
@@ -1536,7 +1536,7 @@ binding 함수는 cott 함수와 다음 항목이 정확히 같아야 한다.
 
 cott 함수 매개변수에는 기본값이 없다. 기본값이 필요한 API는 options struct field로 표현한다. 추가 선택 인자를 받거나 `Any`·`Unknown`이 유입되는 함수는 직접 binding하지 않는다. 선언된 `effects`는 16.4.1의 신뢰 선언이다.
 
-binding된 함수는 agent 생성 대상에서 제외한다. 나머지 각 함수는 별도 파일에 구현한다.
+binding 여부와 관계없이 각 public cott function은 독립 symbol로 해석·signature 검사·생성·검증하며, agent implementation은 함수별 별도 파일에 둔다. 다른 cott function을 facade로 호출해도 두 function을 하나의 binding이나 생성 단위로 합치거나 helper 구현을 caller에 inline하지 않는다.
 
 ```text
 foo.bar.process_bar
@@ -1546,7 +1546,7 @@ foo.bar.process_bar
 
 function implementation resolution priority는 manifest binding → 위 exact agent file → unresolved다. compatible agent file이 이미 있으면 재사용하고 agent를 호출하지 않는다. selected generate에서 agent file이 없거나 signature가 현재 contract와 불일치하면 regeneration candidate로 staged overwrite할 수 있다. binding 불일치는 항상 hard error며 agent로 대체하지 않는다.
 
-compiler가 필요한 `_cott_impl/**/__init__.py`를 side-effect 없는 빈 파일로 생성한다. agent는 선택 함수 파일만 쓰고 helper도 그 파일 안에 둔다.
+compiler가 필요한 `_cott_impl/**/__init__.py`를 side-effect 없는 빈 파일로 생성한다. agent는 선택 함수 파일만 쓰고 선언되지 않은 Python-local helper만 그 파일 안에 둔다. 공개 cott helper는 자신의 함수 파일에서 별도로 binding 또는 생성한다.
 
 binding target은 공개 facade와 달라야 한다. 외부 API가 계약과 다르면 사용자가 typed adapter를 작성한다. cott는 인자·예외 변환을 추측하지 않는다.
 
@@ -1558,19 +1558,22 @@ MVP binding 대상은 함수로 제한한다. 외부 struct와 enum은 cott 타�
 
 ### 16.6 공개 facade와 구현 경계
 
-호출자는 구현 위치와 관계없이 항상 cott module 경로를 사용한다.
+호출자는 구현 위치와 관계없이 항상 cott module 경로를 사용한다. implementation이 다른 project-local function을 호출할 때도 16.5.1의 exact function import만 사용한다.
 
 ```python
-from foo.bar import process_bar
+from foo.bar import process_bar, validate_bar
 ```
 
-cott는 `generated/python/foo/bar.py`에 fully typed wrapper를 생성한다. `bar_types.py`가 module 고유 type identity의 원본이고 standard ABI identity는 `cott_runtime`에 있다. implementation과 adapter는 custom type을 type module에서, standard type을 `cott_runtime`에서 import하며 facade를 import하지 않는다.
+이 composition은 Python implementation boundary에만 존재한다. `.cott`는 계속 실행 body·call-expression syntax 없이 function별 계약을 선언하는 contract-first language다.
+
+cott는 `generated/python/foo/bar.py`에 function별 fully typed wrapper를 생성한다. `bar_types.py`가 module 고유 type identity의 원본이고 standard ABI identity는 `cott_runtime`에 있다. implementation과 adapter는 custom type을 type module에서, standard type을 `cott_runtime`에서 import한다. facade에서는 선언된 public function만 16.5.1의 형태로 import할 수 있고 type·constant는 import할 수 없다. imported helper 호출은 direct implementation symbol로 우회하지 않고 helper의 generated wrapper를 통과하므로 helper 자신의 provenance, ABI, `requires`, 반환·오류와 `ensures` 검사가 configured mode대로 각각 적용된다.
 
 각 wrapper에는 project identity·expected `cott_runtime` ABI version, compile-time specialized `runtime_validation`, implementation의 canonical module·symbol, `generated/python` relative `runtime_origin`·content hash, exact CPython full version·cache tag·OS family·architecture와 16.1의 external dependency record를 immutable constant로 embed한다. full `sysconfig` platform string은 generation provenance에만 둔다. durable `source_origin`은 `generation.json`에만 남고 verify가 generated copy와 byte identity를 확인한다. installed package에 project-side record가 없어도 검사는 동작한다.
 
 `cott_runtime` verified loader는 먼저 facade와 runtime의 project identity·ABI version 및 embedded CPython full version·cache tag·OS family·architecture가 현재 runtime과 같은지 확인하며 OS point version은 비교하지 않는다. CPython patch version mismatch도 거부하며 16장의 재생성·재검증이 필요하다. 그 뒤 ordinary import보다 먼저 자신의 package 위치에서 generated root를 정하고 embedded `runtime_origin`을 no-follow로 열어 exact bytes의 hash를 검사한다. 성공하면 canonical module name으로 단 하나의 module object를 만들고 실행 전에 `sys.modules`에 등록한 뒤 검증한 bytes 자체를 compile·execute한다. 실패하면 등록을 되돌린다.
 
 이미 같은 canonical name이 `sys.modules`에 있으면 cott loader registry가 동일 object·origin·hash를 앞서 검증한 경우에만 재사용하고, 일반 import로 먼저 실행된 module은 거부한다. process-global registry와 load transition은 canonical name별 reentrant lock으로 보호해 concurrent caller가 같은 module object 또는 같은 실패를 관찰하게 한다. 구현 module 직접 import는 지원 API가 아니다. custom loader, relative import 또는 실행이 필요한 parent `__init__.py`는 MVP에서 거부한다. compiler-owned empty parent package만 만들며 검증된 symbol을 cache한다.
+implementation에서 import한 cott facade도 compiler-owned generated root에서만 해석하며 source root나 `_cott_impl`로 fallback하지 않는다. facade call chain의 각 edge는 해당 wrapper의 verified-loader 경계를 다시 통과한다.
 
 loader는 target 실행 전에 recorded direct external module의 distribution identity·version·regular module-relative origin·content hash를 import 없이 확인하고, 이미 load된 module의 `__file__` origin이 다르면 실패한다. 이 preflight는 preloaded module이 과거에 같은 bytes로 실행됐거나 distribution의 transitive file·standard library 전체가 변조되지 않았음을 증명하지 않는다. external execution은 lockfile packaging과 exact CPython installation에 대한 신뢰 선언으로 보고한다.
 
@@ -1580,6 +1583,18 @@ loader는 target 실행 전에 recorded direct external module의 distribution i
 
 구현이 해석된 함수만 facade와 `__all__`에 포함한다. 미구현 함수에는 placeholder를 만들지 않고 `current.unresolved`에 기록한다. `cott verify`는 unresolved가 하나라도 있거나 verified facade projection이 전체 IR과 다르면 실패한다.
 
+#### 16.6.1 유지 curriculum generation-first convention
+
+유지되는 curriculum module의 source order는 type 선언, 작은 domain leaf function, 더 큰 composition function, domain-named final operation 순서다. 의미 있는 경계만 stage로 공개한다. grammar lesson은 의도적으로 leaf 하나일 수 있고 simple·complex lesson도 domain responsibility가 독립적인 경우에만 stage를 추가한다.
+
+`.cott` 선언은 항상 bodyless다. 모든 composition edge는 `from <exact cott module> import <declared public function>` 형태의 alias-free import로 exact generated public facade를 통과해야 하며 구현끼리 직접 호출하지 않는다. caller의 effects는 helper에서 전파된다고 추론하지 않고 caller 계약에 명시한다. 공개 helper는 모든 ABI-valid input에 선언된 결과를 반환하거나 caller가 호출 전에 확립할 수 있는 Cott `requires`를 선언해야 한다.
+
+`examples/grammar/checked-add`만 manifest binding syntax를 가르치는 lesson이다. 이 project만 `[target.python.implementations]` mapping과 `python/cott_bindings/<cott module>/<function>.py`의 authored source를 checkout에 둔다. 16.5의 manifest binding과 source/runtime provenance 규칙은 일반 product feature로 계속 지원하지만 다른 유지 example의 authoring model은 아니다.
+
+나머지 40개 curriculum project와 `examples/complex/process-bar`는 checkout에서 implementation mapping, authored `cott_bindings` function source와 미리 만든 `_cott_impl` function source가 모두 없는 fully unresolved 상태로 시작한다. `cott emit python`은 agent를 호출하지 않고 이 unresolved metadata를 materialize한다. `cott generate --agent <agent> --target python`은 각 미구현 function의 Cott contract와 직접 참조 helper contract로 prompt를 만들고 function별 durable `python/_cott_impl/<cott module>/<function>.py`를 생성한다. 생성 뒤 composition도 위 exact facade 경계를 통과하며 모든 public function이 생성되어야 `cott verify`가 유효하다. `process-bar`는 이 동일한 unresolved-to-generated 흐름의 integration fixture이지 authored-binding 예외가 아니다.
+
+유지되는 curriculum은 generic `run` function, forwarding alias, direct implementation-to-implementation call, duplicated validation, nominal-wrapper-only helper를 금지한다.
+
 ---
 
 ## 17. 에이전트 코드 생성 흐름
@@ -1588,18 +1603,20 @@ loader는 target 실행 전에 recorded direct external module의 distribution i
 
 선택된 에이전트에게 전달되는 정보는 다음과 같다.
 
-1. Canonical IR
-2. 원본 `doc`
-3. 사전 조건
-4. 사후 조건
-5. 오류 조건
-6. 부작용
-7. 생성 대상 언어 규칙
-8. 프로젝트 코딩 규칙
-9. 관련 타입 선언
-10. 기존 구현 파일
-11. 구현 바인딩과 바인딩된 심볼 목록
-12. 읽기 전용인 프로젝트 내부 바인딩 파일
+1. 생성 대상 function의 Canonical IR과 원본 `doc`
+2. 사전 조건
+3. 사후 조건
+4. 오류 조건
+5. 부작용
+6. 생성 대상 언어 규칙
+7. 프로젝트 코딩 규칙
+8. 관련 타입 선언
+9. 현재 구현 파일
+10. 구현 바인딩과 바인딩된 심볼 목록
+11. 읽기 전용인 프로젝트 내부 바인딩 파일
+12. 대상 implementation이 facade로 직접 참조하는 각 public helper function의 `doc`, signature, 관련 타입, 전체 contract와 effects
+
+함수별 prompt는 대상 함수와 직접 참조 helper의 contract surface만 포함한다. helper의 implementation이나 transitive helper contract closure는 포함하지 않으며, 각 helper는 자신의 별도 binding·generation·verification 단위와 prompt를 가진다. 이 depth-one prompt input이 monolithic implementation 대신 function별 계약으로 생성 지시를 분리한다.
 
 ### 17.2 에이전트 선택 및 호출
 
@@ -1612,9 +1629,9 @@ MVP는 다음 두 가지 에이전트와 각 에이전트가 제공하는 CLI �
 | `codex`       | `codex exec`    |
 | `omp`         | `omp -p`        |
 
-cott는 17.1의 입력을 하나의 구현 지시로 구성하여 선택된 인터페이스에 전달한다. 구현 지시에는 최소한 다음 내용을 명시한다.
+cott는 17.1의 입력을 하나의 함수별 구현 지시로 구성하여 선택된 인터페이스에 전달한다. 구현 지시에는 최소한 다음 내용을 명시한다.
 
-> 이 계약에 따라 대상 언어 코드를 구현하라. `.cott` 파일과 읽기 전용 바인딩 파일은 수정하지 말고, 바인딩된 심볼을 다시 구현하지 마라.
+> 이 계약에 따라 대상 언어 코드를 구현하라. `.cott` 파일과 읽기 전용 바인딩 파일은 수정하지 말고, 바인딩된 심볼을 다시 구현하지 마라. project-local 호출은 제공된 public helper 계약에 대한 exact cott facade function import만 사용하라.
 
 지원하지 않는 `--agent` 값은 에이전트를 호출하기 전에 오류로 거부한다.
 
@@ -1636,7 +1653,7 @@ v0.1의 exact main-process argv template는 다음과 같다. 각 항목은 shel
 * shell을 사용하지 않고 executable과 각 인자를 분리하여 실행한다.
 * 실행 전에 executable의 canonical regular-file path, version과 content hash를 기록한다.
 * 작업 디렉터리는 17.4의 격리된 staging workspace다.
-* 실제 project root는 agent sandbox namespace에서 보이지 않는다. 필요한 계약·binding·rule·기존 구현은 staging의 read-only copy로만 제공하고 현재 implementation file과 별도 scratch directory만 쓸 수 있다. adapter executable·runtime library와 adapter별 credential path만 project 밖에서 read-only로 열며, 이 sandbox를 강제할 수 없는 platform에서는 agent generate를 거부한다.
+* 실제 project root는 agent sandbox namespace에서 보이지 않는다. 대상 계약, 직접 참조 helper 계약, 필요한 binding·rule·기존 구현과 compiler-owned facade는 staging의 read-only copy로만 제공하고 현재 implementation file과 별도 scratch directory만 쓸 수 있다. adapter executable·runtime library와 adapter별 credential path만 project 밖에서 read-only로 열며, 이 sandbox를 강제할 수 없는 platform에서는 agent generate를 거부한다.
 * prompt는 adapter가 지원하는 stdin 또는 단일 argv 값으로 전달하며 shell 문자열로 조합하지 않는다. 운영체제 인자 크기 한도를 넘으면 실행 전에 오류로 거부한다.
 * 환경 변수는 compiler version에 고정된 adapter별 name allowlist만 전달한다. secret value는 기록하지 않고 전달한 name만 기록한다.
 * `PYTHONDONTWRITEBYTECODE=1`을 설정하고 `TMPDIR`, type checker·test cache와 agent 임시 상태를 scratch directory로 보낸다.
@@ -1685,13 +1702,13 @@ compiler payload의 regular file mode는 `0644`, directory mode는 `0755`로 고
 
 transaction 시작 시 계약, manifest, manifest가 참조하는 rule, lockfile, `<target.python.source>`, generated tree와 compiler-owned test tree의 파일 목록·content hash를 기록한다. 프로젝트 내부 binding과 기존 implementation도 포함한다. 그 뒤 임시 staging workspace와 별도 scratch directory를 만든다.
 
-staging에는 계약, binding, rule, 기존 구현과 compiler 생성물의 사본을 제공하고 실제 project path는 agent에게 노출하지 않는다. 각 agent process의 workspace write allowlist는 현재 함수 file 하나로 제한한다.
+staging에는 대상 계약, 직접 참조 helper 계약, binding, rule, 기존 구현과 compiler 생성물의 사본을 제공하고 실제 project path는 agent에게 노출하지 않는다. 각 agent process의 workspace write allowlist는 현재 함수 file 하나로 제한한다.
 
 ```text
 <target.python.source>/_cott_impl/<module path>/<function>.py
 ```
 
-helper는 같은 함수 파일 안에 둔다. 필요한 `_cott_impl/**/__init__.py`, facade, type module, stub, IR, docs, generated tests와 provenance는 compiler만 쓴다. 같은 파일을 binding과 agent 생성 대상으로 함께 쓰는 구성은 거부한다.
+선언되지 않은 Python-local helper만 같은 함수 파일 안에 둔다. 공개 cott helper의 implementation file, 필요한 `_cott_impl/**/__init__.py`, facade, type module, stub, IR, docs, generated tests와 provenance는 현재 agent가 쓸 수 없다. 같은 파일을 binding과 agent 생성 대상으로 함께 쓰는 구성은 거부한다.
 
 scratch는 workspace diff 대상이 아니며 실행 뒤 폐기한다. agent 실행 후 staging 전체 file list와 diff를 검사한다. `.cott`, manifest, binding, compiler 생성물, 비선택 구현 또는 allowlist 밖 변경은 실패다. agent가 workspace에 만든 cache·temporary file도 위반이다.
 
@@ -1718,13 +1735,13 @@ cott parse, type check 및 Canonical IR 생성
   ↓
 Python runtime type, IR, stub, docs와 test strategy 생성
   ↓
-이번 세대 type module을 기준으로 binding 정적 해석
+이번 세대 type module과 Canonical IR을 기준으로 binding 및 exact cott facade function import graph 정적 해석
   ↓
 선택된 미구현 함수가 있으면 지정 agent 호출
   ↓
 workspace allowlist 및 비선택 구현 불변 검사
   ↓
-agent 이후 구현 symbol·source origin·content hash와 external import record 재계산
+agent 이후 구현 symbol·source origin·content hash, direct facade reference와 external import record 재계산
   ↓
 local implementation을 canonical module path의 generated runtime copy로 복사
   ↓
@@ -1745,7 +1762,7 @@ staging facade는 embedded identity·runtime origin·hash를 generated copy에�
 
 full verify에는 agent 선택 범위가 없고 agent를 호출하지 않는다. staging에서 재생성한 managed set과 actual project set이 정확히 같아야 하며 검증 record 외 차이는 폐기한다.
 
-binding을 해석하지 못하거나 그 external import에 필요한 lock entry가 없으면 agent 호출 전에 실패한다. agent 결과의 external import는 호출 직후 같은 규칙으로 검사한다. clean checkout에서도 이번 세대 type module을 먼저 만들므로 이전 generated file에 의존하지 않는다.
+binding을 해석하지 못하거나 그 external import에 필요한 lock entry가 없으면 agent 호출 전에 실패한다. facade import가 exact module의 declared public function으로 해석되지 않거나 금지된 형태면 같은 시점에 실패한다. agent 결과의 facade·external import는 호출 직후 같은 규칙으로 다시 검사한다. clean checkout에서도 이번 세대 type module과 facade를 먼저 만들므로 이전 generated file에 의존하지 않는다.
 
 특정 함수 generate에서 agent가 바꿀 수 있는 durable source는 선택된 함수별 implementation file뿐이지만 compiler-owned 관리 집합은 항상 전부 재생성·반영한다. `last_verified`가 있으면 그 baseline에 존재한 비선택 declaration의 canonical `contract_surface` record는 byte-identical해야 하고 비선택 public symbol은 현재 `public_python_symbols`에도 남아야 한다. 새 declaration 추가는 허용한다. 최초 검증 전 `last_verified = null`이면 이 guard 없이 선택 범위를 생성하고 `current.verified = false`로 기록한다.
 
@@ -1852,6 +1869,7 @@ cott verify
 * unresolved 구현과 compiler-owned stale module·symbol
 * stale durable implementation 진단
 * binding·agent source의 정적 signature와 generated copy의 verified-loader runtime signature
+* direct cott facade import의 exact module·public function identity와 금지된 module·alias·type·constant·star·`_cott_impl` import
 * facade, type module, source/runtime implementation origin·content hash와 copy byte identity
 * 모든 external import의 selected lock entry, installed distribution identity·version·metadata·origin·content hash와 archive-to-install 신뢰 등급
 * configured mode의 `requires`, concrete 반환 타입, 허용 error variant와 `ensures`
@@ -2206,6 +2224,7 @@ legal breakpoint가 없는 string·qualified name은 Unicode-scalar column 수�
 * compiler source에서 정적으로 해석하고 generated runtime copy로 고정하는 project-local plain top-level Python binding
 * single-identity verified loader와 embedded implementation provenance
 * user-selected Codex CLI 또는 OMP CLI를 통한 함수별 구현 생성
+* exact cott module의 declared public function만 import하는 generated-facade composition과 depth-one helper contract prompt
 * compiler stale file 자동 삭제와 stale durable implementation 진단
 * `current`·`last_verified` snapshot과 contract/implementation diff
 * formatter, stable CLI exit code와 JSON diagnostics
@@ -2222,8 +2241,8 @@ legal breakpoint가 없는 string·qualified name은 Unicode-scalar column 수�
 * trait specialization과 subtyping variance
 * 비동기 Python binding과 비동기 type system
 * SMT 기반 정적 계약 증명
-* 일반 Python call graph의 effect 전파 검사
-* implementation 사이 project-local import와 cott facade chaining
+* 일반 Python call graph의 자동 effect 전파 검사
+* cott facade를 통하지 않는 implementation 사이 project-local import
 * mutable 호출 전 snapshot과 `old()`
 * 자동 refactoring, adapter와 exception conversion 생성
 * 다중 target language와 완전한 IDE plugin
@@ -2256,7 +2275,7 @@ MVP는 다음 조건을 모두 자동 검증할 때 완료다.
 14. off·test-only mode는 16.4 표보다 강한 보증을 보고하지 않는다.
 15. 자동 test input은 refinement·`requires`를 만족하고 생성 실패 절을 `미관찰`로 보고한다.
 16. pure test는 deny-by-default OS sandbox에서만 실행하고 effectful function과 `Never` 반환 function은 자동 실행하지 않는다.
-17. cott binding을 이번 staged type module에 대해 import 없이 해석하고 unsupported Python shape를 거부한다.
+17. cott binding과 implementation import를 이번 staged type module·Canonical IR에 대해 import 없이 해석하고, project-local composition은 alias 없는 exact cott facade public-function import만 허용하며 각 function을 별도로 생성·검증한다.
 18. 모든 implementation external import는 frozen production dependency closure의 selected lock hash, installed distribution identity·version·metadata·origin·content hash 없이는 실패하며 archive-to-install 연결의 신뢰 등급을 정직하게 보고한다.
 19. local implementation은 generated runtime copy로 고정하고 verified loader가 그 exact bytes를 실행 전 검증한다.
 20. implementation signature, numeric metadata, source/runtime origin, copy byte identity와 content drift를 탐지한다.

@@ -1,0 +1,47 @@
+module curriculum.inventory_reorder
+
+struct ReorderRequest:
+    sku: Str
+    on_hand: U64
+    reserved: U64
+    reorder_point: U64
+    target_level: U64
+
+struct ReorderPlan:
+    sku: Str
+    order_qty: U64
+
+enum InventoryReorderError:
+    BlankSku
+    ReservedExceedsOnHand
+    TargetBelowReorderPoint
+
+fn available_stock(on_hand: U64, reserved: U64) -> Result[U64, InventoryReorderError]:
+    doc """
+    Compute stock available for reorder planning after reservations. Return
+    ReservedExceedsOnHand when reservations cannot be subtracted safely.
+    """
+
+    ensures Result.Ok(available) => available == on_hand - reserved
+
+    error InventoryReorderError.ReservedExceedsOnHand when reserved > on_hand
+
+    effects []
+
+fn plan_reorder(request: ReorderRequest) -> Result[ReorderPlan, InventoryReorderError]:
+    doc """
+    Validate one inventory request and build its deterministic reorder plan.
+    A blank SKU is rejected before available stock is computed. An invalid
+    target is rejected afterward. Stock at or below the reorder point is
+    replenished to the target level; stock above it produces a zero-quantity
+    plan.
+    """
+
+    ensures Result.Ok(plan) => plan.sku == request.sku
+    ensures Result.Ok(plan) => ((request.on_hand - request.reserved <= request.reorder_point and plan.order_qty == request.target_level - (request.on_hand - request.reserved)) or (request.on_hand - request.reserved > request.reorder_point and plan.order_qty == 0))
+
+    error InventoryReorderError.BlankSku when request.sku.len == 0
+    error InventoryReorderError.ReservedExceedsOnHand when (request.sku.len > 0 and request.reserved > request.on_hand)
+    error InventoryReorderError.TargetBelowReorderPoint when (request.sku.len > 0 and request.reserved <= request.on_hand and request.target_level < request.reorder_point)
+
+    effects []

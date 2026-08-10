@@ -1,0 +1,57 @@
+module curriculum.decimal_binary
+
+enum Conversion:
+    DecimalToBinary(value: I64)
+    BinaryToDecimal(digits: Str)
+
+enum ConversionResult:
+    Binary(digits: Str)
+    Decimal(value: I64)
+
+enum ConversionError:
+    NegativeDecimal
+    InvalidBinary
+    Overflow
+
+fn decimal_to_binary(value: I64) -> Result[Str, ConversionError]:
+    doc """
+    Converts one decimal I64 to canonical binary text.
+    
+    Every nonnegative value succeeds with the shortest sequence of ASCII `0`
+    and `1` digits, without leading zeros; zero is exactly `"0"`. A negative
+    value returns `NegativeDecimal`.
+    """
+
+    ensures Result.Ok(digits) => digits.len > 0
+
+    error ConversionError.NegativeDecimal when value < 0
+
+fn binary_to_decimal(digits: Str) -> Result[I64, ConversionError]:
+    doc """
+    Converts binary text to a nonnegative decimal I64.
+    
+    The input must be nonempty and contain only ASCII `0` and `1`; leading
+    zeros are allowed and ignored. Any other input returns `InvalidBinary`.
+    After the entire string is validated, more than 63 significant digits
+    returns `Overflow`, so invalid characters take priority over overflow.
+    """
+
+    ensures Result.Ok(value) => value >= 0
+
+    error ConversionError.InvalidBinary
+    error ConversionError.Overflow
+
+fn convert_binary_decimal(operation: Conversion) -> Result[ConversionResult, ConversionError]:
+    doc """
+    Routes a tagged conversion through the matching decimal or binary
+    conversion operation and wraps its successful scalar result.
+    
+    Errors from the selected operation are returned unchanged.
+    """
+
+    ensures Result.Ok(ConversionResult.Binary(digits)) => digits.len > 0
+    ensures Result.Ok(ConversionResult.Decimal(value)) => value >= 0
+
+    error ConversionError.NegativeDecimal
+    error ConversionError.InvalidBinary
+    error ConversionError.Overflow

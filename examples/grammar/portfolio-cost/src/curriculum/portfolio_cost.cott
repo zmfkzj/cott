@@ -1,0 +1,36 @@
+module curriculum.portfolio_cost
+
+struct Holding:
+    shares: I64
+    price: F64
+
+enum PortfolioError:
+    NegativeShares
+    NonFinitePrice
+    NegativePrice
+    TotalOverflow
+
+fn calculate_portfolio_cost(rows: List[Holding]) -> Result[F64, PortfolioError]:
+    doc """
+    Computes the total market value of a portfolio from a list of holdings.
+    Each holding supplies an I64 share count and an F64 price.
+    
+    Holdings are processed in list order and evaluation stops at the first
+    error. For each holding, a negative share count returns NegativeShares;
+    otherwise a NaN or infinite price returns NonFinitePrice; otherwise a
+    price below zero returns NegativePrice. Zero shares, positive or negative
+    zero prices, and an empty list are accepted.
+    
+    Starting from 0.0, each accepted share count is multiplied by its price
+    and the product is added to the running total using F64 arithmetic, in
+    list order. TotalOverflow is returned if either operation produces a
+    non-finite value. Otherwise Ok contains the finite, non-negative total;
+    ordinary F64 rounding and underflow are retained.
+    """
+
+    ensures Result.Ok(total) => total >= 0.0
+
+    error PortfolioError.NegativeShares
+    error PortfolioError.NonFinitePrice
+    error PortfolioError.NegativePrice
+    error PortfolioError.TotalOverflow

@@ -1,0 +1,51 @@
+module curriculum.artifact_pipeline
+
+struct BuildStep:
+    name: Str
+    needs: List[Str]
+
+struct Pipeline:
+    steps: List[BuildStep]
+
+struct ArtifactPlan:
+    ordered_steps: List[Str]
+
+enum ArtifactPipelineError:
+    BlankStepName
+    DuplicateStep
+    UnknownDependency
+    SelfDependency
+    Cycle
+
+fn topologically_order_steps(steps: List[BuildStep]) -> Result[List[Str], ArtifactPipelineError]:
+    doc """
+    Validate build-step names and dependencies, then return their deterministic
+    topological order. Blank and duplicate names are rejected before dependency
+    errors. Ready steps are ordered lexicographically.
+    """
+
+    ensures Result.Ok(ordered_steps) => ordered_steps.len == steps.len
+
+    error ArtifactPipelineError.BlankStepName
+    error ArtifactPipelineError.DuplicateStep
+    error ArtifactPipelineError.UnknownDependency
+    error ArtifactPipelineError.SelfDependency
+    error ArtifactPipelineError.Cycle
+
+    effects []
+
+fn plan_pipeline(pipeline: Pipeline) -> Result[ArtifactPlan, ArtifactPipelineError]:
+    doc """
+    Order and validate the pipeline's build steps with topologically_order_steps
+    and construct an artifact plan, propagating any ordering error unchanged.
+    """
+
+    ensures Result.Ok(plan) => plan.ordered_steps.len == pipeline.steps.len
+
+    error ArtifactPipelineError.BlankStepName
+    error ArtifactPipelineError.DuplicateStep
+    error ArtifactPipelineError.UnknownDependency
+    error ArtifactPipelineError.SelfDependency
+    error ArtifactPipelineError.Cycle
+
+    effects []

@@ -244,6 +244,10 @@ def resolve_symbol(symbol, module):
     name = local(symbol)
     if hasattr(module, name):
         return getattr(module, name)
+    if symbol.count(".") >= 2:
+        variant_name = variant(symbol)
+        if hasattr(module, variant_name):
+            return getattr(module, variant_name)
     return getattr(cott_runtime, name)
 
 

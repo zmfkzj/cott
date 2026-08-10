@@ -67,12 +67,22 @@ fn generated_runtime_exercises_abi_and_provenance_loader() {
     write_runtime(&temp.path);
     let implementation_dir = temp.path.join("_cott_impl/demo");
     fs::create_dir_all(&implementation_dir).expect("implementation directory should be writable");
-    let good = b"def run() -> int:\n    return 7\n";
+    fs::write(
+        temp.path.join("support.py"),
+        b"def helper() -> int:\n    return 6\n",
+    )
+    .expect("generated facade should be writable");
+    let good = b"from support import helper\n\n\ndef run() -> int:\n    return helper() + 1\n";
     let bad = b"raise ValueError('ordinary failure')\n";
+    let external =
+        b"from cott_missing_types import value\n\n\ndef external() -> object:\n    return value\n";
     fs::write(implementation_dir.join("run.py"), good).expect("binding should be writable");
     fs::write(implementation_dir.join("bad.py"), bad).expect("bad binding should be writable");
+    fs::write(implementation_dir.join("external.py"), external)
+        .expect("external binding should be writable");
     let good_hash = sha256_hex(good);
     let bad_hash = sha256_hex(bad);
+    let external_hash = sha256_hex(external);
 
     let script = format!(
         r#"from pathlib import Path
@@ -95,12 +105,13 @@ class Box(Generic[_T]):
 normalized = _cott_normalize_f32_abi(Box(1.234567), Box[F32])
 assert normalized.value == _runtime._cott_normalize_f32(1.234567)
 
-_good = dict(cott_symbol="demo.run", owner="manifest", python_symbol="_cott_impl.demo.run:run", source_origin="python/demo.py", runtime_origin="_cott_impl/demo/run.py", content_hash="sha256:{good_hash}")
-_bad = dict(cott_symbol="demo.bad", owner="manifest", python_symbol="_cott_impl.demo.bad:bad", source_origin="python/demo.py", runtime_origin="_cott_impl/demo/bad.py", content_hash="sha256:{bad_hash}")
+_good = dict(cott_symbol="demo.run", owner="manifest", python_symbol="_cott_impl.demo.run:run", source_origin="python/cott_bindings/demo/run.py", runtime_origin="_cott_impl/demo/run.py", content_hash="sha256:{good_hash}")
+_bad = dict(cott_symbol="demo.bad", owner="manifest", python_symbol="_cott_impl.demo.bad:bad", source_origin="python/cott_bindings/demo/bad.py", runtime_origin="_cott_impl/demo/bad.py", content_hash="sha256:{bad_hash}")
+_external = dict(cott_symbol="demo.external", owner="manifest", python_symbol="_cott_impl.demo.external:external", source_origin="python/cott_bindings/demo/external.py", runtime_origin="_cott_impl/demo/external.py", content_hash="sha256:{external_hash}")
 _current = dict(generation_id="", verified=True, inputs={{}}, tools=dict(
     python=dict(implementation=sys.implementation.name, version=platform.python_version(), cache_tag=sys.implementation.cache_tag, os=sys.platform, machine=platform.machine(), platform=sysconfig.get_platform(), executable=str(Path(sys.executable).resolve()), content_hash="sha256:"+hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest()),
     runtime=dict(abi=_runtime._COTT_RUNTIME_ABI, version=_runtime._COTT_RUNTIME_VERSION),
-), ir={{}}, contract_surface={{}}, public_python_symbols={{}}, implementations=[_good, _bad], dependencies=[], managed_files={{}}, unresolved=[], verification=None, agent_runs=[])
+), ir={{}}, contract_surface={{}}, public_python_symbols={{"demo":["bad","external","run"],"support":["helper"]}}, implementations=[_good, _bad, _external], dependencies=[], managed_files={{}}, unresolved=[], verification=None, agent_runs=[])
 _identity = dict(_current)
 for _key in ("generation_id", "verified", "verification", "agent_runs"):
     _identity.pop(_key)
@@ -136,6 +147,12 @@ else:
 
 run = _cott_load("_cott_impl/demo/run.py", "{good_hash}", "run", "demo")
 assert run() == 7
+try:
+    _cott_load("_cott_impl/demo/external.py", "{external_hash}", "external", "demo")
+except CottContractViolation as error:
+    assert error.phase == "provenance"
+else:
+    raise AssertionError("unrecorded external dependency was accepted")
 try:
     _cott_load("_cott_impl/demo/run.py", "{good_hash}", "run", "other")
 except CottContractViolation as error:
@@ -174,6 +191,7 @@ else:
 "#,
         good_hash = good_hash,
         bad_hash = bad_hash,
+        external_hash = external_hash,
     );
     let output = Command::new("python3")
         .arg("-c")

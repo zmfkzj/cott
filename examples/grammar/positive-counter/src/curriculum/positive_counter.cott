@@ -1,5 +1,0 @@
-module curriculum.positive_counter
-
-newtype PositiveCount(U64)
-
-fn run() -> PositiveCount

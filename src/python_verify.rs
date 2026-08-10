@@ -264,6 +264,12 @@ fn verify_in_scratch(
     if signature_requests.len() != expected_signature_count {
         return Err("generation record omitted a selected public implementation".to_owned());
     }
+    let project_modules = ir
+        .modules
+        .iter()
+        .map(|module| module.module.as_string())
+        .flat_map(|module| [module.clone(), format!("{module}_types")])
+        .collect::<BTreeSet<_>>();
     let dependencies = dependency_evidence(
         &config.project.name,
         paths,
@@ -271,6 +277,7 @@ fn verify_in_scratch(
         &generated_root,
         artifact_root,
         scratch,
+        &project_modules,
     )?;
     let runtime_probe = process(
         interpreter,
@@ -326,7 +333,7 @@ fn verify_in_scratch(
         interpreter,
         vec![
             "-c".to_owned(),
-            "import importlib,inspect,json,sys,typing\nfrom cott_runtime import _cott_load\n\ndef shape(signature):\n return [(name,parameter.kind.name,parameter.default is inspect.Parameter.empty,repr(parameter.default)) for name,parameter in signature.parameters.items()]\n\nout={}\nfor item in json.loads(sys.argv[1]):\n facade=getattr(importlib.import_module(item['module']),item['function'])\n implementation=_cott_load(item['runtime_path'],item['content_hash'].removeprefix('sha256:'),item['implementation_function'],expected_project_name=item['project'])\n expected_signature=inspect.signature(facade)\n actual_signature=inspect.signature(implementation)\n expected_hints=typing.get_type_hints(facade,include_extras=True)\n actual_hints=typing.get_type_hints(implementation,include_extras=True)\n if shape(actual_signature) != shape(expected_signature) or actual_hints != expected_hints:\n  raise TypeError(f\"{item['symbol']} implementation signature {actual_signature} {actual_hints!r} != {expected_signature} {expected_hints!r}\")\n out[item['symbol']]={'implementation_module':implementation.__module__,'implementation_name':implementation.__name__,'module':facade.__module__,'name':facade.__name__,'signature':str(expected_signature)}\nprint(json.dumps(out,sort_keys=True,separators=(',',':')))".to_owned(),
+            "import importlib,inspect,json,sys,typing\nfrom cott_runtime import _cott_load\n\ndef shape(signature):\n return [(name,parameter.kind.name,parameter.default is inspect.Parameter.empty,repr(parameter.default)) for name,parameter in signature.parameters.items()]\n\ndef hint(value):\n if isinstance(value,typing.TypeVar):\n  return ('TypeVar',value.__name__,hint(value.__bound__),tuple(hint(item) for item in value.__constraints__))\n origin=typing.get_origin(value)\n if origin is not None:\n  return (origin,tuple(hint(item) for item in typing.get_args(value)))\n return value\n\nout={}\nfor item in json.loads(sys.argv[1]):\n facade=getattr(importlib.import_module(item['module']),item['function'])\n implementation=_cott_load(item['runtime_path'],item['content_hash'].removeprefix('sha256:'),item['implementation_function'],expected_project_name=item['project'])\n expected_signature=inspect.signature(facade)\n actual_signature=inspect.signature(implementation)\n expected_hints={name:hint(value) for name,value in typing.get_type_hints(facade,include_extras=True).items()}\n actual_hints={name:hint(value) for name,value in typing.get_type_hints(implementation,include_extras=True).items()}\n if shape(actual_signature) != shape(expected_signature) or actual_hints != expected_hints:\n  raise TypeError(f\"{item['symbol']} implementation signature {actual_signature} {actual_hints!r} != {expected_signature} {expected_hints!r}\")\n out[item['symbol']]={'implementation_module':implementation.__module__,'implementation_name':implementation.__name__,'module':facade.__module__,'name':facade.__name__,'signature':str(expected_signature)}\nprint(json.dumps(out,sort_keys=True,separators=(',',':')))".to_owned(),
             serde_json::to_string(&signature_requests).map_err(|error| error.to_string())?,
         ],
         &generated_root,
@@ -522,6 +529,7 @@ fn dependency_evidence(
     generated_root: &Path,
     artifact_root: &Path,
     scratch: &Path,
+    project_modules: &BTreeSet<String>,
 ) -> Result<Value, String> {
     let metadata_path = paths.python_source_dir.join("pyproject.toml");
     let metadata: toml::Value =
@@ -708,14 +716,16 @@ fn dependency_evidence(
             r#"import ast,hashlib,importlib.metadata as md,json,pathlib,sys
 root=pathlib.Path(sys.argv[1])
 locked=json.loads(sys.argv[2])
+project_modules=set(json.loads(sys.argv[3]))
 imports=set()
 for path in sorted((root/"_cott_impl").rglob("*.py")):
  tree=ast.parse(path.read_bytes(),filename=str(path))
  for node in ast.walk(tree):
   if isinstance(node,ast.Import):
-   imports.update(alias.name.split(".",1)[0] for alias in node.names if not alias.name.endswith("_types"))
-  elif isinstance(node,ast.ImportFrom) and node.level==0 and node.module and not node.module.endswith("_types"):
-   imports.add(node.module.split(".",1)[0])
+   imports.update(alias.name for alias in node.names)
+  elif isinstance(node,ast.ImportFrom) and node.level==0 and node.module:
+   imports.add(node.module)
+imports={name.split(".",1)[0] for name in imports if name not in project_modules}
 imports-=set(sys.stdlib_module_names)|{"cott_runtime","_cott_impl"}
 owners=md.packages_distributions()
 imported_by={}
@@ -757,6 +767,7 @@ print(json.dumps(result,sort_keys=True,separators=(",",":")))"#
                 .to_owned(),
             generated_root.display().to_string(),
             serde_json::to_string(&lock_index).map_err(|error| error.to_string())?,
+            serde_json::to_string(project_modules).map_err(|error| error.to_string())?,
         ],
         generated_root,
         scratch,

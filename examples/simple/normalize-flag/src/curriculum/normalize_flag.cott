@@ -1,3 +1,0 @@
-module curriculum.normalize_flag
-
-fn run() -> Bool

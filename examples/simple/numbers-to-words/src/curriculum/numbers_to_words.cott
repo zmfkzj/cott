@@ -1,0 +1,32 @@
+module curriculum.numbers_to_words
+
+fn spell_under_thousand(value: I64) -> Str:
+    doc """
+    Spell one integer from zero through nine hundred ninety-nine.
+    
+    Hundreds use `and` before a nonzero remainder. Words are lowercase and
+    separated by one ASCII space, without commas or hyphens.
+    """
+
+    requires value >= 0
+    requires value < 1000
+
+    ensures result.len >= 3
+
+fn spell_cardinal(value: I64) -> Str:
+    doc """
+    Render an I64 as a canonical English cardinal.
+    
+    Zero is `Zero`. Negative values begin with `(negative) `. The first number
+    word is capitalized and all later words are lowercase. Words use one ASCII
+    space with no commas or hyphens.
+    
+    The magnitude is visited in descending three-digit groups. Zero groups are
+    omitted; each nonzero group is spelled by spell_under_thousand and paired
+    with `thousand`, `million`, `billion`, `trillion`, `quadrillion`, or
+    `quintillion`, the greatest scale needed by I64. A final group below one
+    hundred follows a higher group with `and`. All I64 values, including the
+    minimum, are accepted without signed-I64 negation.
+    """
+
+    ensures result.len >= 3

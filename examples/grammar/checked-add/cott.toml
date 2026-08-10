@@ -1,0 +1,15 @@
+[project]
+name = "checked-add"
+version = "0.1.0"
+source = "src"
+
+[target.python]
+source = "python"
+generated = "generated/python"
+stubs = "generated/stubs"
+interpreter = ".venv/bin/python"
+type_checker = ".venv/bin/basedpyright"
+runtime_validation = "boundary"
+
+[target.python.implementations]
+"curriculum.checked_add.checked_add" = "cott_bindings.curriculum.checked_add.checked_add:checked_add"

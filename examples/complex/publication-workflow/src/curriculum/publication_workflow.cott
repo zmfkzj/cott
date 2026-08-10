@@ -1,0 +1,48 @@
+module curriculum.publication_workflow
+
+enum PublicationState:
+    Draft
+    InReview
+    Published
+    Withdrawn
+
+enum PublicationAction:
+    Submit
+    Approve
+    Withdraw
+
+struct PublicationRequest:
+    current: PublicationState
+    action: PublicationAction
+    has_editor_approval: Bool
+
+enum PublicationWorkflowError:
+    InvalidTransition
+    ApprovalRequired
+
+fn transition_target(
+    current: PublicationState,
+    action: PublicationAction,
+) -> Option[PublicationState]:
+    doc """
+    Return the publication state selected by the workflow transition table, or
+    Nothing when the state and action do not form a valid transition.
+    """
+
+    ensures Option.Some(next) => next != current
+
+    effects []
+
+fn transition_publication(
+    request: PublicationRequest,
+) -> Result[PublicationState, PublicationWorkflowError]:
+    doc """
+    Enforce approval and apply the publication workflow transition requested.
+    """
+
+    ensures Result.Ok(next) => next != request.current
+
+    error PublicationWorkflowError.ApprovalRequired when (request.current == PublicationState.InReview and request.action == PublicationAction.Approve and not request.has_editor_approval)
+    error PublicationWorkflowError.InvalidTransition
+
+    effects []

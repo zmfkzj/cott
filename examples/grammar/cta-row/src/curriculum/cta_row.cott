@@ -1,0 +1,36 @@
+module curriculum.cta_row
+
+enum DayType:
+    SundayHoliday
+    Saturday
+    Weekday
+
+newtype RouteCode(Str)
+
+newtype ServiceDate(Str)
+
+newtype RideCount(U64)
+
+struct RideRow:
+    route: RouteCode
+    date: ServiceDate
+    day_type: DayType
+    rides: RideCount
+
+enum RideRowError:
+    InvalidDayType
+    InvalidRidership
+    InvalidRoute
+    InvalidDate
+
+fn decode_row(route: Str, date: Str, day_type: Str, rides: I64) -> Result[RideRow, RideRowError]:
+    doc """
+    Purely decode and validate one transit ridership row. Validation is performed in day_type, rides, route, date order and returns the corresponding first error. day_type maps U to SundayHoliday, A to Saturday, and W to Weekday. A valid route contains one to four ASCII uppercase letters or digits and at least one digit. A valid date is a Gregorian date in canonical MM/DD/YYYY form with a year from 0001 through 9999. rides must be from 0 through 9223372036854775807.
+    
+    Success returns a RideRow containing nominal RouteCode, ServiceDate, and RideCount values and the mapped DayType variant. The function has no external effects.
+    """
+
+    error RideRowError.InvalidDayType when not (day_type == "U" or day_type == "A" or day_type == "W")
+    error RideRowError.InvalidRidership when rides < 0
+    error RideRowError.InvalidRoute
+    error RideRowError.InvalidDate

@@ -1,0 +1,69 @@
+module curriculum.billing_system
+
+enum BillingItem:
+    Sanitizer
+    Mask
+    HandGloves
+    Dettol
+    Newsprin
+    ThermalGun
+    Rice
+    FoodOil
+    Wheat
+    Daal
+    Flour
+    Maggi
+    Sprite
+    Limka
+    Mazza
+    Coke
+    Fanta
+    MountainDuo
+
+enum BillingError:
+    NegativeQuantity
+    DuplicateItem
+    WrongCategory
+
+struct Quantity:
+    item: BillingItem
+    quantity: I64
+
+struct BillTotals:
+    medical_subtotal: F64
+    grocery_subtotal: F64
+    drinks_subtotal: F64
+    medical_tax: F64
+    grocery_tax: F64
+    drinks_tax: F64
+    total: F64
+
+fn validate_bill_lines(
+    medical: List[Quantity],
+    grocery: List[Quantity],
+    drinks: List[Quantity],
+) -> Result[Unit, BillingError]:
+    doc """
+    Validate all bill lines before any price or tax arithmetic. Validation makes three complete passes in priority order: any negative quantity returns NegativeQuantity; otherwise an item repeated anywhere across the three lists returns DuplicateItem; otherwise an item placed outside its medical, grocery, or drinks category returns WrongCategory. Zero quantities are valid and still participate in duplicate detection.
+    """
+
+    error BillingError.NegativeQuantity
+    error BillingError.DuplicateItem
+    error BillingError.WrongCategory
+
+fn calculate_bill(
+    medical: List[Quantity],
+    grocery: List[Quantity],
+    drinks: List[Quantity],
+) -> Result[BillTotals, BillingError]:
+    doc """
+    Validate the bill through validate_bill_lines, then calculate exact-cent subtotals and independently rounded taxes from the fixed catalog. Medical and grocery tax are 5 percent; drinks tax is 10 percent. Each tax is rounded to the nearest cent with ties to the even cent, and returned F64 fields are cent amounts divided by 100.
+    
+    A validation error is returned unchanged. On success, the total is the sum of all three subtotals and all three rounded taxes.
+    """
+
+    ensures Result.Ok(totals) => totals.total >= 0.0
+
+    error BillingError.NegativeQuantity
+    error BillingError.DuplicateItem
+    error BillingError.WrongCategory

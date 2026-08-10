@@ -1,0 +1,32 @@
+module curriculum.alphabetical_file_groups
+
+struct FileMove:
+    filename: Str
+    folder: Str
+
+enum FileGroupError:
+    EmptyFilename
+
+fn classify_filename(filename: Str) -> Result[FileMove, FileGroupError]:
+    doc """
+    Classify one filename by its first Unicode code point.
+    
+    Return EmptyFilename for an empty filename. Otherwise copy the filename
+    unchanged and select the full Unicode case-fold of a leading letter as its
+    folder. Select "misc" when the leading code point is not a letter.
+    """
+
+    error FileGroupError.EmptyFilename
+
+fn group_filenames(filenames: List[Str]) -> Result[List[FileMove], FileGroupError]:
+    doc """
+    Classify each filename in input order with classify_filename.
+    
+    Stop at the first EmptyFilename error and propagate it unchanged. Otherwise
+    return one FileMove per input in the same order. An empty input list
+    succeeds with an empty move list.
+    """
+
+    ensures Result.Ok(moves) => moves.len == filenames.len
+
+    error FileGroupError.EmptyFilename

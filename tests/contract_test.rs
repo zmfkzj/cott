@@ -1,9 +1,13 @@
+use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
 use cott::contract_test::{Classification, ContractTestStrategy, derive_strategies};
 use cott::hash::sha256_hex;
 use cott::hir::ModuleId;
 use cott::ir::{CanonicalIr, CanonicalModule, canonical_bytes};
+use cott::python_runtime::render_runtime;
 use serde_json::{Value, json};
 
 #[test]
@@ -221,6 +225,119 @@ fn malformed_function_ir_is_rejected() {
             bytes,
         }],
     };
+
     let error = derive_strategies(&ir).expect_err("missing return type must fail");
     assert!(error.contains("schema violation"));
+}
+#[test]
+fn contract_runner_observes_local_result_error_variant() {
+    if !Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        return;
+    }
+
+    let mut number = 0;
+    let root = loop {
+        let path = std::env::temp_dir().join(format!(
+            "cott-contract-runner-{}-{number}",
+            std::process::id()
+        ));
+        number += 1;
+        match fs::create_dir(&path) {
+            Ok(()) => break path,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("contract runner fixture directory: {error}"),
+        }
+    };
+
+    for (relative, bytes) in render_runtime("demo") {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().expect("runtime file parent")).expect("runtime parent");
+        fs::write(path, bytes).expect("runtime file");
+    }
+    fs::write(
+        root.join("demo.py"),
+        "import dataclasses\nfrom cott_runtime import Err, Result\n\n@dataclasses.dataclass(frozen=True)\nclass Failure_Bad:\n    pass\n\ndef run() -> Result[bool, Failure_Bad]:\n    return Err(error=Failure_Bad())\n",
+    )
+    .expect("fixture module");
+
+    let request = json!({
+        "modules": [{
+            "declarations": [{
+                "body": null,
+                "contract": {
+                    "clauses": [{
+                        "clause_id": 0,
+                        "kind": "error",
+                        "span": span(),
+                        "variant": "demo.Failure.Bad",
+                        "when": null
+                    }],
+                    "effects": []
+                },
+                "doc": null,
+                "generics": [],
+                "kind": "function",
+                "name": "demo.run",
+                "parameters": [],
+                "public": true,
+                "return_type": {"kind": "primitive", "name": "bool"},
+                "source_order": 0,
+                "span": span()
+            }],
+            "imports": [],
+            "module": "demo",
+            "schema_version": 1,
+            "source": "demo.cott"
+        }],
+        "runtime_validation": "boundary",
+        "strategies": [{
+            "classification": "pure",
+            "clause_ids": ["error:0"],
+            "schema_version": 1,
+            "seed": "sha256:test",
+            "symbol": "demo.run",
+            "candidate_limit": 64,
+            "container_length_limit": 3,
+            "json_depth_limit": 4
+        }]
+    });
+    let mut child = Command::new("python3")
+        .args(["-c", include_str!("../src/contract_runner.py")])
+        .current_dir(&root)
+        .env("PYTHONPATH", &root)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .env("PYTHONHASHSEED", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("contract runner should start");
+    child
+        .stdin
+        .take()
+        .expect("contract runner stdin")
+        .write_all(request.to_string().as_bytes())
+        .expect("contract runner request");
+    let output = child
+        .wait_with_output()
+        .expect("contract runner should finish");
+    fs::remove_dir_all(&root).expect("contract runner fixture cleanup");
+    assert!(
+        output.status.success(),
+        "contract runner failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    assert_eq!(
+        report["contracts"][0]["evidence"][0]["valid_cases"],
+        json!(1)
+    );
+    assert_eq!(
+        report["contracts"][0]["evidence"][0]["grade"],
+        json!("test observation")
+    );
 }

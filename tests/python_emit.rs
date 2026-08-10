@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use cott::binding::{ResolvedBinding, resolve_bindings};
 use cott::compiler::parse_project;
+use cott::hash::sha256_hex;
 use cott::hir::lower;
 use cott::ir::render;
 use cott::manifest::ProjectConfig;
@@ -52,7 +53,7 @@ type_checker = ".venv/bin/basedpyright"
 runtime_validation = "boundary"
 
 [target.python.implementations]
-"app.run" = "_cott_impl.app.run:run"
+"app.run" = "cott_bindings.app.run:run"
 "#;
 const SOURCE: &str = r#"module app
 
@@ -83,10 +84,10 @@ fn inputs() -> Inputs {
     let temp = TempDir::new();
     fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest should be writable");
     fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
-    fs::create_dir_all(temp.path.join("python/_cott_impl/app"))
+    fs::create_dir_all(temp.path.join("python/cott_bindings/app"))
         .expect("binding directory should be writable");
     fs::write(temp.path.join("src/app.cott"), SOURCE).expect("source should be writable");
-    fs::write(temp.path.join("python/_cott_impl/app/run.py"), BINDING)
+    fs::write(temp.path.join("python/cott_bindings/app/run.py"), BINDING)
         .expect("binding should be writable");
     write_target_metadata(&temp.path);
     let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
@@ -195,14 +196,16 @@ fn emits_single_and_multiple_generic_trait_bounds() {
             "module api\nuse traits.{Comparable, Serializable}\n\nfn one[T: Comparable](value: T) -> T\nfn many[U: Comparable + Serializable](value: U) -> U\n",
         ),
     ]);
+    let types = String::from_utf8_lossy(bytes(&files, "python/api_types.py"));
     let facade = String::from_utf8_lossy(bytes(&files, "python/api.py"));
     let stub = String::from_utf8_lossy(bytes(&files, "stubs/api.pyi"));
+    let composite = "class _cott_U_Bounds(Comparable, Serializable, Protocol):\n    pass";
+    assert!(types.contains(composite));
+    assert!(facade.contains("from api_types import _cott_U_Bounds"));
+    assert!(stub.contains(composite));
     for output in [facade.as_ref(), stub.as_ref()] {
         assert!(output.contains("from traits_types import Comparable, Serializable"));
         assert!(output.contains("T = TypeVar(\"T\", bound=Comparable)"));
-        assert!(
-            output.contains("class _cott_U_Bounds(Comparable, Serializable, Protocol):\n    pass")
-        );
         assert!(output.contains("U = TypeVar(\"U\", bound=_cott_U_Bounds)"));
     }
 }
@@ -257,13 +260,39 @@ fn emits_complete_deterministic_python_artifact_tree() {
     assert!(facade.contains("_cott_load"));
     assert!(facade.contains("run"));
     assert!(facade.contains("__all__"));
-    let generation = String::from_utf8_lossy(bytes(&first.files, "generation.json"));
-    assert!(generation.contains("\"verified\":false"));
-    assert!(generation.contains("\"schema_version\":1"));
-    assert!(generation.contains("\"current\":"));
-    assert!(!generation.contains("\"project\""));
-    assert!(!generation.contains("\"entry\""));
+    let generation: serde_json::Value =
+        serde_json::from_slice(bytes(&first.files, "generation.json"))
+            .expect("generation record should be JSON");
+    assert_eq!(generation["schema_version"], 1);
+    assert_eq!(generation["current"]["verified"], false);
+    assert!(generation["current"].get("project").is_none());
+    assert!(generation["current"].get("entry").is_none());
+    let implementation = &generation["current"]["implementations"][0];
+    assert_eq!(implementation["cott_symbol"], "app.run");
+    assert_eq!(implementation["owner"], "manifest");
+    assert_eq!(implementation["python_symbol"], "_cott_impl.app.run:run");
+    assert_eq!(
+        implementation["source_origin"],
+        "python/cott_bindings/app/run.py"
+    );
+    assert_eq!(
+        implementation["runtime_origin"],
+        "python/_cott_impl/app/run.py"
+    );
+    assert_ne!(
+        implementation["source_origin"],
+        implementation["runtime_origin"]
+    );
+    assert_eq!(
+        implementation["content_hash"],
+        format!("sha256:{}", sha256_hex(BINDING))
+    );
     assert_eq!(bytes(&first.files, "python/_cott_impl/app/run.py"), BINDING);
+    assert!(
+        !first
+            .files
+            .contains_key(Path::new("python/cott_bindings/app/run.py"))
+    );
 }
 
 #[test]

@@ -32,11 +32,48 @@ struct BarOptions:
     threshold: Probability = Probability(0.5)
     use_cache: Bool = false
 
-fn process_bar(data: InputPayload, options: BarOptions) -> Result[OutputPayload, BarError]:
+fn validate_payload(data: InputPayload) -> Result[InputPayload, BarError]:
     doc """
-    foo 입력을 bar 규칙으로 처리하고 원본 선언 크기와 형식을 기록한 출력을 반환한다.
+    Reject empty payload bytes before any effectful processing.
     """
 
+    ensures Result.Ok(validated) => validated.data == data.data
+    ensures Result.Ok(validated) => validated.declared_size == data.declared_size
+    ensures Result.Ok(validated) => validated.format == data.format
+
+    error BarError.InvalidPayload when data.data.len == 0
+
+    effects []
+
+fn process_payload_bytes(data: Bytes, options: BarOptions) -> Result[Bytes, BarError]:
+    doc """
+    Perform the effectful byte-processing step without changing payload bytes.
+    """
+
+    ensures Result.Ok(processed) => processed == data
+
+    error BarError.ServiceUnavailable
+    error BarError.ProcessingFailed
+
+    effects [network]
+
+fn build_output(data: Bytes, source_size: PayloadSize, format: PayloadFormat) -> OutputPayload:
+    doc """
+    Construct output from processed bytes and the original payload metadata.
+    """
+
+    ensures result.data == data
+    ensures result.source_size == source_size
+    ensures result.format == format
+
+    effects []
+
+fn process_bar(data: InputPayload, options: BarOptions) -> Result[OutputPayload, BarError]:
+    doc """
+    Validate, process, and construct output through the three direct helpers.
+    """
+
+    ensures Result.Ok(output) => output.data == data.data
     ensures Result.Ok(output) => output.source_size == data.declared_size
     ensures Result.Ok(output) => output.format == data.format
 

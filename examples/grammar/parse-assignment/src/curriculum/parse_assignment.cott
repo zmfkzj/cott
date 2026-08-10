@@ -1,0 +1,28 @@
+module curriculum.parse_assignment
+
+struct Assignment:
+    name: Str
+    value: Str
+
+enum ParseAssignmentError:
+    MissingEquals
+    EmptyName
+
+fn parse_assignment(line: Str) -> Result[Assignment, ParseAssignmentError]:
+    doc """
+    Parses one assignment without I/O or mutation.
+    
+    The first `=` is the separator. Leading and trailing Unicode whitespace is
+    removed independently from the text before and after that separator.
+    Whitespace inside either field and every later `=` are preserved. An empty
+    value is valid; a name that is empty after trimming is not.
+    
+    Validation follows this order: return `MissingEquals` when no separator is
+    present, then return `EmptyName` when the trimmed name is empty. Otherwise
+    return the trimmed name and value.
+    """
+
+    ensures Result.Ok(assignment) => assignment.name.len > 0
+
+    error ParseAssignmentError.MissingEquals
+    error ParseAssignmentError.EmptyName

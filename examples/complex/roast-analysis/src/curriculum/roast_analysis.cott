@@ -1,0 +1,51 @@
+module curriculum.roast_analysis
+
+struct TemperatureSample:
+    elapsed_s: U32
+    bean_temp_deci_c: I32
+
+struct RoastProfile:
+    samples: List[TemperatureSample]
+
+struct RoastAnalysis:
+    peak_temp_deci_c: I32
+    peak_at_s: U32
+    total_rise_deci_c: I64
+
+enum RoastAnalysisError:
+    EmptySamples
+    NonIncreasingTime
+
+fn validate_roast_profile(profile: RoastProfile) -> Result[Unit, RoastAnalysisError]:
+    doc """
+    Validate that a roast profile has at least one sample and strictly
+    increasing elapsed times. EmptySamples takes priority over the first
+    NonIncreasingTime violation.
+    """
+
+    error RoastAnalysisError.EmptySamples when profile.samples.len == 0
+    error RoastAnalysisError.NonIncreasingTime
+
+    effects []
+
+fn summarize_roast_samples(samples: List[TemperatureSample]) -> RoastAnalysis:
+    doc """
+    Summarize a nonempty sample sequence. The peak is the earliest sample at
+    the maximum temperature, and total rise is the final temperature minus the
+    first temperature.
+    """
+
+    requires samples.len > 0
+
+    effects []
+
+fn analyze_roast_profile(profile: RoastProfile) -> Result[RoastAnalysis, RoastAnalysisError]:
+    doc """
+    Validate a roast profile, then summarize its samples without repeating
+    chronology checks.
+    """
+
+    error RoastAnalysisError.EmptySamples when profile.samples.len == 0
+    error RoastAnalysisError.NonIncreasingTime
+
+    effects []

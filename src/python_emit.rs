@@ -401,6 +401,11 @@ pub fn emit(
         .iter()
         .map(|binding| {
             let source_module = binding.implementation_module.replace('.', "/");
+            let runtime_module = binding
+                .generated_relative
+                .with_extension("")
+                .to_string_lossy()
+                .replace('/', ".");
             json!({
                 "content_hash": format!("sha256:{}", binding.sha256),
                 "cott_symbol": format!("{}.{}", binding.module, binding.function),
@@ -409,8 +414,8 @@ pub fn emit(
                     BindingOwner::Agent => "agent",
                 },
                 "python_symbol": format!(
-                    "{}:{}",
-                    binding.implementation_module, binding.implementation_function
+                    "{runtime_module}:{}",
+                    binding.implementation_function
                 ),
                 "runtime_origin": path_string(
                     &Path::new(
@@ -821,13 +826,14 @@ fn render_types(
             .and_then(Value::as_array)
             .is_some_and(|generics| !generics.is_empty())
     });
-    render_generic_typevars(&mut out, module, declarations, false);
+    render_generic_typevars(&mut out, module, declarations, false, true);
     if has_generics {
         out.push('\n');
     }
     for declaration in &module.declarations {
         render_type_declaration(&mut out, declaration, module, modules, declarations);
     }
+    render_function_bound_protocols(&mut out, module, declarations);
     let names = exported_names(module);
     writeln!(
         out,
@@ -1194,6 +1200,7 @@ fn render_generic_typevars(
     module: &crate::python::artifact_plan::PythonArtifactModule,
     declarations: &BTreeMap<String, String>,
     functions_only: bool,
+    render_composites: bool,
 ) {
     let mut rendered = BTreeSet::new();
     for declaration in &module.declarations {
@@ -1223,15 +1230,8 @@ fn render_generic_typevars(
             if !rendered.insert(typevar.clone()) {
                 continue;
             }
-            if bounds.len() > 1 {
-                let protocol = format!("_cott_{typevar}_Bounds");
-                let bases = bounds
-                    .iter()
-                    .map(|bound| render_type(bound, &module.module, declarations))
-                    .chain(std::iter::once("Protocol".to_owned()))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                writeln!(out, "class {protocol}({bases}):\n    pass\n").unwrap();
+            if bounds.len() > 1 && render_composites {
+                render_bound_protocol(out, module, declarations, &typevar, &bounds);
             }
             let declaration = match bounds.as_slice() {
                 [bound] => format!(
@@ -1249,6 +1249,86 @@ fn render_generic_typevars(
             .unwrap();
         }
     }
+}
+fn render_bound_protocol(
+    out: &mut String,
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    declarations: &BTreeMap<String, String>,
+    typevar: &str,
+    bounds: &[&Value],
+) {
+    let protocol = format!("_cott_{typevar}_Bounds");
+    let bases = bounds
+        .iter()
+        .map(|bound| render_type(bound, &module.module, declarations))
+        .chain(std::iter::once("Protocol".to_owned()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    writeln!(out, "class {protocol}({bases}):\n    pass\n").unwrap();
+}
+
+fn render_function_bound_protocols(
+    out: &mut String,
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    declarations: &BTreeMap<String, String>,
+) {
+    let mut rendered = BTreeSet::new();
+    for object in module.declarations.iter().filter_map(Value::as_object) {
+        if object.get("kind").and_then(Value::as_str) != Some("function") {
+            continue;
+        }
+        for generic in object
+            .get("generics")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let bounds = generic
+                .get("bounds")
+                .and_then(Value::as_array)
+                .map(|bounds| bounds.iter().collect::<Vec<_>>())
+                .unwrap_or_default();
+            if bounds.len() <= 1 {
+                continue;
+            }
+            let name = generic.get("name").and_then(Value::as_str).unwrap();
+            let typevar = generic_typevar_name(module, object, name, true);
+            if rendered.insert(typevar.clone()) {
+                render_bound_protocol(out, module, declarations, &typevar, &bounds);
+            }
+        }
+    }
+}
+
+fn function_bound_protocol_names(
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+) -> Vec<String> {
+    let mut names = BTreeSet::new();
+    for object in module.declarations.iter().filter_map(Value::as_object) {
+        if object.get("kind").and_then(Value::as_str) != Some("function") {
+            continue;
+        }
+        for generic in object
+            .get("generics")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if generic
+                .get("bounds")
+                .and_then(Value::as_array)
+                .is_none_or(|bounds| bounds.len() <= 1)
+            {
+                continue;
+            }
+            let name = generic.get("name").and_then(Value::as_str).unwrap();
+            names.insert(format!(
+                "_cott_{}_Bounds",
+                generic_typevar_name(module, object, name, true)
+            ));
+        }
+    }
+    names.into_iter().collect()
 }
 
 fn render_private_defaults(
@@ -1356,12 +1436,13 @@ fn render_function_typevars(
     out: &mut String,
     module: &crate::python::artifact_plan::PythonArtifactModule,
     declarations: &BTreeMap<String, String>,
+    render_composites: bool,
 ) {
     if generic_specs(module, true).is_empty() {
         return;
     }
     out.push('\n');
-    render_generic_typevars(out, module, declarations, true);
+    render_generic_typevars(out, module, declarations, true, render_composites);
 }
 fn render_facade(
     module: &crate::python::artifact_plan::PythonArtifactModule,
@@ -1374,12 +1455,14 @@ fn render_facade(
         "from __future__ import annotations\n\nimport dataclasses as _dataclasses\nfrom pathlib import Path\nfrom typing import Literal, Never, Protocol, TypeVar\n\nfrom cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi\n",
     );
     let names = exported_names(module);
-    if !names.is_empty() {
+    let mut local_imports = names.clone();
+    local_imports.extend(function_bound_protocol_names(module));
+    if !local_imports.is_empty() {
         writeln!(
             out,
             "\nfrom {} import {}",
             type_module_name(&module.module),
-            names.join(", ")
+            local_imports.join(", ")
         )
         .unwrap();
     }
@@ -1392,7 +1475,7 @@ fn render_facade(
         )
         .unwrap();
     }
-    render_function_typevars(&mut out, module, declarations);
+    render_function_typevars(&mut out, module, declarations, false);
     let boundary = config.python.runtime_validation == RuntimeValidation::Boundary;
     let test_only = config.python.runtime_validation == RuntimeValidation::TestOnly;
     if test_only {
@@ -2003,7 +2086,7 @@ fn render_stub(
         )
         .unwrap();
     }
-    render_function_typevars(&mut out, module, declarations);
+    render_function_typevars(&mut out, module, declarations, true);
     let mut exported = names;
     for declaration in &module.declarations {
         let object = declaration.as_object().unwrap();

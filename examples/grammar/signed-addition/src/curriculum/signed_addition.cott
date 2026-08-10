@@ -1,6 +1,0 @@
-module curriculum.signed_addition
-
-const LEFT: I32 = 2
-const RIGHT: I32 = 3
-
-fn run() -> I32
