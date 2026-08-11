@@ -110,8 +110,9 @@ fn verify_in_scratch(
         ));
     }
 
-    let checker_probe = process(
+    let checker_probe = checker_process(
         type_checker,
+        interpreter,
         vec!["--version".to_owned()],
         scratch,
         scratch,
@@ -170,8 +171,9 @@ fn verify_in_scratch(
             config_path.display()
         )
     })?;
-    let checker = process(
+    let checker = checker_process(
         type_checker,
+        interpreter,
         vec!["--project".to_owned(), config_path.display().to_string()],
         scratch,
         scratch,
@@ -468,6 +470,27 @@ fn require_success(
     }
 }
 
+fn checker_process(
+    type_checker: &Path,
+    interpreter: &Path,
+    arguments: Vec<String>,
+    cwd: &Path,
+    scratch: &Path,
+    read_only: &[PathBuf],
+) -> Result<crate::sandbox::CompletedProcess, String> {
+    let mut mounts = read_only.to_vec();
+    if let Some(environment) = external_program_environment(interpreter) {
+        mounts.push(environment);
+    }
+    process(type_checker, arguments, cwd, scratch, &mounts)
+}
+
+fn external_program_environment(program: &Path) -> Option<PathBuf> {
+    (!program.starts_with("/usr") && !program.starts_with("/bin") && !program.starts_with("/lib"))
+        .then(|| program.parent()?.parent().map(Path::to_path_buf))
+        .flatten()
+}
+
 fn process(
     program: &Path,
     arguments: Vec<String>,
@@ -476,12 +499,8 @@ fn process(
     read_only: &[PathBuf],
 ) -> Result<crate::sandbox::CompletedProcess, String> {
     let mut mounts = read_only.to_vec();
-    if !program.starts_with("/usr")
-        && !program.starts_with("/bin")
-        && !program.starts_with("/lib")
-        && let Some(environment) = program.parent().and_then(Path::parent)
-    {
-        mounts.push(environment.to_path_buf());
+    if let Some(environment) = external_program_environment(program) {
+        mounts.push(environment);
     }
     run(&SandboxSpec {
         program: program.to_path_buf(),
@@ -820,4 +839,55 @@ fn requirement_name(requirement: &str) -> Option<String> {
         .to_ascii_lowercase()
         .replace(['_', '.'], "-");
     (!name.is_empty() && !requirement.contains('@')).then_some(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    use super::*;
+
+    #[test]
+    fn checker_process_mounts_external_shebang_interpreter() {
+        let root = scratch_directory().expect("fixture root");
+        let outcome = (|| {
+            let interpreter = root.join("toolchain/bin/python");
+            let checker = root.join("project/.venv/bin/basedpyright");
+            let scratch = root.join("scratch");
+            fs::create_dir_all(interpreter.parent().expect("interpreter parent"))?;
+            fs::create_dir_all(checker.parent().expect("checker parent"))?;
+            fs::create_dir(&scratch)?;
+            fs::copy(fs::canonicalize("/bin/sh")?, &interpreter)?;
+            symlink(&interpreter, root.join("project/.venv/bin/python"))?;
+            fs::write(
+                &checker,
+                format!(
+                    "#!{}\nprintf 'basedpyright 1.39.9\\n'\n",
+                    root.join("project/.venv/bin/python").display()
+                ),
+            )?;
+            fs::set_permissions(&checker, fs::Permissions::from_mode(0o755))?;
+            let completed = checker_process(
+                &checker,
+                &interpreter,
+                vec!["--version".to_owned()],
+                &scratch,
+                &scratch,
+                &[],
+            )
+            .map_err(std::io::Error::other)?;
+            Ok::<_, std::io::Error>(completed)
+        })();
+        let cleanup = fs::remove_dir_all(&root);
+        let completed = outcome.expect("checker process");
+        cleanup.expect("remove fixture root");
+        assert_eq!(
+            completed.status,
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&completed.stderr)
+        );
+        assert_eq!(completed.stdout, b"basedpyright 1.39.9\n");
+        assert!(completed.stderr.is_empty());
+    }
 }

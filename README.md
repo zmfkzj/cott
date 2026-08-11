@@ -200,6 +200,22 @@ PYTHONPATH="$project/generated/python" "$project/.venv/bin/python" -c \
 `build_page` owns request validation, `render_page_html` owns document assembly, and
 `escape_page_text` owns escaping. Both composition edges still traverse generated contract facades.
 
+### FastAPI integration
+
+`examples/integrations/fastapi-hello` adapts FastAPI's official
+[First Steps](https://fastapi.tiangolo.com/tutorial/first-steps/) `GET /` example. Cott declares
+the typed `HelloResponse` and generates `read_root`; the four-line `python/app.py` adapter only
+registers that checked facade with FastAPI.
+
+```bash
+project=examples/integrations/fastapi-hello
+UV_PROJECT_ENVIRONMENT="$project/.venv" UV_PYTHON=3.14.6 uv sync --project "$project/python"
+cott verify --project "$project"
+PYTHONPATH="$project/generated/python" "$project/.venv/bin/fastapi" dev "$project/python/app.py"
+curl http://127.0.0.1:8000/
+# {"message":"Hello World"}
+```
+
 ## Complete project index
 
 The graph notation points from a caller to the public helper facade it invokes. `leaf` means the
