@@ -572,6 +572,7 @@ fn validate_declaration(
                 validate_value(value, module, diagnostics);
             }
         }
+        "rule" => {}
         "function" => {
             let Some(parameters) = required_array(object, "parameters", module, diagnostics) else {
                 return;
@@ -1066,6 +1067,23 @@ fn render_type_declaration(
                 }
                 out.push('\n');
             }
+        }
+        "rule" => {
+            let base_name = object.get("base").and_then(Value::as_str);
+            let base_str = if let Some(base) = base_name {
+                let short_base = local_name(base);
+                if generics.is_empty() {
+                    format!("({short_base})")
+                } else {
+                    format!("({short_base}[{generics}])")
+                }
+            } else if generics.is_empty() {
+                String::new()
+            } else {
+                format!("(Generic[{generics}])")
+            };
+            writeln!(out, "class {name}{base_str}:").unwrap();
+            out.push_str("    pass\n\n");
         }
         "const" => writeln!(
             out,

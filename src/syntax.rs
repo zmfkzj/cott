@@ -26,6 +26,10 @@ pub enum Keyword {
     And,
     Or,
     Not,
+    Rule,
+    Override,
+    Delete,
+    Remove,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

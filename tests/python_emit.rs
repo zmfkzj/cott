@@ -348,3 +348,47 @@ fn rejects_colliding_public_python_symbol_projection() {
                 && diagnostic.message.contains("collides"))
     );
 }
+
+#[test]
+fn emits_rule_classes_and_facade_exports() {
+    let temp = TempDir::new();
+    fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    fs::write(
+        temp.path.join("src/app.cott"),
+        r#"module app
+
+rule BaseRule:
+    doc """Base rule."""
+    requires true
+
+rule ChildRule(BaseRule):
+    doc """Child rule."""
+    override requires false
+"#,
+    )
+    .expect("source should be writable");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources")).expect("parse");
+    let ir = render(&lower(&paths.source_dir, parsed).expect("lower")).expect("render");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
+    let emission = emit(&config, &plan, &ir, &[]).expect("rules should emit");
+
+    let types_content = emission
+        .files
+        .get(&PathBuf::from("python/app_types.py"))
+        .map(|b| std::str::from_utf8(b).unwrap())
+        .expect("types file should exist");
+    assert!(types_content.contains("class BaseRule:"));
+    assert!(types_content.contains("class ChildRule(BaseRule):"));
+
+    let facade_content = emission
+        .files
+        .get(&PathBuf::from("python/app.py"))
+        .map(|b| std::str::from_utf8(b).unwrap())
+        .expect("facade file should exist");
+    assert!(facade_content.contains("\"BaseRule\""));
+    assert!(facade_content.contains("\"ChildRule\""));
+}

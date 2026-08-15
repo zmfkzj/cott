@@ -213,6 +213,29 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
             json.array_end();
             json.object_end();
         }
+        HirDeclaration::Rule(value) => {
+            declaration_start(
+                json,
+                "rule",
+                value.id.as_string().as_str(),
+                &value.doc,
+                &value.span,
+                value.public,
+                value.source_order,
+                &value.generics,
+            );
+            json.comma();
+            json.key("base");
+            if let Some(base) = &value.base {
+                json.string(&base.as_string());
+            } else {
+                json.null();
+            }
+            json.comma();
+            json.key("contract");
+            render_contract(json, &value.contract);
+            json.object_end();
+        }
         HirDeclaration::Const(value) => {
             declaration_start(
                 json,

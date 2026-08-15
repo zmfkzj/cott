@@ -581,3 +581,68 @@ fn wrong_nominal() -> Shape:
             && error.diagnostic.span.start < error.diagnostic.span.end
     }));
 }
+
+#[test]
+fn lowers_rule_inheritance_and_clause_actions() {
+    let project = lower_project([source(
+        "src/rules.cott",
+        r#"module rules
+
+struct Assignment:
+    name: Str
+    value: Str
+
+enum ParseAssignmentError:
+    MissingEquals
+    EmptyName
+
+rule BaseAssignmentRule:
+    doc """Base assignment rule."""
+    ensures Result.Ok(assignment) => assignment.name.len > 0
+    error ParseAssignmentError.MissingEquals
+
+rule StrictAssignmentRule(BaseAssignmentRule):
+    doc """Strict assignment rule."""
+    override ensures Result.Ok(assignment) => assignment.name.len > 1
+    delete error ParseAssignmentError.MissingEquals
+    ensures Result.Ok(assignment) => assignment.value.len > 0
+    error ParseAssignmentError.EmptyName
+"#,
+    )]);
+
+    assert_eq!(project.modules.len(), 1);
+    let module = &project.modules[0];
+    assert_eq!(module.declarations.len(), 4);
+
+    let base_rule = match &module.declarations[2] {
+        HirDeclaration::Rule(r) => r,
+        other => panic!("expected base rule, got {other:?}"),
+    };
+    assert_eq!(base_rule.id.name, "BaseAssignmentRule");
+    assert_eq!(base_rule.base, None);
+    assert_eq!(base_rule.contract.clauses.len(), 2);
+
+    let strict_rule = match &module.declarations[3] {
+        HirDeclaration::Rule(r) => r,
+        other => panic!("expected strict rule, got {other:?}"),
+    };
+    assert_eq!(strict_rule.id.name, "StrictAssignmentRule");
+    assert_eq!(
+        strict_rule.base.as_ref().map(|s| s.name.as_str()),
+        Some("BaseAssignmentRule")
+    );
+    assert_eq!(strict_rule.contract.clauses.len(), 3);
+
+    assert!(matches!(
+        strict_rule.contract.clauses[0].kind,
+        HirClauseKind::Ensures { .. }
+    ));
+    assert!(matches!(
+        strict_rule.contract.clauses[1].kind,
+        HirClauseKind::Ensures { .. }
+    ));
+    let HirClauseKind::Error { variant, .. } = &strict_rule.contract.clauses[2].kind else {
+        panic!("expected Error clause at index 2");
+    };
+    assert_eq!(variant.name, "ParseAssignmentError.EmptyName");
+}

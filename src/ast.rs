@@ -30,6 +30,7 @@ pub enum Declaration {
     Trait(TraitDecl),
     Const(ConstDecl),
     Function(FunctionDecl),
+    Rule(RuleDecl),
 }
 
 impl Declaration {
@@ -42,6 +43,7 @@ impl Declaration {
             Self::Trait(value) => &value.span,
             Self::Const(value) => &value.span,
             Self::Function(value) => &value.span,
+            Self::Rule(value) => &value.span,
         }
     }
 }
@@ -119,6 +121,30 @@ pub struct FunctionDecl {
 pub enum FunctionBody {
     Signature { span: Span },
     Clauses { span: Span, clauses: Vec<Clause> },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuleDecl {
+    pub span: Span,
+    pub doc: Option<DocBlock>,
+    pub name: String,
+    pub generics: Vec<GenericParam>,
+    pub base: Option<Type>,
+    pub clauses: Vec<RuleClause>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuleClause {
+    pub span: Span,
+    pub action: RuleClauseAction,
+    pub kind: ClauseKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuleClauseAction {
+    Add,
+    Override,
+    Delete,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -222,6 +248,9 @@ pub struct Clause {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClauseKind {
     Documentation(DocBlock),
+    Rule {
+        name: QualifiedName,
+    },
     Requires {
         condition: Expr,
     },

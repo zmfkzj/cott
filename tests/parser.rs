@@ -1,4 +1,7 @@
-use cott::ast::{BinaryOp, ClauseKind, Declaration, ExprKind, PatternKind, TypeArgKind, UnaryOp};
+use cott::ast::{
+    BinaryOp, ClauseKind, Declaration, ExprKind, PatternKind, RuleClauseAction, TypeArgKind,
+    UnaryOp,
+};
 use cott::parser::parse;
 
 fn assert_rejected(source: &str) {
@@ -329,4 +332,67 @@ fn rejects_unknown_clause_at_eof() {
     assert_rejected(
         "module demo.progress\nfn check(value: Input.Value) -> Output.Result:\n    unexpected",
     );
+}
+
+#[test]
+fn parses_rule_declarations_inheritance_and_clause_actions() {
+    let source = r#"module demo.rules
+
+rule BaseAssignmentRule:
+    doc """Base assignment rule."""
+    requires line.len > 0
+    ensures Result.Ok(assignment) => assignment.name.len > 0
+    error ParseAssignmentError.MissingEquals
+
+rule StrictAssignmentRule(BaseAssignmentRule):
+    doc """Strict assignment rule."""
+    override ensures Result.Ok(assignment) => assignment.name.len > 1
+    delete error ParseAssignmentError.MissingEquals
+    ensures Result.Ok(assignment) => assignment.value.len > 0
+    error ParseAssignmentError.EmptyName
+"#;
+
+    let file = parse(source).expect("rules should parse");
+    assert_eq!(file.declarations.len(), 2);
+
+    let base = match &file.declarations[0] {
+        Declaration::Rule(value) => value,
+        other => panic!("expected rule declaration, got {other:?}"),
+    };
+    assert_eq!(base.name, "BaseAssignmentRule");
+    assert_eq!(base.base, None);
+    assert_eq!(base.clauses.len(), 4);
+    assert_eq!(base.clauses[0].action, RuleClauseAction::Add);
+    assert!(matches!(base.clauses[0].kind, ClauseKind::Documentation(_)));
+    assert_eq!(base.clauses[1].action, RuleClauseAction::Add);
+    assert!(matches!(base.clauses[1].kind, ClauseKind::Requires { .. }));
+    assert_eq!(base.clauses[2].action, RuleClauseAction::Add);
+    assert!(matches!(base.clauses[2].kind, ClauseKind::Ensures { .. }));
+    assert_eq!(base.clauses[3].action, RuleClauseAction::Add);
+    assert!(matches!(base.clauses[3].kind, ClauseKind::Error { .. }));
+
+    let child = match &file.declarations[1] {
+        Declaration::Rule(value) => value,
+        other => panic!("expected rule declaration, got {other:?}"),
+    };
+    assert_eq!(child.name, "StrictAssignmentRule");
+    assert_eq!(
+        child.base.as_ref().map(|b| b
+            .path
+            .segments
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()),
+        Some(vec!["BaseAssignmentRule"])
+    );
+    assert_eq!(child.clauses.len(), 5);
+    assert_eq!(child.clauses[0].action, RuleClauseAction::Add);
+    assert_eq!(child.clauses[1].action, RuleClauseAction::Override);
+    assert!(matches!(child.clauses[1].kind, ClauseKind::Ensures { .. }));
+    assert_eq!(child.clauses[2].action, RuleClauseAction::Delete);
+    assert!(matches!(child.clauses[2].kind, ClauseKind::Error { .. }));
+    assert_eq!(child.clauses[3].action, RuleClauseAction::Add);
+    assert!(matches!(child.clauses[3].kind, ClauseKind::Ensures { .. }));
+    assert_eq!(child.clauses[4].action, RuleClauseAction::Add);
+    assert!(matches!(child.clauses[4].kind, ClauseKind::Error { .. }));
 }

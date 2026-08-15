@@ -41,3 +41,12 @@ fn wraps_legal_comma_lists_at_one_hundred_columns() {
     ));
     assert_eq!(formatted(&output), output);
 }
+
+#[test]
+fn formats_rule_declarations_and_clause_actions() {
+    let unformatted = "module demo.rules\n\nrule BaseAssignmentRule:\n  doc \"\"\"\n  Base assignment rule.\n  \"\"\"\n  requires line.len > 0\n  ensures Result.Ok(assignment) => assignment.name.len > 0\n  error ParseAssignmentError.MissingEquals\n\nrule StrictAssignmentRule(BaseAssignmentRule):\n  doc \"\"\"\n  Strict assignment rule.\n  \"\"\"\n  override ensures Result.Ok(assignment) => assignment.name.len > 1\n  delete error ParseAssignmentError.MissingEquals\n  ensures Result.Ok(assignment) => assignment.value.len > 0\n  error ParseAssignmentError.EmptyName\n";
+    let expected = "module demo.rules\n\nrule BaseAssignmentRule:\n    doc \"\"\"\n    Base assignment rule.\n    \"\"\"\n\n    requires line.len > 0\n\n    ensures Result.Ok(assignment) => assignment.name.len > 0\n\n    error ParseAssignmentError.MissingEquals\n\nrule StrictAssignmentRule(BaseAssignmentRule):\n    doc \"\"\"\n    Strict assignment rule.\n    \"\"\"\n\n    override ensures Result.Ok(assignment) => assignment.name.len > 1\n\n    delete error ParseAssignmentError.MissingEquals\n\n    ensures Result.Ok(assignment) => assignment.value.len > 0\n\n    error ParseAssignmentError.EmptyName\n";
+    let output = formatted(unformatted);
+    assert_eq!(output, expected);
+    assert_eq!(formatted(&output), expected);
+}

@@ -277,6 +277,35 @@ pub struct HirTrait {
     pub source_order: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HirRuleClauseAction {
+    Add,
+    Override,
+    Delete,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirRuleClause {
+    pub clause_id: u32,
+    pub span: Span,
+    pub action: HirRuleClauseAction,
+    pub kind: HirClauseKind,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirRule {
+    pub id: SymbolId,
+    pub span: Span,
+    pub doc: Option<HirDoc>,
+    pub generics: Vec<HirGenericParam>,
+    pub base: Option<SymbolId>,
+    pub base_type: Option<HirType>,
+    pub declared_clauses: Vec<HirRuleClause>,
+    pub contract: HirContract,
+    pub public: bool,
+    pub source_order: usize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HirConst {
     pub id: SymbolId,
@@ -309,6 +338,7 @@ pub enum HirDeclaration {
     Struct(HirStruct),
     Enum(HirEnum),
     Trait(HirTrait),
+    Rule(HirRule),
     Const(HirConst),
     Function(HirFunction),
 }
@@ -321,6 +351,7 @@ impl HirDeclaration {
             Self::Struct(value) => &value.id,
             Self::Enum(value) => &value.id,
             Self::Trait(value) => &value.id,
+            Self::Rule(value) => &value.id,
             Self::Const(value) => &value.id,
             Self::Function(value) => &value.id,
         }
@@ -333,6 +364,7 @@ impl HirDeclaration {
             Self::Struct(value) => &value.span,
             Self::Enum(value) => &value.span,
             Self::Trait(value) => &value.span,
+            Self::Rule(value) => &value.span,
             Self::Const(value) => &value.span,
             Self::Function(value) => &value.span,
         }
@@ -345,6 +377,7 @@ impl HirDeclaration {
             Self::Struct(value) => value.public,
             Self::Enum(value) => value.public,
             Self::Trait(value) => value.public,
+            Self::Rule(value) => value.public,
             Self::Const(value) => value.public,
             Self::Function(value) => value.public,
         }
@@ -507,6 +540,7 @@ enum OwnedDeclKind {
     Const,
     Function,
     Trait { generics: usize },
+    Rule { generics: usize },
 }
 
 struct OwnedLower<'a> {
@@ -518,6 +552,7 @@ struct OwnedLower<'a> {
     resolving_aliases: HashSet<SymbolId>,
     constant_values: HashMap<SymbolId, HirValue>,
     resolving_constants: HashSet<SymbolId>,
+    lowered_rules: HashMap<SymbolId, HirRule>,
 }
 
 impl<'a> OwnedLower<'a> {
@@ -552,6 +587,12 @@ impl<'a> OwnedLower<'a> {
                         },
                     ),
                     Declaration::Const(v) => (&v.name, OwnedDeclKind::Const),
+                    Declaration::Rule(v) => (
+                        &v.name,
+                        OwnedDeclKind::Rule {
+                            generics: v.generics.len(),
+                        },
+                    ),
                     Declaration::Function(v) => (&v.name, OwnedDeclKind::Function),
                 };
                 declarations.insert(SymbolId::new(modules[index].clone(), name.clone()), kind);
@@ -566,6 +607,7 @@ impl<'a> OwnedLower<'a> {
             constant_values: HashMap::new(),
             resolving_constants: HashSet::new(),
             resolving_aliases: HashSet::new(),
+            lowered_rules: HashMap::new(),
         };
         for index in 0..out.parsed.sources.len() {
             let uses = out.parsed.sources[index].syntax.uses.clone();
@@ -1554,6 +1596,13 @@ fn validate_opaque_boundaries(modules: &[HirModule], errors: &mut Vec<ProjectDia
                 HirDeclaration::Const(value) if contains_opaque(&value.ty) => {
                     report(module, &value.span, "Opaque cannot be a constant type")
                 }
+                HirDeclaration::Rule(value) => {
+                    if let Some(base) = &value.base_type {
+                        if contains_opaque(base) {
+                            report(module, &value.span, "Opaque cannot occur in a rule base");
+                        }
+                    }
+                }
                 HirDeclaration::Function(value) => {
                     for parameter in &value.parameters {
                         if contains_opaque(&parameter.ty) && !is_opaque_boundary(&parameter.ty) {
@@ -2364,6 +2413,31 @@ impl<'a> OwnedLower<'a> {
                         text: value.text.clone(),
                     });
                 }
+                ClauseKind::Rule { name } => {
+                    if let Some(rule_sym) = self.resolve(module, name, &name.span) {
+                        if !matches!(
+                            self.declarations.get(&rule_sym),
+                            Some(OwnedDeclKind::Rule { .. })
+                        ) {
+                            self.error(
+                                module,
+                                name.span.clone(),
+                                format!("`{}` is not a rule", name.segments.join(".")),
+                            );
+                        } else if let Some(rule) = self.lowered_rules.get(&rule_sym) {
+                            for clause in &rule.contract.clauses {
+                                contract.clauses.push(HirClause {
+                                    clause_id: contract.clauses.len() as u32,
+                                    span: clause.span.clone(),
+                                    kind: clause.kind.clone(),
+                                });
+                            }
+                            for effect in &rule.contract.effects {
+                                contract.effects.push(effect.clone());
+                            }
+                        }
+                    }
+                }
                 ClauseKind::Requires { condition } => {
                     let expression = self.expr(module, condition, env);
                     if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
@@ -2699,6 +2773,97 @@ impl<'a> OwnedLower<'a> {
             }
         }
     }
+    fn infer_rule_pattern_type(
+        &mut self,
+        module: usize,
+        pattern: &ast::Pattern,
+        generics: &HashSet<String>,
+    ) -> HirType {
+        match &pattern.kind {
+            PatternKind::Variant { path, arguments } => {
+                if path.segments.as_slice() == ["Result", "Ok"] {
+                    let ok_type = if let Some(arg) = arguments.first() {
+                        Box::new(self.infer_rule_pattern_type(module, arg, generics))
+                    } else {
+                        Box::new(HirType::Primitive(PrimitiveType::Unit))
+                    };
+                    HirType::Result {
+                        ok: ok_type,
+                        error: Box::new(HirType::Primitive(PrimitiveType::Never)),
+                    }
+                } else if path.segments.as_slice() == ["Result", "Err"] {
+                    let err_type = if let Some(arg) = arguments.first() {
+                        Box::new(self.infer_rule_pattern_type(module, arg, generics))
+                    } else {
+                        Box::new(HirType::Primitive(PrimitiveType::Unit))
+                    };
+                    HirType::Result {
+                        ok: Box::new(HirType::Primitive(PrimitiveType::Never)),
+                        error: err_type,
+                    }
+                } else if path.segments.as_slice() == ["Option", "Some"] {
+                    let item_type = if let Some(arg) = arguments.first() {
+                        Box::new(self.infer_rule_pattern_type(module, arg, generics))
+                    } else {
+                        Box::new(HirType::Primitive(PrimitiveType::Unit))
+                    };
+                    HirType::Option { item: item_type }
+                } else if path.segments.as_slice() == ["Option", "Nothing"] {
+                    HirType::Option {
+                        item: Box::new(HirType::Primitive(PrimitiveType::Never)),
+                    }
+                } else {
+                    let prefix = if path.segments.len() >= 2 {
+                        ast::QualifiedName::new(
+                            path.span.clone(),
+                            path.segments[..path.segments.len() - 1].to_vec(),
+                        )
+                    } else {
+                        path.clone()
+                    };
+                    if let Some(owner) = self.resolve(module, &prefix, &path.span) {
+                        HirType::Named {
+                            symbol: owner,
+                            args: Vec::new(),
+                        }
+                    } else {
+                        HirType::Primitive(PrimitiveType::Unit)
+                    }
+                }
+            }
+            PatternKind::Binding(name) => {
+                let capitalized = {
+                    let mut c = name.chars();
+                    match c.next() {
+                        None => String::new(),
+                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    }
+                };
+                let qname =
+                    ast::QualifiedName::new(pattern.span.clone(), vec![capitalized.clone()]);
+                if let Some(sym) = self.resolve(module, &qname, &pattern.span) {
+                    HirType::Named {
+                        symbol: sym,
+                        args: Vec::new(),
+                    }
+                } else {
+                    let exact_qname =
+                        ast::QualifiedName::new(pattern.span.clone(), vec![name.clone()]);
+                    if let Some(sym) = self.resolve(module, &exact_qname, &pattern.span) {
+                        HirType::Named {
+                            symbol: sym,
+                            args: Vec::new(),
+                        }
+                    } else if generics.contains(name) {
+                        HirType::TypeParameter { name: name.clone() }
+                    } else {
+                        HirType::Primitive(PrimitiveType::Str)
+                    }
+                }
+            }
+            PatternKind::Wildcard => HirType::Primitive(PrimitiveType::Unit),
+        }
+    }
     fn declaration(
         &mut self,
         module: usize,
@@ -2877,6 +3042,230 @@ impl<'a> OwnedLower<'a> {
                     source_order: order,
                 })
             }
+            Declaration::Rule(value) => {
+                let id = id_for(&value.name);
+                let generic_names = value
+                    .generics
+                    .iter()
+                    .map(|v| v.name.clone())
+                    .collect::<HashSet<_>>();
+                let (base_symbol, base_type) = if let Some(base_ty) = &value.base {
+                    let hir_base_type = self.ty(module, base_ty, &generic_names);
+                    let base_sym = self.resolve(module, &base_ty.path, &base_ty.span);
+                    if let Some(ref sym) = base_sym {
+                        if !matches!(self.declarations.get(sym), Some(OwnedDeclKind::Rule { .. })) {
+                            self.error(
+                                module,
+                                base_ty.span.clone(),
+                                format!("base `{}` is not a rule", base_ty.path.segments.join(".")),
+                            );
+                        }
+                    }
+                    (base_sym, Some(hir_base_type))
+                } else {
+                    (None, None)
+                };
+
+                let generics = self.generics(module, &value.generics);
+
+                let mut declared_clauses = Vec::new();
+                let mut doc = value.doc.as_ref().map(|v| HirDoc {
+                    span: v.span.clone(),
+                    text: v.text.clone(),
+                });
+
+                for (clause_id, clause) in value.clauses.iter().enumerate() {
+                    let action = match clause.action {
+                        ast::RuleClauseAction::Add => HirRuleClauseAction::Add,
+                        ast::RuleClauseAction::Override => HirRuleClauseAction::Override,
+                        ast::RuleClauseAction::Delete => HirRuleClauseAction::Delete,
+                    };
+                    match &clause.kind {
+                        ClauseKind::Documentation(v) => {
+                            if doc.is_none() {
+                                doc = Some(HirDoc {
+                                    span: v.span.clone(),
+                                    text: v.text.clone(),
+                                });
+                            }
+                        }
+                        ClauseKind::Rule { name } => {
+                            if let Some(rule_sym) = self.resolve(module, name, &name.span) {
+                                if !matches!(
+                                    self.declarations.get(&rule_sym),
+                                    Some(OwnedDeclKind::Rule { .. })
+                                ) {
+                                    self.error(
+                                        module,
+                                        name.span.clone(),
+                                        format!("`{}` is not a rule", name.segments.join(".")),
+                                    );
+                                } else if let Some(rule) = self.lowered_rules.get(&rule_sym) {
+                                    for clause in &rule.contract.clauses {
+                                        declared_clauses.push(HirRuleClause {
+                                            clause_id: clause_id as u32,
+                                            span: clause.span.clone(),
+                                            action,
+                                            kind: clause.kind.clone(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        ClauseKind::Requires { condition } => {
+                            let env = HashMap::new();
+                            let expression = self.expr(module, condition, &env);
+                            if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
+                                self.error(
+                                    module,
+                                    condition.span.clone(),
+                                    "contract condition must be boolean",
+                                );
+                            }
+                            declared_clauses.push(HirRuleClause {
+                                clause_id: clause_id as u32,
+                                span: clause.span.clone(),
+                                action,
+                                kind: HirClauseKind::Requires { expression },
+                            });
+                        }
+                        ClauseKind::Ensures { pattern, condition } => {
+                            let mut env = HashMap::new();
+                            let pattern = if let Some(pattern) = pattern {
+                                let expected =
+                                    self.infer_rule_pattern_type(module, pattern, &generic_names);
+                                Some(self.pattern(module, pattern, &expected, &mut env))
+                            } else {
+                                env.insert(
+                                    "result".to_owned(),
+                                    (
+                                        SymbolId::new(self.modules[module].clone(), "result"),
+                                        HirType::Primitive(PrimitiveType::Unit),
+                                        false,
+                                    ),
+                                );
+                                None
+                            };
+                            let expression = self.expr(module, condition, &env);
+                            if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
+                                self.error(
+                                    module,
+                                    condition.span.clone(),
+                                    "contract condition must be boolean",
+                                );
+                            }
+                            declared_clauses.push(HirRuleClause {
+                                clause_id: clause_id as u32,
+                                span: clause.span.clone(),
+                                action,
+                                kind: HirClauseKind::Ensures {
+                                    pattern,
+                                    expression,
+                                },
+                            });
+                        }
+                        ClauseKind::Error { error, when } => {
+                            let resolved = self.error_variant(module, error);
+                            let env = HashMap::new();
+                            let when = when.as_ref().map(|value| {
+                                let expression = self.expr(module, value, &env);
+                                if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
+                                    self.error(
+                                        module,
+                                        value.span.clone(),
+                                        "contract condition must be boolean",
+                                    );
+                                }
+                                expression
+                            });
+                            let variant = resolved.map(|(v, _)| v).unwrap_or_else(|| {
+                                self.resolve(module, error, &error.span).unwrap_or_else(|| {
+                                    SymbolId::new(
+                                        self.modules[module].clone(),
+                                        error.segments.join("."),
+                                    )
+                                })
+                            });
+                            declared_clauses.push(HirRuleClause {
+                                clause_id: clause_id as u32,
+                                span: clause.span.clone(),
+                                action,
+                                kind: HirClauseKind::Error {
+                                    variant,
+                                    priority: None,
+                                    when,
+                                },
+                            });
+                        }
+                        ClauseKind::Effects { .. } => {}
+                    }
+                }
+
+                let mut resolved_clauses: Vec<HirClause> = Vec::new();
+                if let Some(ref base_sym) = base_symbol {
+                    if let Some(base_rule) = self.lowered_rules.get(base_sym) {
+                        resolved_clauses = base_rule.contract.clauses.clone();
+                    }
+                }
+
+                for declared in &declared_clauses {
+                    match declared.action {
+                        HirRuleClauseAction::Add => {
+                            resolved_clauses.push(HirClause {
+                                clause_id: resolved_clauses.len() as u32,
+                                span: declared.span.clone(),
+                                kind: declared.kind.clone(),
+                            });
+                        }
+                        HirRuleClauseAction::Override => {
+                            let mut matched = false;
+                            for target in resolved_clauses.iter_mut() {
+                                if clauses_match(&target.kind, &declared.kind) {
+                                    target.kind = declared.kind.clone();
+                                    target.span = declared.span.clone();
+                                    matched = true;
+                                    break;
+                                }
+                            }
+                            if !matched {
+                                resolved_clauses.push(HirClause {
+                                    clause_id: resolved_clauses.len() as u32,
+                                    span: declared.span.clone(),
+                                    kind: declared.kind.clone(),
+                                });
+                            }
+                        }
+                        HirRuleClauseAction::Delete => {
+                            resolved_clauses
+                                .retain(|target| !clauses_match(&target.kind, &declared.kind));
+                        }
+                    }
+                }
+
+                for (idx, clause) in resolved_clauses.iter_mut().enumerate() {
+                    clause.clause_id = idx as u32;
+                }
+
+                let contract = HirContract {
+                    clauses: resolved_clauses,
+                    effects: Vec::new(),
+                };
+
+                let hir_rule = HirRule {
+                    id: id.clone(),
+                    span: value.span.clone(),
+                    doc,
+                    generics,
+                    base: base_symbol,
+                    base_type,
+                    declared_clauses,
+                    contract,
+                    public: true,
+                    source_order: order,
+                };
+                self.lowered_rules.insert(id, hir_rule.clone());
+                HirDeclaration::Rule(hir_rule)
+            }
             Declaration::Function(value) => {
                 let names = value
                     .generics
@@ -2952,6 +3341,53 @@ impl<'a> OwnedLower<'a> {
             declarations,
             source_order: index,
         }
+    }
+}
+
+fn clauses_match(a: &HirClauseKind, b: &HirClauseKind) -> bool {
+    match (a, b) {
+        (HirClauseKind::Requires { .. }, HirClauseKind::Requires { .. }) => true,
+        (
+            HirClauseKind::Ensures { pattern: pat_a, .. },
+            HirClauseKind::Ensures { pattern: pat_b, .. },
+        ) => match (pat_a, pat_b) {
+            (Some(pa), Some(pb)) => patterns_match(pa, pb),
+            (None, None) => true,
+            _ => true,
+        },
+        (
+            HirClauseKind::Error { variant: var_a, .. },
+            HirClauseKind::Error { variant: var_b, .. },
+        ) => var_a == var_b || var_a.name == var_b.name,
+        _ => false,
+    }
+}
+
+fn patterns_match(a: &HirPattern, b: &HirPattern) -> bool {
+    match (&a.kind, &b.kind) {
+        (HirPatternKind::Wildcard, HirPatternKind::Wildcard) => true,
+        (
+            HirPatternKind::Binding { name: name_a, .. },
+            HirPatternKind::Binding { name: name_b, .. },
+        ) => name_a == name_b,
+        (
+            HirPatternKind::Variant {
+                symbol: sym_a,
+                arguments: args_a,
+            },
+            HirPatternKind::Variant {
+                symbol: sym_b,
+                arguments: args_b,
+            },
+        ) => {
+            (sym_a == sym_b || sym_a.name == sym_b.name)
+                && args_a.len() == args_b.len()
+                && args_a
+                    .iter()
+                    .zip(args_b.iter())
+                    .all(|(x, y)| patterns_match(x, y))
+        }
+        _ => false,
     }
 }
 
@@ -3093,8 +3529,8 @@ fn owned_visit_const_expr<F: FnMut(&ast::QualifiedName)>(value: &ast::ConstExpr,
     }
 }
 
-fn owned_visit_clause<F: FnMut(&ast::QualifiedName)>(value: &ast::Clause, visit: &mut F) {
-    match &value.kind {
+fn owned_visit_clause_kind<F: FnMut(&ast::QualifiedName)>(kind: &ast::ClauseKind, visit: &mut F) {
+    match kind {
         ast::ClauseKind::Requires { condition } => owned_visit_expr(condition, visit),
         ast::ClauseKind::Ensures { pattern, condition } => {
             if let Some(pattern) = pattern {
@@ -3108,8 +3544,13 @@ fn owned_visit_clause<F: FnMut(&ast::QualifiedName)>(value: &ast::Clause, visit:
                 owned_visit_expr(when, visit);
             }
         }
+        ast::ClauseKind::Rule { name } => visit(name),
         ast::ClauseKind::Effects { .. } | ast::ClauseKind::Documentation(_) => {}
     }
+}
+
+fn owned_visit_clause<F: FnMut(&ast::QualifiedName)>(value: &ast::Clause, visit: &mut F) {
+    owned_visit_clause_kind(&value.kind, visit);
 }
 
 fn owned_visit_parameter<F: FnMut(&ast::QualifiedName)>(value: &ast::Parameter, visit: &mut F) {
@@ -3169,6 +3610,19 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
         Declaration::Const(value) => {
             owned_visit_type(&value.ty, &mut visit);
             owned_visit_const_expr(&value.value, &mut visit);
+        }
+        Declaration::Rule(value) => {
+            for generic in &value.generics {
+                for bound in &generic.bounds {
+                    owned_visit_type(bound, &mut visit);
+                }
+            }
+            if let Some(base) = &value.base {
+                owned_visit_type(base, &mut visit);
+            }
+            for clause in &value.clauses {
+                owned_visit_clause_kind(&clause.kind, &mut visit);
+            }
         }
         Declaration::Function(value) => {
             for generic in &value.generics {
@@ -3256,6 +3710,7 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
                 Declaration::Struct(value) => (&value.name, true),
                 Declaration::Enum(value) => (&value.name, true),
                 Declaration::Trait(value) => (&value.name, true),
+                Declaration::Rule(value) => (&value.name, true),
                 Declaration::Const(value) => (&value.name, false),
                 Declaration::Function(value) => (&value.name, false),
             };
@@ -3288,6 +3743,7 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
                 Declaration::Struct(value) => Some(&value.generics),
                 Declaration::Enum(value) => Some(&value.generics),
                 Declaration::Trait(value) => Some(&value.generics),
+                Declaration::Rule(value) => Some(&value.generics),
                 Declaration::Function(value) => Some(&value.generics),
                 _ => None,
             };
@@ -3508,6 +3964,7 @@ fn owned_preflight(
                 Declaration::Struct(v) => &v.name,
                 Declaration::Enum(v) => &v.name,
                 Declaration::Trait(v) => &v.name,
+                Declaration::Rule(v) => &v.name,
                 Declaration::Const(v) => &v.name,
                 Declaration::Function(v) => &v.name,
             };
@@ -3540,6 +3997,7 @@ fn owned_preflight(
                         .flat_map(|v| v.parameters.iter().map(|p| &p.ty))
                         .collect(),
                 ),
+                Declaration::Rule(v) => (&v.name, v.base.as_ref().into_iter().collect()),
                 _ => continue,
             };
             let current = SymbolId::new(module.clone(), name.clone());
@@ -3876,6 +4334,11 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
                     types.extend(value.parameters.iter().map(|parameter| &parameter.ty));
                     types.push(&value.return_type);
                 }
+                HirDeclaration::Rule(value) => {
+                    if let Some(base_type) = &value.base_type {
+                        types.push(base_type);
+                    }
+                }
             }
             for ty in types {
                 visit(ty, modules, &module.source, span, errors);
@@ -3910,6 +4373,7 @@ fn validate_effects(
                     .iter()
                     .map(|method| &method.contract)
                     .collect(),
+                HirDeclaration::Rule(value) => vec![&value.contract],
                 _ => Vec::new(),
             });
         for contract in contracts {

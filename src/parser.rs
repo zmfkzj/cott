@@ -234,6 +234,7 @@ impl Parser {
             TokenKind::Keyword(Keyword::Enum) => Some(Declaration::Enum(self.parse_enum(doc)?)),
             TokenKind::Keyword(Keyword::Trait) => Some(Declaration::Trait(self.parse_trait(doc)?)),
             TokenKind::Keyword(Keyword::Const) => Some(Declaration::Const(self.parse_const(doc)?)),
+            TokenKind::Keyword(Keyword::Rule) => Some(Declaration::Rule(self.parse_rule(doc)?)),
             TokenKind::Keyword(Keyword::Fn) => {
                 if doc.is_some() {
                     self.error(
@@ -365,6 +366,65 @@ impl Parser {
             methods,
         })
     }
+    fn parse_rule(&mut self, doc: Option<DocBlock>) -> Option<RuleDecl> {
+        let st = self.keyword(Keyword::Rule)?.span;
+        let (name, _) = self.name("rule name")?;
+        let generics = self.parse_generics()?;
+        let base = if self.at(&TokenKind::LParen) {
+            self.bump();
+            let b = self.parse_type()?;
+            self.expect(TokenKind::RParen, "expected `)` after base rule")?;
+            Some(b)
+        } else {
+            None
+        };
+        self.expect(TokenKind::Colon, "expected `:` after rule")?;
+        self.newline();
+        self.expect(TokenKind::Indent, "expected indented rule clauses")?;
+        let mut clauses = Vec::new();
+        self.skip_newlines();
+        while !self.at(&TokenKind::Dedent) && !self.eof() {
+            if let Some(c) = self.parse_rule_clause() {
+                clauses.push(c);
+            } else {
+                self.recover_line();
+            }
+            self.skip_newlines();
+        }
+        let end = self.bump().span;
+        Some(RuleDecl {
+            span: Self::join(st, end),
+            doc,
+            name,
+            generics,
+            base,
+            clauses,
+        })
+    }
+    fn parse_rule_clause(&mut self) -> Option<RuleClause> {
+        let (action, action_span) = if self.at(&TokenKind::Keyword(Keyword::Override)) {
+            let tok = self.bump();
+            (RuleClauseAction::Override, Some(tok.span))
+        } else if self.at(&TokenKind::Keyword(Keyword::Delete))
+            || self.at(&TokenKind::Keyword(Keyword::Remove))
+        {
+            let tok = self.bump();
+            (RuleClauseAction::Delete, Some(tok.span))
+        } else {
+            (RuleClauseAction::Add, None)
+        };
+        let clause = self.parse_clause()?;
+        let span = if let Some(start) = action_span {
+            Self::join(start, clause.span.clone())
+        } else {
+            clause.span.clone()
+        };
+        Some(RuleClause {
+            span,
+            action,
+            kind: clause.kind,
+        })
+    }
     fn parse_const(&mut self, doc: Option<DocBlock>) -> Option<ConstDecl> {
         let st = self.keyword(Keyword::Const)?.span;
         let (name, _) = self.name("constant name")?;
@@ -470,10 +530,11 @@ impl Parser {
                 let c = self.parse_clause()?;
                 let rank = match &c.kind {
                     ClauseKind::Documentation(_) => 0,
-                    ClauseKind::Requires { .. } => 1,
-                    ClauseKind::Ensures { .. } => 2,
-                    ClauseKind::Error { .. } => 3,
-                    ClauseKind::Effects { .. } => 4,
+                    ClauseKind::Rule { .. } => 1,
+                    ClauseKind::Requires { .. } => 2,
+                    ClauseKind::Ensures { .. } => 3,
+                    ClauseKind::Error { .. } => 4,
+                    ClauseKind::Effects { .. } => 5,
                 };
                 if rank == 0 {
                     if seen_doc || phase > 0 {
@@ -487,7 +548,7 @@ impl Parser {
                     if rank < phase {
                         self.error("function clauses are out of order", c.span.clone());
                     }
-                    if rank == 4 && phase == 4 {
+                    if rank == 5 && phase == 5 {
                         self.error("function may have only one effects clause", c.span.clone());
                     }
                     phase = phase.max(rank);
@@ -520,6 +581,16 @@ impl Parser {
             return Some(Clause {
                 span: s.clone(),
                 kind: ClauseKind::Documentation(d),
+            });
+        }
+        if self.at(&TokenKind::Keyword(Keyword::Rule)) {
+            let st = self.bump().span;
+            let name = self.parse_qname()?;
+            let end = name.span.clone();
+            self.newline();
+            return Some(Clause {
+                span: Self::join(st, end),
+                kind: ClauseKind::Rule { name },
             });
         }
         if self.at(&TokenKind::Keyword(Keyword::Requires)) {

@@ -165,3 +165,47 @@ fn load_rejects_unknown_declaration_fields() {
     let error = load(&bytes).expect_err("unknown declaration fields must be rejected");
     assert!(error.contains("schema violation"));
 }
+
+#[test]
+fn renders_and_validates_canonical_ir_for_rules() {
+    let parsed = parse_project([source(
+        "src/rules.cott",
+        r#"module rules
+
+struct Assignment:
+    name: Str
+    value: Str
+
+enum ParseAssignmentError:
+    MissingEquals
+    EmptyName
+
+rule BaseAssignmentRule:
+    doc """Base assignment rule."""
+    ensures Result.Ok(assignment) => assignment.name.len > 0
+    error ParseAssignmentError.MissingEquals
+
+rule StrictAssignmentRule(BaseAssignmentRule):
+    doc """Strict assignment rule."""
+    override ensures Result.Ok(assignment) => assignment.name.len > 1
+    delete error ParseAssignmentError.MissingEquals
+    ensures Result.Ok(assignment) => assignment.value.len > 0
+    error ParseAssignmentError.EmptyName
+"#,
+    )])
+    .expect("IR fixture with rules must parse");
+
+    let hir = cott::hir::lower(Path::new("src"), parsed).expect("IR fixture with rules must lower");
+    let rendered = render(&hir).expect("IR with rules must render");
+    assert_eq!(rendered.modules.len(), 1);
+
+    let text = json(&rendered.modules[0]);
+    assert!(text.contains(r#""kind":"rule""#));
+    assert!(text.contains(r#""name":"rules.BaseAssignmentRule""#));
+    assert!(text.contains(r#""name":"rules.StrictAssignmentRule""#));
+    assert!(text.contains(r#""base":"rules.BaseAssignmentRule""#));
+
+    // Validate that load parses and validates against the schema
+    let loaded = load(&rendered.modules[0].bytes).expect("canonical IR with rules must load");
+    assert_eq!(loaded["module"], "rules");
+}

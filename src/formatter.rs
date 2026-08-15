@@ -1,7 +1,7 @@
 use crate::ast::{
     BinaryOp, Clause, ClauseKind, CompareOp, ConstExpr, Declaration, DocBlock, Expr, ExprKind,
-    File, FunctionBody, GenericParam, LiteralKind, Pattern, PatternKind, QualifiedName, Type,
-    TypeArgKind, UnaryOp,
+    File, FunctionBody, GenericParam, LiteralKind, Pattern, PatternKind, QualifiedName, RuleClause,
+    RuleClauseAction, Type, TypeArgKind, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, Span};
 use crate::syntax::{Cst, TokenKind};
@@ -251,6 +251,35 @@ impl<'a> Printer<'a> {
                 );
                 self.inline_for(&value.span);
             }
+            Declaration::Rule(value) => {
+                self.doc(value.doc.as_ref(), 0);
+                let base_str = value
+                    .base
+                    .as_ref()
+                    .map(|b| format!("({})", self.ty(b)))
+                    .unwrap_or_default();
+                self.push(
+                    0,
+                    format!(
+                        "rule {}{}{}:",
+                        value.name,
+                        self.generics(&value.generics),
+                        base_str
+                    ),
+                );
+                self.inline_line(self.keyword_line(&value.span, "rule "));
+                let mut previous_group = None;
+                for rule_clause in &value.clauses {
+                    let group = rule_clause_group(rule_clause);
+                    if previous_group.is_some_and(|previous| previous != group) {
+                        self.blank();
+                    }
+                    self.leading(rule_clause.span.start, 1);
+                    self.rule_clause(rule_clause);
+                    self.inline_for(&rule_clause.span);
+                    previous_group = Some(group);
+                }
+            }
             Declaration::Function(value) => {
                 let parameters = value
                     .parameters
@@ -293,6 +322,7 @@ impl<'a> Printer<'a> {
     fn clause(&mut self, clause: &Clause) {
         match &clause.kind {
             ClauseKind::Documentation(doc) => self.doc(Some(doc), 1),
+            ClauseKind::Rule { name } => self.push(1, format!("rule {}", qname(name))),
             ClauseKind::Requires { condition } => self.expression_line(1, "requires ", condition),
             ClauseKind::Ensures { pattern, condition } => {
                 let prefix = pattern.as_ref().map_or_else(
@@ -311,6 +341,45 @@ impl<'a> Printer<'a> {
             ClauseKind::Effects { effects } => self.comma_list(
                 1,
                 "effects [".to_owned(),
+                effects.iter().map(qname).collect(),
+                "]".to_owned(),
+            ),
+        }
+    }
+
+    fn rule_clause(&mut self, rule_clause: &RuleClause) {
+        let prefix = match rule_clause.action {
+            RuleClauseAction::Add => "",
+            RuleClauseAction::Override => "override ",
+            RuleClauseAction::Delete => "delete ",
+        };
+        match &rule_clause.kind {
+            ClauseKind::Documentation(doc) => self.doc(Some(doc), 1),
+            ClauseKind::Rule { name } => self.push(1, format!("{prefix}rule {}", qname(name))),
+            ClauseKind::Requires { condition } => {
+                self.expression_line(1, &format!("{prefix}requires "), condition);
+            }
+            ClauseKind::Ensures { pattern, condition } => {
+                let p = pattern.as_ref().map_or_else(
+                    || format!("{prefix}ensures "),
+                    |pattern| format!("{prefix}ensures {} => ", self.pattern(pattern)),
+                );
+                self.expression_line(1, &p, condition);
+            }
+            ClauseKind::Error { error, when } => {
+                if let Some(condition) = when {
+                    self.expression_line(
+                        1,
+                        &format!("{prefix}error {} when ", qname(error)),
+                        condition,
+                    );
+                } else {
+                    self.push(1, format!("{prefix}error {}", qname(error)));
+                }
+            }
+            ClauseKind::Effects { effects } => self.comma_list(
+                1,
+                format!("{prefix}effects ["),
                 effects.iter().map(qname).collect(),
                 "]".to_owned(),
             ),
@@ -583,11 +652,29 @@ fn qname(name: &QualifiedName) -> String {
 fn clause_group(clause: &Clause) -> u8 {
     match clause.kind {
         ClauseKind::Documentation(_) => 0,
-        ClauseKind::Requires { .. } => 1,
-        ClauseKind::Ensures { .. } => 2,
-        ClauseKind::Error { .. } => 3,
-        ClauseKind::Effects { .. } => 4,
+        ClauseKind::Rule { .. } => 1,
+        ClauseKind::Requires { .. } => 2,
+        ClauseKind::Ensures { .. } => 3,
+        ClauseKind::Error { .. } => 4,
+        ClauseKind::Effects { .. } => 5,
     }
+}
+
+fn rule_clause_group(clause: &RuleClause) -> u8 {
+    let action_offset = match clause.action {
+        RuleClauseAction::Add => 0,
+        RuleClauseAction::Override => 10,
+        RuleClauseAction::Delete => 20,
+    };
+    action_offset
+        + match clause.kind {
+            ClauseKind::Documentation(_) => 0,
+            ClauseKind::Rule { .. } => 1,
+            ClauseKind::Requires { .. } => 2,
+            ClauseKind::Ensures { .. } => 3,
+            ClauseKind::Error { .. } => 4,
+            ClauseKind::Effects { .. } => 5,
+        }
 }
 
 fn expression_precedence(expression: &Expr) -> u8 {

@@ -70,6 +70,12 @@ const EXAMPLES: &[Example] = &[
         final_symbol: "build_snapshot",
     },
     Example {
+        path: "grammar/assignment-rule",
+        module: "curriculum.assignment_rule",
+        public_functions: &["parse_assignment"],
+        final_symbol: "parse_assignment",
+    },
+    Example {
         path: "simple/calculate-age",
         module: "curriculum.calculate_age",
         public_functions: &["calculate_age_days", "summarize_age"],
@@ -556,13 +562,13 @@ p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True
 
 #[test]
 fn curriculum_inventory_and_final_symbols_are_exact() {
-    assert_eq!(EXAMPLES.len(), 41);
+    assert_eq!(EXAMPLES.len(), 42);
     assert_eq!(
         EXAMPLES
             .iter()
             .filter(|example| example.path.starts_with("grammar/"))
             .count(),
-        9
+        10
     );
     assert_eq!(
         EXAMPLES

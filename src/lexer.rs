@@ -443,6 +443,10 @@ fn keyword(word: &str) -> Option<Keyword> {
         "and" => Keyword::And,
         "or" => Keyword::Or,
         "not" => Keyword::Not,
+        "rule" => Keyword::Rule,
+        "override" => Keyword::Override,
+        "delete" => Keyword::Delete,
+        "remove" => Keyword::Remove,
         _ => return None,
     })
 }
