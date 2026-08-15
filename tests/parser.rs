@@ -396,3 +396,47 @@ rule StrictAssignmentRule(BaseAssignmentRule):
     assert_eq!(child.clauses[4].action, RuleClauseAction::Add);
     assert!(matches!(child.clauses[4].kind, ClauseKind::Error { .. }));
 }
+
+#[test]
+fn parses_annotations_and_docstring_references() {
+    let source = r#"module demo.annotated
+
+@entity
+@memo("User entity definition")
+struct User:
+    id: Str
+
+@pure
+@tag("lookup")
+fn find_user(id: Str) -> Option[User]:
+    doc """
+    Looks up a {User} by identifier.
+    """
+    ensures Option.Some(u) => u.id.len > 0
+"#;
+
+    let file = parse(source).expect("annotated declarations should parse");
+    assert_eq!(file.declarations.len(), 2);
+
+    let structure = match &file.declarations[0] {
+        Declaration::Struct(v) => v,
+        other => panic!("expected struct, got {other:?}"),
+    };
+    assert_eq!(structure.annotations.len(), 2);
+    assert_eq!(structure.annotations[0].name, "entity");
+    assert_eq!(structure.annotations[0].argument, None);
+    assert_eq!(structure.annotations[1].name, "memo");
+    assert_eq!(
+        structure.annotations[1].argument.as_deref(),
+        Some("User entity definition")
+    );
+
+    let function = match &file.declarations[1] {
+        Declaration::Function(v) => v,
+        other => panic!("expected function, got {other:?}"),
+    };
+    assert_eq!(function.annotations.len(), 2);
+    assert_eq!(function.annotations[0].name, "pure");
+    assert_eq!(function.annotations[1].name, "tag");
+    assert_eq!(function.annotations[1].argument.as_deref(), Some("lookup"));
+}

@@ -135,9 +135,18 @@ impl Parser {
         }
         let mut declarations = Vec::new();
         let mut docs = None;
+        let mut annotations = Vec::new();
         while !self.eof() {
             if self.at(&TokenKind::Newline) {
                 self.bump();
+                continue;
+            }
+            if self.at(&TokenKind::At) {
+                if let Some(ann) = self.parse_annotation() {
+                    annotations.push(ann);
+                } else {
+                    self.recover_line();
+                }
                 continue;
             }
             if self.at(&TokenKind::Keyword(Keyword::Doc)) {
@@ -153,7 +162,9 @@ impl Parser {
                 docs = d;
                 continue;
             }
-            if let Some(decl) = self.parse_declaration(docs.take()) {
+            if let Some(decl) =
+                self.parse_declaration(std::mem::take(&mut annotations), docs.take())
+            {
                 declarations.push(decl);
             } else {
                 self.recover_line();
@@ -222,19 +233,102 @@ impl Parser {
             names,
         })
     }
-    fn parse_declaration(&mut self, doc: Option<DocBlock>) -> Option<Declaration> {
+    fn parse_annotation(&mut self) -> Option<Annotation> {
+        let st = self.expect(TokenKind::At, "expected `@`")?.span;
+        let (name, name_span) = match self.current().kind.clone() {
+            TokenKind::Name(s) => {
+                let t = self.bump();
+                (s, t.span)
+            }
+            TokenKind::Keyword(kw) => {
+                let t = self.bump();
+                let s = match kw {
+                    Keyword::Module => "module",
+                    Keyword::Use => "use",
+                    Keyword::Alias => "alias",
+                    Keyword::Newtype => "newtype",
+                    Keyword::Struct => "struct",
+                    Keyword::Enum => "enum",
+                    Keyword::Trait => "trait",
+                    Keyword::Rule => "rule",
+                    Keyword::Const => "const",
+                    Keyword::Fn => "fn",
+                    Keyword::SelfValue => "self",
+                    Keyword::Doc => "doc",
+                    Keyword::Requires => "requires",
+                    Keyword::Ensures => "ensures",
+                    Keyword::When => "when",
+                    Keyword::Effects => "effects",
+                    Keyword::Error => "error",
+                    Keyword::Where => "where",
+                    Keyword::Override => "override",
+                    Keyword::Delete => "delete",
+                    Keyword::Remove => "remove",
+                    Keyword::True => "true",
+                    Keyword::False => "false",
+                    Keyword::And => "and",
+                    Keyword::Or => "or",
+                    Keyword::Not => "not",
+                };
+                (s.to_owned(), t.span)
+            }
+            _ => {
+                self.error("expected annotation name", self.span_here());
+                return None;
+            }
+        };
+        let (argument, end_span) = if self.at(&TokenKind::LParen) {
+            self.bump();
+            let arg = match self.current().kind.clone() {
+                TokenKind::String(s) => {
+                    self.bump();
+                    Some(s)
+                }
+                TokenKind::Name(s) => {
+                    self.bump();
+                    Some(s)
+                }
+                _ => None,
+            };
+            let r = self.expect(TokenKind::RParen, "expected `)` after annotation argument")?;
+            (arg, r.span)
+        } else {
+            (None, name_span)
+        };
+        self.newline();
+        Some(Annotation {
+            span: Self::join(st, end_span),
+            name,
+            argument,
+        })
+    }
+    fn parse_declaration(
+        &mut self,
+        annotations: Vec<Annotation>,
+        doc: Option<DocBlock>,
+    ) -> Option<Declaration> {
         match self.current().kind.clone() {
-            TokenKind::Keyword(Keyword::Alias) => Some(Declaration::Alias(self.parse_alias(doc)?)),
+            TokenKind::Keyword(Keyword::Alias) => {
+                Some(Declaration::Alias(self.parse_alias(annotations, doc)?))
+            }
             TokenKind::Keyword(Keyword::Newtype) => {
-                Some(Declaration::Newtype(self.parse_newtype(doc)?))
+                Some(Declaration::Newtype(self.parse_newtype(annotations, doc)?))
             }
             TokenKind::Keyword(Keyword::Struct) => {
-                Some(Declaration::Struct(self.parse_struct(doc)?))
+                Some(Declaration::Struct(self.parse_struct(annotations, doc)?))
             }
-            TokenKind::Keyword(Keyword::Enum) => Some(Declaration::Enum(self.parse_enum(doc)?)),
-            TokenKind::Keyword(Keyword::Trait) => Some(Declaration::Trait(self.parse_trait(doc)?)),
-            TokenKind::Keyword(Keyword::Const) => Some(Declaration::Const(self.parse_const(doc)?)),
-            TokenKind::Keyword(Keyword::Rule) => Some(Declaration::Rule(self.parse_rule(doc)?)),
+            TokenKind::Keyword(Keyword::Enum) => {
+                Some(Declaration::Enum(self.parse_enum(annotations, doc)?))
+            }
+            TokenKind::Keyword(Keyword::Trait) => {
+                Some(Declaration::Trait(self.parse_trait(annotations, doc)?))
+            }
+            TokenKind::Keyword(Keyword::Const) => {
+                Some(Declaration::Const(self.parse_const(annotations, doc)?))
+            }
+            TokenKind::Keyword(Keyword::Rule) => {
+                Some(Declaration::Rule(self.parse_rule(annotations, doc)?))
+            }
             TokenKind::Keyword(Keyword::Fn) => {
                 if doc.is_some() {
                     self.error(
@@ -242,7 +336,7 @@ impl Parser {
                         doc.unwrap().span,
                     );
                 }
-                Some(Declaration::Function(self.parse_function()?))
+                Some(Declaration::Function(self.parse_function(annotations)?))
             }
             _ => {
                 self.error("expected declaration", self.span_here());
@@ -250,7 +344,11 @@ impl Parser {
             }
         }
     }
-    fn parse_alias(&mut self, doc: Option<DocBlock>) -> Option<AliasDecl> {
+    fn parse_alias(
+        &mut self,
+        annotations: Vec<Annotation>,
+        doc: Option<DocBlock>,
+    ) -> Option<AliasDecl> {
         let st = self.keyword(Keyword::Alias)?.span;
         let (name, _) = self.name("type name")?;
         self.expect(TokenKind::Equal, "expected `=` in alias")?;
@@ -259,12 +357,17 @@ impl Parser {
         self.newline();
         Some(AliasDecl {
             span: Self::join(st, end),
+            annotations,
             doc,
             name,
             target,
         })
     }
-    fn parse_newtype(&mut self, doc: Option<DocBlock>) -> Option<NewtypeDecl> {
+    fn parse_newtype(
+        &mut self,
+        annotations: Vec<Annotation>,
+        doc: Option<DocBlock>,
+    ) -> Option<NewtypeDecl> {
         let st = self.keyword(Keyword::Newtype)?.span;
         let (name, _) = self.name("type name")?;
         self.expect(TokenKind::LParen, "expected `(` in newtype")?;
@@ -282,13 +385,18 @@ impl Parser {
         }
         Some(NewtypeDecl {
             span: Self::join(st, end),
+            annotations,
             doc,
             name,
             underlying,
             where_clause,
         })
     }
-    fn parse_struct(&mut self, doc: Option<DocBlock>) -> Option<StructDecl> {
+    fn parse_struct(
+        &mut self,
+        annotations: Vec<Annotation>,
+        doc: Option<DocBlock>,
+    ) -> Option<StructDecl> {
         let st = self.keyword(Keyword::Struct)?.span;
         let (name, _) = self.name("type name")?;
         let generics = self.parse_generics()?;
@@ -308,13 +416,18 @@ impl Parser {
         let end = self.bump().span;
         Some(StructDecl {
             span: Self::join(st, end),
+            annotations,
             doc,
             name,
             generics,
             fields,
         })
     }
-    fn parse_enum(&mut self, doc: Option<DocBlock>) -> Option<EnumDecl> {
+    fn parse_enum(
+        &mut self,
+        annotations: Vec<Annotation>,
+        doc: Option<DocBlock>,
+    ) -> Option<EnumDecl> {
         let st = self.keyword(Keyword::Enum)?.span;
         let (name, _) = self.name("type name")?;
         let generics = self.parse_generics()?;
@@ -334,13 +447,18 @@ impl Parser {
         let end = self.bump().span;
         Some(EnumDecl {
             span: Self::join(st, end),
+            annotations,
             doc,
             name,
             generics,
             variants,
         })
     }
-    fn parse_trait(&mut self, doc: Option<DocBlock>) -> Option<TraitDecl> {
+    fn parse_trait(
+        &mut self,
+        annotations: Vec<Annotation>,
+        doc: Option<DocBlock>,
+    ) -> Option<TraitDecl> {
         let st = self.keyword(Keyword::Trait)?.span;
         let (name, _) = self.name("trait name")?;
         let generics = self.parse_generics()?;
@@ -360,13 +478,18 @@ impl Parser {
         let end = self.bump().span;
         Some(TraitDecl {
             span: Self::join(st, end),
+            annotations,
             doc,
             name,
             generics,
             methods,
         })
     }
-    fn parse_rule(&mut self, doc: Option<DocBlock>) -> Option<RuleDecl> {
+    fn parse_rule(
+        &mut self,
+        annotations: Vec<Annotation>,
+        doc: Option<DocBlock>,
+    ) -> Option<RuleDecl> {
         let st = self.keyword(Keyword::Rule)?.span;
         let (name, _) = self.name("rule name")?;
         let generics = self.parse_generics()?;
@@ -394,6 +517,7 @@ impl Parser {
         let end = self.bump().span;
         Some(RuleDecl {
             span: Self::join(st, end),
+            annotations,
             doc,
             name,
             generics,
@@ -425,7 +549,11 @@ impl Parser {
             kind: clause.kind,
         })
     }
-    fn parse_const(&mut self, doc: Option<DocBlock>) -> Option<ConstDecl> {
+    fn parse_const(
+        &mut self,
+        annotations: Vec<Annotation>,
+        doc: Option<DocBlock>,
+    ) -> Option<ConstDecl> {
         let st = self.keyword(Keyword::Const)?.span;
         let (name, _) = self.name("constant name")?;
         self.expect(TokenKind::Colon, "expected `:` after constant")?;
@@ -436,6 +564,7 @@ impl Parser {
         self.newline();
         Some(ConstDecl {
             span: Self::join(st, end),
+            annotations,
             doc,
             name,
             ty,
@@ -503,7 +632,7 @@ impl Parser {
             return_type: ret,
         })
     }
-    fn parse_function(&mut self) -> Option<FunctionDecl> {
+    fn parse_function(&mut self, annotations: Vec<Annotation>) -> Option<FunctionDecl> {
         let st = self.keyword(Keyword::Fn)?.span;
         let (name, _) = self.name("function name")?;
         let generics = self.parse_generics()?;
@@ -567,6 +696,7 @@ impl Parser {
         };
         Some(FunctionDecl {
             span: Self::join(st, end),
+            annotations,
             name,
             generics,
             parameters: params,

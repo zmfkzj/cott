@@ -76,6 +76,7 @@ fn owned_hir_preserves_trait_bounds_types_contract_order_and_pattern_identity() 
     let trait_decl = HirTrait {
         id: trait_id.clone(),
         span: at.clone(),
+        annotations: vec![],
         doc: Some(HirDoc {
             span: at.clone(),
             text: "renders values".into(),

@@ -341,6 +341,11 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Vec<Diagnostic>> {
                 i += 1;
                 line_code = true;
             }
+            b'@' => {
+                tokens.push(simple(TokenKind::At, i, i + 1));
+                i += 1;
+                line_code = true;
+            }
             b'!' => {
                 diagnostics.push(Diagnostic::new(
                     "invalid character `!`",

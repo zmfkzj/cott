@@ -1,7 +1,7 @@
 use crate::ast::{
-    BinaryOp, Clause, ClauseKind, CompareOp, ConstExpr, Declaration, DocBlock, Expr, ExprKind,
-    File, FunctionBody, GenericParam, LiteralKind, Pattern, PatternKind, QualifiedName, RuleClause,
-    RuleClauseAction, Type, TypeArgKind, UnaryOp,
+    Annotation, BinaryOp, Clause, ClauseKind, CompareOp, ConstExpr, Declaration, DocBlock, Expr,
+    ExprKind, File, FunctionBody, GenericParam, LiteralKind, Pattern, PatternKind, QualifiedName,
+    RuleClause, RuleClauseAction, Type, TypeArgKind, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, Span};
 use crate::syntax::{Cst, TokenKind};
@@ -150,6 +150,7 @@ impl<'a> Printer<'a> {
     fn declaration(&mut self, declaration: &Declaration) {
         match declaration {
             Declaration::Alias(value) => {
+                self.annotations(&value.annotations);
                 self.doc(value.doc.as_ref(), 0);
                 self.push(
                     0,
@@ -158,6 +159,7 @@ impl<'a> Printer<'a> {
                 self.inline_for(&value.span);
             }
             Declaration::Newtype(value) => {
+                self.annotations(&value.annotations);
                 self.doc(value.doc.as_ref(), 0);
                 self.push(
                     0,
@@ -171,6 +173,7 @@ impl<'a> Printer<'a> {
                 }
             }
             Declaration::Struct(value) => {
+                self.annotations(&value.annotations);
                 self.doc(value.doc.as_ref(), 0);
                 self.push(
                     0,
@@ -189,6 +192,7 @@ impl<'a> Printer<'a> {
                 }
             }
             Declaration::Enum(value) => {
+                self.annotations(&value.annotations);
                 self.doc(value.doc.as_ref(), 0);
                 self.push(
                     0,
@@ -217,6 +221,7 @@ impl<'a> Printer<'a> {
                 }
             }
             Declaration::Trait(value) => {
+                self.annotations(&value.annotations);
                 self.doc(value.doc.as_ref(), 0);
                 self.push(
                     0,
@@ -239,6 +244,7 @@ impl<'a> Printer<'a> {
                 }
             }
             Declaration::Const(value) => {
+                self.annotations(&value.annotations);
                 self.doc(value.doc.as_ref(), 0);
                 self.push(
                     0,
@@ -252,6 +258,7 @@ impl<'a> Printer<'a> {
                 self.inline_for(&value.span);
             }
             Declaration::Rule(value) => {
+                self.annotations(&value.annotations);
                 self.doc(value.doc.as_ref(), 0);
                 let base_str = value
                     .base
@@ -281,6 +288,7 @@ impl<'a> Printer<'a> {
                 }
             }
             Declaration::Function(value) => {
+                self.annotations(&value.annotations);
                 let parameters = value
                     .parameters
                     .iter()
@@ -383,6 +391,17 @@ impl<'a> Printer<'a> {
                 effects.iter().map(qname).collect(),
                 "]".to_owned(),
             ),
+        }
+    }
+    fn annotations(&mut self, annotations: &[Annotation]) {
+        for annotation in annotations {
+            self.leading(annotation.span.start, 0);
+            if let Some(arg) = &annotation.argument {
+                self.push(0, format!("@{}(\"{}\")", annotation.name, arg));
+            } else {
+                self.push(0, format!("@{}", annotation.name));
+            }
+            self.inline_for(&annotation.span);
         }
     }
 

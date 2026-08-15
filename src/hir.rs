@@ -209,9 +209,16 @@ pub struct HirContract {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirAnnotation {
+    pub span: Span,
+    pub name: String,
+    pub argument: Option<String>,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HirAlias {
     pub id: SymbolId,
     pub span: Span,
+    pub annotations: Vec<HirAnnotation>,
     pub doc: Option<HirDoc>,
     pub generics: Vec<HirGenericParam>,
     pub target: HirType,
@@ -223,6 +230,7 @@ pub struct HirAlias {
 pub struct HirNewtype {
     pub id: SymbolId,
     pub span: Span,
+    pub annotations: Vec<HirAnnotation>,
     pub doc: Option<HirDoc>,
     pub generics: Vec<HirGenericParam>,
     pub carrier: HirType,
@@ -235,6 +243,7 @@ pub struct HirNewtype {
 pub struct HirStruct {
     pub id: SymbolId,
     pub span: Span,
+    pub annotations: Vec<HirAnnotation>,
     pub doc: Option<HirDoc>,
     pub generics: Vec<HirGenericParam>,
     pub fields: Vec<HirField>,
@@ -246,6 +255,7 @@ pub struct HirStruct {
 pub struct HirEnum {
     pub id: SymbolId,
     pub span: Span,
+    pub annotations: Vec<HirAnnotation>,
     pub doc: Option<HirDoc>,
     pub generics: Vec<HirGenericParam>,
     pub variants: Vec<HirVariant>,
@@ -270,6 +280,7 @@ pub struct HirMethod {
 pub struct HirTrait {
     pub id: SymbolId,
     pub span: Span,
+    pub annotations: Vec<HirAnnotation>,
     pub doc: Option<HirDoc>,
     pub generics: Vec<HirGenericParam>,
     pub methods: Vec<HirMethod>,
@@ -296,6 +307,7 @@ pub struct HirRuleClause {
 pub struct HirRule {
     pub id: SymbolId,
     pub span: Span,
+    pub annotations: Vec<HirAnnotation>,
     pub doc: Option<HirDoc>,
     pub generics: Vec<HirGenericParam>,
     pub base: Option<SymbolId>,
@@ -310,6 +322,7 @@ pub struct HirRule {
 pub struct HirConst {
     pub id: SymbolId,
     pub span: Span,
+    pub annotations: Vec<HirAnnotation>,
     pub doc: Option<HirDoc>,
     pub ty: HirType,
     pub value: HirValue,
@@ -321,6 +334,7 @@ pub struct HirConst {
 pub struct HirFunction {
     pub id: SymbolId,
     pub span: Span,
+    pub annotations: Vec<HirAnnotation>,
     pub doc: Option<HirDoc>,
     pub generics: Vec<HirGenericParam>,
     pub parameters: Vec<HirParameter>,
@@ -2872,10 +2886,20 @@ impl<'a> OwnedLower<'a> {
     ) -> HirDeclaration {
         let module_id = self.modules[module].clone();
         let id_for = |name: &str| SymbolId::new(module_id.clone(), name);
+        let lower_annotations = |anns: &[ast::Annotation]| {
+            anns.iter()
+                .map(|a| HirAnnotation {
+                    span: a.span.clone(),
+                    name: a.name.clone(),
+                    argument: a.argument.clone(),
+                })
+                .collect::<Vec<_>>()
+        };
         match declaration {
             Declaration::Alias(value) => HirDeclaration::Alias(HirAlias {
                 id: id_for(&value.name),
                 span: value.span.clone(),
+                annotations: lower_annotations(&value.annotations),
                 doc: value.doc.as_ref().map(|v| HirDoc {
                     span: v.span.clone(),
                     text: v.text.clone(),
@@ -2899,6 +2923,7 @@ impl<'a> OwnedLower<'a> {
                 HirDeclaration::Newtype(HirNewtype {
                     id: id_for(&value.name),
                     span: value.span.clone(),
+                    annotations: lower_annotations(&value.annotations),
                     doc: value.doc.as_ref().map(|v| HirDoc {
                         span: v.span.clone(),
                         text: v.text.clone(),
@@ -2922,6 +2947,7 @@ impl<'a> OwnedLower<'a> {
                 HirDeclaration::Struct(HirStruct {
                     id: id_for(&value.name),
                     span: value.span.clone(),
+                    annotations: lower_annotations(&value.annotations),
                     doc: value.doc.as_ref().map(|v| HirDoc {
                         span: v.span.clone(),
                         text: v.text.clone(),
@@ -2947,6 +2973,7 @@ impl<'a> OwnedLower<'a> {
                 HirDeclaration::Enum(HirEnum {
                     id: enum_id.clone(),
                     span: value.span.clone(),
+                    annotations: lower_annotations(&value.annotations),
                     doc: value.doc.as_ref().map(|v| HirDoc {
                         span: v.span.clone(),
                         text: v.text.clone(),
@@ -2992,6 +3019,7 @@ impl<'a> OwnedLower<'a> {
                 HirDeclaration::Trait(HirTrait {
                     id: trait_id.clone(),
                     span: value.span.clone(),
+                    annotations: lower_annotations(&value.annotations),
                     doc: value.doc.as_ref().map(|v| HirDoc {
                         span: v.span.clone(),
                         text: v.text.clone(),
@@ -3032,6 +3060,7 @@ impl<'a> OwnedLower<'a> {
                 HirDeclaration::Const(HirConst {
                     id,
                     span: value.span.clone(),
+                    annotations: lower_annotations(&value.annotations),
                     doc: value.doc.as_ref().map(|v| HirDoc {
                         span: v.span.clone(),
                         text: v.text.clone(),
@@ -3254,6 +3283,7 @@ impl<'a> OwnedLower<'a> {
                 let hir_rule = HirRule {
                     id: id.clone(),
                     span: value.span.clone(),
+                    annotations: lower_annotations(&value.annotations),
                     doc,
                     generics,
                     base: base_symbol,
@@ -3263,7 +3293,6 @@ impl<'a> OwnedLower<'a> {
                     public: true,
                     source_order: order,
                 };
-                self.lowered_rules.insert(id, hir_rule.clone());
                 HirDeclaration::Rule(hir_rule)
             }
             Declaration::Function(value) => {
@@ -3296,6 +3325,7 @@ impl<'a> OwnedLower<'a> {
                 HirDeclaration::Function(HirFunction {
                     id,
                     span: value.span.clone(),
+                    annotations: lower_annotations(&value.annotations),
                     doc,
                     generics: self.generics(module, &value.generics),
                     parameters,

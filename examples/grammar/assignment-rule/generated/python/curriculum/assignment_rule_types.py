@@ -25,13 +25,13 @@ class ParseAssignmentError_EmptyName:
 
 ParseAssignmentError: TypeAlias = Union[ParseAssignmentError_MissingEquals, ParseAssignmentError_EmptyName]
 
-"""Base rule for assignments requiring non-empty name."""
+"""Base rule for {Assignment} requiring non-empty name."""
 class BaseAssignmentRule:
     pass
 
-"""Strict rule inheriting from BaseAssignmentRule with overridden name constraint, deleted error, and added non-empty value constraint."""
+"""Strict rule inheriting from {BaseAssignmentRule} with overridden name constraint, deleted error, and added non-empty value constraint."""
 class StrictAssignmentRule(BaseAssignmentRule):
     pass
 
-"""Parses one assignment without I/O or mutation following strict rules."""
+"""Parses one {Assignment} without I/O or mutation following {StrictAssignmentRule}."""
 __all__ = ["Assignment", "BaseAssignmentRule", "ParseAssignmentError", "ParseAssignmentError_EmptyName", "ParseAssignmentError_MissingEquals", "StrictAssignmentRule"]

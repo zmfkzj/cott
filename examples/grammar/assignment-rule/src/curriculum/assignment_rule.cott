@@ -1,25 +1,31 @@
 module curriculum.assignment_rule
 
+@entity
 struct Assignment:
     name: Str
     value: Str
 
+@error_domain
 enum ParseAssignmentError:
     MissingEquals
     EmptyName
 
+@rule
+@memo("Base validation rules for {Assignment}")
 rule BaseAssignmentRule:
     doc """
-    Base rule for assignments requiring non-empty name.
+    Base rule for {Assignment} requiring non-empty name.
     """
 
     ensures Result.Ok(assignment) => assignment.name.len > 0
 
     error ParseAssignmentError.MissingEquals
 
+@rule
+@memo("Strict validation rules for {Assignment}")
 rule StrictAssignmentRule(BaseAssignmentRule):
     doc """
-    Strict rule inheriting from BaseAssignmentRule with overridden name constraint, deleted error, and added non-empty value constraint.
+    Strict rule inheriting from {BaseAssignmentRule} with overridden name constraint, deleted error, and added non-empty value constraint.
     """
 
     override ensures Result.Ok(assignment) => assignment.name.len > 1
@@ -30,9 +36,11 @@ rule StrictAssignmentRule(BaseAssignmentRule):
 
     error ParseAssignmentError.EmptyName
 
+@pure
+@tag("parser")
 fn parse_assignment(line: Str) -> Result[Assignment, ParseAssignmentError]:
     doc """
-    Parses one assignment without I/O or mutation following strict rules.
+    Parses one {Assignment} without I/O or mutation following {StrictAssignmentRule}.
     """
 
     rule StrictAssignmentRule

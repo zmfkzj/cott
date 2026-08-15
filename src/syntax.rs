@@ -67,6 +67,7 @@ pub enum TokenKind {
     LessEqual,
     Greater,
     GreaterEqual,
+    At,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

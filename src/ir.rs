@@ -6,10 +6,10 @@ use serde_json::Value;
 
 use crate::diagnostics::Span;
 use crate::hir::{
-    HirBinaryOp, HirClause, HirClauseKind, HirCompareOp, HirContract, HirDeclaration, HirDoc,
-    HirEffect, HirExpr, HirExprKind, HirField, HirGenericParam, HirMethod, HirModule, HirParameter,
-    HirParameterKind, HirPattern, HirPatternKind, HirProject, HirReference, HirType, HirUnaryOp,
-    HirValue, HirVariant, PrimitiveType,
+    HirAnnotation, HirBinaryOp, HirClause, HirClauseKind, HirCompareOp, HirContract,
+    HirDeclaration, HirDoc, HirEffect, HirExpr, HirExprKind, HirField, HirGenericParam, HirMethod,
+    HirModule, HirParameter, HirParameterKind, HirPattern, HirPatternKind, HirProject,
+    HirReference, HirType, HirUnaryOp, HirValue, HirVariant, PrimitiveType,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -125,6 +125,7 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
                 json,
                 "alias",
                 value.id.as_string().as_str(),
+                &value.annotations,
                 &value.doc,
                 &value.span,
                 value.public,
@@ -141,6 +142,7 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
                 json,
                 "newtype",
                 value.id.as_string().as_str(),
+                &value.annotations,
                 &value.doc,
                 &value.span,
                 value.public,
@@ -163,6 +165,7 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
                 json,
                 "struct",
                 value.id.as_string().as_str(),
+                &value.annotations,
                 &value.doc,
                 &value.span,
                 value.public,
@@ -179,6 +182,7 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
                 json,
                 "enum",
                 value.id.as_string().as_str(),
+                &value.annotations,
                 &value.doc,
                 &value.span,
                 value.public,
@@ -195,6 +199,7 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
                 json,
                 "trait",
                 value.id.as_string().as_str(),
+                &value.annotations,
                 &value.doc,
                 &value.span,
                 value.public,
@@ -218,6 +223,7 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
                 json,
                 "rule",
                 value.id.as_string().as_str(),
+                &value.annotations,
                 &value.doc,
                 &value.span,
                 value.public,
@@ -241,6 +247,7 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
                 json,
                 "const",
                 value.id.as_string().as_str(),
+                &value.annotations,
                 &value.doc,
                 &value.span,
                 value.public,
@@ -260,6 +267,7 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
                 json,
                 "function",
                 value.id.as_string().as_str(),
+                &value.annotations,
                 &value.doc,
                 &value.span,
                 value.public,
@@ -290,6 +298,7 @@ fn declaration_start(
     json: &mut Json,
     kind: &str,
     name: &str,
+    annotations: &[HirAnnotation],
     doc: &Option<HirDoc>,
     span: &Span,
     public: bool,
@@ -297,6 +306,9 @@ fn declaration_start(
     generics: &[HirGenericParam],
 ) {
     json.object_start();
+    json.key("annotations");
+    render_annotations(json, annotations);
+    json.comma();
     json.key("doc");
     render_doc(json, doc.as_ref());
     json.comma();
@@ -317,6 +329,29 @@ fn declaration_start(
     json.comma();
     json.key("span");
     render_span(json, span);
+}
+fn render_annotations(json: &mut Json, annotations: &[HirAnnotation]) {
+    json.array_start();
+    for (i, ann) in annotations.iter().enumerate() {
+        if i != 0 {
+            json.comma();
+        }
+        json.object_start();
+        json.key("argument");
+        if let Some(arg) = &ann.argument {
+            json.string(arg);
+        } else {
+            json.null();
+        }
+        json.comma();
+        json.key("name");
+        json.string(&ann.name);
+        json.comma();
+        json.key("span");
+        render_span(json, &ann.span);
+        json.object_end();
+    }
+    json.array_end();
 }
 
 fn render_generics(json: &mut Json, values: &[HirGenericParam]) {
@@ -533,25 +568,36 @@ fn render_variants(json: &mut Json, values: &[HirVariant]) {
     json.array_end();
 }
 fn render_method(json: &mut Json, value: &HirMethod) {
-    declaration_start(
-        json,
-        "method",
-        value.id.as_string().as_str(),
-        &value.doc,
-        &value.span,
-        value.public,
-        value.source_order,
-        &value.generics,
-    );
+    json.object_start();
+    json.key("contract");
+    render_contract(json, &value.contract);
+    json.comma();
+    json.key("doc");
+    render_doc(json, value.doc.as_ref());
+    json.comma();
+    json.key("generics");
+    render_generics(json, &value.generics);
+    json.comma();
+    json.key("kind");
+    json.string("method");
+    json.comma();
+    json.key("name");
+    json.string(value.id.as_string().as_str());
     json.comma();
     json.key("parameters");
     render_parameters(json, &value.parameters);
     json.comma();
+    json.key("public");
+    json.boolean(value.public);
+    json.comma();
     json.key("return_type");
     render_type(json, &value.return_type);
     json.comma();
-    json.key("contract");
-    render_contract(json, &value.contract);
+    json.key("source_order");
+    json.number_usize(value.source_order);
+    json.comma();
+    json.key("span");
+    render_span(json, &value.span);
     json.object_end();
 }
 fn render_doc(json: &mut Json, doc: Option<&HirDoc>) {

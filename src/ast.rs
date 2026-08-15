@@ -53,10 +53,17 @@ pub struct DocBlock {
     pub span: Span,
     pub text: String,
 }
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Annotation {
+    pub span: Span,
+    pub name: String,
+    pub argument: Option<String>,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AliasDecl {
     pub span: Span,
+    pub annotations: Vec<Annotation>,
     pub doc: Option<DocBlock>,
     pub name: String,
     pub target: Type,
@@ -65,6 +72,7 @@ pub struct AliasDecl {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NewtypeDecl {
     pub span: Span,
+    pub annotations: Vec<Annotation>,
     pub doc: Option<DocBlock>,
     pub name: String,
     pub underlying: Type,
@@ -74,6 +82,7 @@ pub struct NewtypeDecl {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StructDecl {
     pub span: Span,
+    pub annotations: Vec<Annotation>,
     pub doc: Option<DocBlock>,
     pub name: String,
     pub generics: Vec<GenericParam>,
@@ -83,6 +92,7 @@ pub struct StructDecl {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EnumDecl {
     pub span: Span,
+    pub annotations: Vec<Annotation>,
     pub doc: Option<DocBlock>,
     pub name: String,
     pub generics: Vec<GenericParam>,
@@ -92,6 +102,7 @@ pub struct EnumDecl {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TraitDecl {
     pub span: Span,
+    pub annotations: Vec<Annotation>,
     pub doc: Option<DocBlock>,
     pub name: String,
     pub generics: Vec<GenericParam>,
@@ -101,6 +112,7 @@ pub struct TraitDecl {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConstDecl {
     pub span: Span,
+    pub annotations: Vec<Annotation>,
     pub doc: Option<DocBlock>,
     pub name: String,
     pub ty: Type,
@@ -110,6 +122,7 @@ pub struct ConstDecl {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FunctionDecl {
     pub span: Span,
+    pub annotations: Vec<Annotation>,
     pub name: String,
     pub generics: Vec<GenericParam>,
     pub parameters: Vec<Parameter>,
@@ -126,6 +139,7 @@ pub enum FunctionBody {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuleDecl {
     pub span: Span,
+    pub annotations: Vec<Annotation>,
     pub doc: Option<DocBlock>,
     pub name: String,
     pub generics: Vec<GenericParam>,

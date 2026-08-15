@@ -50,3 +50,11 @@ fn formats_rule_declarations_and_clause_actions() {
     assert_eq!(output, expected);
     assert_eq!(formatted(&output), expected);
 }
+
+#[test]
+fn formats_annotations_on_declarations() {
+    let source = "module demo.annotated\n\n@entity\n@memo(\"User entity definition\")\nstruct User:\n    id: Str\n\n@pure\n@tag(\"lookup\")\nfn find_user(id: Str) -> Option[User]:\n    doc \"\"\"\n    Looks up a {User} by identifier.\n    \"\"\"\n\n    ensures Option.Some(u) => u.id.len > 0\n";
+    let output = formatted(source);
+    assert_eq!(output, source);
+    assert_eq!(formatted(&output), source);
+}
