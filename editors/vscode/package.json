@@ -1,0 +1,35 @@
+{
+  "name": "cott-syntax",
+  "displayName": "Cott Language Support",
+  "description": "Syntax highlighting and language support for Cott (.cott)",
+  "version": "0.1.0",
+  "publisher": "cott",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "cott",
+        "aliases": [
+          "Cott",
+          "cott"
+        ],
+        "extensions": [
+          ".cott"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "cott",
+        "scopeName": "source.cott",
+        "path": "./syntaxes/cott.tmLanguage.json"
+      }
+    ]
+  }
+}
