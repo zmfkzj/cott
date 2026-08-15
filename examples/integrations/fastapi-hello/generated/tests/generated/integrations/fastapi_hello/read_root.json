@@ -1,1 +1,1 @@
-{"schema_version":1,"symbol":"integrations.fastapi_hello.read_root","seed":"sha256:2fde6189ef2120a7fe16dc6010a76424b741fb73195e9c55132a84072856757c","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1"]}
+{"schema_version":1,"symbol":"integrations.fastapi_hello.read_root","seed":"sha256:b9f94a119dfd919841df35e7ce62e7f16833bf18236e80b8d0fa03c32de63cd9","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1"]}

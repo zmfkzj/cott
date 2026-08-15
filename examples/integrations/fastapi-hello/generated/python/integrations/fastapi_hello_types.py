@@ -12,6 +12,6 @@ class HelloResponse:
     __hash__ = None
     message: str
 
-"""Return the response from FastAPI's official First Steps GET `/` example.
+"""Return the {HelloResponse} from FastAPI's official First Steps GET `/` example.
 The response message is always exactly `Hello World`."""
 __all__ = ["HelloResponse"]

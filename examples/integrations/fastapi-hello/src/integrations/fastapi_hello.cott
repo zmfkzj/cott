@@ -3,9 +3,10 @@ module integrations.fastapi_hello
 struct HelloResponse:
     message: Str
 
+@get("/")
 fn read_root() -> HelloResponse:
     doc """
-    Return the response from FastAPI's official First Steps GET `/` example.
+    Return the {HelloResponse} from FastAPI's official First Steps GET `/` example.
     The response message is always exactly `Hello World`.
     """
 
