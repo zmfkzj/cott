@@ -814,3 +814,71 @@ fn every_documented_example_runs_when_python3_is_available() {
         String::from_utf8_lossy(&verified.stderr)
     );
 }
+#[test]
+fn modular_order_management_example_emits_verifies_and_runs() {
+    let project = copied_project("modular/order-management");
+
+    let formatted = cott(&project.path, &["fmt", "--check"]);
+    assert!(
+        formatted.status.success(),
+        "modular/order-management failed cott fmt --check: {}",
+        String::from_utf8_lossy(&formatted.stderr)
+    );
+    let checked = cott(&project.path, &["check"]);
+    assert!(
+        checked.status.success(),
+        "modular/order-management failed cott check: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "modular/order-management failed to emit: {}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+
+    let generation: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json"))
+            .expect("generation record should be readable"),
+    )
+    .expect("generation record should be JSON");
+
+    let implementations = generation["current"]["implementations"]
+        .as_array()
+        .expect("implementations should be an array");
+    assert_eq!(implementations.len(), 3);
+    assert_eq!(generation["current"]["unresolved"], serde_json::json!([]));
+
+    let verified = cott(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "modular/order-management failed to verify: {}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+
+    let usable_python = Command::new("python3")
+        .args([
+            "-c",
+            "import sys; raise SystemExit(sys.version_info < (3, 10))",
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+    if usable_python {
+        let generation = retarget_generation_to_host_python(&project.path);
+        let output = Command::new("python3")
+            .arg(project.path.join("python/app.py"))
+            .env("PYTHONPATH", project.path.join("generated/python"))
+            .output()
+            .expect("modular order-management app.py should run");
+        fs::write(project.path.join("generated/generation.json"), generation)
+            .expect("restore verified generation record");
+        assert!(
+            output.status.success(),
+            "app.py failed to run: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("example stdout must be UTF-8");
+        assert!(stdout.contains("Catalog lookup: Honeycrisp Apple ($1.50)"));
+        assert!(stdout.contains("Order ORD-2026-001: 6 items, total $30.00"));
+    }
+}

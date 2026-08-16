@@ -215,6 +215,28 @@ PYTHONPATH="$project/generated/python" "$project/.venv/bin/fastapi" dev "$projec
 curl http://127.0.0.1:8000/
 # {"message":"Hello World"}
 ```
+### Modular multi-file generation
+
+`examples/modular/order-management` demonstrates code generation across multiple `.cott` source modules:
+
+```text
+store.order.calculate_order → store.order.validate_line
+                            ↘ store.catalog.find_item
+```
+
+1. `src/store/catalog.cott` declares the catalog domain (`Item`, `Catalog`, `CatalogError`, and `find_item`).
+2. `src/store/order.cott` imports catalog types (`use store.catalog.{Catalog, CatalogError, Item}`) and declares order operations (`Order`, `OrderReceipt`, `OrderError`, `validate_line`, and `calculate_order`).
+3. The generated `calculate_order` implementation imports `validate_line` from `store.order` and `find_item` from `store.catalog`, crossing generated contract facades cleanly.
+
+```bash
+project=examples/modular/order-management
+cott check --project "$project"
+cott fmt --check --project "$project"
+cott emit python --project "$project"
+cott generate --agent omp --target python --project "$project"
+cott verify --project "$project"
+PYTHONPATH="$project/generated/python" python3 "$project/python/app.py"
+```
 
 ## Complete project index
 

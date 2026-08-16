@@ -1,0 +1,23 @@
+module store.catalog
+
+struct Item:
+    sku: Str
+    name: Str
+    price_cents: U64
+
+struct Catalog:
+    items: List[Item]
+
+enum CatalogError:
+    ItemNotFound(sku: Str)
+
+fn find_item(catalog: Catalog, sku: Str) -> Result[Item, CatalogError]:
+    doc """
+    Look up an item in the catalog by its SKU.
+    """
+
+    requires sku.len > 0
+
+    ensures Result.Ok(item) => item.sku == sku
+
+    error CatalogError.ItemNotFound

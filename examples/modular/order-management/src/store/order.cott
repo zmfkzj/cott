@@ -1,0 +1,41 @@
+module store.order
+
+use store.catalog.{Catalog, CatalogError, Item}
+
+struct OrderLine:
+    sku: Str
+    quantity: U32
+
+struct Order:
+    order_id: Str
+    lines: List[OrderLine]
+
+struct OrderReceipt:
+    order_id: Str
+    total_items: U32
+    total_cents: U64
+
+enum OrderError:
+    EmptyOrder
+    InvalidQuantity(sku: Str)
+    ItemUnavailable(cause: CatalogError)
+
+fn validate_line(line: OrderLine) -> Result[OrderLine, OrderError]:
+    doc """
+    Ensure an order line has positive quantity.
+    """
+
+    ensures Result.Ok(valid) => valid.quantity > 0
+
+    error OrderError.InvalidQuantity when line.quantity == 0
+
+fn calculate_order(catalog: Catalog, order: Order) -> Result[OrderReceipt, OrderError]:
+    doc """
+    Validate all order lines, lookup item prices, and produce a receipt.
+    """
+
+    ensures Result.Ok(receipt) => receipt.order_id == order.order_id
+
+    error OrderError.EmptyOrder when order.lines.len == 0
+    error OrderError.InvalidQuantity
+    error OrderError.ItemUnavailable

@@ -1,0 +1,1 @@
+{"schema_version":1,"symbol":"store.order.validate_line","seed":"sha256:789824579d808179698592a21d93b0e3883cfd7818175bd8e286916316e98b8a","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1","error:2"]}
