@@ -1,0 +1,25 @@
+module curriculum.trait_protocol
+
+trait Summarizable:
+    fn summary(self) -> Str
+
+trait Prioritizable:
+    fn priority_level(self) -> I32
+
+fn format_summary[T: Summarizable](item: T) -> Str:
+    doc """
+    Format the summary string from any item implementing {Summarizable}.
+    """
+
+    ensures result.len >= 0
+
+    effects []
+
+fn inspect_task[T: Summarizable + Prioritizable](item: T) -> Str:
+    doc """
+    Inspect an item requiring both {Summarizable} and {Prioritizable} trait bounds.
+    """
+
+    ensures result.len > 0
+
+    effects []

@@ -1,0 +1,22 @@
+module curriculum.opaque_resource
+
+enum HandleError:
+    InvalidHandle
+
+fn wrap_handle(raw_id: U64) -> Result[Opaque["client_session"], HandleError]:
+    doc """
+    Wrap a raw connection id into a typed opaque handle with tag client_session.
+    """
+
+    error HandleError.InvalidHandle when raw_id == 0
+
+    effects []
+
+fn extract_handle_id(handle: Opaque["client_session"]) -> U64:
+    doc """
+    Extract the identifier from a client session opaque handle.
+    """
+
+    ensures result > 0
+
+    effects []

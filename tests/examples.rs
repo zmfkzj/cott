@@ -882,3 +882,67 @@ fn modular_order_management_example_emits_verifies_and_runs() {
         assert!(stdout.contains("Order ORD-2026-001: 6 items, total $30.00"));
     }
 }
+
+#[test]
+fn feature_examples_emit_and_check() {
+    let features = [
+        ("features/trait-protocol", "Task: Write Documentation"),
+        ("features/opaque-resource", "Extracted handle id: 42"),
+        (
+            "features/json-transform",
+            "Extracted JSON field: Hello Cott",
+        ),
+        ("features/pair-tuple", "Swapped pair: (20, 10)"),
+        ("features/system-effects", "Inspected path: /etc/hosts"),
+    ];
+    let usable_python = Command::new("python3")
+        .args([
+            "-c",
+            "import sys; raise SystemExit(sys.version_info < (3, 10))",
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+
+    for (feature, expected_output) in features {
+        let project = copied_project(feature);
+        let formatted = cott(&project.path, &["fmt", "--check"]);
+        assert!(
+            formatted.status.success(),
+            "{feature} failed cott fmt --check: {}",
+            String::from_utf8_lossy(&formatted.stderr)
+        );
+        let checked = cott(&project.path, &["check"]);
+        assert!(
+            checked.status.success(),
+            "{feature} failed cott check: {}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+        let emitted = cott(&project.path, &["emit", "python"]);
+        assert!(
+            emitted.status.success(),
+            "{feature} failed to emit: {}",
+            String::from_utf8_lossy(&emitted.stderr)
+        );
+
+        if usable_python {
+            let generation = retarget_generation_to_host_python(&project.path);
+            let output = Command::new("python3")
+                .arg(project.path.join("python/app.py"))
+                .env("PYTHONPATH", project.path.join("generated/python"))
+                .output()
+                .expect("feature app.py should run");
+            fs::write(project.path.join("generated/generation.json"), generation)
+                .expect("restore verified generation record");
+            assert!(
+                output.status.success(),
+                "{feature} app.py failed to run: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8(output.stdout).expect("output must be UTF-8");
+            assert!(
+                stdout.contains(expected_output),
+                "{feature} output did not contain {expected_output}: {stdout}"
+            );
+        }
+    }
+}

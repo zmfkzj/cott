@@ -1,0 +1,1 @@
+{"schema_version":1,"symbol":"curriculum.opaque_resource.extract_handle_id","seed":"sha256:5fcc339bedce71b7953f12608d7a9c4b45be3dca9c2fcce1b01b5c419ad0e443","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1"]}

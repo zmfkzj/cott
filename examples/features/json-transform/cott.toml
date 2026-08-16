@@ -1,0 +1,16 @@
+[project]
+name = "json-transform"
+version = "0.1.0"
+source = "src"
+
+[target.python]
+source = "python"
+generated = "generated/python"
+stubs = "generated/stubs"
+interpreter = ".venv/bin/python"
+type_checker = ".venv/bin/basedpyright"
+runtime_validation = "boundary"
+
+[target.python.implementations]
+"curriculum.json_transform.wrap_scalar_json" = "cott_bindings.curriculum.json_transform.wrap_scalar_json:wrap_scalar_json"
+"curriculum.json_transform.extract_string_field" = "cott_bindings.curriculum.json_transform.extract_string_field:extract_string_field"

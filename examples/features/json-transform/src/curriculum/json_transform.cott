@@ -1,0 +1,19 @@
+module curriculum.json_transform
+
+enum JsonTransformError:
+    NotAnObject
+    MissingField(field_name: Str)
+
+fn wrap_scalar_json(key: Str, value: Str) -> JsonValue:
+    doc """
+    Wrap a string key-value pair into a structured JsonValue object.
+    """
+
+    effects []
+
+fn extract_string_field(payload: JsonValue, field: Str) -> Result[Str, JsonTransformError]:
+    doc """
+    Extract a string field value from a JSON object payload.
+    """
+
+    effects []

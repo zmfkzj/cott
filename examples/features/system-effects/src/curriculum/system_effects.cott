@@ -1,0 +1,23 @@
+module curriculum.system_effects
+
+enum SystemError:
+    PathNotFound(path: Path)
+    AccessDenied(reason: Str)
+
+fn inspect_file_path(target: Path) -> Result[Path, SystemError]:
+    doc """
+    Validate and inspect a system file path target.
+    """
+
+    effects [file.read]
+
+fn format_env_variable(var_name: Str, fallback: Str) -> Str:
+    doc """
+    Format an environment variable value or use the fallback string.
+    """
+
+    requires var_name.len > 0
+
+    ensures result.len >= fallback.len
+
+    effects [clock]

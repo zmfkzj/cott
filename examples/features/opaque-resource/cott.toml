@@ -1,0 +1,16 @@
+[project]
+name = "opaque-resource"
+version = "0.1.0"
+source = "src"
+
+[target.python]
+source = "python"
+generated = "generated/python"
+stubs = "generated/stubs"
+interpreter = ".venv/bin/python"
+type_checker = ".venv/bin/basedpyright"
+runtime_validation = "boundary"
+
+[target.python.implementations]
+"curriculum.opaque_resource.wrap_handle" = "cott_bindings.curriculum.opaque_resource.wrap_handle:wrap_handle"
+"curriculum.opaque_resource.extract_handle_id" = "cott_bindings.curriculum.opaque_resource.extract_handle_id:extract_handle_id"

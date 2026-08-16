@@ -1,0 +1,16 @@
+[project]
+name = "pair-tuple"
+version = "0.1.0"
+source = "src"
+
+[target.python]
+source = "python"
+generated = "generated/python"
+stubs = "generated/stubs"
+interpreter = ".venv/bin/python"
+type_checker = ".venv/bin/basedpyright"
+runtime_validation = "boundary"
+
+[target.python.implementations]
+"curriculum.pair_tuple.make_coordinate_pair" = "cott_bindings.curriculum.pair_tuple.make_coordinate_pair:make_coordinate_pair"
+"curriculum.pair_tuple.swap_pair" = "cott_bindings.curriculum.pair_tuple.swap_pair:swap_pair"
