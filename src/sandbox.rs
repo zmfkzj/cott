@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::version::is_at_least;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NetworkAccess {
     Disabled,
@@ -289,6 +290,10 @@ pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
     })
 }
 
+fn supports_bubblewrap_version(version: &str) -> bool {
+    is_at_least(version, (0, 9, 0))
+}
+
 fn require_bwrap(path: &Path) -> Result<(), SandboxError> {
     let canonical = std::fs::canonicalize(path).map_err(|_| {
         SandboxError::Unavailable("bubblewrap /usr/bin/bwrap is required".to_owned())
@@ -309,12 +314,9 @@ fn require_bwrap(path: &Path) -> Result<(), SandboxError> {
             "unsupported bubblewrap version output".to_owned(),
         ));
     };
-    let mut parts = version.split('.');
-    let major = parts.next().and_then(|part| part.parse::<u64>().ok());
-    let minor = parts.next().and_then(|part| part.parse::<u64>().ok());
-    if !output.status.success() || major != Some(0) || minor.is_none_or(|minor| minor < 9) {
+    if !output.status.success() || !supports_bubblewrap_version(version) {
         return Err(SandboxError::Unavailable(format!(
-            "bubblewrap {version} is unsupported; require >=0.9.0,<1.0.0"
+            "bubblewrap {version} is unsupported; require >=0.9.0"
         )));
     }
     Ok(())
@@ -346,6 +348,18 @@ fn current_user_tasks() -> io::Result<u64> {
         }
     }
     Ok(tasks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bubblewrap_version_has_no_upper_bound() {
+        assert!(supports_bubblewrap_version("0.9.0"));
+        assert!(supports_bubblewrap_version("1.0.0"));
+        assert!(!supports_bubblewrap_version("0.8.9"));
+    }
 }
 
 fn writable_usage(paths: &[PathBuf]) -> io::Result<u64> {

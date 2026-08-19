@@ -623,6 +623,7 @@ def _cott_check_project_identity(expected_project_name: str | None, *, phase: st
             phase=phase,
         )
 _COTT_MODULE_CACHE: dict[str, tuple[_types.ModuleType, str, str]] = {}
+_COTT_LOAD_CACHE: dict[tuple[str, str, str, str | None, str | None], tuple[_types.ModuleType, object, tuple[int, int, int, int, int], tuple[int, int, int, int, int]]] = {}
 _COTT_LOAD_LOCK = _threading.RLock()
 
 
@@ -654,6 +655,17 @@ def _cott_regular_file_bytes(path: _Path, label: str) -> bytes:
         raise
     except (OSError, ValueError) as error:
         raise _cott_violation(f"unable to read {label}: {error}") from error
+
+def _cott_file_stamp(path: _Path, label: str) -> tuple[int, int, int, int, int]:
+    try:
+        metadata = path.lstat()
+        if not _stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise _cott_violation(f"{label} is not a regular file")
+        return (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
+    except CottContractViolation:
+        raise
+    except (OSError, ValueError) as error:
+        raise _cott_violation(f"unable to stat {label}: {error}") from error
 
 
 def _cott_sha256(value: bytes) -> str:
@@ -854,6 +866,20 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
     digest_input = _cott_expected_digest(expected_sha256, "binding hash")
     root = _Path(__file__).resolve().parent.parent
     path = root.joinpath(*parts)
+    generation_path = (root.parent if root.name == "python" else root) / "generation.json"
+    cache_key = (relative_path, digest_input, symbol, expected_project, expected_cott_symbol)
+    with _COTT_LOAD_LOCK:
+        cached_load = _COTT_LOAD_CACHE.get(cache_key)
+        if cached_load is not None:
+            module, implementation, implementation_stamp, generation_stamp = cached_load
+            if (
+                _sys.modules.get(module_name) is module
+                and _cott_file_stamp(path, f"binding {relative_path}") == implementation_stamp
+                and _cott_file_stamp(generation_path, "generation record") == generation_stamp
+            ):
+                return implementation
+            del _COTT_LOAD_CACHE[cache_key]
+    
     source = _cott_regular_file_bytes(path, f"binding {relative_path}")
     digest = _cott_sha256(source)
     if digest != digest_input:
@@ -867,9 +893,16 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
             if cached_digest != digest or cached_generation != generation_id or _sys.modules.get(module_name) is not module:
                 raise _cott_violation(f"canonical module cache conflict for {module_name}")
             try:
-                return getattr(module, symbol)
+                implementation = getattr(module, symbol)
             except AttributeError as error:
                 raise _cott_violation(f"binding symbol {symbol!r} is missing") from error
+            _COTT_LOAD_CACHE[cache_key] = (
+                module,
+                implementation,
+                _cott_file_stamp(path, f"binding {relative_path}"),
+                _cott_file_stamp(generation_path, "generation record"),
+            )
+            return implementation
         if module_name in _sys.modules:
             raise _cott_violation(f"direct implementation import is not allowed: {module_name}")
 
@@ -893,12 +926,19 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
             raise _cott_violation(f"failed to load binding {relative_path}: {error}", phase="implementation-load") from error
         _COTT_MODULE_CACHE[module_name] = (module, digest, generation_id)
         try:
-            return getattr(module, symbol)
+            implementation = getattr(module, symbol)
         except AttributeError as error:
             del _COTT_MODULE_CACHE[module_name]
             if _sys.modules.get(module_name) is module:
                 del _sys.modules[module_name]
             raise _cott_violation(f"binding symbol {symbol!r} is missing") from error
+        _COTT_LOAD_CACHE[cache_key] = (
+            module,
+            implementation,
+            _cott_file_stamp(path, f"binding {relative_path}"),
+            _cott_file_stamp(generation_path, "generation record"),
+        )
+        return implementation
 
 
 __all__ = [

@@ -147,6 +147,20 @@ else:
 
 run = _cott_load("_cott_impl/demo/run.py", "{good_hash}", "run", "demo")
 assert run() == 7
+_reader = _runtime._cott_regular_file_bytes
+def _unexpected_read(*args: object) -> bytes:
+    raise AssertionError("cached loader read a file")
+_runtime._cott_regular_file_bytes = _unexpected_read
+assert _cott_load("_cott_impl/demo/run.py", "{good_hash}", "run", "demo") is run
+_runtime._cott_regular_file_bytes = _reader
+_run_path = Path("_cott_impl/demo/run.py")
+_run_path.write_bytes(_run_path.read_bytes() + b'\x23 changed\n')
+try:
+    _cott_load("_cott_impl/demo/run.py", "{good_hash}", "run", "demo")
+except CottContractViolation as error:
+    assert error.phase == "provenance"
+else:
+    raise AssertionError("modified cached implementation was accepted")
 try:
     _cott_load("_cott_impl/demo/external.py", "{external_hash}", "external", "demo")
 except CottContractViolation as error:

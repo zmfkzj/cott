@@ -174,7 +174,7 @@ fn _hold_env_lock() -> MutexGuard<'static, ()> {
 #[test]
 fn codex_golden_argv_stdin_environment_and_target_write() {
     let (_temp, workspace, scratch, target) = fixture();
-    let executable = fake_adapter(&workspace, "codex-cli 0.147.0", &capture_body(None));
+    let executable = fake_adapter(&workspace, "codex-cli 0.147.1", &capture_body(None));
     let _lock = _hold_env_lock();
     let _environment = EnvRestore::controlled(&scratch, &executable);
     let prompt = b"codex prompt $(touch sibling.py)\n";
@@ -189,6 +189,7 @@ fn codex_golden_argv_stdin_environment_and_target_write() {
         return;
     };
     let candidate = result.expect("Codex run");
+    assert_eq!(candidate.adapter_version, "0.147.1");
     let expected_args = vec![
         "exec".to_owned(),
         "--strict-config".to_owned(),
@@ -253,7 +254,7 @@ fn omp_golden_argv_prompt_environment_and_target_write() {
         "printf isolated > \"$PI_CODING_AGENT_DIR/write-test\"\n{}",
         capture_body(None)
     );
-    let executable = fake_adapter(&workspace, "omp/17.2.12", &body);
+    let executable = fake_adapter(&workspace, "omp/17.2.13", &body);
     let _lock = _hold_env_lock();
     let _environment = EnvRestore::controlled(&scratch, &executable);
     let omp_home = scratch.join("omp-home");
@@ -271,6 +272,7 @@ fn omp_golden_argv_prompt_environment_and_target_write() {
         return;
     };
     let candidate = result.expect("OMP run");
+    assert_eq!(candidate.adapter_version, "17.2.13");
     let expected_args = vec![
         "-p".to_owned(),
         "--cwd".to_owned(),

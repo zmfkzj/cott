@@ -14,6 +14,7 @@ use crate::manifest::ProjectConfig;
 use crate::project::ProjectPaths;
 use crate::provenance::GenerationRecord;
 use crate::sandbox::{BindMounts, NetworkAccess, ResourceLimits, SandboxSpec, run};
+use crate::version::{is_at_least, parse_version};
 
 #[derive(Clone, Debug)]
 pub struct VerificationEvidence {
@@ -34,6 +35,18 @@ impl Drop for CandidateGenerationGuard {
             let _ = fs::write(&self.path, &self.original);
         }
     }
+}
+fn supports_cpython_version(version: &str) -> bool {
+    parse_version(version)
+        .is_some_and(|(major, minor, patch)| (major, minor) == (3, 14) && patch >= 6)
+}
+
+fn basedpyright_version(output: &str) -> Option<&str> {
+    let version_line = output.lines().next().unwrap_or_default();
+    let version = version_line
+        .strip_prefix("basedpyright ")
+        .unwrap_or(version_line);
+    is_at_least(version, (1, 39, 9)).then_some(version)
 }
 
 pub fn verify_python(
@@ -94,19 +107,20 @@ fn verify_in_scratch(
     require_success("Python identity probe", &python_probe)?;
     let python: Value = serde_json::from_slice(&python_probe.stdout)
         .map_err(|error| format!("invalid Python identity probe output: {error}"))?;
+    let python_version = python
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     if python.get("implementation").and_then(Value::as_str) != Some("cpython")
-        || python.get("version").and_then(Value::as_str) != Some("3.14.6")
+        || !supports_cpython_version(python_version)
     {
         return Err(format!(
-            "Python target requires CPython 3.14.6, got {} {}",
+            "Python target requires CPython >=3.14.6,<3.15, got {} {}",
             python
                 .get("implementation")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown"),
-            python
-                .get("version")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
+            python_version
         ));
     }
 
@@ -119,15 +133,12 @@ fn verify_in_scratch(
         &[],
     )?;
     require_success("BasedPyright version probe", &checker_probe)?;
-    let checker_version = String::from_utf8_lossy(&checker_probe.stdout)
-        .trim()
-        .to_owned();
-    let checker_version_line = checker_version.lines().next().unwrap_or_default();
-    if checker_version_line != "basedpyright 1.39.9" && checker_version_line != "1.39.9" {
+    let checker_output = String::from_utf8_lossy(&checker_probe.stdout);
+    let Some(checker_version) = basedpyright_version(&checker_output) else {
         return Err(format!(
-            "Python target requires BasedPyright 1.39.9, got `{checker_version}`"
+            "Python target requires BasedPyright >=1.39.9, got `{checker_output}`"
         ));
-    }
+    };
 
     let managed_root = paths
         .generated_dir
@@ -304,7 +315,7 @@ fn verify_in_scratch(
     let compiler = fs::canonicalize(&compiler)
         .map_err(|error| format!("canonicalize compiler executable: {error}"))?;
     let tools = json!({
-        "basedpyright": tool_record(type_checker, "1.39.9")?,
+        "basedpyright": tool_record(type_checker, checker_version)?,
         "compiler": tool_record(&compiler, env!("CARGO_PKG_VERSION"))?,
         "python": {
             "cache_tag": python["cache_tag"],
@@ -314,7 +325,7 @@ fn verify_in_scratch(
             "machine": python["machine"],
             "os": python["os"],
             "platform": python["platform"],
-            "version": "3.14.6",
+            "version": python_version,
         },
         "runtime": {"abi": "1", "version": env!("CARGO_PKG_VERSION")},
     });
@@ -370,7 +381,7 @@ fn verify_in_scratch(
             "status": "passed",
         },
         "static": {
-            "checker": "BasedPyright 1.39.9",
+            "checker": format!("BasedPyright {checker_version}"),
             "runtime_signatures": runtime_signatures,
             "grade": "static proof",
             "status": "passed",
@@ -889,5 +900,16 @@ mod tests {
         );
         assert_eq!(completed.stdout, b"basedpyright 1.39.9\n");
         assert!(completed.stderr.is_empty());
+    }
+
+    #[test]
+    fn accepts_supported_python_and_basedpyright_versions() {
+        assert!(supports_cpython_version("3.14.6"));
+        assert!(supports_cpython_version("3.14.7"));
+        assert!(!supports_cpython_version("3.14.5"));
+        assert!(!supports_cpython_version("3.15.0"));
+        assert_eq!(basedpyright_version("basedpyright 1.40.0"), Some("1.40.0"));
+        assert_eq!(basedpyright_version("1.39.9"), Some("1.39.9"));
+        assert_eq!(basedpyright_version("basedpyright 1.39.8"), None);
     }
 }

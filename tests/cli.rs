@@ -708,7 +708,7 @@ fn generate_promotes_a_sandboxed_codex_candidate_with_artifacts() {
 }
 
 #[test]
-fn init_scaffolds_a_normative_project_with_pinned_uv() {
+fn init_scaffolds_a_normative_project_with_supported_uv() {
     let temp = TempDir::new();
     let tools = temp.path.join("tools");
     fs::create_dir(&tools).expect("tool directory");
@@ -718,12 +718,12 @@ fn init_scaffolds_a_normative_project_with_pinned_uv() {
         r#"#!/bin/sh
 if [ "$1" = "--no-config" ]; then shift; fi
 case "$1" in
-  --version) echo 'uv 0.12.3' ;;
+  --version) echo 'uv 0.12.4' ;;
   python)
     managed="$(dirname "$0")/managed"
     if [ "$2" = "dir" ]; then
       mkdir -p "$managed"
-      printf '%s\n' '#!/bin/sh' 'echo "cpython 3.14.6"' > "$managed/python"
+      printf '%s\n' '#!/bin/sh' 'echo "cpython 3.14.7"' > "$managed/python"
       chmod +x "$managed/python"
       echo "$managed"
     elif [ "$2" = "find" ]; then
@@ -735,8 +735,8 @@ case "$1" in
     ;;
   venv|sync)
     mkdir -p "$UV_PROJECT_ENVIRONMENT/bin"
-    printf '%s\n' '#!/bin/sh' 'echo "cpython 3.14.6"' > "$UV_PROJECT_ENVIRONMENT/bin/python"
-    printf '%s\n' '#!/bin/sh' 'echo "basedpyright 1.39.9"' > "$UV_PROJECT_ENVIRONMENT/bin/basedpyright"
+    printf '%s\n' '#!/bin/sh' 'echo "cpython 3.14.7"' > "$UV_PROJECT_ENVIRONMENT/bin/python"
+    printf '%s\n' '#!/bin/sh' 'echo "basedpyright 1.40.0"' > "$UV_PROJECT_ENVIRONMENT/bin/basedpyright"
     chmod +x "$UV_PROJECT_ENVIRONMENT/bin/python" "$UV_PROJECT_ENVIRONMENT/bin/basedpyright"
     ;;
 esac
@@ -769,6 +769,9 @@ esac
     assert!(manifest.contains("runtime_validation = \"boundary\""));
     assert!(manifest.contains("lockfile = \"python/uv.lock\""));
     assert!(target.join("python/uv.lock").is_file());
+    let pyproject = fs::read_to_string(target.join("python/pyproject.toml")).expect("pyproject");
+    assert!(pyproject.contains("requires-python = \">=3.14.6,<3.15\""));
+    assert!(pyproject.contains("basedpyright>=1.39.9"));
     assert_eq!(
         fs::read_to_string(target.join(".gitignore")).expect("gitignore"),
         ".cott/\n.venv/\ngenerated/generation.json\n__pycache__/\n*.py[cod]\n"

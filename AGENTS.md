@@ -121,7 +121,7 @@ cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--form
 ## Runtime/Tooling Preferences
 
 - Use the committed Rust toolchain through Cargo.
-- The Python target is CPython 3.14.6 with BasedPyright 1.39.9; init and lock operations use uv 0.12.3.
+- The Python target is CPython >=3.14.6,<3.15 with BasedPyright >=1.39.9; init and lock operations use uv 0.12.3 or later.
 - Generated runtime code is standard-library-only. Project implementations may use lock-selected
   external distributions whose installed identity and files verify exactly.
 

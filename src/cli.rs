@@ -29,6 +29,7 @@ use crate::python::artifact_plan::PythonArtifactPlan;
 use crate::python_emit::{Emission, EmitDiagnostic, emit};
 use crate::python_verify::verify_python;
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession};
+use crate::version::{is_at_least, parse_version};
 
 const USAGE: &str = "Usage:\n  cott init <path> [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python [--project <dir>] [--format json]\n  cott generate [<fully.qualified.function>] --agent codex|omp --target python [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n";
 
@@ -2072,6 +2073,27 @@ fn check_project(project_argument: Option<PathBuf>, selected: Option<PathBuf>) -
         }
     }
 }
+fn supports_uv_version(version: &str) -> bool {
+    version
+        .strip_prefix("uv ")
+        .is_some_and(|version| is_at_least(version, (0, 12, 3)))
+}
+
+fn supports_basedpyright_version(version: &str) -> bool {
+    let version = version
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .strip_prefix("basedpyright ")
+        .unwrap_or(version);
+    is_at_least(version, (1, 39, 9))
+}
+
+fn supports_python_version(version: &str) -> bool {
+    parse_version(version)
+        .is_some_and(|(major, minor, patch)| (major, minor) == (3, 14) && patch >= 6)
+}
+
 fn init_project(path: PathBuf, name: Option<String>, no_sync: bool, format: OutputFormat) -> i32 {
     let absolute = if path.is_absolute() {
         path
@@ -2156,8 +2178,8 @@ fn init_project(path: PathBuf, name: Option<String>, no_sync: bool, format: Outp
             return 2;
         }
     };
-    if version != "uv 0.12.3" {
-        eprintln!("error: cott 0.1 requires uv 0.12.3, found `{version}`");
+    if !supports_uv_version(&version) {
+        eprintln!("error: cott 0.1 requires uv >=0.12.3, found `{version}`");
         return 2;
     }
 
@@ -2259,7 +2281,7 @@ fn publish_init_scaffold(
     write_private(
         &temporary.join("python/pyproject.toml"),
         format!(
-            "[project]\nname = \"{project_name}\"\nversion = \"0.1.0\"\nrequires-python = \">=3.14,<3.15\"\ndependencies = []\n\n[dependency-groups]\ndev = [\"basedpyright==1.39.9\"]\n"
+            "[project]\nname = \"{project_name}\"\nversion = \"0.1.0\"\nrequires-python = \">=3.14.6,<3.15\"\ndependencies = []\n\n[dependency-groups]\ndev = [\"basedpyright>=1.39.9\"]\n"
         )
         .as_bytes(),
     )?;
@@ -2523,12 +2545,9 @@ fn initialize_python(
             Duration::from_secs(30),
         )?;
         if checker.status != Some(0)
-            || !matches!(
-                String::from_utf8_lossy(&checker.stdout).trim(),
-                "basedpyright 1.39.9" | "1.39.9"
-            )
+            || !supports_basedpyright_version(&String::from_utf8_lossy(&checker.stdout))
         {
-            return Err("root BasedPyright probe did not report 1.39.9".to_owned());
+            return Err("root BasedPyright probe requires >=1.39.9".to_owned());
         }
     }
     Ok(interpreter)
@@ -2550,13 +2569,18 @@ fn probe_python(
         environment,
         Duration::from_secs(30),
     )?;
-    if output.status == Some(0)
-        && String::from_utf8_lossy(&output.stdout).trim() == "cpython 3.14.6"
-    {
+    let identity = String::from_utf8_lossy(&output.stdout);
+    let valid = identity
+        .trim()
+        .split_once(' ')
+        .is_some_and(|(implementation, version)| {
+            implementation == "cpython" && supports_python_version(version)
+        });
+    if output.status == Some(0) && valid {
         Ok(())
     } else {
         Err(format!(
-            "Python probe requires CPython 3.14.6: {}",
+            "Python probe requires CPython >=3.14.6,<3.15: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ))
     }
@@ -3267,7 +3291,7 @@ mod init_publication_tests {
                 ),
                 (
                     PathBuf::from("python/pyproject.toml"),
-                    b"[project]\nname = \"demo-app\"\nversion = \"0.1.0\"\nrequires-python = \">=3.14,<3.15\"\ndependencies = []\n\n[dependency-groups]\ndev = [\"basedpyright==1.39.9\"]\n"
+                    b"[project]\nname = \"demo-app\"\nversion = \"0.1.0\"\nrequires-python = \">=3.14.6,<3.15\"\ndependencies = []\n\n[dependency-groups]\ndev = [\"basedpyright>=1.39.9\"]\n"
                         .to_vec(),
                 ),
                 (
@@ -3428,5 +3452,19 @@ mod init_publication_tests {
             }
             assert_tree(&fixture.target, fixture.expected(false));
         }
+    }
+    #[test]
+    fn tool_versions_require_the_minimum_release() {
+        assert!(supports_uv_version("uv 0.12.3"));
+        assert!(supports_uv_version("uv 0.12.4"));
+        assert!(!supports_uv_version("uv 0.12.2"));
+        assert!(!supports_uv_version("uv 0.12"));
+        assert!(supports_python_version("3.14.6"));
+        assert!(supports_python_version("3.14.7"));
+        assert!(!supports_python_version("3.14.5"));
+        assert!(!supports_python_version("3.15.0"));
+        assert!(supports_basedpyright_version("basedpyright 1.39.9"));
+        assert!(supports_basedpyright_version("1.40.0"));
+        assert!(!supports_basedpyright_version("basedpyright 1.39.8"));
     }
 }

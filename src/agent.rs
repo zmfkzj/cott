@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::hash::sha256_hex;
 use crate::sandbox::{BindMounts, NetworkAccess, ResourceLimits, SandboxSpec, run};
+use crate::version::{is_at_least, parse_version};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AgentKind {
@@ -16,7 +17,7 @@ pub enum AgentKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdapterSpec {
     pub executable_name: &'static str,
-    pub exact_version: &'static str,
+    pub minimum_version: &'static str,
     pub version_argv: &'static [&'static str],
     pub argv_template: &'static [&'static str],
     pub prompt_on_stdin: bool,
@@ -24,7 +25,7 @@ pub struct AdapterSpec {
 
 pub const CODEX: AdapterSpec = AdapterSpec {
     executable_name: "codex",
-    exact_version: "0.147.0",
+    minimum_version: "0.147.0",
     version_argv: &["--version"],
     argv_template: &[
         "exec",
@@ -45,7 +46,7 @@ pub const CODEX: AdapterSpec = AdapterSpec {
 };
 pub const OMP: AdapterSpec = AdapterSpec {
     executable_name: "omp",
-    exact_version: "17.2.12",
+    minimum_version: "17.2.12",
     version_argv: &["--version"],
     argv_template: &[
         "-p",
@@ -164,18 +165,23 @@ pub fn run_agent(
         timeout_seconds,
     )?;
     let version_text = String::from_utf8_lossy(&version.stdout).trim().to_owned();
-    let valid_version = match kind {
-        AgentKind::Codex => version_text == "codex-cli 0.147.0" || version_text == "codex 0.147.0",
-        AgentKind::Omp => version_text == "omp/17.2.12",
-    };
-    if !valid_version {
+    let minimum_version =
+        parse_version(spec.minimum_version).expect("adapter minimum versions are complete numbers");
+    let adapter_version = match kind {
+        AgentKind::Codex => version_text
+            .strip_prefix("codex-cli ")
+            .or_else(|| version_text.strip_prefix("codex ")),
+        AgentKind::Omp => version_text.strip_prefix("omp/"),
+    }
+    .filter(|version| is_at_least(version, minimum_version));
+    let Some(adapter_version) = adapter_version else {
         return Err(format!(
             "unsupported {} version `{version_text}` (exit {:?}): {}",
             spec.executable_name,
             version.status,
             String::from_utf8_lossy(&version.stderr).trim()
         ));
-    }
+    };
     let arguments = match kind {
         AgentKind::Codex => vec![
             "exec",
@@ -288,7 +294,7 @@ pub fn run_agent(
         implementation,
         executable: executable.clone(),
         executable_hash: format!("sha256:{}", sha256_hex(&executable_bytes)),
-        adapter_version: spec.exact_version.to_owned(),
+        adapter_version: adapter_version.to_owned(),
         prompt_hash: format!("sha256:{}", sha256_hex(&prompt)),
         stdout: completed.stdout,
         stderr: completed.stderr,

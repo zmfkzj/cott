@@ -3,11 +3,11 @@ use std::path::Path;
 use cott::agent::{AgentKind, CODEX, OMP, adapter, render_prompt};
 
 #[test]
-fn adapter_contracts_are_exact_and_pinned() {
+fn adapter_contracts_have_minimum_versions_and_exact_argv() {
     assert_eq!(adapter(AgentKind::Codex), &CODEX);
     assert_eq!(adapter(AgentKind::Omp), &OMP);
     assert_eq!(CODEX.executable_name, "codex");
-    assert_eq!(CODEX.exact_version, "0.147.0");
+    assert_eq!(CODEX.minimum_version, "0.147.0");
     assert_eq!(CODEX.version_argv, &["--version"]);
     assert_eq!(
         CODEX.argv_template,
@@ -29,7 +29,7 @@ fn adapter_contracts_are_exact_and_pinned() {
     );
     assert!(CODEX.prompt_on_stdin);
     assert_eq!(OMP.executable_name, "omp");
-    assert_eq!(OMP.exact_version, "17.2.12");
+    assert_eq!(OMP.minimum_version, "17.2.12");
     assert_eq!(OMP.version_argv, &["--version"]);
     assert_eq!(
         OMP.argv_template,
