@@ -57,6 +57,41 @@ fn source_file_constructor_feeds_parse_project() {
 }
 
 #[test]
+fn parses_stateful_impl_declaration_through_public_compiler() {
+    let project = parse_project([SourceFile::new(
+        "memory/counter.cott",
+        r#"module memory.counter
+
+trait Readable:
+    fn value(self) -> I32
+
+trait Incrementable:
+    fn increment(self, amount: I32) -> I32
+
+impl Counter for Readable + Incrementable:
+    state:
+        count: I32 = 0
+    invariant self.count >= 0
+    init():
+        ensures self.count == 0
+    fn value(self) -> I32:
+        ensures result == self.count
+    fn increment(self, amount: I32) -> I32:
+        requires amount > 0
+        modifies self.count
+        ensures result == old(self.count) + amount
+"#,
+    )])
+    .expect("closed stateful impl declaration should parse through the public compiler");
+
+    assert_eq!(project.sources.len(), 1);
+    assert_eq!(
+        project.sources[0].path,
+        PathBuf::from("memory/counter.cott")
+    );
+}
+
+#[test]
 fn aggregates_syntax_diagnostics_with_their_source_paths() {
     let errors = parse_project([
         SourceFile::new("broken/first.cott", "module broken.first\n@\n"),

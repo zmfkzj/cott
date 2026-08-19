@@ -831,7 +831,27 @@ def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symb
     matches = []
     for implementation in implementations:
         if type(implementation) is not dict:
-            continue
+            raise _cott_violation("generation implementation must be an object")
+        kind = implementation.get("kind")
+        concrete = implementation.get("concrete")
+        method = implementation.get("method")
+        if kind is None:
+            if "concrete" in implementation or "method" in implementation or symbol.startswith("_cott_impl_"):
+                raise _cott_violation("generation implementation kind is malformed")
+            kind = "function"
+        if kind == "function":
+            if concrete is not None or method is not None:
+                raise _cott_violation("free-function provenance must not name an implementation method")
+        elif kind == "impl_method":
+            if (
+                type(concrete) is not str
+                or not concrete.isidentifier()
+                or type(method) is not str
+                or not method.isidentifier()
+            ):
+                raise _cott_violation("implementation-method provenance is malformed")
+        else:
+            raise _cott_violation("generation implementation kind is malformed")
         if (
             implementation.get("runtime_origin") == selected_origin
             and implementation.get("python_symbol") == selected_python_symbol
@@ -879,7 +899,7 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
             ):
                 return implementation
             del _COTT_LOAD_CACHE[cache_key]
-    
+
     source = _cott_regular_file_bytes(path, f"binding {relative_path}")
     digest = _cott_sha256(source)
     if digest != digest_input:

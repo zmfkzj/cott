@@ -10,7 +10,7 @@ use crate::hash::sha256_hex;
 use crate::ir::CanonicalIr;
 use crate::manifest::{ProjectConfig, RuntimeValidation};
 use crate::provenance::{GenerationRecord, GenerationSnapshot};
-use crate::python::artifact_plan::PythonArtifactPlan;
+use crate::python::artifact_plan::{PythonArtifactPlan, PythonCallableKind};
 use crate::python_runtime::render_runtime;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -145,35 +145,39 @@ pub fn emit(
             }
         }
     }
-    let functions: BTreeSet<(String, String)> = declarations
-        .iter()
-        .filter_map(|(name, kind)| {
-            (kind == "function").then(|| {
-                let (module, function) = name.rsplit_once('.').unwrap_or(("", name));
-                (module.to_owned(), function.to_owned())
-            })
-        })
-        .collect();
+    let callables = plan
+        .callables()
+        .into_iter()
+        .map(|callable| (callable.cott_symbol.clone(), callable))
+        .collect::<BTreeMap<_, _>>();
     let mut seen_bindings = BTreeSet::new();
     let mut seen_paths = HashSet::new();
     for binding in bindings {
-        let function = local_name(&binding.function);
-        let key = (binding.module.clone(), function.to_owned());
-        if !functions.contains(&key) {
+        let Some(callable) = callables.get(&binding.cott_symbol) else {
             diagnostics.push(diag(
                 binding.source.clone(),
                 format!(
-                    "binding does not match a canonical function: {}",
-                    binding.function
+                    "binding does not match a canonical callable: {}",
+                    binding.cott_symbol
                 ),
             ));
-        } else if !seen_bindings.insert(key) {
+            continue;
+        };
+        if binding.module != callable.module
+            || binding.function != callable.name
+            || binding.kind != callable.kind
+        {
             diagnostics.push(diag(
                 binding.source.clone(),
-                "duplicate binding for canonical function",
+                "binding callable identity does not match canonical callable",
+            ));
+        } else if !seen_bindings.insert(binding.cott_symbol.clone()) {
+            diagnostics.push(diag(
+                binding.source.clone(),
+                "duplicate binding for canonical callable",
             ));
         }
-        let expected = binding_path(&binding.module, function);
+        let expected = binding_path(&binding.module, &binding.kind, &binding.function);
         if binding.generated_relative != expected {
             diagnostics.push(diag(
                 binding.generated_relative.clone(),
@@ -368,13 +372,9 @@ pub fn emit(
             json!(format!("sha256:{}", sha256_hex(&module.bytes))),
         );
     }
-    let mut contract_surface = serde_json::Map::new();
+    let contract_surface = plan.contract_surface();
     let mut public_python_symbols = serde_json::Map::new();
     for module in modules.values() {
-        contract_surface.insert(
-            module.module.clone(),
-            json!({"declarations": module.declarations}),
-        );
         let mut names = exported_names(module);
         names.extend(module.declarations.iter().filter_map(|declaration| {
             let object = declaration.as_object()?;
@@ -406,9 +406,20 @@ pub fn emit(
                 .with_extension("")
                 .to_string_lossy()
                 .replace('/', ".");
+            let (kind, concrete, method) = match &binding.kind {
+                PythonCallableKind::Function => ("function", Value::Null, Value::Null),
+                PythonCallableKind::ImplMethod { concrete } => (
+                    "impl_method",
+                    Value::String(concrete.clone()),
+                    Value::String(binding.function.clone()),
+                ),
+            };
             json!({
                 "content_hash": format!("sha256:{}", binding.sha256),
-                "cott_symbol": format!("{}.{}", binding.module, binding.function),
+                "concrete": concrete,
+                "cott_symbol": binding.cott_symbol,
+                "kind": kind,
+                "method": method,
                 "owner": match binding.owner {
                     BindingOwner::Manifest => "manifest",
                     BindingOwner::Agent => "agent",
@@ -431,10 +442,10 @@ pub fn emit(
             })
         })
         .collect::<Vec<_>>();
-    let unresolved = functions
-        .iter()
-        .filter(|function| !seen_bindings.contains(function))
-        .map(|(module, function)| format!("{module}.{function}"))
+    let unresolved = callables
+        .keys()
+        .filter(|symbol| !seen_bindings.contains(*symbol))
+        .cloned()
         .collect::<Vec<_>>();
     let artifact_prefix = Path::new(&config.python.generated)
         .parent()
@@ -465,7 +476,7 @@ pub fn emit(
             "runtime": {"abi": "1", "version": env!("CARGO_PKG_VERSION")},
         }),
         ir: Value::Object(ir_hashes),
-        contract_surface: Value::Object(contract_surface),
+        contract_surface,
         public_python_symbols: Value::Object(public_python_symbols),
         implementations: Value::Array(implementation_symbols),
         dependencies: json!([]),
@@ -561,6 +572,34 @@ fn validate_declaration(
                     if let Some(ty) = required_value(method, "return_type", module, diagnostics) {
                         validate_type(ty, module, diagnostics);
                     }
+                }
+            }
+        }
+        "impl" => {
+            validate_fields(object, "state", module, diagnostics);
+            for callable in object
+                .get("init")
+                .into_iter()
+                .chain(object.get("methods"))
+                .flat_map(|value| match value {
+                    Value::Object(value) => vec![value],
+                    Value::Array(values) => values.iter().filter_map(Value::as_object).collect(),
+                    _ => Vec::new(),
+                })
+            {
+                for parameter in callable
+                    .get("parameters")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_object)
+                {
+                    if let Some(ty) = parameter.get("type") {
+                        validate_type(ty, module, diagnostics);
+                    }
+                }
+                if let Some(ty) = callable.get("return_type") {
+                    validate_type(ty, module, diagnostics);
                 }
             }
         }
@@ -835,7 +874,7 @@ fn render_types(
         render_type_declaration(&mut out, declaration, module, modules, declarations);
     }
     render_function_bound_protocols(&mut out, module, declarations);
-    let names = exported_names(module);
+    let names = type_exported_names(module);
     writeln!(
         out,
         "__all__ = [{}]",
@@ -1470,10 +1509,10 @@ fn render_facade(
     config: &ProjectConfig,
 ) -> Vec<u8> {
     let mut out = String::from(
-        "from __future__ import annotations\n\nimport dataclasses as _dataclasses\nfrom pathlib import Path\nfrom typing import Literal, Never, Protocol, TypeVar\n\nfrom cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi\n",
+        "from __future__ import annotations\n\nimport dataclasses as _dataclasses\nimport threading as _threading\nfrom pathlib import Path\nfrom typing import Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi\n",
     );
     let names = exported_names(module);
-    let mut local_imports = names.clone();
+    let mut local_imports = type_exported_names(module);
     local_imports.extend(function_bound_protocol_names(module));
     if !local_imports.is_empty() {
         writeln!(
@@ -1545,12 +1584,6 @@ fn render_facade(
                 writeln!(
                     out,
                     "    {name} = _cott_validate_abi({name}, {ty}, path={path})"
-                )
-                .unwrap();
-            } else if test_only {
-                writeln!(
-                    out,
-                    "    {name} = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)({name}, {ty}, path={path})"
                 )
                 .unwrap();
             } else {
@@ -1657,6 +1690,15 @@ fn render_facade(
             exported.push(function.to_owned());
         }
     }
+    render_impl_classes(
+        &mut out,
+        module,
+        bindings,
+        declarations,
+        config,
+        boundary,
+        test_only,
+    );
     exported.sort();
     writeln!(
         out,
@@ -1669,6 +1711,526 @@ fn render_facade(
     )
     .unwrap();
     out.into_bytes()
+}
+
+fn render_impl_classes(
+    out: &mut String,
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    bindings: &[ResolvedBinding],
+    declarations: &BTreeMap<String, String>,
+    config: &ProjectConfig,
+    boundary: bool,
+    test_only: bool,
+) {
+    for declaration in &module.declarations {
+        let Some(implementation) = declaration
+            .as_object()
+            .filter(|object| object.get("kind").and_then(Value::as_str) == Some("impl"))
+        else {
+            continue;
+        };
+        let name = local_name(
+            implementation
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        );
+        let state = implementation
+            .get("state")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        writeln!(out, "\n@final\nclass {name}:").unwrap();
+        let slots = state
+            .iter()
+            .filter_map(|field| field.get("name").and_then(Value::as_str))
+            .chain(std::iter::once("_cott_lock"))
+            .map(json_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        for field in state {
+            let field = field.as_object().expect("validated impl state field");
+            let field_name = field
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let ty = render_type(field.get("type").unwrap(), &module.module, declarations);
+            writeln!(out, "    {field_name}: {ty}").unwrap();
+        }
+        writeln!(out, "    __slots__ = ({slots},)").unwrap();
+        writeln!(
+            out,
+            "\n    def __init_subclass__(cls, **_kwargs: object) -> None:\n        raise TypeError({})",
+            json_string(&format!("{name} is final"))
+        )
+        .unwrap();
+
+        let init = implementation.get("init").and_then(Value::as_object);
+        let init_parameters = init
+            .and_then(|init| init.get("parameters"))
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let (signature, _, parameters) =
+            render_impl_parameters(init_parameters, &module.module, declarations);
+        let signature = if signature.is_empty() {
+            "self".to_owned()
+        } else {
+            format!("self, {signature}")
+        };
+        writeln!(out, "\n    def __init__({signature}) -> None:").unwrap();
+        if let Some(doc) = init
+            .and_then(|init| init.get("contracts"))
+            .and_then(Value::as_object)
+            .and_then(|contracts| contracts.get("doc"))
+            .and_then(Value::as_str)
+        {
+            writeln!(
+                out,
+                "        \"\"\"{}\"\"\"",
+                doc.replace('\\', "\\\\").replace("\"\"\"", "\\\"\\\"\\\"")
+            )
+            .unwrap();
+        }
+        for (parameter, ty) in &parameters {
+            render_abi_assignment(out, parameter, ty, 8, boundary, test_only);
+        }
+        if let Some(init) = init {
+            let contract =
+                impl_contract_callable(init, &format!("{}.{}", module.module, name), false);
+            render_contract_block(out, &contract, true, boundary, test_only, 4);
+        }
+        for field in state {
+            let field = field.as_object().expect("validated impl state field");
+            let field_name = field
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let ty = render_type(field.get("type").unwrap(), &module.module, declarations);
+            let value = if parameters
+                .iter()
+                .any(|(parameter, _)| parameter == field_name)
+            {
+                field_name.to_owned()
+            } else {
+                render_value(
+                    field
+                        .get("default")
+                        .expect("state without init parameter has default"),
+                )
+            };
+            writeln!(
+                out,
+                "        self.{field_name} = _cott_validate_abi({value}, {ty}, path={})",
+                json_string(&format!("$.{field_name}"))
+            )
+            .unwrap();
+        }
+        out.push_str("        self._cott_lock = _threading.RLock()\n");
+        if let Some(init) = init {
+            let contract =
+                impl_contract_callable(init, &format!("{}.{}", module.module, name), false);
+            render_contract_block(out, &contract, false, boundary, test_only, 4);
+        }
+        render_invariants(
+            out,
+            implementation,
+            &format!("{}.{}", module.module, name),
+            8,
+        );
+
+        for method in implementation
+            .get("methods")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_object)
+        {
+            let method_name = method
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let cott_symbol = format!("{}.{}.{}", module.module, name, method_name);
+            let Some(binding) = bindings
+                .iter()
+                .find(|binding| binding.cott_symbol == cott_symbol)
+            else {
+                continue;
+            };
+            let (signature, call, parameters) = render_impl_parameters(
+                method
+                    .get("parameters")
+                    .and_then(Value::as_array)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+                &module.module,
+                declarations,
+            );
+            let signature = if signature.is_empty() {
+                format!("self: {name}")
+            } else {
+                format!("self: {name}, {signature}")
+            };
+            let return_type = render_type(
+                method.get("return_type").unwrap(),
+                &module.module,
+                declarations,
+            );
+            writeln!(
+                out,
+                "\n    def {method_name}({signature}) -> {return_type}:"
+            )
+            .unwrap();
+            if let Some(doc) = method
+                .get("contracts")
+                .and_then(Value::as_object)
+                .and_then(|contracts| contracts.get("doc"))
+                .and_then(Value::as_str)
+            {
+                writeln!(
+                    out,
+                    "        \"\"\"{}\"\"\"",
+                    doc.replace('\\', "\\\\").replace("\"\"\"", "\\\"\\\"\\\"")
+                )
+                .unwrap();
+            }
+            out.push_str("        with self._cott_lock:\n");
+            for field in state {
+                let field_name = field
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                writeln!(
+                    out,
+                    "            _cott_old_{field_name} = self.{field_name}"
+                )
+                .unwrap();
+            }
+            for (parameter, ty) in &parameters {
+                render_abi_assignment(out, parameter, ty, 12, boundary, test_only);
+            }
+            let contract = impl_contract_callable(method, &cott_symbol, true);
+            render_contract_block(out, &contract, true, boundary, test_only, 8);
+            let span = serde_json::to_string(method.get("span").unwrap()).expect("span serializes");
+            out.push_str("            try:\n");
+            writeln!(
+                out,
+                "                _implementation = _cott_load({}, {}, {}, expected_project_name={}, expected_cott_symbol={})",
+                json_string(&path_string(&binding.generated_relative)),
+                json_string(&binding.sha256),
+                json_string(&binding.implementation_function),
+                json_string(&config.project.name),
+                json_string(&cott_symbol),
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "                _result = _implementation(self{}{})",
+                if call.is_empty() { "" } else { ", " },
+                call
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "            except CottContractViolation as _error:\n                if _error.symbol is None or _error.symbol == \"_cott_load\":\n                    _error.symbol = {}\n                if _error.span is None:\n                    _error.span = {span}\n                raise",
+                json_string(&cott_symbol),
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "            except SystemExit as _error:\n                raise CottContractViolation(\"implementation raised SystemExit\", symbol={}, phase=\"implementation-call\", span={span}, expected=\"ordinary return\", actual=\"SystemExit\") from _error",
+                json_string(&cott_symbol),
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "            except Exception as _error:\n                raise CottContractViolation(\"implementation raised an undeclared exception\", symbol={}, phase=\"implementation-call\", span={span}, expected=\"declared Result error or ordinary return\", actual=type(_error).__name__) from _error",
+                json_string(&cott_symbol),
+            )
+            .unwrap();
+            let never = is_never(method.get("return_type"));
+            if !never {
+                render_abi_assignment(out, "_result", &return_type, 12, boundary, test_only);
+            }
+            for field in state {
+                let field_name = field
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let ty = render_type(field.get("type").unwrap(), &module.module, declarations);
+                writeln!(
+                    out,
+                    "            self.{field_name} = _cott_validate_abi(self.{field_name}, {ty}, path={})",
+                    json_string(&format!("$.{field_name}"))
+                )
+                .unwrap();
+            }
+            let modifies = method
+                .get("modifies")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            for field in state {
+                let field_name = field
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if modifies
+                    .iter()
+                    .any(|value| local_name(value.as_str().unwrap_or_default()) == field_name)
+                {
+                    continue;
+                }
+                writeln!(
+                    out,
+                    "            if self.{field_name} is not _cott_old_{field_name}:\n                raise CottContractViolation(\"modifies clause failed\", symbol={}, phase=\"modifies\", span={span}, expected={}, actual={})",
+                    json_string(&cott_symbol),
+                    json_string(&format!("self.{field_name} unchanged")),
+                    json_string(&format!("self.{field_name} changed")),
+                )
+                .unwrap();
+            }
+            if never {
+                render_invariants(
+                    out,
+                    implementation,
+                    &format!("{}.{}", module.module, name),
+                    12,
+                );
+                writeln!(
+                    out,
+                    "            raise CottContractViolation(\"Never function returned\", symbol={}, phase=\"return\", span={span}, expected=\"Never\", actual=repr(_result))",
+                    json_string(&cott_symbol)
+                )
+                .unwrap();
+                continue;
+            }
+            render_contract_block(out, &contract, false, boundary, test_only, 8);
+            render_invariants(
+                out,
+                implementation,
+                &format!("{}.{}", module.module, name),
+                12,
+            );
+            out.push_str("            return _result\n");
+        }
+    }
+}
+
+fn render_impl_parameters(
+    parameters: &[Value],
+    module: &str,
+    declarations: &BTreeMap<String, String>,
+) -> (String, String, Vec<(String, String)>) {
+    let mut signature = Vec::new();
+    let mut call = Vec::new();
+    let mut typed = Vec::new();
+    let mut keyword_marker = false;
+    for parameter in parameters {
+        let name = parameter
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let kind = parameter
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("positional");
+        if kind == "keyword_only" && !keyword_marker {
+            signature.push("*".to_owned());
+            keyword_marker = true;
+        }
+        let ty = render_type(parameter.get("type").unwrap(), module, declarations);
+        let default = parameter
+            .get("default")
+            .filter(|default| !default.is_null())
+            .map(|default| format!(" = {}", render_value(default)))
+            .unwrap_or_default();
+        signature.push(format!("{name}: {ty}{default}"));
+        call.push(if kind == "keyword_only" {
+            format!("{name}={name}")
+        } else {
+            name.to_owned()
+        });
+        typed.push((name.to_owned(), ty));
+    }
+    (signature.join(", "), call.join(", "), typed)
+}
+
+fn render_abi_assignment(
+    out: &mut String,
+    name: &str,
+    ty: &str,
+    indent: usize,
+    boundary: bool,
+    test_only: bool,
+) {
+    let prefix = " ".repeat(indent);
+    let path_string = if name == "_result" {
+        "$.return".to_owned()
+    } else {
+        format!("$.{name}")
+    };
+    let path = json_string(&path_string);
+    let validator = if boundary {
+        "_cott_validate_abi"
+    } else if test_only {
+        "(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)"
+    } else {
+        "_cott_normalize_f32_abi"
+    };
+    writeln!(
+        out,
+        "{prefix}{name} = {validator}({name}, {ty}, path={path})"
+    )
+    .unwrap();
+}
+
+fn impl_contract_callable(
+    callable: &serde_json::Map<String, Value>,
+    symbol: &str,
+    errors: bool,
+) -> Value {
+    let contracts = callable
+        .get("contracts")
+        .and_then(Value::as_object)
+        .expect("validated impl callable contracts");
+    let mut clauses = Vec::new();
+    for name in ["requires", "errors", "ensures"] {
+        if name == "errors" && !errors {
+            continue;
+        }
+        clauses.extend(
+            contracts
+                .get(name)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .cloned(),
+        );
+    }
+    let effects = callable
+        .get("effects")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let mut value = json!({"name": symbol, "span": callable["span"], "contract": {"clauses": clauses, "effects": effects}});
+    rewrite_impl_contract_references(&mut value);
+    value
+}
+
+fn rewrite_impl_contract_references(value: &mut Value) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                rewrite_impl_contract_references(value);
+            }
+        }
+        Value::Object(object) => match object.get("kind").and_then(Value::as_str) {
+            Some("self_ref") => {
+                *object = serde_json::Map::from_iter([
+                    ("kind".to_owned(), Value::String("parameter_ref".to_owned())),
+                    ("symbol".to_owned(), Value::String("self".to_owned())),
+                ]);
+            }
+            Some("result_ref") => {
+                *object = serde_json::Map::from_iter([
+                    ("kind".to_owned(), Value::String("parameter_ref".to_owned())),
+                    ("symbol".to_owned(), Value::String("_result".to_owned())),
+                ]);
+            }
+            Some("old_state_field") => {
+                let field = local_name(
+                    object
+                        .get("field")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                );
+                *object = serde_json::Map::from_iter([
+                    ("kind".to_owned(), Value::String("parameter_ref".to_owned())),
+                    (
+                        "symbol".to_owned(),
+                        Value::String(format!("_cott_old_{field}")),
+                    ),
+                ]);
+            }
+            _ => {
+                for value in object.values_mut() {
+                    rewrite_impl_contract_references(value);
+                }
+            }
+        },
+        _ => {}
+    }
+}
+
+fn render_contract_block(
+    out: &mut String,
+    callable: &Value,
+    preconditions: bool,
+    boundary: bool,
+    test_only: bool,
+    extra_indent: usize,
+) {
+    let callable = callable
+        .as_object()
+        .expect("synthetic callable is an object");
+    let mut block = String::new();
+    if boundary {
+        if preconditions {
+            render_preconditions(&mut block, callable, "");
+        } else {
+            render_postconditions(&mut block, callable, "");
+        }
+    } else if test_only {
+        render_test_only_contract(&mut block, callable, "", preconditions);
+    }
+    if !block.is_empty() {
+        let prefix = " ".repeat(extra_indent);
+        for line in block.split_inclusive('\n') {
+            out.push_str(&prefix);
+            out.push_str(line);
+        }
+    }
+}
+
+fn render_invariants(
+    out: &mut String,
+    implementation: &serde_json::Map<String, Value>,
+    symbol: &str,
+    indent: usize,
+) {
+    let prefix = " ".repeat(indent);
+    for invariant in implementation
+        .get("invariants")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let mut expression = invariant.get("expression").cloned().unwrap_or(Value::Null);
+        rewrite_impl_contract_references(&mut expression);
+        let expression = render_contract_expression(&expression);
+        let span = serde_json::to_string(invariant.get("span").unwrap()).expect("span serializes");
+        let label = format!(
+            "invariant:{}",
+            invariant
+                .get("clause_id")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+        );
+        writeln!(
+            out,
+            "{prefix}if not ({expression}):\n{prefix}    raise CottContractViolation(\"invariant failed\", symbol={}, clause={}, phase=\"invariant\", span={span}, expected=\"true\", actual=\"false\")",
+            json_string(symbol),
+            json_string(&label),
+        )
+        .unwrap();
+    }
+}
+
+fn is_never(value: Option<&Value>) -> bool {
+    value.and_then(Value::as_object).is_some_and(|ty| {
+        ty.get("kind").and_then(Value::as_str) == Some("primitive")
+            && ty.get("name").and_then(Value::as_str) == Some("never")
+    })
 }
 
 fn render_function_parameters_with_names(
@@ -1980,7 +2542,7 @@ fn render_contract_expression(expression: &Value) -> String {
                     .unwrap_or_default()
             )
         ),
-        "self_ref" => "_result".to_owned(),
+        "self_ref" | "result_ref" => "_result".to_owned(),
         "field" => format!(
             "({}).{}",
             render_contract_expression(expression.get("base").unwrap()),
@@ -2079,15 +2641,16 @@ fn render_stub(
     declarations: &BTreeMap<String, String>,
 ) -> Vec<u8> {
     let mut out = String::from(
-        "from __future__ import annotations\n\nfrom pathlib import Path\nfrom typing import Literal, Never, Protocol, TypeVar\n\nfrom cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit\n",
+        "from __future__ import annotations\n\nfrom pathlib import Path\nfrom typing import Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit\n",
     );
     let names = exported_names(module);
-    if !names.is_empty() {
+    let type_names = type_exported_names(module);
+    if !type_names.is_empty() {
         writeln!(
             out,
             "\nfrom {} import {}",
             type_module_name(&module.module),
-            names
+            type_names
                 .iter()
                 .map(|name| format!("{name} as {name}"))
                 .collect::<Vec<_>>()
@@ -2139,6 +2702,7 @@ fn render_stub(
         writeln!(out, "def {name}({signature}) -> {return_type}: ...\n").unwrap();
         exported.push(name.to_owned());
     }
+    render_impl_stubs(&mut out, module, declarations);
     exported.sort();
     writeln!(
         out,
@@ -2151,6 +2715,90 @@ fn render_stub(
     )
     .unwrap();
     out.into_bytes()
+}
+
+fn render_impl_stubs(
+    out: &mut String,
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    declarations: &BTreeMap<String, String>,
+) {
+    for declaration in &module.declarations {
+        let Some(implementation) = declaration
+            .as_object()
+            .filter(|object| object.get("kind").and_then(Value::as_str) == Some("impl"))
+        else {
+            continue;
+        };
+        let name = local_name(
+            implementation
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        );
+        writeln!(out, "\n@final\nclass {name}:").unwrap();
+        for field in implementation
+            .get("state")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let field = field.as_object().expect("validated impl state field");
+            let field_name = field
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let ty = render_type(field.get("type").unwrap(), &module.module, declarations);
+            writeln!(out, "    {field_name}: {ty}").unwrap();
+        }
+        let init = implementation
+            .get("init")
+            .and_then(Value::as_object)
+            .and_then(|init| init.get("parameters"))
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let (signature, _, _) = render_impl_parameters(init, &module.module, declarations);
+        let signature = if signature.is_empty() {
+            "self".to_owned()
+        } else {
+            format!("self, {signature}")
+        };
+        writeln!(out, "    def __init__({signature}) -> None: ...").unwrap();
+        for method in implementation
+            .get("methods")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_object)
+        {
+            let method_name = method
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let parameters = method
+                .get("parameters")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let (signature, _, _) =
+                render_impl_parameters(parameters, &module.module, declarations);
+            let signature = if signature.is_empty() {
+                format!("self: {name}")
+            } else {
+                format!("self: {name}, {signature}")
+            };
+            let return_type = render_type(
+                method.get("return_type").unwrap(),
+                &module.module,
+                declarations,
+            );
+            writeln!(
+                out,
+                "    def {method_name}({signature}) -> {return_type}: ..."
+            )
+            .unwrap();
+        }
+    }
 }
 fn render_type(value: &Value, module: &str, declarations: &BTreeMap<String, String>) -> String {
     render_type_with_names(value, module, declarations, &BTreeMap::new())
@@ -2575,6 +3223,9 @@ fn referenced_imports(
                 }
             }
         }
+        if kind == "impl" {
+            collect_references(declaration, &module.module, declarations, &mut imports);
+        }
         if let Some(groups) = object
             .get(if kind == "struct" {
                 "fields"
@@ -2863,6 +3514,24 @@ fn exported_names(module: &crate::python::artifact_plan::PythonArtifactModule) -
     names.sort();
     names
 }
+
+fn type_exported_names(module: &crate::python::artifact_plan::PythonArtifactModule) -> Vec<String> {
+    let mut names = exported_names(module);
+    names.retain(|name| {
+        module.declarations.iter().all(|declaration| {
+            declaration.as_object().is_none_or(|object| {
+                object.get("kind").and_then(Value::as_str) != Some("impl")
+                    || local_name(
+                        object
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                    ) != name
+            })
+        })
+    });
+    names
+}
 fn render_doc(out: &mut String, value: Option<&Value>) {
     if let Some(text) = value
         .and_then(Value::as_object)
@@ -3046,10 +3715,13 @@ fn valid_binding_path(path: &Path) -> bool {
             && value.ends_with(".py")
     }
 }
-fn binding_path(module: &str, function: &str) -> PathBuf {
+fn binding_path(module: &str, kind: &PythonCallableKind, function: &str) -> PathBuf {
     let mut path = PathBuf::from("_cott_impl");
     for segment in module.split('.') {
         path.push(segment);
+    }
+    if let PythonCallableKind::ImplMethod { concrete } = kind {
+        path.push(concrete);
     }
     path.push(format!("{function}.py"));
     path

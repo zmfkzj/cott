@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -8,7 +9,8 @@ use cott::hir::lower;
 use cott::ir::render;
 use cott::manifest::ProjectConfig;
 use cott::project::{ProjectPaths, load_config_with_paths};
-use cott::python::artifact_plan::PythonArtifactPlan;
+use cott::provenance::{AgentRun, AgentStatus, GenerationRecord, GenerationSnapshot, StreamDigest};
+use cott::python::artifact_plan::{PythonArtifactPlan, PythonCallableKind};
 
 struct Fixture {
     config: ProjectConfig,
@@ -58,6 +60,132 @@ fn fixture(source: &str) -> Fixture {
     }
 }
 
+fn impl_fixture() -> Fixture {
+    fixture(
+        r#"module api.service
+
+trait Reader:
+    fn read(self, amount: I32) -> I32
+
+trait Writer:
+    fn read(self, amount: I32) -> I32
+
+impl ReaderState for Reader:
+    fn read(self, amount: I32) -> I32:
+        ensures result == amount
+
+impl WriterState for Writer:
+    fn read(self, amount: I32) -> I32:
+        ensures result == amount
+"#,
+    )
+}
+
+fn record_agent_provenance(fixture: &Fixture, symbol: &str, source: &PathBuf, bytes: &[u8]) {
+    let content_hash = format!("sha256:{}", cott::hash::sha256_hex(bytes));
+    let generated_relative = source
+        .strip_prefix(&fixture.paths.python_source_dir)
+        .expect("agent source is rooted at the Python source");
+    let concrete = source
+        .parent()
+        .and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+        .expect("agent method source has a concrete parent");
+    let method = source
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .expect("agent method source has a name");
+    let runtime_module = generated_relative
+        .with_extension("")
+        .to_string_lossy()
+        .replace('/', ".");
+    let mut record = GenerationRecord {
+        schema_version: 1,
+        current: GenerationSnapshot {
+            generation_id: String::new(),
+            verified: false,
+            inputs: serde_json::json!({}),
+            tools: serde_json::json!({}),
+            ir: serde_json::json!({}),
+            contract_surface: serde_json::json!({}),
+            public_python_symbols: serde_json::json!({}),
+            implementations: serde_json::json!([{
+                "cott_symbol": symbol,
+                "kind": "impl_method",
+                "concrete": concrete,
+                "method": method,
+                "owner": "agent",
+                "python_symbol": format!("{runtime_module}:_cott_impl_{concrete}_{method}"),
+                "source_origin": source
+                    .strip_prefix(&fixture.paths.root)
+                    .expect("agent source is rooted at the fixture")
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+                "runtime_origin": format!(
+                    "{}/{}",
+                    std::path::Path::new(&fixture.config.python.generated)
+                        .file_name()
+                        .expect("generated root has a final component")
+                        .to_string_lossy(),
+                    generated_relative.to_string_lossy().replace('\\', "/")
+                ),
+                "content_hash": content_hash,
+            }]),
+            dependencies: serde_json::json!([]),
+            managed_files: BTreeMap::new(),
+            unresolved: Vec::new(),
+            verification: serde_json::Value::Null,
+            agent_runs: vec![AgentRun {
+                symbol: symbol.to_owned(),
+                adapter: "test".to_owned(),
+                adapter_version: "1".to_owned(),
+                argv_template: Vec::new(),
+                executable: "test".to_owned(),
+                executable_hash: "sha256:test".to_owned(),
+                prompt_hash: "sha256:test".to_owned(),
+                implementation_hash: content_hash.clone(),
+                environment_names: Vec::new(),
+                duration_ms: 0,
+                status: AgentStatus {
+                    exit_code: Some(0),
+                    signal: None,
+                    timed_out: false,
+                    cancelled: false,
+                },
+                stdout: StreamDigest {
+                    bytes: 0,
+                    sha256: "sha256:test".to_owned(),
+                    truncated: false,
+                },
+                stderr: StreamDigest {
+                    bytes: 0,
+                    sha256: "sha256:test".to_owned(),
+                    truncated: false,
+                },
+            }],
+        },
+        last_verified: None,
+    };
+    record
+        .current
+        .compute_generation_id()
+        .expect("test provenance identity must compute");
+    let path = fixture
+        .paths
+        .generated_dir
+        .parent()
+        .expect("generated Python directory has a parent")
+        .join("generation.json");
+    fs::create_dir_all(path.parent().expect("generation record has a parent")).unwrap();
+    fs::write(
+        path,
+        record
+            .canonical_bytes()
+            .expect("test provenance must serialize"),
+    )
+    .unwrap();
+}
+
 #[test]
 fn accepts_cott_bindings_manifest_source_namespace() {
     let mut fixture = fixture("module api.service\n\nfn run() -> Unit\n");
@@ -77,6 +205,8 @@ fn accepts_cott_bindings_manifest_source_namespace() {
     assert_eq!(bindings.len(), 1);
     assert_eq!(bindings[0].module, "api.service");
     assert_eq!(bindings[0].function, "run");
+    assert_eq!(bindings[0].cott_symbol, "api.service.run");
+    assert_eq!(bindings[0].kind, PythonCallableKind::Function);
     assert_eq!(bindings[0].source, path);
     assert_eq!(
         bindings[0].generated_relative,
@@ -118,6 +248,12 @@ fn reports_unresolved_canonical_planned_function() {
     assert_eq!(resolution.unresolved.len(), 1);
     assert_eq!(resolution.unresolved[0].module, "api.service");
     assert_eq!(resolution.unresolved[0].function, "missing");
+    assert_eq!(resolution.unresolved[0].cott_symbol, "api.service.missing");
+    assert_eq!(resolution.unresolved[0].kind, PythonCallableKind::Function);
+    assert_eq!(
+        resolution.unresolved[0].expected_implementation_function,
+        "missing"
+    );
     assert_eq!(
         resolution.unresolved[0].source,
         fixture
@@ -128,6 +264,270 @@ fn reports_unresolved_canonical_planned_function() {
 }
 
 #[test]
+fn unresolved_impl_methods_have_distinct_canonical_symbols_and_nested_sources() {
+    let fixture = impl_fixture();
+
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("absent impl methods are unresolved");
+    assert_eq!(
+        resolution
+            .unresolved
+            .iter()
+            .map(|binding| (binding.cott_symbol.as_str(), binding.source.clone()))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "api.service.ReaderState.read",
+                fixture
+                    .paths
+                    .python_source_dir
+                    .join("_cott_impl/api/service/ReaderState/read.py"),
+            ),
+            (
+                "api.service.WriterState.read",
+                fixture
+                    .paths
+                    .python_source_dir
+                    .join("_cott_impl/api/service/WriterState/read.py"),
+            ),
+        ]
+    );
+    assert_eq!(
+        resolution.unresolved[0].kind,
+        PythonCallableKind::ImplMethod {
+            concrete: "ReaderState".to_owned()
+        }
+    );
+    assert_eq!(
+        resolution.unresolved[0].expected_implementation_function,
+        "_cott_impl_ReaderState_read"
+    );
+}
+
+#[test]
+fn resolves_provenance_backed_impl_methods_to_their_helper() {
+    let fixture = impl_fixture();
+    let path = fixture
+        .paths
+        .python_source_dir
+        .join("_cott_impl/api/service/ReaderState/read.py");
+    let bytes = b"from api.service import ReaderState\n\ndef _cott_impl_ReaderState_read(self: ReaderState, amount: int) -> int:\n    return amount\n";
+    fs::create_dir_all(path.parent().expect("impl method has a parent")).unwrap();
+    fs::write(&path, bytes).unwrap();
+    record_agent_provenance(&fixture, "api.service.ReaderState.read", &path, bytes);
+    let record: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            fixture
+                .paths
+                .generated_dir
+                .parent()
+                .expect("generated Python directory has a parent")
+                .join("generation.json"),
+        )
+        .expect("method generation record"),
+    )
+    .expect("method generation record is JSON");
+    let implementation = &record["current"]["implementations"][0];
+    assert_eq!(implementation["kind"], "impl_method");
+    assert_eq!(implementation["concrete"], "ReaderState");
+    assert_eq!(implementation["method"], "read");
+    assert_eq!(
+        implementation["python_symbol"],
+        "_cott_impl.api.service.ReaderState.read:_cott_impl_ReaderState_read"
+    );
+    assert_eq!(
+        implementation["source_origin"],
+        "python/_cott_impl/api/service/ReaderState/read.py"
+    );
+    assert_eq!(
+        implementation["runtime_origin"],
+        "python/_cott_impl/api/service/ReaderState/read.py"
+    );
+    assert_eq!(
+        implementation["content_hash"],
+        format!("sha256:{}", cott::hash::sha256_hex(bytes))
+    );
+
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("provenance-backed impl method must resolve");
+    assert_eq!(resolution.resolved.len(), 1);
+    assert_eq!(resolution.unresolved.len(), 1);
+    let binding = &resolution.resolved[0];
+    assert_eq!(
+        binding.kind,
+        PythonCallableKind::ImplMethod {
+            concrete: "ReaderState".to_owned()
+        }
+    );
+    assert_eq!(binding.cott_symbol, "api.service.ReaderState.read");
+    assert_eq!(binding.source, path);
+    assert_eq!(
+        binding.generated_relative,
+        PathBuf::from("_cott_impl/api/service/ReaderState/read.py")
+    );
+    assert_eq!(
+        binding.implementation_module,
+        "_cott_impl.api.service.ReaderState.read"
+    );
+    assert_eq!(
+        binding.implementation_function,
+        "_cott_impl_ReaderState_read"
+    );
+    assert_eq!(binding.owner, cott::binding::BindingOwner::Agent);
+}
+#[test]
+fn rejects_malformed_impl_method_provenance_records() {
+    let fixture = impl_fixture();
+    let path = fixture
+        .paths
+        .python_source_dir
+        .join("_cott_impl/api/service/ReaderState/read.py");
+    let bytes = b"from api.service import ReaderState\n\ndef _cott_impl_ReaderState_read(self: ReaderState, amount: int) -> int:\n    return amount\n";
+    fs::create_dir_all(path.parent().expect("impl method has a parent")).unwrap();
+    fs::write(&path, bytes).unwrap();
+    record_agent_provenance(&fixture, "api.service.ReaderState.read", &path, bytes);
+    let generation = fixture
+        .paths
+        .generated_dir
+        .parent()
+        .expect("generated Python directory has a parent")
+        .join("generation.json");
+    let record: serde_json::Value =
+        serde_json::from_slice(&fs::read(&generation).expect("method generation record"))
+            .expect("method generation record is JSON");
+    for missing in ["kind", "concrete", "method"] {
+        let mut incomplete = record.clone();
+        incomplete["current"]["implementations"][0]
+            .as_object_mut()
+            .expect("implementation is an object")
+            .remove(missing);
+
+        assert!(
+            GenerationRecord::parse(
+                &serde_json::to_vec(&incomplete).expect("malformed provenance serializes")
+            )
+            .is_err(),
+            "generation provenance must reject an impl method record missing `{missing}`"
+        );
+    }
+    let mut mismatched = record.clone();
+    mismatched["current"]["implementations"][0]["method"] = serde_json::json!("other");
+    assert!(
+        GenerationRecord::parse(
+            &serde_json::to_vec(&mismatched).expect("mismatched provenance serializes")
+        )
+        .is_err(),
+        "generation provenance must reject a method record whose symbol does not match"
+    );
+}
+
+#[test]
+fn rejects_manifest_bindings_for_impl_methods() {
+    let mut fixture = impl_fixture();
+    fixture.config.python.implementations.insert(
+        "api.service.ReaderState.read".to_owned(),
+        "cott_bindings.api.service.reader:read".to_owned(),
+    );
+
+    resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect_err("impl methods must never be manifest-bindable");
+}
+
+#[test]
+fn reports_stale_nested_impl_method_sources() {
+    let fixture = impl_fixture();
+    let stale = fixture
+        .paths
+        .python_source_dir
+        .join("_cott_impl/api/service/ReaderState/removed.py");
+    fs::create_dir_all(stale.parent().expect("stale method has a parent")).unwrap();
+    fs::write(&stale, b"def removed() -> object:\n    return None\n").unwrap();
+
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("unresolved methods do not make stale-source detection fail");
+    assert_eq!(resolution.stale, [stale]);
+}
+
+#[test]
+fn validates_impl_method_helpers_and_rejects_extra_top_level_definitions() {
+    let fixture = impl_fixture();
+    let valid = b"from api.service import ReaderState\n\ndef _cott_impl_ReaderState_read(self: ReaderState, amount: int) -> int:\n    def double(value: int) -> int:\n        return value * 2\n\n    return double(amount) // 2\n";
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.ReaderState.read",
+        valid,
+    )
+    .expect("impl helper may contain a typed local helper");
+
+    let cases: &[(&[u8], &str)] = &[
+        (
+            b"from api.service import ReaderState\n\ndef _cott_impl_ReaderState_read(self: ReaderState | None, amount: int) -> int:\n    return amount\n",
+            "must begin with `self: ReaderState`",
+        ),
+        (
+            b"from api.service import ReaderState\n\ndef _cott_impl_ReaderState_read(self, amount: int) -> int:\n    return amount\n",
+            "must begin with `self: ReaderState`",
+        ),
+        (
+            b"class ReaderState:\n    pass\n\ndef _cott_impl_ReaderState_read(self: ReaderState, amount: int) -> int:\n    return amount\n",
+            "class definitions are not allowed",
+        ),
+        (
+            b"from api.service import ReaderState\n\ndef extra() -> None:\n    return None\n\ndef _cott_impl_ReaderState_read(self: ReaderState, amount: int) -> int:\n    return amount\n",
+            "must not define extra function 'extra'",
+        ),
+    ];
+    for (invalid, expected) in cases {
+        let error = validate_candidate(
+            &fixture.config,
+            &fixture.paths,
+            &fixture.plan,
+            "api.service.ReaderState.read",
+            invalid,
+        )
+        .expect_err("impl candidate must have only the exact helper signature");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn rejects_impl_concrete_imports_outside_its_exact_facade() {
+    let fixture = impl_fixture();
+    let cases: &[(&[u8], &str)] = &[
+        (
+            b"from api.service_types import ReaderState\n\ndef _cott_impl_ReaderState_read(self: ReaderState, amount: int) -> int:\n    return amount\n",
+            "impl helper concrete `ReaderState` must be imported from facade `api.service`, not generated types `api.service_types`",
+        ),
+        (
+            b"from api.service import ReaderState as State\n\ndef _cott_impl_ReaderState_read(self: State, amount: int) -> int:\n    return amount\n",
+            "impl helper concrete `ReaderState` must be imported from facade `api.service` without an alias",
+        ),
+        (
+            b"from api import ReaderState\n\ndef _cott_impl_ReaderState_read(self: ReaderState, amount: int) -> int:\n    return amount\n",
+            "impl helper concrete `ReaderState` must be imported from facade `api.service`, not `api`",
+        ),
+        (
+            b"def _cott_impl_ReaderState_read(self: ReaderState, amount: int) -> int:\n    return amount\n",
+            "impl helper concrete `ReaderState` must be imported from facade `api.service`",
+        ),
+    ];
+
+    for (source, expected) in cases {
+        let error = validate_candidate(
+            &fixture.config,
+            &fixture.paths,
+            &fixture.plan,
+            "api.service.ReaderState.read",
+            source,
+        )
+        .expect_err("impl helper must import its concrete from its exact facade");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
 fn candidate_validation_public_api_uses_only_the_canonical_plan() {
     let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
     validate_candidate(
@@ -135,9 +535,36 @@ fn candidate_validation_public_api_uses_only_the_canonical_plan() {
         &fixture.paths,
         &fixture.plan,
         "run",
-        b"def run() -> object:\n    return None\n",
+        b"def run() -> object:\n    def identity(value: object) -> object:\n        return value\n\n    return identity(None)\n",
     )
-    .expect("canonical plan candidate must validate");
+    .expect("canonical plan candidate may contain a typed local helper");
+}
+
+#[test]
+fn rejects_extra_top_level_definitions_for_public_functions() {
+    let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    let cases: &[(&[u8], &str)] = &[
+        (
+            b"def extra() -> None:\n    return None\n\ndef run() -> object:\n    return None\n",
+            "must not define extra function 'extra'",
+        ),
+        (
+            b"class Run:\n    pass\n\ndef run() -> object:\n    return None\n",
+            "class definitions are not allowed",
+        ),
+    ];
+
+    for (source, expected) in cases {
+        let error = validate_candidate(
+            &fixture.config,
+            &fixture.paths,
+            &fixture.plan,
+            "api.service.run",
+            source,
+        )
+        .expect_err("public candidate must have only its exact top-level function");
+        assert!(error.contains(expected), "{error}");
+    }
 }
 
 #[test]

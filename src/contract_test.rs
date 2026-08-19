@@ -64,8 +64,17 @@ impl ContractTestStrategy {
 }
 
 /// Derive metadata-only contract test strategies directly from canonical module
-/// bytes, preserving the canonical module and declaration order.
+/// bytes, preserving canonical module, declaration, and impl-member order.
 pub fn derive_strategies(ir: &CanonicalIr) -> Result<Vec<ContractTestStrategy>, String> {
+    Ok(derive_strategy_entries(ir)?
+        .into_iter()
+        .map(|(strategy, _)| strategy)
+        .collect())
+}
+
+fn derive_strategy_entries(
+    ir: &CanonicalIr,
+) -> Result<Vec<(ContractTestStrategy, Option<String>)>, String> {
     let mut strategies = Vec::new();
     for (module_index, module) in ir.modules.iter().enumerate() {
         let value = crate::ir::load(&module.bytes)
@@ -79,63 +88,193 @@ pub fn derive_strategies(ir: &CanonicalIr) -> Result<Vec<ContractTestStrategy>, 
             let kind = required_string(declaration, "kind").map_err(|error| {
                 format!("module {module_index} declaration {declaration_index}: {error}")
             })?;
-            if kind != "function" {
-                continue;
+            let context = format!("module {module_index} declaration {declaration_index}");
+            match kind {
+                "function" => {
+                    let symbol = required_string(declaration, "name")
+                        .map_err(|error| format!("{context}: {error}"))?;
+                    let return_type = required_object(declaration, "return_type")
+                        .map_err(|error| format!("{context} function {symbol}: {error}"))?;
+                    let contract = required_object(declaration, "contract")
+                        .map_err(|error| format!("{context} function {symbol}: {error}"))?;
+                    let classification = classify(
+                        return_type,
+                        required_array(contract, "effects")
+                            .map_err(|error| format!("{context} function {symbol}: {error}"))?,
+                        &format!("{context} function {symbol}"),
+                    )?;
+                    let clause_ids = contract_clause_ids(
+                        contract,
+                        &["clauses"],
+                        &format!("{context} function {symbol}"),
+                    )?;
+
+                    let strategy = ContractTestStrategy::new(
+                        symbol,
+                        &module.bytes,
+                        classification,
+                        clause_ids,
+                    );
+                    strategy.bytes()?;
+                    strategies.push((strategy, None));
+                }
+                "impl" => {
+                    let name = required_string(declaration, "name")
+                        .map_err(|error| format!("{context}: {error}"))?;
+                    let invariants = invariant_clause_ids(
+                        required_array(declaration, "invariants")
+                            .map_err(|error| format!("{context} impl {name}: {error}"))?,
+                        &format!("{context} impl {name}"),
+                    )?;
+                    let init_symbol = format!("{name}.init");
+                    let mut init_clause_ids = match required_field(declaration, "init")
+                        .map_err(|error| format!("{context} impl {name}: {error}"))?
+                    {
+                        Value::Null => Vec::new(),
+                        init => {
+                            let contracts = required_object(init, "contracts")
+                                .map_err(|error| format!("{context} impl {name} init: {error}"))?;
+                            contract_clause_ids(
+                                contracts,
+                                &["requires", "ensures"],
+                                &format!("{context} impl {name} init"),
+                            )?
+                        }
+                    };
+                    init_clause_ids.extend(invariants.iter().cloned());
+                    let strategy = ContractTestStrategy::new(
+                        init_symbol.clone(),
+                        &module.bytes,
+                        Classification::Pure,
+                        init_clause_ids,
+                    );
+                    strategy.bytes()?;
+                    strategies.push((strategy, None));
+
+                    let methods = required_array(declaration, "methods")
+                        .map_err(|error| format!("{context} impl {name}: {error}"))?;
+                    for (method_index, method) in methods.iter().enumerate() {
+                        let method_name = required_string(method, "name").map_err(|error| {
+                            format!("{context} impl {name} method {method_index}: {error}")
+                        })?;
+                        let method_context = format!("{context} impl {name} method {method_name}");
+                        let contracts = required_object(method, "contracts")
+                            .map_err(|error| format!("{method_context}: {error}"))?;
+                        let mut clause_ids = contract_clause_ids(
+                            contracts,
+                            &["requires", "ensures", "errors"],
+                            &method_context,
+                        )?;
+                        let modifies = required_array(method, "modifies")
+                            .map_err(|error| format!("{method_context}: {error}"))?;
+                        for (modifies_index, field) in modifies.iter().enumerate() {
+                            let field = field.as_str().ok_or_else(|| {
+                                format!(
+                                    "{method_context} modifies {modifies_index}: required field must be a string"
+                                )
+                            })?;
+                            clause_ids.push(format!("modifies:{field}"));
+                        }
+                        clause_ids.extend(invariants.iter().cloned());
+                        let return_type = required_object(method, "return_type")
+                            .map_err(|error| format!("{method_context}: {error}"))?;
+                        let classification = classify(
+                            return_type,
+                            required_array(method, "effects")
+                                .map_err(|error| format!("{method_context}: {error}"))?,
+                            &method_context,
+                        )?;
+                        let strategy = ContractTestStrategy::new(
+                            format!("{name}.{method_name}"),
+                            &module.bytes,
+                            classification,
+                            clause_ids,
+                        );
+                        strategy.bytes()?;
+                        strategies.push((strategy, Some(init_symbol.clone())));
+                    }
+                }
+                _ => {}
             }
-
-            let symbol = required_string(declaration, "name").map_err(|error| {
-                format!("module {module_index} declaration {declaration_index}: {error}")
-            })?;
-            let return_type = required_object(declaration, "return_type")
-                .map_err(|error| format!("module {module_index} function {symbol}: {error}"))?;
-            let return_kind = required_string(return_type, "kind")
-                .map_err(|error| format!("module {module_index} function {symbol}: {error}"))?;
-            let contract = required_object(declaration, "contract")
-                .map_err(|error| format!("module {module_index} function {symbol}: {error}"))?;
-            let effects = required_array(contract, "effects")
-                .map_err(|error| format!("module {module_index} function {symbol}: {error}"))?;
-            let classification = if return_kind == "primitive"
-                && required_string(return_type, "name")
-                    .map_err(|error| format!("module {module_index} function {symbol}: {error}"))?
-                    == "never"
-            {
-                Classification::Never
-            } else if effects.is_empty() {
-                Classification::Pure
-            } else {
-                Classification::Effectful
-            };
-
-            let clauses = required_array(contract, "clauses")
-                .map_err(|error| format!("module {module_index} function {symbol}: {error}"))?;
-            let mut clause_ids = Vec::with_capacity(clauses.len());
-            for (clause_index, clause) in clauses.iter().enumerate() {
-                let clause_kind = required_string(clause, "kind").map_err(|error| {
-                    format!(
-                        "module {module_index} function {symbol} clause {clause_index}: {error}"
-                    )
-                })?;
-                let clause_id = required_field(clause, "clause_id")
-                    .and_then(|value| {
-                        value.as_u64().ok_or_else(|| {
-                            "required field `clause_id` must be a non-negative integer".to_owned()
-                        })
-                    })
-                    .map_err(|error| {
-                        format!(
-                            "module {module_index} function {symbol} clause {clause_index}: {error}"
-                        )
-                    })?;
-                clause_ids.push(format!("{clause_kind}:{clause_id}"));
-            }
-
-            let strategy =
-                ContractTestStrategy::new(symbol, &module.bytes, classification, clause_ids);
-            strategy.bytes()?;
-            strategies.push(strategy);
         }
     }
     Ok(strategies)
+}
+
+fn classify(
+    return_type: &Value,
+    effects: &[Value],
+    context: &str,
+) -> Result<Classification, String> {
+    let return_kind =
+        required_string(return_type, "kind").map_err(|error| format!("{context}: {error}"))?;
+    if return_kind == "primitive"
+        && required_string(return_type, "name").map_err(|error| format!("{context}: {error}"))?
+            == "never"
+    {
+        Ok(Classification::Never)
+    } else if effects.is_empty() {
+        Ok(Classification::Pure)
+    } else {
+        Ok(Classification::Effectful)
+    }
+}
+
+fn contract_clause_ids(
+    contract: &Value,
+    fields: &[&str],
+    context: &str,
+) -> Result<Vec<String>, String> {
+    let mut clauses = Vec::new();
+    for (field_order, field) in fields.iter().enumerate() {
+        for (clause_index, clause) in required_array(contract, field)
+            .map_err(|error| format!("{context} {field}: {error}"))?
+            .iter()
+            .enumerate()
+        {
+            let clause_kind = required_string(clause, "kind")
+                .map_err(|error| format!("{context} {field} clause {clause_index}: {error}"))?;
+            let clause_id = required_field(clause, "clause_id")
+                .and_then(|value| {
+                    value.as_u64().ok_or_else(|| {
+                        "required field `clause_id` must be a non-negative integer".to_owned()
+                    })
+                })
+                .map_err(|error| format!("{context} {field} clause {clause_index}: {error}"))?;
+            clauses.push((
+                clause_id,
+                field_order,
+                clause_index,
+                format!("{clause_kind}:{clause_id}"),
+            ));
+        }
+    }
+    if fields.len() > 1 {
+        clauses.sort_unstable_by_key(|(clause_id, field_order, clause_index, _)| {
+            (*clause_id, *field_order, *clause_index)
+        });
+    }
+    Ok(clauses
+        .into_iter()
+        .map(|(_, _, _, clause_id)| clause_id)
+        .collect())
+}
+
+fn invariant_clause_ids(invariants: &[Value], context: &str) -> Result<Vec<String>, String> {
+    invariants
+        .iter()
+        .enumerate()
+        .map(|(invariant_index, invariant)| {
+            let clause_id = required_field(invariant, "clause_id")
+                .and_then(|value| {
+                    value.as_u64().ok_or_else(|| {
+                        "required field `clause_id` must be a non-negative integer".to_owned()
+                    })
+                })
+                .map_err(|error| format!("{context} invariant {invariant_index}: {error}"))?;
+            Ok(format!("invariant:{clause_id}"))
+        })
+        .collect()
 }
 
 pub fn execute_contract_tests(
@@ -146,9 +285,26 @@ pub fn execute_contract_tests(
     scope: Option<&BTreeSet<String>>,
 ) -> Result<Value, String> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let strategies = derive_strategies(ir)?
+    let strategies = derive_strategy_entries(ir)?;
+    let selected_initializers = scope.map(|scope| {
+        strategies
+            .iter()
+            .filter(|(strategy, _)| scope.contains(&strategy.symbol))
+            .filter_map(|(_, initializer)| initializer.as_ref())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+    });
+    let strategies = strategies
         .into_iter()
-        .filter(|strategy| scope.is_none_or(|scope| scope.contains(&strategy.symbol)))
+        .filter(|(strategy, _)| {
+            scope.is_none_or(|scope| {
+                scope.contains(&strategy.symbol)
+                    || selected_initializers
+                        .as_ref()
+                        .is_some_and(|initializers| initializers.contains(&strategy.symbol))
+            })
+        })
+        .map(|(strategy, _)| strategy)
         .collect::<Vec<_>>();
     let modules = ir
         .modules

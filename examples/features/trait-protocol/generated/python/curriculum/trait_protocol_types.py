@@ -19,9 +19,15 @@ class Prioritizable(Protocol):
         ...
 
 
+@runtime_checkable
+class Completable(Protocol):
+    def complete(self) -> bool:
+        ...
+
+
 """Format the summary string from any item implementing {Summarizable}."""
 """Inspect an item requiring both {Summarizable} and {Prioritizable} trait bounds."""
 class _cott__cott_inspect_task_T_Bounds(Summarizable, Prioritizable, Protocol):
     pass
 
-__all__ = ["Prioritizable", "Summarizable"]
+__all__ = ["Completable", "Prioritizable", "Summarizable"]

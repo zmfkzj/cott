@@ -77,68 +77,68 @@ const TRACEABILITY: &[(u8, &[&str])] = &[
     ),
     (
         14,
-        &["cli::generated_facades_enforce_contextual_and_exit_contracts"],
+        &[
+            "hir::lowers_impl_state_contracts_and_old_state_fields",
+            "hir::rejects_invalid_impl_state_init_and_trait_method_coverage",
+        ],
     ),
     (
         15,
+        &["cli::generated_facades_enforce_contextual_and_exit_contracts"],
+    ),
+    (
+        16,
         &[
             "contract_test::derived_strategy_bytes_are_deterministic_in_module_declaration_order",
             "contract_test::derived_strategy_clause_ids_preserve_source_order",
         ],
     ),
     (
-        16,
+        17,
         &[
             "contract_test::derived_strategy_classifies_pure_effectful_and_never",
             "sandbox::contract_test_limits_are_fixed",
         ],
     ),
     (
-        17,
+        18,
         &[
             "binding::candidate_validation_public_api_uses_only_the_canonical_plan",
             "binding::validates_parameter_names_and_kinds_against_canonical_ir",
         ],
     ),
     (
-        18,
-        &["binding::accepts_only_import_roots_selected_in_uv_lock"],
-    ),
-    (
         19,
-        &["python_runtime::generated_runtime_exercises_abi_and_provenance_loader"],
+        &["hir::rejects_invalid_impl_state_init_and_trait_method_coverage"],
     ),
     (
         20,
+        &["binding::accepts_only_import_roots_selected_in_uv_lock"],
+    ),
+    (
+        21,
+        &["python_runtime::generated_runtime_exercises_abi_and_provenance_loader"],
+    ),
+    (
+        22,
         &[
             "binding::validates_parameter_names_and_kinds_against_canonical_ir",
             "python_runtime::generated_runtime_exercises_abi_and_provenance_loader",
         ],
     ),
     (
-        21,
+        23,
         &[
             "agent_runner::codex_golden_argv_stdin_environment_and_target_write",
             "agent_runner::omp_golden_argv_prompt_environment_and_target_write",
         ],
     ),
     (
-        22,
+        24,
         &[
             "cli::process_bar_generation_records_unresolved_and_verified_transitions",
             "agent_runner::preexisting_hardlink_target_is_rejected",
             "agent_runner::preexisting_symlink_target_is_rejected",
-        ],
-    ),
-    (
-        23,
-        &["cli::process_bar_generation_records_unresolved_and_verified_transitions"],
-    ),
-    (
-        24,
-        &[
-            "binding::reports_unresolved_canonical_planned_function",
-            "cli::process_bar_generation_records_unresolved_and_verified_transitions",
         ],
     ),
     (
@@ -148,47 +148,58 @@ const TRACEABILITY: &[(u8, &[&str])] = &[
     (
         26,
         &[
+            "binding::reports_unresolved_canonical_planned_function",
+            "cli::process_bar_generation_records_unresolved_and_verified_transitions",
+        ],
+    ),
+    (
+        27,
+        &["cli::process_bar_generation_records_unresolved_and_verified_transitions"],
+    ),
+    (
+        28,
+        &[
             "cli::process_bar_generation_records_unresolved_and_verified_transitions",
             "binding::reports_unreferenced_durable_implementations_as_stale",
         ],
     ),
     (
-        27,
+        29,
         &[
             "cli::emits_complete_tree_and_verifies_exact_bytes",
             "cli::process_bar_generation_records_unresolved_and_verified_transitions",
         ],
     ),
     (
-        28,
+        30,
         &[
             "binding::reports_unreferenced_durable_implementations_as_stale",
             "cli::process_bar_generation_records_unresolved_and_verified_transitions",
         ],
     ),
     (
-        29,
+        31,
         &[
             "transaction::tests::every_apply_fault_recovers_to_one_complete_snapshot",
             "transaction::tests::interrupted_rollback_is_idempotent",
         ],
     ),
     (
-        30,
+        32,
         &[
             "command::rejects_duplicate_or_invalid_options",
             "cli::json_mode_returns_one_closed_diagnostic_document_with_source_spans",
         ],
     ),
     (
-        31,
+        33,
         &[
             "cli::process_bar_generation_records_unresolved_and_verified_transitions",
             "examples::every_documented_example_runs_when_python3_is_available",
         ],
     ),
     (
-        32,
+        34,
         &[
             "formatter::lossless_formatter_normalizes_newlines_idempotently",
             "formatter::canonicalizes_spacing_indentation_lists_and_comments",
@@ -196,14 +207,14 @@ const TRACEABILITY: &[(u8, &[&str])] = &[
         ],
     ),
     (
-        33,
+        35,
         &[
             "diagnostics::report_is_one_json_object_with_source_locations",
             "cli::json_mode_returns_one_closed_diagnostic_document_with_source_spans",
         ],
     ),
     (
-        34,
+        36,
         &[
             "cli::init_scaffolds_a_normative_project_with_pinned_uv",
             "cli::tests::scaffold_file_and_directory_fsync_faults_leave_no_target",
@@ -217,8 +228,8 @@ const TRACEABILITY: &[(u8, &[&str])] = &[
 ];
 
 #[test]
-fn all_34_architecture_acceptance_criteria_map_to_named_assertions() {
-    assert_eq!(TRACEABILITY.len(), 34);
+fn all_36_architecture_acceptance_criteria_map_to_named_assertions() {
+    assert_eq!(TRACEABILITY.len(), 36);
     for (index, (criterion, assertions)) in TRACEABILITY.iter().enumerate() {
         assert_eq!(*criterion as usize, index + 1);
         assert!(!assertions.is_empty());

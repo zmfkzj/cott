@@ -42,7 +42,7 @@ alias Count = U32
 
 struct User:
     id: UserId
-    state: Status
+    status: Status
 
 enum Status:
     Ready
@@ -296,6 +296,24 @@ fn guarded(value: I32) -> Result[I32, Error]:
         HirClauseKind::Error { .. }
     ));
     assert_eq!(function.contract.effects[0].key, "network");
+}
+
+#[test]
+fn accepts_cross_module_impl_trait_union() {
+    let project = lower_project([
+        source(
+            "src/api.cott",
+            "module api\n\ntrait Reader:\n    fn read(self) -> I32\n",
+        ),
+        source(
+            "src/service.cott",
+            "module service\nuse api.Reader\n\nimpl Store for Reader:\n    fn read(self) -> I32:\n        ensures result == 1\n",
+        ),
+    ]);
+    assert!(matches!(
+        project.modules[1].declarations[0],
+        HirDeclaration::Impl(_)
+    ));
 }
 
 #[test]

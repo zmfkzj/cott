@@ -3,14 +3,14 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cott::binding::{ResolvedBinding, resolve_bindings};
+use cott::binding::{BindingOwner, ResolvedBinding, resolve_bindings};
 use cott::compiler::parse_project;
 use cott::hash::sha256_hex;
 use cott::hir::lower;
 use cott::ir::render;
 use cott::manifest::ProjectConfig;
 use cott::project::{discover_sources_from_paths, load_config_with_paths};
-use cott::python::artifact_plan::PythonArtifactPlan;
+use cott::python::artifact_plan::{PythonArtifactPlan, PythonCallableKind};
 use cott::python_emit::emit;
 
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
@@ -60,9 +60,13 @@ const SOURCE: &str = r#"module app
 doc """A count returned by the entry point"""
 alias Count = I32
 
-fn run() -> Count
+struct Payload:
+    data: Count
+
+fn run(data: Count) -> Payload:
+    ensures result.data == data
 "#;
-const BINDING: &[u8] = b"def run() -> int:\n    return 7\n";
+const BINDING: &[u8] = b"def run(data: int) -> object:\n    return None\n";
 
 fn write_target_metadata(root: &Path) {
     fs::create_dir_all(root.join("python")).expect("Python source directory");
@@ -260,6 +264,7 @@ fn emits_complete_deterministic_python_artifact_tree() {
     assert!(facade.contains("_cott_load"));
     assert!(facade.contains("run"));
     assert!(facade.contains("__all__"));
+    assert!(facade.contains("(_result).data == data"));
     let generation: serde_json::Value =
         serde_json::from_slice(bytes(&first.files, "generation.json"))
             .expect("generation record should be JSON");
@@ -391,4 +396,122 @@ rule ChildRule(BaseRule):
         .expect("facade file should exist");
     assert!(facade_content.contains("\"BaseRule\""));
     assert!(facade_content.contains("\"ChildRule\""));
+}
+
+#[test]
+fn emits_impl_class_with_locked_method_helper_and_provenance() {
+    let temp = TempDir::new();
+    fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    fs::write(
+        temp.path.join("src/app.cott"),
+        r#"module app
+
+trait Counter:
+    fn advance(self, amount: I32) -> I32
+
+impl CounterState for Counter:
+    state:
+        title: Str
+        urgency: I32
+        completed: Bool = false
+        count: I32 = 0
+    invariant self.count >= 0
+    init(title: Str, urgency: I32, count: I32):
+        requires count >= 0
+        ensures self.count == count
+    fn advance(self, amount: I32) -> I32:
+        modifies self.count
+        ensures result == self.count
+        ensures old(self.count) + amount == self.count
+"#,
+    )
+    .expect("source should be writable");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources")).expect("parse");
+    let ir = render(&lower(&paths.source_dir, parsed).expect("lower")).expect("render");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
+    let helper = b"def _cott_impl_CounterState_advance(self: CounterState, amount: int) -> int:\n    self.count += amount\n    return self.count\n";
+    let binding = ResolvedBinding {
+        module: "app".to_owned(),
+        function: "advance".to_owned(),
+        cott_symbol: "app.CounterState.advance".to_owned(),
+        kind: PythonCallableKind::ImplMethod {
+            concrete: "CounterState".to_owned(),
+        },
+        implementation_module: "_cott_impl.app.CounterState.advance".to_owned(),
+        implementation_function: "_cott_impl_CounterState_advance".to_owned(),
+        owner: BindingOwner::Agent,
+        source: temp
+            .path
+            .join("python/_cott_impl/app/CounterState/advance.py"),
+        generated_relative: PathBuf::from("_cott_impl/app/CounterState/advance.py"),
+        bytes: helper.to_vec(),
+        sha256: sha256_hex(helper),
+    };
+    let emission = emit(&config, &plan, &ir, &[binding]).expect("impl should emit");
+    let facade = String::from_utf8_lossy(bytes(&emission.files, "python/app.py"));
+    let stub = String::from_utf8_lossy(bytes(&emission.files, "stubs/app.pyi"));
+    assert!(facade.contains("@final\nclass CounterState:"));
+    assert!(facade.contains(
+        "__slots__ = (\"title\", \"urgency\", \"completed\", \"count\", \"_cott_lock\",)"
+    ));
+    assert!(facade.contains(
+        "    title: str\n    urgency: I32\n    completed: bool\n    count: I32\n    __slots__"
+    ));
+    assert!(facade.contains("with self._cott_lock:"));
+    assert!(facade.contains("_cott_old_count = self.count"));
+    assert!(facade.contains("_cott_impl_CounterState_advance"));
+    assert!(facade.contains("def advance(self: CounterState, amount: I32) -> I32:"));
+    let init_ensure = "        if not (((self).count == count)):";
+    let init_invariant = "        if not (((self).count >= 0)):";
+    let method_invariant = "            if not (((self).count >= 0)):";
+    assert_eq!(
+        facade
+            .lines()
+            .filter(|line| *line == init_invariant)
+            .count(),
+        1,
+        "init invariant must be inside __init__:\n{facade}"
+    );
+    assert_eq!(
+        facade
+            .lines()
+            .filter(|line| *line == method_invariant)
+            .count(),
+        1,
+        "method invariant must remain inside its lock:\n{facade}"
+    );
+    assert!(
+        facade.find(init_ensure).unwrap() < facade.find(init_invariant).unwrap(),
+        "init ensures must precede init invariants:\n{facade}"
+    );
+    assert!(stub.contains("@final\nclass CounterState:"));
+    assert!(stub.contains(
+        "    title: str\n    urgency: I32\n    completed: bool\n    count: I32\n    def __init__"
+    ));
+    assert!(!stub.contains("_cott_lock"));
+    assert!(stub.contains("def advance(self: CounterState, amount: I32) -> I32: ..."));
+    let generation: serde_json::Value =
+        serde_json::from_slice(bytes(&emission.files, "generation.json")).expect("generation JSON");
+    let implementation = &generation["current"]["implementations"][0];
+    assert_eq!(implementation["kind"], "impl_method");
+    assert_eq!(implementation["concrete"], "CounterState");
+    assert_eq!(implementation["method"], "advance");
+    assert_eq!(
+        generation["current"]["public_python_symbols"]["app"],
+        serde_json::json!(["Counter", "CounterState"])
+    );
+    assert!(
+        generation["current"]["contract_surface"]["app"]["declarations"]
+            .to_string()
+            .contains("CounterState")
+    );
+    assert!(
+        !generation["current"]["contract_surface"]["app"]["declarations"]
+            .to_string()
+            .contains("\"span\"")
+    );
 }

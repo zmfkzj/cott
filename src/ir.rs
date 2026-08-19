@@ -7,9 +7,10 @@ use serde_json::Value;
 use crate::diagnostics::Span;
 use crate::hir::{
     HirAnnotation, HirBinaryOp, HirClause, HirClauseKind, HirCompareOp, HirContract,
-    HirDeclaration, HirDoc, HirEffect, HirExpr, HirExprKind, HirField, HirGenericParam, HirMethod,
-    HirModule, HirParameter, HirParameterKind, HirPattern, HirPatternKind, HirProject,
-    HirReference, HirType, HirUnaryOp, HirValue, HirVariant, PrimitiveType,
+    HirDeclaration, HirDoc, HirEffect, HirExpr, HirExprKind, HirField, HirGenericParam,
+    HirImplInitializer, HirImplMethod, HirMethod, HirModule, HirParameter, HirParameterKind,
+    HirPattern, HirPatternKind, HirProject, HirReference, HirType, HirUnaryOp, HirValue,
+    HirVariant, PrimitiveType,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -214,6 +215,82 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
                     json.comma();
                 }
                 render_method(json, method);
+            }
+            json.array_end();
+            json.object_end();
+        }
+        HirDeclaration::Impl(value) => {
+            json.object_start();
+            json.key("annotations");
+            render_annotations(json, &value.annotations);
+            json.comma();
+            json.key("doc");
+            json.null();
+            json.comma();
+            json.key("generics");
+            json.array_start();
+            json.array_end();
+            json.comma();
+            json.key("init");
+            match &value.initializer {
+                Some(initializer) => render_impl_initializer(json, initializer),
+                None => json.null(),
+            }
+            json.comma();
+            json.key("invariants");
+            json.array_start();
+            for (index, invariant) in value.invariants.iter().enumerate() {
+                if index != 0 {
+                    json.comma();
+                }
+                json.object_start();
+                json.key("clause_id");
+                json.number_u32(invariant.clause_id);
+                json.comma();
+                json.key("expression");
+                render_expr(json, &invariant.expression);
+                json.comma();
+                json.key("span");
+                render_span(json, &invariant.span);
+                json.object_end();
+            }
+            json.array_end();
+            json.comma();
+            json.key("kind");
+            json.string("impl");
+            json.comma();
+            json.key("methods");
+            json.array_start();
+            for (index, method) in value.methods.iter().enumerate() {
+                if index != 0 {
+                    json.comma();
+                }
+                render_impl_method(json, method);
+            }
+            json.array_end();
+            json.comma();
+            json.key("name");
+            json.string(&value.id.as_string());
+            json.comma();
+            json.key("public");
+            json.boolean(value.public);
+            json.comma();
+            json.key("source_order");
+            json.number_usize(value.source_order);
+            json.comma();
+            json.key("span");
+            render_span(json, &value.span);
+            json.comma();
+            json.key("state");
+            render_fields(json, &value.state);
+            json.comma();
+            json.key("traits");
+            json.array_start();
+            for (index, trait_ref) in value.traits.iter().enumerate() {
+                if index != 0 {
+                    json.comma();
+                }
+                render_type(json, trait_ref);
             }
             json.array_end();
             json.object_end();
@@ -600,6 +677,112 @@ fn render_method(json: &mut Json, value: &HirMethod) {
     render_span(json, &value.span);
     json.object_end();
 }
+
+fn render_impl_initializer(json: &mut Json, value: &HirImplInitializer) {
+    json.object_start();
+    json.key("contracts");
+    render_impl_contract(json, value.doc.as_ref(), &value.contract, false);
+    json.comma();
+    json.key("parameters");
+    render_parameters(json, &value.parameters);
+    json.comma();
+    json.key("span");
+    render_span(json, &value.span);
+    json.object_end();
+}
+
+fn render_impl_method(json: &mut Json, value: &HirImplMethod) {
+    json.object_start();
+    json.key("contracts");
+    render_impl_contract(json, value.doc.as_ref(), &value.contract, true);
+    json.comma();
+    json.key("effects");
+    render_effects(json, &value.contract.effects);
+    json.comma();
+    json.key("modifies");
+    json.array_start();
+    for (index, field) in value.modifies.iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
+        json.string(&field.as_string());
+    }
+    json.array_end();
+    json.comma();
+    json.key("name");
+    json.string(&value.name);
+    json.comma();
+    json.key("parameters");
+    render_parameters(json, &value.parameters);
+    json.comma();
+    json.key("return_type");
+    render_type(json, &value.return_type);
+    json.comma();
+    json.key("span");
+    render_span(json, &value.span);
+    json.object_end();
+}
+
+fn render_impl_contract(
+    json: &mut Json,
+    doc: Option<&HirDoc>,
+    contract: &HirContract,
+    include_errors: bool,
+) {
+    json.object_start();
+    json.key("doc");
+    match doc {
+        Some(value) => json.string(&value.text),
+        None => json.null(),
+    }
+    json.comma();
+    json.key("ensures");
+    render_impl_clauses(json, contract, "ensures");
+    if include_errors {
+        json.comma();
+        json.key("errors");
+        render_impl_clauses(json, contract, "error");
+    }
+    json.comma();
+    json.key("requires");
+    render_impl_clauses(json, contract, "requires");
+    json.object_end();
+}
+
+fn render_impl_clauses(json: &mut Json, contract: &HirContract, expected_kind: &str) {
+    json.array_start();
+    let mut first = true;
+    for clause in &contract.clauses {
+        let matches = matches!(
+            (&clause.kind, expected_kind),
+            (HirClauseKind::Requires { .. }, "requires")
+                | (HirClauseKind::Ensures { .. }, "ensures")
+                | (HirClauseKind::Error { .. }, "error")
+        );
+        if !matches {
+            continue;
+        }
+        if !first {
+            json.comma();
+        }
+        first = false;
+        render_clause(json, clause);
+    }
+    json.array_end();
+}
+
+fn render_effects(json: &mut Json, effects: &[HirEffect]) {
+    json.array_start();
+    let mut effects = effects.iter().collect::<Vec<_>>();
+    effects.sort_by(|left, right| left.key.cmp(&right.key));
+    for (index, effect) in effects.into_iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
+        render_effect(json, effect);
+    }
+    json.array_end();
+}
 fn render_doc(json: &mut Json, doc: Option<&HirDoc>) {
     match doc {
         Some(doc) => {
@@ -674,6 +857,19 @@ fn render_clause(json: &mut Json, clause: &HirClause) {
             json.comma();
             json.key("expression");
             render_expr(json, expression);
+        }
+        HirClauseKind::Modifies { fields } => {
+            json.string("modifies");
+            json.comma();
+            json.key("fields");
+            json.array_start();
+            for (index, field) in fields.iter().enumerate() {
+                if index != 0 {
+                    json.comma();
+                }
+                json.string(&field.as_string());
+            }
+            json.array_end();
         }
         HirClauseKind::Ensures {
             pattern,
@@ -754,6 +950,13 @@ fn render_expr(json: &mut Json, expression: &HirExpr) {
             json.string(&symbol.as_string());
         }
         HirExprKind::SelfRef => json.string("self_ref"),
+        HirExprKind::ResultRef => json.string("result_ref"),
+        HirExprKind::OldStateField { field } => {
+            json.string("old_state_field");
+            json.comma();
+            json.key("field");
+            json.string(&field.as_string());
+        }
         HirExprKind::ConstantRef(symbol) => {
             json.string("constant_ref");
             json.comma();
@@ -877,6 +1080,13 @@ fn render_reference(json: &mut Json, reference: &HirReference) {
         HirReference::Field(value) => {
             json.key("kind");
             json.string("field");
+            json.comma();
+            json.key("symbol");
+            json.string(&value.as_string());
+        }
+        HirReference::OldStateField(value) => {
+            json.key("kind");
+            json.string("old_state_field");
             json.comma();
             json.key("symbol");
             json.string(&value.as_string());

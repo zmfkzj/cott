@@ -1,18 +1,9 @@
 from __future__ import annotations
 
-from curriculum.trait_protocol import format_summary, inspect_task
-
-class SimpleTask:
-    def __init__(self, title: str, urgency: int) -> None:
-        self.title = title
-        self.urgency = urgency
-
-    def summary(self) -> str:
-        return f"Task: {self.title}"
-
-    def priority_level(self) -> int:
-        return self.urgency
+from curriculum.trait_protocol import SimpleTask, format_summary, inspect_task
 
 task = SimpleTask("Write Documentation", 2)
 print(format_summary(task))
 print(inspect_task(task))
+print(f"Priority: {task.priority_level()}")
+print(f"Completed: {task.complete()}")

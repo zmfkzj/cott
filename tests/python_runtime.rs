@@ -80,9 +80,14 @@ fn generated_runtime_exercises_abi_and_provenance_loader() {
     fs::write(implementation_dir.join("bad.py"), bad).expect("bad binding should be writable");
     fs::write(implementation_dir.join("external.py"), external)
         .expect("external binding should be writable");
+    let method_dir = implementation_dir.join("CounterState");
+    fs::create_dir_all(&method_dir).expect("method helper directory should be writable");
+    let method = b"def _cott_impl_CounterState_advance(self: object, amount: int) -> int:\n    return amount\n";
+    fs::write(method_dir.join("advance.py"), method).expect("method helper should be writable");
     let good_hash = sha256_hex(good);
     let bad_hash = sha256_hex(bad);
     let external_hash = sha256_hex(external);
+    let method_hash = sha256_hex(method);
 
     let script = format!(
         r#"from pathlib import Path
@@ -105,13 +110,14 @@ class Box(Generic[_T]):
 normalized = _cott_normalize_f32_abi(Box(1.234567), Box[F32])
 assert normalized.value == _runtime._cott_normalize_f32(1.234567)
 
-_good = dict(cott_symbol="demo.run", owner="manifest", python_symbol="_cott_impl.demo.run:run", source_origin="python/cott_bindings/demo/run.py", runtime_origin="_cott_impl/demo/run.py", content_hash="sha256:{good_hash}")
-_bad = dict(cott_symbol="demo.bad", owner="manifest", python_symbol="_cott_impl.demo.bad:bad", source_origin="python/cott_bindings/demo/bad.py", runtime_origin="_cott_impl/demo/bad.py", content_hash="sha256:{bad_hash}")
-_external = dict(cott_symbol="demo.external", owner="manifest", python_symbol="_cott_impl.demo.external:external", source_origin="python/cott_bindings/demo/external.py", runtime_origin="_cott_impl/demo/external.py", content_hash="sha256:{external_hash}")
+_good = dict(cott_symbol="demo.run", kind="function", concrete=None, method=None, owner="manifest", python_symbol="_cott_impl.demo.run:run", source_origin="python/cott_bindings/demo/run.py", runtime_origin="_cott_impl/demo/run.py", content_hash="sha256:{good_hash}")
+_bad = dict(cott_symbol="demo.bad", kind="function", concrete=None, method=None, owner="manifest", python_symbol="_cott_impl.demo.bad:bad", source_origin="python/cott_bindings/demo/bad.py", runtime_origin="_cott_impl/demo/bad.py", content_hash="sha256:{bad_hash}")
+_external = dict(cott_symbol="demo.external", kind="function", concrete=None, method=None, owner="manifest", python_symbol="_cott_impl.demo.external:external", source_origin="python/cott_bindings/demo/external.py", runtime_origin="_cott_impl/demo/external.py", content_hash="sha256:{external_hash}")
+_method = dict(cott_symbol="demo.CounterState.advance", kind="impl_method", concrete="CounterState", method="advance", owner="agent", python_symbol="_cott_impl.demo.CounterState.advance:_cott_impl_CounterState_advance", source_origin="python/_cott_impl/demo/CounterState/advance.py", runtime_origin="_cott_impl/demo/CounterState/advance.py", content_hash="sha256:{method_hash}")
 _current = dict(generation_id="", verified=True, inputs={{}}, tools=dict(
     python=dict(implementation=sys.implementation.name, version=platform.python_version(), cache_tag=sys.implementation.cache_tag, os=sys.platform, machine=platform.machine(), platform=sysconfig.get_platform(), executable=str(Path(sys.executable).resolve()), content_hash="sha256:"+hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest()),
     runtime=dict(abi=_runtime._COTT_RUNTIME_ABI, version=_runtime._COTT_RUNTIME_VERSION),
-), ir={{}}, contract_surface={{}}, public_python_symbols={{"demo":["bad","external","run"],"support":["helper"]}}, implementations=[_good, _bad, _external], dependencies=[], managed_files={{}}, unresolved=[], verification=None, agent_runs=[])
+), ir={{}}, contract_surface={{}}, public_python_symbols={{"demo":["CounterState","bad","external","run"],"support":["helper"]}}, implementations=[_good, _bad, _external, _method], dependencies=[], managed_files={{}}, unresolved=[], verification=None, agent_runs=[])
 _identity = dict(_current)
 for _key in ("generation_id", "verified", "verification", "agent_runs"):
     _identity.pop(_key)
@@ -145,6 +151,8 @@ except CottContractViolation:
 else:
     raise AssertionError("Path subclass was accepted")
 
+method_helper = _cott_load("_cott_impl/demo/CounterState/advance.py", "{method_hash}", "_cott_impl_CounterState_advance", "demo", expected_cott_symbol="demo.CounterState.advance")
+assert method_helper(object(), 2) == 2
 run = _cott_load("_cott_impl/demo/run.py", "{good_hash}", "run", "demo")
 assert run() == 7
 _reader = _runtime._cott_regular_file_bytes
@@ -206,6 +214,7 @@ else:
         good_hash = good_hash,
         bad_hash = bad_hash,
         external_hash = external_hash,
+        method_hash = method_hash,
     );
     let output = Command::new("python3")
         .arg("-c")

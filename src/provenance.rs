@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
@@ -110,6 +110,7 @@ impl GenerationRecord {
 }
 
 fn validate_snapshot_identity(snapshot: &GenerationSnapshot) -> Result<(), String> {
+    validate_implementation_records(&snapshot.implementations)?;
     let mut expected = snapshot.clone();
     expected.compute_generation_id()?;
     if expected.generation_id == snapshot.generation_id {
@@ -120,6 +121,72 @@ fn validate_snapshot_identity(snapshot: &GenerationSnapshot) -> Result<(), Strin
             expected.generation_id, snapshot.generation_id
         ))
     }
+}
+
+fn validate_implementation_records(implementations: &Value) -> Result<(), String> {
+    let implementations = implementations
+        .as_array()
+        .ok_or("generation implementations must be an array")?;
+    let mut symbols = BTreeSet::new();
+    for implementation in implementations {
+        let object = implementation
+            .as_object()
+            .ok_or("generation implementation must be an object")?;
+        let symbol = object
+            .get("cott_symbol")
+            .and_then(Value::as_str)
+            .ok_or("generation implementation is missing cott_symbol")?;
+        if !symbols.insert(symbol) {
+            return Err(format!(
+                "generation record contains duplicate implementation `{symbol}`"
+            ));
+        }
+        match object.get("kind").and_then(Value::as_str) {
+            None if object.get("concrete").is_none()
+                && object.get("method").is_none()
+                && !object
+                    .get("python_symbol")
+                    .and_then(Value::as_str)
+                    .and_then(|value| value.rsplit_once(':').map(|(_, function)| function))
+                    .is_some_and(|function| function.starts_with("_cott_impl_")) => {}
+            Some("function") => {
+                if object.get("concrete") != Some(&Value::Null)
+                    || object.get("method") != Some(&Value::Null)
+                {
+                    return Err(format!(
+                        "function implementation `{symbol}` must not name a concrete or method"
+                    ));
+                }
+            }
+            Some("impl_method") => {
+                let concrete = object
+                    .get("concrete")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        format!("implementation method `{symbol}` is missing its concrete class")
+                    })?;
+                let method = object
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        format!("implementation method `{symbol}` is missing its method name")
+                    })?;
+                if !symbol.ends_with(&format!(".{concrete}.{method}")) {
+                    return Err(format!(
+                        "implementation method `{symbol}` does not match `{concrete}.{method}`"
+                    ));
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "generation implementation `{symbol}` has an invalid kind"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn canonical_json(value: &Value) -> Result<Vec<u8>, String> {

@@ -243,6 +243,82 @@ impl<'a> Printer<'a> {
                     self.inline_for(&method.span);
                 }
             }
+            Declaration::Impl(value) => {
+                self.annotations(&value.annotations);
+                self.push(
+                    0,
+                    format!(
+                        "impl {} for {}:",
+                        value.name,
+                        value
+                            .traits
+                            .iter()
+                            .map(|trait_ref| self.ty(trait_ref))
+                            .collect::<Vec<_>>()
+                            .join(" + ")
+                    ),
+                );
+                self.inline_line(self.keyword_line(&value.span, "impl "));
+                let mut wrote_section = false;
+                if !value.state.is_empty() {
+                    self.push(1, "state:".to_owned());
+                    self.inline_line(self.keyword_line(&value.span, "state"));
+                    for field in &value.state {
+                        self.leading(field.span.start, 2);
+                        let mut line = format!("{}: {}", field.name, self.ty(&field.ty));
+                        if let Some(default) = &field.default {
+                            line.push_str(" = ");
+                            line.push_str(&self.const_expr(default));
+                        }
+                        self.push(2, line);
+                        self.inline_for(&field.span);
+                    }
+                    wrote_section = true;
+                }
+                if !value.invariants.is_empty() {
+                    if wrote_section {
+                        self.blank();
+                    }
+                    for invariant in &value.invariants {
+                        self.leading(invariant.span.start, 1);
+                        self.expression_line(1, "invariant ", &invariant.condition);
+                        self.inline_for(&invariant.span);
+                    }
+                    wrote_section = true;
+                }
+                if let Some(initializer) = &value.initializer {
+                    if wrote_section {
+                        self.blank();
+                    }
+                    let parameters = initializer
+                        .parameters
+                        .iter()
+                        .map(|parameter| format!("{}: {}", parameter.name, self.ty(&parameter.ty)))
+                        .collect();
+                    self.comma_list(1, "init(".to_owned(), parameters, "):".to_owned());
+                    self.inline_line(self.keyword_line(&initializer.span, "init"));
+                    self.impl_clauses(&initializer.clauses);
+                    wrote_section = true;
+                }
+                for method in &value.methods {
+                    if wrote_section {
+                        self.blank();
+                    }
+                    let mut parameters = vec!["self".to_owned()];
+                    parameters.extend(method.parameters.iter().map(|parameter| {
+                        format!("{}: {}", parameter.name, self.ty(&parameter.ty))
+                    }));
+                    self.comma_list(
+                        1,
+                        format!("fn {}(", method.name),
+                        parameters,
+                        format!(") -> {}:", self.ty(&method.return_type)),
+                    );
+                    self.inline_line(self.keyword_line(&method.span, "fn "));
+                    self.impl_clauses(&method.clauses);
+                    wrote_section = true;
+                }
+            }
             Declaration::Const(value) => {
                 self.annotations(&value.annotations);
                 self.doc(value.doc.as_ref(), 0);
@@ -328,26 +404,61 @@ impl<'a> Printer<'a> {
     }
 
     fn clause(&mut self, clause: &Clause) {
+        self.clause_at(clause, 1);
+    }
+
+    fn impl_clauses(&mut self, clauses: &[Clause]) {
+        let mut previous_group = None;
+        for clause in clauses {
+            let group = clause_group(clause);
+            if previous_group.is_some_and(|previous| previous != group) {
+                self.blank();
+            }
+            self.leading(clause.span.start, 2);
+            self.clause_at(clause, 2);
+            self.inline_for(&clause.span);
+            previous_group = Some(group);
+        }
+    }
+
+    fn clause_at(&mut self, clause: &Clause, indent: usize) {
         match &clause.kind {
-            ClauseKind::Documentation(doc) => self.doc(Some(doc), 1),
-            ClauseKind::Rule { name } => self.push(1, format!("rule {}", qname(name))),
-            ClauseKind::Requires { condition } => self.expression_line(1, "requires ", condition),
+            ClauseKind::Documentation(doc) => self.doc(Some(doc), indent),
+            ClauseKind::Rule { name } => self.push(indent, format!("rule {}", qname(name))),
+            ClauseKind::Requires { condition } => {
+                self.expression_line(indent, "requires ", condition)
+            }
+            ClauseKind::Modifies { fields } => self.push(
+                indent,
+                format!(
+                    "modifies {}",
+                    fields
+                        .iter()
+                        .map(|field| format!("self.{}", field.name))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ),
             ClauseKind::Ensures { pattern, condition } => {
                 let prefix = pattern.as_ref().map_or_else(
                     || "ensures ".to_owned(),
                     |pattern| format!("ensures {} => ", self.pattern(pattern)),
                 );
-                self.expression_line(1, &prefix, condition);
+                self.expression_line(indent, &prefix, condition);
             }
             ClauseKind::Error { error, when } => {
                 if let Some(condition) = when {
-                    self.expression_line(1, &format!("error {} when ", qname(error)), condition);
+                    self.expression_line(
+                        indent,
+                        &format!("error {} when ", qname(error)),
+                        condition,
+                    );
                 } else {
-                    self.push(1, format!("error {}", qname(error)));
+                    self.push(indent, format!("error {}", qname(error)));
                 }
             }
             ClauseKind::Effects { effects } => self.comma_list(
-                1,
+                indent,
                 "effects [".to_owned(),
                 effects.iter().map(qname).collect(),
                 "]".to_owned(),
@@ -367,6 +478,17 @@ impl<'a> Printer<'a> {
             ClauseKind::Requires { condition } => {
                 self.expression_line(1, &format!("{prefix}requires "), condition);
             }
+            ClauseKind::Modifies { fields } => self.push(
+                1,
+                format!(
+                    "{prefix}modifies {}",
+                    fields
+                        .iter()
+                        .map(|field| format!("self.{}", field.name))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ),
             ClauseKind::Ensures { pattern, condition } => {
                 let p = pattern.as_ref().map_or_else(
                     || format!("{prefix}ensures "),
@@ -537,6 +659,7 @@ impl<'a> Printer<'a> {
             ExprKind::Field { base, name } => {
                 format!("{}.{}", self.expr(base, precedence), name)
             }
+            ExprKind::OldStateField { field } => format!("old(self.{})", field.name),
         };
         if precedence < parent_precedence {
             format!("({rendered})")
@@ -673,9 +796,10 @@ fn clause_group(clause: &Clause) -> u8 {
         ClauseKind::Documentation(_) => 0,
         ClauseKind::Rule { .. } => 1,
         ClauseKind::Requires { .. } => 2,
-        ClauseKind::Ensures { .. } => 3,
-        ClauseKind::Error { .. } => 4,
-        ClauseKind::Effects { .. } => 5,
+        ClauseKind::Modifies { .. } => 3,
+        ClauseKind::Ensures { .. } => 4,
+        ClauseKind::Error { .. } => 5,
+        ClauseKind::Effects { .. } => 6,
     }
 }
 
@@ -690,9 +814,10 @@ fn rule_clause_group(clause: &RuleClause) -> u8 {
             ClauseKind::Documentation(_) => 0,
             ClauseKind::Rule { .. } => 1,
             ClauseKind::Requires { .. } => 2,
-            ClauseKind::Ensures { .. } => 3,
-            ClauseKind::Error { .. } => 4,
-            ClauseKind::Effects { .. } => 5,
+            ClauseKind::Modifies { .. } => 3,
+            ClauseKind::Ensures { .. } => 4,
+            ClauseKind::Error { .. } => 5,
+            ClauseKind::Effects { .. } => 6,
         }
 }
 

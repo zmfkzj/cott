@@ -148,6 +148,25 @@ fn make_unresolved(project: &TempDir) {
         .expect("unresolved manifest should be writable");
 }
 
+fn method_project() -> TempDir {
+    let temp = TempDir::new();
+    let manifest = NORMATIVE_MANIFEST
+        .split_once("\n[target.python.implementations]\n")
+        .expect("normative manifest has implementations")
+        .0;
+    fs::write(temp.path.join("cott.toml"), format!("{manifest}\n"))
+        .expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src/api")).expect("source directory should be writable");
+    fs::write(
+        temp.path.join("src/api/service.cott"),
+        "module api.service\n\ntrait Reader:\n    fn read(self, amount: I32) -> I32\n\nimpl ReaderState for Reader:\n    state:\n        count: I32 = 0\n    init(count: I32):\n        requires count > 0\n        ensures self.count == count\n    fn read(self, amount: I32) -> I32:\n        ensures result == amount\n",
+    )
+    .expect("method source should be writable");
+    write_target_metadata(&temp.path);
+    install_fake_python_tools(&temp.path);
+    temp
+}
+
 fn normative_project() -> TempDir {
     let temp = TempDir::new();
     fs::write(temp.path.join("cott.toml"), NORMATIVE_MANIFEST)
@@ -208,6 +227,29 @@ p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True
     );
 }
 
+fn remove_free_function_callable_metadata(root: &Path) {
+    let script = r#"import hashlib,json,pathlib
+p=pathlib.Path("generated/generation.json")
+r=json.loads(p.read_bytes())
+i=r["current"]["implementations"][0]
+for k in ("kind","concrete","method"): i.pop(k)
+c=dict(r["current"])
+for k in ("generation_id","verified","verification","agent_runs"): c.pop(k,None)
+r["current"]["generation_id"]="sha256:"+hashlib.sha256(json.dumps(c,ensure_ascii=False,separators=(",",":"),sort_keys=True).encode()+b"\n").hexdigest()
+p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True)+"\n")
+"#;
+    let output = Command::new("python3")
+        .args(["-c", script])
+        .current_dir(root)
+        .output()
+        .expect("host Python should write legacy generation provenance");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn emits_complete_tree_and_verifies_exact_bytes() {
     let project = project();
@@ -257,6 +299,91 @@ fn emits_complete_tree_and_verifies_exact_bytes() {
 }
 
 #[test]
+fn verifier_uses_strict_basedpyright_with_compiler_owned_exceptions() {
+    let project = project();
+    let checker = project.path.join(".venv/bin/basedpyright");
+    fs::write(
+        &checker,
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'basedpyright 1.39.9\nbased on pyright 1.1.411\n'
+  exit 0
+fi
+config=$(cat "$2")
+for setting in '"typeCheckingMode":"strict"' '"reportInvalidTypeVarUse":"none"' '"reportUnusedFunction":"none"' '"reportPrivateUsage":"none"'; do
+  case "$config" in *"$setting"*) ;; *) printf 'missing BasedPyright setting %s\n' "$setting" >&2; exit 1 ;; esac
+done
+remaining=$(printf '%s' "$config" | sed 's/"reportInvalidTypeVarUse":"none"//g; s/"reportUnusedFunction":"none"//g; s/"reportPrivateUsage":"none"//g')
+case "$remaining" in
+  *'"report'*':"none"'*)
+    printf 'strict BasedPyright diagnostic disabled\n' >&2
+    exit 1
+    ;;
+esac
+"#,
+    )
+    .expect("asserting fake BasedPyright");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&checker, fs::Permissions::from_mode(0o755))
+            .expect("make asserting fake BasedPyright executable");
+    }
+
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let verified = cott(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+}
+
+#[test]
+fn emit_rewrites_valid_legacy_free_function_provenance_with_callable_metadata() {
+    let project = project();
+    let initial = cott(&project.path, &["emit", "python"]);
+    assert!(
+        initial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
+    remove_free_function_callable_metadata(&project.path);
+
+    let legacy: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json"))
+            .expect("legacy generation record"),
+    )
+    .expect("legacy generation record is JSON");
+    let legacy_implementation = &legacy["current"]["implementations"][0];
+    assert!(legacy_implementation.get("kind").is_none());
+    assert!(legacy_implementation.get("concrete").is_none());
+    assert!(legacy_implementation.get("method").is_none());
+
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+
+    let rewritten: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json"))
+            .expect("rewritten generation record"),
+    )
+    .expect("rewritten generation record is JSON");
+    let implementation = &rewritten["current"]["implementations"][0];
+    assert_eq!(implementation["kind"], "function");
+    assert!(implementation["concrete"].is_null());
+    assert!(implementation["method"].is_null());
+}
+
+#[test]
 fn syntax_errors_leave_existing_artifacts_untouched() {
     let project = project();
     fs::create_dir_all(project.path.join("generated/python"))
@@ -301,7 +428,7 @@ fn permits_exact_generated_type_imports_in_bindings() {
 }
 
 #[test]
-fn generate_requires_an_agent_only_for_unresolved_functions() {
+fn generate_requires_an_agent_only_for_unresolved_callables() {
     let project = project();
     make_unresolved(&project);
 
@@ -312,14 +439,25 @@ fn generate_requires_an_agent_only_for_unresolved_functions() {
 }
 
 #[test]
-fn generate_promotes_a_sandboxed_omp_candidate_with_artifacts() {
+fn generate_promotes_a_sandboxed_omp_function_candidate_with_artifacts() {
     let project = project();
     make_unresolved(&project);
     let tools = project.path.join("tools");
     fs::create_dir(&tools).expect("tool directory");
     let omp = tools.join("omp");
-    fs::write(&omp, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo omp/17.2.12; exit 0; fi\nprintf 'from cott_runtime import I32\\n\\n\\ndef run() -> I32:\\n    return 7\\n' > implementation.py\n")
-        .expect("write fake OMP");
+    fs::write(
+        &omp,
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
+case "$*" in
+  *'Symbol: app.run'*'Module facade imports use `from app import name`; generated type imports use `from app_types import Type`;'*)
+    printf 'from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n' > implementation.py
+    ;;
+  *) exit 64 ;;
+esac
+"#,
+    )
+    .expect("write fake OMP");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -352,6 +490,179 @@ fn generate_promotes_a_sandboxed_omp_candidate_with_artifacts() {
         "from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n"
     );
     assert!(project.path.join("generated/python/app.py").is_file());
+}
+
+#[test]
+fn generate_promotes_an_impl_method_helper_without_agent_class_shell() {
+    let project = method_project();
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    let omp = tools.join("omp");
+    fs::write(
+        &omp,
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
+case "$*" in
+  *'Symbol: api.service.ReaderState.read'*'The compiler-owned concrete facade class `ReaderState` is absent from `api.service_types`; import it exactly as `from api.service import ReaderState` for the `self` annotation.'*'Generated value-type imports remain `from api.service_types import Type`.'*)
+    printf '%s\n' 'from api.service import ReaderState' 'from cott_runtime import I32' '' '' 'def _cott_impl_ReaderState_read(self: ReaderState, amount: I32) -> I32:' '    return amount' > implementation.py
+    ;;
+  *) exit 64 ;;
+esac
+"#,
+    )
+    .expect("write fake OMP");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&omp, fs::Permissions::from_mode(0o755))
+            .expect("make fake OMP executable");
+    }
+    let path = std::env::join_paths([tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("PATH");
+    let output = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .args([
+            "generate",
+            "api.service.ReaderState.read",
+            "--agent",
+            "omp",
+            "--target",
+            "python",
+            "--project",
+        ])
+        .arg(&project.path)
+        .env("PATH", path)
+        .output()
+        .expect("cott should run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(
+            project
+                .path
+                .join("python/_cott_impl/api/service/ReaderState/read.py")
+        )
+        .expect("durable method helper"),
+        "from api.service import ReaderState\nfrom cott_runtime import I32\n\n\ndef _cott_impl_ReaderState_read(self: ReaderState, amount: I32) -> I32:\n    return amount\n"
+    );
+    let record: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json")).expect("generated method record"),
+    )
+    .expect("generated method record is JSON");
+    let implementation = &record["current"]["implementations"][0];
+    assert_eq!(implementation["kind"], "impl_method");
+    assert_eq!(implementation["concrete"], "ReaderState");
+    assert_eq!(implementation["method"], "read");
+    let facade = fs::read_to_string(project.path.join("generated/python/api/service.py"))
+        .expect("generated method facade");
+    assert!(facade.contains("class ReaderState"));
+    assert!(
+        !project
+            .path
+            .join("python/_cott_impl/api/service/read.py")
+            .exists()
+    );
+}
+
+#[test]
+fn generate_scoped_free_function_does_not_run_unrelated_initializers() {
+    let project = method_project();
+    fs::write(
+        project.path.join("src/api/service.cott"),
+        "module api.service\n\nfn run() -> I32\n\ntrait Reader:\n    fn read(self) -> I32\n\nimpl ReaderState for Reader:\n    state:\n        count: I32 = 0\n    invariant false\n    init(count: I32):\n        requires count > 0\n    fn read(self) -> I32:\n        ensures result == self.count\n",
+    )
+    .expect("scoped free-function source should be writable");
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    let omp = tools.join("omp");
+    fs::write(
+        &omp,
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
+case "$*" in
+  *"Symbol: api.service.run"*)
+    printf '%s\n' 'from cott_runtime import I32' '' '' 'def run() -> I32:' '    return 7' > implementation.py
+    ;;
+  *) exit 64 ;;
+esac
+"#,
+    )
+    .expect("write fake OMP");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&omp, fs::Permissions::from_mode(0o755))
+            .expect("make fake OMP executable");
+    }
+    let path = std::env::join_paths([tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("PATH");
+    let output = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .args([
+            "generate",
+            "api.service.run",
+            "--agent",
+            "omp",
+            "--target",
+            "python",
+            "--project",
+        ])
+        .arg(&project.path)
+        .env("PATH", path)
+        .output()
+        .expect("cott should run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn generate_rejects_an_agent_owned_impl_class_shell() {
+    let project = method_project();
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    let omp = tools.join("omp");
+    fs::write(
+        &omp,
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
+printf '%s\n' 'class ReaderState:' '    def read(self, amount: int) -> int:' '        return amount' > implementation.py
+"#,
+    )
+    .expect("write fake OMP");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&omp, fs::Permissions::from_mode(0o755))
+            .expect("make fake OMP executable");
+    }
+    let path = std::env::join_paths([tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("PATH");
+    let output = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .args([
+            "generate",
+            "api.service.ReaderState.read",
+            "--agent",
+            "omp",
+            "--target",
+            "python",
+            "--project",
+        ])
+        .arg(&project.path)
+        .env("PATH", path)
+        .output()
+        .expect("cott should run");
+    assert_eq!(output.status.code(), Some(5));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("agent generation"));
+    assert!(
+        !project
+            .path
+            .join("python/_cott_impl/api/service/ReaderState/read.py")
+            .exists()
+    );
 }
 #[test]
 fn process_bar_generation_records_unresolved_and_verified_transitions() {
@@ -518,15 +829,24 @@ esac
             .map(|implementation| {
                 (
                     implementation["cott_symbol"].as_str().expect("Cott symbol"),
+                    implementation["kind"].as_str().expect("callable kind"),
+                    implementation["concrete"].is_null(),
+                    implementation["method"].is_null(),
                     implementation["owner"].as_str().expect("owner"),
                 )
             })
             .collect::<Vec<_>>(),
         [
-            ("foo.bar.build_output", "agent"),
-            ("foo.bar.process_bar", "agent"),
-            ("foo.bar.process_payload_bytes", "agent"),
-            ("foo.bar.validate_payload", "agent"),
+            ("foo.bar.build_output", "function", true, true, "agent"),
+            ("foo.bar.process_bar", "function", true, true, "agent"),
+            (
+                "foo.bar.process_payload_bytes",
+                "function",
+                true,
+                true,
+                "agent",
+            ),
+            ("foo.bar.validate_payload", "function", true, true, "agent"),
         ]
     );
     assert!(generated["last_verified"].is_null());

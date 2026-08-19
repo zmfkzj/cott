@@ -29,15 +29,28 @@ pub struct PythonArtifactModule {
     declaration_info: Vec<DeclarationInfo>,
 }
 
-/// A callable function selected from a plan.
+/// The kind of a callable selected from a plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PythonCallableFunction {
+pub enum PythonCallableKind {
+    Function,
+    ImplMethod { concrete: String },
+}
+
+/// A callable selected from a plan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PythonCallable {
     /// Dotted canonical module name.
     pub module: String,
-    /// Dotted canonical function name (for example, `api.service.run`).
-    pub function: String,
-    /// The complete canonical function declaration.
+    /// Canonical Cott symbol.
+    pub cott_symbol: String,
+    /// The free-function or method name.
+    pub name: String,
+    /// Whether this is a free function or an implementation method.
+    pub kind: PythonCallableKind,
+    /// The complete canonical function or method declaration.
     pub declaration: Value,
+    /// The enclosing implementation declaration for methods.
+    pub owner: Option<Value>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -144,7 +157,9 @@ impl PythonArtifactPlan {
             })
             .collect()
     }
-    pub fn callable_functions(&self) -> Vec<PythonCallableFunction> {
+    /// Enumerate public free functions and every implementation method in
+    /// deterministic module, declaration, and method source order.
+    pub fn callables(&self) -> Vec<PythonCallable> {
         self.modules
             .iter()
             .flat_map(|module| {
@@ -152,11 +167,51 @@ impl PythonArtifactPlan {
                     .declarations
                     .iter()
                     .zip(&module.declaration_info)
-                    .filter(|(_, info)| info.kind == "function")
-                    .map(|(declaration, info)| PythonCallableFunction {
-                        module: module.module.clone(),
-                        function: info.name.clone(),
-                        declaration: declaration.clone(),
+                    .flat_map(|(declaration, info)| match info.kind.as_str() {
+                        "function" if info.public => vec![PythonCallable {
+                            module: module.module.clone(),
+                            cott_symbol: info.name.clone(),
+                            name: info
+                                .name
+                                .rsplit('.')
+                                .next()
+                                .expect("validated canonical function name")
+                                .to_owned(),
+                            kind: PythonCallableKind::Function,
+                            declaration: declaration.clone(),
+                            owner: None,
+                        }],
+                        "impl" => {
+                            let concrete = info
+                                .name
+                                .rsplit('.')
+                                .next()
+                                .expect("validated canonical implementation name");
+                            declaration
+                                .get("methods")
+                                .and_then(Value::as_array)
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|method| {
+                                    method.get("name").and_then(Value::as_str).map(|name| {
+                                        PythonCallable {
+                                            module: module.module.clone(),
+                                            cott_symbol: format!(
+                                                "{}.{}.{}",
+                                                module.module, concrete, name
+                                            ),
+                                            name: name.to_owned(),
+                                            kind: PythonCallableKind::ImplMethod {
+                                                concrete: concrete.to_owned(),
+                                            },
+                                            declaration: method.clone(),
+                                            owner: Some(declaration.clone()),
+                                        }
+                                    })
+                                })
+                                .collect()
+                        }
+                        _ => Vec::new(),
                     })
                     .collect::<Vec<_>>()
             })
@@ -190,10 +245,26 @@ impl PythonArtifactPlan {
                 .collect(),
         }
     }
+    /// Project public declarations for generation identity without source-only
+    /// metadata.
+    pub fn contract_surface(&self) -> Value {
+        let mut modules = Map::new();
+        for module in self.public_projection().modules {
+            let mut declarations = module.declarations;
+            for declaration in &mut declarations {
+                strip_source_metadata(declaration);
+            }
+            modules.insert(
+                module.module,
+                serde_json::json!({"declarations": declarations}),
+            );
+        }
+        Value::Object(modules)
+    }
 
-    /// Enumerate public callable declarations without creating a second plan.
-    pub fn public_callable_functions(&self) -> Vec<PythonCallableFunction> {
-        self.public_projection().callable_functions()
+    /// Enumerate public free functions and every implementation method.
+    pub fn public_callables(&self) -> Vec<PythonCallable> {
+        self.callables()
     }
 }
 
@@ -354,5 +425,23 @@ fn malformed(
         module: module.to_owned(),
         declaration_index,
         message: message.into(),
+    }
+}
+
+fn strip_source_metadata(value: &mut Value) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                strip_source_metadata(value);
+            }
+        }
+        Value::Object(object) => {
+            object.remove("span");
+            object.remove("source_order");
+            for value in object.values_mut() {
+                strip_source_metadata(value);
+            }
+        }
+        _ => {}
     }
 }

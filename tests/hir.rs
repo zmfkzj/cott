@@ -260,6 +260,26 @@ fn inspect(value: I32, other: I32) -> Result[I32, Failure]:
         [("network", 0), ("database.write", 1)]
     );
 }
+
+#[test]
+fn function_result_contract_lowers_to_result_ref() {
+    let parsed = parse_project([SourceFile::new(
+        "src/result_ref.cott",
+        "module result_ref\n\nfn value() -> I32:\n    ensures result == 1\n",
+    )])
+    .expect("result fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("result fixture should lower");
+    let HirDeclaration::Function(function) = &project.modules[0].declarations[0] else {
+        panic!("expected function");
+    };
+    let HirClauseKind::Ensures { expression, .. } = &function.contract.clauses[0].kind else {
+        panic!("expected ensures");
+    };
+    let HirExprKind::ComparisonChain { operands, .. } = &expression.kind else {
+        panic!("expected comparison");
+    };
+    assert!(matches!(operands[0].kind, HirExprKind::ResultRef));
+}
 #[test]
 fn direct_lowering_accepts_numeric_comparison_contracts() {
     let parsed = parse_project([SourceFile::new(
@@ -314,6 +334,87 @@ fn numeric_literals_take_operand_context_and_widths_must_match() {
             .expect("invalid semantic fixture should parse");
         assert!(lower(Path::new("src"), parsed).is_err());
     }
+}
+
+#[test]
+fn impl_state_numeric_comparisons_take_literal_context() {
+    let parsed = parse_project([SourceFile::new(
+        "src/impl_numeric_context.cott",
+        r#"module impl_numeric_context
+
+trait Counter:
+    fn check(self) -> F32
+
+impl CounterState for Counter:
+    state:
+        count: I32 = 0
+        ratio: F32 = 0.0
+    invariant self.count >= 0
+    invariant self.ratio <= 1.0
+    fn check(self) -> F32:
+        modifies self.count
+        ensures result >= 0.0
+        ensures old(self.count) >= 0
+        ensures old(self.ratio) <= 1.0
+"#,
+    )])
+    .expect("impl numeric context fixture should parse");
+    let project =
+        lower(Path::new("src"), parsed).expect("impl numeric literals should take context");
+    let HirDeclaration::Impl(implementation) = &project.modules[0].declarations[1] else {
+        panic!("expected impl");
+    };
+    let expressions = implementation
+        .invariants
+        .iter()
+        .map(|invariant| &invariant.expression)
+        .chain(
+            implementation.methods[0]
+                .contract
+                .clauses
+                .iter()
+                .filter_map(|clause| {
+                    let HirClauseKind::Ensures { expression, .. } = &clause.kind else {
+                        return None;
+                    };
+                    Some(expression)
+                }),
+        );
+    for expression in expressions {
+        let HirExprKind::ComparisonChain { operands, .. } = &expression.kind else {
+            panic!("expected comparison");
+        };
+        assert_eq!(expression.ty, HirType::Primitive(PrimitiveType::Bool));
+        assert_eq!(operands[0].ty, operands[1].ty);
+    }
+    assert_eq!(
+        implementation.methods[0].modifies[0].as_string(),
+        "impl_numeric_context.CounterState.count"
+    );
+    let old_fields = implementation.methods[0]
+        .contract
+        .clauses
+        .iter()
+        .filter_map(|clause| {
+            let HirClauseKind::Ensures { expression, .. } = &clause.kind else {
+                return None;
+            };
+            let HirExprKind::ComparisonChain { operands, .. } = &expression.kind else {
+                return None;
+            };
+            let HirExprKind::OldStateField { field } = &operands[0].kind else {
+                return None;
+            };
+            Some(field.as_string())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        old_fields,
+        [
+            "impl_numeric_context.CounterState.count",
+            "impl_numeric_context.CounterState.ratio",
+        ]
+    );
 }
 
 #[test]

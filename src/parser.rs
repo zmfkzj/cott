@@ -14,6 +14,7 @@ struct Parser {
     tokens: Vec<Token>,
     pos: usize,
     errors: Vec<Diagnostic>,
+    allow_old: bool,
 }
 
 impl Parser {
@@ -22,6 +23,7 @@ impl Parser {
             tokens,
             pos: 0,
             errors: Vec::new(),
+            allow_old: false,
         }
     }
     fn current(&self) -> &Token {
@@ -250,15 +252,22 @@ impl Parser {
                     Keyword::Struct => "struct",
                     Keyword::Enum => "enum",
                     Keyword::Trait => "trait",
+                    Keyword::Impl => "impl",
+                    Keyword::For => "for",
+                    Keyword::State => "state",
                     Keyword::Rule => "rule",
                     Keyword::Const => "const",
                     Keyword::Fn => "fn",
                     Keyword::SelfValue => "self",
                     Keyword::Doc => "doc",
                     Keyword::Requires => "requires",
+                    Keyword::Invariant => "invariant",
+                    Keyword::Init => "init",
                     Keyword::Ensures => "ensures",
                     Keyword::When => "when",
                     Keyword::Effects => "effects",
+                    Keyword::Modifies => "modifies",
+                    Keyword::Old => "old",
                     Keyword::Error => "error",
                     Keyword::Where => "where",
                     Keyword::Override => "override",
@@ -337,6 +346,15 @@ impl Parser {
                     );
                 }
                 Some(Declaration::Function(self.parse_function(annotations)?))
+            }
+            TokenKind::Keyword(Keyword::Impl) => {
+                if let Some(doc) = doc {
+                    self.error(
+                        "top-level documentation must precede a type or constant declaration",
+                        doc.span,
+                    );
+                }
+                Some(Declaration::Impl(self.parse_impl(annotations)?))
             }
             _ => {
                 self.error("expected declaration", self.span_here());
@@ -661,6 +679,7 @@ impl Parser {
                     ClauseKind::Documentation(_) => 0,
                     ClauseKind::Rule { .. } => 1,
                     ClauseKind::Requires { .. } => 2,
+                    ClauseKind::Modifies { .. } => 3,
                     ClauseKind::Ensures { .. } => 3,
                     ClauseKind::Error { .. } => 4,
                     ClauseKind::Effects { .. } => 5,
@@ -704,6 +723,300 @@ impl Parser {
             body,
         })
     }
+    fn parse_impl(&mut self, annotations: Vec<Annotation>) -> Option<ImplDecl> {
+        let st = self.keyword(Keyword::Impl)?.span;
+        let (name, _) = self.name("impl type name")?;
+        self.keyword(Keyword::For)?;
+        let mut traits = vec![self.parse_type()?];
+        while self.at(&TokenKind::Plus) {
+            self.bump();
+            traits.push(self.parse_type()?);
+        }
+        self.expect(TokenKind::Colon, "expected `:` after impl traits")?;
+        self.newline();
+        self.expect(TokenKind::Indent, "expected indented impl body")?;
+        self.skip_newlines();
+
+        let state = if self.at(&TokenKind::Keyword(Keyword::State)) {
+            self.parse_state_block()?
+        } else {
+            Vec::new()
+        };
+        self.skip_newlines();
+        let mut invariants = Vec::new();
+        while self.at(&TokenKind::Keyword(Keyword::Invariant)) {
+            let invariant = self.parse_impl_invariant()?;
+            invariants.push(invariant);
+            self.skip_newlines();
+        }
+        let initializer = if self.at(&TokenKind::Keyword(Keyword::Init)) {
+            let initializer = self.parse_impl_initializer()?;
+            self.skip_newlines();
+            Some(initializer)
+        } else {
+            None
+        };
+        let mut methods = Vec::new();
+        while self.at(&TokenKind::Keyword(Keyword::Fn)) {
+            methods.push(self.parse_impl_method()?);
+            self.skip_newlines();
+        }
+        if methods.is_empty() {
+            self.error("impl requires at least one method", self.span_here());
+        }
+        let end = self
+            .expect(TokenKind::Dedent, "expected end of impl body")?
+            .span;
+        Some(ImplDecl {
+            span: Self::join(st, end),
+            annotations,
+            name,
+            traits,
+            state,
+            invariants,
+            initializer,
+            methods,
+        })
+    }
+    fn parse_state_block(&mut self) -> Option<Vec<Field>> {
+        self.keyword(Keyword::State)?;
+        self.expect(TokenKind::Colon, "expected `:` after state")?;
+        self.newline();
+        self.expect(TokenKind::Indent, "expected indented state fields")?;
+        self.skip_newlines();
+        let mut fields = Vec::new();
+        while !self.at(&TokenKind::Dedent) && !self.eof() {
+            if let Some(field) = self.parse_field() {
+                fields.push(field);
+            } else {
+                self.recover_line();
+            }
+            self.skip_newlines();
+        }
+        if fields.is_empty() {
+            self.error(
+                "state block must contain at least one field",
+                self.span_here(),
+            );
+        }
+        self.expect(TokenKind::Dedent, "expected end of state block")?;
+        Some(fields)
+    }
+    fn parse_impl_invariant(&mut self) -> Option<ImplInvariant> {
+        let st = self.keyword(Keyword::Invariant)?.span;
+        let condition = self.parse_expr()?;
+        let end = condition.span.clone();
+        self.newline();
+        Some(ImplInvariant {
+            span: Self::join(st, end),
+            condition,
+        })
+    }
+    fn parse_impl_initializer(&mut self) -> Option<ImplInitializer> {
+        let st = self.keyword(Keyword::Init)?.span;
+        self.expect(TokenKind::LParen, "expected `(` after init")?;
+        let parameters = self.parse_parameters(true)?;
+        self.expect(TokenKind::RParen, "expected `)` after init parameters")?;
+        self.expect(TokenKind::Colon, "expected `:` after init signature")?;
+        self.newline();
+        self.expect(TokenKind::Indent, "expected indented init clauses")?;
+        let clauses = self.parse_impl_clauses(false)?;
+        let end = self
+            .expect(TokenKind::Dedent, "expected end of init clauses")?
+            .span;
+        Some(ImplInitializer {
+            span: Self::join(st, end),
+            parameters,
+            clauses,
+        })
+    }
+    fn parse_impl_method(&mut self) -> Option<ImplMethod> {
+        let st = self.keyword(Keyword::Fn)?.span;
+        let (name, _) = self.name("method name")?;
+        self.expect(TokenKind::LParen, "expected `(` after method name")?;
+        let self_span = self.keyword(Keyword::SelfValue)?.span;
+        let parameters = if self.at(&TokenKind::Comma) {
+            self.bump();
+            self.parse_parameters(true)?
+        } else {
+            Vec::new()
+        };
+        self.expect(TokenKind::RParen, "expected `)` after method parameters")?;
+        self.expect(TokenKind::Arrow, "expected `->` after method parameters")?;
+        let return_type = self.parse_type()?;
+        self.expect(TokenKind::Colon, "expected `:` after method signature")?;
+        self.newline();
+        self.expect(TokenKind::Indent, "expected indented method clauses")?;
+        let clauses = self.parse_impl_clauses(true)?;
+        let end = self
+            .expect(TokenKind::Dedent, "expected end of method clauses")?
+            .span;
+        Some(ImplMethod {
+            span: Self::join(st, end),
+            name,
+            self_span,
+            parameters,
+            return_type,
+            clauses,
+        })
+    }
+    fn parse_impl_clauses(&mut self, method: bool) -> Option<Vec<Clause>> {
+        let mut clauses = Vec::new();
+        let mut seen_doc = false;
+        let mut seen_modifies = false;
+        let mut phase = 0u8;
+        self.skip_newlines();
+        while !self.at(&TokenKind::Dedent) && !self.eof() {
+            let clause = if method {
+                self.parse_method_clause()?
+            } else {
+                self.parse_init_clause()?
+            };
+            let rank = match &clause.kind {
+                ClauseKind::Documentation(_) => 0,
+                ClauseKind::Requires { .. } => 1,
+                ClauseKind::Modifies { .. } => 2,
+                ClauseKind::Ensures { .. } => 3,
+                ClauseKind::Error { .. } => 4,
+                ClauseKind::Effects { .. } => 5,
+                ClauseKind::Rule { .. } => unreachable!(),
+            };
+            if !method && rank > 3 {
+                self.error(
+                    "init clauses may contain only doc, requires, and ensures",
+                    clause.span.clone(),
+                );
+            }
+            if rank == 0 {
+                if seen_doc || phase > 0 {
+                    self.error(
+                        "impl documentation must be the first clause and may occur once",
+                        clause.span.clone(),
+                    );
+                }
+                seen_doc = true;
+            } else {
+                if (!method && rank == 2) || rank < phase {
+                    self.error("impl clauses are out of order", clause.span.clone());
+                }
+                if rank == 2 && seen_modifies {
+                    self.error(
+                        "method may have only one modifies clause",
+                        clause.span.clone(),
+                    );
+                }
+                if rank == 2 {
+                    seen_modifies = true;
+                }
+                if rank == 5 && phase == 5 {
+                    self.error(
+                        "impl method may have only one effects clause",
+                        clause.span.clone(),
+                    );
+                }
+                phase = phase.max(rank);
+            }
+            clauses.push(clause);
+            self.skip_newlines();
+        }
+        if clauses.is_empty() {
+            self.error("impl clause block must not be empty", self.span_here());
+        }
+        Some(clauses)
+    }
+    fn parse_init_clause(&mut self) -> Option<Clause> {
+        if self.at(&TokenKind::Keyword(Keyword::Doc)) {
+            let doc = self.parse_doc()?;
+            return Some(Clause {
+                span: doc.span.clone(),
+                kind: ClauseKind::Documentation(doc),
+            });
+        }
+        if self.at(&TokenKind::Keyword(Keyword::Requires)) {
+            let st = self.bump().span;
+            let condition = self.parse_expr()?;
+            let end = condition.span.clone();
+            self.newline();
+            return Some(Clause {
+                span: Self::join(st, end),
+                kind: ClauseKind::Requires { condition },
+            });
+        }
+        if self.at(&TokenKind::Keyword(Keyword::Ensures)) {
+            let st = self.bump().span;
+            let condition = self.parse_expr()?;
+            let end = condition.span.clone();
+            self.newline();
+            return Some(Clause {
+                span: Self::join(st, end),
+                kind: ClauseKind::Ensures {
+                    pattern: None,
+                    condition,
+                },
+            });
+        }
+        self.error("expected init clause", self.span_here());
+        None
+    }
+    fn parse_method_clause(&mut self) -> Option<Clause> {
+        if self.at(&TokenKind::Keyword(Keyword::Modifies)) {
+            let st = self.bump().span;
+            let mut fields = vec![self.parse_modified_field()?];
+            while self.at(&TokenKind::Comma) {
+                self.bump();
+                fields.push(self.parse_modified_field()?);
+            }
+            let end = fields
+                .last()
+                .map(|field| field.span.clone())
+                .unwrap_or(st.clone());
+            self.newline();
+            return Some(Clause {
+                span: Self::join(st, end),
+                kind: ClauseKind::Modifies { fields },
+            });
+        }
+        if self.at(&TokenKind::Keyword(Keyword::Ensures)) {
+            let st = self.bump().span;
+            let save = self.pos;
+            let mut pattern = None;
+            if matches!(self.current().kind, TokenKind::Name(_)) {
+                if let Some(candidate) = self.parse_pattern() {
+                    if self.at(&TokenKind::FatArrow) {
+                        self.bump();
+                        pattern = Some(candidate);
+                    } else {
+                        self.pos = save;
+                    }
+                }
+            }
+            let condition = self.parse_expr_allowing_old()?;
+            let end = condition.span.clone();
+            self.newline();
+            return Some(Clause {
+                span: Self::join(st, end),
+                kind: ClauseKind::Ensures { pattern, condition },
+            });
+        }
+        if self.at(&TokenKind::Keyword(Keyword::Doc))
+            || self.at(&TokenKind::Keyword(Keyword::Requires))
+            || self.at(&TokenKind::Keyword(Keyword::Error))
+            || self.at(&TokenKind::Keyword(Keyword::Effects))
+        {
+            return self.parse_clause();
+        }
+        self.error("expected method clause", self.span_here());
+        None
+    }
+    fn parse_modified_field(&mut self) -> Option<ModifiedField> {
+        let self_span = self.keyword(Keyword::SelfValue)?.span;
+        self.expect(TokenKind::Dot, "expected `.` after self in modifies")?;
+        let (name, field_span) = self.name("state field name")?;
+        Some(ModifiedField {
+            span: Self::join(self_span, field_span),
+            name,
+        })
+    }
     fn parse_clause(&mut self) -> Option<Clause> {
         if self.at(&TokenKind::Keyword(Keyword::Doc)) {
             let d = self.parse_doc()?;
@@ -737,12 +1050,14 @@ impl Parser {
             let st = self.bump().span;
             let save = self.pos;
             let mut pattern = None;
-            if let Some(p) = self.parse_pattern() {
-                if self.at(&TokenKind::FatArrow) {
-                    self.bump();
-                    pattern = Some(p);
-                } else {
-                    self.pos = save;
+            if matches!(self.current().kind, TokenKind::Name(_)) {
+                if let Some(p) = self.parse_pattern() {
+                    if self.at(&TokenKind::FatArrow) {
+                        self.bump();
+                        pattern = Some(p);
+                    } else {
+                        self.pos = save;
+                    }
                 }
             }
             let condition = self.parse_expr()?;
@@ -1049,6 +1364,12 @@ impl Parser {
     fn parse_expr(&mut self) -> Option<Expr> {
         self.parse_or()
     }
+    fn parse_expr_allowing_old(&mut self) -> Option<Expr> {
+        let previous = std::mem::replace(&mut self.allow_old, true);
+        let expression = self.parse_expr();
+        self.allow_old = previous;
+        expression
+    }
     fn parse_or(&mut self) -> Option<Expr> {
         self.binary(Self::parse_and, &[Keyword::Or], BinaryOp::Or)
     }
@@ -1237,6 +1558,28 @@ impl Parser {
                         span: t.span,
                         kind: LiteralKind::Bool(b),
                     }),
+                }
+            }
+            TokenKind::Keyword(Keyword::Old) => {
+                let st = self.bump().span;
+                self.expect(TokenKind::LParen, "expected `(` after old")?;
+                let self_span = self.keyword(Keyword::SelfValue)?.span;
+                self.expect(TokenKind::Dot, "expected `.` after self in old")?;
+                let (name, field_span) = self.name("state field name")?;
+                let end = self
+                    .expect(TokenKind::RParen, "expected `)` after old state field")?
+                    .span;
+                if !self.allow_old {
+                    self.error("old is only allowed in impl method ensures", st.clone());
+                }
+                Expr {
+                    span: Self::join(st, end),
+                    kind: ExprKind::OldStateField {
+                        field: ModifiedField {
+                            span: Self::join(self_span, field_span),
+                            name,
+                        },
+                    },
                 }
             }
             TokenKind::LParen => {

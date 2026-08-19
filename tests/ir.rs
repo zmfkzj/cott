@@ -71,6 +71,38 @@ fn run() -> Outcome
     cott::hir::lower(Path::new("src"), parsed).expect("IR fixture must lower")
 }
 
+fn impl_project() -> HirProject {
+    let parsed = parse_project([source(
+        "src/impls/counter.cott",
+        r#"module impls.counter
+
+trait Counter:
+    fn advance(self, amount: I32) -> I32
+    fn read(self) -> I32
+
+impl CounterState for Counter:
+    state:
+        count: I32 = 0
+    invariant self.count >= 0
+    init():
+        doc """initialize"""
+        ensures self.count == 0
+    fn advance(self, amount: I32) -> I32:
+        doc """advance"""
+        requires amount > 0
+        modifies self.count
+        ensures result == self.count
+        ensures old(self.count) + amount == self.count
+        effects [network]
+    fn read(self) -> I32:
+        ensures result == self.count
+"#,
+    )])
+    .expect("impl IR fixture must parse");
+
+    cott::hir::lower(Path::new("src"), parsed).expect("impl IR fixture must lower")
+}
+
 fn json(module: &cott::ir::CanonicalModule) -> &str {
     std::str::from_utf8(&module.bytes).expect("canonical IR must be UTF-8")
 }
@@ -208,4 +240,119 @@ rule StrictAssignmentRule(BaseAssignmentRule):
     // Validate that load parses and validates against the schema
     let loaded = load(&rendered.modules[0].bytes).expect("canonical IR with rules must load");
     assert_eq!(loaded["module"], "rules");
+}
+
+#[test]
+fn renders_exact_deterministic_impl_canonical_ir() {
+    let project = impl_project();
+    let first = render(&project).expect("impl HIR must render");
+    let second = render(&project).expect("impl HIR must render twice");
+    assert_eq!(first.modules[0].bytes, second.modules[0].bytes);
+
+    let text = json(&first.modules[0]);
+    let impl_start = text[..text.find(r#""kind":"impl""#).expect("impl declaration")]
+        .rfind(r#"{"annotations""#)
+        .expect("impl declaration start");
+    assert_in_order(
+        &text[impl_start..],
+        &[
+            r#""annotations":"#,
+            r#""doc":null"#,
+            r#""generics":[]"#,
+            r#""init":"#,
+            r#""invariants":"#,
+            r#""kind":"impl""#,
+            r#""methods":"#,
+            r#""name":"impls.counter.CounterState""#,
+            r#""state":"#,
+            r#""traits":"#,
+        ],
+    );
+    assert!(text.contains(r#""kind":"result_ref""#));
+    assert!(text.contains(r#""kind":"old_state_field""#));
+
+    let value = load(&first.modules[0].bytes).expect("impl canonical IR must load");
+    let implementation = value["declarations"]
+        .as_array()
+        .expect("declarations")
+        .iter()
+        .find(|declaration| declaration["kind"] == "impl")
+        .expect("impl declaration");
+    assert_eq!(implementation["traits"][0]["kind"], "named");
+    assert_eq!(implementation["traits"][0]["name"], "impls.counter.Counter");
+    assert_eq!(implementation["state"][0]["name"], "count");
+    assert_eq!(implementation["invariants"][0]["clause_id"], 0);
+    assert_eq!(implementation["init"]["contracts"]["doc"], "initialize");
+    assert_eq!(implementation["methods"][0]["name"], "advance");
+    assert_eq!(implementation["methods"][0]["contracts"]["doc"], "advance");
+    assert_eq!(implementation["methods"][0]["effects"][0]["key"], "network");
+    assert_eq!(
+        implementation["methods"][0]["modifies"][0],
+        "impls.counter.CounterState.count"
+    );
+    assert_eq!(implementation["methods"][1]["name"], "read");
+}
+
+fn remove_old_state_field(value: &mut serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Array(values) => values.iter_mut().any(remove_old_state_field),
+        serde_json::Value::Object(values) => {
+            if values.get("kind").and_then(serde_json::Value::as_str) == Some("old_state_field") {
+                values.remove("field");
+                true
+            } else {
+                values.values_mut().any(remove_old_state_field)
+            }
+        }
+        _ => false,
+    }
+}
+
+fn assert_schema_rejects(value: serde_json::Value, message: &str) {
+    let mut bytes = serde_json::to_vec(&value).expect("serialize malformed IR");
+    bytes.push(b'\n');
+    let error = load(&bytes).expect_err(message);
+    assert!(error.contains("schema violation"), "{error}");
+}
+
+#[test]
+fn schema_rejects_malformed_impl_nodes() {
+    let rendered = render(&impl_project()).expect("impl fixture must render");
+    let value: serde_json::Value = serde_json::from_slice(&rendered.modules[0].bytes).unwrap();
+    let impl_index = value["declarations"]
+        .as_array()
+        .expect("declarations")
+        .iter()
+        .position(|declaration| declaration["kind"] == "impl")
+        .expect("impl declaration");
+
+    let mut malformed_impl = value.clone();
+    malformed_impl["declarations"][impl_index]
+        .as_object_mut()
+        .expect("impl object")
+        .remove("traits");
+    assert_schema_rejects(malformed_impl, "impl without traits must fail");
+
+    let mut malformed_init = value.clone();
+    malformed_init["declarations"][impl_index]["init"]
+        .as_object_mut()
+        .expect("explicit init")
+        .remove("contracts");
+    assert_schema_rejects(malformed_init, "init without contracts must fail");
+
+    let mut malformed_method = value.clone();
+    malformed_method["declarations"][impl_index]["methods"][0]
+        .as_object_mut()
+        .expect("method object")
+        .remove("return_type");
+    assert_schema_rejects(malformed_method, "method without return type must fail");
+
+    let mut malformed_modifies = value.clone();
+    malformed_modifies["declarations"][impl_index]["methods"][0]["modifies"] =
+        serde_json::json!([{"field": "impls.counter.CounterState.count"}]);
+    assert_schema_rejects(malformed_modifies, "non-identity modifies entry must fail");
+
+    let mut malformed_old = value;
+    assert!(remove_old_state_field(&mut malformed_old));
+    assert_schema_rejects(malformed_old, "old state field without identity must fail");
 }

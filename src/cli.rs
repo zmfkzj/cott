@@ -25,13 +25,13 @@ use crate::hir::lower_with_effects;
 use crate::ir::render;
 use crate::project::{ProjectPaths, discover_sources_from_paths, load_config_with_paths};
 use crate::provenance::{AgentRun, AgentStatus, GenerationRecord, StreamDigest};
-use crate::python::artifact_plan::PythonArtifactPlan;
+use crate::python::artifact_plan::{PythonArtifactPlan, PythonCallable, PythonCallableKind};
 use crate::python_emit::{Emission, EmitDiagnostic, emit};
 use crate::python_verify::verify_python;
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession};
 use crate::version::{is_at_least, parse_version};
 
-const USAGE: &str = "Usage:\n  cott init <path> [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python [--project <dir>] [--format json]\n  cott generate [<fully.qualified.function>] --agent codex|omp --target python [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n";
+const USAGE: &str = "Usage:\n  cott init <path> [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|omp --target python [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n";
 
 #[cfg(test)]
 thread_local! {
@@ -1359,26 +1359,24 @@ fn generate_project(
             return 4;
         }
     };
+    let callables = plan
+        .callables()
+        .into_iter()
+        .map(|callable| (callable.cott_symbol.clone(), callable))
+        .collect::<BTreeMap<String, PythonCallable>>();
     let requested = symbol.as_deref();
     let mut unresolved = resolution
         .unresolved
         .into_iter()
-        .filter(|binding| {
-            requested
-                .is_none_or(|symbol| symbol == format!("{}.{}", binding.module, binding.function))
-        })
+        .filter(|binding| requested.is_none_or(|symbol| symbol == binding.cott_symbol))
         .collect::<Vec<_>>();
     if let Some(symbol) = requested {
-        let known = plan
-            .callable_functions()
-            .iter()
-            .any(|function| function.function == symbol);
-        if !known {
-            eprintln!("error: unknown function `{symbol}`");
+        if !callables.contains_key(symbol) {
+            eprintln!("error: unknown callable `{symbol}`");
             return 2;
         }
     }
-    unresolved.sort_by_key(|binding| format!("{}.{}", binding.module, binding.function));
+    unresolved.sort_by(|left, right| left.cott_symbol.cmp(&right.cott_symbol));
     let mut bindings = resolution.resolved;
     add_binding_input_hashes(&paths, &bindings, &mut input_hashes);
     let candidate_paths = match unresolved
@@ -1414,7 +1412,7 @@ fn generate_project(
     let mut generated_runs = Vec::new();
     if !unresolved.is_empty() {
         let Some(agent) = agent else {
-            eprintln!("error: unresolved selected function requires `--agent codex|omp`");
+            eprintln!("error: unresolved selected callable requires `--agent codex|omp`");
             return 2;
         };
         if let Err(error) = verified_baseline_guard(&paths, &input_hashes) {
@@ -1429,6 +1427,9 @@ fn generate_project(
             }
         };
         for unresolved_binding in unresolved {
+            let callable = callables
+                .get(&unresolved_binding.cott_symbol)
+                .expect("resolution callable was selected from the artifact plan");
             let temporary = match agent_workspace() {
                 Ok(paths) => paths,
                 Err(error) => {
@@ -1440,21 +1441,19 @@ fn generate_project(
             let module_ir = match ir
                 .modules
                 .iter()
-                .find(|module| module.module.as_string() == unresolved_binding.module)
+                .find(|module| module.module.as_string() == callable.module)
             {
                 Some(module) => module.bytes.clone(),
                 None => {
                     let _ = fs::remove_dir_all(&temporary.root);
-                    eprintln!("error: selected function has no canonical IR module");
+                    eprintln!("error: selected callable has no canonical IR module");
                     return 1;
                 }
             };
-            let fully_qualified = format!(
-                "{}.{}",
-                unresolved_binding.module, unresolved_binding.function
-            );
+            let fully_qualified = callable.cott_symbol.clone();
             let bound_symbols = bindings
                 .iter()
+                .filter(|binding| matches!(&binding.kind, PythonCallableKind::Function))
                 .map(|binding| format!("from {} import {}", binding.module, binding.function))
                 .collect::<Vec<_>>()
                 .join("\n");
@@ -1469,10 +1468,16 @@ fn generate_project(
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            let target_rules = format!(
-                "CPython 3.14.6, fully annotated Python. The file's top level may contain only imports and exactly the requested function; put constants and helpers inside that function. Import only names the function actually references. Keep the complete `def` signature on one physical line and end the file with exactly one newline. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, CottList, CottSet, FrozenMap, and CottTuple2 from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict/tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float values: never call an alias such as I64 and never access `.value` on one. Path ABI values are pathlib.Path objects, never strings. Construct contract containers with `CottList(values=iterable)`, `CottSet(values=iterable)`, `FrozenMap(values=mapping)`, and `CottTuple2(first=value, second=value)`. CottList and CottSet expose len/iteration/membership, and CottList exposes indexing; neither exposes a public `.values` attribute. Explicitly annotate empty local work collections, for example `seen: set[str] = set()`. Import generated nominal types only from the exact module `{}_types`. Generated structs use `Struct(field=value)`, newtypes use `Newtype(value=value)`, and enum variants use separate keyword-only classes named `Enum_Variant`; never use `Enum.Variant`. Narrow enum unions with `isinstance` only while multiple variants remain, then handle the final variant in `else` without a redundant test; never test an already-exact parameter type. Use `Ok(value=value)`, `Err(error=error)`, `Some(value=value)`, `Nothing()`, and `UNIT` as return values. Copy every line in BOUND SYMBOLS IMPORT RULES exactly when calling a sibling; never append the function name to its module path. Do not use pass, ellipsis anywhere, dynamic import, eval, exec, compile, suppressions, agent operations, or external imports not present in the lockfile.",
-                unresolved_binding.module
-            );
+            let target_rules = match &callable.kind {
+                PythonCallableKind::Function => format!(
+                    "CPython 3.14.6, fully annotated Python. The file's top level may contain only imports and exactly the requested function; put constants and helpers inside that function. Import only names the function actually references. Keep the complete `def` signature on one physical line and end the file with exactly one newline. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, CottList, CottSet, FrozenMap, and CottTuple2 from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict/tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime but must remain annotated with their exact aliases. For cross-function calls import only public generated facade symbols, never _cott_impl. Module facade imports use `from {0} import name`; generated type imports use `from {0}_types import Type`; project helper imports are allowed only from declared local imports. Do not use eval, exec, compile, globals, locals, vars, importlib, __import__, dynamic attribute access, subprocess, filesystem, network, environment, reflection, or monkeypatching. The target file must be self-contained except allowed imports.",
+                    callable.module
+                ),
+                PythonCallableKind::ImplMethod { concrete } => format!(
+                    "CPython 3.14.6, fully annotated Python. The file's top level may contain only imports and exactly the private helper `_cott_impl_{concrete}_{0}`; do not emit a class, facade shell, or any other top-level definition. Import only names the helper actually references. Keep the complete `def` signature on one physical line and end the file with exactly one newline. The helper's leading `self` annotation must be `{concrete}`. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, CottList, CottSet, FrozenMap, and CottTuple2 from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict/tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime but must remain annotated with their exact aliases. The compiler-owned concrete facade class `{concrete}` is absent from `{1}_types`; import it exactly as `from {1} import {concrete}` for the `self` annotation. Generated value-type imports remain `from {1}_types import Type`. For cross-function calls import only public generated facade symbols, never _cott_impl. Module facade imports use `from {1} import name`; generated type imports use `from {1}_types import Type`; project helper imports are allowed only from declared local imports. Do not use eval, exec, compile, globals, locals, vars, importlib, __import__, dynamic attribute access, subprocess, filesystem, network, environment, reflection, or monkeypatching. The target file must be self-contained except allowed imports.",
+                    callable.name, callable.module
+                ),
+            };
             let project_rules = config
                 .generator
                 .rules
@@ -1483,7 +1488,7 @@ fn generate_project(
             let result = project_rules
                 .and_then(|project_rules| {
                     render_prompt(
-                        &fully_qualified,
+                        callable,
                         &module_ir,
                         &binding_context,
                         &target_rules,
@@ -1509,7 +1514,7 @@ fn generate_project(
                         &config,
                         &paths,
                         &plan,
-                        &unresolved_binding.function,
+                        &fully_qualified,
                         &candidate.implementation,
                     )
                     .map(|_| candidate)
@@ -1535,14 +1540,24 @@ fn generate_project(
                 .expect("implementation path is project-relative")
                 .to_path_buf();
             durable_sources.push((relative_source, bytes.clone()));
+            let implementation_module = match &callable.kind {
+                PythonCallableKind::Function => {
+                    format!("_cott_impl.{}.{}", callable.module, callable.name)
+                }
+                PythonCallableKind::ImplMethod { concrete } => {
+                    format!(
+                        "_cott_impl.{}.{concrete}.{}",
+                        callable.module, callable.name
+                    )
+                }
+            };
             bindings.push(ResolvedBinding {
-                module: unresolved_binding.module.clone(),
-                function: unresolved_binding.function.clone(),
-                implementation_module: format!(
-                    "_cott_impl.{}.{}",
-                    unresolved_binding.module, unresolved_binding.function
-                ),
-                implementation_function: unresolved_binding.function,
+                module: callable.module.clone(),
+                function: callable.name.clone(),
+                cott_symbol: callable.cott_symbol.clone(),
+                kind: callable.kind.clone(),
+                implementation_module,
+                implementation_function: unresolved_binding.expected_implementation_function,
                 owner: crate::binding::BindingOwner::Agent,
                 source: unresolved_binding.source,
                 generated_relative,
@@ -1551,9 +1566,7 @@ fn generate_project(
             });
         }
     }
-    bindings.sort_by(|left, right| {
-        (&left.module, &left.function).cmp(&(&right.module, &right.function))
-    });
+    bindings.sort_by(|left, right| left.cott_symbol.cmp(&right.cott_symbol));
     add_binding_input_hashes(&paths, &bindings, &mut input_hashes);
     let mut emission = match emit(&config, &plan, &ir, &bindings) {
         Ok(emission) => emission,

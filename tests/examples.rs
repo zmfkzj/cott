@@ -885,15 +885,23 @@ fn modular_order_management_example_emits_verifies_and_runs() {
 
 #[test]
 fn feature_examples_emit_and_check() {
-    let features = [
-        ("features/trait-protocol", "Task: Write Documentation"),
-        ("features/opaque-resource", "Extracted handle id: 42"),
+    let features: [(&str, &[&str]); 5] = [
+        (
+            "features/trait-protocol",
+            &[
+                "Write Documentation (urgency: 2)",
+                "[2] Write Documentation (urgency: 2)",
+                "Priority: 2",
+                "Completed: True",
+            ],
+        ),
+        ("features/opaque-resource", &["Extracted handle id: 42"]),
         (
             "features/json-transform",
-            "Extracted JSON field: Hello Cott",
+            &["Extracted JSON field: Hello Cott"],
         ),
-        ("features/pair-tuple", "Swapped pair: (20, 10)"),
-        ("features/system-effects", "Inspected path: /etc/hosts"),
+        ("features/pair-tuple", &["Swapped pair: (20, 10)"]),
+        ("features/system-effects", &["Inspected path: /etc/hosts"]),
     ];
     let usable_python = Command::new("python3")
         .args([
@@ -903,7 +911,7 @@ fn feature_examples_emit_and_check() {
         .status()
         .is_ok_and(|status| status.success());
 
-    for (feature, expected_output) in features {
+    for (feature, expected_outputs) in features {
         let project = copied_project(feature);
         let formatted = cott(&project.path, &["fmt", "--check"]);
         assert!(
@@ -931,18 +939,43 @@ fn feature_examples_emit_and_check() {
                 .env("PYTHONPATH", project.path.join("generated/python"))
                 .output()
                 .expect("feature app.py should run");
-            fs::write(project.path.join("generated/generation.json"), generation)
-                .expect("restore verified generation record");
             assert!(
                 output.status.success(),
                 "{feature} app.py failed to run: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
             let stdout = String::from_utf8(output.stdout).expect("output must be UTF-8");
-            assert!(
-                stdout.contains(expected_output),
-                "{feature} output did not contain {expected_output}: {stdout}"
-            );
+            for &expected_output in expected_outputs {
+                assert!(
+                    stdout.contains(expected_output),
+                    "{feature} output did not contain {expected_output}: {stdout}"
+                );
+            }
+            if feature == "features/trait-protocol" {
+                let generated = Command::new("python3")
+                    .args([
+                        "-c",
+                        concat!(
+                            "from curriculum.trait_protocol import SimpleTask, format_summary, inspect_task\n",
+                            "task = SimpleTask('Write Documentation', 2)\n",
+                            "assert format_summary(task) == 'Write Documentation (urgency: 2)'\n",
+                            "assert inspect_task(task) == '[2] Write Documentation (urgency: 2)'\n",
+                            "assert task.priority_level() == 2\n",
+                            "assert task.complete() is True\n",
+                            "assert task.completed is True\n",
+                        ),
+                    ])
+                    .env("PYTHONPATH", project.path.join("generated/python"))
+                    .output()
+                    .expect("generated SimpleTask should run");
+                assert!(
+                    generated.status.success(),
+                    "generated SimpleTask behavior failed: {}",
+                    String::from_utf8_lossy(&generated.stderr)
+                );
+            }
+            fs::write(project.path.join("generated/generation.json"), generation)
+                .expect("restore verified generation record");
         }
     }
 }

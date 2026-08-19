@@ -190,6 +190,9 @@ pub enum HirClauseKind {
     Requires {
         expression: HirExpr,
     },
+    Modifies {
+        fields: Vec<SymbolId>,
+    },
     Ensures {
         pattern: Option<HirPattern>,
         expression: HirExpr,
@@ -288,6 +291,49 @@ pub struct HirTrait {
     pub source_order: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirImplInvariant {
+    pub clause_id: u32,
+    pub span: Span,
+    pub expression: HirExpr,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirImplInitializer {
+    pub span: Span,
+    pub parameters: Vec<HirParameter>,
+    pub doc: Option<HirDoc>,
+    pub contract: HirContract,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirImplMethod {
+    pub id: SymbolId,
+    pub span: Span,
+    pub name: String,
+    pub self_span: Span,
+    pub parameters: Vec<HirParameter>,
+    pub return_type: HirType,
+    pub doc: Option<HirDoc>,
+    pub contract: HirContract,
+    pub modifies: Vec<SymbolId>,
+    pub source_order: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirImpl {
+    pub id: SymbolId,
+    pub span: Span,
+    pub annotations: Vec<HirAnnotation>,
+    pub traits: Vec<HirType>,
+    pub state: Vec<HirField>,
+    pub invariants: Vec<HirImplInvariant>,
+    pub initializer: Option<HirImplInitializer>,
+    pub methods: Vec<HirImplMethod>,
+    pub public: bool,
+    pub source_order: usize,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HirRuleClauseAction {
     Add,
@@ -352,6 +398,7 @@ pub enum HirDeclaration {
     Struct(HirStruct),
     Enum(HirEnum),
     Trait(HirTrait),
+    Impl(HirImpl),
     Rule(HirRule),
     Const(HirConst),
     Function(HirFunction),
@@ -365,6 +412,7 @@ impl HirDeclaration {
             Self::Struct(value) => &value.id,
             Self::Enum(value) => &value.id,
             Self::Trait(value) => &value.id,
+            Self::Impl(value) => &value.id,
             Self::Rule(value) => &value.id,
             Self::Const(value) => &value.id,
             Self::Function(value) => &value.id,
@@ -378,6 +426,7 @@ impl HirDeclaration {
             Self::Struct(value) => &value.span,
             Self::Enum(value) => &value.span,
             Self::Trait(value) => &value.span,
+            Self::Impl(value) => &value.span,
             Self::Rule(value) => &value.span,
             Self::Const(value) => &value.span,
             Self::Function(value) => &value.span,
@@ -391,6 +440,7 @@ impl HirDeclaration {
             Self::Struct(value) => value.public,
             Self::Enum(value) => value.public,
             Self::Trait(value) => value.public,
+            Self::Impl(value) => value.public,
             Self::Rule(value) => value.public,
             Self::Const(value) => value.public,
             Self::Function(value) => value.public,
@@ -426,6 +476,7 @@ pub enum HirReference {
     Constant(SymbolId),
     EnumSingleton(SymbolId),
     Field(SymbolId),
+    OldStateField(SymbolId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -470,8 +521,12 @@ pub enum HirExprKind {
     ParameterRef(SymbolId),
     BindingRef(SymbolId),
     SelfRef,
+    ResultRef,
     ConstantRef(SymbolId),
     EnumSingletonRef(SymbolId),
+    OldStateField {
+        field: SymbolId,
+    },
     Field {
         base: Box<HirExpr>,
         name: String,
@@ -554,6 +609,7 @@ enum OwnedDeclKind {
     Const,
     Function,
     Trait { generics: usize },
+    Impl,
     Rule { generics: usize },
 }
 
@@ -600,6 +656,7 @@ impl<'a> OwnedLower<'a> {
                             generics: v.generics.len(),
                         },
                     ),
+                    Declaration::Impl(v) => (&v.name, OwnedDeclKind::Impl),
                     Declaration::Const(v) => (&v.name, OwnedDeclKind::Const),
                     Declaration::Rule(v) => (
                         &v.name,
@@ -1038,6 +1095,7 @@ impl<'a> OwnedLower<'a> {
                 | OwnedDeclKind::Enum { generics }
                 | OwnedDeclKind::Trait { generics },
             ) => generics,
+            Some(OwnedDeclKind::Impl) | None => 0,
             _ => 0,
         };
         self.arity(module, value, expected, &symbol.as_string());
@@ -1283,7 +1341,7 @@ impl<'a> OwnedLower<'a> {
                 }
                 Some(HirValue::Bool(true))
             }
-            ExprKind::Field { .. } => {
+            ExprKind::Field { .. } | ExprKind::OldStateField { .. } => {
                 self.error(
                     module,
                     expression.span.clone(),
@@ -1366,6 +1424,8 @@ impl<'a> OwnedLower<'a> {
             },
             HirExprKind::ParameterRef(_)
             | HirExprKind::BindingRef(_)
+            | HirExprKind::ResultRef
+            | HirExprKind::OldStateField { .. }
             | HirExprKind::EnumSingletonRef(_) => None,
         }
     }
@@ -1617,6 +1677,11 @@ fn validate_opaque_boundaries(modules: &[HirModule], errors: &mut Vec<ProjectDia
                         }
                     }
                 }
+                HirDeclaration::Impl(value)
+                    if value.state.iter().any(|field| contains_opaque(&field.ty)) =>
+                {
+                    // Stateful impl storage is intentionally the sole Opaque exception.
+                }
                 HirDeclaration::Function(value) => {
                     for parameter in &value.parameters {
                         if contains_opaque(&parameter.ty) && !is_opaque_boundary(&parameter.ty) {
@@ -1842,6 +1907,29 @@ impl<'a> OwnedLower<'a> {
                 HirType::Primitive(PrimitiveType::Unit),
                 None,
             ),
+            ExprKind::OldStateField { field } => {
+                let key = format!("old:{}", field.name);
+                if let Some((symbol, ty, _)) = env.get(&key) {
+                    (
+                        HirExprKind::OldStateField {
+                            field: symbol.clone(),
+                        },
+                        ty.clone(),
+                        Some(HirReference::OldStateField(symbol.clone())),
+                    )
+                } else {
+                    self.error(
+                        module,
+                        value.span.clone(),
+                        "old(self.field) is only allowed in an impl method ensures clause",
+                    );
+                    (
+                        HirExprKind::Literal(HirValue::Unit),
+                        owned_invalid_expr_type("invalid-old-state-field"),
+                        None,
+                    )
+                }
+            }
             ExprKind::Name(path) => {
                 let name = path.segments.last().cloned().unwrap_or_default();
                 if path.segments.len() > 1 {
@@ -1854,8 +1942,10 @@ impl<'a> OwnedLower<'a> {
                             } else {
                                 Some(HirReference::Parameter(symbol.clone()))
                             },
-                            kind: if path.segments[0] == "result" || path.segments[0] == "self" {
+                            kind: if path.segments[0] == "self" {
                                 HirExprKind::SelfRef
+                            } else if path.segments[0] == "result" {
+                                HirExprKind::ResultRef
                             } else if binding {
                                 HirExprKind::BindingRef(symbol)
                             } else {
@@ -1903,8 +1993,10 @@ impl<'a> OwnedLower<'a> {
                     }
                 }
                 if let Some((symbol, ty, binding)) = env.get(&name) {
-                    if name == "result" || name == "self" {
+                    if name == "self" {
                         (HirExprKind::SelfRef, ty.clone(), None)
+                    } else if name == "result" {
+                        (HirExprKind::ResultRef, ty.clone(), None)
                     } else if *binding {
                         (
                             HirExprKind::BindingRef(symbol.clone()),
@@ -2279,6 +2371,11 @@ impl<'a> OwnedLower<'a> {
                     {
                         Some((value.underlying.clone(), Vec::new()))
                     }
+                    Declaration::Impl(value) if value.name == symbol.name => value
+                        .state
+                        .iter()
+                        .find(|field| field.name == field_name)
+                        .map(|field| (field.ty.clone(), Vec::new())),
                     _ => None,
                 })?
         };
@@ -2410,15 +2507,14 @@ impl<'a> OwnedLower<'a> {
     fn contract(
         &mut self,
         module: usize,
-        body: &FunctionBody,
+        clauses: &[ast::Clause],
         env: &HashMap<String, (SymbolId, HirType, bool)>,
         return_type: &HirType,
+        old_fields: Option<&HashMap<String, (SymbolId, HirType, bool)>>,
+        allow_result: bool,
     ) -> (HirContract, Option<HirDoc>) {
         let mut contract = HirContract::default();
         let mut doc = None;
-        let FunctionBody::Clauses { clauses, .. } = body else {
-            return (contract, doc);
-        };
         for (clause_id, clause) in clauses.iter().enumerate() {
             match &clause.kind {
                 ClauseKind::Documentation(value) => {
@@ -2469,9 +2565,12 @@ impl<'a> OwnedLower<'a> {
                 }
                 ClauseKind::Ensures { pattern, condition } => {
                     let mut clause_env = env.clone();
+                    if let Some(old_fields) = old_fields {
+                        clause_env.extend(old_fields.clone());
+                    }
                     let pattern = if let Some(pattern) = pattern {
                         Some(self.pattern(module, pattern, return_type, &mut clause_env))
-                    } else {
+                    } else if allow_result {
                         clause_env.insert(
                             "result".to_owned(),
                             (
@@ -2480,6 +2579,8 @@ impl<'a> OwnedLower<'a> {
                                 false,
                             ),
                         );
+                        None
+                    } else {
                         None
                     };
                     let expression = self.expr(module, condition, &clause_env);
@@ -2544,6 +2645,7 @@ impl<'a> OwnedLower<'a> {
                         });
                     }
                 }
+                ClauseKind::Modifies { .. } => {}
                 ClauseKind::Effects { effects } => {
                     for (source_order, effect) in effects.iter().enumerate() {
                         contract.effects.push(HirEffect {
@@ -2878,6 +2980,143 @@ impl<'a> OwnedLower<'a> {
             PatternKind::Wildcard => HirType::Primitive(PrimitiveType::Unit),
         }
     }
+    fn state_type_allowed(&self, ty: &HirType) -> bool {
+        match ty {
+            HirType::Primitive(PrimitiveType::Never) | HirType::TypeParameter { .. } => false,
+            HirType::Primitive(_) | HirType::Opaque { .. } => true,
+            HirType::Named { symbol, args } => {
+                matches!(
+                    self.declarations.get(symbol),
+                    Some(OwnedDeclKind::Type { .. } | OwnedDeclKind::Enum { .. })
+                ) && args.iter().all(|arg| self.state_type_allowed(arg))
+            }
+            HirType::List { item } | HirType::Set { item } | HirType::Option { item } => {
+                self.state_type_allowed(item)
+            }
+            HirType::Map { key, value } => {
+                self.state_type_allowed(key) && self.state_type_allowed(value)
+            }
+            HirType::Tuple2 { first, second } => {
+                self.state_type_allowed(first) && self.state_type_allowed(second)
+            }
+            HirType::Result { ok, error } => {
+                self.state_type_allowed(ok) && self.state_type_allowed(error)
+            }
+        }
+    }
+
+    fn validate_impl_methods(
+        &mut self,
+        module: usize,
+        traits: &[HirType],
+        methods: &[HirImplMethod],
+    ) {
+        let mut required = BTreeMap::<String, (Vec<(String, HirType)>, HirType)>::new();
+        for trait_ref in traits {
+            let HirType::Named { symbol, args } = trait_ref else {
+                continue;
+            };
+            let Some(source_module) = self
+                .modules
+                .iter()
+                .position(|candidate| candidate == &symbol.module)
+            else {
+                continue;
+            };
+            let Some((generics, trait_methods)) = self.parsed.sources[source_module]
+                .syntax
+                .declarations
+                .iter()
+                .find_map(|declaration| match declaration {
+                    Declaration::Trait(value) if value.name == symbol.name => {
+                        Some((&value.generics, &value.methods))
+                    }
+                    _ => None,
+                })
+            else {
+                continue;
+            };
+            let substitutions = generics
+                .iter()
+                .map(|generic| generic.name.clone())
+                .zip(args.iter().cloned())
+                .collect::<HashMap<_, _>>();
+            let names = generics
+                .iter()
+                .map(|generic| generic.name.clone())
+                .collect::<HashSet<_>>();
+            for trait_method in trait_methods {
+                let parameters = trait_method
+                    .parameters
+                    .iter()
+                    .map(|parameter| {
+                        (
+                            parameter.name.clone(),
+                            substitute_hir_type(
+                                self.ty(source_module, &parameter.ty, &names),
+                                &substitutions,
+                            ),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let return_type = substitute_hir_type(
+                    self.ty(source_module, &trait_method.return_type, &names),
+                    &substitutions,
+                );
+                if let Some((old_parameters, old_return)) = required.get(&trait_method.name) {
+                    if old_parameters != &parameters || old_return != &return_type {
+                        self.error(
+                            module,
+                            trait_method.span.clone(),
+                            "impl traits have incompatible methods with the same name",
+                        );
+                    }
+                } else {
+                    required.insert(trait_method.name.clone(), (parameters, return_type));
+                }
+            }
+        }
+        let mut declared = BTreeSet::new();
+        for method in methods {
+            if !declared.insert(method.name.clone()) {
+                self.error(
+                    module,
+                    method.span.clone(),
+                    format!("duplicate impl method `{}`", method.name),
+                );
+            }
+            match required.get(&method.name) {
+                Some((parameters, return_type))
+                    if method.return_type == *return_type
+                        && method
+                            .parameters
+                            .iter()
+                            .map(|parameter| (parameter.name.clone(), parameter.ty.clone()))
+                            .collect::<Vec<_>>()
+                            == *parameters => {}
+                Some(_) => self.error(
+                    module,
+                    method.span.clone(),
+                    "impl method signature must exactly match its trait method",
+                ),
+                None => self.error(
+                    module,
+                    method.span.clone(),
+                    "impl method is not declared by its traits",
+                ),
+            }
+        }
+        for name in required.keys() {
+            if !declared.contains(name) {
+                self.error(
+                    module,
+                    Span::new(0, 0),
+                    format!("impl is missing trait method `{name}`"),
+                );
+            }
+        }
+    }
+
     fn declaration(
         &mut self,
         module: usize,
@@ -3049,6 +3288,293 @@ impl<'a> OwnedLower<'a> {
                             source_order: i,
                         })
                         .collect(),
+                    public: true,
+                    source_order: order,
+                })
+            }
+            Declaration::Impl(value) => {
+                let id = id_for(&value.name);
+                let traits = value
+                    .traits
+                    .iter()
+                    .map(|trait_ref| self.ty(module, trait_ref, &HashSet::new()))
+                    .collect::<Vec<_>>();
+                let mut trait_symbols = BTreeSet::new();
+                for (source, trait_ref) in value.traits.iter().zip(&traits) {
+                    match trait_ref {
+                        HirType::Named { symbol, .. }
+                            if matches!(
+                                self.declarations.get(symbol),
+                                Some(OwnedDeclKind::Trait { .. })
+                            ) =>
+                        {
+                            if !trait_symbols.insert(symbol.clone()) {
+                                self.error(module, source.span.clone(), "duplicate impl trait");
+                            }
+                        }
+                        _ => self.error(module, source.span.clone(), "impl target must be a trait"),
+                    }
+                }
+                let state = value
+                    .state
+                    .iter()
+                    .enumerate()
+                    .map(|(i, field)| self.field(module, field, &HashSet::new(), i))
+                    .collect::<Vec<_>>();
+                let mut state_names = BTreeSet::new();
+                let mut optional = false;
+                for field in &state {
+                    if !state_names.insert(field.name.clone()) {
+                        self.error(
+                            module,
+                            field.span.clone(),
+                            format!("duplicate state field `{}`", field.name),
+                        );
+                    }
+                    if field.default.is_some() {
+                        optional = true;
+                    } else if optional {
+                        self.error(
+                            module,
+                            field.span.clone(),
+                            "required state fields must precede default state fields",
+                        );
+                    }
+                    if !self.state_type_allowed(&field.ty) {
+                        self.error(
+                            module,
+                            field.span.clone(),
+                            "state field type must be a closed immutable cott value type",
+                        );
+                    }
+                }
+                let mut self_env = HashMap::new();
+                self_env.insert(
+                    "self".into(),
+                    (
+                        SymbolId::new(id.module.clone(), "self"),
+                        HirType::Named {
+                            symbol: id.clone(),
+                            args: vec![],
+                        },
+                        false,
+                    ),
+                );
+                let invariants = value
+                    .invariants
+                    .iter()
+                    .enumerate()
+                    .map(|(clause_id, invariant)| {
+                        let expression = self.expr(module, &invariant.condition, &self_env);
+                        if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
+                            self.error(
+                                module,
+                                invariant.condition.span.clone(),
+                                "contract condition must be boolean",
+                            );
+                        }
+                        HirImplInvariant {
+                            clause_id: clause_id as u32,
+                            span: invariant.span.clone(),
+                            expression,
+                        }
+                    })
+                    .collect();
+                let initializer = value.initializer.as_ref().map(|init| {
+                    let mut env = HashMap::new();
+                    let parameters = init
+                        .parameters
+                        .iter()
+                        .enumerate()
+                        .map(|(i, parameter)| {
+                            let parameter = self.parameter(module, parameter, &HashSet::new(), i);
+                            env.insert(
+                                parameter.name.clone(),
+                                (
+                                    SymbolId::new(id.module.clone(), parameter.name.clone()),
+                                    parameter.ty.clone(),
+                                    false,
+                                ),
+                            );
+                            parameter
+                        })
+                        .collect::<Vec<_>>();
+                    let mut last = None;
+                    for parameter in &parameters {
+                        let Some((index, field)) = state
+                            .iter()
+                            .enumerate()
+                            .find(|(_, field)| field.name == parameter.name)
+                        else {
+                            self.error(
+                                module,
+                                parameter.span.clone(),
+                                "init parameter must name a state field",
+                            );
+                            continue;
+                        };
+                        if last.is_some_and(|last| index <= last) || field.ty != parameter.ty {
+                            self.error(
+                                module,
+                                parameter.span.clone(),
+                                "init parameters must be an ordered exact state-field subsequence",
+                            );
+                        }
+                        last = Some(index);
+                    }
+                    for field in state.iter().filter(|field| field.default.is_none()) {
+                        if !parameters.iter().any(|parameter| {
+                            parameter.name == field.name && parameter.ty == field.ty
+                        }) {
+                            self.error(
+                                module,
+                                field.span.clone(),
+                                "init must include every required state field",
+                            );
+                        }
+                    }
+                    let mut ensures_env = env.clone();
+                    ensures_env.extend(self_env.clone());
+                    let (contract, doc) = self.contract(
+                        module,
+                        &init.clauses,
+                        &ensures_env,
+                        &HirType::Primitive(PrimitiveType::Unit),
+                        None,
+                        false,
+                    );
+                    HirImplInitializer {
+                        span: init.span.clone(),
+                        parameters,
+                        doc,
+                        contract,
+                    }
+                });
+                if state.is_empty() && initializer.is_some() {
+                    self.error(
+                        module,
+                        value.span.clone(),
+                        "impl without state cannot declare init",
+                    );
+                } else if state.iter().any(|field| field.default.is_none()) && initializer.is_none()
+                {
+                    self.error(
+                        module,
+                        value.span.clone(),
+                        "impl with required state fields requires init",
+                    );
+                }
+                let methods = value
+                    .methods
+                    .iter()
+                    .enumerate()
+                    .map(|(source_order, method)| {
+                        let mut env = self_env.clone();
+                        let parameters = method
+                            .parameters
+                            .iter()
+                            .enumerate()
+                            .map(|(i, parameter)| {
+                                let parameter =
+                                    self.parameter(module, parameter, &HashSet::new(), i);
+                                env.insert(
+                                    parameter.name.clone(),
+                                    (
+                                        SymbolId::new(id.module.clone(), parameter.name.clone()),
+                                        parameter.ty.clone(),
+                                        false,
+                                    ),
+                                );
+                                parameter
+                            })
+                            .collect::<Vec<_>>();
+                        let return_type = self.ty(module, &method.return_type, &HashSet::new());
+                        let old_fields = state
+                            .iter()
+                            .map(|field| {
+                                (
+                                    format!("old:{}", field.name),
+                                    (
+                                        SymbolId::new(
+                                            id.module.clone(),
+                                            format!("{}.{}", id.name, field.name),
+                                        ),
+                                        field.ty.clone(),
+                                        false,
+                                    ),
+                                )
+                            })
+                            .collect::<HashMap<_, _>>();
+                        let (contract, doc) = self.contract(
+                            module,
+                            &method.clauses,
+                            &env,
+                            &return_type,
+                            Some(&old_fields),
+                            true,
+                        );
+                        let mut modifies = Vec::new();
+                        for clause in &method.clauses {
+                            if let ClauseKind::Modifies { fields } = &clause.kind {
+                                if !modifies.is_empty() {
+                                    self.error(
+                                        module,
+                                        clause.span.clone(),
+                                        "method may have at most one modifies clause",
+                                    );
+                                }
+                                for field in fields {
+                                    if !state_names.contains(&field.name) {
+                                        self.error(
+                                            module,
+                                            field.span.clone(),
+                                            "modifies field must be impl state",
+                                        );
+                                    } else {
+                                        let symbol = SymbolId::new(
+                                            id.module.clone(),
+                                            format!("{}.{}", id.name, field.name),
+                                        );
+                                        if modifies.contains(&symbol) {
+                                            self.error(
+                                                module,
+                                                field.span.clone(),
+                                                "duplicate modifies field",
+                                            );
+                                        } else {
+                                            modifies.push(symbol);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        HirImplMethod {
+                            id: SymbolId::new(
+                                id.module.clone(),
+                                format!("{}.{}", id.name, method.name),
+                            ),
+                            span: method.span.clone(),
+                            name: method.name.clone(),
+                            self_span: method.self_span.clone(),
+                            parameters,
+                            return_type,
+                            doc,
+                            contract,
+                            modifies,
+                            source_order,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                self.validate_impl_methods(module, &traits, &methods);
+                HirDeclaration::Impl(HirImpl {
+                    id,
+                    span: value.span.clone(),
+                    annotations: lower_annotations(&value.annotations),
+                    traits,
+                    state,
+                    invariants,
+                    initializer,
+                    methods,
                     public: true,
                     source_order: order,
                 })
@@ -3226,6 +3752,7 @@ impl<'a> OwnedLower<'a> {
                                 },
                             });
                         }
+                        ClauseKind::Modifies { .. } => {}
                         ClauseKind::Effects { .. } => {}
                     }
                 }
@@ -3321,7 +3848,12 @@ impl<'a> OwnedLower<'a> {
                     })
                     .collect::<Vec<_>>();
                 let return_type = self.ty(module, &value.return_type, &names);
-                let (contract, doc) = self.contract(module, &value.body, &env, &return_type);
+                let clauses: &[ast::Clause] = match &value.body {
+                    FunctionBody::Clauses { clauses, .. } => clauses,
+                    FunctionBody::Signature { .. } => &[],
+                };
+                let (contract, doc) =
+                    self.contract(module, clauses, &env, &return_type, None, true);
                 HirDeclaration::Function(HirFunction {
                     id,
                     span: value.span.clone(),
@@ -3523,7 +4055,7 @@ fn owned_visit_expr<F: FnMut(&ast::QualifiedName)>(value: &ast::Expr, visit: &mu
     match &value.kind {
         ExprKind::Name(path) => visit(path),
         ExprKind::Parenthesized(inner) | ExprKind::Unary { operand: inner, .. } => {
-            owned_visit_expr(inner, visit);
+            owned_visit_expr(inner, visit)
         }
         ExprKind::Binary { left, right, .. } => {
             owned_visit_expr(left, visit);
@@ -3536,10 +4068,9 @@ fn owned_visit_expr<F: FnMut(&ast::QualifiedName)>(value: &ast::Expr, visit: &mu
             }
         }
         ExprKind::Field { base, .. } => owned_visit_expr(base, visit),
-        ExprKind::Literal(_) | ExprKind::Unit => {}
+        ExprKind::OldStateField { .. } | ExprKind::Literal(_) | ExprKind::Unit => {}
     }
 }
-
 fn owned_visit_pattern<F: FnMut(&ast::QualifiedName)>(value: &ast::Pattern, visit: &mut F) {
     if let PatternKind::Variant { path, arguments } = &value.kind {
         visit(path);
@@ -3548,7 +4079,6 @@ fn owned_visit_pattern<F: FnMut(&ast::QualifiedName)>(value: &ast::Pattern, visi
         }
     }
 }
-
 fn owned_visit_const_expr<F: FnMut(&ast::QualifiedName)>(value: &ast::ConstExpr, visit: &mut F) {
     match value {
         ast::ConstExpr::Expression(expression) => owned_visit_expr(expression, visit),
@@ -3558,7 +4088,6 @@ fn owned_visit_const_expr<F: FnMut(&ast::QualifiedName)>(value: &ast::ConstExpr,
         }
     }
 }
-
 fn owned_visit_clause_kind<F: FnMut(&ast::QualifiedName)>(kind: &ast::ClauseKind, visit: &mut F) {
     match kind {
         ast::ClauseKind::Requires { condition } => owned_visit_expr(condition, visit),
@@ -3575,18 +4104,17 @@ fn owned_visit_clause_kind<F: FnMut(&ast::QualifiedName)>(kind: &ast::ClauseKind
             }
         }
         ast::ClauseKind::Rule { name } => visit(name),
-        ast::ClauseKind::Effects { .. } | ast::ClauseKind::Documentation(_) => {}
+        ast::ClauseKind::Modifies { .. }
+        | ast::ClauseKind::Effects { .. }
+        | ast::ClauseKind::Documentation(_) => {}
     }
 }
-
 fn owned_visit_clause<F: FnMut(&ast::QualifiedName)>(value: &ast::Clause, visit: &mut F) {
     owned_visit_clause_kind(&value.kind, visit);
 }
-
 fn owned_visit_parameter<F: FnMut(&ast::QualifiedName)>(value: &ast::Parameter, visit: &mut F) {
     owned_visit_type(&value.ty, visit);
 }
-
 fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
     declaration: &ast::Declaration,
     mut visit: F,
@@ -3600,11 +4128,6 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
             }
         }
         Declaration::Struct(value) => {
-            for generic in &value.generics {
-                for bound in &generic.bounds {
-                    owned_visit_type(bound, &mut visit);
-                }
-            }
             for field in &value.fields {
                 owned_visit_type(&field.ty, &mut visit);
                 if let Some(default) = &field.default {
@@ -3613,11 +4136,6 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
             }
         }
         Declaration::Enum(value) => {
-            for generic in &value.generics {
-                for bound in &generic.bounds {
-                    owned_visit_type(bound, &mut visit);
-                }
-            }
             for variant in &value.variants {
                 for parameter in &variant.parameters {
                     owned_visit_parameter(parameter, &mut visit);
@@ -3625,11 +4143,6 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
             }
         }
         Declaration::Trait(value) => {
-            for generic in &value.generics {
-                for bound in &generic.bounds {
-                    owned_visit_type(bound, &mut visit);
-                }
-            }
             for method in &value.methods {
                 for parameter in &method.parameters {
                     owned_visit_parameter(parameter, &mut visit);
@@ -3637,16 +4150,42 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
                 owned_visit_type(&method.return_type, &mut visit);
             }
         }
+        Declaration::Impl(value) => {
+            for trait_ref in &value.traits {
+                owned_visit_type(trait_ref, &mut visit);
+            }
+            for field in &value.state {
+                owned_visit_type(&field.ty, &mut visit);
+                if let Some(default) = &field.default {
+                    owned_visit_const_expr(default, &mut visit);
+                }
+            }
+            for invariant in &value.invariants {
+                owned_visit_expr(&invariant.condition, &mut visit);
+            }
+            if let Some(init) = &value.initializer {
+                for parameter in &init.parameters {
+                    owned_visit_parameter(parameter, &mut visit);
+                }
+                for clause in &init.clauses {
+                    owned_visit_clause(clause, &mut visit);
+                }
+            }
+            for method in &value.methods {
+                for parameter in &method.parameters {
+                    owned_visit_parameter(parameter, &mut visit);
+                }
+                owned_visit_type(&method.return_type, &mut visit);
+                for clause in &method.clauses {
+                    owned_visit_clause(clause, &mut visit);
+                }
+            }
+        }
         Declaration::Const(value) => {
             owned_visit_type(&value.ty, &mut visit);
             owned_visit_const_expr(&value.value, &mut visit);
         }
         Declaration::Rule(value) => {
-            for generic in &value.generics {
-                for bound in &generic.bounds {
-                    owned_visit_type(bound, &mut visit);
-                }
-            }
             if let Some(base) = &value.base {
                 owned_visit_type(base, &mut visit);
             }
@@ -3655,11 +4194,6 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
             }
         }
         Declaration::Function(value) => {
-            for generic in &value.generics {
-                for bound in &generic.bounds {
-                    owned_visit_type(bound, &mut visit);
-                }
-            }
             for parameter in &value.parameters {
                 owned_visit_parameter(parameter, &mut visit);
             }
@@ -3740,6 +4274,7 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
                 Declaration::Struct(value) => (&value.name, true),
                 Declaration::Enum(value) => (&value.name, true),
                 Declaration::Trait(value) => (&value.name, true),
+                Declaration::Impl(value) => (&value.name, true),
                 Declaration::Rule(value) => (&value.name, true),
                 Declaration::Const(value) => (&value.name, false),
                 Declaration::Function(value) => (&value.name, false),
@@ -3994,6 +4529,7 @@ fn owned_preflight(
                 Declaration::Struct(v) => &v.name,
                 Declaration::Enum(v) => &v.name,
                 Declaration::Trait(v) => &v.name,
+                Declaration::Impl(v) => &v.name,
                 Declaration::Rule(v) => &v.name,
                 Declaration::Const(v) => &v.name,
                 Declaration::Function(v) => &v.name,
@@ -4016,20 +4552,38 @@ fn owned_preflight(
             continue;
         };
         for declaration in &source.syntax.declarations {
-            let (name, types): (&String, Vec<&ast::Type>) = match declaration {
-                Declaration::Alias(v) => (&v.name, vec![&v.target]),
-                Declaration::Newtype(v) => (&v.name, vec![&v.underlying]),
-                Declaration::Struct(v) => (&v.name, v.fields.iter().map(|f| &f.ty).collect()),
-                Declaration::Enum(v) => (
-                    &v.name,
-                    v.variants
-                        .iter()
-                        .flat_map(|v| v.parameters.iter().map(|p| &p.ty))
-                        .collect(),
-                ),
-                Declaration::Rule(v) => (&v.name, v.base.as_ref().into_iter().collect()),
-                _ => continue,
-            };
+            let (name, types): (&String, Vec<&ast::Type>) =
+                match declaration {
+                    Declaration::Alias(v) => (&v.name, vec![&v.target]),
+                    Declaration::Newtype(v) => (&v.name, vec![&v.underlying]),
+                    Declaration::Struct(v) => (&v.name, v.fields.iter().map(|f| &f.ty).collect()),
+                    Declaration::Enum(v) => (
+                        &v.name,
+                        v.variants
+                            .iter()
+                            .flat_map(|v| v.parameters.iter().map(|p| &p.ty))
+                            .collect(),
+                    ),
+                    Declaration::Impl(v) => (
+                        &v.name,
+                        v.traits
+                            .iter()
+                            .chain(v.state.iter().map(|field| &field.ty))
+                            .chain(v.initializer.iter().flat_map(|init| {
+                                init.parameters.iter().map(|parameter| &parameter.ty)
+                            }))
+                            .chain(v.methods.iter().flat_map(|method| {
+                                method
+                                    .parameters
+                                    .iter()
+                                    .map(|parameter| &parameter.ty)
+                                    .chain(std::iter::once(&method.return_type))
+                            }))
+                            .collect(),
+                    ),
+                    Declaration::Rule(v) => (&v.name, v.base.as_ref().into_iter().collect()),
+                    _ => continue,
+                };
             let current = SymbolId::new(module.clone(), name.clone());
             let mut paths = Vec::new();
             for ty in types {
@@ -4359,6 +4913,17 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
                         types.push(&method.return_type);
                     }
                 }
+                HirDeclaration::Impl(value) => {
+                    types.extend(value.traits.iter());
+                    types.extend(value.state.iter().map(|field| &field.ty));
+                    if let Some(initializer) = &value.initializer {
+                        types.extend(initializer.parameters.iter().map(|parameter| &parameter.ty));
+                    }
+                    for method in &value.methods {
+                        types.extend(method.parameters.iter().map(|parameter| &parameter.ty));
+                        types.push(&method.return_type);
+                    }
+                }
                 HirDeclaration::Const(value) => types.push(&value.ty),
                 HirDeclaration::Function(value) => {
                     types.extend(value.parameters.iter().map(|parameter| &parameter.ty));
@@ -4402,6 +4967,12 @@ fn validate_effects(
                     .methods
                     .iter()
                     .map(|method| &method.contract)
+                    .collect(),
+                HirDeclaration::Impl(value) => value
+                    .initializer
+                    .iter()
+                    .map(|initializer| &initializer.contract)
+                    .chain(value.methods.iter().map(|method| &method.contract))
                     .collect(),
                 HirDeclaration::Rule(value) => vec![&value.contract],
                 _ => Vec::new(),

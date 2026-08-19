@@ -7,13 +7,15 @@ use crate::hash::sha256_hex;
 use crate::manifest::ProjectConfig;
 use crate::project::ProjectPaths;
 use crate::provenance::GenerationRecord;
-use crate::python::artifact_plan::PythonArtifactPlan;
+use crate::python::artifact_plan::{PythonArtifactPlan, PythonCallable, PythonCallableKind};
 
 /// A validated implementation binding and its byte identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedBinding {
     pub module: String,
     pub function: String,
+    pub cott_symbol: String,
+    pub kind: PythonCallableKind,
     pub implementation_module: String,
     pub implementation_function: String,
     pub owner: BindingOwner,
@@ -49,6 +51,9 @@ pub struct ImplementationResolution {
 pub struct UnresolvedBinding {
     pub module: String,
     pub function: String,
+    pub cott_symbol: String,
+    pub kind: PythonCallableKind,
+    pub expected_implementation_function: String,
     pub source: PathBuf,
 }
 
@@ -79,26 +84,29 @@ pub fn resolve_implementations(
     plan: &PythonArtifactPlan,
 ) -> Result<ImplementationResolution, Vec<BindingDiagnostic>> {
     let callables = plan
-        .callable_functions()
+        .callables()
         .into_iter()
-        .filter(|callable| {
-            callable
-                .declaration
-                .get("public")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-        })
-        .map(|callable| (callable.function.clone(), callable))
+        .map(|callable| (callable.cott_symbol.clone(), callable))
         .collect::<BTreeMap<_, _>>();
     let mut diagnostics = Vec::new();
     for symbol in config.python.implementations.keys() {
-        if !callables.contains_key(symbol) {
-            diagnostics.push(BindingDiagnostic {
+        match callables.get(symbol) {
+            Some(PythonCallable {
+                kind: PythonCallableKind::Function,
+                ..
+            }) => {}
+            Some(_) => diagnostics.push(BindingDiagnostic {
+                path: paths.manifest.clone(),
+                message: format!(
+                    "implementation binding key `{symbol}` names an implementation method; implementation methods are agent-only"
+                ),
+            }),
+            None => diagnostics.push(BindingDiagnostic {
                 path: paths.manifest.clone(),
                 message: format!(
                     "implementation binding key `{symbol}` does not name a public function"
                 ),
-            });
+            }),
         }
     }
     if !diagnostics.is_empty() {
@@ -137,8 +145,8 @@ pub fn resolve_implementations(
     let mut unresolved = Vec::new();
     let mut expected_agent_files = BTreeSet::new();
     for (symbol, callable) in callables {
-        let function = symbol.rsplit('.').next().unwrap_or(&symbol).to_owned();
-        if json_contains_opaque(&callable.declaration)
+        if matches!(&callable.kind, PythonCallableKind::Function)
+            && json_contains_opaque(&callable.declaration)
             && !config.python.implementations.contains_key(&symbol)
         {
             diagnostics.push(BindingDiagnostic {
@@ -156,11 +164,15 @@ pub fn resolve_implementations(
             });
             continue;
         };
+        let expected_implementation_function = expected_implementation_function(&callable);
         let mut agent_source = paths.python_source_dir.join("_cott_impl");
         for segment in segments {
             agent_source.push(segment);
         }
-        agent_source.push(format!("{function}.py"));
+        if let PythonCallableKind::ImplMethod { concrete } = &callable.kind {
+            agent_source.push(concrete);
+        }
+        agent_source.push(format!("{}.py", callable.name));
         let generated_relative = agent_source
             .strip_prefix(&paths.python_source_dir)
             .expect("canonical implementation is rooted at Python source")
@@ -212,14 +224,17 @@ pub fn resolve_implementations(
             }
             (
                 agent_source,
-                format!("_cott_impl.{}.{}", callable.module, function),
-                function.clone(),
+                agent_implementation_module(&callable),
+                expected_implementation_function.clone(),
                 BindingOwner::Agent,
             )
         } else {
             unresolved.push(UnresolvedBinding {
-                module: callable.module,
-                function,
+                module: callable.module.clone(),
+                function: callable.name.clone(),
+                cott_symbol: symbol,
+                kind: callable.kind.clone(),
+                expected_implementation_function,
                 source: agent_source,
             });
             continue;
@@ -228,7 +243,7 @@ pub fn resolve_implementations(
         match read_binding(
             &source,
             &implementation_function,
-            &callable.declaration,
+            &callable,
             &local_imports,
             &generated_type_modules,
             &allowed_facade_imports,
@@ -236,7 +251,9 @@ pub fn resolve_implementations(
         ) {
             Ok(bytes) => resolved.push(ResolvedBinding {
                 module: callable.module,
-                function,
+                function: callable.name,
+                cott_symbol: symbol,
+                kind: callable.kind,
                 implementation_module,
                 implementation_function,
                 owner,
@@ -257,13 +274,8 @@ pub fn resolve_implementations(
         &mut diagnostics,
     );
     if diagnostics.is_empty() {
-        resolved.sort_by(|left, right| {
-            (&left.module, &left.function).cmp(&(&right.module, &right.function))
-        });
-
-        unresolved.sort_by(|left, right| {
-            (&left.module, &left.function).cmp(&(&right.module, &right.function))
-        });
+        resolved.sort_by(|left, right| left.cott_symbol.cmp(&right.cott_symbol));
+        unresolved.sort_by(|left, right| left.cott_symbol.cmp(&right.cott_symbol));
         Ok(ImplementationResolution {
             resolved,
             unresolved,
@@ -484,23 +496,34 @@ pub fn validate_candidate(
 ) -> Result<(), String> {
     let source =
         std::str::from_utf8(bytes).map_err(|_| "binding source is not valid UTF-8".to_owned())?;
-    let mut matches = plan.callable_functions().into_iter().filter(|callable| {
-        callable.function == function || callable.function.rsplit('.').next() == Some(function)
-    });
+    let callables = plan.callables();
+    let mut matches = callables
+        .iter()
+        .filter(|callable| callable.cott_symbol == function)
+        .collect::<Vec<_>>();
+    if matches.is_empty() {
+        matches = callables
+            .iter()
+            .filter(|callable| callable.name == function)
+            .collect();
+        if matches
+            .iter()
+            .any(|callable| matches!(&callable.kind, PythonCallableKind::Function))
+        {
+            matches.retain(|callable| matches!(&callable.kind, PythonCallableKind::Function));
+        }
+    }
     let callable = matches
-        .next()
-        .ok_or_else(|| format!("unknown canonical function `{function}`"))?;
-    if matches.next().is_some() {
+        .first()
+        .ok_or_else(|| format!("unknown canonical function `{function}`"))?
+        .to_owned();
+    if matches.len() != 1 {
         return Err(format!("ambiguous canonical function `{function}`"));
     }
     validate_source(
         source,
-        callable
-            .function
-            .rsplit('.')
-            .next()
-            .unwrap_or(&callable.function),
-        &callable.declaration,
+        &expected_implementation_function(&callable),
+        &callable,
         &local_import_roots(config, plan),
         &generated_type_modules(plan),
         &allowed_facade_imports(plan),
@@ -524,14 +547,13 @@ fn local_import_roots(config: &ProjectConfig, plan: &PythonArtifactPlan) -> Hash
 
 fn allowed_facade_imports(plan: &PythonArtifactPlan) -> BTreeMap<String, BTreeSet<String>> {
     let mut imports = BTreeMap::<String, BTreeSet<String>>::new();
-    for callable in plan.public_callable_functions() {
-        let function = callable
-            .function
-            .rsplit('.')
-            .next()
-            .unwrap_or(&callable.function)
-            .to_owned();
-        imports.entry(callable.module).or_default().insert(function);
+    for callable in plan.public_callables() {
+        if matches!(&callable.kind, PythonCallableKind::Function) {
+            imports
+                .entry(callable.module)
+                .or_default()
+                .insert(callable.name);
+        }
     }
     imports
 }
@@ -547,6 +569,27 @@ fn module_segments(module: &str) -> Option<Vec<&str>> {
                 && !segment.contains('\\')
         }))
     .then_some(segments)
+}
+
+fn expected_implementation_function(callable: &PythonCallable) -> String {
+    match &callable.kind {
+        PythonCallableKind::Function => callable.name.clone(),
+        PythonCallableKind::ImplMethod { concrete } => {
+            format!("_cott_impl_{concrete}_{}", callable.name)
+        }
+    }
+}
+
+fn agent_implementation_module(callable: &PythonCallable) -> String {
+    match &callable.kind {
+        PythonCallableKind::Function => format!("_cott_impl.{}.{}", callable.module, callable.name),
+        PythonCallableKind::ImplMethod { concrete } => {
+            format!(
+                "_cott_impl.{}.{concrete}.{}",
+                callable.module, callable.name
+            )
+        }
+    }
 }
 
 fn generated_type_modules(plan: &PythonArtifactPlan) -> HashSet<String> {
@@ -624,7 +667,7 @@ fn locked_import_roots(
 fn read_binding(
     path: &Path,
     expected_function: &str,
-    declaration: &serde_json::Value,
+    callable: &PythonCallable,
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
     allowed_facade_imports: &BTreeMap<String, BTreeSet<String>>,
@@ -644,7 +687,7 @@ fn read_binding(
     validate_source(
         text,
         expected_function,
-        declaration,
+        callable,
         local_imports,
         generated_type_modules,
         allowed_facade_imports,
@@ -656,7 +699,7 @@ fn read_binding(
 fn validate_source(
     source: &str,
     expected_function: &str,
-    declaration: &serde_json::Value,
+    callable: &PythonCallable,
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
     allowed_facade_imports: &BTreeMap<String, BTreeSet<String>>,
@@ -716,10 +759,11 @@ fn validate_source(
         local_imports,
         generated_type_modules,
         allowed_facade_imports,
+        callable,
         locked_imports,
         &mut add_error,
     );
-    inspect_function_definitions(&masked, expected_function, declaration, &mut add_error);
+    inspect_function_definitions(&masked, expected_function, callable, &mut add_error);
     inspect_top_level(&masked, &mut add_error);
 
     if errors.is_empty() {
@@ -733,15 +777,17 @@ fn validate_source(
 struct ParameterShape {
     name: String,
     keyword_only: bool,
+    annotation: String,
 }
 
 fn inspect_function_definitions(
     source: &str,
     expected_function: &str,
-    declaration: &serde_json::Value,
+    callable: &PythonCallable,
     add_error: &mut impl FnMut(String),
 ) {
-    let expected = declaration
+    let expected = callable
+        .declaration
         .get("parameters")
         .and_then(serde_json::Value::as_array)
         .map(|parameters| {
@@ -751,6 +797,7 @@ fn inspect_function_definitions(
                     Some(ParameterShape {
                         name: parameter.get("name")?.as_str()?.to_owned(),
                         keyword_only: parameter.get("kind")?.as_str()? == "keyword_only",
+                        annotation: String::new(),
                     })
                 })
                 .collect::<Vec<_>>()
@@ -759,6 +806,12 @@ fn inspect_function_definitions(
     let lines: Vec<&str> = source.lines().collect();
     let mut expected_count = 0;
 
+    for line in &lines {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("class ") {
+            add_error("class definitions are not allowed".to_owned());
+        }
+    }
     for (line_number, line) in lines.iter().enumerate() {
         if !line.starts_with("def ") {
             continue;
@@ -769,11 +822,38 @@ fn inspect_function_definitions(
         };
         if name == expected_function {
             expected_count += 1;
-            if parameters != expected {
+            let parameters = if let PythonCallableKind::ImplMethod { concrete } = &callable.kind {
+                match parameters.split_first() {
+                    Some((self_parameter, parameters))
+                        if self_parameter.name == "self"
+                            && !self_parameter.keyword_only
+                            && self_parameter.annotation == *concrete =>
+                    {
+                        parameters
+                    }
+                    _ => {
+                        add_error(format!(
+                            "function '{expected_function}' must begin with `self: {concrete}`"
+                        ));
+                        &parameters[..]
+                    }
+                }
+            } else {
+                &parameters[..]
+            };
+            if parameters.len() != expected.len()
+                || parameters.iter().zip(&expected).any(|(actual, expected)| {
+                    actual.name != expected.name || actual.keyword_only != expected.keyword_only
+                })
+            {
                 add_error(format!(
                     "function '{expected_function}' parameters do not match the canonical signature"
                 ));
             }
+        } else {
+            add_error(format!(
+                "implementation must not define extra function '{name}'"
+            ));
         }
         let mut previous = line_number;
         while previous > 0 {
@@ -871,6 +951,7 @@ fn parse_signature(
         parameters.push(ParameterShape {
             name: parameter.to_owned(),
             keyword_only,
+            annotation: parts[1].trim().to_owned(),
         });
     }
     Some((name.to_owned(), parameters))
@@ -961,9 +1042,13 @@ fn inspect_imports(
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
     allowed_facade_imports: &BTreeMap<String, BTreeSet<String>>,
+    callable: &PythonCallable,
     locked_imports: &HashSet<String>,
     add_error: &mut impl FnMut(String),
 ) {
+    let impl_concrete_import = impl_concrete_import_source(callable);
+    let mut imports_impl_concrete = false;
+    let mut saw_impl_concrete_import = false;
     for line in source.lines() {
         let trimmed = line.trim_start();
         let nested = trimmed.len() != line.len();
@@ -978,6 +1063,7 @@ fn inspect_imports(
                     rest,
                     local_imports,
                     generated_type_modules,
+                    None,
                     None,
                     locked_imports,
                     add_error,
@@ -994,18 +1080,79 @@ fn inspect_imports(
             if module == "__future__" && imported.trim() != "annotations" {
                 add_error("only `from __future__ import annotations` is allowed".to_owned());
             }
+            inspect_impl_concrete_import(
+                module,
+                imported,
+                impl_concrete_import,
+                &mut imports_impl_concrete,
+                &mut saw_impl_concrete_import,
+                add_error,
+            );
             inspect_import_target(
                 module,
                 imported,
                 local_imports,
                 generated_type_modules,
                 allowed_facade_imports.get(module),
+                impl_concrete_import
+                    .filter(|(facade, _)| module == *facade)
+                    .map(|(_, concrete)| concrete),
                 locked_imports,
                 add_error,
             );
             if imported.split_whitespace().any(|word| word == "*") {
                 add_error(String::from("star imports are not allowed"));
             }
+        }
+    }
+    if let Some((facade, concrete)) = impl_concrete_import {
+        if !imports_impl_concrete && !saw_impl_concrete_import {
+            add_error(format!(
+                "impl helper concrete `{concrete}` must be imported from facade `{facade}`"
+            ));
+        }
+    }
+}
+
+fn impl_concrete_import_source(callable: &PythonCallable) -> Option<(&str, &str)> {
+    let PythonCallableKind::ImplMethod { concrete } = &callable.kind else {
+        return None;
+    };
+    let owner = callable.owner.as_ref()?.get("name")?.as_str()?;
+    let (facade, owner_concrete) = owner.rsplit_once('.')?;
+    (facade == callable.module && owner_concrete == concrete).then_some((facade, concrete))
+}
+
+fn inspect_impl_concrete_import(
+    module: &str,
+    imported: &str,
+    impl_concrete_import: Option<(&str, &str)>,
+    imports_impl_concrete: &mut bool,
+    saw_impl_concrete_import: &mut bool,
+    add_error: &mut impl FnMut(String),
+) {
+    let Some((facade, concrete)) = impl_concrete_import else {
+        return;
+    };
+    for item in imported.split(',').map(str::trim) {
+        if item.split_whitespace().next() != Some(concrete) {
+            continue;
+        }
+        *saw_impl_concrete_import = true;
+        if module == facade && item == concrete {
+            *imports_impl_concrete = true;
+        } else if module == facade {
+            add_error(format!(
+                "impl helper concrete `{concrete}` must be imported from facade `{facade}` without an alias"
+            ));
+        } else if module.strip_suffix("_types") == Some(facade) {
+            add_error(format!(
+                "impl helper concrete `{concrete}` must be imported from facade `{facade}`, not generated types `{module}`"
+            ));
+        } else {
+            add_error(format!(
+                "impl helper concrete `{concrete}` must be imported from facade `{facade}`, not `{module}`"
+            ));
         }
     }
 }
@@ -1016,6 +1163,7 @@ fn inspect_import_target(
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
     allowed_facade_functions: Option<&BTreeSet<String>>,
+    allowed_facade_concrete: Option<&str>,
     locked_imports: &HashSet<String>,
     add_error: &mut impl FnMut(String),
 ) {
@@ -1030,11 +1178,13 @@ fn inspect_import_target(
     if imported.split_whitespace().any(|word| word == "*") {
         add_error(String::from("star imports are not allowed"));
     }
-    if let Some(functions) = allowed_facade_functions {
+    if allowed_facade_functions.is_some() || allowed_facade_concrete.is_some() {
         for item in imported.split(',').map(str::trim) {
             if item.split_whitespace().count() != 1 {
                 add_error(String::from("import aliases are not allowed"));
-            } else if !functions.contains(item) {
+            } else if !allowed_facade_functions.is_some_and(|functions| functions.contains(item))
+                && allowed_facade_concrete != Some(item)
+            {
                 add_error(format!(
                     "project-local import '{module}.{item}' is not allowed"
                 ));

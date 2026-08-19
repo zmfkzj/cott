@@ -13,6 +13,7 @@ use crate::ir::CanonicalIr;
 use crate::manifest::ProjectConfig;
 use crate::project::ProjectPaths;
 use crate::provenance::GenerationRecord;
+use crate::python::artifact_plan::{PythonArtifactPlan, PythonCallableKind};
 use crate::sandbox::{BindMounts, NetworkAccess, ResourceLimits, SandboxSpec, run};
 use crate::version::{is_at_least, parse_version};
 
@@ -169,6 +170,8 @@ fn verify_in_scratch(
         "pythonPlatform": python_platform,
         "pythonVersion": "3.14",
         "reportInvalidTypeVarUse": "none",
+        "reportPrivateUsage": "none",
+        "reportUnusedFunction": "none",
         "stubPath": stubs_root,
         "typeCheckingMode": "strict",
     });
@@ -197,85 +200,169 @@ fn verify_in_scratch(
             .map_err(|error| format!("read staged generation record: {error}"))?,
     )
     .map_err(|error| format!("invalid staged generation record: {error}"))?;
-    let implementation_symbols = generation
+    let plan = PythonArtifactPlan::from_ir(ir)
+        .map_err(|error| format!("project canonical IR cannot be verified: {error}"))?;
+    let callables = plan.callables();
+    let callable_symbols = callables
+        .iter()
+        .map(|callable| (callable.cott_symbol.clone(), callable))
+        .collect::<BTreeMap<_, _>>();
+    let implementations = generation
         .current
         .implementations
         .as_array()
-        .ok_or("generation implementations must be an array")?
+        .ok_or("generation implementations must be an array")?;
+    let mut implementation_symbols = BTreeMap::new();
+    for implementation in implementations {
+        let symbol = implementation
+            .get("cott_symbol")
+            .and_then(Value::as_str)
+            .ok_or("generation implementation is missing cott_symbol")?;
+        if implementation_symbols
+            .insert(symbol.to_owned(), implementation)
+            .is_some()
+        {
+            return Err(format!(
+                "generation record contains duplicate implementation `{symbol}`"
+            ));
+        }
+    }
+    for (symbol, implementation) in &implementation_symbols {
+        let callable = callable_symbols.get(symbol).ok_or_else(|| {
+            format!("generation record contains unknown implementation `{symbol}`")
+        })?;
+        let (kind, concrete, method) = match &callable.kind {
+            PythonCallableKind::Function => ("function", Value::Null, Value::Null),
+            PythonCallableKind::ImplMethod { concrete } => (
+                "impl_method",
+                Value::String(concrete.clone()),
+                Value::String(callable.name.clone()),
+            ),
+        };
+        if implementation.get("kind").and_then(Value::as_str) != Some(kind)
+            || implementation.get("concrete") != Some(&concrete)
+            || implementation.get("method") != Some(&method)
+        {
+            return Err(format!(
+                "generation record has an invalid callable identity for `{symbol}`"
+            ));
+        }
+    }
+    let selected_callables = callables
         .iter()
-        .filter_map(|implementation| {
-            Some((
-                implementation.get("cott_symbol")?.as_str()?.to_owned(),
-                implementation.clone(),
-            ))
-        })
-        .collect::<BTreeMap<_, _>>();
-
-    let signature_requests = ir
-        .modules
-        .iter()
-        .flat_map(|module| {
-            let module_name = module.module.as_string();
-            let implementation_symbols = &implementation_symbols;
-            serde_json::from_slice::<Value>(&module.bytes)
-                .ok()
-                .and_then(|value| value.get("declarations").and_then(Value::as_array).cloned())
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|declaration| {
-                    declaration.get("kind").and_then(Value::as_str) == Some("function")
-                        && declaration.get("public").and_then(Value::as_bool) == Some(true)
-                })
-                .filter_map(move |declaration| {
-                    let symbol = declaration.get("name")?.as_str()?;
-                    let name = symbol.rsplit('.').next()?;
-                    let implementation = implementation_symbols.get(symbol)?;
-                    let python_symbol = implementation.get("python_symbol")?.as_str()?;
-                    let (_, implementation_function) = python_symbol.split_once(':')?;
-                    let runtime_origin = Path::new(implementation.get("runtime_origin")?.as_str()?)
-                        .strip_prefix(Path::new(&config.python.generated).file_name()?)
-                        .ok()?;
-                    Some(json!({
-                        "content_hash": implementation.get("content_hash")?,
-                        "function": name,
-                        "implementation_function": implementation_function,
-                        "module": module_name,
-                        "project": config.project.name,
-                        "runtime_path": runtime_origin,
-                        "symbol": symbol,
-                    }))
-                })
-        })
-        .filter(|request| {
-            scope.is_none_or(|scope| {
-                request
-                    .get("symbol")
-                    .and_then(Value::as_str)
-                    .is_some_and(|symbol| scope.contains(symbol))
-            })
-        })
+        .filter(|callable| scope.is_none_or(|scope| scope.contains(&callable.cott_symbol)))
         .collect::<Vec<_>>();
-    let expected_signature_count = ir
-        .modules
+    let signature_requests = selected_callables
         .iter()
-        .flat_map(|module| {
-            serde_json::from_slice::<Value>(&module.bytes)
-                .ok()
-                .and_then(|value| value.get("declarations").and_then(Value::as_array).cloned())
-                .unwrap_or_default()
-        })
-        .filter(|declaration| {
-            declaration.get("kind").and_then(Value::as_str) == Some("function")
-                && declaration.get("public").and_then(Value::as_bool) == Some(true)
-                && scope.is_none_or(|scope| {
-                    declaration
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .is_some_and(|symbol| scope.contains(symbol))
+        .map(|callable| {
+            let implementation = implementation_symbols
+                .get(&callable.cott_symbol)
+                .ok_or_else(|| {
+                    format!(
+                        "generation record omitted a selected public implementation `{}`",
+                        callable.cott_symbol
+                    )
+                })?;
+            let python_symbol = implementation
+                .get("python_symbol")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    format!(
+                        "generation record implementation `{}` is missing python_symbol",
+                        callable.cott_symbol
+                    )
+                })?;
+            let (implementation_module, implementation_function) = python_symbol
+                .split_once(':')
+                .filter(|(module, function)| {
+                    !module.is_empty() && !function.is_empty() && !function.contains(':')
                 })
+                .ok_or_else(|| {
+                    format!(
+                        "generation record implementation `{}` has an invalid python_symbol",
+                        callable.cott_symbol
+                    )
+                })?;
+            let runtime_origin = Path::new(
+                implementation
+                    .get("runtime_origin")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        format!(
+                            "generation record implementation `{}` is missing runtime_origin",
+                            callable.cott_symbol
+                        )
+                    })?,
+            )
+            .strip_prefix(
+                Path::new(&config.python.generated)
+                    .file_name()
+                    .ok_or("target.python.generated has no directory name")?,
+            )
+            .map_err(|_| {
+                format!(
+                    "generation record implementation `{}` escaped generated Python root",
+                    callable.cott_symbol
+                )
+            })?;
+            let (facade, method) = match &callable.kind {
+                PythonCallableKind::Function => (callable.name.as_str(), None),
+                PythonCallableKind::ImplMethod { concrete } => {
+                    let expected_path = Path::new("_cott_impl")
+                        .join(callable.module.replace('.', "/"))
+                        .join(concrete)
+                        .join(format!("{}.py", callable.name));
+                    let expected_source = Path::new(&config.python.source)
+                        .join(&expected_path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    let expected_runtime = Path::new(
+                        Path::new(&config.python.generated)
+                            .file_name()
+                            .ok_or("target.python.generated has no directory name")?,
+                    )
+                    .join(&expected_path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                    let expected_module = format!(
+                        "_cott_impl.{}.{}.{}",
+                        callable.module, concrete, callable.name
+                    );
+                    let expected_function =
+                        format!("_cott_impl_{}_{}", concrete, callable.name);
+                    if runtime_origin != expected_path
+                        || implementation
+                            .get("source_origin")
+                            .and_then(Value::as_str)
+                            != Some(expected_source.as_str())
+                        || implementation
+                            .get("runtime_origin")
+                            .and_then(Value::as_str)
+                            != Some(expected_runtime.as_str())
+                        || implementation_module != expected_module
+                        || implementation_function != expected_function
+                    {
+                        return Err(format!(
+                            "generation record has an invalid implementation method binding for `{}`",
+                            callable.cott_symbol
+                        ));
+                    }
+                    (concrete.as_str(), Some(callable.name.as_str()))
+                }
+            };
+            Ok(json!({
+                "content_hash": implementation.get("content_hash").ok_or_else(|| format!("generation record implementation `{}` is missing content_hash", callable.cott_symbol))?,
+                "facade": facade,
+                "implementation_function": implementation_function,
+                "method": method,
+                "module": callable.module,
+                "project": config.project.name,
+                "runtime_path": runtime_origin,
+                "symbol": callable.cott_symbol,
+            }))
         })
-        .count();
-    if signature_requests.len() != expected_signature_count {
+        .collect::<Result<Vec<_>, String>>()?;
+    if signature_requests.len() != selected_callables.len() {
         return Err("generation record omitted a selected public implementation".to_owned());
     }
     let project_modules = ir
@@ -347,7 +434,7 @@ fn verify_in_scratch(
         interpreter,
         vec![
             "-c".to_owned(),
-            "import importlib,inspect,json,sys,typing\nfrom cott_runtime import _cott_load\n\ndef shape(signature):\n return [(name,parameter.kind.name,parameter.default is inspect.Parameter.empty,repr(parameter.default)) for name,parameter in signature.parameters.items()]\n\ndef hint(value):\n if isinstance(value,typing.TypeVar):\n  return ('TypeVar',value.__name__,hint(value.__bound__),tuple(hint(item) for item in value.__constraints__))\n origin=typing.get_origin(value)\n if origin is not None:\n  return (origin,tuple(hint(item) for item in typing.get_args(value)))\n return value\n\nout={}\nfor item in json.loads(sys.argv[1]):\n facade=getattr(importlib.import_module(item['module']),item['function'])\n implementation=_cott_load(item['runtime_path'],item['content_hash'].removeprefix('sha256:'),item['implementation_function'],expected_project_name=item['project'])\n expected_signature=inspect.signature(facade)\n actual_signature=inspect.signature(implementation)\n expected_hints={name:hint(value) for name,value in typing.get_type_hints(facade,include_extras=True).items()}\n actual_hints={name:hint(value) for name,value in typing.get_type_hints(implementation,include_extras=True).items()}\n if shape(actual_signature) != shape(expected_signature) or actual_hints != expected_hints:\n  raise TypeError(f\"{item['symbol']} implementation signature {actual_signature} {actual_hints!r} != {expected_signature} {expected_hints!r}\")\n out[item['symbol']]={'implementation_module':implementation.__module__,'implementation_name':implementation.__name__,'module':facade.__module__,'name':facade.__name__,'signature':str(expected_signature)}\nprint(json.dumps(out,sort_keys=True,separators=(',',':')))".to_owned(),
+            "import importlib,inspect,json,sys,typing\nfrom cott_runtime import _cott_load\n\ndef shape(signature):\n return [(name,parameter.kind.name,parameter.default is inspect.Parameter.empty,repr(parameter.default)) for name,parameter in signature.parameters.items()]\n\ndef hint(value):\n if isinstance(value,typing.TypeVar):\n  return ('TypeVar',hint(value.__bound__),tuple(hint(item) for item in value.__constraints__),value.__covariant__,value.__contravariant__)\n origin=typing.get_origin(value)\n if origin is not None:\n  return (origin,tuple(hint(item) for item in typing.get_args(value)))\n return value\n\nout={}\nfor item in json.loads(sys.argv[1]):\n facade=getattr(importlib.import_module(item['module']),item['facade'])\n if item['method'] is not None:\n  facade=getattr(facade,item['method'])\n implementation=_cott_load(item['runtime_path'],item['content_hash'].removeprefix('sha256:'),item['implementation_function'],expected_project_name=item['project'])\n expected_signature=inspect.signature(facade)\n actual_signature=inspect.signature(implementation)\n expected_hints={name:hint(value) for name,value in typing.get_type_hints(facade,include_extras=True).items()}\n actual_hints={name:hint(value) for name,value in typing.get_type_hints(implementation,include_extras=True).items()}\n if shape(actual_signature) != shape(expected_signature) or actual_hints != expected_hints:\n  raise TypeError(f\"{item['symbol']} implementation signature {actual_signature} {actual_hints!r} != {expected_signature} {expected_hints!r}\")\n out[item['symbol']]={'implementation_module':implementation.__module__,'implementation_name':implementation.__name__,'module':facade.__module__,'name':facade.__qualname__,'signature':str(expected_signature)}\nprint(json.dumps(out,sort_keys=True,separators=(',',':')))".to_owned(),
             serde_json::to_string(&signature_requests).map_err(|error| error.to_string())?,
         ],
         &generated_root,

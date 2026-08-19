@@ -37,12 +37,39 @@
       "additionalProperties": false,
       "properties": {
         "cott_symbol": {"type": "string"},
+        "kind": {"enum": ["function", "impl_method"]},
+        "concrete": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+        "method": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
         "owner": {"enum": ["manifest", "agent"]},
         "python_symbol": {"type": "string"},
         "source_origin": {"type": "string"},
         "runtime_origin": {"type": "string"},
         "content_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
-      }
+      },
+      "anyOf": [
+        {
+          "not": {
+            "anyOf": [
+              {"required": ["kind"]},
+              {"required": ["concrete"]},
+              {"required": ["method"]}
+            ]
+          }
+        },
+        {
+          "required": ["kind", "concrete", "method"]
+        }
+      ],
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "function"}}, "required": ["kind"]},
+          "then": {"properties": {"concrete": {"type": "null"}, "method": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "impl_method"}}, "required": ["kind"]},
+          "then": {"properties": {"concrete": {"type": "string", "minLength": 1}, "method": {"type": "string", "minLength": 1}}}
+        }
+      ]
     },
     "dependency": {
       "type": "object",

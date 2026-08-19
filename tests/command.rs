@@ -34,6 +34,22 @@ fn parses_global_options_in_any_position() {
             format: OutputFormat::Human
         },
     );
+    assert_eq!(
+        parse(&[
+            "generate",
+            "--target",
+            "python",
+            "foo.bar.Reader.read",
+            "--agent",
+            "codex"
+        ]),
+        Command::Generate {
+            symbol: Some("foo.bar.Reader.read".to_owned()),
+            agent: Some(AgentKind::Codex),
+            project: None,
+            format: OutputFormat::Human
+        },
+    );
 }
 
 #[test]

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::hash::sha256_hex;
+use crate::python::artifact_plan::{PythonCallable, PythonCallableKind};
 use crate::sandbox::{BindMounts, NetworkAccess, ResourceLimits, SandboxSpec, run};
 use crate::version::{is_at_least, parse_version};
 
@@ -95,7 +96,7 @@ pub struct AgentRunCandidate {
 }
 
 pub fn render_prompt(
-    symbol: &str,
+    callable: &PythonCallable,
     selected_ir: &[u8],
     docs: &str,
     type_declarations: &str,
@@ -107,7 +108,17 @@ pub fn render_prompt(
     if rules.is_some_and(|rules| rules.len() > 1024 * 1024) || selected_ir.len() > 1024 * 1024 {
         return Err("agent prompt input exceeds 1 MiB".to_owned());
     }
-    let mut prompt = format!("COTT_AGENT_PROMPT_V1\n\nTARGET\nSymbol: {symbol}\nWrite path: {}\n\nCANONICAL IR\n{}\n\nDOCS CONTRACTS EFFECTS\n{docs}\n\nRELEVANT TYPES\n{type_declarations}\n\nBOUND SYMBOLS IMPORT RULES\n{bound_symbols}\n", write_path.display(), String::from_utf8_lossy(selected_ir)).into_bytes();
+    let ownership = match &callable.kind {
+        PythonCallableKind::Function => format!(
+            "Define exactly one top-level function `{}`. Do not define a class or facade shell.",
+            callable.name
+        ),
+        PythonCallableKind::ImplMethod { concrete } => format!(
+            "Define exactly one private top-level helper `_cott_impl_{concrete}_{}`. Do not define a class, facade shell, or any other top-level definition; the compiler owns the public class. The concrete class `{concrete}` is absent from `{}_types`; import it exactly as `from {} import {concrete}` for the `self` annotation.",
+            callable.name, callable.module, callable.module
+        ),
+    };
+    let mut prompt = format!("COTT_AGENT_PROMPT_V1\n\nTARGET\nSymbol: {}\nWrite path: {}\n\nIMPLEMENTATION OWNERSHIP\n{ownership}\n\nCANONICAL IR\n{}\n\nDOCS CONTRACTS EFFECTS\n{docs}\n\nRELEVANT TYPES\n{type_declarations}\n\nBOUND SYMBOLS IMPORT RULES\n{bound_symbols}\n", callable.cott_symbol, write_path.display(), String::from_utf8_lossy(selected_ir)).into_bytes();
     if let Some(existing) = existing {
         prompt.extend_from_slice(b"\nEXISTING IMPLEMENTATION\n");
         prompt.extend_from_slice(existing);

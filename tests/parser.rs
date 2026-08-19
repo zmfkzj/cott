@@ -440,3 +440,177 @@ fn find_user(id: Str) -> Option[User]:
     assert_eq!(function.annotations[1].name, "tag");
     assert_eq!(function.annotations[1].argument.as_deref(), Some("lookup"));
 }
+
+#[test]
+fn parses_stateful_impls_with_contracts_and_old_state() {
+    let source = r#"module demo.impls
+
+trait Reader:
+    fn read(self) -> I32
+
+trait Writer:
+    fn write(self, value: I32) -> Unit
+
+@entity
+impl Counter for Reader + Writer:
+    state:
+        count: I32
+        label: Str = "counter"
+    invariant self.count >= 0
+    invariant self.label.len > 0
+    init(count: I32):
+        doc """Initializes the counter."""
+        requires count >= 0
+        ensures self.count == count
+    fn read(self) -> I32:
+        doc """Reads the count."""
+        requires self.count >= 0
+        ensures old(self.count) == self.count
+    fn write(self, value: I32) -> Unit:
+        requires value >= 0
+        modifies self.count, self.label
+        ensures old(self.count) <= self.count
+        error CounterError.BadValue when value == 13
+        effects [Log.Write]
+"#;
+
+    let file = parse(source).expect("stateful impl should parse");
+    let implementation = match &file.declarations[2] {
+        Declaration::Impl(value) => value,
+        other => panic!("expected impl, got {other:?}"),
+    };
+    assert_eq!(implementation.name, "Counter");
+    assert_eq!(implementation.annotations.len(), 1);
+    assert_eq!(implementation.annotations[0].name, "entity");
+    assert_eq!(implementation.traits.len(), 2);
+    assert_eq!(implementation.traits[0].path.segments, ["Reader"]);
+    assert_eq!(implementation.traits[1].path.segments, ["Writer"]);
+    assert_eq!(
+        implementation
+            .state
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        ["count", "label"]
+    );
+    assert!(implementation.state[0].default.is_none());
+    assert!(implementation.state[1].default.is_some());
+    assert_eq!(implementation.invariants.len(), 2);
+
+    let initializer = implementation
+        .initializer
+        .as_ref()
+        .expect("required state field has explicit init");
+    assert_eq!(initializer.parameters.len(), 1);
+    assert_eq!(initializer.parameters[0].name, "count");
+    assert!(matches!(
+        initializer.clauses.as_slice(),
+        [
+            cott::ast::Clause {
+                kind: ClauseKind::Documentation(_),
+                ..
+            },
+            cott::ast::Clause {
+                kind: ClauseKind::Requires { .. },
+                ..
+            },
+            cott::ast::Clause {
+                kind: ClauseKind::Ensures { pattern: None, .. },
+                ..
+            },
+        ]
+    ));
+
+    assert_eq!(
+        implementation
+            .methods
+            .iter()
+            .map(|method| method.name.as_str())
+            .collect::<Vec<_>>(),
+        ["read", "write"]
+    );
+    let write = &implementation.methods[1];
+    assert!(write.self_span.start < write.self_span.end);
+    assert_eq!(write.parameters[0].name, "value");
+    assert!(matches!(
+        &write.clauses[1].kind,
+        ClauseKind::Modifies { fields }
+            if fields.iter().map(|field| field.name.as_str()).collect::<Vec<_>>()
+                == ["count", "label"]
+    ));
+    let condition = match &write.clauses[2].kind {
+        ClauseKind::Ensures { condition, .. } => condition,
+        other => panic!("expected ensures after modifies, got {other:?}"),
+    };
+    assert!(matches!(
+        &condition.kind,
+        ExprKind::Comparison { first, .. }
+            if matches!(
+                &first.kind,
+                ExprKind::OldStateField { field } if field.name == "count"
+            )
+    ));
+}
+
+#[test]
+fn parses_impls_with_implicit_initializers() {
+    let source = r#"module demo.impls
+
+trait Ready:
+    fn ready(self) -> Bool
+
+impl Empty for Ready:
+    fn ready(self) -> Bool:
+        ensures true
+
+trait Versioned:
+    fn version(self) -> I32
+
+impl Defaults for Versioned:
+    state:
+        version: I32 = 1
+    fn version(self) -> I32:
+        ensures result >= 0
+"#;
+
+    let file = parse(source).expect("impl initializer forms should parse");
+    let empty = match &file.declarations[1] {
+        Declaration::Impl(value) => value,
+        other => panic!("expected empty impl, got {other:?}"),
+    };
+    assert!(empty.state.is_empty());
+    assert!(empty.initializer.is_none());
+
+    let defaults = match &file.declarations[3] {
+        Declaration::Impl(value) => value,
+        other => panic!("expected default-state impl, got {other:?}"),
+    };
+    assert_eq!(defaults.state.len(), 1);
+    assert!(defaults.state[0].default.is_some());
+    assert!(defaults.initializer.is_none());
+}
+
+#[test]
+fn rejects_malformed_impl_members_clauses_and_eof_recovery() {
+    for source in [
+        "module demo.bad\nimpl Counter:\n    fn read(self) -> I32:\n        ensures true\n",
+        "module demo.bad\nimpl Counter for Reader:\n",
+        "module demo.bad\nimpl Counter for Reader:\n    state:\n    fn read(self) -> I32:\n        ensures true\n",
+        "module demo.bad\nimpl Counter for Reader:\n    init():\n    fn read(self) -> I32:\n        ensures true\n",
+        "module demo.bad\nimpl Counter for Reader:\n    state:\n        count: I32\n",
+        "module demo.bad\nimpl Counter for Reader:\n    state:\n        count: I32\n    state:\n        label: Str\n    fn read(self) -> I32:\n        ensures true\n",
+        "module demo.bad\nimpl Counter for Reader:\n    init():\n        ensures true\n    init():\n        ensures true\n    fn read(self) -> I32:\n        ensures true\n",
+        "module demo.bad\nimpl Counter for Reader:\n    invariant true\n    state:\n        count: I32\n    fn read(self) -> I32:\n        ensures true\n",
+        "module demo.bad\nimpl Counter for Reader:\n    fn read(self) -> I32:\n        ensures true\n    init():\n        ensures true\n",
+        "module demo.bad\nimpl Counter for Reader:\n    fn read(self) -> I32:\n        modifies self.count\n        requires true\n        ensures true\n",
+        "module demo.bad\nimpl Counter for Reader:\n    fn read(self) -> I32:\n        requires true\n        ensures true\n        modifies self.count\n",
+        "module demo.bad\nimpl Counter for Reader:\n    fn read(self) -> I32:\n        modifies self.count\n        modifies self.label\n        ensures true\n",
+        "module demo.bad\nimpl Counter for Reader:\n    fn read(self) -> I32:\n        modifies count\n        ensures true\n",
+        "module demo.bad\nimpl Counter for Reader:\n    fn read(self) -> I32:\n        ensures old(self.count + 1) == 0\n",
+        "module demo.bad\nimpl Counter for Reader:\n    fn read(self) -> I32:\n        requires old(self.count) == 0\n",
+        "module demo.bad\nimpl Counter for Reader:\n    fn read(self) -> I32:\n        ensures true\n  fn write(self) -> I32:\n        ensures true\n",
+        "module demo.bad\nimpl Counter for Reader:\n    fn read(self) -> I32:\n        ensures old(self.count) ==\n",
+    ] {
+        assert_rejected(source);
+    }
+}

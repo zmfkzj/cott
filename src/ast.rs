@@ -30,6 +30,7 @@ pub enum Declaration {
     Trait(TraitDecl),
     Const(ConstDecl),
     Function(FunctionDecl),
+    Impl(ImplDecl),
     Rule(RuleDecl),
 }
 
@@ -43,6 +44,7 @@ impl Declaration {
             Self::Trait(value) => &value.span,
             Self::Const(value) => &value.span,
             Self::Function(value) => &value.span,
+            Self::Impl(value) => &value.span,
             Self::Rule(value) => &value.span,
         }
     }
@@ -128,6 +130,41 @@ pub struct FunctionDecl {
     pub parameters: Vec<Parameter>,
     pub return_type: Type,
     pub body: FunctionBody,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImplDecl {
+    pub span: Span,
+    pub annotations: Vec<Annotation>,
+    pub name: String,
+    pub traits: Vec<Type>,
+    pub state: Vec<Field>,
+    pub invariants: Vec<ImplInvariant>,
+    pub initializer: Option<ImplInitializer>,
+    pub methods: Vec<ImplMethod>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImplInvariant {
+    pub span: Span,
+    pub condition: Expr,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImplInitializer {
+    pub span: Span,
+    pub parameters: Vec<Parameter>,
+    pub clauses: Vec<Clause>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImplMethod {
+    pub span: Span,
+    pub name: String,
+    pub self_span: Span,
+    pub parameters: Vec<Parameter>,
+    pub return_type: Type,
+    pub clauses: Vec<Clause>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -268,6 +305,9 @@ pub enum ClauseKind {
     Requires {
         condition: Expr,
     },
+    Modifies {
+        fields: Vec<ModifiedField>,
+    },
     Ensures {
         pattern: Option<Pattern>,
         condition: Expr,
@@ -281,6 +321,11 @@ pub enum ClauseKind {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModifiedField {
+    pub span: Span,
+    pub name: String,
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Pattern {
     pub span: Span,
@@ -325,6 +370,9 @@ pub enum ExprKind {
     Field {
         base: Box<Expr>,
         name: String,
+    },
+    OldStateField {
+        field: ModifiedField,
     },
 }
 

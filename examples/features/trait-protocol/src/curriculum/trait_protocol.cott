@@ -6,6 +6,9 @@ trait Summarizable:
 trait Prioritizable:
     fn priority_level(self) -> I32
 
+trait Completable:
+    fn complete(self) -> Bool
+
 fn format_summary[T: Summarizable](item: T) -> Str:
     doc """
     Format the summary string from any item implementing {Summarizable}.
@@ -23,3 +26,41 @@ fn inspect_task[T: Summarizable + Prioritizable](item: T) -> Str:
     ensures result.len > 0
 
     effects []
+
+impl SimpleTask for Summarizable + Prioritizable + Completable:
+    state:
+        title: Str
+        urgency: I32
+        completed: Bool = false
+
+    invariant self.title.len > 0
+    invariant self.urgency >= 0
+
+    init(title: Str, urgency: I32):
+        requires title.len > 0
+        requires urgency >= 0
+
+        ensures self.title == title
+        ensures self.urgency == urgency
+        ensures self.completed == false
+
+    fn summary(self) -> Str:
+        ensures result.len > 0
+
+        effects []
+
+    fn priority_level(self) -> I32:
+        ensures result == self.urgency
+
+        effects []
+
+    fn complete(self) -> Bool:
+        requires self.completed == false
+
+        modifies self.completed
+
+        ensures old(self.completed) == false
+        ensures self.completed == true
+        ensures result == self.completed
+
+        effects []

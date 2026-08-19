@@ -58,3 +58,73 @@ fn formats_annotations_on_declarations() {
     assert_eq!(output, source);
     assert_eq!(formatted(&output), source);
 }
+
+#[test]
+fn formats_stateful_impls_idempotently_with_comments() {
+    let source = r#"# module comment
+module demo.impls # module
+
+trait Reader:
+  fn read(self)->I32
+
+trait Writer:
+  fn write(self,value:I32)->Unit
+
+# concrete comment
+@entity
+impl Counter for Reader+Writer: # impl
+  state:
+    count:I32=0 # state
+  invariant self.count>=0
+  init(count:I32):
+    # init contract
+    requires count>=0
+    ensures self.count==count
+  fn read(self)->I32:
+    ensures old(self.count)==self.count # snapshot
+  fn write(self,value:I32)->Unit:
+    requires value>=0
+    modifies self.count
+    ensures old(self.count)<=self.count
+"#;
+    let expected = r#"# module comment
+module demo.impls  # module
+
+trait Reader:
+    fn read(self) -> I32
+
+trait Writer:
+    fn write(self, value: I32) -> Unit
+
+# concrete comment
+@entity
+impl Counter for Reader + Writer:  # impl
+    state:
+        count: I32 = 0  # state
+
+    invariant self.count >= 0
+
+    init(count: I32):
+        # init contract
+        requires count >= 0
+
+        ensures self.count == count
+
+    fn read(self) -> I32:
+        ensures old(self.count) == self.count  # snapshot
+
+    fn write(self, value: I32) -> Unit:
+        requires value >= 0
+
+        modifies self.count
+
+        ensures old(self.count) <= self.count
+"#;
+
+    let output = formatted(source);
+    assert_eq!(output, expected);
+    assert!(output.contains("# concrete comment"));
+    assert!(output.contains("# init contract"));
+    assert!(output.contains("# snapshot"));
+    assert_eq!(formatted(&output), output);
+}
