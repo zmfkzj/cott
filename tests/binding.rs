@@ -873,3 +873,81 @@ fn rejects_reserved_and_non_authored_manifest_module_roots() {
         );
     }
 }
+
+#[test]
+fn nested_opaque_functions_remain_agent_eligible() {
+    let fixture = fixture(
+        r#"module api.service
+
+fn transform(values: List[Opaque["payload"]]) -> Iterator[Opaque["result"]]
+"#,
+    );
+
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("nested Opaque must not require a manifest binding");
+    assert_eq!(
+        resolution
+            .unresolved
+            .iter()
+            .map(|binding| binding.cott_symbol.as_str())
+            .collect::<Vec<_>>(),
+        ["api.service.transform"]
+    );
+}
+
+#[test]
+fn accepts_generator_implementations_with_yield() {
+    let fixture = fixture("module api.service\n\nfn stream() -> Generator[I32, Unknown, Unit]\n");
+
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.stream",
+        b"from collections.abc import Generator\n\ndef stream() -> Generator[int, object, object]:\n    yield 1\n",
+    )
+    .expect("generator implementations may yield");
+}
+
+#[test]
+fn retains_unsafe_source_rejections() {
+    let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    let cases: &[(&[u8], &str)] = &[
+        (
+            b"async def run() -> object:\n    return None\n",
+            "async implementation is not allowed",
+        ),
+        (
+            b"def run() -> object:\n    return __import__(\"pathlib\")\n",
+            "dynamic imports are not allowed",
+        ),
+        (
+            b"def run() -> object:\n    return __file__\n",
+            "runtime reflection `__file__` is not allowed",
+        ),
+        (
+            b"from pathlib import *\n\ndef run() -> object:\n    return None\n",
+            "star imports are not allowed",
+        ),
+        (
+            b"from .service import helper\n\ndef run() -> object:\n    return helper()\n",
+            "relative imports are not allowed",
+        ),
+        (
+            b"import unlocked_package\n\ndef run() -> object:\n    return None\n",
+            "external distribution import 'unlocked_package' is not selected in uv.lock",
+        ),
+    ];
+
+    for (source, expected) in cases {
+        let error = validate_candidate(
+            &fixture.config,
+            &fixture.paths,
+            &fixture.plan,
+            "api.service.run",
+            source,
+        )
+        .expect_err("unsafe candidate must fail");
+        assert!(error.contains(expected), "{error}");
+    }
+}

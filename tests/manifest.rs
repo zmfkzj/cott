@@ -30,6 +30,81 @@ fn parses_the_closed_v1_manifest() {
 }
 
 #[test]
+fn defaults_external_type_projections() {
+    let manifest =
+        ProjectConfig::parse(Path::new("cott.toml"), VALID).expect("manifest should parse");
+    assert!(manifest.python.external_types.is_empty());
+}
+
+#[test]
+fn parses_external_type_projections() {
+    let manifest = ProjectConfig::parse(
+        Path::new("cott.toml"),
+        &format!(
+            "{VALID}\n[target.python.external_types]\n\"vendor.auth.AccessToken\" = \"vendor_sdk.auth:AccessToken\"\n\"vendor.models.Result\" = \"vendor_sdk.models:Result.Value\"\n"
+        ),
+    )
+    .expect("external type projections should parse");
+    assert_eq!(
+        manifest
+            .python
+            .external_types
+            .get("vendor.auth.AccessToken"),
+        Some(&"vendor_sdk.auth:AccessToken".to_owned())
+    );
+    assert_eq!(
+        manifest.python.external_types.get("vendor.models.Result"),
+        Some(&"vendor_sdk.models:Result.Value".to_owned())
+    );
+}
+
+#[test]
+fn keeps_python_target_table_closed() {
+    let invalid = format!("{VALID}\nexternal_types = {{}}\nunknown = true\n");
+    assert!(ProjectConfig::parse(Path::new("cott.toml"), &invalid).is_err());
+}
+
+#[test]
+fn requires_quoted_external_type_symbols() {
+    let error = ProjectConfig::parse(
+        Path::new("config/cott.toml"),
+        &format!(
+            "{VALID}\n[target.python.external_types]\nvendor.auth.AccessToken = \"vendor_sdk.auth:AccessToken\"\n"
+        ),
+    )
+    .expect_err("dotted external symbols must be quoted TOML keys");
+    assert_eq!(error.path, Path::new("config/cott.toml"));
+}
+
+#[test]
+fn rejects_malformed_external_type_projections() {
+    for (symbol, target) in [
+        ("Token", "vendor.auth:Token"),
+        ("vendor.type.Token", "vendor.auth:Token"),
+        ("vendor.auth.Token", ":Token"),
+        ("vendor.auth.Token", "vendor.auth:"),
+        ("vendor.auth.Token", "vendor.auth:Outer:Token"),
+        ("vendor.auth.Token", "vendor.class:Token"),
+        ("vendor.auth.Token", "_cott_vendor.auth:Token"),
+        ("vendor.auth.Token", "vendor auth:Token"),
+        ("vendor.auth.Token", "vendor\\n.auth:Token"),
+        ("vendor.auth.Token", "vendor.auth:Token; import os"),
+    ] {
+        let error = ProjectConfig::parse(
+            Path::new("config/cott.toml"),
+            &format!("{VALID}\n[target.python.external_types]\n\"{symbol}\" = \"{target}\"\n"),
+        )
+        .expect_err("malformed external type projection must fail");
+        assert_eq!(error.path, Path::new("config/cott.toml"));
+        assert!(
+            error.message.contains("invalid external type projection"),
+            "{symbol} = {target}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
 fn rejects_unknown_manifest_fields() {
     let invalid = VALID.replace("source = \"src\"", "source = \"src\"\nentry = \"app.run\"");
     assert!(ProjectConfig::parse(Path::new("cott.toml"), &invalid).is_err());

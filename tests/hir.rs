@@ -640,3 +640,226 @@ fn distinct_numeric_newtypes_compare_through_their_carriers() {
     .expect("newtype carrier fixture should parse");
     lower(Path::new("src"), parsed).expect("compatible carriers should lower");
 }
+
+#[test]
+fn expression_first_agent_types_lower_in_every_declarative_position() {
+    let parsed = parse_project([SourceFile::new(
+        "src/agents.cott",
+        r#"module agents
+
+alias Token = Opaque["alias"]
+newtype Handle(Opaque["newtype"])
+
+struct Request:
+    field: Opaque["field"]
+    iterator: Iterator[Any]
+    values: List[Opaque["list"]]
+
+enum Response:
+    Value(value: Opaque["variant"])
+
+trait Service:
+    fn stream(self, input: Opaque["parameter"]) -> Generator[Opaque["yield"], Unknown, Opaque["return"]]
+
+fn inspect(value: Map[Str, Opaque["map-value"]], stream: Iterator[Unknown]) -> Any
+"#,
+    )])
+    .expect("expression-first fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("nested opaque types should lower");
+    let declarations = &project.modules[0].declarations;
+
+    let HirDeclaration::Alias(token) = &declarations[0] else {
+        panic!("expected opaque alias");
+    };
+    assert_eq!(
+        token.target,
+        HirType::Opaque {
+            tag: "alias".into()
+        }
+    );
+
+    let HirDeclaration::Newtype(handle) = &declarations[1] else {
+        panic!("expected opaque newtype");
+    };
+    assert_eq!(
+        handle.carrier,
+        HirType::Opaque {
+            tag: "newtype".into()
+        }
+    );
+
+    let HirDeclaration::Struct(request) = &declarations[2] else {
+        panic!("expected request struct");
+    };
+    assert_eq!(
+        request.fields[0].ty,
+        HirType::Opaque {
+            tag: "field".into()
+        }
+    );
+    assert_eq!(
+        request.fields[1].ty,
+        HirType::Iterator {
+            item: Box::new(HirType::Primitive(PrimitiveType::Any))
+        }
+    );
+    assert_eq!(
+        request.fields[2].ty,
+        HirType::List {
+            item: Box::new(HirType::Opaque { tag: "list".into() })
+        }
+    );
+
+    let HirDeclaration::Enum(response) = &declarations[3] else {
+        panic!("expected response enum");
+    };
+    assert_eq!(
+        response.variants[0].fields[0].ty,
+        HirType::Opaque {
+            tag: "variant".into()
+        }
+    );
+
+    let HirDeclaration::Trait(service) = &declarations[4] else {
+        panic!("expected service trait");
+    };
+    assert_eq!(
+        service.methods[0].parameters[0].ty,
+        HirType::Opaque {
+            tag: "parameter".into()
+        }
+    );
+    assert_eq!(
+        service.methods[0].return_type,
+        HirType::Generator {
+            yield_type: Box::new(HirType::Opaque {
+                tag: "yield".into()
+            }),
+            send_type: Box::new(HirType::Primitive(PrimitiveType::Unknown)),
+            return_type: Box::new(HirType::Opaque {
+                tag: "return".into()
+            }),
+        }
+    );
+
+    let HirDeclaration::Function(inspect) = &declarations[5] else {
+        panic!("expected inspect function");
+    };
+    assert_eq!(
+        inspect.parameters[0].ty,
+        HirType::Map {
+            key: Box::new(HirType::Primitive(PrimitiveType::Str)),
+            value: Box::new(HirType::Opaque {
+                tag: "map-value".into()
+            }),
+        }
+    );
+    assert_eq!(
+        inspect.parameters[1].ty,
+        HirType::Iterator {
+            item: Box::new(HirType::Primitive(PrimitiveType::Unknown))
+        }
+    );
+    assert_eq!(inspect.return_type, HirType::Primitive(PrimitiveType::Any));
+}
+
+#[test]
+fn external_types_lower_as_named_symbols_and_imports() {
+    let parsed = parse_project([
+        SourceFile::new(
+            "src/providers.cott",
+            r#"module providers
+
+doc """Python remote client"""
+external type Remote
+"#,
+        ),
+        SourceFile::new(
+            "src/consumers.cott",
+            r#"module consumers
+use providers.Remote
+
+struct Request:
+    remote: Remote
+
+fn forward(remote: Remote) -> Remote
+"#,
+        ),
+    ])
+    .expect("external type fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("external types should lower");
+
+    let provider = &project.modules[0];
+    let HirDeclaration::ExternalType(remote) = &provider.declarations[0] else {
+        panic!("expected external remote type");
+    };
+    assert_eq!(remote.id.as_string(), "providers.Remote");
+    assert_eq!(
+        remote.doc.as_ref().map(|doc| doc.text.as_str()),
+        Some("Python remote client")
+    );
+    assert!(remote.public);
+    assert_eq!(remote.source_order, 0);
+
+    let consumer = &project.modules[1];
+    assert_eq!(consumer.imports.len(), 1);
+    assert_eq!(consumer.imports[0].symbol, remote.id);
+    assert_eq!(consumer.imports[0].name, "Remote");
+    let remote_type = HirType::Named {
+        symbol: remote.id.clone(),
+        args: Vec::new(),
+    };
+    let HirDeclaration::Struct(request) = &consumer.declarations[0] else {
+        panic!("expected request struct");
+    };
+    assert_eq!(request.fields[0].ty, remote_type);
+    let HirDeclaration::Function(forward) = &consumer.declarations[1] else {
+        panic!("expected forward function");
+    };
+    assert_eq!(forward.parameters[0].ty, forward.return_type);
+    assert_eq!(
+        forward.return_type,
+        HirType::Named {
+            symbol: remote.id.clone(),
+            args: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn rejects_invalid_agent_type_arities_and_opaque_boundaries() {
+    for (source, expected) in [
+        (
+            "module invalid\nstruct Value:\n    item: Iterator[U8, U16]\n",
+            "type constructor `Iterator` expects 1 argument(s), got 2",
+        ),
+        (
+            "module invalid\nstruct Value:\n    item: Generator[U8, U16]\n",
+            "type constructor `Generator` expects 3 argument(s), got 2",
+        ),
+        (
+            "module invalid\nstruct Value:\n    item: Opaque[\"Invalid\"]\n",
+            "Opaque tag must match [a-z][a-z0-9._-]{0,63}",
+        ),
+        (
+            "module invalid\nstruct Value:\n    items: Set[Opaque[\"set\"]]\n",
+            "Set item type must be hash-stable",
+        ),
+        (
+            "module invalid\nstruct Value:\n    entries: Map[Opaque[\"map\"], U8]\n",
+            "Map key type must be hash-stable",
+        ),
+    ] {
+        let parsed =
+            parse_project([SourceFile::new("src/invalid.cott", source)]).expect("fixture parses");
+        let errors = lower(Path::new("src"), parsed).expect_err("fixture must be rejected");
+        assert_eq!(
+            errors
+                .iter()
+                .map(|error| error.diagnostic.message.as_str())
+                .collect::<Vec<_>>(),
+            [expected],
+            "unexpected diagnostics for:\n{source}"
+        );
+    }
+}

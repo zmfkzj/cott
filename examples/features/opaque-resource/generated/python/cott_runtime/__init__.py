@@ -16,7 +16,7 @@ import sys as _sys
 import sysconfig as _sysconfig
 import threading as _threading
 import types as _types
-from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
+from collections.abc import Generator as _Generator, Iterable, Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass
 from pathlib import Path as _Path
 from typing import Annotated, Any, Generic, Literal, Never, TypeAlias, TypeVar, Union, get_args as _get_args, get_origin as _get_origin, get_type_hints as _get_type_hints, final as _final, overload
@@ -59,6 +59,12 @@ class CottFloat:
     def __post_init__(self) -> None:
         if self.bits not in (32, 64):
             raise ValueError("invalid CottFloat metadata")
+
+
+@_final
+@dataclass(frozen=True, slots=True)
+class CottExternal:
+    path: str
 
 
 I8: TypeAlias = Annotated[int, CottInt("signed", 8)]
@@ -431,6 +437,17 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") ->
     origin = _get_origin(annotation)
     args = _get_args(annotation)
     if origin is Annotated:
+        external = next((item for item in args[1:] if isinstance(item, CottExternal)), None)
+        if external is not None:
+            target = args[0]
+            if isinstance(target, type):
+                try:
+                    matches = isinstance(value, target)
+                except TypeError:
+                    return value
+                if not matches:
+                    raise CottContractViolation(f"{path} does not match external ABI type", phase="validation")
+            return value
         normalized = _cott_normalize_scalar(value, annotation)
         return _cott_validate_abi(normalized, args[0], path=path)
     if origin in (Union, _types.UnionType):
@@ -444,10 +461,18 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") ->
         if any(type(value) is type(candidate) and value == candidate for candidate in args):
             return value
         raise CottContractViolation(f"{path} does not match ABI literal", phase="validation")
-    if annotation is Any:
+    if annotation is Any or annotation is object:
         return value
     if isinstance(annotation, TypeVar):
         return value
+    if origin is _Generator or annotation is _Generator:
+        if isinstance(value, _Generator):
+            return value
+        raise CottContractViolation(f"{path} does not match ABI generator", phase="validation")
+    if origin is Iterator or annotation is Iterator:
+        if isinstance(value, Iterator):
+            return value
+        raise CottContractViolation(f"{path} does not match ABI iterator", phase="validation")
     protocol = origin if isinstance(origin, type) and getattr(origin, "_is_protocol", False) else annotation
     if isinstance(protocol, type) and getattr(protocol, "_is_protocol", False):
         missing = [
@@ -525,9 +550,15 @@ def _cott_normalize_f32_abi(value: object, annotation: object, *, path: str = "$
     """Normalize every concretely typed F32 while leaving other validation disabled."""
     origin = _get_origin(annotation)
     args = _get_args(annotation)
+    if annotation is Any or annotation is object:
+        return value
     if origin is Annotated:
+        if any(isinstance(item, CottExternal) for item in args[1:]):
+            return value
         metadata = next((item for item in args[1:] if isinstance(item, CottFloat)), None)
         return _cott_normalize_f32(value) if metadata is not None and metadata.bits == 32 else value
+    if origin is _Generator or annotation is _Generator or origin is Iterator or annotation is Iterator:
+        return value
     if origin in (Union, _types.UnionType):
         for candidate in args:
             candidate_origin = _get_origin(candidate)
@@ -620,6 +651,7 @@ def _cott_check_project_identity(expected_project_name: str | None, *, phase: st
             phase=phase,
         )
 _COTT_MODULE_CACHE: dict[str, tuple[_types.ModuleType, str, str]] = {}
+_COTT_LOAD_CACHE: dict[tuple[str, str, str, str | None, str | None], tuple[_types.ModuleType, object, tuple[int, int, int, int, int], tuple[int, int, int, int, int]]] = {}
 _COTT_LOAD_LOCK = _threading.RLock()
 
 
@@ -651,6 +683,17 @@ def _cott_regular_file_bytes(path: _Path, label: str) -> bytes:
         raise
     except (OSError, ValueError) as error:
         raise _cott_violation(f"unable to read {label}: {error}") from error
+
+def _cott_file_stamp(path: _Path, label: str) -> tuple[int, int, int, int, int]:
+    try:
+        metadata = path.lstat()
+        if not _stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise _cott_violation(f"{label} is not a regular file")
+        return (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
+    except CottContractViolation:
+        raise
+    except (OSError, ValueError) as error:
+        raise _cott_violation(f"unable to stat {label}: {error}") from error
 
 
 def _cott_sha256(value: bytes) -> str:
@@ -816,7 +859,27 @@ def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symb
     matches = []
     for implementation in implementations:
         if type(implementation) is not dict:
-            continue
+            raise _cott_violation("generation implementation must be an object")
+        kind = implementation.get("kind")
+        concrete = implementation.get("concrete")
+        method = implementation.get("method")
+        if kind is None:
+            if "concrete" in implementation or "method" in implementation or symbol.startswith("_cott_impl_"):
+                raise _cott_violation("generation implementation kind is malformed")
+            kind = "function"
+        if kind == "function":
+            if concrete is not None or method is not None:
+                raise _cott_violation("free-function provenance must not name an implementation method")
+        elif kind == "impl_method":
+            if (
+                type(concrete) is not str
+                or not concrete.isidentifier()
+                or type(method) is not str
+                or not method.isidentifier()
+            ):
+                raise _cott_violation("implementation-method provenance is malformed")
+        else:
+            raise _cott_violation("generation implementation kind is malformed")
         if (
             implementation.get("runtime_origin") == selected_origin
             and implementation.get("python_symbol") == selected_python_symbol
@@ -851,6 +914,20 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
     digest_input = _cott_expected_digest(expected_sha256, "binding hash")
     root = _Path(__file__).resolve().parent.parent
     path = root.joinpath(*parts)
+    generation_path = (root.parent if root.name == "python" else root) / "generation.json"
+    cache_key = (relative_path, digest_input, symbol, expected_project, expected_cott_symbol)
+    with _COTT_LOAD_LOCK:
+        cached_load = _COTT_LOAD_CACHE.get(cache_key)
+        if cached_load is not None:
+            module, implementation, implementation_stamp, generation_stamp = cached_load
+            if (
+                _sys.modules.get(module_name) is module
+                and _cott_file_stamp(path, f"binding {relative_path}") == implementation_stamp
+                and _cott_file_stamp(generation_path, "generation record") == generation_stamp
+            ):
+                return implementation
+            del _COTT_LOAD_CACHE[cache_key]
+
     source = _cott_regular_file_bytes(path, f"binding {relative_path}")
     digest = _cott_sha256(source)
     if digest != digest_input:
@@ -864,9 +941,16 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
             if cached_digest != digest or cached_generation != generation_id or _sys.modules.get(module_name) is not module:
                 raise _cott_violation(f"canonical module cache conflict for {module_name}")
             try:
-                return getattr(module, symbol)
+                implementation = getattr(module, symbol)
             except AttributeError as error:
                 raise _cott_violation(f"binding symbol {symbol!r} is missing") from error
+            _COTT_LOAD_CACHE[cache_key] = (
+                module,
+                implementation,
+                _cott_file_stamp(path, f"binding {relative_path}"),
+                _cott_file_stamp(generation_path, "generation record"),
+            )
+            return implementation
         if module_name in _sys.modules:
             raise _cott_violation(f"direct implementation import is not allowed: {module_name}")
 
@@ -890,16 +974,23 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
             raise _cott_violation(f"failed to load binding {relative_path}: {error}", phase="implementation-load") from error
         _COTT_MODULE_CACHE[module_name] = (module, digest, generation_id)
         try:
-            return getattr(module, symbol)
+            implementation = getattr(module, symbol)
         except AttributeError as error:
             del _COTT_MODULE_CACHE[module_name]
             if _sys.modules.get(module_name) is module:
                 del _sys.modules[module_name]
             raise _cott_violation(f"binding symbol {symbol!r} is missing") from error
+        _COTT_LOAD_CACHE[cache_key] = (
+            module,
+            implementation,
+            _cott_file_stamp(path, f"binding {relative_path}"),
+            _cott_file_stamp(generation_path, "generation record"),
+        )
+        return implementation
 
 
 __all__ = [
-    "CottContractViolation", "CottFloat", "CottInt", "CottList", "CottSet", "CottTuple2", "Err", "F32", "F64", "FrozenMap",
+    "CottContractViolation", "CottExternal", "CottFloat", "CottInt", "CottList", "CottSet", "CottTuple2", "Err", "F32", "F64", "FrozenMap",
     "I8", "I16", "I32", "I64", "JsonArray", "JsonBoolean", "JsonFloat", "JsonInteger", "JsonNull", "JsonObject", "JsonString", "JsonValue",
     "Never", "Nothing", "Ok", "Opaque", "Option", "PROJECT_NAME", "Result", "Some", "U8", "U16", "U32", "U64", "UNIT", "Unit",
 ]

@@ -10,6 +10,7 @@ pub mod hash;
 pub mod hir;
 pub mod ir;
 pub mod lexer;
+pub mod lsp;
 pub mod manifest;
 pub mod syntax;
 

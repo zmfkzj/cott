@@ -78,6 +78,7 @@ fn function(symbol: &str, return_name: &str, effects: &[&str], clauses: &[(&str,
         )
         .collect::<Vec<_>>();
     json!({
+        "annotations": [],
         "body": null,
         "contract": {"clauses": clauses, "effects": effects},
         "doc": null,
@@ -194,7 +195,7 @@ fn module(name: &str, declarations: Vec<Value>) -> CanonicalModule {
         "declarations": declarations,
         "imports": [],
         "module": name,
-        "schema_version": 1,
+        "schema_version": 2,
         "source": format!("{name}.cott")
     });
     CanonicalModule {
@@ -489,6 +490,7 @@ fn contract_runner_observes_local_result_error_variant() {
     let request = json!({
         "modules": [{
             "declarations": [{
+                "annotations": [],
                 "body": null,
                 "contract": {
                     "clauses": [{
@@ -512,7 +514,7 @@ fn contract_runner_observes_local_result_error_variant() {
             }],
             "imports": [],
             "module": "demo",
-            "schema_version": 1,
+            "schema_version": 2,
             "source": "demo.cott"
         }],
         "runtime_validation": "boundary",
@@ -707,6 +709,70 @@ fn runner_request(declaration: Value, strategies: Vec<Value>) -> Value {
         "runtime_validation": "boundary",
         "strategies": strategies
     })
+}
+
+#[test]
+fn contract_runner_marks_any_inputs_unobserved_without_executing() {
+    let declaration = json!({
+        "kind": "function",
+        "name": "demo.accepts",
+        "contract": {"clauses": [runner_clause("requires", 0, runner_literal(json!({"kind": "bool", "value": true})))]}
+    });
+    let Some(output) = run_contract_runner(
+        "import typing\n\ndef accepts(value: typing.Any) -> int:\n    raise AssertionError('Any input must not be synthesized')\n",
+        runner_request(
+            declaration,
+            vec![runner_strategy(
+                "demo.accepts",
+                vec!["requires:0".to_owned()],
+            )],
+        ),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "contract runner failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    let evidence = &report["contracts"][0]["evidence"][0];
+    assert_eq!(evidence["grade"], json!("unobserved"));
+    assert_eq!(evidence["valid_cases"], json!(0));
+    assert_eq!(
+        evidence["reason"],
+        json!("input parameter `value` is Any and is not automatically generated")
+    );
+}
+
+#[test]
+fn contract_runner_does_not_consume_iterator_returns() {
+    let declaration = json!({
+        "kind": "function",
+        "name": "demo.stream",
+        "contract": {"clauses": [runner_clause("requires", 0, runner_literal(json!({"kind": "bool", "value": true})))]}
+    });
+    let Some(output) = run_contract_runner(
+        "import collections.abc\n\nclass Trap(collections.abc.Iterator):\n    def __iter__(self):\n        raise AssertionError('iterator return was consumed')\n\n    def __next__(self):\n        raise AssertionError('iterator return was consumed')\n\ndef stream() -> collections.abc.Iterator[int]:\n    return Trap()\n",
+        runner_request(
+            declaration,
+            vec![runner_strategy(
+                "demo.stream",
+                vec!["requires:0".to_owned()],
+            )],
+        ),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "contract runner failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    let evidence = &report["contracts"][0]["evidence"][0];
+    assert_eq!(evidence["grade"], json!("test observation"));
+    assert_eq!(evidence["valid_cases"], json!(1));
 }
 
 #[test]

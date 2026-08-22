@@ -245,6 +245,8 @@ impl Parser {
             TokenKind::Keyword(kw) => {
                 let t = self.bump();
                 let s = match kw {
+                    Keyword::External => "external",
+                    Keyword::Type => "type",
                     Keyword::Module => "module",
                     Keyword::Use => "use",
                     Keyword::Alias => "alias",
@@ -317,6 +319,12 @@ impl Parser {
         doc: Option<DocBlock>,
     ) -> Option<Declaration> {
         match self.current().kind.clone() {
+            TokenKind::Keyword(Keyword::External) => Some(Declaration::ExternalType(
+                self.parse_external_type(annotations, doc)?,
+            )),
+            TokenKind::Name(value) if value == "external" => Some(Declaration::ExternalType(
+                self.parse_external_type(annotations, doc)?,
+            )),
             TokenKind::Keyword(Keyword::Alias) => {
                 Some(Declaration::Alias(self.parse_alias(annotations, doc)?))
             }
@@ -362,6 +370,33 @@ impl Parser {
             }
         }
     }
+    fn parse_external_type(
+        &mut self,
+        annotations: Vec<Annotation>,
+        doc: Option<DocBlock>,
+    ) -> Option<ExternalTypeDecl> {
+        let st = match self.current().kind.clone() {
+            TokenKind::Keyword(Keyword::External) => self.bump().span,
+            TokenKind::Name(value) if value == "external" => self.bump().span,
+            _ => {
+                self.error("expected `external`", self.span_here());
+                return None;
+            }
+        };
+        self.expect(
+            TokenKind::Keyword(Keyword::Type),
+            "expected `type` after `external`",
+        )?;
+        let (name, end) = self.name("type name")?;
+        self.newline();
+        Some(ExternalTypeDecl {
+            span: Self::join(st, end),
+            annotations,
+            doc,
+            name,
+        })
+    }
+
     fn parse_alias(
         &mut self,
         annotations: Vec<Annotation>,

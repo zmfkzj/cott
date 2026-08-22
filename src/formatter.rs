@@ -149,6 +149,12 @@ impl<'a> Printer<'a> {
 
     fn declaration(&mut self, declaration: &Declaration) {
         match declaration {
+            Declaration::ExternalType(value) => {
+                self.annotations(&value.annotations);
+                self.doc(value.doc.as_ref(), 0);
+                self.push(0, format!("external type {}", value.name));
+                self.inline_for(&value.span);
+            }
             Declaration::Alias(value) => {
                 self.annotations(&value.annotations);
                 self.doc(value.doc.as_ref(), 0);

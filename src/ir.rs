@@ -106,7 +106,7 @@ fn render_module(module: &HirModule) -> CanonicalModule {
     json.string(&module.id.as_string());
     json.comma();
     json.key("schema_version");
-    json.number("1");
+    json.number("2");
     json.comma();
     json.key("source");
     json.string(&source_string(&module.source));
@@ -121,6 +121,30 @@ fn render_module(module: &HirModule) -> CanonicalModule {
 
 fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
     match declaration {
+        HirDeclaration::ExternalType(value) => {
+            json.object_start();
+            json.key("annotations");
+            render_annotations(json, &value.annotations);
+            json.comma();
+            json.key("doc");
+            render_doc(json, value.doc.as_ref());
+            json.comma();
+            json.key("kind");
+            json.string("external_type");
+            json.comma();
+            json.key("name");
+            json.string(&value.id.as_string());
+            json.comma();
+            json.key("public");
+            json.boolean(value.public);
+            json.comma();
+            json.key("source_order");
+            json.number_usize(value.source_order);
+            json.comma();
+            json.key("span");
+            render_span(json, &value.span);
+            json.object_end();
+        }
         HirDeclaration::Alias(value) => {
             declaration_start(
                 json,
@@ -545,6 +569,30 @@ fn render_type(json: &mut Json, ty: &HirType) {
             json.comma();
             json.key("ok");
             render_type(json, ok);
+        }
+        HirType::Iterator { item } => {
+            json.key("item");
+            render_type(json, item);
+            json.comma();
+            json.key("kind");
+            json.string("iterator");
+        }
+        HirType::Generator {
+            yield_type,
+            send_type,
+            return_type,
+        } => {
+            json.key("kind");
+            json.string("generator");
+            json.comma();
+            json.key("return");
+            render_type(json, return_type);
+            json.comma();
+            json.key("send");
+            render_type(json, send_type);
+            json.comma();
+            json.key("yield");
+            render_type(json, yield_type);
         }
         HirType::Opaque { tag } => {
             json.key("kind");
@@ -1324,6 +1372,8 @@ fn primitive_name(value: PrimitiveType) -> &'static str {
         PrimitiveType::Path => "path",
         PrimitiveType::Unit => "unit",
         PrimitiveType::JsonValue => "json",
+        PrimitiveType::Any => "any",
+        PrimitiveType::Unknown => "unknown",
         PrimitiveType::Never => "never",
     }
 }

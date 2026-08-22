@@ -614,3 +614,128 @@ fn rejects_malformed_impl_members_clauses_and_eof_recovery() {
         assert_rejected(source);
     }
 }
+
+#[test]
+fn parses_expression_first_agent_types_and_external_declarations() {
+    let source = r#"module agents.types
+
+doc """Remote agent SDK type"""
+external type Remote
+
+alias Protected = Opaque["alias"]
+newtype Handle(Opaque["newtype"])
+
+struct Record:
+    value: Opaque["field"]
+    stream: Iterator[Any]
+
+enum Response:
+    Value(value: Opaque["variant"])
+
+trait Service:
+    fn stream(self, input: List[Opaque["container"]]) -> Generator[Opaque["yield"], Unknown, Any]
+
+fn inspect(value: Map[Str, Opaque["map-value"]]) -> Unknown
+"#;
+
+    let file = parse(source).expect("expression-first agent types should parse");
+    assert_eq!(file.declarations.len(), 7);
+
+    let Declaration::ExternalType(external) = &file.declarations[0] else {
+        panic!("expected external type declaration");
+    };
+    assert_eq!(external.name, "Remote");
+    assert_eq!(
+        external.doc.as_ref().map(|doc| doc.text.as_str()),
+        Some("Remote agent SDK type")
+    );
+
+    let Declaration::Alias(alias) = &file.declarations[1] else {
+        panic!("expected opaque alias");
+    };
+    assert_eq!(alias.target.path.segments, ["Opaque"]);
+    assert!(matches!(
+        &alias.target.arguments[0].kind,
+        TypeArgKind::String(tag) if tag == "alias"
+    ));
+
+    let Declaration::Newtype(newtype) = &file.declarations[2] else {
+        panic!("expected opaque newtype");
+    };
+    assert_eq!(newtype.underlying.path.segments, ["Opaque"]);
+    assert!(matches!(
+        &newtype.underlying.arguments[0].kind,
+        TypeArgKind::String(tag) if tag == "newtype"
+    ));
+
+    let Declaration::Struct(record) = &file.declarations[3] else {
+        panic!("expected record struct");
+    };
+    assert_eq!(record.fields[0].ty.path.segments, ["Opaque"]);
+    assert_eq!(record.fields[1].ty.path.segments, ["Iterator"]);
+    assert!(matches!(
+        &record.fields[1].ty.arguments[0].kind,
+        TypeArgKind::Type(ty) if ty.path.segments == ["Any"]
+    ));
+
+    let Declaration::Enum(response) = &file.declarations[4] else {
+        panic!("expected response enum");
+    };
+    assert_eq!(
+        response.variants[0].parameters[0].ty.path.segments,
+        ["Opaque"]
+    );
+
+    let Declaration::Trait(service) = &file.declarations[5] else {
+        panic!("expected service trait");
+    };
+    let method = &service.methods[0];
+    assert_eq!(method.parameters[0].ty.path.segments, ["List"]);
+    assert!(matches!(
+        &method.parameters[0].ty.arguments[0].kind,
+        TypeArgKind::Type(ty)
+            if ty.path.segments == ["Opaque"]
+                && matches!(&ty.arguments[0].kind, TypeArgKind::String(tag) if tag == "container")
+    ));
+    assert_eq!(method.return_type.path.segments, ["Generator"]);
+    assert_eq!(method.return_type.arguments.len(), 3);
+    assert!(matches!(
+        &method.return_type.arguments[0].kind,
+        TypeArgKind::Type(ty) if ty.path.segments == ["Opaque"]
+    ));
+    assert!(matches!(
+        &method.return_type.arguments[1].kind,
+        TypeArgKind::Type(ty) if ty.path.segments == ["Unknown"]
+    ));
+    assert!(matches!(
+        &method.return_type.arguments[2].kind,
+        TypeArgKind::Type(ty) if ty.path.segments == ["Any"]
+    ));
+
+    let Declaration::Function(inspect) = &file.declarations[6] else {
+        panic!("expected inspect function");
+    };
+    assert_eq!(inspect.parameters[0].ty.path.segments, ["Map"]);
+    assert_eq!(inspect.parameters[0].ty.arguments.len(), 2);
+    assert!(matches!(
+        &inspect.parameters[0].ty.arguments[1].kind,
+        TypeArgKind::Type(ty)
+            if ty.path.segments == ["Opaque"]
+                && matches!(&ty.arguments[0].kind, TypeArgKind::String(tag) if tag == "map-value")
+    ));
+    assert_eq!(inspect.return_type.path.segments, ["Unknown"]);
+}
+
+#[test]
+fn rejects_legacy_external_type_syntax() {
+    for source in [
+        "module agents.bad\nexternal python type Remote = \"vendor.client:Remote\"\n",
+        "module agents.bad\nexternal rust type Remote = \"vendor.client:Remote\"\n",
+        "module agents.bad\nexternal python Remote = \"vendor.client:Remote\"\n",
+        "module agents.bad\nexternal type Remote = \"vendor.client:Remote\"\n",
+        "module agents.bad\nexternal type Remote = vendor.client:Remote\n",
+        "module agents.bad\nexternal type Remote \"vendor.client:Remote\"\n",
+    ] {
+        assert_rejected(source);
+    }
+}

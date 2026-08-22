@@ -1,3 +1,4 @@
+import collections.abc
 import dataclasses
 import importlib
 import inspect
@@ -53,10 +54,48 @@ def substitute(annotation, substitutions):
         return annotation
 
 
+def non_generatable(annotation, substitutions=None):
+    annotation = substitute(annotation, substitutions or {})
+    if annotation is typing.Any:
+        return "Any"
+    if annotation is object:
+        return "Unknown"
+    origin = typing.get_origin(annotation)
+    args = typing.get_args(annotation)
+    if origin is typing.Annotated:
+        if any(type(value).__name__ == "CottExternal" for value in args[1:]):
+            return "external type"
+        return non_generatable(args[0], substitutions)
+    if annotation is collections.abc.Iterator or origin is collections.abc.Iterator:
+        return "Iterator"
+    if annotation is collections.abc.Generator or origin is collections.abc.Generator:
+        return "Generator"
+    if origin in (typing.Union, types.UnionType):
+        reasons = [non_generatable(value, substitutions) for value in args]
+        return next(iter(reasons), None) if reasons and all(reasons) else None
+    return next(
+        (reason for value in args if (reason := non_generatable(value, substitutions))),
+        None,
+    )
+
+
+def input_candidate_reason(function):
+    hints = callable_hints(function)
+    signature = inspect.signature(function)
+    for parameter in signature.parameters.values():
+        annotation = hints.get(parameter.name, parameter.annotation)
+        reason = non_generatable(annotation)
+        if reason is not None:
+            return (
+                f"input parameter `{parameter.name}` is {reason} and is not "
+                "automatically generated"
+            )
+    return None
+
 def candidates(annotation, depth=0, substitutions=None):
     substitutions = substitutions or {}
     annotation = substitute(annotation, substitutions)
-    if isinstance(annotation, typing.TypeVar) or depth > 4:
+    if non_generatable(annotation, substitutions) is not None:
         return []
     origin = typing.get_origin(annotation)
     args = typing.get_args(annotation)
@@ -448,7 +487,9 @@ def run_function(module_value, declaration, strategy):
         return observed, grade, reason
     valid_cases = 0
     hints = callable_hints(function)
-    for args, kwargs, environment in invoke_cases(function):
+    cases = invoke_cases(function)
+    candidate_reason = input_candidate_reason(function) if not cases else None
+    for args, kwargs, environment in cases:
         requirements = [clause for clause in clauses if clause["kind"] == "requires"]
         try:
             if not all(evaluate(clause["expression"], environment, module) for clause in requirements):
@@ -486,7 +527,10 @@ def run_function(module_value, declaration, strategy):
                 if matches:
                     observed[clause_id] += 1
     if valid_cases == 0:
-        return observed, "unobserved", "no valid input candidate satisfied refinements and requires"
+        return observed, "unobserved", (
+            candidate_reason
+            or "no valid input candidate satisfied refinements and requires"
+        )
     return observed, "test observation", None
 
 
@@ -502,6 +546,7 @@ def run_initializer(module, implementation, strategy):
         "Never-returning initializer is not automatically executed",
     )
     raw_cases = invoke_cases(facade)
+    candidate_reason = input_candidate_reason(facade) if not raw_cases else None
     if grade is not None:
         return clauses, observed, grade, reason, raw_cases
     valid_cases = 0
@@ -528,7 +573,10 @@ def run_initializer(module, implementation, strategy):
                     raise AssertionError(f"{symbol}: {clause['kind']} clause {clause_id} failed independently")
                 observed[clause_id] += 1
     if valid_cases == 0:
-        return clauses, observed, "unobserved", "no valid input candidate satisfied refinements and requires", accepted
+        return clauses, observed, "unobserved", (
+            candidate_reason
+            or "no valid input candidate satisfied refinements and requires"
+        ), accepted
     return clauses, observed, "test observation", None, accepted
 
 
@@ -552,9 +600,14 @@ def run_method(module, implementation, strategy, constructor_cases):
     if grade is not None:
         return clauses, observed, grade, reason
     if not constructor_cases:
-        return clauses, observed, "unobserved", "no valid constructor candidate satisfied refinements and requires"
+        return clauses, observed, "unobserved", (
+            input_candidate_reason(facade)
+            or "no valid constructor candidate satisfied refinements and requires"
+        )
     probe = facade(*constructor_cases[0][0], **constructor_cases[0][1])
-    cases = invoke_cases(getattr(probe, method_name))
+    bound_method = getattr(probe, method_name)
+    cases = invoke_cases(bound_method)
+    candidate_reason = input_candidate_reason(bound_method) if not cases else None
     valid_cases = 0
     requirements = [clause for clause in clauses if clause["kind"] == "requires"]
     state = [local(field["name"]) for field in implementation.get("state", ())]
@@ -611,7 +664,10 @@ def run_method(module, implementation, strategy, constructor_cases):
                     raise AssertionError(f"{symbol}: invariant clause {clause_id} failed independently")
                 observed[clause_id] += 1
     if valid_cases == 0:
-        return clauses, observed, "unobserved", "no valid input candidate satisfied refinements and requires"
+        return clauses, observed, "unobserved", (
+            candidate_reason
+            or "no valid input candidate satisfied refinements and requires"
+        )
     return clauses, observed, "test observation", None
 
 

@@ -6,6 +6,8 @@ use crate::diagnostics::Span;
 pub enum Keyword {
     Module,
     Use,
+    External,
+    Type,
     Alias,
     Newtype,
     Struct,

@@ -122,6 +122,13 @@ fn emit_sources(sources: &[(&str, &str)]) -> std::collections::BTreeMap<PathBuf,
 fn emit_sources_result(
     sources: &[(&str, &str)],
 ) -> Result<std::collections::BTreeMap<PathBuf, Vec<u8>>, Vec<cott::python_emit::EmitDiagnostic>> {
+    emit_sources_with_external_types_result(sources, &[])
+}
+
+fn emit_sources_with_external_types_result(
+    sources: &[(&str, &str)],
+    external_types: &[(&str, &str)],
+) -> Result<std::collections::BTreeMap<PathBuf, Vec<u8>>, Vec<cott::python_emit::EmitDiagnostic>> {
     let temp = TempDir::new();
     fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest should be writable");
     fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
@@ -129,7 +136,11 @@ fn emit_sources_result(
     for (name, source) in sources {
         fs::write(temp.path.join("src").join(name), source).expect("source should be writable");
     }
-    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let (mut config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    config.python.external_types = external_types
+        .iter()
+        .map(|(name, target)| ((*name).to_owned(), (*target).to_owned()))
+        .collect();
     let parsed =
         parse_project(discover_sources_from_paths(&paths).expect("sources should be discovered"))
             .expect("sources should parse");
@@ -514,4 +525,139 @@ impl CounterState for Counter:
             .to_string()
             .contains("\"span\"")
     );
+}
+
+#[test]
+fn emits_manifest_projected_external_types_deterministically() {
+    let sources = [
+        (
+            "providers.cott",
+            r#"module providers
+
+external type Remote
+external type RemoteAgain
+external type Class
+"#,
+        ),
+        (
+            "app.cott",
+            r#"module app
+use providers.{Remote}
+
+alias Stream = Iterator[Generator[Any, Unknown, Remote]]
+
+fn run(data: Iterator[Generator[Any, Unknown, Remote]]) -> Generator[Remote, Unknown, Any]
+"#,
+        ),
+    ];
+    let projections = [
+        ("providers.Remote", "vendor.client:Remote.Inner"),
+        ("providers.RemoteAgain", "vendor.client:Remote.Inner"),
+        ("providers.Class", "module:Class"),
+    ];
+    let first =
+        emit_sources_with_external_types_result(&sources, &projections).expect("valid projections");
+    let second =
+        emit_sources_with_external_types_result(&sources, &projections).expect("valid projections");
+    assert_eq!(first, second);
+
+    let provider_types = String::from_utf8_lossy(bytes(&first, "python/providers_types.py"));
+    assert!(provider_types.contains("from vendor.client import Remote as _cott_external_Remote"));
+    assert!(
+        provider_types.contains("from vendor.client import Remote as _cott_external_RemoteAgain")
+    );
+    assert!(
+        provider_types.contains(
+            "Remote: TypeAlias = Annotated[_cott_external_Remote.Inner, CottExternal(\"vendor.client:Remote.Inner\")]"
+        )
+    );
+    assert!(
+        provider_types.contains(
+            "RemoteAgain: TypeAlias = Annotated[_cott_external_RemoteAgain.Inner, CottExternal(\"vendor.client:Remote.Inner\")]"
+        )
+    );
+    assert!(provider_types.contains("from module import Class as _cott_external_Class"));
+    assert!(provider_types.contains(
+        "Class: TypeAlias = Annotated[_cott_external_Class, CottExternal(\"module:Class\")]"
+    ));
+
+    let changed = emit_sources_with_external_types_result(
+        &sources,
+        &[
+            ("providers.Remote", "vendor.client:Remote.Inner"),
+            ("providers.RemoteAgain", "vendor.client:Remote.Inner"),
+            ("providers.Class", "other.module:Class"),
+        ],
+    )
+    .expect("valid changed projection");
+    assert_ne!(
+        bytes(&first, "python/providers_types.py"),
+        bytes(&changed, "python/providers_types.py")
+    );
+    assert_eq!(
+        bytes(&first, "ir/providers.json"),
+        bytes(&changed, "ir/providers.json")
+    );
+
+    let app_types = String::from_utf8_lossy(bytes(&first, "python/app_types.py"));
+    let facade = String::from_utf8_lossy(bytes(&first, "python/app.py"));
+    let stub = String::from_utf8_lossy(bytes(&first, "stubs/app.pyi"));
+    for output in [app_types.as_ref(), facade.as_ref(), stub.as_ref()] {
+        assert_eq!(
+            output
+                .lines()
+                .find(|line| *line == "from collections.abc import Generator, Iterator"),
+            Some("from collections.abc import Generator, Iterator")
+        );
+        assert!(output.lines().any(|line| line.contains("Any")));
+        assert!(output.contains("from providers_types import Remote"));
+    }
+}
+
+#[test]
+fn rejects_missing_stale_non_external_and_malformed_external_projections() {
+    let external = [(
+        "providers.cott",
+        "module providers\n\nexternal type Remote\n",
+    )];
+    let missing = emit_sources_with_external_types_result(&external, &[])
+        .expect_err("external declaration requires a projection");
+    assert!(
+        missing
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("has no Python projection"))
+    );
+
+    let stale = emit_sources_with_external_types_result(
+        &external,
+        &[("providers.Stale", "vendor.client:Remote")],
+    )
+    .expect_err("stale projection must fail");
+    assert!(
+        stale
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("is stale"))
+    );
+
+    let non_external = emit_sources_with_external_types_result(
+        &[("providers.cott", "module providers\n\nalias Remote = I32\n")],
+        &[("providers.Remote", "vendor.client:Remote")],
+    )
+    .expect_err("non-external projection must fail");
+    assert!(
+        non_external
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("is not an external type"))
+    );
+
+    let malformed = emit_sources_with_external_types_result(
+        &external,
+        &[("providers.Remote", "not a projection")],
+    )
+    .expect_err("malformed projection must fail");
+    assert!(malformed.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("has malformed Python projection")
+    }));
 }

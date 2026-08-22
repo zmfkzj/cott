@@ -895,7 +895,15 @@ fn feature_examples_emit_and_check() {
                 "Completed: True",
             ],
         ),
-        ("features/opaque-resource", &["Extracted handle id: 42"]),
+        (
+            "features/opaque-resource",
+            &[
+                "Extracted handle id: 42",
+                "Lines: alpha,beta",
+                "Generated values: first,7",
+                "Generator return count: 2",
+            ],
+        ),
         (
             "features/json-transform",
             &["Extracted JSON field: Hello Cott"],

@@ -19,7 +19,7 @@ import sys as _sys
 import sysconfig as _sysconfig
 import threading as _threading
 import types as _types
-from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
+from collections.abc import Generator as _Generator, Iterable, Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass
 from pathlib import Path as _Path
 from typing import Annotated, Any, Generic, Literal, Never, TypeAlias, TypeVar, Union, get_args as _get_args, get_origin as _get_origin, get_type_hints as _get_type_hints, final as _final, overload
@@ -62,6 +62,12 @@ class CottFloat:
     def __post_init__(self) -> None:
         if self.bits not in (32, 64):
             raise ValueError("invalid CottFloat metadata")
+
+
+@_final
+@dataclass(frozen=True, slots=True)
+class CottExternal:
+    path: str
 
 
 I8: TypeAlias = Annotated[int, CottInt("signed", 8)]
@@ -434,6 +440,17 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") ->
     origin = _get_origin(annotation)
     args = _get_args(annotation)
     if origin is Annotated:
+        external = next((item for item in args[1:] if isinstance(item, CottExternal)), None)
+        if external is not None:
+            target = args[0]
+            if isinstance(target, type):
+                try:
+                    matches = isinstance(value, target)
+                except TypeError:
+                    return value
+                if not matches:
+                    raise CottContractViolation(f"{path} does not match external ABI type", phase="validation")
+            return value
         normalized = _cott_normalize_scalar(value, annotation)
         return _cott_validate_abi(normalized, args[0], path=path)
     if origin in (Union, _types.UnionType):
@@ -447,10 +464,18 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") ->
         if any(type(value) is type(candidate) and value == candidate for candidate in args):
             return value
         raise CottContractViolation(f"{path} does not match ABI literal", phase="validation")
-    if annotation is Any:
+    if annotation is Any or annotation is object:
         return value
     if isinstance(annotation, TypeVar):
         return value
+    if origin is _Generator or annotation is _Generator:
+        if isinstance(value, _Generator):
+            return value
+        raise CottContractViolation(f"{path} does not match ABI generator", phase="validation")
+    if origin is Iterator or annotation is Iterator:
+        if isinstance(value, Iterator):
+            return value
+        raise CottContractViolation(f"{path} does not match ABI iterator", phase="validation")
     protocol = origin if isinstance(origin, type) and getattr(origin, "_is_protocol", False) else annotation
     if isinstance(protocol, type) and getattr(protocol, "_is_protocol", False):
         missing = [
@@ -528,9 +553,15 @@ def _cott_normalize_f32_abi(value: object, annotation: object, *, path: str = "$
     """Normalize every concretely typed F32 while leaving other validation disabled."""
     origin = _get_origin(annotation)
     args = _get_args(annotation)
+    if annotation is Any or annotation is object:
+        return value
     if origin is Annotated:
+        if any(isinstance(item, CottExternal) for item in args[1:]):
+            return value
         metadata = next((item for item in args[1:] if isinstance(item, CottFloat)), None)
         return _cott_normalize_f32(value) if metadata is not None and metadata.bits == 32 else value
+    if origin is _Generator or annotation is _Generator or origin is Iterator or annotation is Iterator:
+        return value
     if origin in (Union, _types.UnionType):
         for candidate in args:
             candidate_origin = _get_origin(candidate)
@@ -962,7 +993,7 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
 
 
 __all__ = [
-    "CottContractViolation", "CottFloat", "CottInt", "CottList", "CottSet", "CottTuple2", "Err", "F32", "F64", "FrozenMap",
+    "CottContractViolation", "CottExternal", "CottFloat", "CottInt", "CottList", "CottSet", "CottTuple2", "Err", "F32", "F64", "FrozenMap",
     "I8", "I16", "I32", "I64", "JsonArray", "JsonBoolean", "JsonFloat", "JsonInteger", "JsonNull", "JsonObject", "JsonString", "JsonValue",
     "Never", "Nothing", "Ok", "Opaque", "Option", "PROJECT_NAME", "Result", "Some", "U8", "U16", "U32", "U64", "UNIT", "Unit",
 ]

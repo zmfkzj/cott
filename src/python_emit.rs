@@ -99,6 +99,12 @@ pub fn emit(
             validate_declaration(&module.module, object, &mut diagnostics);
         }
     }
+    validate_external_types(
+        &modules,
+        &declarations,
+        &config.python.external_types,
+        &mut diagnostics,
+    );
     for module in modules.values() {
         let mut projected = BTreeSet::new();
         for declaration in &module.declarations {
@@ -142,6 +148,43 @@ pub fn emit(
                         ));
                     }
                 }
+            }
+        }
+    }
+    for module in modules.values() {
+        let mut external_aliases = BTreeSet::new();
+        for declaration in &module.declarations {
+            let Some(object) = declaration.as_object() else {
+                continue;
+            };
+            if object.get("kind").and_then(Value::as_str) == Some("external_type")
+                && !external_aliases.insert(external_import_alias(object))
+            {
+                diagnostics.push(diag(
+                    module_path(&module.module),
+                    "external Python import aliases collide",
+                ));
+            }
+        }
+        for declaration in &module.declarations {
+            let Some(object) = declaration.as_object() else {
+                continue;
+            };
+            if object.get("kind").and_then(Value::as_str) != Some("external_type")
+                && external_aliases.contains(&format!(
+                    "_cott_external_{}",
+                    local_name(
+                        object
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                    )
+                ))
+            {
+                diagnostics.push(diag(
+                    module_path(&module.module),
+                    "external Python import alias collides with a generated declaration",
+                ));
             }
         }
     }
@@ -305,7 +348,12 @@ pub fn emit(
             &mut files,
             &mut diagnostics,
             type_path(&module.module),
-            finish(render_types(module, &modules, &declarations)),
+            finish(render_types(
+                module,
+                &modules,
+                &declarations,
+                &config.python.external_types,
+            )),
         );
         add_file(
             &mut files,
@@ -524,6 +572,7 @@ fn validate_declaration(
         return;
     };
     match kind {
+        "external_type" => {}
         "alias" => {
             if let Some(ty) = required_value(object, "target", module, diagnostics) {
                 validate_type(ty, module, diagnostics);
@@ -641,6 +690,52 @@ fn validate_declaration(
         ),
     }
 }
+fn validate_external_types(
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+    declarations: &BTreeMap<String, String>,
+    external_types: &BTreeMap<String, String>,
+    diagnostics: &mut Vec<EmitDiagnostic>,
+) {
+    for (name, kind) in declarations {
+        if kind == "external_type" && !external_types.contains_key(name) {
+            let module = modules
+                .values()
+                .find(|module| {
+                    module.declarations.iter().any(|declaration| {
+                        declaration.get("name").and_then(Value::as_str) == Some(name)
+                    })
+                })
+                .map_or("python", |module| module.module.as_str());
+            diagnostics.push(diag(
+                module_path(module),
+                format!("external type `{name}` has no Python projection"),
+            ));
+        }
+    }
+    for (name, projection) in external_types {
+        match declarations.get(name).map(String::as_str) {
+            Some("external_type") => {
+                if external_type_target(projection).is_none() {
+                    diagnostics.push(diag(
+                        "cott.toml",
+                        format!(
+                            "external type `{name}` has malformed Python projection `{projection}`"
+                        ),
+                    ));
+                }
+            }
+            Some(_) => diagnostics.push(diag(
+                "cott.toml",
+                format!("Python external type projection `{name}` is not an external type"),
+            )),
+            None => diagnostics.push(diag(
+                "cott.toml",
+                format!("Python external type projection `{name}` is stale"),
+            )),
+        }
+    }
+}
+
 fn validate_fields(
     object: &serde_json::Map<String, Value>,
     field: &str,
@@ -695,6 +790,8 @@ fn validate_type(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnost
                     | "path"
                     | "unit"
                     | "json"
+                    | "any"
+                    | "unknown"
                     | "never"
             ) {
                 unsupported(
@@ -715,7 +812,7 @@ fn validate_type(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnost
         "type_parameter" => {
             required_string(object, "name", module, diagnostics);
         }
-        "list" | "set" | "option" => {
+        "list" | "set" | "option" | "iterator" => {
             if let Some(item) = required_value(object, "item", module, diagnostics) {
                 validate_type(item, module, diagnostics);
             }
@@ -736,6 +833,13 @@ fn validate_type(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnost
         }
         "result" => {
             for field in ["ok", "error"] {
+                if let Some(item) = required_value(object, field, module, diagnostics) {
+                    validate_type(item, module, diagnostics);
+                }
+            }
+        }
+        "generator" => {
+            for field in ["yield", "send", "return"] {
                 if let Some(item) = required_value(object, field, module, diagnostics) {
                     validate_type(item, module, diagnostics);
                 }
@@ -843,10 +947,14 @@ fn render_types(
     module: &crate::python::artifact_plan::PythonArtifactModule,
     modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
     declarations: &BTreeMap<String, String>,
+    external_types: &BTreeMap<String, String>,
 ) -> Vec<u8> {
     let mut out = String::from(
-        "from __future__ import annotations\n\nimport dataclasses as _dataclasses\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import Final, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable\n\nfrom cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_normalize_f32, _cott_validate_abi\n",
+        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport dataclasses as _dataclasses\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import Annotated, Any, Final, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable\n\nfrom cott_runtime import CottContractViolation, CottExternal, CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_normalize_f32, _cott_validate_abi\n",
     );
+    for (source, name, alias) in external_imports(module, external_types) {
+        writeln!(out, "from {source} import {name} as {alias}").unwrap();
+    }
     let imports = referenced_imports(module, declarations);
     for (source, names) in &imports {
         writeln!(
@@ -871,7 +979,14 @@ fn render_types(
         out.push('\n');
     }
     for declaration in &module.declarations {
-        render_type_declaration(&mut out, declaration, module, modules, declarations);
+        render_type_declaration(
+            &mut out,
+            declaration,
+            module,
+            modules,
+            declarations,
+            external_types,
+        );
     }
     render_function_bound_protocols(&mut out, module, declarations);
     let names = type_exported_names(module);
@@ -893,6 +1008,7 @@ fn render_type_declaration(
     module: &crate::python::artifact_plan::PythonArtifactModule,
     modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
     declarations: &BTreeMap<String, String>,
+    external_types: &BTreeMap<String, String>,
 ) {
     let object = declaration.as_object().unwrap();
     let typevar_names = generic_typevar_names(module, object, false);
@@ -947,6 +1063,22 @@ fn render_type_declaration(
     }
     render_doc(out, object.get("doc"));
     match kind {
+        "external_type" => {
+            let canonical_name = object.get("name").and_then(Value::as_str).unwrap();
+            let projection = external_types
+                .get(canonical_name)
+                .expect("validated Python external type projection");
+            let (_, qualified) = external_type_target(projection)
+                .expect("validated Python external type projection");
+            let nested = qualified.find('.').map_or("", |index| &qualified[index..]);
+            writeln!(
+                out,
+                "{name}: TypeAlias = Annotated[{}{nested}, CottExternal({})]\n",
+                external_import_alias(object),
+                json_string(projection),
+            )
+            .unwrap();
+        }
         "alias" => writeln!(
             out,
             "{name}: TypeAlias = {}\n",
@@ -1509,7 +1641,7 @@ fn render_facade(
     config: &ProjectConfig,
 ) -> Vec<u8> {
     let mut out = String::from(
-        "from __future__ import annotations\n\nimport dataclasses as _dataclasses\nimport threading as _threading\nfrom pathlib import Path\nfrom typing import Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi\n",
+        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport dataclasses as _dataclasses\nimport threading as _threading\nfrom pathlib import Path\nfrom typing import Any, Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi\n",
     );
     let names = exported_names(module);
     let mut local_imports = type_exported_names(module);
@@ -2641,7 +2773,7 @@ fn render_stub(
     declarations: &BTreeMap<String, String>,
 ) -> Vec<u8> {
     let mut out = String::from(
-        "from __future__ import annotations\n\nfrom pathlib import Path\nfrom typing import Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit\n",
+        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nfrom pathlib import Path\nfrom typing import Any, Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit\n",
     );
     let names = exported_names(module);
     let type_names = type_exported_names(module);
@@ -2829,8 +2961,10 @@ fn render_type_with_names(
             "path" => "Path",
             "unit" => "Unit",
             "json" => "JsonValue",
+            "any" => "Any",
+            "unknown" => "object",
             "never" => "Never",
-            _ => "object",
+            other => unreachable!("validated primitive type `{other}`"),
         }
         .into(),
         "named" => {
@@ -2937,6 +3071,36 @@ fn render_type_with_names(
                 typevar_names
             )
         ),
+        "iterator" => format!(
+            "Iterator[{}]",
+            render_type_with_names(
+                object.get("item").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            )
+        ),
+        "generator" => format!(
+            "Generator[{}, {}, {}]",
+            render_type_with_names(
+                object.get("yield").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            ),
+            render_type_with_names(
+                object.get("send").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            ),
+            render_type_with_names(
+                object.get("return").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            )
+        ),
         "opaque" => format!(
             "Opaque[Literal[{}]]",
             json_string(
@@ -2946,7 +3110,7 @@ fn render_type_with_names(
                     .unwrap_or_default()
             )
         ),
-        _ => "object".into(),
+        other => unreachable!("validated canonical type kind `{other}`"),
     }
 }
 fn render_value(value: &Value) -> String {
@@ -3083,7 +3247,7 @@ fn render_value(value: &Value) -> String {
             }
         }
         "json" => render_json_value(object.get("value").unwrap()),
-        _ => "None".into(),
+        other => unreachable!("validated canonical value kind `{other}`"),
     }
 }
 
@@ -3157,6 +3321,56 @@ fn float_bits(bits: &str, single: bool) -> String {
         }
     }
 }
+
+fn external_type_target(path: &str) -> Option<(&str, &str)> {
+    let (module, qualified) = path.split_once(':')?;
+    (!module.is_empty()
+        && !qualified.is_empty()
+        && module.split('.').all(valid_python_name)
+        && qualified.split('.').all(valid_python_name))
+    .then_some((module, qualified))
+}
+
+fn external_import_alias(object: &serde_json::Map<String, Value>) -> String {
+    format!(
+        "_cott_external_{}",
+        local_name(
+            object
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        )
+    )
+}
+
+fn external_imports(
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    external_types: &BTreeMap<String, String>,
+) -> BTreeSet<(String, String, String)> {
+    module
+        .declarations
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|declaration| {
+            declaration.get("kind").and_then(Value::as_str) == Some("external_type")
+        })
+        .map(|declaration| {
+            let canonical_name = declaration.get("name").and_then(Value::as_str).unwrap();
+            let projection = external_types
+                .get(canonical_name)
+                .expect("validated Python external type projection");
+            let (source, qualified) = external_type_target(projection)
+                .expect("validated Python external type projection");
+            let root = qualified.split('.').next().unwrap();
+            (
+                source.to_owned(),
+                root.to_owned(),
+                external_import_alias(declaration),
+            )
+        })
+        .collect()
+}
+
 fn referenced_imports(
     module: &crate::python::artifact_plan::PythonArtifactModule,
     declarations: &BTreeMap<String, String>,
@@ -3346,7 +3560,7 @@ fn collect_symbol(
         if source != module
             && matches!(
                 declarations.get(symbol).map(String::as_str),
-                Some("alias" | "newtype" | "struct" | "enum" | "trait" | "const")
+                Some("alias" | "external_type" | "newtype" | "struct" | "enum" | "trait" | "const")
             )
         {
             imports
@@ -3384,7 +3598,7 @@ fn collect_named(
                 collect_named(argument, module, declarations, imports);
             }
         }
-        "list" | "set" | "option" => {
+        "list" | "set" | "option" | "iterator" => {
             if let Some(item) = object.get("item") {
                 collect_named(item, module, declarations, imports);
             }
@@ -3398,6 +3612,13 @@ fn collect_named(
         }
         "tuple2" => {
             for key in ["first", "second"] {
+                if let Some(value) = object.get(key) {
+                    collect_named(value, module, declarations, imports);
+                }
+            }
+        }
+        "generator" => {
+            for key in ["yield", "send", "return"] {
                 if let Some(value) = object.get(key) {
                     collect_named(value, module, declarations, imports);
                 }
@@ -3431,7 +3652,7 @@ fn validate_named(
             if let Some(name) = object.get("name").and_then(Value::as_str) {
                 if !matches!(
                     declarations.get(name).map(String::as_str),
-                    Some("alias" | "newtype" | "struct" | "enum")
+                    Some("alias" | "external_type" | "newtype" | "struct" | "enum" | "trait")
                 ) {
                     unsupported(
                         module,
@@ -3440,18 +3661,46 @@ fn validate_named(
                     );
                 }
             }
+            for argument in object
+                .get("args")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                validate_named(argument, module, declarations, diagnostics);
+            }
         }
-        "option" => {
+        "list" | "set" | "option" | "iterator" => {
             if let Some(item) = object.get("item") {
                 validate_named(item, module, declarations, diagnostics);
             }
         }
-        "result" => {
-            if let Some(item) = object.get("ok") {
-                validate_named(item, module, declarations, diagnostics);
+        "map" => {
+            for key in ["key", "value"] {
+                if let Some(item) = object.get(key) {
+                    validate_named(item, module, declarations, diagnostics);
+                }
             }
-            if let Some(item) = object.get("error") {
-                validate_named(item, module, declarations, diagnostics);
+        }
+        "tuple2" => {
+            for key in ["first", "second"] {
+                if let Some(item) = object.get(key) {
+                    validate_named(item, module, declarations, diagnostics);
+                }
+            }
+        }
+        "result" => {
+            for key in ["ok", "error"] {
+                if let Some(item) = object.get(key) {
+                    validate_named(item, module, declarations, diagnostics);
+                }
+            }
+        }
+        "generator" => {
+            for key in ["yield", "send", "return"] {
+                if let Some(item) = object.get(key) {
+                    validate_named(item, module, declarations, diagnostics);
+                }
             }
         }
         _ => {}
@@ -3809,7 +4058,10 @@ fn valid_python_name(name: &str) -> bool {
 
 fn python_support_names() -> &'static [&'static str] {
     &[
+        "Annotated",
+        "Any",
         "CottContractViolation",
+        "CottExternal",
         "CottList",
         "CottSet",
         "CottTuple2",
@@ -3818,6 +4070,7 @@ fn python_support_names() -> &'static [&'static str] {
         "F64",
         "Final",
         "FrozenMap",
+        "Generator",
         "Generic",
         "I8",
         "I16",
@@ -3832,6 +4085,7 @@ fn python_support_names() -> &'static [&'static str] {
         "JsonString",
         "JsonValue",
         "Literal",
+        "Iterator",
         "Never",
         "Nothing",
         "Ok",

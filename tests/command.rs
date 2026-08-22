@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::process::Command as ProcessCommand;
 
 use cott::cli::{AgentKind, Command, EmitTarget, OutputFormat, parse_command};
 
@@ -50,6 +51,51 @@ fn parses_global_options_in_any_position() {
             format: OutputFormat::Human
         },
     );
+}
+
+#[test]
+fn parses_parameterless_lsp_only() {
+    assert_eq!(parse(&["lsp"]), Command::Lsp);
+    for arguments in [
+        &["lsp", "--format", "json"][..],
+        &["lsp", "--project", "demo"][..],
+        &["lsp", "--unknown"][..],
+        &["lsp", "--help"][..],
+        &["lsp", "source.cott"][..],
+    ] {
+        assert!(
+            parse_command(
+                &arguments
+                    .iter()
+                    .map(|value| OsString::from(*value))
+                    .collect::<Vec<_>>()
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn lsp_options_bypass_json_diagnostic_routing() {
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cott"))
+        .args(["lsp", "--format", "json", "--format", "json"])
+        .output()
+        .expect("cott should run");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("`lsp` does not accept options or operands")
+    );
+
+    let duplicate = ProcessCommand::new(env!("CARGO_BIN_EXE_cott"))
+        .args(["check", "--format", "json", "--format", "json"])
+        .output()
+        .expect("cott should run");
+    assert_eq!(duplicate.status.code(), Some(2));
+    let report: serde_json::Value =
+        serde_json::from_slice(&duplicate.stdout).expect("duplicate format reports JSON");
+    assert_eq!(report["diagnostics"][0]["message"], "duplicate option");
 }
 
 #[test]

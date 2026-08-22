@@ -428,6 +428,8 @@ fn keyword(word: &str) -> Option<Keyword> {
     Some(match word {
         "module" => Keyword::Module,
         "use" => Keyword::Use,
+        "external" => Keyword::External,
+        "type" => Keyword::Type,
         "alias" => Keyword::Alias,
         "newtype" => Keyword::Newtype,
         "where" => Keyword::Where,

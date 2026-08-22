@@ -145,18 +145,6 @@ pub fn resolve_implementations(
     let mut unresolved = Vec::new();
     let mut expected_agent_files = BTreeSet::new();
     for (symbol, callable) in callables {
-        if matches!(&callable.kind, PythonCallableKind::Function)
-            && json_contains_opaque(&callable.declaration)
-            && !config.python.implementations.contains_key(&symbol)
-        {
-            diagnostics.push(BindingDiagnostic {
-                path: paths.manifest.clone(),
-                message: format!(
-                    "Opaque boundary function `{symbol}` requires a manifest implementation binding"
-                ),
-            });
-            continue;
-        }
         let Some(segments) = module_segments(&callable.module) else {
             diagnostics.push(BindingDiagnostic {
                 path: paths.python_source_dir.clone(),
@@ -335,17 +323,6 @@ fn recorded_agent_sources(
                 .then(|| (symbol.to_owned(), (path.to_owned(), hash.to_owned())))
         })
         .collect())
-}
-
-fn json_contains_opaque(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Object(object) => {
-            object.get("kind").and_then(serde_json::Value::as_str) == Some("opaque")
-                || object.values().any(json_contains_opaque)
-        }
-        serde_json::Value::Array(values) => values.iter().any(json_contains_opaque),
-        _ => false,
-    }
 }
 
 fn manifest_target(
@@ -744,7 +721,6 @@ fn validate_source(
             "global" | "nonlocal" => {
                 add_error(format!("function statement `{token}` is not allowed"))
             }
-            "yield" => add_error(String::from("generator implementations are not allowed")),
             _ => {}
         }
     }

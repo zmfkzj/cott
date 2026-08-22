@@ -31,7 +31,7 @@ use crate::python_verify::verify_python;
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession};
 use crate::version::{is_at_least, parse_version};
 
-const USAGE: &str = "Usage:\n  cott init <path> [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|omp --target python [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n";
+const USAGE: &str = "Usage:\n  cott init <path> [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|omp --target python [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n";
 
 #[cfg(test)]
 thread_local! {
@@ -78,7 +78,7 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
         .windows(2)
         .filter(|pair| pair[0] == "--format" && pair[1] == "json")
         .count();
-    if json_formats > 1 {
+    if json_formats > 1 && !matches!(arguments.first(), Some(command) if command == "lsp") {
         let report = DiagnosticReport {
             diagnostics: vec![Diagnostic::error(
                 code::CLI_USAGE,
@@ -92,11 +92,12 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
         let _ = std::io::stdout().write_all(&bytes);
         return 2;
     }
-    if json_formats == 1 {
+    if json_formats == 1 && !matches!(arguments.first(), Some(command) if command == "lsp") {
         return run_json(arguments);
     }
 
     match parse_command(&arguments) {
+        Ok(Command::Lsp) => crate::lsp::run(),
         Ok(Command::Help) => {
             print!("{USAGE}");
             0
@@ -343,6 +344,7 @@ pub enum Command {
         project: Option<PathBuf>,
         format: OutputFormat,
     },
+    Lsp,
     Help,
 }
 
@@ -360,6 +362,8 @@ pub fn parse_command(arguments: &[OsString]) -> Result<Command, &'static str> {
         "fmt" => parse_fmt(values),
         "emit" => parse_emit(values),
         "generate" => parse_generate(values),
+        "lsp" if values.is_empty() => Ok(Command::Lsp),
+        "lsp" => Err("`lsp` does not accept options or operands"),
         "verify" => {
             let options = ExistingOptions::parse(values)?;
             Ok(Command::Verify {
@@ -1492,6 +1496,7 @@ fn generate_project(
                         &module_ir,
                         &binding_context,
                         &target_rules,
+                        &config.python.external_types,
                         &bound_symbols,
                         None,
                         project_rules.as_deref(),

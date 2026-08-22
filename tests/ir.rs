@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use cott::compiler::{SourceFile, parse_project};
@@ -15,13 +16,47 @@ fn checked_in_canonical_ir_schema_is_parseable() {
         .expect("canonical IR schema must be a JSON object");
 
     assert_eq!(
+        object.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "$defs",
+            "$id",
+            "$schema",
+            "additionalProperties",
+            "properties",
+            "required",
+            "title",
+            "type",
+        ])
+    );
+    assert_eq!(
         object.get("$schema").and_then(serde_json::Value::as_str),
         Some("https://json-schema.org/draft/2020-12/schema")
     );
     assert_eq!(
         object.get("$id").and_then(serde_json::Value::as_str),
-        Some("https://cott.dev/schema/canonical-ir/v1")
+        Some("https://cott.dev/schema/canonical-ir/v2")
     );
+    assert_eq!(
+        object
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|properties| properties.get("schema_version"))
+            .and_then(serde_json::Value::as_object)
+            .and_then(|version| version.get("const"))
+            .and_then(serde_json::Value::as_u64),
+        Some(2)
+    );
+
+    let definitions = object
+        .get("$defs")
+        .and_then(serde_json::Value::as_object)
+        .expect("canonical IR schema must define $defs");
+    for definition in ["pattern", "contract", "effect"] {
+        assert!(
+            definitions.contains_key(definition),
+            "canonical IR schema must define $defs.{definition}"
+        );
+    }
 }
 
 fn source(path: &str, text: &str) -> SourceFile {
@@ -69,6 +104,26 @@ fn run() -> Outcome
     .expect("IR fixture must parse");
 
     cott::hir::lower(Path::new("src"), parsed).expect("IR fixture must lower")
+}
+
+fn advanced_types_project() -> HirProject {
+    let parsed = parse_project([source(
+        "src/types/advanced.cott",
+        r#"module types.advanced
+
+external type PyIterator
+
+alias Anything = Any
+alias UnknownValue = Unknown
+alias Imported = PyIterator
+alias Stream = Generator[Opaque["yield"], Unknown, Iterator[Opaque["handle"]]]
+
+fn consume(items: Iterator[Opaque["handle"]]) -> Stream
+"#,
+    )])
+    .expect("advanced type fixture must parse");
+
+    cott::hir::lower(Path::new("src"), parsed).expect("advanced type fixture must lower")
 }
 
 fn impl_project() -> HirProject {
@@ -169,6 +224,51 @@ fn renders_deterministic_owned_hir_modules() {
     assert!(api.contains(r#""start_byte":"#));
     assert!(api.contains(r#""start_line":"#));
     assert!(api.contains(r#""start_column":"#));
+}
+
+#[test]
+fn renders_and_closes_advanced_type_nodes() {
+    let project = advanced_types_project();
+    let first = render(&project).expect("advanced HIR must render");
+    let second = render(&project).expect("advanced HIR must render twice");
+    assert_eq!(first.modules[0].bytes, second.modules[0].bytes);
+
+    let text = json(&first.modules[0]);
+    assert!(text.contains(r#""schema_version":2"#));
+    assert_in_order(
+        text,
+        &[
+            r#""annotations":[]"#,
+            r#""doc":null"#,
+            r#""kind":"external_type""#,
+            r#""name":"types.advanced.PyIterator""#,
+            r#""public":true"#,
+            r#""source_order":0"#,
+            r#""span":"#,
+        ],
+    );
+    assert!(text.contains(r#"{"kind":"primitive","name":"any"}"#));
+    assert!(text.contains(r#"{"kind":"primitive","name":"unknown"}"#));
+    assert!(text.contains(r#"{"args":[],"kind":"named","name":"types.advanced.PyIterator"}"#));
+    assert!(text.contains(r#"{"item":{"kind":"opaque","tag":"handle"},"kind":"iterator"}"#));
+    assert!(text.contains(
+        r#"{"kind":"generator","return":{"item":{"kind":"opaque","tag":"handle"},"kind":"iterator"},"send":{"kind":"primitive","name":"unknown"},"yield":{"kind":"opaque","tag":"yield"}}"#,
+    ));
+
+    let value = load(&first.modules[0].bytes).expect("advanced canonical IR must load");
+    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["declarations"][0]["kind"], "external_type");
+    let external = value["declarations"][0]
+        .as_object()
+        .expect("external declaration object");
+    assert!(!external.contains_key("target"));
+    assert!(!external.contains_key("path"));
+    assert_eq!(
+        value["declarations"][0]["name"],
+        "types.advanced.PyIterator"
+    );
+    assert_eq!(value["declarations"][0]["public"], true);
+    assert_eq!(value["declarations"][4]["target"]["kind"], "generator");
 }
 
 #[test]
@@ -313,6 +413,56 @@ fn assert_schema_rejects(value: serde_json::Value, message: &str) {
     bytes.push(b'\n');
     let error = load(&bytes).expect_err(message);
     assert!(error.contains("schema violation"), "{error}");
+}
+
+#[test]
+fn schema_rejects_malformed_advanced_type_nodes() {
+    let rendered = render(&advanced_types_project()).expect("advanced fixture must render");
+    let value: serde_json::Value = serde_json::from_slice(&rendered.modules[0].bytes).unwrap();
+    let declarations = value["declarations"].as_array().expect("declarations");
+    let external_index = declarations
+        .iter()
+        .position(|declaration| declaration["kind"] == "external_type")
+        .expect("external declaration");
+    let generator_index = declarations
+        .iter()
+        .position(|declaration| declaration["target"]["kind"] == "generator")
+        .expect("generator declaration");
+    let primitive_index = declarations
+        .iter()
+        .position(|declaration| declaration["target"]["name"] == "any")
+        .expect("any declaration");
+
+    let mut stale_external_path = value.clone();
+    stale_external_path["declarations"][external_index]["path"] =
+        serde_json::Value::String("collections.abc:Iterator".into());
+    assert_schema_rejects(stale_external_path, "stale external path must fail");
+    let mut stale_external_target = value.clone();
+    stale_external_target["declarations"][external_index]["target"] =
+        serde_json::Value::String("python".into());
+    assert_schema_rejects(stale_external_target, "stale external target must fail");
+
+    let mut malformed_generator = value.clone();
+    malformed_generator["declarations"][generator_index]["target"]
+        .as_object_mut()
+        .expect("generator object")
+        .remove("return");
+    assert_schema_rejects(
+        malformed_generator,
+        "generator without return type must fail",
+    );
+
+    let mut malformed_iterator = value.clone();
+    malformed_iterator["declarations"][generator_index]["target"]["return"]
+        .as_object_mut()
+        .expect("iterator object")
+        .remove("item");
+    assert_schema_rejects(malformed_iterator, "iterator without item type must fail");
+
+    let mut malformed_primitive = value;
+    malformed_primitive["declarations"][primitive_index]["target"]["name"] =
+        serde_json::Value::String("invalid".into());
+    assert_schema_rejects(malformed_primitive, "unknown primitive name must fail");
 }
 
 #[test]

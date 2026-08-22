@@ -100,6 +100,7 @@ pub fn render_prompt(
     selected_ir: &[u8],
     docs: &str,
     type_declarations: &str,
+    external_types: &BTreeMap<String, String>,
     bound_symbols: &str,
     existing: Option<&[u8]>,
     rules: Option<&[u8]>,
@@ -118,7 +119,12 @@ pub fn render_prompt(
             callable.name, callable.module, callable.module
         ),
     };
-    let mut prompt = format!("COTT_AGENT_PROMPT_V1\n\nTARGET\nSymbol: {}\nWrite path: {}\n\nIMPLEMENTATION OWNERSHIP\n{ownership}\n\nCANONICAL IR\n{}\n\nDOCS CONTRACTS EFFECTS\n{docs}\n\nRELEVANT TYPES\n{type_declarations}\n\nBOUND SYMBOLS IMPORT RULES\n{bound_symbols}\n", callable.cott_symbol, write_path.display(), String::from_utf8_lossy(selected_ir)).into_bytes();
+    let external_types = external_types
+        .iter()
+        .map(|(name, projection)| format!("{name} = {projection}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut prompt = format!("COTT_AGENT_PROMPT_V1\n\nTARGET\nSymbol: {}\nWrite path: {}\n\nIMPLEMENTATION OWNERSHIP\n{ownership}\n\nCANONICAL IR\n{}\n\nDOCS CONTRACTS EFFECTS\n{docs}\n\nRELEVANT TYPES\n{type_declarations}\n\nPYTHON EXTERNAL TYPE PROJECTIONS\n{external_types}\n\nBOUND SYMBOLS IMPORT RULES\n{bound_symbols}\n\nTYPE MODEL\nPreserve every declared annotation exactly. For Iterator and Generator returns, return the lazy object itself: do not iterate, materialize, normalize, or validate inner values. Use external declarations through their exact public generated aliases; do not reconstruct external paths or use dynamic imports or reflection. Any, Unknown, external values, and inner values of Opaque or lazy types are evidence-only: preserve them without inspection, coercion, or validation. Preserve Opaque values and their declared tag boundary without inspecting their payload.\n", callable.cott_symbol, write_path.display(), String::from_utf8_lossy(selected_ir)).into_bytes();
     if let Some(existing) = existing {
         prompt.extend_from_slice(b"\nEXISTING IMPLEMENTATION\n");
         prompt.extend_from_slice(existing);

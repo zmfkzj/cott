@@ -73,6 +73,8 @@ pub enum PrimitiveType {
     Path,
     Unit,
     JsonValue,
+    Any,
+    Unknown,
     Never,
 }
 
@@ -107,6 +109,14 @@ pub enum HirType {
     Result {
         ok: Box<HirType>,
         error: Box<HirType>,
+    },
+    Iterator {
+        item: Box<HirType>,
+    },
+    Generator {
+        yield_type: Box<HirType>,
+        send_type: Box<HirType>,
+        return_type: Box<HirType>,
     },
     Opaque {
         tag: String,
@@ -217,6 +227,16 @@ pub struct HirAnnotation {
     pub name: String,
     pub argument: Option<String>,
 }
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirExternalType {
+    pub id: SymbolId,
+    pub span: Span,
+    pub annotations: Vec<HirAnnotation>,
+    pub doc: Option<HirDoc>,
+    pub public: bool,
+    pub source_order: usize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HirAlias {
     pub id: SymbolId,
@@ -393,6 +413,7 @@ pub struct HirFunction {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HirDeclaration {
+    ExternalType(HirExternalType),
     Alias(HirAlias),
     Newtype(HirNewtype),
     Struct(HirStruct),
@@ -407,6 +428,7 @@ pub enum HirDeclaration {
 impl HirDeclaration {
     pub fn id(&self) -> &SymbolId {
         match self {
+            Self::ExternalType(value) => &value.id,
             Self::Alias(value) => &value.id,
             Self::Newtype(value) => &value.id,
             Self::Struct(value) => &value.id,
@@ -421,6 +443,7 @@ impl HirDeclaration {
 
     pub fn span(&self) -> &Span {
         match self {
+            Self::ExternalType(value) => &value.span,
             Self::Alias(value) => &value.span,
             Self::Newtype(value) => &value.span,
             Self::Struct(value) => &value.span,
@@ -435,6 +458,7 @@ impl HirDeclaration {
 
     pub fn public(&self) -> bool {
         match self {
+            Self::ExternalType(value) => value.public,
             Self::Alias(value) => value.public,
             Self::Newtype(value) => value.public,
             Self::Struct(value) => value.public,
@@ -636,6 +660,7 @@ impl<'a> OwnedLower<'a> {
         for (index, source) in parsed.sources.iter().enumerate() {
             for declaration in &source.syntax.declarations {
                 let (name, kind) = match declaration {
+                    Declaration::ExternalType(v) => (&v.name, OwnedDeclKind::Type { generics: 0 }),
                     Declaration::Alias(v) => (&v.name, OwnedDeclKind::Alias),
                     Declaration::Newtype(v) => (&v.name, OwnedDeclKind::Type { generics: 0 }),
                     Declaration::Struct(v) => (
@@ -819,6 +844,18 @@ impl<'a> OwnedLower<'a> {
                 HirType::Option { item } => HirType::Option {
                     item: Box::new(resolve(lower, item, seen)),
                 },
+                HirType::Iterator { item } => HirType::Iterator {
+                    item: Box::new(resolve(lower, item, seen)),
+                },
+                HirType::Generator {
+                    yield_type,
+                    send_type,
+                    return_type,
+                } => HirType::Generator {
+                    yield_type: Box::new(resolve(lower, yield_type, seen)),
+                    send_type: Box::new(resolve(lower, send_type, seen)),
+                    return_type: Box::new(resolve(lower, return_type, seen)),
+                },
                 HirType::Result { ok, error } => HirType::Result {
                     ok: Box::new(resolve(lower, ok, seen)),
                     error: Box::new(resolve(lower, error, seen)),
@@ -983,8 +1020,9 @@ impl<'a> OwnedLower<'a> {
                 };
             }
             let expected = match name.as_str() {
-                "List" | "Set" | "Option" => Some(1),
+                "List" | "Set" | "Option" | "Iterator" => Some(1),
                 "Map" | "Tuple" | "Result" => Some(2),
+                "Generator" => Some(3),
                 _ => None,
             };
             if let Some(expected) = expected {
@@ -1000,54 +1038,35 @@ impl<'a> OwnedLower<'a> {
                                 argument.span.clone(),
                                 "string type arguments are unsupported",
                             );
-                            HirType::Opaque {
-                                tag: "string-type-argument".into(),
-                            }
+                            HirType::Primitive(PrimitiveType::Unknown)
                         }
                     })
                     .collect::<Vec<_>>();
+                let argument = |index| {
+                    args.get(index)
+                        .cloned()
+                        .unwrap_or(HirType::Primitive(PrimitiveType::Unknown))
+                };
                 return match name.as_str() {
                     "List" => HirType::List {
-                        item: Box::new(args.into_iter().next().unwrap_or_else(|| {
-                            HirType::Opaque {
-                                tag: "missing".into(),
-                            }
-                        })),
+                        item: Box::new(argument(0)),
                     },
                     "Set" => HirType::Set {
-                        item: Box::new(args.into_iter().next().unwrap_or_else(|| {
-                            HirType::Opaque {
-                                tag: "missing".into(),
-                            }
-                        })),
+                        item: Box::new(argument(0)),
                     },
                     "Option" => HirType::Option {
-                        item: Box::new(args.into_iter().next().unwrap_or_else(|| {
-                            HirType::Opaque {
-                                tag: "missing".into(),
-                            }
-                        })),
+                        item: Box::new(argument(0)),
                     },
                     "Map" => HirType::Map {
-                        key: Box::new(args.first().cloned().unwrap_or_else(|| HirType::Opaque {
-                            tag: "missing".into(),
-                        })),
-                        value: Box::new(args.get(1).cloned().unwrap_or_else(|| HirType::Opaque {
-                            tag: "missing".into(),
-                        })),
+                        key: Box::new(argument(0)),
+                        value: Box::new(argument(1)),
                     },
                     "Tuple" => HirType::Tuple2 {
-                        first: Box::new(args.first().cloned().unwrap_or_else(|| HirType::Opaque {
-                            tag: "missing".into(),
-                        })),
-                        second: Box::new(args.get(1).cloned().unwrap_or_else(|| HirType::Opaque {
-                            tag: "missing".into(),
-                        })),
+                        first: Box::new(argument(0)),
+                        second: Box::new(argument(1)),
                     },
                     "Result" => {
-                        let error = args.get(1).cloned().unwrap_or_else(|| HirType::Opaque {
-                            tag: "missing".into(),
-                        });
+                        let error = argument(1);
                         if !matches!(&error, HirType::Named { symbol, .. } if matches!(self.declarations.get(symbol), Some(OwnedDeclKind::Enum { .. })))
                         {
                             self.error(
@@ -1057,22 +1076,24 @@ impl<'a> OwnedLower<'a> {
                             );
                         }
                         HirType::Result {
-                            ok: Box::new(args.first().cloned().unwrap_or_else(|| {
-                                HirType::Opaque {
-                                    tag: "missing".into(),
-                                }
-                            })),
+                            ok: Box::new(argument(0)),
                             error: Box::new(error),
                         }
                     }
+                    "Iterator" => HirType::Iterator {
+                        item: Box::new(argument(0)),
+                    },
+                    "Generator" => HirType::Generator {
+                        yield_type: Box::new(argument(0)),
+                        send_type: Box::new(argument(1)),
+                        return_type: Box::new(argument(2)),
+                    },
                     _ => unreachable!(),
                 };
             }
         }
         let Some(symbol) = self.resolve(module, &value.path, &value.span) else {
-            return HirType::Opaque {
-                tag: value.path.segments.join("."),
-            };
+            return HirType::Primitive(PrimitiveType::Unknown);
         };
         if self.declarations.get(&symbol) == Some(&OwnedDeclKind::Alias) {
             if !self.resolving_aliases.insert(symbol.clone()) {
@@ -1595,118 +1616,6 @@ fn valid_opaque_tag(tag: &str) -> bool {
                 _ => false,
             })
 }
-fn contains_opaque(ty: &HirType) -> bool {
-    match ty {
-        HirType::Opaque { .. } => true,
-        HirType::Named { args, .. } => args.iter().any(contains_opaque),
-        HirType::List { item } | HirType::Set { item } | HirType::Option { item } => {
-            contains_opaque(item)
-        }
-        HirType::Map { key, value } => contains_opaque(key) || contains_opaque(value),
-        HirType::Tuple2 { first, second } => contains_opaque(first) || contains_opaque(second),
-        HirType::Result { ok, error } => contains_opaque(ok) || contains_opaque(error),
-        HirType::Primitive(_) | HirType::TypeParameter { .. } => false,
-    }
-}
-
-fn is_opaque_boundary(ty: &HirType) -> bool {
-    match ty {
-        HirType::Opaque { .. } => true,
-        HirType::Option { item } => matches!(item.as_ref(), HirType::Opaque { .. }),
-        HirType::Result { ok, error } => {
-            matches!(ok.as_ref(), HirType::Opaque { .. }) && !contains_opaque(error)
-        }
-        _ => false,
-    }
-}
-
-fn validate_opaque_boundaries(modules: &[HirModule], errors: &mut Vec<ProjectDiagnostic>) {
-    let mut report = |module: &HirModule, span: &Span, message: &str| {
-        errors.push(ProjectDiagnostic {
-            path: module.source.clone(),
-            diagnostic: Diagnostic::new(message, span.clone()),
-        });
-    };
-    for module in modules {
-        for declaration in &module.declarations {
-            match declaration {
-                HirDeclaration::Alias(value) if contains_opaque(&value.target) => report(
-                    module,
-                    &value.span,
-                    "Opaque is allowed only as a manifest-bound function boundary",
-                ),
-                HirDeclaration::Newtype(value) if contains_opaque(&value.carrier) => {
-                    report(module, &value.span, "Opaque cannot be a newtype carrier")
-                }
-                HirDeclaration::Struct(value)
-                    if value.fields.iter().any(|field| contains_opaque(&field.ty)) =>
-                {
-                    report(module, &value.span, "Opaque cannot occur in a struct field")
-                }
-                HirDeclaration::Enum(value)
-                    if value
-                        .variants
-                        .iter()
-                        .flat_map(|variant| &variant.fields)
-                        .any(|field| contains_opaque(&field.ty)) =>
-                {
-                    report(
-                        module,
-                        &value.span,
-                        "Opaque cannot occur in an enum payload",
-                    )
-                }
-                HirDeclaration::Trait(value)
-                    if value.methods.iter().any(|method| {
-                        contains_opaque(&method.return_type)
-                            || method
-                                .parameters
-                                .iter()
-                                .any(|parameter| contains_opaque(&parameter.ty))
-                    }) =>
-                {
-                    report(module, &value.span, "Opaque cannot occur in a trait")
-                }
-                HirDeclaration::Const(value) if contains_opaque(&value.ty) => {
-                    report(module, &value.span, "Opaque cannot be a constant type")
-                }
-                HirDeclaration::Rule(value) => {
-                    if let Some(base) = &value.base_type {
-                        if contains_opaque(base) {
-                            report(module, &value.span, "Opaque cannot occur in a rule base");
-                        }
-                    }
-                }
-                HirDeclaration::Impl(value)
-                    if value.state.iter().any(|field| contains_opaque(&field.ty)) =>
-                {
-                    // Stateful impl storage is intentionally the sole Opaque exception.
-                }
-                HirDeclaration::Function(value) => {
-                    for parameter in &value.parameters {
-                        if contains_opaque(&parameter.ty) && !is_opaque_boundary(&parameter.ty) {
-                            report(
-                                module,
-                                &parameter.span,
-                                "Opaque must be a direct function boundary type",
-                            );
-                        }
-                    }
-                    if contains_opaque(&value.return_type)
-                        && !is_opaque_boundary(&value.return_type)
-                    {
-                        report(
-                            module,
-                            &value.span,
-                            "Opaque must be a direct function boundary type",
-                        );
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-}
 
 fn owned_primitive(name: &str) -> Option<PrimitiveType> {
     Some(match name {
@@ -1726,6 +1635,8 @@ fn owned_primitive(name: &str) -> Option<PrimitiveType> {
         "Path" => PrimitiveType::Path,
         "Unit" => PrimitiveType::Unit,
         "JsonValue" => PrimitiveType::JsonValue,
+        "Any" => PrimitiveType::Any,
+        "Unknown" => PrimitiveType::Unknown,
         "Never" => PrimitiveType::Never,
         _ => return None,
     })
@@ -1762,9 +1673,10 @@ fn owned_has_unresolved_type(ty: &HirType) -> bool {
     match ty {
         HirType::TypeParameter { .. } | HirType::Opaque { .. } => true,
         HirType::Named { args, .. } => args.iter().any(owned_has_unresolved_type),
-        HirType::List { item } | HirType::Set { item } | HirType::Option { item } => {
-            owned_has_unresolved_type(item)
-        }
+        HirType::List { item }
+        | HirType::Set { item }
+        | HirType::Option { item }
+        | HirType::Iterator { item } => owned_has_unresolved_type(item),
         HirType::Map { key, value } => {
             owned_has_unresolved_type(key) || owned_has_unresolved_type(value)
         }
@@ -1773,6 +1685,15 @@ fn owned_has_unresolved_type(ty: &HirType) -> bool {
         }
         HirType::Result { ok, error } => {
             owned_has_unresolved_type(ok) || owned_has_unresolved_type(error)
+        }
+        HirType::Generator {
+            yield_type,
+            send_type,
+            return_type,
+        } => {
+            owned_has_unresolved_type(yield_type)
+                || owned_has_unresolved_type(send_type)
+                || owned_has_unresolved_type(return_type)
         }
         HirType::Primitive(_) => false,
     }
@@ -2990,9 +2911,10 @@ impl<'a> OwnedLower<'a> {
                     Some(OwnedDeclKind::Type { .. } | OwnedDeclKind::Enum { .. })
                 ) && args.iter().all(|arg| self.state_type_allowed(arg))
             }
-            HirType::List { item } | HirType::Set { item } | HirType::Option { item } => {
-                self.state_type_allowed(item)
-            }
+            HirType::List { item }
+            | HirType::Set { item }
+            | HirType::Option { item }
+            | HirType::Iterator { item } => self.state_type_allowed(item),
             HirType::Map { key, value } => {
                 self.state_type_allowed(key) && self.state_type_allowed(value)
             }
@@ -3001,6 +2923,15 @@ impl<'a> OwnedLower<'a> {
             }
             HirType::Result { ok, error } => {
                 self.state_type_allowed(ok) && self.state_type_allowed(error)
+            }
+            HirType::Generator {
+                yield_type,
+                send_type,
+                return_type,
+            } => {
+                self.state_type_allowed(yield_type)
+                    && self.state_type_allowed(send_type)
+                    && self.state_type_allowed(return_type)
             }
         }
     }
@@ -3135,6 +3066,17 @@ impl<'a> OwnedLower<'a> {
                 .collect::<Vec<_>>()
         };
         match declaration {
+            Declaration::ExternalType(value) => HirDeclaration::ExternalType(HirExternalType {
+                id: id_for(&value.name),
+                span: value.span.clone(),
+                annotations: lower_annotations(&value.annotations),
+                doc: value.doc.as_ref().map(|v| HirDoc {
+                    span: v.span.clone(),
+                    text: v.text.clone(),
+                }),
+                public: true,
+                source_order: order,
+            }),
             Declaration::Alias(value) => HirDeclaration::Alias(HirAlias {
                 id: id_for(&value.name),
                 span: value.span.clone(),
@@ -3983,6 +3925,18 @@ fn substitute_hir_type(ty: HirType, substitutions: &HashMap<String, HirType>) ->
         HirType::Option { item } => HirType::Option {
             item: Box::new(substitute_hir_type(*item, substitutions)),
         },
+        HirType::Iterator { item } => HirType::Iterator {
+            item: Box::new(substitute_hir_type(*item, substitutions)),
+        },
+        HirType::Generator {
+            yield_type,
+            send_type,
+            return_type,
+        } => HirType::Generator {
+            yield_type: Box::new(substitute_hir_type(*yield_type, substitutions)),
+            send_type: Box::new(substitute_hir_type(*send_type, substitutions)),
+            return_type: Box::new(substitute_hir_type(*return_type, substitutions)),
+        },
         HirType::Result { ok, error } => HirType::Result {
             ok: Box::new(substitute_hir_type(*ok, substitutions)),
             error: Box::new(substitute_hir_type(*error, substitutions)),
@@ -4121,6 +4075,7 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
 ) {
     match declaration {
         Declaration::Alias(value) => owned_visit_type(&value.target, &mut visit),
+        Declaration::ExternalType(_) => {}
         Declaration::Newtype(value) => {
             owned_visit_type(&value.underlying, &mut visit);
             if let Some(refinement) = &value.where_clause {
@@ -4236,6 +4191,7 @@ fn owned_qualified_owner(
         .any(|declaration| {
             matches!(
                 declaration,
+
                 Declaration::Enum(value)
                     if value.name == enum_symbol.name
                         && value
@@ -4269,6 +4225,7 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
         };
         for declaration in &source.syntax.declarations {
             let (name, type_decl) = match declaration {
+                Declaration::ExternalType(value) => (&value.name, true),
                 Declaration::Alias(value) => (&value.name, true),
                 Declaration::Newtype(value) => (&value.name, true),
                 Declaration::Struct(value) => (&value.name, true),
@@ -4296,7 +4253,15 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
             if owned_primitive(name).is_some()
                 || matches!(
                     name.as_str(),
-                    "List" | "Set" | "Map" | "Tuple" | "Option" | "Result" | "Opaque"
+                    "List"
+                        | "Set"
+                        | "Map"
+                        | "Tuple"
+                        | "Option"
+                        | "Result"
+                        | "Iterator"
+                        | "Generator"
+                        | "Opaque"
                 )
             {
                 report(
@@ -4524,6 +4489,7 @@ fn owned_preflight(
         }
         for declaration in &source.syntax.declarations {
             let name = match declaration {
+                Declaration::ExternalType(v) => &v.name,
                 Declaration::Alias(v) => &v.name,
                 Declaration::Newtype(v) => &v.name,
                 Declaration::Struct(v) => &v.name,
@@ -4868,12 +4834,21 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
                 visit(key, modules, path, span, errors);
                 visit(value, modules, path, span, errors);
             }
-            HirType::List { item } | HirType::Option { item } => {
+            HirType::List { item } | HirType::Option { item } | HirType::Iterator { item } => {
                 visit(item, modules, path, span, errors);
             }
             HirType::Tuple2 { first, second } => {
                 visit(first, modules, path, span, errors);
                 visit(second, modules, path, span, errors);
+            }
+            HirType::Generator {
+                yield_type,
+                send_type,
+                return_type,
+            } => {
+                visit(yield_type, modules, path, span, errors);
+                visit(send_type, modules, path, span, errors);
+                visit(return_type, modules, path, span, errors);
             }
             HirType::Result { ok, error } => {
                 visit(ok, modules, path, span, errors);
@@ -4893,6 +4868,7 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
             let span = declaration.span();
             let mut types = Vec::new();
             match declaration {
+                HirDeclaration::ExternalType(_) => {}
                 HirDeclaration::Alias(value) => types.push(&value.target),
                 HirDeclaration::Newtype(value) => types.push(&value.carrier),
                 HirDeclaration::Struct(value) => {
@@ -5024,9 +5000,6 @@ pub fn lower_with_effects(
         .map(|index| lowerer.module(index))
         .collect::<Vec<_>>();
     errors.extend(lowerer.errors);
-    if errors.is_empty() {
-        validate_opaque_boundaries(&modules, &mut errors);
-    }
     if errors.is_empty() {
         validate_hash_stable_keys(&modules, &mut errors);
     }

@@ -63,7 +63,7 @@ impl ContractTestStrategy {
     }
 }
 
-/// Derive metadata-only contract test strategies directly from canonical module
+/// Derive metadata-only contract test strategies from canonical IR v2 module
 /// bytes, preserving canonical module, declaration, and impl-member order.
 pub fn derive_strategies(ir: &CanonicalIr) -> Result<Vec<ContractTestStrategy>, String> {
     Ok(derive_strategy_entries(ir)?

@@ -97,11 +97,14 @@ import json
 import platform
 import sys
 import sysconfig
-from typing import Generic, Literal, TypeVar
+from collections.abc import Generator, Iterator
+from typing import Annotated, Any, Generic, Literal, Protocol, TypeVar
 
 import cott_runtime as _runtime
 from cott_runtime import *
 from cott_runtime import _cott_load, _cott_normalize_f32_abi, _cott_normalize_scalar, _cott_validate_abi
+assert "CottExternal" in _runtime.__all__
+
 
 _T = TypeVar("_T")
 @dataclasses.dataclass(frozen=True)
@@ -142,6 +145,69 @@ except CottContractViolation as error:
     assert error.phase == "validation"
 else:
     raise AssertionError("mismatched Opaque tag was accepted")
+class _PoisonIterator:
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        raise AssertionError("ABI traversal advanced an iterator")
+
+
+def _poison_generator():
+    raise AssertionError("ABI traversal advanced a generator")
+    yield None
+
+
+_poison_iterator = _PoisonIterator()
+assert _cott_validate_abi(_poison_iterator, Iterator[int]) is _poison_iterator
+assert _cott_normalize_f32_abi(_poison_iterator, Iterator[F32]) is _poison_iterator
+_poison_generator_value = _poison_generator()
+assert _cott_validate_abi(_poison_generator_value, Generator[int, None, None]) is _poison_generator_value
+assert _cott_normalize_f32_abi(_poison_generator_value, Generator[F32, None, None]) is _poison_generator_value
+
+
+class _External:
+    pass
+
+
+_external_metadata = CottExternal("support:_External")
+try:
+    _external_metadata.path = "other:_External"
+except dataclasses.FrozenInstanceError:
+    pass
+else:
+    raise AssertionError("CottExternal metadata is mutable")
+_external_value = _External()
+_external_annotation = Annotated[_External, _external_metadata]
+assert _cott_validate_abi(_external_value, _external_annotation) is _external_value
+assert _cott_normalize_f32_abi(_external_value, _external_annotation) is _external_value
+try:
+    _cott_validate_abi(object(), _external_annotation)
+except CottContractViolation as error:
+    assert error.phase == "validation"
+else:
+    raise AssertionError("wrong external class was accepted")
+class _ExternalProtocol(Protocol):
+    def required(self) -> None: ...
+
+
+_static_external = object()
+assert _cott_validate_abi(_static_external, Annotated[_ExternalProtocol, CottExternal("support:_ExternalProtocol")]) is _static_external
+
+_untyped = object()
+assert _cott_validate_abi(_untyped, Any) is _untyped
+assert _cott_normalize_f32_abi(_untyped, Any) is _untyped
+assert _cott_validate_abi(_untyped, object) is _untyped
+assert _cott_normalize_f32_abi(_untyped, object) is _untyped
+
+_nested_opaque = Opaque(tag="token", value=object())
+assert _cott_validate_abi(Box(_nested_opaque), Box[Opaque[Literal["token"]]]).value is _nested_opaque
+try:
+    _cott_validate_abi(Box(Opaque(tag="other", value=object())), Box[Opaque[Literal["token"]]])
+except CottContractViolation as error:
+    assert error.phase == "validation"
+else:
+    raise AssertionError("nested mismatched Opaque tag was accepted")
 class DerivedPath(type(Path())):
     pass
 try:

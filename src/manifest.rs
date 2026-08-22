@@ -49,6 +49,8 @@ pub struct PythonTarget {
     pub runtime_validation: RuntimeValidation,
     #[serde(default)]
     pub implementations: BTreeMap<String, String>,
+    #[serde(default)]
+    pub external_types: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -200,6 +202,14 @@ impl ProjectConfig {
                 ));
             }
         }
+        for (symbol, target) in &self.python.external_types {
+            if !valid_external_type_symbol(symbol) || !valid_external_type_projection(target) {
+                return Err(ManifestError::new(
+                    path,
+                    format!("invalid external type projection `{symbol}` = `{target}`"),
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -233,6 +243,107 @@ fn valid_identifier(value: &str) -> bool {
         .next()
         .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
         && chars.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+}
+
+fn valid_external_type_symbol(value: &str) -> bool {
+    value.contains('.') && value.split('.').all(valid_cott_name)
+}
+
+fn valid_external_type_projection(value: &str) -> bool {
+    value.matches(':').count() == 1
+        && value.split_once(':').is_some_and(|(module, qualified)| {
+            valid_python_qname(module) && valid_python_qname(qualified)
+        })
+}
+
+fn valid_cott_name(value: &str) -> bool {
+    valid_identifier(value)
+        && !matches!(
+            value,
+            "module"
+                | "use"
+                | "external"
+                | "type"
+                | "alias"
+                | "newtype"
+                | "where"
+                | "struct"
+                | "enum"
+                | "trait"
+                | "impl"
+                | "for"
+                | "state"
+                | "const"
+                | "fn"
+                | "self"
+                | "doc"
+                | "requires"
+                | "invariant"
+                | "init"
+                | "ensures"
+                | "when"
+                | "effects"
+                | "modifies"
+                | "old"
+                | "error"
+                | "true"
+                | "false"
+                | "and"
+                | "or"
+                | "not"
+                | "rule"
+                | "override"
+                | "delete"
+                | "remove"
+        )
+}
+
+fn valid_python_qname(value: &str) -> bool {
+    !value.is_empty() && value.split('.').all(valid_python_name)
+}
+
+fn valid_python_name(value: &str) -> bool {
+    valid_identifier(value)
+        && !value.starts_with("_cott_")
+        && !(value.starts_with("__") && value.ends_with("__"))
+        && !matches!(
+            value,
+            "False"
+                | "None"
+                | "True"
+                | "and"
+                | "as"
+                | "assert"
+                | "async"
+                | "await"
+                | "break"
+                | "class"
+                | "continue"
+                | "def"
+                | "del"
+                | "elif"
+                | "else"
+                | "except"
+                | "finally"
+                | "for"
+                | "from"
+                | "global"
+                | "if"
+                | "import"
+                | "in"
+                | "is"
+                | "lambda"
+                | "nonlocal"
+                | "not"
+                | "or"
+                | "pass"
+                | "raise"
+                | "return"
+                | "try"
+                | "while"
+                | "with"
+                | "yield"
+        )
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

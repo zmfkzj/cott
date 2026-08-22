@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from typing import Literal
-from cott_runtime import Opaque, U64
+from typing import cast
 
-def extract_handle_id(handle: Opaque[Literal["client_session"]]) -> U64:
-    return handle.value
+from cott_runtime import U64
+from curriculum.opaque_resource_types import HandleBundle
+
+def extract_handle_id(bundle: HandleBundle) -> U64:
+    return cast(U64, bundle.handle.unwrap())

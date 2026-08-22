@@ -442,6 +442,19 @@ fn generate_requires_an_agent_only_for_unresolved_callables() {
 fn generate_promotes_a_sandboxed_omp_function_candidate_with_artifacts() {
     let project = project();
     make_unresolved(&project);
+    fs::write(
+        project.path.join("cott.toml"),
+        format!(
+            "{}\n[target.python.external_types]\n\"app.Widget\" = \"io:StringIO\"\n",
+            fs::read_to_string(project.path.join("cott.toml")).expect("manifest")
+        ),
+    )
+    .expect("manifest should be writable");
+    fs::write(
+        project.path.join("src/app.cott"),
+        "module app\n\nexternal type Widget\n\nfn run() -> I32\n",
+    )
+    .expect("source should be writable");
     let tools = project.path.join("tools");
     fs::create_dir(&tools).expect("tool directory");
     let omp = tools.join("omp");
@@ -449,12 +462,28 @@ fn generate_promotes_a_sandboxed_omp_function_candidate_with_artifacts() {
         &omp,
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
-case "$*" in
-  *'Symbol: app.run'*'Module facade imports use `from app import name`; generated type imports use `from app_types import Type`;'*)
-    printf 'from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n' > implementation.py
-    ;;
-  *) exit 64 ;;
+prompt=
+for prompt; do :; done
+case "$prompt" in
+  *'Symbol: app.run'*) ;;
+  *) printf '%s\n' 'missing prompt fragment: Symbol: app.run' "$*" >&2; exit 64 ;;
 esac
+case "$prompt" in
+  *'PYTHON EXTERNAL TYPE PROJECTIONS'*) ;;
+  *) printf '%s\n' 'missing prompt fragment: PYTHON EXTERNAL TYPE PROJECTIONS' "$*" >&2; exit 64 ;;
+esac
+case "$prompt" in
+  *'app.Widget = io:StringIO'*) ;;
+  *) printf '%s\n' 'missing prompt fragment: app.Widget = io:StringIO' "$*" >&2; exit 64 ;;
+esac
+case "$prompt" in
+  *'Module facade imports use `from app import name`; generated type imports use `from app_types import Type`;'*) ;;
+  *) printf '%s\n' 'missing prompt fragment: module facade/type import guidance' "$*" >&2; exit 64 ;;
+esac
+case "$prompt" in
+  *'"external_types"'*) printf '%s\n' 'unexpected prompt fragment: "external_types"' "$*" >&2; exit 64 ;;
+esac
+printf 'from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n' > implementation.py
 "#,
     )
     .expect("write fake OMP");

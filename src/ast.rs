@@ -23,6 +23,7 @@ pub struct UseDecl {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Declaration {
+    ExternalType(ExternalTypeDecl),
     Alias(AliasDecl),
     Newtype(NewtypeDecl),
     Struct(StructDecl),
@@ -37,6 +38,7 @@ pub enum Declaration {
 impl Declaration {
     pub fn span(&self) -> &Span {
         match self {
+            Self::ExternalType(value) => &value.span,
             Self::Alias(value) => &value.span,
             Self::Newtype(value) => &value.span,
             Self::Struct(value) => &value.span,
@@ -60,6 +62,14 @@ pub struct Annotation {
     pub span: Span,
     pub name: String,
     pub argument: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalTypeDecl {
+    pub span: Span,
+    pub annotations: Vec<Annotation>,
+    pub doc: Option<DocBlock>,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

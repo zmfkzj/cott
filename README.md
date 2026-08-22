@@ -1,10 +1,93 @@
 # cott
 
-`cott` is a Rust compiler for a contract-first DSL. A bodyless `.cott` module declares public types,
-functions, contracts, and errors. The compiler can then ask an agent to implement unresolved Python
-functions and publish a generated package whose public facades enforce those declarations.
+`cott` is a Rust compiler for a declaration- and contract-first DSL. A bodyless `.cott` module
+declares public types, functions, contracts, and errors: declarative intent is the agent's input,
+target projection is second, and verification reports only the evidence it obtained. Cott is not a
+general-purpose execution language; Cott functions have no executable bodies.
 
 `architecture.md` is the normative v0.1 contract.
+
+## Declaration-first contract
+
+Every declaration is resolved and type-checked, lowered to Canonical IR v2, projected to the target,
+and then checked using the available capabilities. An unavailable implementation, runtime check, test
+input, or safe execution permission lowers evidence rather than rejecting an otherwise valid
+declaration. Syntax, names, generic arity, constants, Opaque tags, and hash-key admissibility remain
+hard errors.
+
+`Any` and `Unknown` are explicit prelude types, not omitted annotations. `Any` means intentionally
+unconstrained; `Unknown` requires narrowing or target-side adaptation. `Iterator[T]` has one type
+argument. `Generator[Y, S, R]` has yielded, sent, and completion types; constructing either lazy
+value is not evidence that its lifecycle or declared effects occurred.
+
+`Opaque["tag"]` preserves a tagged foreign identity. Its tag matches
+`[a-z][a-z0-9._-]{0,63}`; it may occur recursively in aliases, newtypes, fields, enum payloads,
+traits, containers, and function or method signatures, including agent implementations. It is
+forbidden only as a compile-time constant or hash key.
+
+External types use exactly this syntax:
+
+```cott
+external type Name
+```
+
+An external declaration identifies a semantic Cott type; it contains neither a backend nor a source
+path. Each backend joins the fully qualified Cott external symbol to its own manifest projection
+table. Python uses `[target.python.external_types]`, with a quoted fully qualified Cott symbol as the
+key and a `module:Qualname` value:
+
+```toml
+[target.python.external_types]
+"example.http.Request" = "starlette.requests:Request"
+```
+
+Every external declaration must have exactly one valid Python projection for Python emission; missing,
+stale, non-external, or malformed mappings fail emission. The mapping never enters Canonical IR or
+implementation selection. References remain named Cott types, so a projected Python object may cross a
+contract boundary without an adapter; an adapter is needed only when an external API's call contract
+must be changed. A Python binding is optional implementation selection, not contract source: an absent
+binding leaves an eligible function unresolved for an agent; a present binding must resolve and have a
+compatible signature. Agents receive the resolved contract and a separate deterministic Python
+projection section; they may implement eligible unresolved signatures containing `Any`, `Unknown`,
+external, lazy, or recursively placed `Opaque` types, but cannot weaken a declaration or add a Cott
+body. Future Rust and TypeScript backends can provide corresponding projection tables, but neither
+target nor its table is implemented today.
+
+Function contracts use a closed, pure, typed expression grammar: literals, names, constants, enum
+values, fields, `.len`, declared `old(self.field)`, arithmetic, comparisons, and boolean operators.
+They never execute arbitrary calls, indexing, collection literals, reflection, or Python source.
+Target-side external projection inspection, when configured, runs only under containment rules and
+records evidence; it never changes declaration validity or Canonical IR.
+
+| Cott | Python ABI projection |
+| --- | --- |
+| `Any` | `typing.Any` |
+| `Unknown` | `object` |
+| `Iterator[T]` | `typing.Iterator[T]` |
+| `Generator[Y, S, R]` | `typing.Generator[Y, S, R]` |
+| `Opaque["tag"]` | `cott_runtime.Opaque[typing.Literal["tag"]]` |
+| `external type Name` | `[target.python.external_types]` joins its fully qualified Cott symbol to a Python `module:Qualname` |
+
+Canonical IR schema version **2** represents `Any` as `{"kind":"any"}`,
+`Unknown` as `{"kind":"unknown"}`, iterators as `{"kind":"iterator","item":...}`, and generators as
+`{"kind":"generator","yield":...,"send":...,"return":...}`. An `external_type` declaration contains
+only semantic declaration metadata (`annotations`, `doc`, `kind`, `name`, `public`, `source_order`,
+and `span`); bindings, projection mappings, locations, hashes, and target tool identities are
+provenance/configuration inputs, not replacements for this semantic form.
+
+Verification reports capability-based evidence per symbol and clause:
+
+| Evidence | Meaning |
+| --- | --- |
+| static proof | A deterministic non-executing declaration, signature, type, or target-shape check passed. |
+| runtime check | A configured production boundary actually executed the check. |
+| test observation | A permitted valid case actually ran and observed the contract point. |
+| unobserved | No valid permitted runtime or test observation was available. |
+| trust declaration | The declaration is accepted but not generally proven by Cott. |
+
+Generated and selected artifacts record contract and implementation hashes, source/runtime and target
+identities, and validation mode. Provenance establishes observed identities, never unobserved behavior
+or execution.
 
 ## Generation-first curriculum
 
@@ -55,8 +138,9 @@ examples/grammar/checked-add/
 "curriculum.checked_add.checked_add" = "cott_bindings.curriculum.checked_add.checked_add:checked_add"
 ```
 
-The mapping names the source module and symbol. Emission verifies that source, copies it to the
-canonical runtime location
+The optional mapping selects this existing compatible implementation; it does not define the Cott
+contract. Its key and target must resolve and its signature must be compatible. Emission verifies the
+selected source, copies it to the canonical runtime location
 `generated/python/_cott_impl/curriculum/checked_add/checked_add.py`, and publishes the facade at
 `generated/python/curriculum/checked_add.py`.
 
@@ -97,14 +181,14 @@ cott generate --agent omp --target python --project examples/<level>/<project>
 cott verify --project examples/<level>/<project>
 ```
 
-This sequence is idempotent on the committed examples: `generate` invokes an agent only for
+This sequence is idempotent on the committed examples: `generate` invokes an agent only for eligible
 functions still listed in `current.unresolved`; already accepted durable implementations are reused.
 
 `cott emit python` is a planning step. It never invokes an agent: it emits compiler-owned metadata,
-records every missing function in `current.unresolved`, and omits unresolved functions from the
-public facade. A successful emit is therefore not yet a deployable result.
+records every eligible missing function in `current.unresolved`, and omits unresolved functions from
+the public facade. A successful emit is therefore not yet a deployable result.
 
-`cott generate --agent omp --target python` runs one function-scoped agent process for each
+`cott generate --agent omp --target python` runs one function-scoped agent process for each eligible
 unresolved public function. Accepted implementations become durable source at:
 
 ```text
@@ -322,8 +406,20 @@ cott generate --agent omp --target python --project "$project"
 cott verify --project "$project"
 ```
 
-Full generation invokes one function-scoped agent process for each unresolved symbol and retains the
-four accepted implementations below `python/_cott_impl/foo/bar/`. `process_bar` orchestrates the
-three helpers through the generated `foo.bar` facade; the network effect declared by
-`process_payload_bytes` remains declared by its caller. This fixture exercises the complete
+Full generation invokes one function-scoped agent process for each eligible unresolved symbol and
+retains the four accepted implementations below `python/_cott_impl/foo/bar/`. `process_bar`
+orchestrates the three helpers through the generated `foo.bar` facade; the network effect declared
+by `process_payload_bytes` remains declared by its caller. This fixture exercises the complete
 unresolved-to-generated transition rather than teaching manifest binding.
+
+## Editor analysis
+
+Run the parameterless language server from a Cott project:
+
+```bash
+cott lsp
+```
+
+It serves editor diagnostics, completion, hover, and definition over stdio JSON-RPC using UTF-16
+positions and full document sync. It analyzes open documents without generating, publishing, or
+invoking an agent.
