@@ -1309,6 +1309,17 @@ impl<'a> OwnedLower<'a> {
             ExprKind::Unit => Some(HirValue::Unit),
             ExprKind::Parenthesized(inner) => self.constant_expression(module, inner, expected),
             ExprKind::Name(path) => {
+                if path.segments.as_slice() == ["Option", "Nothing"] {
+                    if matches!(expected, HirType::Option { .. }) {
+                        return Some(HirValue::Option(None));
+                    }
+                    self.error(
+                        module,
+                        expression.span.clone(),
+                        "Option.Nothing does not match the declared constant type",
+                    );
+                    return None;
+                }
                 if let Some(symbol) = self.lookup(module, path)
                     && self.declarations.get(&symbol) == Some(&OwnedDeclKind::Const)
                 {
@@ -1574,6 +1585,10 @@ fn hir_value_matches_type(value: &HirValue, ty: &HirType) -> bool {
                     .name
                     .strip_prefix(&format!("{}.", symbol.name))
                     .is_some()
+        }
+        (HirValue::Option(None), HirType::Option { .. }) => true,
+        (HirValue::Option(Some(value)), HirType::Option { item }) => {
+            hir_value_matches_type(value, item)
         }
         _ => false,
     }

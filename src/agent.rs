@@ -111,11 +111,11 @@ pub fn render_prompt(
     }
     let ownership = match &callable.kind {
         PythonCallableKind::Function => format!(
-            "Define exactly one top-level function `{}`. Do not define a class or facade shell.",
+            "Define exactly one canonical top-level function `{}`. You MAY additionally define private implementation helpers, private immutable constants, and invariant TypeVars. Each helper MUST be an undecorated, synchronous, fully annotated top-level function whose name starts with a single `_` but is neither dunder nor reserved `_cott_`; function names MUST be unique. Each constant MUST have a single-leading-underscore name that is neither dunder nor reserved `_cott_`, and be a literal `Final[bool|int|float|str|bytes]` value. Do not define classes, public helpers, mutable globals, decorators, async functions, variadic parameters, parameter defaults, or other executable top-level assignments.",
             callable.name
         ),
         PythonCallableKind::ImplMethod { concrete } => format!(
-            "Define exactly one private top-level helper `_cott_impl_{concrete}_{}`. Do not define a class, facade shell, or any other top-level definition; the compiler owns the public class. The concrete class `{concrete}` is absent from `{}_types`; import it exactly as `from {} import {concrete}` for the `self` annotation.",
+            "Define exactly one canonical private top-level function `_cott_impl_{concrete}_{}`. You MAY additionally define private implementation helpers, private immutable constants, and invariant TypeVars. Each helper MUST be an undecorated, synchronous, fully annotated top-level function whose name starts with a single `_` but is neither dunder nor reserved `_cott_`; function names MUST be unique. Each constant MUST have a single-leading-underscore name that is neither dunder nor reserved `_cott_`, and be a literal `Final[bool|int|float|str|bytes]` value. Do not define classes, public helpers, mutable globals, decorators, async functions, variadic parameters, parameter defaults, or other executable top-level assignments. The compiler owns the public class. The concrete class `{concrete}` is absent from `{}_types`; import it exactly as `from {} import {concrete}` for the `self` annotation.",
             callable.name, callable.module, callable.module
         ),
     };

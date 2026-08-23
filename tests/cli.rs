@@ -477,8 +477,16 @@ case "$prompt" in
   *) printf '%s\n' 'missing prompt fragment: app.Widget = io:StringIO' "$*" >&2; exit 64 ;;
 esac
 case "$prompt" in
-  *'Module facade imports use `from app import name`; generated type imports use `from app_types import Type`;'*) ;;
+  *'For other modules import public generated symbols only through `from app import name` and generated value types only through `from app_types import Type`.'*) ;;
   *) printf '%s\n' 'missing prompt fragment: module facade/type import guidance' "$*" >&2; exit 64 ;;
+esac
+case "$prompt" in
+  *'You MAY additionally define private implementation helpers, private immutable constants, and invariant TypeVars.'*) ;;
+  *) printf '%s\n' 'missing prompt fragment: private implementation policy' "$*" >&2; exit 64 ;;
+esac
+case "$prompt" in
+  *'Each constant MUST have a single-leading-underscore name that is neither dunder nor reserved `_cott_`'*) ;;
+  *) printf '%s\n' 'missing prompt fragment: private Final constant policy' "$*" >&2; exit 64 ;;
 esac
 case "$prompt" in
   *'"external_types"'*) printf '%s\n' 'unexpected prompt fragment: "external_types"' "$*" >&2; exit 64 ;;
@@ -532,7 +540,7 @@ fn generate_promotes_an_impl_method_helper_without_agent_class_shell() {
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
 case "$*" in
-  *'Symbol: api.service.ReaderState.read'*'The compiler-owned concrete facade class `ReaderState` is absent from `api.service_types`; import it exactly as `from api.service import ReaderState` for the `self` annotation.'*'Generated value-type imports remain `from api.service_types import Type`.'*)
+  *'Symbol: api.service.ReaderState.read'*'You MAY additionally define private implementation helpers, private immutable constants, and invariant TypeVars.'*'Each constant MUST have a single-leading-underscore name that is neither dunder nor reserved `_cott_`'*'The compiler-owned concrete facade class `ReaderState` is absent from `api.service_types`; import it exactly as `from api.service import ReaderState` for the `self` annotation.'*'Generated value-type imports remain `from api.service_types import Type`.'*)
     printf '%s\n' 'from api.service import ReaderState' 'from cott_runtime import I32' '' '' 'def _cott_impl_ReaderState_read(self: ReaderState, amount: I32) -> I32:' '    return amount' > implementation.py
     ;;
   *) exit 64 ;;

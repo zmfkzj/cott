@@ -393,6 +393,41 @@ fn renders_exact_deterministic_impl_canonical_ir() {
     assert_eq!(implementation["methods"][1]["name"], "read");
 }
 
+#[test]
+fn renders_option_nothing_state_default_with_implicit_initializer() {
+    let parsed = parse_project([source(
+        "src/impls/option_state.cott",
+        r#"module impls.option_state
+
+trait Holder:
+    fn value(self) -> Option[Any]
+
+impl HolderState for Holder:
+    state:
+        value: Option[Any] = Option.Nothing
+    fn value(self) -> Option[Any]:
+        ensures Option.Nothing => true
+"#,
+    )])
+    .expect("Option.Nothing IR fixture must parse");
+    let project =
+        cott::hir::lower(Path::new("src"), parsed).expect("Option.Nothing IR fixture must lower");
+    let rendered = render(&project).expect("Option.Nothing HIR must render");
+    let value = load(&rendered.modules[0].bytes).expect("Option.Nothing IR must load");
+    let implementation = value["declarations"]
+        .as_array()
+        .expect("declarations")
+        .iter()
+        .find(|declaration| declaration["kind"] == "impl")
+        .expect("impl declaration");
+    assert!(implementation["init"].is_null());
+    assert_eq!(implementation["state"][0]["name"], "value");
+    assert_eq!(
+        implementation["state"][0]["default"],
+        serde_json::json!({"kind": "option", "value": null}),
+    );
+}
+
 fn remove_old_state_field(value: &mut serde_json::Value) -> bool {
     match value {
         serde_json::Value::Array(values) => values.iter_mut().any(remove_old_state_field),

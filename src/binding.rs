@@ -395,6 +395,13 @@ fn valid_identifier(value: &str) -> bool {
         && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
 }
 
+fn private_name(value: &str) -> bool {
+    value
+        .strip_prefix('_')
+        .is_some_and(|suffix| !suffix.is_empty() && !suffix.starts_with('_'))
+        && !value.starts_with("_cott_")
+}
+
 fn collect_stale_agent_files(
     root: &Path,
     expected: &BTreeSet<PathBuf>,
@@ -740,7 +747,7 @@ fn validate_source(
         &mut add_error,
     );
     inspect_function_definitions(&masked, expected_function, callable, &mut add_error);
-    inspect_top_level(&masked, &mut add_error);
+    inspect_top_level(source, &masked, &mut add_error);
 
     if errors.is_empty() {
         Ok(())
@@ -781,6 +788,7 @@ fn inspect_function_definitions(
         .unwrap_or_default();
     let lines: Vec<&str> = source.lines().collect();
     let mut expected_count = 0;
+    let mut helper_names = HashSet::new();
 
     for line in &lines {
         let trimmed = line.trim_start();
@@ -827,9 +835,16 @@ fn inspect_function_definitions(
                 ));
             }
         } else {
-            add_error(format!(
-                "implementation must not define extra function '{name}'"
-            ));
+            if !private_name(&name) {
+                add_error(format!(
+                    "helper function '{name}' must have a single private `_` prefix"
+                ));
+            }
+            if !helper_names.insert(name.clone()) {
+                add_error(format!(
+                    "implementation must not define duplicate function '{name}'"
+                ));
+            }
         }
         let mut previous = line_number;
         while previous > 0 {
@@ -989,8 +1004,8 @@ fn collect_signature(lines: &[&str], start: usize) -> String {
     result
 }
 
-fn inspect_top_level(source: &str, add_error: &mut impl FnMut(String)) {
-    for line in source.lines() {
+fn inspect_top_level(source: &str, masked: &str, add_error: &mut impl FnMut(String)) {
+    for (source_line, line) in source.lines().zip(masked.lines()) {
         if line.is_empty() || line.starts_with(char::is_whitespace) {
             continue;
         }
@@ -1003,7 +1018,7 @@ fn inspect_top_level(source: &str, add_error: &mut impl FnMut(String)) {
             || line.starts_with("from ")
             || line.starts_with('@')
             || line.contains("TypeVar(")
-            || (line.contains("Final[") && line.contains('='))
+            || private_final_literal(source_line.trim())
             || punctuation_only;
         if !allowed {
             add_error(format!(
@@ -1011,6 +1026,63 @@ fn inspect_top_level(source: &str, add_error: &mut impl FnMut(String)) {
             ));
         }
     }
+}
+
+fn private_final_literal(line: &str) -> bool {
+    let Some((name, rest)) = line.split_once(':') else {
+        return false;
+    };
+    let Some((annotation, value)) = rest.split_once('=') else {
+        return false;
+    };
+    let Some(annotation) = annotation.trim().strip_prefix("Final[") else {
+        return false;
+    };
+    let Some(kind) = annotation.strip_suffix(']') else {
+        return false;
+    };
+    if !private_name(name.trim()) {
+        return false;
+    }
+    let value = value.trim();
+    match kind.trim() {
+        "bool" => matches!(value, "True" | "False"),
+        "int" => integer_literal(value),
+        "float" => float_literal(value),
+        "str" => string_literal(value),
+        "bytes" => value.strip_prefix('b').is_some_and(string_literal),
+        _ => false,
+    }
+}
+
+fn integer_literal(value: &str) -> bool {
+    let value = value
+        .strip_prefix('+')
+        .or_else(|| value.strip_prefix('-'))
+        .unwrap_or(value);
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '_')
+        && value.replace('_', "").parse::<i128>().is_ok()
+}
+
+fn float_literal(value: &str) -> bool {
+    let value = value.replace('_', "");
+    !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_digit() || matches!(character, '.' | '+' | '-' | 'e' | 'E')
+        })
+        && (value.contains('.') || value.contains('e') || value.contains('E'))
+        && value.parse::<f64>().is_ok()
+}
+
+fn string_literal(value: &str) -> bool {
+    value.len() >= 2
+        && matches!(
+            (value.as_bytes()[0], value.as_bytes()[value.len() - 1]),
+            (b'\'', b'\'') | (b'"', b'"')
+        )
 }
 
 fn inspect_imports(

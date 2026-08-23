@@ -528,6 +528,57 @@ impl CounterState for Counter:
 }
 
 #[test]
+fn emits_option_nothing_state_default_with_zero_argument_constructor() {
+    let temp = TempDir::new();
+    fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    fs::write(
+        temp.path.join("src/app.cott"),
+        r#"module app
+
+trait Holder:
+    fn value(self) -> Option[Any]
+
+impl HolderState for Holder:
+    state:
+        value: Option[Any] = Option.Nothing
+    fn value(self) -> Option[Any]:
+        ensures Option.Nothing => true
+"#,
+    )
+    .expect("source should be writable");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources")).expect("parse");
+    let ir = render(&lower(&paths.source_dir, parsed).expect("lower")).expect("render");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
+    let helper = b"def _cott_impl_HolderState_value(self: HolderState) -> Option[Any]:\n    return Nothing()\n";
+    let binding = ResolvedBinding {
+        module: "app".to_owned(),
+        function: "value".to_owned(),
+        cott_symbol: "app.HolderState.value".to_owned(),
+        kind: PythonCallableKind::ImplMethod {
+            concrete: "HolderState".to_owned(),
+        },
+        implementation_module: "_cott_impl.app.HolderState.value".to_owned(),
+        implementation_function: "_cott_impl_HolderState_value".to_owned(),
+        owner: BindingOwner::Agent,
+        source: temp.path.join("python/_cott_impl/app/HolderState/value.py"),
+        generated_relative: PathBuf::from("_cott_impl/app/HolderState/value.py"),
+        bytes: helper.to_vec(),
+        sha256: sha256_hex(helper),
+    };
+    let emission = emit(&config, &plan, &ir, &[binding]).expect("impl should emit");
+    let facade = String::from_utf8_lossy(bytes(&emission.files, "python/app.py"));
+    let stub = String::from_utf8_lossy(bytes(&emission.files, "stubs/app.pyi"));
+    assert!(facade.contains(
+        "def __init__(self) -> None:\n        self.value = _cott_validate_abi(Nothing(), Option[Any], path=\"$.value\")"
+    ));
+    assert!(stub.contains("def __init__(self) -> None: ..."));
+}
+
+#[test]
 fn emits_manifest_projected_external_types_deterministically() {
     let sources = [
         (

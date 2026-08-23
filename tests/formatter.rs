@@ -60,6 +60,17 @@ fn formats_annotations_on_declarations() {
 }
 
 #[test]
+fn formats_option_nothing_state_default_stably() {
+    let output = formatted(
+        "module demo.option_state\n\ntrait Holder:\n  fn value(self)->Option[Any]\n\nimpl HolderState for Holder:\n  state:\n    value:Option[Any]=Option.Nothing\n  fn value(self)->Option[Any]:\n    ensures Option.Nothing=>true\n",
+    );
+    assert!(output.contains(
+        "    state:\n        value: Option[Any] = Option.Nothing\n\n    fn value(self) -> Option[Any]:\n        ensures Option.Nothing => true\n"
+    ));
+    assert_eq!(formatted(&output), output);
+}
+
+#[test]
 fn formats_stateful_impls_idempotently_with_comments() {
     let source = r#"# module comment
 module demo.impls # module

@@ -660,6 +660,20 @@ MVP trait는 비어 있을 수 없고 method signature만 가진다. method에�
 
 `state` field는 source order의 고정된 instance storage다. type은 alias를 해소한 뒤 concrete이고 닫힌 ABI immutable cott value type 또는 `Opaque["tag"]`여야 한다. 따라서 `Never`, trait, type parameter 및 mutable·열린 Python object는 state type이 될 수 없다. required field는 default field보다 앞에 오며 default는 field type의 compile-time `const_expr`여야 한다. state value는 immutable이므로 wrapper가 보관하는 field snapshot은 복사 없이 안정적이다.
 
+`Option` state default는 compile-time absence value `Option.Nothing`을 사용한다.
+
+```cott
+trait Cache:
+    fn clear(self) -> Unit
+
+impl MemoryCache for Cache:
+    state:
+        value: Option[Any] = Option.Nothing
+
+    fn clear(self) -> Unit:
+        ensures result == ()
+```
+
 state에 required field가 하나라도 있으면 `init`은 필수다. explicit `init`의 parameter는 state field와 같은 선언 순서의 subsequence이고, extra·중복 parameter는 없으며, 모든 required field는 같은 name과 exact resolved type의 parameter를 가져야 한다. default field parameter는 생략할 수 있고 생략하면 state default를 쓴다. `init`이 없으면 required state field도 없어야 하며 compiler가 모든 default를 채우는 zero-argument init을 합성한다. state가 없으면 `init`은 쓸 수 없고 zero-argument init만 합성한다. init의 assignment는 compiler-owned이며 agent body가 없다; explicit init은 `doc`, `requires`, bare `ensures`만 선언한다. init `requires` scope는 parameter와 constant, init `ensures` scope는 parameter·constant·완전히 할당된 `self`이며 둘 다 `result`, pattern binding, `old`를 사용할 수 없다.
 
 invariant expression은 `Bool`이어야 하며 scope는 `self`와 constant뿐이다. `self`는 해당 Concrete이고 state field와 허용된 immutable value field·`.len`만 읽을 수 있다. invariant는 init assignment와 init `ensures` 뒤, 그리고 method helper가 정상 반환한 뒤 반환값을 공개하기 전에 검사한다; `Result` method의 `Ok`와 `Err` 모두 정상 반환이다. helper exception이나 failed precondition은 정상 반환이 아니므로 invariant를 실행하지 않는다.
@@ -668,7 +682,7 @@ impl method는 trait union의 각 signature를 정확히 한 번만 선언하고
 
 Concrete에는 inheritance·subclassing·dynamic attribute·`__del__`가 없으며 identity equality와 identity hash만 제공한다. compiler-owned slotted shell, init, per-instance `RLock`, public wrappers와 ABI/contract/invariant/modifies checks를 제외한 implementation ownership은 없다. public method call은 같은 instance의 lock으로 직렬화한다. `close`는 magic lifecycle hook이 아니라 trait가 선언하고 impl이 위 규칙으로 구현하는 ordinary method/state transition이며 implicit cleanup은 없다.
 
-각 impl method의 agent implementation은 canonical symbol `<module>.<Concrete>.<method>`, durable path `python/_cott_impl/<module>/<Concrete>/<method>.py`, private top-level function `_cott_impl_<Concrete>_<method>` 하나를 가진다. helper는 manifest binding 대상이 아니며 impl method는 agent-only다; unresolved helper는 verify failure다. trait 자체는 계속 structural·signature-only이며 trait method는 top-level cott function이 아니므로 facade, manifest binding, agent generation과 contract test 대상이 아니다. `struct implements Trait`, nominal trait marker, default method와 runtime dispatch는 제공하지 않는다.
+각 impl method의 agent implementation은 canonical symbol `<module>.<Concrete>.<method>`, durable path `python/_cott_impl/<module>/<Concrete>/<method>.py`, 그리고 그 symbol과 exact signature를 가진 private top-level canonical function `_cott_impl_<Concrete>_<method>` 하나를 가진다. 이 함수는 파일의 유일한 Cott-observable contract entrypoint이지 implementation inventory가 아니다. 같은 file에는 manifest binding 대상이 아닌, dunder도 reserved `_cott_`도 아닌 single-leading-underscore 이름의 undecorated synchronous fully annotated private helper를 0개 이상 둘 수 있고, 같은 private-name rule의 literal `Final[bool | int | float | str | bytes]` immutable constant도 둘 수 있다. canonical function과 helper의 이름 중복은 오류이며 class·mutable module global·그 밖의 executable top-level assignment는 허용하지 않는다. helper는 facade에 export되지 않으며 helper가 public contract가 되어야 할 때만 별도 Cott declaration과 자체 implementation file로 승격한다. impl method는 agent-only이며 unresolved helper는 verify failure다; trait 자체는 계속 structural·signature-only이며 trait method는 top-level cott function이 아니므로 facade, manifest binding, agent generation과 contract test 대상이 아니다. `struct implements Trait`, nominal trait marker, default method와 runtime dispatch는 제공하지 않는다.
 
 Python emitter는 `@runtime_checkable` `typing.Protocol`을 생성한다. BasedPyright와 cott static verifier가 method name, parameter kind·type와 return type을 구조적으로 비교한다. boundary checker는 parameterized Protocol에 `isinstance`를 호출하지 않고 `inspect.getattr_static`으로 origin Protocol의 required member presence만 확인해 descriptor를 실행하지 않는다. annotation과 generic 관계는 정적 보증으로 보고한다.
 
@@ -892,7 +906,7 @@ prelude effect 이름은 위 여덟 개다. CPU 계산 자체는 effect가 아�
 
 manifest effect key는 qname 문법이고 value는 literal `true`여야 한다. false·non-boolean value, empty list, unknown name, prelude 재정의와 한 effects list 안의 duplicate는 오류다. Canonical IR은 effect set을 이름순으로 저장한다.
 
-MVP에서 `effects`는 Canonical IR metadata이자 trust declaration이다. cott function에는 실행 body가 없고 contract language의 expression에도 call이 없다. Python implementation은 16.5.1의 공개 cott facade를 통해 다른 선언 함수를 호출할 수 있지만 compiler는 그 call graph에서 effect를 전파하지 않는다. 따라서 caller는 직접·간접 helper의 effect를 포함한 자신의 전체 effect set을 선언할 책임이 있으며 MVP는 이를 신뢰한다. implementation-level effect propagation 검사는 v0.3에서 도입한다.
+MVP에서 `effects`는 Canonical IR metadata이자 trust declaration이다. cott function에는 실행 body가 없고 contract language의 expression에도 call이 없다. Python implementation은 16.5.1의 공개 cott facade를 통해 다른 선언 함수를 호출할 수 있지만 compiler는 그 call graph에서 effect를 전파하지 않는다. 따라서 canonical function의 caller는 same-file private helper를 포함한 직접·간접 implementation effect 전체를 자신의 effect set에 선언할 책임이 있으며 MVP는 이를 신뢰한다. implementation-level effect propagation 검사는 v0.3에서 도입한다.
 
 ---
 
@@ -945,7 +959,7 @@ enum Option[T]:
     Nothing
 ```
 
-값이 존재하지 않는 상황은 `Option`으로 표현한다. `Nothing`은 Python 예약어 `None`과 충돌하지 않는 표준 빈 variant다.
+값이 존재하지 않는 상황은 `Option`으로 표현한다. `Nothing`은 Python 예약어 `None`과 충돌하지 않는 표준 빈 variant다. `Option.Nothing`은 괄호 없는 payloadless qualified name이며, 기대 type이 `Option[T]`인 top-level `const` expression과 struct·state field default에서 모든 `T`(`Any` 포함)의 canonical absence value로 허용된다. 이는 `Unit` literal `()`와 별개의 값이다. `Option.Some`과 `Result`의 payload constructor는 이미 별도로 지원되지 않는 한 이 추가 범위에 포함하지 않는다.
 
 ### 12.3 Never
 
@@ -1006,7 +1020,7 @@ newtype PayloadSize(U32)
     where 1 <= self <= MAX_PAYLOAD_LIMIT
 ```
 
-MVP constant expression은 scalar literal, imported constant 또는 같은 module에서 앞서 선언된 constant, arithmetic·boolean operator, enum singleton과 newtype constructor로 제한한다. struct field default도 같은 scope를 사용하며 다른 field를 참조하지 않는다. compiler가 타입 검사·평가·숫자 정규화·refinement 검사를 마친 canonical value를 IR에 저장하므로 module DAG와 source order상 value dependency도 acyclic하다.
+MVP constant expression은 scalar literal, imported constant 또는 같은 module에서 앞서 선언된 constant, arithmetic·boolean operator, enum singleton, `Option.Nothing`과 newtype constructor로 제한한다. `Option.Nothing`은 기대 type이 `Option[T]`일 때만 canonical absence value이며, 다른 기대 type에서는 unknown-name 중복 없이 type diagnostic 하나를 낸다. struct와 state field default도 같은 scope를 사용하며 다른 field를 참조하지 않는다. compiler가 타입 검사·평가·숫자 정규화·refinement 검사를 마친 canonical value를 IR에 저장하므로 module DAG와 source order상 value dependency도 acyclic하다.
 
 ---
 
@@ -1333,7 +1347,7 @@ generated module의 support import와 helper는 reserved `_cott_` prefix를 사�
 
 `facade_exports(IR, resolved)`는 `public_python_symbols(IR)`의 모든 비-callable symbol, 이번 세대에 구현이 해석된 public free-function symbol과 every method가 resolved된 impl class symbol의 합집합이다. facade의 `__all__`은 이 집합과 정확히 같다. `verified = true`인 세대에서는 unresolved가 없어 `facade_exports`가 전체 `public_python_symbols`와 같아야 한다. 미구현 free function과 impl method는 `generation.json.current.unresolved`에 기록한다. `bar_types.py`는 구현과 adapter가 공유하는 지원 대상 typing boundary지만 공개 free function 또는 impl class의 대체 import 경로는 아니다. `generated/stubs`의 `.pyi`는 도구 산출물이며 runtime import path에 넣지 않는다. `cott_runtime`을 제외한 모든 compiler-owned package `__init__.py`는 비어 있고 re-export하지 않는다.
 
-resolved local binding과 agent implementation module은 source bytes를 canonical Python module path 아래에 그대로 복사한다. compiler가 만든 empty parent `__init__.py` 외에는 같은 package의 다른 source를 복사하지 않는다. external distribution module은 복사하지 않는다. source file은 durable 원본, generated copy는 compiler-owned runtime artifact이며 두 hash가 다르면 verify가 실패한다.
+resolved local binding과 agent implementation module은 source bytes 전체를 canonical Python module path 아래에 그대로 복사한다. canonical function, same-file private helper와 permitted `Final` constant를 포함한 그 단일 file의 raw-byte SHA-256가 provenance `content_hash`이며 generated copy와 durable source가 다르면 verify가 실패한다. compiler가 만든 empty parent `__init__.py` 외에는 같은 package의 다른 source를 복사하지 않는다. external distribution module은 복사하지 않는다.
 `impl Concrete for Trait [+ Trait ...]`는 agent가 class를 작성하는 기능이 아니다. emitter는 trait `Protocol`을 구현 상속하지 않는 ordinary `@final` class `Concrete`를 생성하고, declaration-order state slot과 private `_cott_lock` slot만 둔다. compiler-owned `__init__`은 required state parameter를 exact ABI type으로 받고 defaulted field에는 declaration default를 적용한 뒤 field를 한 번씩 대입하고 `threading.RLock`을 만든다. state가 없으면 public zero-argument init을 생성한다. init의 `requires`·`ensures`와 invariant는 wrapper가 검사하며 agent code는 실행하지 않는다. class는 inheritance·subclassing·dynamic attribute·`__del__`을 허용하지 않고 identity equality와 identity hash를 유지한다. trait는 계속 signature-only structural `Protocol`이며 class는 nominal runtime dispatch나 trait default method를 얻지 않는다.
 
 state field ABI type은 closed immutable value 또는 `Opaque`여야 한다. 따라서 wrapper가 method 전 state를 field-value tuple로 snapshot해 `old(self.field)`, `modifies`와 invariant 판정에 사용해도 aliasing으로 변하지 않는다. public method wrapper는 instance `_cott_lock`을 전체 validation, helper invocation, state check 및 normal return invariant 검사 동안 획득한다. `RLock`이므로 helper가 자기 instance의 다른 declared public method를 wrapper를 통해 호출할 수 있지만, instance 사이 serializability·reader snapshot isolation은 보장하지 않는다. resource lifecycle은 별도 magic hook이 아니라 ordinary trait method와 declared state transition(예: `close`)로만 모델링한다.
@@ -1395,7 +1409,7 @@ record의 필수 field를 보여 주는 다음 JSON은 객체·배열 entry 일�
 project-owned path는 project-relative POSIX path이고 dependency import origin만 distribution-relative POSIX path다. hash는 raw file bytes의 SHA-256 lowercase hex다. map key와 set-derived array를 정렬한 UTF-8 JSON으로 쓰며 file 끝 newline 하나만 둔다. `generation.json` 자체는 self-reference를 피하려고 `managed_files`에서 제외한다. `generation_id`는 domain tag, top-level `schema_version`과 current에서 `generation_id`·`verified`·`verification`·`agent_runs`를 뺀 canonical object의 hash다. `last_verified`는 pointer가 아니라 verified current snapshot의 deep copy다.
 
 `agent_runs`는 현재 agent implementation content hash와 일치하는 callable별 마지막 successful run만 담는다. 이후 emit·verify에서도 hash가 같으면 보존하고 agent 재생성 시 교체하며 user edit로 hash가 달라지면 제거한다. 실패·폐기된 run과 무제한 history는 generation record에 누적하지 않는다.
-implementation record의 `cott_symbol`은 free function 또는 `<module>.<Concrete>.<method>`다. impl method record는 `"kind":"impl_method"`, `"concrete":"<Concrete>"`, `"method":"<method>"`, `"owner":"agent"`, `"python_symbol":"_cott_impl.<module path>.<Concrete>.<method>:_cott_impl_<Concrete>_<method>"`, `"source_origin":"python/_cott_impl/<module path>/<Concrete>/<method>.py"`와 같은 runtime origin·content hash를 반드시 가진다. `current.unresolved`도 free function과 impl method의 canonical symbol·kind·source span을 각각 기록한다. impl method에는 manifest binding record가 없고 owner는 언제나 `agent`다.
+implementation record의 `cott_symbol`은 free function 또는 `<module>.<Concrete>.<method>`이며 `python_symbol`은 file의 유일한 canonical contract function만 가리킨다. 같은 file의 private helper와 permitted `Final` constant는 별도 symbol·binding·facade export·provenance record를 만들지 않고 file 전체 `content_hash`로 함께 provenance된다. impl method record는 `"kind":"impl_method"`, `"concrete":"<Concrete>"`, `"method":"<method>"`, `"owner":"agent"`, `"python_symbol":"_cott_impl.<module path>.<Concrete>.<method>:_cott_impl_<Concrete>_<method>"`, `"source_origin":"python/_cott_impl/<module path>/<Concrete>/<method>.py"`와 같은 runtime origin·content hash를 반드시 가진다. `current.unresolved`도 free function과 impl method의 canonical symbol·kind·source span을 각각 기록한다. impl method에는 manifest binding record가 없고 owner는 언제나 `agent`다.
 
 canonical executable path와 binary hash를 포함하므로 `generation_id`는 같은 machine·tool installation의 generation instance identity이지 cross-machine reproducible build ID가 아니다. portable 비교는 Canonical IR, `contract_surface`, `public_python_symbols`, durable implementation content hash와 normalized lock·dependency identity를 사용한다. exact tool·runtime identity와 machine-specific constant를 embed한 managed artifact hash는 같은 target environment 안에서만 비교한다. `generation.json`은 machine-local state이고 wheel에 포함하지 않는다.
 
@@ -1570,9 +1584,7 @@ manifest binding key는 현재 IR의 public free function을 정확히 가리켜
 
 `cott check`, `cott emit`, `cott generate`, `cott verify`는 Python source와 stub을 import 없이 정적으로 해석한다. 타입 판정은 이번 transaction에서 staging에 생성한 `*_types.py`를 기준으로 한다.
 
-MVP의 **free-function binding** target은 regular `.py`에 선언된 decorator 없는 top-level synchronous function과 simple function name으로 제한한다. target의 coroutine, overload, variadic parameter와 descriptor, extension·zip·custom loader는 거부한다. Python generator function은 선언된 `Generator[Y, S, R]` ABI와 호환되면 허용한다. Python-local helper와 아래 허용된 module initialization은 implementation bytes의 일부지만 선언된 effect를 증명한다고 보지 않는다.
-
-free-function binding module top-level node는 optional docstring, `from __future__ import annotations`, absolute import, invariant `TypeVar` 선언, literal로 초기화한 `Final[bool | int | float | str | bytes]`와 undecorated synchronous function definition만 허용한다. class·type alias 정의는 거부한다. 모든 Python-local helper signature도 concrete하게 typed되어야 하며 function body의 nested import·`global`·`nonlocal`과 그 밖의 executable top-level statement는 거부한다. 이 restriction은 compiler가 생성하지 않는 free-function binding에만 적용하며 impl method helper의 closed one-function file 규칙은 16.3이 적용한다.
+MVP의 **free-function binding** target은 regular `.py`에 선언된 decorator 없는 top-level synchronous function과 simple function name으로 제한한다. target의 coroutine, overload, variadic parameter와 descriptor, extension·zip·custom loader는 거부한다. Python generator function은 선언된 `Generator[Y, S, R]` ABI와 호환되면 허용한다. implementation file은 Cott의 최소 public/observable contract이지 exhaustive implementation inventory가 아니다: binding target 또는 agent file의 expected canonical function 하나는 Cott symbol의 exact name·signature를 가져야 하지만, 같은 file에는 dunder도 reserved `_cott_`도 아닌 single-leading-underscore 이름의 undecorated synchronous fully annotated private helper를 0개 이상 둘 수 있다. duplicate function name은 거부한다. top-level node는 optional docstring, `from __future__ import annotations`, absolute import, invariant `TypeVar` 선언, same private-name rule의 literal `Final[bool | int | float | str | bytes]` immutable constant, canonical function과 위 private helper만 허용한다. class·type alias·mutable module global과 그 밖의 executable top-level statement는 거부한다. helper는 manifest binding 대상도 facade export도 아니며 public behavior가 필요해질 때만 별도 Cott declaration과 자체 implementation file로 승격한다. 모든 canonical function과 Python-local helper signature는 fully annotated여야 하며 function body의 nested import·`global`·`nonlocal`은 거부한다. 이 same-file rule은 binding과 free-function/impl-method agent implementation에 공통으로 적용한다.
 
 target과 Python-local helper에서 optional docstring을 제외한 body가 `pass` 또는 `...`뿐인 placeholder, value placeholder로 대입·반환하는 `...`, `NotImplementedError`를 직접 발생시키는 코드는 정적 해석 단계에서 거부한다. 일반 `.py` type annotation의 `tuple[T, ...]`와 `.pyi` stub의 ellipsis는 placeholder가 아니다.
 
@@ -1610,7 +1622,7 @@ foo.bar.Counter.increment
 
 free-function implementation resolution priority는 optional manifest binding → 위 exact agent file → unresolved다. compatible agent file이 이미 있으면 재사용하고 agent를 호출하지 않는다. selected generate에서 agent file이 없거나 signature가 현재 contract와 불일치하면 regeneration candidate로 staged overwrite할 수 있다. binding 불일치는 항상 hard error며 agent로 대체하지 않는다. impl method resolution priority는 exact agent helper file → unresolved뿐이다; compatible helper가 없거나 name/signature가 다르면 regeneration candidate고 manifest binding은 언제나 hard configuration error다.
 
-compiler가 필요한 `_cott_impl/**/__init__.py`를 side-effect 없는 빈 파일로 생성한다. free-function agent는 선택 function file만 쓰고 선언되지 않은 Python-local helper만 그 파일 안에 둘 수 있다. impl-method agent는 선택 `<Concrete>/<method>.py`에 exact `_cott_impl_<Concrete>_<method>` 하나만 쓴다. 공개 cott free helper는 자신의 함수 파일에서 별도로 binding 또는 생성하고, impl helper의 instance method coordination은 `self.<declared_method>(...)` public wrapper를 통해서만 한다.
+compiler가 필요한 `_cott_impl/**/__init__.py`를 side-effect 없는 빈 파일로 생성한다. free-function agent와 impl-method agent는 선택 function file만 쓰며, 그 file에는 exact Cott symbol/signature의 canonical function 하나와 0개 이상의 위 private helper·permitted literal `Final` constant만 둘 수 있다. helper는 manifest binding, `generation.json` implementation symbol, facade와 `__all__`의 대상이 아니며 public behavior가 되면 별도 Cott function으로 승격한다. impl helper의 instance method coordination은 `self.<declared_method>(...)` public wrapper를 통해서만 한다.
 
 binding target은 공개 facade와 달라야 한다. 외부 API가 계약과 다르면 사용자가 typed adapter를 작성한다. cott는 인자·예외 변환을 추측하지 않는다.
 
@@ -1628,7 +1640,7 @@ from foo.bar import process_bar, validate_bar
 
 이 composition은 Python implementation boundary에만 존재한다. `.cott`는 계속 실행 body·call-expression syntax 없이 function별 계약을 선언하는 contract-first language다.
 
-cott는 `generated/python/foo/bar.py`에 fully typed free-function wrapper와 impl마다 compiler-owned ordinary class 및 public method wrapper를 생성한다. `bar_types.py`가 module 고유 type identity의 원본이고 standard ABI identity는 `cott_runtime`에 있다. implementation과 adapter는 custom type을 type module에서, standard type을 `cott_runtime`에서 import한다. facade에서는 선언된 public free function만 16.5.1의 형태로 import할 수 있고 type·constant는 import할 수 없다. impl helper는 `_cott_impl`을 import하거나 another helper를 직접 호출하지 않으며 own `self`의 declared public method만 호출할 수 있다. imported free helper 또는 that public method call은 direct implementation symbol로 우회하지 않고 generated wrapper를 통과하므로 its own provenance, ABI, `requires`, return/error와 `ensures` 검사가 configured mode대로 각각 적용된다.
+cott는 `generated/python/foo/bar.py`에 fully typed free-function wrapper와 impl마다 compiler-owned ordinary class 및 public method wrapper를 생성한다. `bar_types.py`가 module 고유 type identity의 원본이고 standard ABI identity는 `cott_runtime`에 있다. implementation과 adapter는 custom type을 type module에서, standard type을 `cott_runtime`에서 import한다. facade에서는 declared public free function만 16.5.1의 형태로 import할 수 있고 type·constant는 import할 수 없다. same-file private helper와 `Final` constant는 Cott declaration도 facade export도 아니며 `_cott_impl`을 import하지 않는다; canonical function과 private helper는 같은 file 안에서만 서로 직접 호출할 수 있다. impl canonical function의 cross-contract method call은 own `self`의 declared public method만 호출할 수 있다. imported Cott free function 또는 that public method call은 direct implementation symbol로 우회하지 않고 generated wrapper를 통과하므로 its own provenance, ABI, `requires`, return/error와 `ensures` 검사가 configured mode대로 각각 적용된다.
 
 각 free-function wrapper와 impl class/method wrapper에는 project identity·expected `cott_runtime` ABI version, compile-time specialized `runtime_validation`, implementation의 canonical module·symbol, `generated/python` relative `runtime_origin`·content hash, exact CPython full version·cache tag·OS family·architecture와 16.1의 external dependency record를 immutable constant로 embed한다. impl class shell additionally embeds ordered state layout, defaults, init/invariant and method `modifies` metadata; helper symbol is `<module>.<Concrete>.<method>`. full `sysconfig` platform string은 generation provenance에만 둔다. durable `source_origin`은 `generation.json`에만 남고 verify가 generated copy와 byte identity를 확인한다. installed package에 project-side record가 없어도 검사는 동작한다.
 
@@ -1649,7 +1661,7 @@ cache miss 또는 stamp drift의 loader preflight는 target 실행 전에 record
 
 유지되는 curriculum module의 source order는 type 선언, 작은 domain leaf function, 더 큰 composition function, domain-named final operation 순서다. 의미 있는 경계만 stage로 공개한다. grammar lesson은 의도적으로 leaf 하나일 수 있고 simple·complex lesson도 domain responsibility가 독립적인 경우에만 stage를 추가한다.
 
-`.cott` declaration은 항상 bodyless다. free-function composition edge는 `from <exact cott module> import <declared public function>` 형태의 alias-free import로 exact generated public facade를 통과해야 하며 implementation끼리 직접 호출하지 않는다. impl helper의 only method composition edge는 `self.<declared_method>(...)` public wrapper다. caller의 effects는 helper에서 전파된다고 추론하지 않고 caller 계약에 명시한다. 공개 helper는 모든 ABI-valid input에 선언된 결과를 반환하거나 caller가 호출 전에 확립할 수 있는 Cott `requires`를 선언해야 한다.
+`.cott` declaration은 항상 bodyless다. free-function composition edge는 `from <exact cott module> import <declared public function>` 형태의 alias-free import로 exact generated public facade를 통과해야 하며 implementation file끼리 직접 호출하지 않는다. same-file private helper call은 implementation detail이고 impl canonical function의 only cross-contract method composition edge는 `self.<declared_method>(...)` public wrapper다. caller의 effects는 private helper를 포함한 transitive implementation effect에서 자동 전파된다고 추론하지 않고 caller 계약에 명시한다. helper가 Cott로 승격되어 public function이 되면 모든 ABI-valid input에 선언된 결과를 반환하거나 caller가 호출 전에 확립할 수 있는 Cott `requires`를 선언해야 한다.
 
 `examples/grammar/checked-add`만 manifest binding syntax를 가르치는 lesson이다. 이 project만 `[target.python.implementations]` mapping과 `python/cott_bindings/<cott module>/<function>.py`의 authored source를 checkout에 둔다. 16.5의 manifest binding과 source/runtime provenance 규칙은 일반 product feature로 계속 지원하지만 다른 유지 example의 authoring model은 아니다.
 
@@ -1688,7 +1700,7 @@ MVP는 다음 두 가지 에이전트와 각 에이전트가 제공하는 CLI �
 | `codex`       | `codex exec`    |
 | `omp`         | `omp -p`        |
 
-cott는 17.1의 입력을 하나의 callable별 구현 지시로 구성하여 선택된 인터페이스에 전달한다. implementation kind가 free function이면 바인딩된 symbol을 다시 구현하지 말고 project-local call에는 exact cott facade function import만 사용하라고 명시한다. kind가 impl method이면 supplied exact helper 하나만 작성하고 class·init·wrapper·state declaration을 작성하지 말며 project-local method coordination에는 `self.<declared_method>(...)`만 사용하라고 명시한다.
+cott는 17.1의 입력을 하나의 callable별 구현 지시로 구성하여 선택된 인터페이스에 전달한다. implementation kind가 free function이면 바인딩된 symbol을 다시 구현하지 말고 project-local call에는 exact cott facade function import만 사용하라고 명시한다. kind가 impl method이면 supplied exact canonical function을 작성하고 class·init·wrapper·state declaration을 작성하지 말며 project-local method coordination에는 `self.<declared_method>(...)`만 사용하라고 명시한다. 어느 경우든 prompt는 same-file private helper와 literal `Final` constant가 canonical function의 private implementation detail이며 public behavior가 되면 Cott로 승격해야 함을 명시한다.
 
 지원하지 않는 `--agent` 값은 에이전트를 호출하기 전에 오류로 거부한다.
 
@@ -1729,7 +1741,7 @@ v0.1의 exact main-process argv template는 다음과 같다. 각 항목은 shel
 * impl concrete 이름, trait 목록, ordered state field·default, init contract, invariant와 `modifies`
 * compiler-owned class shell, slot, lock, init, facade wrapper, provenance와 generated test
 
-impl method agent는 exact private `_cott_impl_<Concrete>_<method>` top-level function 외 declaration을 작성할 수 없다. 계약 변경이 필요하면 `.cott` 파일을 수정하지 않고 변경 필요성을 결과로 보고해야 한다.
+impl method agent는 exact private `_cott_impl_<Concrete>_<method>` canonical top-level function 하나를 작성해야 하며, 같은 file의 permitted private helper와 literal `Final` constant 외 public declaration·class·mutable module global을 작성할 수 없다. 계약 변경이 필요하면 `.cott` 파일을 수정하지 않고 변경 필요성을 결과로 보고해야 한다.
 
 ### 17.4 격리 실행과 원자적 반영
 
@@ -1762,7 +1774,7 @@ staging에는 대상 계약, allowed direct helper 계약, binding, rule, 기존
 <target.python.source>/_cott_impl/<module path>/<Concrete>/<method>.py
 ```
 
-free-function agent에만 선언되지 않은 Python-local helper를 같은 함수 파일 안에 둘 수 있다. impl-method file에는 canonical helper 하나만 둔다. 공개 cott helper의 implementation file, 필요한 `_cott_impl/**/__init__.py`, facade, type module, stub, IR, docs, generated tests와 provenance는 현재 agent가 쓸 수 없다. free-function binding file을 agent 생성 대상으로 함께 쓰거나 impl method binding을 선언하는 구성은 거부한다.
+각 agent file에는 canonical function 하나와 same-file private helper 0개 이상, same private-name rule의 permitted literal `Final` immutable constant만 둘 수 있다. helper는 single-leading-underscore private name을 쓰고 facade·manifest binding·provenance symbol이 아니며 public behavior가 되면 별도 Cott declaration과 implementation file로 승격한다. 공개 cott helper의 implementation file, 필요한 `_cott_impl/**/__init__.py`, facade, type module, stub, IR, docs, generated tests와 provenance는 현재 agent가 쓸 수 없다. free-function binding file을 agent 생성 대상으로 함께 쓰거나 impl method binding을 선언하는 구성은 거부한다.
 
 scratch는 workspace diff 대상이 아니며 실행 뒤 폐기한다. agent 실행 후 staging 전체 file list와 diff를 검사한다. `.cott`, manifest, binding, compiler 생성물, 비선택 구현 또는 allowlist 밖 변경은 실패다. agent가 workspace에 만든 cache·temporary file도 위반이다.
 
@@ -1816,7 +1828,7 @@ staging facade는 embedded identity·runtime origin·hash를 generated copy에�
 
 full verify에는 agent 선택 범위가 없고 agent를 호출하지 않는다. staging에서 재생성한 managed set과 actual project set이 정확히 같아야 하며 검증 record 외 차이는 폐기한다.
 
-free-function binding을 해석하지 못하거나 그 external import에 필요한 lock entry가 없으면 agent 호출 전에 실패한다. facade import가 exact module의 declared public free function으로 해석되지 않거나 금지된 형태면 같은 시점에 실패한다. impl helper가 canonical name/signature, one-function shape 또는 allowed `self` method call rule을 어기면 같은 시점에 실패한다. agent 결과의 facade·external import는 호출 직후 같은 규칙으로 다시 검사한다. clean checkout에서도 이번 세대 type module과 facade를 먼저 만들므로 이전 generated file에 의존하지 않는다.
+free-function binding을 해석하지 못하거나 그 external import에 필요한 lock entry가 없으면 agent 호출 전에 실패한다. facade import가 exact module의 declared public free function으로 해석되지 않거나 금지된 형태면 같은 시점에 실패한다. implementation file이 canonical name/signature, same-file private helper/`Final` policy 또는 allowed `self` method call rule을 어기면 같은 시점에 실패한다. agent 결과의 facade·external import는 호출 직후 같은 규칙으로 다시 검사한다. clean checkout에서도 이번 세대 type module과 facade를 먼저 만들므로 이전 generated file에 의존하지 않는다.
 
 특정 callable generate에서 agent가 바꿀 수 있는 durable source는 선택된 free-function 또는 impl-method file뿐이지만 compiler-owned 관리 집합은 항상 전부 재생성·반영한다. `last_verified`가 있으면 그 baseline에 존재한 비선택 declaration의 canonical `contract_surface` record는 byte-identical해야 하고 비선택 public symbol은 현재 `public_python_symbols`에도 남아야 한다. 새 declaration 추가는 허용한다. 최초 검증 전 `last_verified = null`이면 이 guard 없이 선택 범위를 생성하고 `current.verified = false`로 기록한다.
 
@@ -1919,7 +1931,7 @@ cott verify
 * 숫자 ABI metadata, 명목 container invariance와 structural trait bound
 * facade와 tool-only stub의 독립적인 Canonical IR 일치
 * BasedPyright strict 결과와 binding/agent source의 static signature
-* impl agent helper의 canonical symbol/path, exact one-function top-level shape와 allowed `self` method edge
+* binding/agent file의 canonical symbol/path·exact signature, same-file private helper/`Final` policy와 allowed `self` method edge
 * deterministic init-case construction을 포함한 순수 free function/impl method 계약 테스트, init/invariant/modifies clause별 evidence와 미관찰 사례의 정확한 등급 강하
 * unresolved callable과 compiler-owned stale module·symbol, stale durable implementation 진단
 * generated copy의 verified-loader runtime signature, facade/type/source/runtime origin·content hash와 copy byte identity
@@ -2286,7 +2298,7 @@ legal breakpoint가 없는 string·qualified name은 Unicode-scalar column 수�
 * compiler source에서 정적으로 해석하고 generated runtime copy로 고정하는 project-local plain top-level Python **free-function** binding
 * compiler-owned slotted impl class, identity equality/hash, per-instance `RLock`과 embedded callable provenance
 * single-identity verified loader와 embedded implementation provenance
-* user-selected Codex CLI 또는 OMP CLI를 통한 callable별 구현 생성; impl method의 exact one-helper source
+* user-selected Codex CLI 또는 OMP CLI를 통한 callable별 구현 생성; canonical function 하나와 same-file private helper/`Final` implementation detail
 * exact cott module public free-function import와 declared `self` method wrapper만 허용하는 generated-facade composition 및 depth-one helper contract prompt
 * compiler stale file 자동 삭제와 stale durable implementation 진단
 * `current`·`last_verified` snapshot과 contract/implementation diff
@@ -2340,7 +2352,7 @@ MVP는 다음 조건을 모두 자동 검증할 때 완료다.
 16. 자동 test input은 refinement·`requires`를 만족하며, impl method는 deterministic init case로 instantiate하고 생성 실패 clause를 `미관찰`로 보고한다.
 17. pure free-function/impl-method test는 deny-by-default OS sandbox에서 facade wrapper를 통해서만 실행하고 effectful callable과 `Never` 반환 callable은 자동 실행하지 않는다.
 18. free-function binding과 implementation import를 이번 staged type module·Canonical IR에 대해 import 없이 해석하고, project-local composition은 alias 없는 exact cott facade public-free-function import 또는 declared `self` method wrapper만 허용하며 각 callable을 별도로 생성·검증한다.
-19. impl class는 ordinary final slot shell이며 inheritance·subclassing·dynamic attribute·`__del__` 없이 trait method union을 exact coverage하고 every impl method가 canonical one-helper symbol/path로 agent-only 해석됨을 검증한다.
+19. impl class는 ordinary final slot shell이며 inheritance·subclassing·dynamic attribute·`__del__` 없이 trait method union을 exact coverage하고 every impl method가 canonical agent-only function/path 및 same-file private helper/`Final` policy로 해석됨을 검증한다.
 20. 모든 implementation external import는 frozen production dependency closure의 selected lock hash, installed distribution identity·version·metadata·origin·content hash 없이는 실패하며 archive-to-install 연결의 신뢰 등급을 정직하게 보고한다.
 21. local implementation은 generated runtime copy로 고정하고 verified loader가 그 exact bytes를 실행 전 검증한다.
 22. implementation signature, numeric metadata, source/runtime origin, copy byte identity와 content drift를 탐지하고 impl provenance/unresolved record를 canonical callable symbol과 kind로 남긴다.
@@ -2480,7 +2492,7 @@ Python ABI의 표준 identity는 project identity를 embed한 generated `cott_ru
 
 ### 결정 10
 
-Python free function은 manifest의 plain top-level binding이거나 함수별 `_cott_impl` source다. impl method는 exact agent-only private helper source이고 compiler가 ordinary slotted class·init·lock·public wrapper를 소유한다. local module은 canonical path의 generated runtime copy로 고정한다. 연결 정보는 Canonical IR가 아니라 target manifest와 provenance에 둔다.
+Python free function은 manifest의 plain top-level binding이거나 함수별 `_cott_impl` source다. 각 implementation file은 exact canonical function 하나로 Cott의 최소 public/observable contract를 충족하며 private helper와 literal `Final` constant는 같은 hashed/provenanced file의 비공개 구현 detail이다. impl method는 agent-only canonical private function source이고 compiler가 ordinary slotted class·init·lock·public wrapper를 소유한다. local module은 canonical path의 generated runtime copy로 고정한다. 연결 정보는 Canonical IR가 아니라 target manifest와 provenance에 둔다.
 
 ### 결정 11
 

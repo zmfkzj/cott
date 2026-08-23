@@ -77,7 +77,7 @@ fn prompt_has_fixed_sections_and_final_instruction() {
         ("app.Widget".to_owned(), "vendor.models:Widget".to_owned()),
         ("app.Alpha".to_owned(), "vendor.models:Alpha".to_owned()),
     ]);
-    let generated_type_import_rule = "Module facade imports use `from app import name`; generated type imports use `from app_types import Type`;";
+    let generated_type_import_rule = "For other modules import public generated symbols only through `from app import name` and generated value types only through `from app_types import Type`.";
     let prompt = render_prompt(
         &callable,
         br#"{"module":"app"}"#,
@@ -106,10 +106,14 @@ fn prompt_has_fixed_sections_and_final_instruction() {
     let text = String::from_utf8(prompt).expect("UTF-8 prompt");
     assert!(text.starts_with("COTT_AGENT_PROMPT_V1\n\nTARGET\n"));
     assert!(text.contains("Symbol: app.run"));
+    assert!(text.contains("Define exactly one canonical top-level function `run`."));
+    assert!(text.contains(
+        "You MAY additionally define private implementation helpers, private immutable constants, and invariant TypeVars. Each helper MUST be an undecorated, synchronous, fully annotated top-level function whose name starts with a single `_` but is neither dunder nor reserved `_cott_`; function names MUST be unique. Each constant MUST have a single-leading-underscore name that is neither dunder nor reserved `_cott_`, and be a literal `Final[bool|int|float|str|bytes]` value. Do not define classes, public helpers, mutable globals, decorators, async functions, variadic parameters, parameter defaults, or other executable top-level assignments."
+    ));
     assert!(text.contains("CANONICAL IR\n{\"module\":\"app\"}\n\nDOCS CONTRACTS EFFECTS"));
     assert!(!text.contains("\"external_types\""));
     assert!(text.contains(
-        "RELEVANT TYPES\nModule facade imports use `from app import name`; generated type imports use `from app_types import Type`;\n\nPYTHON EXTERNAL TYPE PROJECTIONS\napp.Alpha = vendor.models:Alpha\napp.Widget = vendor.models:Widget\n\nBOUND SYMBOLS IMPORT RULES"
+        "RELEVANT TYPES\nFor other modules import public generated symbols only through `from app import name` and generated value types only through `from app_types import Type`.\n\nPYTHON EXTERNAL TYPE PROJECTIONS\napp.Alpha = vendor.models:Alpha\napp.Widget = vendor.models:Widget\n\nBOUND SYMBOLS IMPORT RULES"
     ));
     assert!(
         text.ends_with(
@@ -119,7 +123,7 @@ fn prompt_has_fixed_sections_and_final_instruction() {
 }
 
 #[test]
-fn method_prompt_requires_only_the_private_helper() {
+fn method_prompt_allows_private_helpers_and_constants() {
     let prompt = render_prompt(
         &PythonCallable {
             module: "foo.bar".to_owned(),
@@ -133,7 +137,7 @@ fn method_prompt_requires_only_the_private_helper() {
         },
         br#"{"module":"foo.bar"}"#,
         "docs",
-        "types",
+        "The compiler-owned concrete facade class `Reader` is absent from `foo.bar_types`; import it exactly as `from foo.bar import Reader` for the `self` annotation. Generated value-type imports remain `from foo.bar_types import Type`.",
         &BTreeMap::new(),
         "bound",
         None,
@@ -143,11 +147,13 @@ fn method_prompt_requires_only_the_private_helper() {
     .expect("prompt");
     let text = String::from_utf8(prompt).expect("UTF-8 prompt");
     assert!(text.contains("Symbol: foo.bar.Reader.read"));
-    assert!(text.contains("exactly one private top-level helper `_cott_impl_Reader_read`"));
     assert!(
-        text.contains("Do not define a class, facade shell, or any other top-level definition")
+        text.contains("exactly one canonical private top-level function `_cott_impl_Reader_read`")
     );
     assert!(text.contains(
-        "The concrete class `Reader` is absent from `foo.bar_types`; import it exactly as `from foo.bar import Reader`"
+        "You MAY additionally define private implementation helpers, private immutable constants, and invariant TypeVars. Each helper MUST be an undecorated, synchronous, fully annotated top-level function whose name starts with a single `_` but is neither dunder nor reserved `_cott_`; function names MUST be unique. Each constant MUST have a single-leading-underscore name that is neither dunder nor reserved `_cott_`, and be a literal `Final[bool|int|float|str|bytes]` value. Do not define classes, public helpers, mutable globals, decorators, async functions, variadic parameters, parameter defaults, or other executable top-level assignments."
+    ));
+    assert!(text.contains(
+        "The compiler-owned concrete facade class `Reader` is absent from `foo.bar_types`; import it exactly as `from foo.bar import Reader` for the `self` annotation. Generated value-type imports remain `from foo.bar_types import Type`."
     ));
 }

@@ -449,9 +449,9 @@ fn reports_stale_nested_impl_method_sources() {
 }
 
 #[test]
-fn validates_impl_method_helpers_and_rejects_extra_top_level_definitions() {
+fn validates_impl_method_private_helpers_and_rejects_public_functions() {
     let fixture = impl_fixture();
-    let valid = b"from api.service import ReaderState\n\ndef _cott_impl_ReaderState_read(self: ReaderState, amount: int) -> int:\n    def double(value: int) -> int:\n        return value * 2\n\n    return double(amount) // 2\n";
+    let valid = b"from api.service import ReaderState\n\ndef _normalize(value: int) -> int:\n    return value * 2\n\ndef _cott_impl_ReaderState_read(self: ReaderState, amount: int) -> int:\n    return _normalize(amount) // 2\n";
     validate_candidate(
         &fixture.config,
         &fixture.paths,
@@ -459,7 +459,7 @@ fn validates_impl_method_helpers_and_rejects_extra_top_level_definitions() {
         "api.service.ReaderState.read",
         valid,
     )
-    .expect("impl helper may contain a typed local helper");
+    .expect("impl helper may contain a typed private top-level helper");
 
     let cases: &[(&[u8], &str)] = &[
         (
@@ -476,7 +476,7 @@ fn validates_impl_method_helpers_and_rejects_extra_top_level_definitions() {
         ),
         (
             b"from api.service import ReaderState\n\ndef extra() -> None:\n    return None\n\ndef _cott_impl_ReaderState_read(self: ReaderState, amount: int) -> int:\n    return amount\n",
-            "must not define extra function 'extra'",
+            "must have a single private",
         ),
     ];
     for (invalid, expected) in cases {
@@ -535,9 +535,9 @@ fn candidate_validation_public_api_uses_only_the_canonical_plan() {
         &fixture.paths,
         &fixture.plan,
         "run",
-        b"def run() -> object:\n    def identity(value: object) -> object:\n        return value\n\n    return identity(None)\n",
+        b"from typing import Final\n\n_enabled: Final[bool] = True\n_count: Final[int] = 1\n_ratio: Final[float] = 1.5\n_label: Final[str] = \"cott\"\n_payload: Final[bytes] = b\"cott\"\n\ndef _normalize(value: object) -> object:\n    return value\n\ndef run() -> object:\n    return _normalize(None)\n",
     )
-    .expect("canonical plan candidate may contain a typed local helper");
+    .expect("canonical plan candidate may contain typed private helpers and constants");
 }
 
 #[test]
@@ -546,7 +546,7 @@ fn rejects_extra_top_level_definitions_for_public_functions() {
     let cases: &[(&[u8], &str)] = &[
         (
             b"def extra() -> None:\n    return None\n\ndef run() -> object:\n    return None\n",
-            "must not define extra function 'extra'",
+            "must have a single private",
         ),
         (
             b"class Run:\n    pass\n\ndef run() -> object:\n    return None\n",
@@ -563,6 +563,65 @@ fn rejects_extra_top_level_definitions_for_public_functions() {
             source,
         )
         .expect_err("public candidate must have only its exact top-level function");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn rejects_invalid_private_helpers_and_extra_contract_functions() {
+    let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    let cases: &[(&[u8], &str)] = &[
+        (
+            b"def normalize(value: int) -> int:\n    return value\n\ndef run() -> object:\n    return None\n",
+            "must have a single private",
+        ),
+        (
+            b"def _cott_x(value: int) -> int:\n    return value\n\ndef run() -> object:\n    return None\n",
+            "must have a single private",
+        ),
+        (
+            b"def __x(value: int) -> int:\n    return value\n\ndef run() -> object:\n    return None\n",
+            "must have a single private",
+        ),
+        (
+            b"def _normalize(value: int) -> int:\n    return value\n\ndef _normalize(value: int) -> int:\n    return value\n\ndef run() -> object:\n    return None\n",
+            "must not define duplicate function '_normalize'",
+        ),
+        (
+            b"def _normalize(value) -> int:\n    return value\n\ndef run() -> object:\n    return None\n",
+            "parameter `value` must have one concrete annotation",
+        ),
+        (
+            b"def _normalize(value: int):\n    return value\n\ndef run() -> object:\n    return None\n",
+            "function '_normalize' must have a return annotation",
+        ),
+        (
+            b"@decorator\ndef _normalize(value: int) -> int:\n    return value\n\ndef run() -> object:\n    return None\n",
+            "function '_normalize' must not be decorated",
+        ),
+        (
+            b"_state: list[int] = []\n\ndef run() -> object:\n    return None\n",
+            "executable top-level statement",
+        ),
+        (
+            b"from typing import Final\n\nvisible: Final[int] = 1\n\ndef run() -> object:\n    return None\n",
+            "executable top-level statement",
+        ),
+        (
+            b"def run() -> object:\n    return None\n\ndef run() -> object:\n    return None\n",
+            "must define exactly one top-level function 'run'",
+        ),
+    ];
+
+    for (source, expected) in cases {
+        let error = validate_candidate(
+            &fixture.config,
+            &fixture.paths,
+            &fixture.plan,
+            "api.service.run",
+            source,
+        )
+        .expect_err("candidate must preserve the closed implementation contract");
         assert!(error.contains(expected), "{error}");
     }
 }

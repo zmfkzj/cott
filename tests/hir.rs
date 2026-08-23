@@ -418,6 +418,85 @@ impl CounterState for Counter:
 }
 
 #[test]
+fn lowers_option_nothing_state_default_for_any_with_implicit_initializer() {
+    let parsed = parse_project([SourceFile::new(
+        "src/option_state.cott",
+        r#"module option_state
+
+trait Holder:
+    fn value(self) -> Option[Any]
+
+impl HolderState for Holder:
+    state:
+        value: Option[Any] = Option.Nothing
+    fn value(self) -> Option[Any]:
+        ensures Option.Nothing => true
+"#,
+    )])
+    .expect("Option.Nothing state fixture should parse");
+    let project =
+        lower(Path::new("src"), parsed).expect("Option.Nothing state fixture should lower");
+    let HirDeclaration::Impl(implementation) = &project.modules[0].declarations[1] else {
+        panic!("expected impl");
+    };
+    assert_eq!(implementation.initializer, None);
+    assert_eq!(
+        implementation.state[0].ty,
+        HirType::Option {
+            item: Box::new(HirType::Primitive(PrimitiveType::Any)),
+        }
+    );
+    assert_eq!(
+        implementation.state[0].default,
+        Some(HirValue::Option(None)),
+    );
+}
+
+#[test]
+fn option_nothing_rejects_unit_and_unsupported_forms() {
+    let unit = parse_project([SourceFile::new(
+        "src/unit.cott",
+        "module unit\n\ntrait Holder:\n    fn value(self) -> Option[Any]\n\nimpl HolderState for Holder:\n    state:\n        value: Option[Any] = ()\n    fn value(self) -> Option[Any]:\n        ensures true\n",
+    )])
+    .expect("Unit fixture should parse");
+    let unit_errors = lower(Path::new("src"), unit).expect_err("Unit is not Option.Nothing");
+    assert_eq!(
+        unit_errors
+            .iter()
+            .map(|error| error.diagnostic.message.as_str())
+            .collect::<Vec<_>>(),
+        ["default value does not match its declared type"],
+    );
+
+    let wrong_type = parse_project([SourceFile::new(
+        "src/wrong_type.cott",
+        "module wrong_type\n\nconst VALUE: Unit = Option.Nothing\n",
+    )])
+    .expect("wrong-type fixture should parse");
+    let wrong_type_errors =
+        lower(Path::new("src"), wrong_type).expect_err("Option.Nothing requires Option");
+    assert_eq!(
+        wrong_type_errors
+            .iter()
+            .map(|error| error.diagnostic.message.as_str())
+            .collect::<Vec<_>>(),
+        ["Option.Nothing does not match the declared constant type"],
+    );
+
+    for source in [
+        "module invalid\n\nconst VALUE: Option[Any] = Option.Nothing()\n",
+        "module invalid\n\nconst VALUE: Option[Any] = Option.None\n",
+    ] {
+        let rejected = parse_project([SourceFile::new("src/invalid.cott", source)])
+            .map_or(true, |parsed| lower(Path::new("src"), parsed).is_err());
+        assert!(
+            rejected,
+            "unsupported Option form must be rejected:\n{source}"
+        );
+    }
+}
+
+#[test]
 fn direct_lowering_rejects_nonlogical_binary_contracts() {
     let parsed = parse_project([SourceFile::new(
         "src/nonlogical.cott",
