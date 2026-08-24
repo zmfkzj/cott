@@ -9,7 +9,7 @@ general-purpose execution language; Cott functions have no executable bodies.
 
 ## Declaration-first contract
 
-Every declaration is resolved and type-checked, lowered to Canonical IR v2, projected to the target,
+Every declaration is resolved and type-checked, lowered to Canonical IR v3, projected to the target,
 and then checked using the available capabilities. An unavailable implementation, runtime check, test
 input, or safe execution permission lowers evidence rather than rejecting an otherwise valid
 declaration. Syntax, names, generic arity, constants, Opaque tags, and hash-key admissibility remain
@@ -65,15 +65,25 @@ records evidence; it never changes declaration validity or Canonical IR.
 | `Unknown` | `object` |
 | `Iterator[T]` | `typing.Iterator[T]` |
 | `Generator[Y, S, R]` | `typing.Generator[Y, S, R]` |
+| `Factory[Concrete]` | exact generated `type[Concrete]` class object |
 | `Opaque["tag"]` | `cott_runtime.Opaque[typing.Literal["tag"]]` |
 | `external type Name` | `[target.python.external_types]` joins its fully qualified Cott symbol to a Python `module:Qualname` |
 
-Canonical IR schema version **2** represents `Any` as `{"kind":"any"}`,
-`Unknown` as `{"kind":"unknown"}`, iterators as `{"kind":"iterator","item":...}`, and generators as
-`{"kind":"generator","yield":...,"send":...,"return":...}`. An `external_type` declaration contains
-only semantic declaration metadata (`annotations`, `doc`, `kind`, `name`, `public`, `source_order`,
-and `span`); bindings, projection mappings, locations, hashes, and target tool identities are
+Canonical IR schema version **3** represents `Any` as `{"kind":"any"}`,
+`Unknown` as `{"kind":"unknown"}`, iterators as `{"kind":"iterator","item":...}`, generators as
+`{"kind":"generator","yield":...,"send":...,"return":...}`, and Factory as
+`{"instance":{"kind":"named",...},"kind":"factory"}` (lexical key order: `instance`, `kind`).
+`factory.instance` is the resolved named impl type. An `external_type` declaration contains only
+semantic declaration metadata (`annotations`, `doc`, `kind`, `name`, `public`, `source_order`, and
+`span`); bindings, projection mappings, locations, hashes, and target tool identities are
 provenance/configuration inputs, not replacements for this semantic form.
+
+`Factory[Concrete]` has exactly one argument. Aliases resolve first; the result must be an argument-free
+named impl declaration. It has no value literal, is neither hash-stable nor admissible as impl state,
+and contract tests never synthesize it. Python projects it to the exact generated `type[Concrete]`
+class object: no instance, subclass, or arbitrary callable is valid, and validation never invokes it.
+The class's compiler-generated init supplies the callable signature. A cross-module Python annotation
+imports `Concrete` from its public Cott facade, never from a `_types` module.
 
 Verification reports capability-based evidence per symbol and clause:
 
@@ -91,15 +101,15 @@ or execution.
 
 ## Generation-first curriculum
 
-The maintained curriculum has 41 projects:
+The maintained curriculum has 42 projects:
 
-1. **Grammar — 9 projects:** learn declarations, types, refinements, and focused contracts.
+1. **Grammar — 10 projects:** learn declarations, types, refinements, and focused contracts.
 2. **Simple — 16 projects:** generate a reusable leaf and a domain-named final operation that calls
    the leaf through its generated facade.
 3. **Complex — 16 projects:** generate meaningful validation, transformation, and aggregation
    stages that compose through generated facades.
 
-`grammar/checked-add` is the only manifest-binding lesson. The other 40 curriculum projects have no
+`grammar/checked-add` is the only manifest-binding lesson. The other 41 curriculum projects have no
 `[target.python.implementations]` table or `python/cott_bindings/` source. Their committed
 `python/_cott_impl/` implementations and `generated/` trees are outputs created by `cott generate`
 and retained so the generated code and provenance can be inspected directly.
@@ -328,10 +338,11 @@ The graph notation points from a caller to the public helper facade it invokes. 
 final symbol is the project's only public function. Except for `checked-add`, every function in
 these graphs is generated from the project's `.cott` declarations.
 
-### Grammar — 9 projects
+### Grammar — 10 projects
 
 | Project | Final symbol | Public helper graph |
 | --- | --- | --- |
+| `assignment-rule` | `parse_assignment` | leaf |
 | `checked-add` | `checked_add` | leaf |
 | `cta-row` | `decode_row` | leaf |
 | `fractional-range-values` | `build_bounded_range` | leaf |

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Generator, Iterator
 import dataclasses as _dataclasses
+import threading as _threading
 from pathlib import Path
-from typing import Literal, Never, Protocol, TypeVar
+from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
@@ -59,7 +61,7 @@ def calculate_order(catalog: Catalog, order: Order) -> Result[OrderReceipt, Orde
         _expected_error_span = {"end_byte":925,"end_column":58,"end_line":39,"start_byte":872,"start_column":5,"start_line":39}
         _expected_error_clause = "error:2"
     try:
-        _implementation = _cott_load("_cott_impl/store/order/calculate_order.py", "284bb0c3777a6b29cd041d9cadac97b31904d3eaaf0cd067d7f5065488c2b361", "calculate_order", expected_project_name="order-management", expected_cott_symbol="store.order.calculate_order")
+        _implementation = _cott_load("_cott_impl/store/order/calculate_order.py", "cc9319adbf323ba6594a669f824c4f58718173d73d4f8d5a1f76b6c033fd7900", "calculate_order", expected_project_name="order-management", expected_cott_symbol="store.order.calculate_order")
         _result = _implementation(catalog, order)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

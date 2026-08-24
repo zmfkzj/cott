@@ -34,7 +34,7 @@ fn checked_in_canonical_ir_schema_is_parseable() {
     );
     assert_eq!(
         object.get("$id").and_then(serde_json::Value::as_str),
-        Some("https://cott.dev/schema/canonical-ir/v2")
+        Some("https://cott.dev/schema/canonical-ir/v3")
     );
     assert_eq!(
         object
@@ -44,19 +44,26 @@ fn checked_in_canonical_ir_schema_is_parseable() {
             .and_then(serde_json::Value::as_object)
             .and_then(|version| version.get("const"))
             .and_then(serde_json::Value::as_u64),
-        Some(2)
+        Some(3)
     );
 
     let definitions = object
         .get("$defs")
         .and_then(serde_json::Value::as_object)
         .expect("canonical IR schema must define $defs");
-    for definition in ["pattern", "contract", "effect"] {
+    for definition in ["pattern", "contract", "effect", "tfactory"] {
         assert!(
             definitions.contains_key(definition),
             "canonical IR schema must define $defs.{definition}"
         );
     }
+    let factory = definitions
+        .get("tfactory")
+        .and_then(serde_json::Value::as_object)
+        .expect("canonical IR schema must define Factory");
+    assert_eq!(factory["required"], serde_json::json!(["instance", "kind"]));
+    assert_eq!(factory["additionalProperties"], false);
+    assert_eq!(factory["properties"]["instance"]["$ref"], "#/$defs/tn");
 }
 
 fn source(path: &str, text: &str) -> SourceFile {
@@ -124,6 +131,30 @@ fn consume(items: Iterator[Opaque["handle"]]) -> Stream
     .expect("advanced type fixture must parse");
 
     cott::hir::lower(Path::new("src"), parsed).expect("advanced type fixture must lower")
+}
+
+fn factory_project() -> HirProject {
+    let parsed = parse_project([source(
+        "src/factories/counter.cott",
+        r#"module factories.counter
+
+trait Counter:
+    fn count(self) -> I32
+
+impl CounterState for Counter:
+    state:
+        count: I32 = 0
+    fn count(self) -> I32:
+        effects []
+
+alias CounterFactory = Factory[CounterState]
+
+fn make() -> CounterFactory
+"#,
+    )])
+    .expect("Factory IR fixture must parse");
+
+    cott::hir::lower(Path::new("src"), parsed).expect("Factory IR fixture must lower")
 }
 
 fn impl_project() -> HirProject {
@@ -234,7 +265,7 @@ fn renders_and_closes_advanced_type_nodes() {
     assert_eq!(first.modules[0].bytes, second.modules[0].bytes);
 
     let text = json(&first.modules[0]);
-    assert!(text.contains(r#""schema_version":2"#));
+    assert!(text.contains(r#""schema_version":3"#));
     assert_in_order(
         text,
         &[
@@ -256,7 +287,7 @@ fn renders_and_closes_advanced_type_nodes() {
     ));
 
     let value = load(&first.modules[0].bytes).expect("advanced canonical IR must load");
-    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["schema_version"], 3);
     assert_eq!(value["declarations"][0]["kind"], "external_type");
     let external = value["declarations"][0]
         .as_object()
@@ -269,6 +300,43 @@ fn renders_and_closes_advanced_type_nodes() {
     );
     assert_eq!(value["declarations"][0]["public"], true);
     assert_eq!(value["declarations"][4]["target"]["kind"], "generator");
+}
+
+#[test]
+fn renders_and_closes_factory_type_nodes() {
+    let rendered = render(&factory_project()).expect("Factory HIR must render");
+    let text = json(&rendered.modules[0]);
+    assert!(text.contains(
+        r#"{"instance":{"args":[],"kind":"named","name":"factories.counter.CounterState"},"kind":"factory"}"#,
+    ));
+
+    let value = load(&rendered.modules[0].bytes).expect("Factory canonical IR must load");
+    assert_eq!(value["schema_version"], 3);
+    let declarations = value["declarations"].as_array().expect("declarations");
+    let alias = declarations
+        .iter()
+        .find(|declaration| declaration["kind"] == "alias")
+        .expect("Factory alias declaration");
+    assert_eq!(alias["name"], "factories.counter.CounterFactory");
+    assert_eq!(alias["public"], true);
+    assert_eq!(alias["target"]["kind"], "factory");
+    assert_eq!(
+        alias["target"]["instance"]["name"],
+        "factories.counter.CounterState"
+    );
+
+    let factory = declarations
+        .iter()
+        .find(|declaration| declaration["kind"] == "function")
+        .expect("Factory-returning function")["return_type"]
+        .as_object()
+        .expect("Factory return type");
+    assert_eq!(factory["kind"], "factory");
+    assert_eq!(factory["instance"]["kind"], "named");
+    assert_eq!(
+        factory["instance"]["name"],
+        "factories.counter.CounterState"
+    );
 }
 
 #[test]
@@ -498,6 +566,37 @@ fn schema_rejects_malformed_advanced_type_nodes() {
     malformed_primitive["declarations"][primitive_index]["target"]["name"] =
         serde_json::Value::String("invalid".into());
     assert_schema_rejects(malformed_primitive, "unknown primitive name must fail");
+}
+
+#[test]
+fn schema_rejects_malformed_factory_type_nodes() {
+    let rendered = render(&factory_project()).expect("Factory fixture must render");
+    let value: serde_json::Value = serde_json::from_slice(&rendered.modules[0].bytes).unwrap();
+    let factory_index = value["declarations"]
+        .as_array()
+        .expect("declarations")
+        .iter()
+        .position(|declaration| declaration["return_type"]["kind"] == "factory")
+        .expect("Factory-returning declaration");
+
+    let mut missing_instance = value.clone();
+    missing_instance["declarations"][factory_index]["return_type"]
+        .as_object_mut()
+        .expect("Factory type")
+        .remove("instance");
+    assert_schema_rejects(missing_instance, "Factory without instance must fail");
+
+    let mut primitive_instance = value.clone();
+    primitive_instance["declarations"][factory_index]["return_type"]["instance"] =
+        serde_json::json!({"kind": "primitive", "name": "i32"});
+    assert_schema_rejects(
+        primitive_instance,
+        "Factory instance must be structurally named",
+    );
+
+    let mut stale_arguments = value;
+    stale_arguments["declarations"][factory_index]["return_type"]["args"] = serde_json::json!([]);
+    assert_schema_rejects(stale_arguments, "Factory must reject stale arguments");
 }
 
 #[test]

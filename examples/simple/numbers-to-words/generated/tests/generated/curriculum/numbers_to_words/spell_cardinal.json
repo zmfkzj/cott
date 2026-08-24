@@ -1,1 +1,1 @@
-{"schema_version":1,"symbol":"curriculum.numbers_to_words.spell_cardinal","seed":"sha256:a1048e1acf4dbd86bb605a81a9ffc49d53ac01374000d210c79561dd15026514","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1"]}
+{"schema_version":1,"symbol":"curriculum.numbers_to_words.spell_cardinal","seed":"sha256:8c2af6c67eb680f3cb6e8cc342075b767a05299e42630f5815d2daa406ca798b","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1"]}

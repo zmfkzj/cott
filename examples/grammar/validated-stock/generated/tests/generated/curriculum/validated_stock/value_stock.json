@@ -1,1 +1,1 @@
-{"schema_version":1,"symbol":"curriculum.validated_stock.value_stock","seed":"sha256:a8dfc032dcaa0137db2e990d6fe4506796ba9b4bf1bbd5e77eed5c9300d60648","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1","error:2"]}
+{"schema_version":1,"symbol":"curriculum.validated_stock.value_stock","seed":"sha256:419951b7d8a4eabfa5f2e5ee12b99e574f6031515f8711964faf6bcb79039b4f","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1","error:2"]}

@@ -70,6 +70,8 @@ def non_generatable(annotation, substitutions=None):
         return "Iterator"
     if annotation is collections.abc.Generator or origin is collections.abc.Generator:
         return "Generator"
+    if origin is type:
+        return "Factory"
     if origin in (typing.Union, types.UnionType):
         reasons = [non_generatable(value, substitutions) for value in args]
         return next(iter(reasons), None) if reasons and all(reasons) else None
@@ -92,9 +94,11 @@ def input_candidate_reason(function):
             )
     return None
 
-def candidates(annotation, depth=0, substitutions=None):
+def candidates(annotation, depth=0, substitutions=None, container_length_limit=3, json_depth_limit=4):
     substitutions = substitutions or {}
     annotation = substitute(annotation, substitutions)
+    if depth >= json_depth_limit:
+        return []
     if non_generatable(annotation, substitutions) is not None:
         return []
     origin = typing.get_origin(annotation)
@@ -121,14 +125,18 @@ def candidates(annotation, depth=0, substitutions=None):
         )
         if floating is not None:
             return [-1.0, -0.0, 0.0, 0.5, 1.0]
-        return candidates(args[0], depth, substitutions)
+        return candidates(
+            args[0], depth, substitutions, container_length_limit, json_depth_limit
+        )
     if origin is typing.Literal:
         return list(args)
     if origin in (typing.Union, types.UnionType):
         return unique(
             value
             for argument in args
-            for value in candidates(argument, depth + 1, substitutions)
+            for value in candidates(
+                argument, depth + 1, substitutions, container_length_limit, json_depth_limit
+            )
         )
     if annotation is type(None):
         return [None]
@@ -154,10 +162,19 @@ def candidates(annotation, depth=0, substitutions=None):
         "FrozenMap",
         "CottTuple2",
     }:
-        element_values = candidates(args[0], depth + 1, substitutions) if args else []
+        element_values = (
+            candidates(args[0], depth + 1, substitutions, container_length_limit, json_depth_limit)
+            if args
+            else []
+        )
         if target in (dict,) or target_name == "FrozenMap":
-            key_values = element_values
-            value_values = candidates(args[1], depth + 1, substitutions) if len(args) > 1 else []
+            key_values = element_values[:min(1, container_length_limit)]
+            value_values = (
+                candidates(args[1], depth + 1, substitutions, container_length_limit, json_depth_limit)
+                if len(args) > 1
+                else []
+            )
+            value_values = value_values[:min(1, container_length_limit)]
             raw = [{}]
             if key_values and value_values:
                 raw.append({key_values[0]: value_values[0]})
@@ -165,9 +182,19 @@ def candidates(annotation, depth=0, substitutions=None):
                 return raw
             return [target(values=value) for value in raw]
         if target_name == "CottTuple2" or target is tuple and len(args) == 2:
-            right = candidates(args[1], depth + 1, substitutions)
-            return [target(first=a, second=b) for a in element_values[:2] for b in right[:2]]
-        raw = [[], element_values[:1], element_values[:3]]
+            right = candidates(
+                args[1], depth + 1, substitutions, container_length_limit, json_depth_limit
+            )
+            return [
+                target(first=a, second=b)
+                for a in element_values[:min(2, container_length_limit)]
+                for b in right[:min(2, container_length_limit)]
+            ]
+        raw = [
+            [],
+            element_values[:min(1, container_length_limit)],
+            element_values[:container_length_limit],
+        ]
         if target is list:
             return raw
         if target is set:
@@ -188,7 +215,13 @@ def candidates(annotation, depth=0, substitutions=None):
         fields = dataclasses.fields(target)
         pools = []
         for field in fields:
-            pool = candidates(hints.get(field.name, field.type), depth + 1, nested)
+            pool = candidates(
+                hints.get(field.name, field.type),
+                depth + 1,
+                nested,
+                container_length_limit,
+                json_depth_limit,
+            )
             if not pool:
                 return []
             pools.append(pool[:5])
@@ -388,13 +421,25 @@ def callable_hints(function):
     return typing.get_type_hints(target, include_extras=True)
 
 
-def invoke_cases(function):
+def invoke_cases(function, strategy=None):
     hints = callable_hints(function)
     signature = inspect.signature(function)
+    strategy = strategy or {}
+    candidate_limit = strategy.get("candidate_limit", 64)
+    container_length_limit = strategy.get("container_length_limit", 3)
+    json_depth_limit = strategy.get("json_depth_limit", 4)
     pools = []
     for parameter in signature.parameters.values():
         annotation = hints.get(parameter.name, parameter.annotation)
-        pool = candidates(annotation) if annotation is not inspect.Parameter.empty else []
+        pool = (
+            candidates(
+                annotation,
+                container_length_limit=container_length_limit,
+                json_depth_limit=json_depth_limit,
+            )
+            if annotation is not inspect.Parameter.empty
+            else []
+        )
         if parameter.default is not inspect.Parameter.empty:
             pool = [OMIT, *pool]
         if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
@@ -405,7 +450,7 @@ def invoke_cases(function):
             return []
         pools.append(pool)
     cases = []
-    for combination in itertools.islice(itertools.product(*pools), 64):
+    for combination in itertools.islice(itertools.product(*pools), candidate_limit):
         args, kwargs, environment = [], {}, {}
         valid = True
         for parameter, value in zip(signature.parameters.values(), combination):
@@ -487,7 +532,7 @@ def run_function(module_value, declaration, strategy):
         return observed, grade, reason
     valid_cases = 0
     hints = callable_hints(function)
-    cases = invoke_cases(function)
+    cases = invoke_cases(function, strategy)
     candidate_reason = input_candidate_reason(function) if not cases else None
     for args, kwargs, environment in cases:
         requirements = [clause for clause in clauses if clause["kind"] == "requires"]
@@ -545,7 +590,7 @@ def run_initializer(module, implementation, strategy):
         "effectful initializer is not automatically executed",
         "Never-returning initializer is not automatically executed",
     )
-    raw_cases = invoke_cases(facade)
+    raw_cases = invoke_cases(facade, strategy)
     candidate_reason = input_candidate_reason(facade) if not raw_cases else None
     if grade is not None:
         return clauses, observed, grade, reason, raw_cases
@@ -606,13 +651,15 @@ def run_method(module, implementation, strategy, constructor_cases):
         )
     probe = facade(*constructor_cases[0][0], **constructor_cases[0][1])
     bound_method = getattr(probe, method_name)
-    cases = invoke_cases(bound_method)
+    cases = invoke_cases(bound_method, strategy)
     candidate_reason = input_candidate_reason(bound_method) if not cases else None
     valid_cases = 0
     requirements = [clause for clause in clauses if clause["kind"] == "requires"]
     state = [local(field["name"]) for field in implementation.get("state", ())]
     permitted = {local(field) for field in method.get("modifies", ())}
-    for constructor, case in itertools.islice(itertools.product(constructor_cases, cases), 64):
+    for constructor, case in itertools.islice(
+        itertools.product(constructor_cases, cases), strategy["candidate_limit"]
+    ):
         args, kwargs, init_environment = constructor
         receiver = facade(*args, **kwargs)
         method_args, method_kwargs, environment = case

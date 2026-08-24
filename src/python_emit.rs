@@ -313,9 +313,14 @@ pub fn emit(
     }
     for module in modules.values() {
         let mut owners = BTreeMap::<String, BTreeSet<String>>::new();
-        for (source, names) in referenced_imports(module, &declarations) {
-            for name in names {
-                owners.entry(name).or_default().insert(source.clone());
+        for imports in [
+            referenced_imports(module, &declarations),
+            factory_concrete_imports(module, &declarations),
+        ] {
+            for (source, names) in imports {
+                for name in names {
+                    owners.entry(name).or_default().insert(source.clone());
+                }
             }
         }
         for (name, sources) in owners {
@@ -817,6 +822,11 @@ fn validate_type(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnost
                 validate_type(item, module, diagnostics);
             }
         }
+        "factory" => {
+            if let Some(instance) = required_value(object, "instance", module, diagnostics) {
+                validate_type(instance, module, diagnostics);
+            }
+        }
         "map" => {
             for field in ["key", "value"] {
                 if let Some(item) = required_value(object, field, module, diagnostics) {
@@ -965,7 +975,16 @@ fn render_types(
         )
         .unwrap();
     }
-    if !imports.is_empty() {
+    let factory_imports = factory_concrete_imports(module, declarations);
+    for (source, names) in &factory_imports {
+        writeln!(
+            out,
+            "from {source} import {}",
+            names.iter().cloned().collect::<Vec<_>>().join(", ")
+        )
+        .unwrap();
+    }
+    if !imports.is_empty() || !factory_imports.is_empty() {
         out.push('\n');
     }
     let has_generics = module.declarations.iter().any(|declaration| {
@@ -1660,6 +1679,14 @@ fn render_facade(
             out,
             "from {} import {}",
             type_module_name(&source),
+            names.into_iter().collect::<Vec<_>>().join(", ")
+        )
+        .unwrap();
+    }
+    for (source, names) in factory_concrete_imports(module, declarations) {
+        writeln!(
+            out,
+            "from {source} import {}",
             names.into_iter().collect::<Vec<_>>().join(", ")
         )
         .unwrap();
@@ -2799,6 +2826,14 @@ fn render_stub(
         )
         .unwrap();
     }
+    for (source, names) in factory_concrete_imports(module, declarations) {
+        writeln!(
+            out,
+            "from {source} import {}",
+            names.into_iter().collect::<Vec<_>>().join(", ")
+        )
+        .unwrap();
+    }
     render_function_typevars(&mut out, module, declarations, true);
     let mut exported = names;
     for declaration in &module.declarations {
@@ -2989,6 +3024,15 @@ fn render_type_with_names(
                 format!("{name}[{}]", args.join(", "))
             }
         }
+        "factory" => format!(
+            "type[{}]",
+            render_type_with_names(
+                object.get("instance").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            )
+        ),
         "type_parameter" => {
             let name = object
                 .get("name")
@@ -3476,6 +3520,52 @@ fn referenced_imports(
     imports
 }
 
+fn factory_concrete_imports(
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    declarations: &BTreeMap<String, String>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut imports = BTreeMap::new();
+    for declaration in &module.declarations {
+        collect_factory_concrete_imports(declaration, &module.module, declarations, &mut imports);
+    }
+    imports
+}
+
+fn collect_factory_concrete_imports(
+    value: &Value,
+    module: &str,
+    declarations: &BTreeMap<String, String>,
+    imports: &mut BTreeMap<String, BTreeSet<String>>,
+) {
+    let Some(object) = value.as_object() else {
+        if let Some(values) = value.as_array() {
+            for value in values {
+                collect_factory_concrete_imports(value, module, declarations, imports);
+            }
+        }
+        return;
+    };
+    if object.get("kind").and_then(Value::as_str) == Some("factory")
+        && let Some(name) = object
+            .get("instance")
+            .and_then(Value::as_object)
+            .filter(|instance| instance.get("kind").and_then(Value::as_str) == Some("named"))
+            .and_then(|instance| instance.get("name"))
+            .and_then(Value::as_str)
+        && declarations.get(name).map(String::as_str) == Some("impl")
+        && let Some((source, local)) = name.rsplit_once('.')
+        && source != module
+    {
+        imports
+            .entry(source.to_owned())
+            .or_default()
+            .insert(local.to_owned());
+    }
+    for child in object.values() {
+        collect_factory_concrete_imports(child, module, declarations, imports);
+    }
+}
+
 fn declaration_types<'a>(object: &'a serde_json::Map<String, Value>, kind: &str) -> Vec<&'a Value> {
     match kind {
         "alias" => object.get("target").into_iter().collect(),
@@ -3668,6 +3758,29 @@ fn validate_named(
                 .flatten()
             {
                 validate_named(argument, module, declarations, diagnostics);
+            }
+        }
+        "factory" => {
+            let Some(instance) = object.get("instance").and_then(Value::as_object) else {
+                unsupported(
+                    module,
+                    "Factory instance must be a named implementation",
+                    diagnostics,
+                );
+                return;
+            };
+            let name = instance.get("name").and_then(Value::as_str);
+            let arguments = instance.get("args").and_then(Value::as_array);
+            if instance.get("kind").and_then(Value::as_str) != Some("named")
+                || !arguments.is_some_and(Vec::is_empty)
+                || !name
+                    .is_some_and(|name| declarations.get(name).map(String::as_str) == Some("impl"))
+            {
+                unsupported(
+                    module,
+                    "Factory instance must be a named implementation",
+                    diagnostics,
+                );
             }
         }
         "list" | "set" | "option" | "iterator" => {

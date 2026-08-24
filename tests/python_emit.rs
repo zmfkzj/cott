@@ -712,3 +712,124 @@ fn rejects_missing_stale_non_external_and_malformed_external_projections() {
             .contains("has malformed Python projection")
     }));
 }
+
+#[test]
+fn emits_factory_annotations_from_concrete_facades() {
+    let temp = TempDir::new();
+    fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    fs::write(
+        temp.path.join("src/alpha.cott"),
+        r#"module alpha
+
+trait Alpha:
+    fn value(self) -> I32
+
+impl AlphaState for Alpha:
+    state:
+        value: I32
+    init(value: I32):
+        requires value >= 0
+        ensures self.value == value
+    fn value(self) -> I32:
+        effects []
+"#,
+    )
+    .expect("source should be writable");
+    fs::write(
+        temp.path.join("src/beta.cott"),
+        r#"module beta
+
+trait Beta:
+    fn value(self) -> I32
+
+impl BetaState for Beta:
+    state:
+        value: I32
+    init(value: I32):
+        requires value >= 0
+        ensures self.value == value
+    fn value(self) -> I32:
+        effects []
+"#,
+    )
+    .expect("source should be writable");
+    fs::write(
+        temp.path.join("src/app.cott"),
+        r#"module app
+use alpha.{AlphaState}
+use beta.{BetaState}
+
+trait App:
+    fn value(self) -> I32
+
+impl AppState for App:
+    state:
+        value: I32
+    init(value: I32):
+        requires value >= 0
+        ensures self.value == value
+    fn value(self) -> I32:
+        effects []
+
+alias AlphaFactory = Factory[AlphaState]
+
+fn choose(
+    local: Factory[AppState],
+    beta: Factory[BetaState],
+    alpha: AlphaFactory,
+) -> Factory[AppState]
+"#,
+    )
+    .expect("source should be writable");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources")).expect("parse");
+    let ir = render(&lower(&paths.source_dir, parsed).expect("lower")).expect("render");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
+    let helper =
+        b"def choose(local: object, beta: object, alpha: object) -> object:\n    return local\n";
+    let binding = ResolvedBinding {
+        module: "app".to_owned(),
+        function: "choose".to_owned(),
+        cott_symbol: "app.choose".to_owned(),
+        kind: PythonCallableKind::Function,
+        implementation_module: "_cott_impl.app.choose".to_owned(),
+        implementation_function: "choose".to_owned(),
+        owner: BindingOwner::Agent,
+        source: temp.path.join("python/_cott_impl/app/choose.py"),
+        generated_relative: PathBuf::from("_cott_impl/app/choose.py"),
+        bytes: helper.to_vec(),
+        sha256: sha256_hex(helper),
+    };
+    let emission = emit(&config, &plan, &ir, &[binding]).expect("Factory should emit");
+    let app_types = String::from_utf8_lossy(bytes(&emission.files, "python/app_types.py"));
+    let facade = String::from_utf8_lossy(bytes(&emission.files, "python/app.py"));
+    let stub = String::from_utf8_lossy(bytes(&emission.files, "stubs/app.pyi"));
+    let alpha_stub = String::from_utf8_lossy(bytes(&emission.files, "stubs/alpha.pyi"));
+
+    assert!(app_types.contains("from alpha import AlphaState\nfrom beta import BetaState\n"));
+    assert!(app_types.contains("AlphaFactory: TypeAlias = type[AlphaState]"));
+    for output in [facade.as_ref(), stub.as_ref()] {
+        assert!(output.contains("from alpha import AlphaState\nfrom beta import BetaState\n"));
+        assert!(!output.contains("from alpha_types import AlphaState"));
+        assert!(!output.contains("from beta_types import BetaState"));
+    }
+    assert!(
+        facade.contains(
+            "def choose(local: type[AppState], beta: type[BetaState], alpha: type[AlphaState]) -> type[AppState]:"
+        ),
+        "{facade}"
+    );
+    assert!(
+        stub.contains(
+            "def choose(local: type[AppState], beta: type[BetaState], alpha: type[AlphaState]) -> type[AppState]: ..."
+        ),
+        "{stub}"
+    );
+    assert!(stub.contains("class AppState:"));
+    assert!(stub.contains("def __init__(self, value: I32) -> None: ..."));
+    assert!(alpha_stub.contains("class AlphaState:"));
+    assert!(alpha_stub.contains("def __init__(self, value: I32) -> None: ..."));
+}

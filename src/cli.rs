@@ -15,7 +15,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub use crate::agent::AgentKind;
 use crate::agent::{AgentRunCandidate, adapter, render_prompt, run_agent};
-use crate::binding::{ResolvedBinding, resolve_implementations, validate_candidate};
+use crate::binding::{
+    ResolvedBinding, factory_concrete_imports, resolve_implementations, validate_candidate,
+};
 use crate::compiler::{ProjectDiagnostic, parse_project};
 use crate::diagnostics::{
     Diagnostic, DiagnosticReport, Severity, SourceMap, SourceSpan, Span, code,
@@ -1472,16 +1474,32 @@ fn generate_project(
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            let target_rules = match &callable.kind {
+            let mut target_rules = match &callable.kind {
                 PythonCallableKind::Function => format!(
-                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, CottList, CottSet, FrozenMap, and CottTuple2 from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict/tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` means `None`; do not construct it. Use `Option.Nothing` exactly as a value; do not call it. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(xs), CottSet(xs), FrozenMap({}), and CottTuple2(a, b). For Result returns import and return Result.Ok(value) or Result.Err(error); never raise, catch, or inspect Result. Do not use classes, mutable module state, `Any`, casts, `typing.cast`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. For other modules import public generated symbols only through `from {0} import name` and generated value types only through `from {0}_types import Type`. Do not import concrete facade classes from generated type modules.",
+                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, CottList, CottSet, FrozenMap, and CottTuple2 from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict/tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` means `None`; do not construct it. Use `Option.Nothing` exactly as a value; do not call it. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={{}}), and CottTuple2(first=a, second=b). For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err, raise, catch, or inspect Result. Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `{0}_types` module, never `<Enum>.<Variant>`. Do not use classes, mutable module state, `Any`, casts, `typing.cast`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. For other modules import public generated symbols only through `from {0} import name` and generated value types only through `from {0}_types import Type`. Do not import concrete facade classes from generated type modules.",
                     callable.module
                 ),
                 PythonCallableKind::ImplMethod { concrete } => format!(
-                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. The canonical function's leading `self` annotation must be `{concrete}`. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, CottList, CottSet, FrozenMap, and CottTuple2 from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict/tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` means `None`; do not construct it. Use `Option.Nothing` exactly as a value; do not call it. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(xs), CottSet(xs), FrozenMap({}), and CottTuple2(a, b). For Result returns import and return Result.Ok(value) or Result.Err(error); never raise, catch, or inspect Result. Do not use classes, mutable module state, `Any`, casts, `typing.cast`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. The compiler-owned concrete facade class `{concrete}` is absent from `{0}_types`; import it exactly as `from {0} import {concrete}` for the `self` annotation. Generated value-type imports remain `from {0}_types import Type`.",
+                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. The canonical function's leading `self` annotation must be `{concrete}`. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, CottList, CottSet, FrozenMap, and CottTuple2 from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict/tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` means `None`; do not construct it. Use `Option.Nothing` exactly as a value; do not call it. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={{}}), and CottTuple2(first=a, second=b). For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err, raise, catch, or inspect Result. Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `{0}_types` module, never `<Enum>.<Variant>`. Do not use classes, mutable module state, `Any`, casts, `typing.cast`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. The compiler-owned concrete facade class `{concrete}` is absent from `{0}_types`; import it exactly as `from {0} import {concrete}` for the `self` annotation. Generated value-type imports remain `from {0}_types import Type`.",
                     callable.module
                 ),
             };
+            let factory_imports = factory_concrete_imports(&plan, callable)
+                .into_iter()
+                .flat_map(|(module, concretes)| {
+                    concretes
+                        .into_iter()
+                        .map(move |concrete| format!("from {module} import {concrete}"))
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !factory_imports.is_empty() {
+                target_rules.push_str(
+                    "\nFactory annotations require these exact concrete public-facade imports; do not substitute them or import from `*_types`:\n",
+                );
+                target_rules.push_str(&factory_imports);
+                target_rules.push('\n');
+            }
             let project_rules = config
                 .generator
                 .rules

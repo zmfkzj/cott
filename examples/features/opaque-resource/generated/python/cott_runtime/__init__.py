@@ -298,7 +298,7 @@ class CottTuple2(Sequence[Union[_T1, _T2]], Generic[_T1, _T2]):
 class Opaque(Generic[_T]):
     __hash__ = None
     tag: str
-    value: _T
+    value: object
 
     def __post_init__(self) -> None:
         if type(self.tag) is not str or not self.tag:
@@ -461,6 +461,10 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") ->
         if any(type(value) is type(candidate) and value == candidate for candidate in args):
             return value
         raise CottContractViolation(f"{path} does not match ABI literal", phase="validation")
+    if origin is type:
+        if len(args) == 1 and value is args[0]:
+            return value
+        raise CottContractViolation(f"{path} does not match ABI Factory", phase="validation")
     if annotation is Any or annotation is object:
         return value
     if isinstance(annotation, TypeVar):

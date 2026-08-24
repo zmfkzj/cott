@@ -115,6 +115,12 @@ fn prompt_has_fixed_sections_and_final_instruction() {
     assert!(text.contains(
         "RELEVANT TYPES\nFor other modules import public generated symbols only through `from app import name` and generated value types only through `from app_types import Type`.\n\nPYTHON EXTERNAL TYPE PROJECTIONS\napp.Alpha = vendor.models:Alpha\napp.Widget = vendor.models:Widget\n\nBOUND SYMBOLS IMPORT RULES"
     ));
+    assert!(text.contains(
+        "FACTORY TYPE MODEL\n`Factory[Concrete]` maps to `type[Concrete]`: it is the exact compiler-generated `Concrete` class object, never an instance, subclass, or arbitrary callable. Constructor calls MUST match `Concrete`'s inferred Cott init signature. Validation MUST NOT construct or invoke a Factory value."
+    ));
+    assert!(text.contains(
+        "Standard ABI aliases, including integer widths, are annotations and MUST NOT be called. Construct result values only with top-level `cott_runtime.Ok(...)`/`cott_runtime.Err(...)`, never `Result.Ok`/`Result.Err`. Generated payload enum aliases have no members; import and construct top-level `<Enum>_<Variant>` classes from the exact generated `*_types` module, never `<Enum>.<Variant>`."
+    ));
     assert!(
         text.ends_with(
             "If the contract must change, report that and leave the target unresolved.\n"

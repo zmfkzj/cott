@@ -110,6 +110,9 @@ pub enum HirType {
         ok: Box<HirType>,
         error: Box<HirType>,
     },
+    Factory {
+        instance: Box<HirType>,
+    },
     Iterator {
         item: Box<HirType>,
     },
@@ -860,6 +863,9 @@ impl<'a> OwnedLower<'a> {
                     ok: Box::new(resolve(lower, ok, seen)),
                     error: Box::new(resolve(lower, error, seen)),
                 },
+                HirType::Factory { instance } => HirType::Factory {
+                    instance: Box::new(resolve(lower, instance, seen)),
+                },
                 _ => ty.clone(),
             }
         }
@@ -1017,6 +1023,45 @@ impl<'a> OwnedLower<'a> {
                             tag: "invalid".into(),
                         }
                     }
+                };
+            }
+            if name == "Factory" {
+                self.arity(module, value, 1, &name);
+                let args = value
+                    .arguments
+                    .iter()
+                    .map(|argument| match &argument.kind {
+                        TypeArgKind::Type(inner) => self.ty(module, inner, generics),
+                        TypeArgKind::String(_) => {
+                            self.error(
+                                module,
+                                argument.span.clone(),
+                                "string type arguments are unsupported",
+                            );
+                            HirType::Primitive(PrimitiveType::Unknown)
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let instance = args
+                    .first()
+                    .cloned()
+                    .unwrap_or(HirType::Primitive(PrimitiveType::Unknown));
+                if value.arguments.len() == 1
+                    && !matches!(
+                        &instance,
+                        HirType::Named { symbol, args }
+                            if args.is_empty()
+                                && self.declarations.get(symbol) == Some(&OwnedDeclKind::Impl)
+                    )
+                {
+                    self.error(
+                        module,
+                        value.span.clone(),
+                        "Factory instance type must resolve to an impl declaration without type arguments",
+                    );
+                }
+                return HirType::Factory {
+                    instance: Box::new(instance),
                 };
             }
             let expected = match name.as_str() {
@@ -1688,6 +1733,7 @@ fn owned_has_unresolved_type(ty: &HirType) -> bool {
     match ty {
         HirType::TypeParameter { .. } | HirType::Opaque { .. } => true,
         HirType::Named { args, .. } => args.iter().any(owned_has_unresolved_type),
+        HirType::Factory { instance } => owned_has_unresolved_type(instance),
         HirType::List { item }
         | HirType::Set { item }
         | HirType::Option { item }
@@ -2920,6 +2966,7 @@ impl<'a> OwnedLower<'a> {
         match ty {
             HirType::Primitive(PrimitiveType::Never) | HirType::TypeParameter { .. } => false,
             HirType::Primitive(_) | HirType::Opaque { .. } => true,
+            HirType::Factory { .. } => false,
             HirType::Named { symbol, args } => {
                 matches!(
                     self.declarations.get(symbol),
@@ -3952,6 +3999,9 @@ fn substitute_hir_type(ty: HirType, substitutions: &HashMap<String, HirType>) ->
             send_type: Box::new(substitute_hir_type(*send_type, substitutions)),
             return_type: Box::new(substitute_hir_type(*return_type, substitutions)),
         },
+        HirType::Factory { instance } => HirType::Factory {
+            instance: Box::new(substitute_hir_type(*instance, substitutions)),
+        },
         HirType::Result { ok, error } => HirType::Result {
             ok: Box::new(substitute_hir_type(*ok, substitutions)),
             error: Box::new(substitute_hir_type(*error, substitutions)),
@@ -4274,6 +4324,7 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
                         | "Tuple"
                         | "Option"
                         | "Result"
+                        | "Factory"
                         | "Iterator"
                         | "Generator"
                         | "Opaque"
@@ -4812,6 +4863,7 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
                 visiting.remove(symbol);
                 result
             }
+            HirType::Factory { .. } => false,
             _ => false,
         }
     }
@@ -4849,6 +4901,7 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
                 visit(key, modules, path, span, errors);
                 visit(value, modules, path, span, errors);
             }
+            HirType::Factory { instance } => visit(instance, modules, path, span, errors),
             HirType::List { item } | HirType::Option { item } | HirType::Iterator { item } => {
                 visit(item, modules, path, span, errors);
             }

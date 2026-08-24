@@ -1,1 +1,1 @@
-{"schema_version":1,"symbol":"foo.bar.build_output","seed":"sha256:2b25bf33d41ed9ba62dbfed25a4cbbd3e01716dbe4c23b1d33c8edd9a3e4900f","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1","ensures:2","ensures:3"]}
+{"schema_version":1,"symbol":"foo.bar.build_output","seed":"sha256:f8b29aa10790c024f7406ee1fd977b9f22e295700c71e405014b364f29269470","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1","ensures:2","ensures:3"]}

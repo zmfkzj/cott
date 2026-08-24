@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Generator, Iterator
 import dataclasses as _dataclasses
+import threading as _threading
 from pathlib import Path
-from typing import Literal, Never, Protocol, TypeVar
+from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
@@ -15,7 +17,7 @@ Ampersands, angle brackets, and both quote characters are replaced with
 their HTML character references. All other characters are preserved."""
     value = _cott_validate_abi(value, str, path="$.value")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/page_build/escape_page_text.py", "3154e4fcae63412388f752e4a19f3ff86b9bfa04fb1e0be3a427ec50f4d9e275", "escape_page_text", expected_project_name="page-build", expected_cott_symbol="curriculum.page_build.escape_page_text")
+        _implementation = _cott_load("_cott_impl/curriculum/page_build/escape_page_text.py", "c9cd0f2d5c6c3f5b5335207003c6fcdf5986b27414cdd8e0678641ea8526c430", "escape_page_text", expected_project_name="page-build", expected_cott_symbol="curriculum.page_build.escape_page_text")
         _result = _implementation(value)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -38,7 +40,7 @@ escaped `p` in source order; empty lines are omitted."""
     title = _cott_validate_abi(title, str, path="$.title")
     body = _cott_validate_abi(body, str, path="$.body")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/page_build/render_page_html.py", "4adbdf126a1c5267411e882c82a0bf74754df0f1c8acf7a5711ccc0cb5c5b606", "render_page_html", expected_project_name="page-build", expected_cott_symbol="curriculum.page_build.render_page_html")
+        _implementation = _cott_load("_cott_impl/curriculum/page_build/render_page_html.py", "2e3bd65d3fb5dd4238f73f23cb85bd14e586171d29a06d593d73f0f5db3fbd7a", "render_page_html", expected_project_name="page-build", expected_cott_symbol="curriculum.page_build.render_page_html")
         _result = _implementation(title, body)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -68,7 +70,7 @@ accepted text is preserved. The output path is `<slug>/index.html`, and
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/page_build/build_page.py", "b362ef3f2150975af2a91224f7162bbc962e269e5caa0d16d265f1b8f16d768c", "build_page", expected_project_name="page-build", expected_cott_symbol="curriculum.page_build.build_page")
+        _implementation = _cott_load("_cott_impl/curriculum/page_build/build_page.py", "d76084bc7d4e3c258aad5a9558e4d7a1512a054c088247457803b58fc9dafda7", "build_page", expected_project_name="page-build", expected_cott_symbol="curriculum.page_build.build_page")
         _result = _implementation(source)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

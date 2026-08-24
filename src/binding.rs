@@ -228,6 +228,7 @@ pub fn resolve_implementations(
             continue;
         };
 
+        let factory_imports = factory_concrete_imports(plan, &callable);
         match read_binding(
             &source,
             &implementation_function,
@@ -235,6 +236,7 @@ pub fn resolve_implementations(
             &local_imports,
             &generated_type_modules,
             &allowed_facade_imports,
+            &factory_imports,
             &locked_imports,
         ) {
             Ok(bytes) => resolved.push(ResolvedBinding {
@@ -504,6 +506,7 @@ pub fn validate_candidate(
     if matches.len() != 1 {
         return Err(format!("ambiguous canonical function `{function}`"));
     }
+    let factory_imports = factory_concrete_imports(plan, &callable);
     validate_source(
         source,
         &expected_implementation_function(&callable),
@@ -511,6 +514,7 @@ pub fn validate_candidate(
         &local_import_roots(config, plan),
         &generated_type_modules(plan),
         &allowed_facade_imports(plan),
+        &factory_imports,
         &locked_import_roots(paths, &config.project.name)?,
     )
 }
@@ -540,6 +544,91 @@ fn allowed_facade_imports(plan: &PythonArtifactPlan) -> BTreeMap<String, BTreeSe
         }
     }
     imports
+}
+
+pub(crate) fn factory_concrete_imports(
+    plan: &PythonArtifactPlan,
+    callable: &PythonCallable,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let concrete_symbols = plan
+        .modules()
+        .iter()
+        .flat_map(|module| module.declarations.iter())
+        .filter(|declaration| {
+            declaration.get("kind").and_then(serde_json::Value::as_str) == Some("impl")
+        })
+        .filter_map(|declaration| declaration.get("name").and_then(serde_json::Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let mut imports = BTreeMap::new();
+    for ty in callable
+        .declaration
+        .get("parameters")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|parameter| parameter.get("type"))
+        .chain(callable.declaration.get("return_type"))
+    {
+        collect_factory_concrete_imports(ty, &callable.module, &concrete_symbols, &mut imports);
+    }
+    imports
+}
+
+fn collect_factory_concrete_imports(
+    value: &serde_json::Value,
+    callable_module: &str,
+    concrete_symbols: &BTreeSet<&str>,
+    imports: &mut BTreeMap<String, BTreeSet<String>>,
+) {
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    if object.get("kind").and_then(serde_json::Value::as_str) == Some("factory") {
+        let Some(instance) = object
+            .get("instance")
+            .and_then(serde_json::Value::as_object)
+        else {
+            return;
+        };
+        let Some(symbol) = (instance.get("kind").and_then(serde_json::Value::as_str)
+            == Some("named")
+            && instance
+                .get("args")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(Vec::is_empty))
+        .then(|| instance.get("name").and_then(serde_json::Value::as_str))
+        .flatten() else {
+            return;
+        };
+        let Some((facade, concrete)) = symbol.rsplit_once('.') else {
+            return;
+        };
+        if facade != callable_module && concrete_symbols.contains(symbol) {
+            imports
+                .entry(facade.to_owned())
+                .or_default()
+                .insert(concrete.to_owned());
+        }
+        return;
+    }
+    for child in object.values() {
+        match child {
+            serde_json::Value::Object(_) => {
+                collect_factory_concrete_imports(child, callable_module, concrete_symbols, imports);
+            }
+            serde_json::Value::Array(values) => {
+                for child in values {
+                    collect_factory_concrete_imports(
+                        child,
+                        callable_module,
+                        concrete_symbols,
+                        imports,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn module_segments(module: &str) -> Option<Vec<&str>> {
@@ -655,6 +744,7 @@ fn read_binding(
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
     allowed_facade_imports: &BTreeMap<String, BTreeSet<String>>,
+    factory_imports: &BTreeMap<String, BTreeSet<String>>,
     locked_imports: &HashSet<String>,
 ) -> Result<Vec<u8>, String> {
     let metadata = fs::symlink_metadata(path)
@@ -675,6 +765,7 @@ fn read_binding(
         local_imports,
         generated_type_modules,
         allowed_facade_imports,
+        factory_imports,
         locked_imports,
     )?;
     Ok(bytes)
@@ -687,6 +778,7 @@ fn validate_source(
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
     allowed_facade_imports: &BTreeMap<String, BTreeSet<String>>,
+    factory_imports: &BTreeMap<String, BTreeSet<String>>,
     locked_imports: &HashSet<String>,
 ) -> Result<(), String> {
     let masked = mask_python(source);
@@ -742,6 +834,7 @@ fn validate_source(
         local_imports,
         generated_type_modules,
         allowed_facade_imports,
+        factory_imports,
         callable,
         locked_imports,
         &mut add_error,
@@ -1090,6 +1183,7 @@ fn inspect_imports(
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
     allowed_facade_imports: &BTreeMap<String, BTreeSet<String>>,
+    factory_imports: &BTreeMap<String, BTreeSet<String>>,
     callable: &PythonCallable,
     locked_imports: &HashSet<String>,
     add_error: &mut impl FnMut(String),
@@ -1111,6 +1205,7 @@ fn inspect_imports(
                     rest,
                     local_imports,
                     generated_type_modules,
+                    None,
                     None,
                     None,
                     locked_imports,
@@ -1136,12 +1231,14 @@ fn inspect_imports(
                 &mut saw_impl_concrete_import,
                 add_error,
             );
+            inspect_factory_concrete_import(module, imported, factory_imports, add_error);
             inspect_import_target(
                 module,
                 imported,
                 local_imports,
                 generated_type_modules,
                 allowed_facade_imports.get(module),
+                factory_imports.get(module),
                 impl_concrete_import
                     .filter(|(facade, _)| module == *facade)
                     .map(|(_, concrete)| concrete),
@@ -1205,13 +1302,45 @@ fn inspect_impl_concrete_import(
     }
 }
 
+fn inspect_factory_concrete_import(
+    module: &str,
+    imported: &str,
+    factory_imports: &BTreeMap<String, BTreeSet<String>>,
+    add_error: &mut impl FnMut(String),
+) {
+    for (facade, concretes) in factory_imports {
+        for item in imported.split(',').map(str::trim) {
+            let Some(concrete) = item.split_whitespace().next() else {
+                continue;
+            };
+            if !concretes.contains(concrete) || (module == facade && item == concrete) {
+                continue;
+            }
+            if module == facade {
+                add_error(format!(
+                    "factory concrete `{concrete}` must be imported from facade `{facade}` without an alias"
+                ));
+            } else if module.strip_suffix("_types") == Some(facade) {
+                add_error(format!(
+                    "factory concrete `{concrete}` must be imported from facade `{facade}`, not generated types `{module}`"
+                ));
+            } else {
+                add_error(format!(
+                    "factory concrete `{concrete}` must be imported from facade `{facade}`, not `{module}`"
+                ));
+            }
+        }
+    }
+}
+
 fn inspect_import_target(
     module: &str,
     imported: &str,
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
     allowed_facade_functions: Option<&BTreeSet<String>>,
-    allowed_facade_concrete: Option<&str>,
+    allowed_factory_concretes: Option<&BTreeSet<String>>,
+    allowed_impl_concrete: Option<&str>,
     locked_imports: &HashSet<String>,
     add_error: &mut impl FnMut(String),
 ) {
@@ -1226,12 +1355,16 @@ fn inspect_import_target(
     if imported.split_whitespace().any(|word| word == "*") {
         add_error(String::from("star imports are not allowed"));
     }
-    if allowed_facade_functions.is_some() || allowed_facade_concrete.is_some() {
+    if allowed_facade_functions.is_some()
+        || allowed_factory_concretes.is_some()
+        || allowed_impl_concrete.is_some()
+    {
         for item in imported.split(',').map(str::trim) {
             if item.split_whitespace().count() != 1 {
                 add_error(String::from("import aliases are not allowed"));
             } else if !allowed_facade_functions.is_some_and(|functions| functions.contains(item))
-                && allowed_facade_concrete != Some(item)
+                && !allowed_factory_concretes.is_some_and(|concretes| concretes.contains(item))
+                && allowed_impl_concrete != Some(item)
             {
                 add_error(format!(
                     "project-local import '{module}.{item}' is not allowed"

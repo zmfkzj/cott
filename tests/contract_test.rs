@@ -195,7 +195,7 @@ fn module(name: &str, declarations: Vec<Value>) -> CanonicalModule {
         "declarations": declarations,
         "imports": [],
         "module": name,
-        "schema_version": 2,
+        "schema_version": 3,
         "source": format!("{name}.cott")
     });
     CanonicalModule {
@@ -514,7 +514,7 @@ fn contract_runner_observes_local_result_error_variant() {
             }],
             "imports": [],
             "module": "demo",
-            "schema_version": 2,
+            "schema_version": 3,
             "source": "demo.cott"
         }],
         "runtime_validation": "boundary",
@@ -746,6 +746,40 @@ fn contract_runner_marks_any_inputs_unobserved_without_executing() {
 }
 
 #[test]
+fn contract_runner_marks_factory_inputs_unobserved_without_executing() {
+    let declaration = json!({
+        "kind": "function",
+        "name": "demo.accepts_factory",
+        "contract": {"clauses": [runner_clause("requires", 0, runner_literal(json!({"kind": "bool", "value": true})))]}
+    });
+    let Some(output) = run_contract_runner(
+        "class Concrete:\n    def __init__(self):\n        raise AssertionError('Factory input must not be constructed')\n\ndef accepts_factory(value: type[Concrete]) -> int:\n    raise AssertionError('Factory input must not be invoked')\n",
+        runner_request(
+            declaration,
+            vec![runner_strategy(
+                "demo.accepts_factory",
+                vec!["requires:0".to_owned()],
+            )],
+        ),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "contract runner failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    let evidence = &report["contracts"][0]["evidence"][0];
+    assert_eq!(evidence["grade"], json!("unobserved"));
+    assert_eq!(evidence["valid_cases"], json!(0));
+    assert_eq!(
+        evidence["reason"],
+        json!("input parameter `value` is Factory and is not automatically generated")
+    );
+}
+
+#[test]
 fn contract_runner_does_not_consume_iterator_returns() {
     let declaration = json!({
         "kind": "function",
@@ -811,6 +845,44 @@ fn contract_runner_evaluates_free_function_result_ref() {
     assert_eq!(
         report["contracts"][0]["evidence"][0]["grade"],
         json!("test observation")
+    );
+}
+
+#[test]
+fn contract_runner_bounds_json_value_candidates() {
+    let declaration = json!({
+        "kind": "function",
+        "name": "demo.accepts_json",
+        "contract": {"clauses": [runner_clause(
+            "ensures",
+            0,
+            runner_literal(json!({"kind": "bool", "value": true})),
+        )]}
+    });
+    let Some(output) = run_contract_runner(
+        "import sys\nsys.setrecursionlimit(32)\nfrom cott_runtime import JsonValue\n\ndef accepts_json(value: JsonValue) -> int:\n    return 0\n",
+        runner_request(
+            declaration,
+            vec![runner_strategy(
+                "demo.accepts_json",
+                vec!["ensures:0".to_owned()],
+            )],
+        ),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "contract runner failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    let evidence = &report["contracts"][0]["evidence"][0];
+    assert_eq!(evidence["grade"], json!("test observation"));
+    assert!(
+        evidence["valid_cases"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
     );
 }
 

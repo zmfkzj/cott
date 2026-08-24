@@ -138,6 +138,10 @@ assert hash(CottTuple2(first=1, second="x"))
 assert Unit() is UNIT
 assert Nothing() == Nothing()
 assert _cott_validate_abi(Path("/tmp"), Path) == Path("/tmp")
+_client_session_value: U64 = 1
+_client_session: Opaque[Literal["client_session"]] = Opaque(tag="client_session", value=_client_session_value)
+assert Opaque.__annotations__["value"] == "object"
+assert _client_session.unwrap() is _client_session_value
 assert _cott_validate_abi(Opaque(tag="token", value=object()), Opaque[Literal["token"]]).tag == "token"
 try:
     _cott_validate_abi(Opaque(tag="other", value=object()), Opaque[Literal["token"]])
@@ -199,6 +203,30 @@ assert _cott_validate_abi(_untyped, Any) is _untyped
 assert _cott_normalize_f32_abi(_untyped, Any) is _untyped
 assert _cott_validate_abi(_untyped, object) is _untyped
 assert _cott_normalize_f32_abi(_untyped, object) is _untyped
+
+class _FactoryConcrete:
+    def __init__(self):
+        raise AssertionError("Factory validation constructed the concrete class")
+
+
+class _FactorySubclass(_FactoryConcrete):
+    pass
+
+
+_factory_annotation = type[_FactoryConcrete]
+assert _cott_validate_abi(_FactoryConcrete, _factory_annotation) is _FactoryConcrete
+for _invalid_factory in (
+    object.__new__(_FactoryConcrete),
+    _FactorySubclass,
+    str,
+    lambda: _FactoryConcrete,
+):
+    try:
+        _cott_validate_abi(_invalid_factory, _factory_annotation)
+    except CottContractViolation as error:
+        assert error.phase == "validation"
+    else:
+        raise AssertionError("invalid Factory value was accepted")
 
 _nested_opaque = Opaque(tag="token", value=object())
 assert _cott_validate_abi(Box(_nested_opaque), Box[Opaque[Literal["token"]]]).value is _nested_opaque

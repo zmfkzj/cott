@@ -489,6 +489,18 @@ case "$prompt" in
   *) printf '%s\n' 'missing prompt fragment: private Final constant policy' "$*" >&2; exit 64 ;;
 esac
 case "$prompt" in
+  *'Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={}), and CottTuple2(first=a, second=b).'*) ;;
+  *) printf '%s\n' 'missing prompt fragment: keyword-only contract containers' "$*" >&2; exit 64 ;;
+esac
+case "$prompt" in
+  *'For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err'*) ;;
+  *) printf '%s\n' 'missing prompt fragment: top-level result constructors' "$*" >&2; exit 64 ;;
+esac
+case "$prompt" in
+  *'Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `app_types` module, never `<Enum>.<Variant>`.'*) ;;
+  *) printf '%s\n' 'missing prompt fragment: top-level payload enum variants' "$*" >&2; exit 64 ;;
+esac
+case "$prompt" in
   *'"external_types"'*) printf '%s\n' 'unexpected prompt fragment: "external_types"' "$*" >&2; exit 64 ;;
 esac
 printf 'from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n' > implementation.py
@@ -527,6 +539,59 @@ printf 'from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n' > i
         "from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n"
     );
     assert!(project.path.join("generated/python/app.py").is_file());
+}
+
+#[test]
+fn generate_agent_prompt_grants_exact_factory_facade_imports() {
+    let project = method_project();
+    fs::write(
+        project.path.join("src/app.cott"),
+        "module app\nuse api.service.ReaderState\n\nfn run(factory: Factory[ReaderState]) -> I32\n",
+    )
+    .expect("Factory source should be writable");
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    let omp = tools.join("omp");
+    fs::write(
+        &omp,
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
+case "$*" in
+  *'Symbol: app.run'*'Factory annotations require these exact concrete public-facade imports; do not substitute them or import from `*_types`:'*'from api.service import ReaderState'*'`Factory[Concrete]` maps to `type[Concrete]`'*'Constructor calls MUST match `Concrete`'\''s inferred Cott init signature.'*'Validation MUST NOT construct or invoke a Factory value.'*)
+    printf '%s\n' 'from api.service import ReaderState' 'from cott_runtime import I32' '' '' 'def run(factory: type[ReaderState]) -> I32:' '    return 7' > implementation.py
+    ;;
+  *) exit 64 ;;
+esac
+"#,
+    )
+    .expect("write fake OMP");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&omp, fs::Permissions::from_mode(0o755))
+            .expect("make fake OMP executable");
+    }
+    let path = std::env::join_paths([tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("PATH");
+    let output = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .args([
+            "generate",
+            "app.run",
+            "--agent",
+            "omp",
+            "--target",
+            "python",
+            "--project",
+        ])
+        .arg(&project.path)
+        .env("PATH", path)
+        .output()
+        .expect("cott should run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -600,6 +665,64 @@ esac
             .path
             .join("python/_cott_impl/api/service/read.py")
             .exists()
+    );
+}
+
+#[test]
+fn generate_impl_agent_prompt_grants_exact_factory_facade_imports() {
+    let project = method_project();
+    fs::write(
+        project.path.join("src/models.cott"),
+        "module models\n\ntrait Builder:\n    fn build(self, amount: I32) -> I32\n\nimpl FactoryConcrete for Builder:\n    state:\n        count: I32 = 0\n    init(count: I32):\n        requires count > 0\n        ensures self.count == count\n    fn build(self, amount: I32) -> I32:\n        ensures result == amount\n",
+    )
+    .expect("Factory concrete source should be writable");
+    fs::write(
+        project.path.join("src/api/service.cott"),
+        "module api.service\nuse models.FactoryConcrete\n\ntrait Reader:\n    fn read(self, factory: Factory[FactoryConcrete]) -> I32\n\nimpl ReaderState for Reader:\n    state:\n        count: I32 = 0\n    init(count: I32):\n        requires count > 0\n        ensures self.count == count\n    fn read(self, factory: Factory[FactoryConcrete]) -> I32:\n        ensures result == self.count\n",
+    )
+    .expect("Factory method source should be writable");
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    let omp = tools.join("omp");
+    fs::write(
+        &omp,
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
+case "$*" in
+  *'Symbol: api.service.ReaderState.read'*'Factory annotations require these exact concrete public-facade imports; do not substitute them or import from `*_types`:'*'from models import FactoryConcrete'*'`Factory[Concrete]` maps to `type[Concrete]`'*)
+    printf '%s\n' 'from api.service import ReaderState' 'from models import FactoryConcrete' 'from cott_runtime import I32' '' '' 'def _cott_impl_ReaderState_read(self: ReaderState, factory: type[FactoryConcrete]) -> I32:' '    return self.count' > implementation.py
+    ;;
+  *) exit 64 ;;
+esac
+"#,
+    )
+    .expect("write fake OMP");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&omp, fs::Permissions::from_mode(0o755))
+            .expect("make fake OMP executable");
+    }
+    let path = std::env::join_paths([tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("PATH");
+    let output = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .args([
+            "generate",
+            "api.service.ReaderState.read",
+            "--agent",
+            "omp",
+            "--target",
+            "python",
+            "--project",
+        ])
+        .arg(&project.path)
+        .env("PATH", path)
+        .output()
+        .expect("cott should run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 

@@ -1,1 +1,1 @@
-{"schema_version":1,"symbol":"curriculum.move_2048.validate_2048_board","seed":"sha256:40d57bda2d91bbb1bdaff901e7d6335aa59aa247f94c2aa37237f069720dd113","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["error:1","error:2"]}
+{"schema_version":1,"symbol":"curriculum.move_2048.validate_2048_board","seed":"sha256:88cfd6d584f0eccc2671d9077f8913ef161a4b2a2c50ef320fa5940c0d5c7b29","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["error:1","error:2"]}

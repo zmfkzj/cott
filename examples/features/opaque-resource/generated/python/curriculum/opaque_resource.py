@@ -21,7 +21,7 @@ def wrap_handle(raw_id: U64) -> Result[HandleBundle, HandleError]:
         _expected_error_span = {"end_byte":377,"end_column":53,"end_line":16,"start_byte":329,"start_column":5,"start_line":16}
         _expected_error_clause = "error:1"
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/opaque_resource/wrap_handle.py", "52fbb7285ad20be6720b44bb1fe3d59715217781770190dda880c202da1199f8", "wrap_handle", expected_project_name="opaque-resource", expected_cott_symbol="curriculum.opaque_resource.wrap_handle")
+        _implementation = _cott_load("_cott_impl/curriculum/opaque_resource/wrap_handle.py", "f6d87fe4a862acd9454c4d4ad066295fc4e22b32c357e3d22b6c3d594f6a68c0", "wrap_handle", expected_project_name="opaque-resource", expected_cott_symbol="curriculum.opaque_resource.wrap_handle")
         _result = _implementation(raw_id)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

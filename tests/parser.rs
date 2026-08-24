@@ -1,6 +1,6 @@
 use cott::ast::{
-    BinaryOp, ClauseKind, Declaration, ExprKind, PatternKind, RuleClauseAction, TypeArgKind,
-    UnaryOp,
+    BinaryOp, ClauseKind, Declaration, ExprKind, PatternKind, RuleClauseAction, TypeArg,
+    TypeArgKind, UnaryOp,
 };
 use cott::parser::parse;
 
@@ -738,4 +738,28 @@ fn rejects_legacy_external_type_syntax() {
     ] {
         assert_rejected(source);
     }
+}
+
+#[test]
+fn parses_factory_type_arguments() {
+    let file = parse(
+        "module factory\n\nstruct Handle:\n    maker: Factory[Concrete]\n\nfn create(factory: Factory[Concrete]) -> Factory[Concrete]\n",
+    )
+    .expect("Factory types should parse");
+    let Declaration::Struct(handle) = &file.declarations[0] else {
+        panic!("expected handle struct");
+    };
+    assert_eq!(handle.fields[0].ty.path.segments, ["Factory"]);
+    assert!(matches!(
+        &handle.fields[0].ty.arguments[..],
+        [TypeArg {
+            kind: TypeArgKind::Type(instance),
+            ..
+        }] if instance.path.segments == ["Concrete"]
+    ));
+    let Declaration::Function(create) = &file.declarations[1] else {
+        panic!("expected create function");
+    };
+    assert_eq!(create.parameters[0].ty.path.segments, ["Factory"]);
+    assert_eq!(create.return_type.path.segments, ["Factory"]);
 }

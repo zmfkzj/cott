@@ -1,1 +1,1 @@
-{"schema_version":1,"symbol":"store.catalog.find_item","seed":"sha256:936ce0591f5d775bf874abb5d163b780f346de7a26626b21288a40dadc552abf","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["requires:1","ensures:2","error:3"]}
+{"schema_version":1,"symbol":"store.catalog.find_item","seed":"sha256:9ebf1b70486153917b3a3fe49bb8ad6d30e3724e77598ed1c786f9b4e5d54f07","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["requires:1","ensures:2","error:3"]}

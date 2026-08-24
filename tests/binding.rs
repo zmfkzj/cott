@@ -26,6 +26,10 @@ impl Drop for Fixture {
 }
 
 fn fixture(source: &str) -> Fixture {
+    fixture_sources(&[("api/service.cott", source)])
+}
+
+fn fixture_sources(sources: &[(&str, &str)]) -> Fixture {
     let root = std::env::temp_dir().join(format!(
         "cott-binding-{}-{}",
         std::process::id(),
@@ -47,8 +51,12 @@ fn fixture(source: &str) -> Fixture {
     )
     .expect("target project metadata must be writable");
     let (config, paths) = load_config_with_paths(&root).expect("manifest must load");
-    let parsed = parse_project([SourceFile::new(PathBuf::from("api/service.cott"), source)])
-        .expect("fixture source must parse");
+    let parsed = parse_project(
+        sources
+            .iter()
+            .map(|(path, source)| SourceFile::new(PathBuf::from(path), *source)),
+    )
+    .expect("fixture source must parse");
     let lowered = lower(&paths.source_dir, parsed).expect("fixture source must lower");
     let ir = render(&lowered).expect("fixture source must render");
     let plan = PythonArtifactPlan::from_ir(&ir).expect("fixture IR must project");
@@ -79,6 +87,32 @@ impl WriterState for Writer:
         ensures result == amount
 "#,
     )
+}
+
+fn factory_fixture() -> Fixture {
+    fixture_sources(&[
+        (
+            "api/models.cott",
+            r#"module api.models
+
+trait Order:
+    fn id(self) -> I32
+
+impl OrderState for Order:
+    fn id(self) -> I32:
+        ensures result >= 0
+"#,
+        ),
+        (
+            "api/service.cott",
+            r#"module api.service
+
+use api.models.{OrderState}
+
+fn run(make: Factory[OrderState]) -> Unit
+"#,
+        ),
+    ])
 }
 
 fn record_agent_provenance(fixture: &Fixture, symbol: &str, source: &PathBuf, bytes: &[u8]) {
@@ -523,6 +557,54 @@ fn rejects_impl_concrete_imports_outside_its_exact_facade() {
             source,
         )
         .expect_err("impl helper must import its concrete from its exact facade");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn allows_only_exact_cross_module_factory_concrete_facade_imports() {
+    let fixture = factory_fixture();
+    let valid = b"from api.models import OrderState\n\ndef run(make: type[OrderState]) -> object:\n    return None\n";
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        valid,
+    )
+    .expect("Factory may import its concrete exactly from the owning facade");
+
+    let cases: &[(&[u8], &str)] = &[
+        (
+            b"from api.models import OtherState\n\ndef run(make: type[OtherState]) -> object:\n    return None\n",
+            "project-local import 'api.models.OtherState' is not allowed",
+        ),
+        (
+            b"from api.models import OrderState as State\n\ndef run(make: type[State]) -> object:\n    return None\n",
+            "factory concrete `OrderState` must be imported from facade `api.models` without an alias",
+        ),
+        (
+            b"from api import OrderState\n\ndef run(make: type[OrderState]) -> object:\n    return None\n",
+            "factory concrete `OrderState` must be imported from facade `api.models`, not `api`",
+        ),
+        (
+            b"from api.models_types import OrderState\n\ndef run(make: type[OrderState]) -> object:\n    return None\n",
+            "factory concrete `OrderState` must be imported from facade `api.models`, not generated types `api.models_types`",
+        ),
+        (
+            b"from api.models import Order\n\ndef run(make: type[Order]) -> object:\n    return None\n",
+            "project-local import 'api.models.Order' is not allowed",
+        ),
+    ];
+    for (source, expected) in cases {
+        let error = validate_candidate(
+            &fixture.config,
+            &fixture.paths,
+            &fixture.plan,
+            "api.service.run",
+            source,
+        )
+        .expect_err("Factory facade imports must name only its exact concrete");
         assert!(error.contains(expected), "{error}");
     }
 }

@@ -942,3 +942,143 @@ fn rejects_invalid_agent_type_arities_and_opaque_boundaries() {
         );
     }
 }
+
+#[test]
+fn factory_lowers_only_imported_aliases_of_impl_identities() {
+    let parsed = parse_project([
+        SourceFile::new(
+            "src/contracts.cott",
+            r#"module contracts
+
+trait Worker:
+    fn work(self) -> Unit
+
+impl WorkerState for Worker:
+    fn work(self) -> Unit:
+        ensures true
+
+alias WorkerFactory = WorkerState
+"#,
+        ),
+        SourceFile::new(
+            "src/api.cott",
+            r#"module api
+use contracts.{WorkerFactory, WorkerState}
+
+fn create(factory: Factory[WorkerFactory]) -> Factory[WorkerState]
+"#,
+        ),
+    ])
+    .expect("Factory aliases should parse");
+    let project = lower(Path::new("src"), parsed).expect("Factory impl aliases should lower");
+    let HirDeclaration::Function(create) = &project.modules[1].declarations[0] else {
+        panic!("expected create function");
+    };
+    let concrete = HirType::Named {
+        symbol: SymbolId::new(ModuleId::new(vec!["contracts".into()]), "WorkerState"),
+        args: vec![],
+    };
+    assert_eq!(
+        create.parameters[0].ty,
+        HirType::Factory {
+            instance: Box::new(concrete.clone()),
+        }
+    );
+    assert_eq!(
+        create.return_type,
+        HirType::Factory {
+            instance: Box::new(concrete),
+        }
+    );
+}
+
+#[test]
+fn factory_rejects_non_impl_targets_and_non_value_positions() {
+    let parsed = parse_project([SourceFile::new(
+        "src/invalid.cott",
+        r#"module invalid
+
+external type Remote
+
+struct Record:
+    value: U8
+trait Contract:
+    fn run(self) -> Unit
+
+impl Concrete for Contract:
+    state:
+        factory: Factory[Concrete] = ()
+    fn run(self) -> Unit:
+        ensures true
+
+fn reject[T](trait_value: Factory[Contract], record_value: Factory[Record], remote_value: Factory[Remote], parameter_value: Factory[T], generic_value: Factory[Concrete[U8]], arity_value: Factory[Concrete, U8]) -> Unit
+"#,
+    )])
+    .expect("Factory rejection fixture should parse");
+    let errors = lower(Path::new("src"), parsed).expect_err("Factory invalid uses must fail");
+    let messages = errors
+        .iter()
+        .map(|error| error.diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| {
+                **message
+                    == "Factory instance type must resolve to an impl declaration without type arguments"
+            })
+            .count(),
+        5
+    );
+    assert!(messages.contains(&"type constructor `invalid.Concrete` expects 0 argument(s), got 1"));
+    assert!(messages.contains(&"type constructor `Factory` expects 1 argument(s), got 2"));
+    assert!(messages.contains(&"state field type must be a closed immutable cott value type"));
+    assert!(messages.contains(&"default value does not match its declared type"));
+}
+
+#[test]
+fn factory_is_not_hash_stable() {
+    let parsed = parse_project([SourceFile::new(
+        "src/hash.cott",
+        r#"module hash
+
+trait Contract:
+    fn run(self) -> Unit
+
+impl Concrete for Contract:
+    fn run(self) -> Unit:
+        ensures true
+
+fn index(items: Set[Factory[Concrete]], entries: Map[Factory[Concrete], U8]) -> Unit
+"#,
+    )])
+    .expect("Factory hash fixture should parse");
+    let errors = lower(Path::new("src"), parsed).expect_err("Factory keys must be rejected");
+    assert_eq!(
+        errors
+            .iter()
+            .map(|error| error.diagnostic.message.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "Set item type must be hash-stable",
+            "Map key type must be hash-stable",
+        ]
+    );
+}
+
+#[test]
+fn factory_is_a_reserved_prelude_type() {
+    let parsed = parse_project([SourceFile::new(
+        "src/reserved.cott",
+        "module reserved\n\nstruct Factory:\n    value: U8\n",
+    )])
+    .expect("Factory declaration fixture should parse");
+    let errors = lower(Path::new("src"), parsed).expect_err("Factory must be reserved");
+    assert_eq!(
+        errors
+            .iter()
+            .map(|error| error.diagnostic.message.as_str())
+            .collect::<Vec<_>>(),
+        ["declaration `Factory` collides with a prelude type"]
+    );
+}

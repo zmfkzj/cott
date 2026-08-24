@@ -39,6 +39,7 @@ const BUILTIN_TYPES: &[&str] = &[
     "Unknown",
     "Iterator",
     "Generator",
+    "Factory",
 ];
 
 struct Backend {
@@ -752,7 +753,10 @@ fn builtin_hover(name: &str, text: &str, span: Span) -> Option<Hover> {
     BUILTIN_TYPES.contains(&name).then(|| Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
-            value: format!("```cott\n{name}\n```\n\nBuilt-in type"),
+            value: match name {
+                "Factory" => "```cott\nFactory[Concrete]\n```\n\nBuilt-in type for the exact generated `Concrete` class object; `Concrete` must be an impl declaration.".to_owned(),
+                _ => format!("```cott\n{name}\n```\n\nBuilt-in type"),
+            },
         }),
         range: Some(range_for(text, span)),
     })
@@ -871,11 +875,13 @@ mod tests {
         assert!(all_keywords().contains(&"effects"));
         assert!(all_keywords().contains(&"external"));
         assert!(all_keywords().contains(&"type"));
+        assert!(!all_keywords().contains(&"Factory"));
         assert!(BUILTIN_TYPES.contains(&"Any"));
         assert!(BUILTIN_TYPES.contains(&"Unknown"));
         assert!(BUILTIN_TYPES.contains(&"Iterator"));
         assert!(BUILTIN_TYPES.contains(&"Generator"));
         assert!(BUILTIN_TYPES.contains(&"Result"));
+        assert!(BUILTIN_TYPES.contains(&"Factory"));
     }
 
     #[test]

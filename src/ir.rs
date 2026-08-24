@@ -106,7 +106,7 @@ fn render_module(module: &HirModule) -> CanonicalModule {
     json.string(&module.id.as_string());
     json.comma();
     json.key("schema_version");
-    json.number("2");
+    json.number("3");
     json.comma();
     json.key("source");
     json.string(&source_string(&module.source));
@@ -593,6 +593,13 @@ fn render_type(json: &mut Json, ty: &HirType) {
             json.comma();
             json.key("yield");
             render_type(json, yield_type);
+        }
+        HirType::Factory { instance } => {
+            json.key("instance");
+            render_type(json, instance);
+            json.comma();
+            json.key("kind");
+            json.string("factory");
         }
         HirType::Opaque { tag } => {
             json.key("kind");
