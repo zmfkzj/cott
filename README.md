@@ -53,6 +53,11 @@ external, lazy, or recursively placed `Opaque` types, but cannot weaken a declar
 body. Future Rust and TypeScript backends can provide corresponding projection tables, but neither
 target nor its table is implemented today.
 
+Projected external values may also occupy `impl` state. The generated wrapper validates their Python
+ABI at initialization and after each method, snapshots each state slot by object identity, and requires
+`modifies` only when a slot is replaced. In-place mutation inside an external object is not a Cott
+state transition; implementations must declare the corresponding effect.
+
 Function contracts use a closed, pure, typed expression grammar: literals, names, constants, enum
 values, fields, `.len`, declared `old(self.field)`, arithmetic, comparisons, and boolean operators.
 They never execute arbitrary calls, indexing, collection literals, reflection, or Python source.

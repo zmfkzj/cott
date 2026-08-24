@@ -517,10 +517,6 @@ def unexecuted(clauses, strategy, effectful_reason, never_reason):
 
 def run_function(module_value, declaration, strategy):
     symbol = declaration["name"]
-    module = importlib.import_module(module_value["module"])
-    function = getattr(module, local(symbol))
-    if hasattr(module, "_cott_set_test_context"):
-        module._cott_set_test_context(True)
     clauses = declaration["contract"]["clauses"]
     observed, grade, reason = unexecuted(
         clauses,
@@ -530,6 +526,10 @@ def run_function(module_value, declaration, strategy):
     )
     if grade is not None:
         return observed, grade, reason
+    module = importlib.import_module(module_value["module"])
+    function = getattr(module, local(symbol))
+    if hasattr(module, "_cott_set_test_context"):
+        module._cott_set_test_context(True)
     valid_cases = 0
     hints = callable_hints(function)
     cases = invoke_cases(function, strategy)
@@ -745,20 +745,61 @@ def main():
                 observed, grade, reason = run_function(module_value, declaration, strategy)
                 contracts.extend(evidence(declaration["name"], declaration["contract"]["clauses"], observed, grade, reason, request))
             elif declaration["kind"] == "impl":
+                init_symbol = f"{module_value['module']}.{local(declaration['name'])}.init"
+                init_strategy = strategies.get(init_symbol)
+                initializer = declaration.get("init") or {"contracts": {}, "parameters": []}
+                init_clauses = impl_clauses(initializer.get("contracts", {}), declaration.get("invariants", ()))
+                method_strategies = []
+                for method in declaration["methods"]:
+                    symbol = f"{module_value['module']}.{local(declaration['name'])}.{method['name']}"
+                    strategy = strategies.get(symbol)
+                    if strategy is not None:
+                        clauses = impl_clauses(
+                            method.get("contracts", {}),
+                            declaration.get("invariants", ()),
+                            method.get("modifies", ()),
+                            method.get("span"),
+                        )
+                        method_strategies.append((method, symbol, strategy, clauses))
+                pure_method_needs_execution = any(
+                    strategy["classification"] == "pure" and bool(clauses)
+                    for _, _, strategy, clauses in method_strategies
+                )
+                needs_execution = pure_method_needs_execution or (
+                    not method_strategies
+                    and init_strategy is not None
+                    and init_strategy["classification"] == "pure"
+                    and bool(init_clauses)
+                )
+                if not needs_execution:
+                    if init_strategy is not None:
+                        observed, grade, reason = unexecuted(
+                            init_clauses,
+                            init_strategy,
+                            "effectful initializer is not automatically executed",
+                            "Never-returning initializer is not automatically executed",
+                        )
+                        if grade is None:
+                            grade = "unobserved"
+                            reason = "initializer selected only for an unexecuted effectful method"
+                        contracts.extend(evidence(init_symbol, init_clauses, observed, grade, reason, request))
+                    for _, symbol, strategy, clauses in method_strategies:
+                        observed, grade, reason = unexecuted(
+                            clauses,
+                            strategy,
+                            "effectful method is not automatically executed",
+                            "Never-returning method is not automatically executed",
+                        )
+                        contracts.extend(evidence(symbol, clauses, observed, grade, reason, request))
+                    continue
                 module = importlib.import_module(module_value["module"])
                 if hasattr(module, "_cott_set_test_context"):
                     module._cott_set_test_context(True)
-                init_symbol = f"{module_value['module']}.{local(declaration['name'])}.init"
-                init_strategy = strategies.get(init_symbol)
                 initializer_cases = invoke_cases(getattr(module, local(declaration["name"])))
                 if init_strategy is not None:
                     clauses, observed, grade, reason, initializer_cases = run_initializer(module, declaration, init_strategy)
                     contracts.extend(evidence(init_symbol, clauses, observed, grade, reason, request))
-                for method in declaration["methods"]:
-                    symbol = f"{module_value['module']}.{local(declaration['name'])}.{method['name']}"
-                    strategy = strategies.get(symbol)
-                    if strategy is None:
-                        continue
+                for _, symbol, strategy, _ in method_strategies:
                     clauses, observed, grade, reason = run_method(module, declaration, strategy, initializer_cases)
                     contracts.extend(evidence(symbol, clauses, observed, grade, reason, request))
     print(json.dumps({"contracts": contracts}, sort_keys=True, separators=(",", ":")))

@@ -690,6 +690,21 @@ def _cott_regular_file_bytes(path: _Path, label: str) -> bytes:
         raise
     except (OSError, ValueError) as error:
         raise _cott_violation(f"unable to read {label}: {error}") from error
+def _cott_dependency_file_bytes(path: _Path, label: str) -> bytes:
+    try:
+        resolved = path.resolve(strict=True)
+        if resolved != path:
+            raise _cott_violation(f"{label} contains a symlink")
+        metadata = path.stat()
+        if not _stat.S_ISREG(metadata.st_mode):
+            raise _cott_violation(f"{label} is not a regular file")
+        return path.read_bytes()
+    except CottContractViolation:
+        raise
+    except (OSError, ValueError) as error:
+        raise _cott_violation(f"unable to read {label}: {error}") from error
+
+
 
 def _cott_file_stamp(path: _Path, label: str) -> tuple[int, int, int, int, int]:
     try:
@@ -835,7 +850,7 @@ def _cott_validate_dependencies(dependencies: object, source: bytes, public_pyth
             if candidate.is_symlink():
                 raise _cott_violation(f"dependency {name!r} origin is a symlink")
             expected = _cott_expected_digest(origin.get("content_hash"), f"dependency {name} file hash")
-            actual = _cott_sha256(_cott_regular_file_bytes(candidate, f"dependency {name} file"))
+            actual = _cott_sha256(_cott_dependency_file_bytes(candidate, f"dependency {name} file"))
             if actual != expected:
                 raise _cott_violation(f"dependency {name!r} file hash mismatch")
 def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symbol: str, project: str | None, cott_symbol: str | None, source: bytes) -> str:

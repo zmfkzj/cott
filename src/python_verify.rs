@@ -162,14 +162,20 @@ fn verify_in_scratch(
         Some("win32") => "Windows",
         _ => "Linux",
     };
+    let target_site_packages = external_program_environment(type_checker)
+        .map(|environment| site_package_directories(&environment))
+        .unwrap_or_default();
+    let mut checker_extra_paths = vec![generated_root.clone()];
+    checker_extra_paths.extend(target_site_packages.iter().cloned());
     let config_path = scratch.join("basedpyrightconfig.json");
     let checker_config = json!({
         "exclude": [generated_root.join("__pycache__")],
-        "extraPaths": [generated_root],
+        "extraPaths": checker_extra_paths,
         "include": [generated_root.join("_cott_impl")],
         "pythonPlatform": python_platform,
         "pythonVersion": "3.14",
         "reportInvalidTypeVarUse": "none",
+        "reportUnknownMemberType": "none",
         "reportPrivateUsage": "none",
         "reportUnusedFunction": "none",
         "stubPath": stubs_root,
@@ -379,6 +385,7 @@ fn verify_in_scratch(
         artifact_root,
         scratch,
         &project_modules,
+        &target_site_packages,
     )?;
     let runtime_probe = process(
         interpreter,
@@ -430,6 +437,8 @@ fn verify_in_scratch(
     let mut candidate_guard =
         stage_candidate_generation(artifact_root, &candidate_tools, &dependencies)?;
 
+    let mut signature_mounts = vec![artifact_root.to_path_buf()];
+    signature_mounts.extend(target_site_packages.iter().cloned());
     let signature_probe = process(
         interpreter,
         vec![
@@ -439,10 +448,12 @@ fn verify_in_scratch(
         ],
         &generated_root,
         scratch,
-        &[artifact_root.to_path_buf()],
+        &signature_mounts,
     )?;
     require_success("runtime signature probe", &signature_probe)?;
-    let runtime_signatures: Value = serde_json::from_slice(&signature_probe.stdout)
+    let runtime_signature_output = last_nonempty_line(&signature_probe.stdout)
+        .ok_or("runtime signature probe produced no JSON")?;
+    let runtime_signatures: Value = serde_json::from_slice(runtime_signature_output)
         .map_err(|error| format!("invalid runtime signature probe output: {error}"))?;
     if runtime_signatures
         .as_object()
@@ -455,6 +466,7 @@ fn verify_in_scratch(
     let contract_report = execute_contract_tests(
         interpreter,
         &generated_root,
+        &target_site_packages,
         ir,
         config.python.runtime_validation.clone(),
         scope,
@@ -545,6 +557,12 @@ fn hash_file(path: &Path) -> Result<String, String> {
         .map_err(|error| format!("hash executable {}: {error}", path.display()))
 }
 
+fn last_nonempty_line(output: &[u8]) -> Option<&[u8]> {
+    output
+        .rsplit(|byte| *byte == b'\n')
+        .find(|line| !line.is_empty())
+}
+
 fn require_success(
     label: &str,
     completed: &crate::sandbox::CompletedProcess,
@@ -577,16 +595,57 @@ fn checker_process(
     read_only: &[PathBuf],
 ) -> Result<crate::sandbox::CompletedProcess, String> {
     let mut mounts = read_only.to_vec();
-    if let Some(environment) = external_program_environment(interpreter) {
-        mounts.push(environment);
+    for program in [interpreter, type_checker] {
+        if let Some(environment) = external_program_environment(program) {
+            mounts.push(environment);
+        }
     }
-    process(type_checker, arguments, cwd, scratch, &mounts)
+    let python_launcher = fs::read(type_checker).ok().is_some_and(|source| {
+        let line = source
+            .split(|byte| *byte == b'\n')
+            .next()
+            .unwrap_or_default();
+        line.starts_with(b"#!") && line.windows(6).any(|part| part == b"python")
+    });
+    if python_launcher {
+        let environment = type_checker
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| {
+                format!(
+                    "type checker has no environment: {}",
+                    type_checker.display()
+                )
+            })?;
+        let mut checker_arguments = vec![
+            "-c".to_owned(),
+            "import pathlib,runpy,sys; checker=sys.argv[1]; environment=pathlib.Path(sys.argv[2]); sys.path[:0]=[str(path) for path in (environment/'lib').glob('python*/site-packages')]; sys.argv=[checker,*sys.argv[3:]]; runpy.run_path(checker,run_name='__main__')".to_owned(),
+            type_checker.display().to_string(),
+            environment.display().to_string(),
+        ];
+        checker_arguments.extend(arguments);
+        process(interpreter, checker_arguments, cwd, scratch, &mounts)
+    } else {
+        process(type_checker, arguments, cwd, scratch, &mounts)
+    }
 }
 
 fn external_program_environment(program: &Path) -> Option<PathBuf> {
     (!program.starts_with("/usr") && !program.starts_with("/bin") && !program.starts_with("/lib"))
         .then(|| program.parent()?.parent().map(Path::to_path_buf))
         .flatten()
+}
+fn site_package_directories(environment: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(environment.join("lib")) else {
+        return Vec::new();
+    };
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("site-packages"))
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
 }
 
 fn process(
@@ -600,18 +659,31 @@ fn process(
     if let Some(environment) = external_program_environment(program) {
         mounts.push(environment);
     }
+    let mut environment = BTreeMap::from([
+        ("HOME".to_owned(), scratch.display().to_string()),
+        ("NO_COLOR".to_owned(), "1".to_owned()),
+        ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
+        ("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned()),
+        ("PYTHONHASHSEED".to_owned(), "0".to_owned()),
+        ("TMPDIR".to_owned(), scratch.display().to_string()),
+    ]);
+    let site_packages = read_only
+        .iter()
+        .filter(|path| path.file_name().is_some_and(|name| name == "site-packages"))
+        .collect::<Vec<_>>();
+    if !site_packages.is_empty() {
+        let python_path = std::env::join_paths(site_packages)
+            .map_err(|error| format!("construct sandbox PYTHONPATH: {error}"))?;
+        environment.insert(
+            "PYTHONPATH".to_owned(),
+            python_path.to_string_lossy().into_owned(),
+        );
+    }
     run(&SandboxSpec {
         program: program.to_path_buf(),
         arguments,
         cwd: cwd.to_path_buf(),
-        environment: BTreeMap::from([
-            ("HOME".to_owned(), scratch.display().to_string()),
-            ("NO_COLOR".to_owned(), "1".to_owned()),
-            ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
-            ("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned()),
-            ("PYTHONHASHSEED".to_owned(), "0".to_owned()),
-            ("TMPDIR".to_owned(), scratch.display().to_string()),
-        ]),
+        environment,
         stdin: Vec::new(),
         binds: BindMounts {
             read_only: mounts,
@@ -656,6 +728,7 @@ fn dependency_evidence(
     artifact_root: &Path,
     scratch: &Path,
     project_modules: &BTreeSet<String>,
+    site_packages: &[PathBuf],
 ) -> Result<Value, String> {
     let metadata_path = paths.python_source_dir.join("pyproject.toml");
     let metadata: toml::Value =
@@ -835,6 +908,8 @@ fn dependency_evidence(
     } else {
         (Vec::new(), BTreeMap::new())
     };
+    let mut dependency_mounts = vec![artifact_root.to_path_buf()];
+    dependency_mounts.extend(site_packages.iter().cloned());
     let probe = process(
         interpreter,
         vec![
@@ -897,7 +972,7 @@ print(json.dumps(result,sort_keys=True,separators=(",",":")))"#
         ],
         generated_root,
         scratch,
-        &[artifact_root.to_path_buf()],
+        &dependency_mounts,
     )?;
     require_success("dependency provenance probe", &probe)?;
     let installed: BTreeMap<String, Value> = serde_json::from_slice(&probe.stdout)
@@ -949,18 +1024,16 @@ mod tests {
     fn checker_process_mounts_external_shebang_interpreter() {
         let root = scratch_directory().expect("fixture root");
         let outcome = (|| {
-            let interpreter = root.join("toolchain/bin/python");
+            let interpreter = fs::canonicalize("/usr/bin/python3")?;
             let checker = root.join("project/.venv/bin/basedpyright");
             let scratch = root.join("scratch");
-            fs::create_dir_all(interpreter.parent().expect("interpreter parent"))?;
             fs::create_dir_all(checker.parent().expect("checker parent"))?;
             fs::create_dir(&scratch)?;
-            fs::copy(fs::canonicalize("/bin/sh")?, &interpreter)?;
             symlink(&interpreter, root.join("project/.venv/bin/python"))?;
             fs::write(
                 &checker,
                 format!(
-                    "#!{}\nprintf 'basedpyright 1.39.9\\n'\n",
+                    "#!{}\nprint('basedpyright 1.39.9')\n",
                     root.join("project/.venv/bin/python").display()
                 ),
             )?;
@@ -987,6 +1060,62 @@ mod tests {
         );
         assert_eq!(completed.stdout, b"basedpyright 1.39.9\n");
         assert!(completed.stderr.is_empty());
+    }
+    #[test]
+    fn discovers_target_site_packages_deterministically() {
+        let root = scratch_directory().expect("fixture root");
+        let second = root.join("lib/python3.15/site-packages");
+        let first = root.join("lib/python3.14/site-packages");
+        fs::create_dir_all(&second).expect("second site-packages");
+        fs::create_dir_all(&first).expect("first site-packages");
+        assert_eq!(
+            site_package_directories(&root),
+            vec![first.clone(), second.clone()]
+        );
+        fs::remove_dir_all(root).expect("remove fixture root");
+    }
+    #[test]
+    fn process_exposes_mounted_site_packages_to_python() {
+        let root = scratch_directory().expect("fixture root");
+        let outcome = (|| {
+            let scratch = root.join("scratch");
+            let site_packages = root.join("lib/python3.14/site-packages");
+            fs::create_dir(&scratch)?;
+            fs::create_dir_all(&site_packages)?;
+            fs::write(
+                site_packages.join("dependency_fixture.py"),
+                "VALUE = 'available'\n",
+            )?;
+            process(
+                &fs::canonicalize("/usr/bin/python3")?,
+                vec![
+                    "-c".to_owned(),
+                    "import dependency_fixture; print(dependency_fixture.VALUE)".to_owned(),
+                ],
+                &scratch,
+                &scratch,
+                &[site_packages],
+            )
+            .map_err(std::io::Error::other)
+        })();
+        let cleanup = fs::remove_dir_all(&root);
+        let completed = outcome.expect("Python process");
+        cleanup.expect("remove fixture root");
+        assert_eq!(
+            completed.status,
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&completed.stderr)
+        );
+        assert_eq!(completed.stdout, b"available\n");
+    }
+
+    #[test]
+    fn selects_probe_json_after_dependency_logs() {
+        assert_eq!(
+            last_nonempty_line(b"dependency warning\n{\"ok\":true}\n"),
+            Some(b"{\"ok\":true}".as_slice())
+        );
     }
 
     #[test]

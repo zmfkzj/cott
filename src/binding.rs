@@ -671,6 +671,21 @@ fn generated_type_modules(plan: &PythonArtifactPlan) -> HashSet<String> {
         .map(|module| format!("{}_types", module.module))
         .collect()
 }
+fn is_generated_facade_or_package(module: &str, generated_type_modules: &HashSet<String>) -> bool {
+    generated_type_modules.iter().any(|generated| {
+        let facade = generated
+            .strip_suffix("_types")
+            .expect("generated type module suffix");
+        facade == module
+            || facade
+                .strip_prefix(module)
+                .is_some_and(|suffix| suffix.starts_with('.'))
+    })
+}
+
+fn is_exact_generated_facade(module: &str, generated_type_modules: &HashSet<String>) -> bool {
+    generated_type_modules.contains(&format!("{module}_types"))
+}
 
 fn locked_import_roots(
     paths: &ProjectPaths,
@@ -1199,7 +1214,11 @@ fn inspect_imports(
                 add_error("nested imports are not allowed".to_owned());
             }
             for item in rest.split(',') {
+                let item = item.trim();
                 let module = item.split_whitespace().next().unwrap_or_default();
+                if is_generated_facade_or_package(module, generated_type_modules) {
+                    continue;
+                }
                 inspect_import_target(
                     module,
                     rest,
@@ -1231,20 +1250,32 @@ fn inspect_imports(
                 &mut saw_impl_concrete_import,
                 add_error,
             );
-            inspect_factory_concrete_import(module, imported, factory_imports, add_error);
-            inspect_import_target(
+            inspect_factory_concrete_import(
                 module,
                 imported,
-                local_imports,
                 generated_type_modules,
-                allowed_facade_imports.get(module),
-                factory_imports.get(module),
-                impl_concrete_import
-                    .filter(|(facade, _)| module == *facade)
-                    .map(|(_, concrete)| concrete),
-                locked_imports,
+                factory_imports,
                 add_error,
             );
+            let imports_generated_facade_modules = imported.split(',').all(|item| {
+                let child = item.split_whitespace().next().unwrap_or_default();
+                is_generated_facade_or_package(&format!("{module}.{child}"), generated_type_modules)
+            });
+            if !imports_generated_facade_modules {
+                inspect_import_target(
+                    module,
+                    imported,
+                    local_imports,
+                    generated_type_modules,
+                    allowed_facade_imports.get(module),
+                    factory_imports.get(module),
+                    impl_concrete_import
+                        .filter(|(facade, _)| module == *facade)
+                        .map(|(_, concrete)| concrete),
+                    locked_imports,
+                    add_error,
+                );
+            }
             if imported.split_whitespace().any(|word| word == "*") {
                 add_error(String::from("star imports are not allowed"));
             }
@@ -1305,6 +1336,7 @@ fn inspect_impl_concrete_import(
 fn inspect_factory_concrete_import(
     module: &str,
     imported: &str,
+    generated_type_modules: &HashSet<String>,
     factory_imports: &BTreeMap<String, BTreeSet<String>>,
     add_error: &mut impl FnMut(String),
 ) {
@@ -1313,7 +1345,9 @@ fn inspect_factory_concrete_import(
             let Some(concrete) = item.split_whitespace().next() else {
                 continue;
             };
-            if !concretes.contains(concrete) || (module == facade && item == concrete) {
+            if !concretes.contains(concrete)
+                || is_exact_generated_facade(module, generated_type_modules) && item == concrete
+            {
                 continue;
             }
             if module == facade {
@@ -1354,6 +1388,18 @@ fn inspect_import_target(
     }
     if imported.split_whitespace().any(|word| word == "*") {
         add_error(String::from("star imports are not allowed"));
+    }
+    if is_exact_generated_facade(module, generated_type_modules) {
+        for item in imported.split(',').map(str::trim) {
+            if item.split_whitespace().count() != 1 {
+                add_error(String::from("import aliases are not allowed"));
+            } else if item.starts_with('_') {
+                add_error(format!(
+                    "private generated facade import '{module}.{item}' is not allowed"
+                ));
+            }
+        }
+        return;
     }
     if allowed_facade_functions.is_some()
         || allowed_factory_concretes.is_some()

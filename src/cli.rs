@@ -1476,14 +1476,17 @@ fn generate_project(
                 .join("\n");
             let mut target_rules = match &callable.kind {
                 PythonCallableKind::Function => format!(
-                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, CottList, CottSet, FrozenMap, and CottTuple2 from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict/tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` means `None`; do not construct it. Use `Option.Nothing` exactly as a value; do not call it. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={{}}), and CottTuple2(first=a, second=b). For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err, raise, catch, or inspect Result. Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `{0}_types` module, never `<Enum>.<Variant>`. Do not use classes, mutable module state, `Any`, casts, `typing.cast`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. For other modules import public generated symbols only through `from {0} import name` and generated value types only through `from {0}_types import Type`. Do not import concrete facade classes from generated type modules.",
+                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, UNIT, Some, Nothing, CottList, CottSet, FrozenMap, and CottTuple2 from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict/tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` is the annotation and `UNIT` is its only value; return `Ok(value=UNIT)` for Result[Unit, E]. For Option annotations use the top-level `Some(value=...)` and `Nothing()` variants, never `Option.Some` or `Option.Nothing`; narrow an Option with structural `match` before reading a Some payload. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={{}}), and CottTuple2(first=a, second=b). For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err, raise, catch, or inspect Result. Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `{0}_types` module, never `<Enum>.<Variant>`. `typing.cast` MAY be used only from a concrete external SDK return to its declared external projection when upstream stubs are incompatible; never cast Cott-owned values. Do not use classes, mutable module state, `Any`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. For other modules import public generated symbols only through `from {0} import name` and generated value types only through `from {0}_types import Type`. Do not import concrete facade classes from generated type modules.",
                     callable.module
                 ),
                 PythonCallableKind::ImplMethod { concrete } => format!(
-                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. The canonical function's leading `self` annotation must be `{concrete}`. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, CottList, CottSet, FrozenMap, and CottTuple2 from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict/tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` means `None`; do not construct it. Use `Option.Nothing` exactly as a value; do not call it. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={{}}), and CottTuple2(first=a, second=b). For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err, raise, catch, or inspect Result. Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `{0}_types` module, never `<Enum>.<Variant>`. Do not use classes, mutable module state, `Any`, casts, `typing.cast`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. The compiler-owned concrete facade class `{concrete}` is absent from `{0}_types`; import it exactly as `from {0} import {concrete}` for the `self` annotation. Generated value-type imports remain `from {0}_types import Type`.",
+                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. The canonical function's leading `self` annotation must be `{concrete}`. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, UNIT, Some, Nothing, CottList, CottSet, FrozenMap, and CottTuple2 from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict/tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` is the annotation and `UNIT` is its only value; return `Ok(value=UNIT)` for Result[Unit, E]. For Option annotations use the top-level `Some(value=...)` and `Nothing()` variants, never `Option.Some` or `Option.Nothing`; narrow an Option with structural `match` before reading a Some payload. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={{}}), and CottTuple2(first=a, second=b). For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err, raise, catch, or inspect Result. Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `{0}_types` module, never `<Enum>.<Variant>`. `typing.cast` MAY be used only from a concrete external SDK return to its declared external projection when upstream stubs are incompatible; never cast Cott-owned values. Do not use classes, mutable module state, `Any`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. The compiler-owned concrete facade class `{concrete}` is absent from `{0}_types`; import it exactly as `from {0} import {concrete}` for the `self` annotation. Generated value-type imports remain `from {0}_types import Type`.",
                     callable.module
                 ),
             };
+            target_rules.push_str(
+                "\nExact generated Cott facade modules MAY be imported directly or from their parent package, with an optional alias, for module-qualified access. Import generated value types for annotations through `from module_types import Type`, and do not import any other project-local module.\n",
+            );
             let factory_imports = factory_concrete_imports(&plan, callable)
                 .into_iter()
                 .flat_map(|(module, concretes)| {
@@ -1499,6 +1502,9 @@ fn generate_project(
                 );
                 target_rules.push_str(&factory_imports);
                 target_rules.push('\n');
+                target_rules.push_str(
+                    "Use each listed `from module import Concrete` line for annotations. The same exact generated facade may also be imported under the general module-import rule when its class object is needed.\n",
+                );
             }
             let project_rules = config
                 .generator
@@ -1507,41 +1513,79 @@ fn generate_project(
                 .map(|path| fs::read(paths.root.join(path)))
                 .transpose()
                 .map_err(|error| error.to_string());
-            let result = project_rules
-                .and_then(|project_rules| {
-                    render_prompt(
-                        callable,
-                        &module_ir,
-                        &binding_context,
-                        &target_rules,
-                        &config.python.external_types,
-                        &bound_symbols,
-                        None,
-                        project_rules.as_deref(),
-                        &target,
-                    )
-                })
-                .and_then(|prompt| {
-                    run_agent(
-                        agent,
-                        executable.clone(),
-                        &temporary.workspace,
-                        &temporary.scratch,
-                        &target,
-                        prompt,
-                        config.generator.timeout_seconds,
-                    )
-                })
-                .and_then(|candidate| {
-                    validate_candidate(
+            let result = project_rules.and_then(|project_rules| {
+                let prompt = render_prompt(
+                    callable,
+                    &module_ir,
+                    &binding_context,
+                    &target_rules,
+                    &config.python.external_types,
+                    &bound_symbols,
+                    None,
+                    project_rules.as_deref(),
+                    &target,
+                )?;
+                let mut candidate = run_agent(
+                    agent,
+                    executable.clone(),
+                    &temporary.workspace,
+                    &temporary.scratch,
+                    &target,
+                    prompt,
+                    config.generator.timeout_seconds,
+                )?;
+                let mut retry_rules = project_rules.unwrap_or_default();
+                for attempt in 0..=2 {
+                    match validate_candidate(
                         &config,
                         &paths,
                         &plan,
                         &fully_qualified,
                         &candidate.implementation,
-                    )
-                    .map(|_| candidate)
-                });
+                    ) {
+                        Ok(()) => return Ok(candidate),
+                        Err(validation_error) if attempt == 2 => return Err(validation_error),
+                        Err(validation_error) => {
+                            if !retry_rules.is_empty() && !retry_rules.ends_with(b"\n") {
+                                retry_rules.push(b'\n');
+                            }
+                            retry_rules.extend_from_slice(
+                                format!(
+                                    "VALIDATION FAILURE\n{validation_error}\nFix the existing implementation and change nothing outside the target file.\n"
+                                )
+                                .as_bytes(),
+                            );
+                            let retry_prompt = render_prompt(
+                                callable,
+                                &module_ir,
+                                &binding_context,
+                                &target_rules,
+                                &config.python.external_types,
+                                &bound_symbols,
+                                Some(&candidate.implementation),
+                                Some(&retry_rules),
+                                &target,
+                            )?;
+                            fs::remove_file(&target).map_err(|error| {
+                                format!(
+                                    "reset isolated agent target {}: {error}",
+                                    target.display()
+                                )
+                            })?;
+                            candidate = run_agent(
+                                agent,
+                                executable.clone(),
+                                &temporary.workspace,
+                                &temporary.scratch,
+                                &target,
+                                retry_prompt,
+                                config.generator.timeout_seconds,
+                            )?;
+                        }
+                    }
+                }
+                unreachable!()
+            });
             let _ = fs::remove_dir_all(&temporary.root);
             let candidate = match result {
                 Ok(candidate) => candidate,

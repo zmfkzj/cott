@@ -562,7 +562,7 @@ fn rejects_impl_concrete_imports_outside_its_exact_facade() {
 }
 
 #[test]
-fn allows_only_exact_cross_module_factory_concrete_facade_imports() {
+fn allows_factory_concrete_imports_from_generated_facades() {
     let fixture = factory_fixture();
     let valid = b"from api.models import OrderState\n\ndef run(make: type[OrderState]) -> object:\n    return None\n";
     validate_candidate(
@@ -573,12 +573,27 @@ fn allows_only_exact_cross_module_factory_concrete_facade_imports() {
         valid,
     )
     .expect("Factory may import its concrete exactly from the owning facade");
+    let valid_module = b"from api.models import OrderState\nimport api.models\n\ndef run(make: type[OrderState]) -> object:\n    return api.models.OrderState\n";
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        valid_module,
+    )
+    .expect("Factory may reference its exact owning facade module");
+    let valid_support =
+        b"from api.service import OrderState\n\ndef run(make: type[OrderState]) -> object:\n    return OrderState\n";
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        valid_support,
+    )
+    .expect("Factory concrete may be imported through another generated facade");
 
     let cases: &[(&[u8], &str)] = &[
-        (
-            b"from api.models import OtherState\n\ndef run(make: type[OtherState]) -> object:\n    return None\n",
-            "project-local import 'api.models.OtherState' is not allowed",
-        ),
         (
             b"from api.models import OrderState as State\n\ndef run(make: type[State]) -> object:\n    return None\n",
             "factory concrete `OrderState` must be imported from facade `api.models` without an alias",
@@ -590,10 +605,6 @@ fn allows_only_exact_cross_module_factory_concrete_facade_imports() {
         (
             b"from api.models_types import OrderState\n\ndef run(make: type[OrderState]) -> object:\n    return None\n",
             "factory concrete `OrderState` must be imported from facade `api.models`, not generated types `api.models_types`",
-        ),
-        (
-            b"from api.models import Order\n\ndef run(make: type[Order]) -> object:\n    return None\n",
-            "project-local import 'api.models.Order' is not allowed",
         ),
     ];
     for (source, expected) in cases {
@@ -748,6 +759,36 @@ fn allows_public_function_imports_from_the_exact_canonical_facade() {
         source,
     )
     .expect("agent candidate may import a declared sibling function");
+    let module_source =
+        b"import api.service as service\n\ndef run() -> object:\n    return service.helper()\n";
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        module_source,
+    )
+    .expect("agent candidate may import an exact generated facade module");
+    let parent_source =
+        b"from api import service as service\n\ndef run() -> object:\n    return service.helper()\n";
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        parent_source,
+    )
+    .expect("agent candidate may import an exact facade from its parent package");
+    let value_source =
+        b"from api.service import Count, LIMIT\n\ndef run() -> object:\n    return (Count, LIMIT)\n";
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        value_source,
+    )
+    .expect("generated facade values may be imported directly");
 
     fixture.config.python.implementations.insert(
         "api.service.run".to_owned(),
@@ -766,7 +807,7 @@ fn allows_public_function_imports_from_the_exact_canonical_facade() {
 }
 
 #[test]
-fn rejects_non_function_and_non_explicit_facade_imports() {
+fn rejects_aliased_private_and_non_facade_imports() {
     let fixture = fixture(
         "module api.service\n\nalias Count = I32\nconst LIMIT: I32 = 1\nfn helper() -> Unit\nfn run() -> Unit\n",
     );
@@ -776,24 +817,8 @@ fn rejects_non_function_and_non_explicit_facade_imports() {
             "import aliases are not allowed",
         ),
         (
-            b"import api.service\n\ndef run() -> object:\n    return None\n",
-            "project-local import 'api.service' is not allowed",
-        ),
-        (
             b"from api import helper\n\ndef run() -> object:\n    return None\n",
             "project-local import 'api' is not allowed",
-        ),
-        (
-            b"from api.service import Count\n\ndef run() -> object:\n    return None\n",
-            "project-local import 'api.service.Count' is not allowed",
-        ),
-        (
-            b"from api.service import LIMIT\n\ndef run() -> object:\n    return None\n",
-            "project-local import 'api.service.LIMIT' is not allowed",
-        ),
-        (
-            b"from api.service import missing\n\ndef run() -> object:\n    return None\n",
-            "project-local import 'api.service.missing' is not allowed",
         ),
         (
             b"from .service import helper\n\ndef run() -> object:\n    return helper()\n",
@@ -802,6 +827,10 @@ fn rejects_non_function_and_non_explicit_facade_imports() {
         (
             b"from api.service import *\n\ndef run() -> object:\n    return None\n",
             "star imports are not allowed",
+        ),
+        (
+            b"from api.service import _cott_load\n\ndef run() -> object:\n    return None\n",
+            "private generated facade import 'api.service._cott_load' is not allowed",
         ),
         (
             b"from _cott_impl.api.service.run import run\n\ndef run() -> object:\n    return None\n",

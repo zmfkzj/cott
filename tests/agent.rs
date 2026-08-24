@@ -116,6 +116,9 @@ fn prompt_has_fixed_sections_and_final_instruction() {
         "RELEVANT TYPES\nFor other modules import public generated symbols only through `from app import name` and generated value types only through `from app_types import Type`.\n\nPYTHON EXTERNAL TYPE PROJECTIONS\napp.Alpha = vendor.models:Alpha\napp.Widget = vendor.models:Widget\n\nBOUND SYMBOLS IMPORT RULES"
     ));
     assert!(text.contains(
+        "Use external declarations through their exact public generated aliases; their projected public APIs MAY be called when the contract requires it. Do not reconstruct external paths, use dynamic imports or reflection, or inspect and coerce external values merely to validate a contract."
+    ));
+    assert!(text.contains(
         "FACTORY TYPE MODEL\n`Factory[Concrete]` maps to `type[Concrete]`: it is the exact compiler-generated `Concrete` class object, never an instance, subclass, or arbitrary callable. Constructor calls MUST match `Concrete`'s inferred Cott init signature. Validation MUST NOT construct or invoke a Factory value."
     ));
     assert!(text.contains(

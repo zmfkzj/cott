@@ -862,6 +862,21 @@ struct Request:
     remote: Remote
 
 fn forward(remote: Remote) -> Remote
+
+trait RemoteHolder:
+    fn current(self) -> Remote
+
+impl StoredRemote for RemoteHolder:
+    state:
+        remote: Remote
+    init(remote: Remote):
+        doc """
+        Store the projected external value.
+        """
+    fn current(self) -> Remote:
+        doc """
+        Return the stored external value.
+        """
 "#,
         ),
     ])
@@ -903,6 +918,10 @@ fn forward(remote: Remote) -> Remote
             args: Vec::new(),
         }
     );
+    let HirDeclaration::Impl(stored) = &consumer.declarations[3] else {
+        panic!("expected external state implementation");
+    };
+    assert_eq!(stored.state[0].ty, remote_type);
 }
 
 #[test]

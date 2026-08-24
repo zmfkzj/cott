@@ -310,10 +310,10 @@ if [ "$1" = "--version" ]; then
   exit 0
 fi
 config=$(cat "$2")
-for setting in '"typeCheckingMode":"strict"' '"reportInvalidTypeVarUse":"none"' '"reportUnusedFunction":"none"' '"reportPrivateUsage":"none"'; do
+for setting in '"typeCheckingMode":"strict"' '"reportInvalidTypeVarUse":"none"' '"reportUnknownMemberType":"none"' '"reportUnusedFunction":"none"' '"reportPrivateUsage":"none"'; do
   case "$config" in *"$setting"*) ;; *) printf 'missing BasedPyright setting %s\n' "$setting" >&2; exit 1 ;; esac
 done
-remaining=$(printf '%s' "$config" | sed 's/"reportInvalidTypeVarUse":"none"//g; s/"reportUnusedFunction":"none"//g; s/"reportPrivateUsage":"none"//g')
+remaining=$(printf '%s' "$config" | sed 's/"reportInvalidTypeVarUse":"none"//g; s/"reportUnknownMemberType":"none"//g; s/"reportUnusedFunction":"none"//g; s/"reportPrivateUsage":"none"//g')
 case "$remaining" in
   *'"report'*':"none"'*)
     printf 'strict BasedPyright diagnostic disabled\n' >&2
@@ -497,13 +497,36 @@ case "$prompt" in
   *) printf '%s\n' 'missing prompt fragment: top-level result constructors' "$*" >&2; exit 64 ;;
 esac
 case "$prompt" in
+  *'`Unit` is the annotation and `UNIT` is its only value; return `Ok(value=UNIT)` for Result[Unit, E].'*) ;;
+  *) printf '%s\n' 'missing prompt fragment: Unit singleton ABI' "$*" >&2; exit 64 ;;
+esac
+case "$prompt" in
+  *'For Option annotations use the top-level `Some(value=...)` and `Nothing()` variants, never `Option.Some` or `Option.Nothing`; narrow an Option with structural `match` before reading a Some payload.'*) ;;
+  *) printf '%s\n' 'missing prompt fragment: Option variant ABI' "$*" >&2; exit 64 ;;
+esac
+case "$prompt" in
+  *'`typing.cast` MAY be used only from a concrete external SDK return to its declared external projection when upstream stubs are incompatible; never cast Cott-owned values.'*) ;;
+  *) printf '%s\n' 'missing prompt fragment: external projection cast policy' "$*" >&2; exit 64 ;;
+esac
+case "$prompt" in
   *'Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `app_types` module, never `<Enum>.<Variant>`.'*) ;;
   *) printf '%s\n' 'missing prompt fragment: top-level payload enum variants' "$*" >&2; exit 64 ;;
 esac
 case "$prompt" in
   *'"external_types"'*) printf '%s\n' 'unexpected prompt fragment: "external_types"' "$*" >&2; exit 64 ;;
 esac
-printf 'from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n' > implementation.py
+case "$prompt" in
+  *'EXISTING IMPLEMENTATION'*'VALIDATION FAILURE'*'missing_distribution'*'Fix the existing implementation and change nothing outside the target file.'*)
+    printf 'from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n' > implementation.py
+    ;;
+  *'EXISTING IMPLEMENTATION'*)
+    printf '%s\n' 'retry prompt omitted validation feedback' >&2
+    exit 64
+    ;;
+  *)
+    printf 'import missing_distribution\nfrom cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n' > implementation.py
+    ;;
+esac
 "#,
     )
     .expect("write fake OMP");
@@ -557,7 +580,7 @@ fn generate_agent_prompt_grants_exact_factory_facade_imports() {
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
 case "$*" in
-  *'Symbol: app.run'*'Factory annotations require these exact concrete public-facade imports; do not substitute them or import from `*_types`:'*'from api.service import ReaderState'*'`Factory[Concrete]` maps to `type[Concrete]`'*'Constructor calls MUST match `Concrete`'\''s inferred Cott init signature.'*'Validation MUST NOT construct or invoke a Factory value.'*)
+  *'Symbol: app.run'*'Exact generated Cott facade modules MAY be imported directly or from their parent package, with an optional alias, for module-qualified access. Import generated value types for annotations through `from module_types import Type`, and do not import any other project-local module.'*'Factory annotations require these exact concrete public-facade imports; do not substitute them or import from `*_types`:'*'from api.service import ReaderState'*'Use each listed `from module import Concrete` line for annotations. The same exact generated facade may also be imported under the general module-import rule when its class object is needed.'*'`Factory[Concrete]` maps to `type[Concrete]`'*'Constructor calls MUST match `Concrete`'\''s inferred Cott init signature.'*'Validation MUST NOT construct or invoke a Factory value.'*)
     printf '%s\n' 'from api.service import ReaderState' 'from cott_runtime import I32' '' '' 'def run(factory: type[ReaderState]) -> I32:' '    return 7' > implementation.py
     ;;
   *) exit 64 ;;

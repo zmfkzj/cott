@@ -418,17 +418,20 @@ fn emits_impl_class_with_locked_method_helper_and_provenance() {
         temp.path.join("src/app.cott"),
         r#"module app
 
+external type Resource
+
 trait Counter:
     fn advance(self, amount: I32) -> I32
 
 impl CounterState for Counter:
     state:
+        resource: Resource
         title: Str
         urgency: I32
         completed: Bool = false
         count: I32 = 0
     invariant self.count >= 0
-    init(title: Str, urgency: I32, count: I32):
+    init(resource: Resource, title: Str, urgency: I32, count: I32):
         requires count >= 0
         ensures self.count == count
     fn advance(self, amount: I32) -> I32:
@@ -439,7 +442,11 @@ impl CounterState for Counter:
     )
     .expect("source should be writable");
     write_target_metadata(&temp.path);
-    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let (mut config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    config.python.external_types.insert(
+        "app.Resource".to_owned(),
+        "vendor.resource:Resource".to_owned(),
+    );
     let parsed =
         parse_project(discover_sources_from_paths(&paths).expect("sources")).expect("parse");
     let ir = render(&lower(&paths.source_dir, parsed).expect("lower")).expect("render");
@@ -467,13 +474,14 @@ impl CounterState for Counter:
     let stub = String::from_utf8_lossy(bytes(&emission.files, "stubs/app.pyi"));
     assert!(facade.contains("@final\nclass CounterState:"));
     assert!(facade.contains(
-        "__slots__ = (\"title\", \"urgency\", \"completed\", \"count\", \"_cott_lock\",)"
+        "__slots__ = (\"resource\", \"title\", \"urgency\", \"completed\", \"count\", \"_cott_lock\",)"
     ));
     assert!(facade.contains(
-        "    title: str\n    urgency: I32\n    completed: bool\n    count: I32\n    __slots__"
+        "    resource: Resource\n    title: str\n    urgency: I32\n    completed: bool\n    count: I32\n    __slots__"
     ));
     assert!(facade.contains("with self._cott_lock:"));
     assert!(facade.contains("_cott_old_count = self.count"));
+    assert!(facade.contains("if self.resource is not _cott_old_resource:"));
     assert!(facade.contains("_cott_impl_CounterState_advance"));
     assert!(facade.contains("def advance(self: CounterState, amount: I32) -> I32:"));
     let init_ensure = "        if not (((self).count == count)):";
@@ -501,7 +509,7 @@ impl CounterState for Counter:
     );
     assert!(stub.contains("@final\nclass CounterState:"));
     assert!(stub.contains(
-        "    title: str\n    urgency: I32\n    completed: bool\n    count: I32\n    def __init__"
+        "    resource: Resource\n    title: str\n    urgency: I32\n    completed: bool\n    count: I32\n    def __init__"
     ));
     assert!(!stub.contains("_cott_lock"));
     assert!(stub.contains("def advance(self: CounterState, amount: I32) -> I32: ..."));
@@ -513,7 +521,7 @@ impl CounterState for Counter:
     assert_eq!(implementation["method"], "advance");
     assert_eq!(
         generation["current"]["public_python_symbols"]["app"],
-        serde_json::json!(["Counter", "CounterState"])
+        serde_json::json!(["Counter", "CounterState", "Resource"])
     );
     assert!(
         generation["current"]["contract_surface"]["app"]["declarations"]

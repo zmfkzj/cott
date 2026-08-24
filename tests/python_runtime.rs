@@ -255,6 +255,17 @@ def _unexpected_read(*args: object) -> bytes:
 _runtime._cott_regular_file_bytes = _unexpected_read
 assert _cott_load("_cott_impl/demo/run.py", "{good_hash}", "run", "demo") is run
 _runtime._cott_regular_file_bytes = _reader
+_dependency_source = Path("dependency-source.bin").resolve()
+_dependency_link = Path("dependency-link.bin").resolve()
+_dependency_source.write_bytes(b"dependency")
+_dependency_link.hardlink_to(_dependency_source)
+assert _runtime._cott_dependency_file_bytes(_dependency_link, "dependency file") == b"dependency"
+try:
+    _runtime._cott_regular_file_bytes(_dependency_link, "managed file")
+except CottContractViolation:
+    pass
+else:
+    raise AssertionError("managed hardlink was accepted")
 _run_path = Path("_cott_impl/demo/run.py")
 _run_path.write_bytes(_run_path.read_bytes() + b'\x23 changed\n')
 try:

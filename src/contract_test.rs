@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -280,6 +280,7 @@ fn invariant_clause_ids(invariants: &[Value], context: &str) -> Result<Vec<Strin
 pub fn execute_contract_tests(
     interpreter: &Path,
     generated_root: &Path,
+    site_packages: &[PathBuf],
     ir: &CanonicalIr,
     runtime_validation: RuntimeValidation,
     scope: Option<&BTreeSet<String>>,
@@ -342,6 +343,7 @@ pub fn execute_contract_tests(
             .unwrap_or(generated_root)
             .to_path_buf(),
     ];
+    read_only.extend(site_packages.iter().cloned());
     if !interpreter.starts_with("/usr")
         && !interpreter.starts_with("/bin")
         && !interpreter.starts_with("/lib")
@@ -349,6 +351,10 @@ pub fn execute_contract_tests(
     {
         read_only.push(environment.to_path_buf());
     }
+    let mut python_paths = vec![generated_root.to_path_buf()];
+    python_paths.extend(site_packages.iter().cloned());
+    let python_path = std::env::join_paths(python_paths)
+        .map_err(|error| format!("construct contract-test PYTHONPATH: {error}"))?;
     let result = run(&SandboxSpec {
         program: interpreter.to_path_buf(),
         arguments: vec![
@@ -363,7 +369,7 @@ pub fn execute_contract_tests(
             ("PYTHONHASHSEED".to_owned(), "0".to_owned()),
             (
                 "PYTHONPATH".to_owned(),
-                generated_root.display().to_string(),
+                python_path.to_string_lossy().into_owned(),
             ),
             ("TMPDIR".to_owned(), scratch.display().to_string()),
         ]),
@@ -396,8 +402,12 @@ pub fn execute_contract_tests(
             String::from_utf8_lossy(&completed.stderr).trim()
         ));
     }
-    serde_json::from_slice(&completed.stdout)
-        .map_err(|error| format!("invalid contract-test report: {error}"))
+    let output = completed
+        .stdout
+        .rsplit(|byte| *byte == b'\n')
+        .find(|line| !line.is_empty())
+        .ok_or("contract test process produced no JSON")?;
+    serde_json::from_slice(output).map_err(|error| format!("invalid contract-test report: {error}"))
 }
 
 fn required_field<'a>(value: &'a Value, field: &str) -> Result<&'a Value, String> {
@@ -441,5 +451,95 @@ fn validate(value: &Value) -> Result<(), String> {
         Ok(())
     } else {
         Err(errors.join("; "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    use super::*;
+
+    #[test]
+    fn effectful_strategies_do_not_import_their_facade() {
+        let root = std::env::temp_dir().join(format!(
+            "cott-effectful-contract-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).expect("fixture root");
+        fs::write(root.join("cott_runtime.py"), "").expect("runtime stub");
+        let request = serde_json::json!({
+            "modules": [{
+                "module": "missing.facade",
+                "declarations": [
+                    {
+                        "kind": "function",
+                        "name": "missing.facade.fetch",
+                        "contract": {"clauses": []},
+                    },
+                    {
+                        "kind": "impl",
+                        "name": "missing.facade.Camera",
+                        "init": {
+                            "contracts": {
+                                "requires": [{"clause_id": 0, "span": null, "expression": {}}],
+                            },
+                        },
+                        "invariants": [],
+                        "methods": [{
+                            "name": "build",
+                            "contracts": {},
+                            "modifies": [],
+                            "span": null,
+                        }],
+                    },
+                ],
+            }],
+            "runtime_validation": "boundary",
+            "strategies": [
+                {
+                    "symbol": "missing.facade.fetch",
+                    "classification": "effectful",
+                },
+                {
+                    "symbol": "missing.facade.Camera.init",
+                    "classification": "pure",
+                },
+                {
+                    "symbol": "missing.facade.Camera.build",
+                    "classification": "effectful",
+                },
+            ],
+        });
+        let mut child = match Command::new("python3")
+            .args(["-c", include_str!("contract_runner.py")])
+            .env("PYTHONPATH", &root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("spawn Python: {error}"),
+        };
+        child
+            .stdin
+            .take()
+            .expect("Python stdin")
+            .write_all(&serde_json::to_vec(&request).expect("request"))
+            .expect("write request");
+        let output = child.wait_with_output().expect("wait for Python");
+        fs::remove_dir_all(root).expect("remove fixture root");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report = serde_json::from_slice::<Value>(&output.stdout).expect("report");
+        assert_eq!(report["contracts"].as_array().map(Vec::len), Some(1));
+        assert_eq!(report["contracts"][0]["evidence"][0]["grade"], "unobserved");
     }
 }
