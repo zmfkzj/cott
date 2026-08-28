@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 def checked_add(left: I32, right: I32) -> I64:
     """Compute the exact mathematical sum of two signed 32-bit integers as a signed 64-bit integer.
@@ -32,6 +33,7 @@ The function performs no additional validation, raises no declared errors, and d
         raise CottContractViolation("ensures clause failed", symbol="curriculum.checked_add.checked_add", clause="ensures:1", phase="ensures", span={"end_byte":535,"end_column":34,"end_line":10,"start_byte":506,"start_column":5,"start_line":10}, expected="true", actual="false")
     if not ((_result <= 4294967294)):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.checked_add.checked_add", clause="ensures:2", phase="ensures", span={"end_byte":568,"end_column":33,"end_line":11,"start_byte":540,"start_column":5,"start_line":11}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, I64, path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["checked_add"]

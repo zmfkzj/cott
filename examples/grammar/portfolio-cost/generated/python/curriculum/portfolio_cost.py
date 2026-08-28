@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.portfolio_cost_types import Holding, PortfolioError, PortfolioError_NegativePrice, PortfolioError_NegativeShares, PortfolioError_NonFinitePrice, PortfolioError_TotalOverflow
 
@@ -59,6 +60,7 @@ ordinary F64 rounding and underflow are retained."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.portfolio_cost.calculate_portfolio_cost", clause="ensures:1", phase="ensures", span={"end_byte":1179,"end_column":45,"end_line":31,"start_byte":1139,"start_column":5,"start_line":31}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[F64, PortfolioError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["Holding", "PortfolioError", "PortfolioError_NegativePrice", "PortfolioError_NegativeShares", "PortfolioError_NonFinitePrice", "PortfolioError_TotalOverflow", "calculate_portfolio_cost"]

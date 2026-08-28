@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottList, CottSet, Dyn, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.calculate_age_types import AgeError as AgeError, AgeError_InvalidDate as AgeError_InvalidDate, AgeError_NegativeAge as AgeError_NegativeAge, AgeError_Overflow as AgeError_Overflow, AgeSummary as AgeSummary
 """Calculate the elapsed Gregorian days for an age in whole years ending on the supplied date.

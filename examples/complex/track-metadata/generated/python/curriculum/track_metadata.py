@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.track_metadata_types import TrackDraft, TrackMetadata, TrackMetadataError, TrackMetadataError_BlankArtist, TrackMetadataError_BlankTitle, TrackMetadataError_ZeroTrackNumber
 
@@ -31,6 +32,7 @@ is safe to call independently for every TrackDraft."""
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.track_metadata.trim_track_draft", phase="implementation-call", span={"end_byte":608,"end_column":1,"end_line":29,"start_byte":253,"start_column":1,"start_line":18}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, TrackDraft, path="$.return")
+    _result = _cott_wrap_async_protocol(_result, TrackDraft, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def format_track_metadata(draft: TrackDraft) -> TrackMetadata:
@@ -55,6 +57,7 @@ This total formatting step is safe for every TrackDraft."""
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.track_metadata.format_track_metadata", phase="implementation-call", span={"end_byte":1079,"end_column":1,"end_line":41,"start_byte":608,"start_column":1,"start_line":29}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, TrackMetadata, path="$.return")
+    _result = _cott_wrap_async_protocol(_result, TrackMetadata, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def normalize_track_metadata(draft: TrackDraft) -> Result[TrackMetadata, TrackMetadataError]:
@@ -102,6 +105,7 @@ format_track_metadata."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.track_metadata.normalize_track_metadata", clause="ensures:1", phase="ensures", span={"end_byte":1554,"end_column":60,"end_line":51,"start_byte":1499,"start_column":5,"start_line":51}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[TrackMetadata, TrackMetadataError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["TrackDraft", "TrackMetadata", "TrackMetadataError", "TrackMetadataError_BlankArtist", "TrackMetadataError_BlankTitle", "TrackMetadataError_ZeroTrackNumber", "format_track_metadata", "normalize_track_metadata", "trim_track_draft"]

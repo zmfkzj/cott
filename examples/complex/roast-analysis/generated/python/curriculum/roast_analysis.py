@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.roast_analysis_types import RoastAnalysis, RoastAnalysisError, RoastAnalysisError_EmptySamples, RoastAnalysisError_NonIncreasingTime, RoastProfile, TemperatureSample
 
@@ -44,6 +45,7 @@ NonIncreasingTime violation."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.roast_analysis.validate_roast_profile", phase="error", span={"end_byte":745,"end_column":1,"end_line":31,"start_byte":325,"start_column":1,"start_line":19}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.roast_analysis.validate_roast_profile", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    _result = _cott_wrap_async_protocol(_result, Result[Unit, RoastAnalysisError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def summarize_roast_samples(samples: CottList[TemperatureSample]) -> RoastAnalysis:
@@ -67,6 +69,7 @@ first temperature."""
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.roast_analysis.summarize_roast_samples", phase="implementation-call", span={"end_byte":1070,"end_column":1,"end_line":42,"start_byte":745,"start_column":1,"start_line":31}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, RoastAnalysis, path="$.return")
+    _result = _cott_wrap_async_protocol(_result, RoastAnalysis, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def analyze_roast_profile(profile: RoastProfile) -> Result[RoastAnalysis, RoastAnalysisError]:
@@ -102,6 +105,7 @@ chronology checks."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.roast_analysis.analyze_roast_profile", phase="error", span={"end_byte":1418,"end_column":1,"end_line":52,"start_byte":1070,"start_column":1,"start_line":42}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.roast_analysis.analyze_roast_profile", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    _result = _cott_wrap_async_protocol(_result, Result[RoastAnalysis, RoastAnalysisError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["RoastAnalysis", "RoastAnalysisError", "RoastAnalysisError_EmptySamples", "RoastAnalysisError_NonIncreasingTime", "RoastProfile", "TemperatureSample", "analyze_roast_profile", "summarize_roast_samples", "validate_roast_profile"]

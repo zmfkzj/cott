@@ -32,6 +32,7 @@ pub enum Declaration {
     Const(ConstDecl),
     Function(FunctionDecl),
     Impl(ImplDecl),
+    Specialize(SpecializeDecl),
     Resource(ResourceDecl),
     Rule(RuleDecl),
 }
@@ -48,6 +49,7 @@ impl Declaration {
             Self::Const(value) => &value.span,
             Self::Function(value) => &value.span,
             Self::Impl(value) => &value.span,
+            Self::Specialize(value) => &value.span,
             Self::Resource(value) => &value.span,
             Self::Rule(value) => &value.span,
         }
@@ -120,6 +122,7 @@ pub struct TraitDecl {
     pub doc: Option<DocBlock>,
     pub name: String,
     pub generics: Vec<GenericParam>,
+    pub parents: Vec<Type>,
     pub associated_types: Vec<AssociatedTypeDecl>,
     pub methods: Vec<TraitMethod>,
 }
@@ -173,6 +176,22 @@ pub struct ImplDecl {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SpecializeDecl {
+    pub span: Span,
+    pub annotations: Vec<Annotation>,
+    pub name: String,
+    pub trait_: Type,
+    pub entries: Vec<SpecializeEntry>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SpecializeEntry {
+    pub span: Span,
+    pub name: String,
+    pub target: QualifiedName,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssociatedTypeAssignment {
     pub span: Span,
     pub name: String,
@@ -200,6 +219,7 @@ pub struct ImplMethod {
     pub self_span: Span,
     pub parameters: Vec<Parameter>,
     pub return_type: Type,
+    pub callable_kind: CallableKind,
     pub clauses: Vec<Clause>,
 }
 
@@ -287,6 +307,7 @@ pub struct TraitMethod {
     pub self_span: Span,
     pub parameters: Vec<Parameter>,
     pub return_type: Type,
+    pub callable_kind: CallableKind,
     pub default: Option<QualifiedName>,
 }
 
@@ -301,6 +322,7 @@ pub struct Parameter {
 pub enum GenericParam {
     Type {
         span: Span,
+        variance: Variance,
         name: String,
         bounds: Vec<Type>,
     },
@@ -309,6 +331,13 @@ pub enum GenericParam {
         name: String,
         ty: ConstKind,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Variance {
+    Invariant,
+    Covariant,
+    Contravariant,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -7,6 +7,8 @@ trait Summarizable:
 trait Prioritizable:
     fn priority_level(self) -> I32
 
+trait TaskView for Summarizable + Prioritizable:
+
 trait Completable:
     fn complete(self) -> Bool
 
@@ -19,13 +21,16 @@ fn format_summary[T: Summarizable](item: T) -> Str:
 
     effects []
 
-fn inspect_task[T: Summarizable + Prioritizable](item: T) -> Str:
+fn inspect_task[T: TaskView](item: T) -> Str:
     doc """
-    Inspect an item requiring both {Summarizable} and {Prioritizable} trait bounds.
+    Inspect an item implementing {TaskView}.
     """
 
     ensures result.len > 0
 
+    effects []
+
+fn inspect_dyn(item: Dyn[TaskView]) -> Str:
     effects []
 
 resource TaskLifecycle:
@@ -35,7 +40,7 @@ resource TaskLifecycle:
     terminal Completed
     transition Pending -> Completed
 
-impl SimpleTask for Summarizable + Prioritizable + Completable:
+impl SimpleTask for TaskView + Completable:
     type Summary = Str
     state:
         title: Str

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.page_build_types import BuiltPage, PageBuildError, PageBuildError_BlankTitle, PageBuildError_InvalidSlug, PageSource
 
@@ -30,6 +31,7 @@ their HTML character references. All other characters are preserved."""
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.page_build.escape_page_text", phase="implementation-call", span={"end_byte":475,"end_column":1,"end_line":24,"start_byte":201,"start_column":1,"start_line":16}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, str, path="$.return")
+    _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def render_page_html(title: str, body: str) -> str:
@@ -55,6 +57,7 @@ escaped `p` in source order; empty lines are omitted."""
     _result = _cott_validate_abi(_result, str, path="$.return")
     if not ((len(_result) > 0)):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.page_build.render_page_html", clause="ensures:1", phase="ensures", span={"end_byte":769,"end_column":27,"end_line":32,"start_byte":747,"start_column":5,"start_line":32}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def build_page(source: PageSource) -> Result[BuiltPage, PageBuildError]:
@@ -99,6 +102,7 @@ accepted text is preserved. The output path is `<slug>/index.html`, and
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.page_build.build_page", clause="ensures:1", phase="ensures", span={"end_byte":1329,"end_column":49,"end_line":45,"start_byte":1285,"start_column":5,"start_line":45}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[BuiltPage, PageBuildError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["BuiltPage", "PageBuildError", "PageBuildError_BlankTitle", "PageBuildError_InvalidSlug", "PageSource", "build_page", "escape_page_text", "render_page_html"]

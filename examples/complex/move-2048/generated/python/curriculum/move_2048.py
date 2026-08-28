@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.move_2048_types import Board4, Direction, Direction_Down, Direction_Left, Direction_Right, Direction_Up, LineMove, Move2048Error, Move2048Error_InvalidBoardSize, Move2048Error_InvalidTile, Move2048Error_ScoreOverflow, MoveRequest, MoveResult
 
@@ -44,6 +45,7 @@ U16."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.move_2048.validate_2048_board", phase="error", span={"end_byte":769,"end_column":1,"end_line":42,"start_byte":393,"start_column":1,"start_line":30}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.move_2048.validate_2048_board", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    _result = _cott_wrap_async_protocol(_result, Result[Unit, Move2048Error], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def merge_move_line(line: CottList[U16]) -> Result[LineMove, Move2048Error]:
@@ -85,6 +87,7 @@ if a merged tile cannot fit U16 or the accumulated score cannot fit U32."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.move_2048.merge_move_line", clause="ensures:1", phase="ensures", span={"end_byte":1230,"end_column":60,"end_line":50,"start_byte":1175,"start_column":5,"start_line":50}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[LineMove, Move2048Error], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def apply_2048_move(request: MoveRequest) -> Result[MoveResult, Move2048Error]:
@@ -130,6 +133,7 @@ merge scores, and whether any cell changed."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.move_2048.apply_2048_move", clause="ensures:1", phase="ensures", span={"end_byte":1717,"end_column":60,"end_line":64,"start_byte":1662,"start_column":5,"start_line":64}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[MoveResult, Move2048Error], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["Board4", "Direction", "Direction_Down", "Direction_Left", "Direction_Right", "Direction_Up", "LineMove", "Move2048Error", "Move2048Error_InvalidBoardSize", "Move2048Error_InvalidTile", "Move2048Error_ScoreOverflow", "MoveRequest", "MoveResult", "apply_2048_move", "merge_move_line", "validate_2048_board"]

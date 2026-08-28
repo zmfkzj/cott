@@ -14,3 +14,4 @@ runtime_validation = "boundary"
 [target.python.implementations]
 "curriculum.trait_protocol.format_summary" = "cott_bindings.curriculum.trait_protocol.format_summary:format_summary"
 "curriculum.trait_protocol.inspect_task" = "cott_bindings.curriculum.trait_protocol.inspect_task:inspect_task"
+"curriculum.trait_protocol.inspect_dyn" = "cott_bindings.curriculum.trait_protocol.inspect_dyn:inspect_dyn"

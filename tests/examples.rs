@@ -544,7 +544,7 @@ e=pathlib.Path(sys.executable).resolve()
 r["current"]["tools"]["python"]={"cache_tag":sys.implementation.cache_tag,"content_hash":"sha256:"+hashlib.sha256(e.read_bytes()).hexdigest(),"executable":str(e),"implementation":sys.implementation.name,"machine":platform.machine(),"os":sys.platform,"platform":sysconfig.get_platform(),"version":platform.python_version()}
 i=dict(r["current"])
 for k in ("generation_id","verified","verification","agent_runs"): i.pop(k,None)
-r["current"]["generation_id"]="sha256:"+hashlib.sha256(json.dumps({"current":i,"domain":"cott.generation.v2","schema_version":r["schema_version"]},ensure_ascii=False,separators=(",",":"),sort_keys=True).encode()+b"\n").hexdigest()
+r["current"]["generation_id"]="sha256:"+hashlib.sha256(json.dumps({"current":i,"domain":"cott.generation.v5","schema_version":r["schema_version"]},ensure_ascii=False,separators=(",",":"),sort_keys=True).encode()+b"\n").hexdigest()
 p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True)+"\n")
 "#;
     let output = Command::new("python3")

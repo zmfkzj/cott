@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.decimal_binary_types import Conversion, ConversionError, ConversionError_InvalidBinary, ConversionError_NegativeDecimal, ConversionError_Overflow, ConversionResult, ConversionResult_Binary, ConversionResult_Decimal, Conversion_BinaryToDecimal, Conversion_DecimalToBinary
 
@@ -54,6 +55,7 @@ value returns `NegativeDecimal`."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.decimal_binary.decimal_to_binary", clause="ensures:1", phase="ensures", span={"end_byte":648,"end_column":48,"end_line":25,"start_byte":605,"start_column":5,"start_line":25}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[str, ConversionError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def binary_to_decimal(digits: str) -> Result[I64, ConversionError]:
@@ -97,6 +99,7 @@ returns `Overflow`, so invalid characters take priority over overflow."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.decimal_binary.binary_to_decimal", clause="ensures:1", phase="ensures", span={"end_byte":1198,"end_column":43,"end_line":39,"start_byte":1160,"start_column":5,"start_line":39}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[I64, ConversionError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def convert_binary_decimal(operation: Conversion) -> Result[ConversionResult, ConversionError]:
@@ -146,6 +149,7 @@ Errors from the selected operation are returned unchanged."""
         return True
     if not (_cott_match_ensures_2()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.decimal_binary.convert_binary_decimal", clause="ensures:2", phase="ensures", span={"end_byte":1736,"end_column":69,"end_line":53,"start_byte":1672,"start_column":5,"start_line":53}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[ConversionResult, ConversionError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["Conversion", "ConversionError", "ConversionError_InvalidBinary", "ConversionError_NegativeDecimal", "ConversionError_Overflow", "ConversionResult", "ConversionResult_Binary", "ConversionResult_Decimal", "Conversion_BinaryToDecimal", "Conversion_DecimalToBinary", "binary_to_decimal", "convert_binary_decimal", "decimal_to_binary"]

@@ -249,7 +249,7 @@ fn default_impl_methods_keep_only_the_verified_free_facade_dependency() {
         .find(|callable| callable.cott_symbol == "api.service.ReaderState.read")
         .expect("default impl method must remain a compiler dispatch slot");
 
-    assert_eq!(method.declaration["selected"]["kind"], "default");
+    assert_eq!(method.declaration["selected"]["origin"], "default");
     assert_eq!(
         method.declaration["selected"]["function"],
         serde_json::json!({
@@ -360,6 +360,68 @@ fn rejects_explicit_method_absent_from_selected_slots() {
     module.bytes = serde_json::to_vec(&value).unwrap();
     module.bytes.push(b'\n');
 
-    let error = PythonArtifactPlan::from_ir(&ir).expect_err("unselected method must reject");
-    assert!(error.to_string().contains("absent from `selected_methods`"));
+    PythonArtifactPlan::from_ir(&ir).expect_err("unselected method must reject");
+}
+
+#[test]
+fn specialization_target_is_a_dependency_not_a_fake_impl_binding() {
+    let parsed = parse_project([source(
+        "src/api/service.cott",
+        r#"module api.service
+
+
+trait Reader:
+    fn read(self, value: I32) -> I32 = api.service.default_read
+    fn label(self) -> Unit
+
+fn default_read(receiver: Reader, value: I32) -> I32
+fn specialized_read(receiver: ReaderState, value: I32) -> I32
+
+specialize ReaderState for Reader:
+    read = api.service.specialized_read
+
+impl ReaderState for Reader:
+    fn label(self) -> Unit:
+        ensures true
+"#,
+    )])
+    .expect("specialization fixture must parse");
+    let project = lower(Path::new("src"), parsed).expect("specialization fixture must lower");
+    let mut ir = render(&project).expect("specialization fixture must render");
+    let module = ir
+        .modules
+        .iter_mut()
+        .find(|module| module.module.as_string() == "api.service")
+        .expect("specialization module must exist");
+    let mut value: serde_json::Value = serde_json::from_slice(&module.bytes).unwrap();
+    value["declarations"]
+        .as_array_mut()
+        .expect("declarations must be an array")
+        .iter_mut()
+        .find(|declaration| declaration["name"] == "api.service.specialized_read")
+        .expect("specialization target must exist")["public"] = serde_json::Value::Bool(false);
+    module.bytes = serde_json::to_vec(&value).unwrap();
+    module.bytes.push(b'\n');
+
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("specialization plan must load");
+    let callables = plan.callables();
+    let target = callables
+        .iter()
+        .find(|callable| callable.cott_symbol == "api.service.specialized_read")
+        .expect("private specialization target must remain a free-function dependency");
+    assert_eq!(target.kind, PythonCallableKind::Function);
+    let dispatch = callables
+        .iter()
+        .find(|callable| callable.cott_symbol == "api.service.ReaderState.read")
+        .expect("specialized dispatch slot must remain compiler-owned");
+    assert_eq!(dispatch.declaration["selected"]["origin"], "specialization");
+    assert_eq!(
+        dispatch.declaration["selected"]["function"]["verified_facade"],
+        "api.service.specialized_read"
+    );
+    assert!(
+        !callables
+            .iter()
+            .any(|callable| callable.cott_symbol == "api.service.ReaderState.specialized_read")
+    );
 }

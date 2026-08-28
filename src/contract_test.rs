@@ -29,9 +29,12 @@ pub struct ContractTestStrategy {
     pub symbol: String,
     pub seed: String,
     pub candidate_limit: u32,
+    pub node_limit: u32,
     pub container_length_limit: u32,
     pub json_depth_limit: u32,
+    pub lifecycle_limit: u32,
     pub callable_kind: String,
+    pub return_kind: String,
     pub classification: Classification,
     pub clause_ids: Vec<String>,
 }
@@ -45,13 +48,16 @@ impl ContractTestStrategy {
         clause_ids: Vec<String>,
     ) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 3,
             symbol: symbol.into(),
             seed: format!("sha256:{}", sha256_hex(ir_bytes)),
             candidate_limit: 64,
+            node_limit: 64,
             container_length_limit: 3,
             json_depth_limit: 4,
+            lifecycle_limit: 3,
             callable_kind: callable_kind.into(),
+            return_kind: "value".to_owned(),
             classification,
             clause_ids,
         }
@@ -66,7 +72,7 @@ impl ContractTestStrategy {
     }
 }
 
-/// Derive metadata-only contract test strategies from canonical IR v5 module
+/// Derive metadata-only contract test strategies from canonical IR v7 module
 /// bytes, preserving canonical module, declaration, and selected-slot order.
 pub fn derive_strategies(ir: &CanonicalIr) -> Result<Vec<ContractTestStrategy>, String> {
     Ok(derive_strategy_entries(ir)?
@@ -123,13 +129,14 @@ fn derive_strategy_entries(
                         &format!("{context} function {symbol}"),
                     )?;
 
-                    let strategy = ContractTestStrategy::new(
+                    let mut strategy = ContractTestStrategy::new(
                         symbol,
                         &module.bytes,
                         callable_kind,
                         classification,
                         clause_ids,
                     );
+                    strategy.return_kind = protocol_return_kind(return_type)?.to_owned();
                     strategy.bytes()?;
                     strategies.push((strategy, None));
                 }
@@ -185,12 +192,9 @@ fn derive_strategy_entries(
                         let selected_impl = required_object(slot, "selected").map_err(|error| {
                             format!("{context} impl {name} selected method {method_name}: {error}")
                         })?;
-                        let selected_kind =
-                            required_string(selected_impl, "kind").map_err(|error| {
-                                format!(
-                                    "{context} impl {name} selected method {method_name}: {error}"
-                                )
-                            })?;
+                        let selected_kind = selected_origin(selected_impl).map_err(|error| {
+                            format!("{context} impl {name} selected method {method_name}: {error}")
+                        })?;
                         let function =
                             required_object(selected_impl, "function").map_err(|error| {
                                 format!(
@@ -222,7 +226,7 @@ fn derive_strategy_entries(
                                     })?,
                                 BTreeMap::new(),
                             ),
-                            "default" => {
+                            "default" | "specialization" => {
                                 let (trait_declaration, method) = find_trait_method(
                                     &modules,
                                     trait_method,
@@ -230,12 +234,16 @@ fn derive_strategy_entries(
                                 )?;
                                 (
                                     method,
-                                    trait_substitutions(
-                                        declaration,
-                                        trait_declaration,
-                                        trait_method,
-                                        &format!("{context} impl {name} selected method {method_name}"),
-                                    )?,
+                                    if slot.get("return_type").is_some() {
+                                        BTreeMap::new()
+                                    } else {
+                                        trait_substitutions(
+                                            declaration,
+                                            trait_declaration,
+                                            trait_method,
+                                            &format!("{context} impl {name} selected method {method_name}"),
+                                        )?
+                                    },
                                 )
                             }
                             _ => {
@@ -244,9 +252,16 @@ fn derive_strategy_entries(
                                 ));
                             }
                         };
-                        let parameters = required_array(source, "parameters").map_err(|error| {
-                            format!("{context} impl {name} selected method {method_name}: {error}")
-                        })?;
+                        let parameters = match slot.get("parameters") {
+                            Some(parameters) => parameters.as_array().ok_or_else(|| {
+                                format!(
+                                    "{context} impl {name} selected method {method_name}: selected parameters must be an array"
+                                )
+                            })?,
+                            None => required_array(source, "parameters").map_err(|error| {
+                                format!("{context} impl {name} selected method {method_name}: {error}")
+                            })?,
+                        };
                         let parameter_types = parameters
                             .iter()
                             .enumerate()
@@ -260,14 +275,15 @@ fn derive_strategy_entries(
                                     })
                             })
                             .collect::<Result<Vec<_>, _>>()?;
-                        let return_type = concretize(
-                            required_field(source, "return_type").map_err(|error| {
-                                format!(
-                                    "{context} impl {name} selected method {method_name}: {error}"
-                                )
-                            })?,
-                            &substitutions,
-                        );
+                        let return_type = match slot.get("return_type") {
+                            Some(return_type) => return_type.clone(),
+                            None => concretize(
+                                required_field(source, "return_type").map_err(|error| {
+                                    format!("{context} impl {name} selected method {method_name}: {error}")
+                                })?,
+                                &substitutions,
+                            ),
+                        };
                         let signature = serde_json::json!({
                             "parameters": parameter_types,
                             "return_type": return_type,
@@ -295,9 +311,11 @@ fn derive_strategy_entries(
                             .expect("return type");
                         let effects = match selected_kind {
                             "explicit" => required_array(source, "effects"),
-                            "default" => required_object(source, "contract")
+                            "default" | "specialization" => required_object(source, "contract")
                                 .and_then(|contract| required_array(contract, "effects")),
-                            _ => unreachable!(),
+                            _ => Err(format!(
+                                "unsupported selected implementation `{selected_kind}`"
+                            )),
                         }
                         .map_err(|error| {
                             format!("{context} impl {name} selected method {method_name}: {error}")
@@ -315,14 +333,16 @@ fn derive_strategy_entries(
                                 &["requires", "ensures", "errors"],
                                 &format!("{context} impl {name} selected method {method_name}"),
                             ),
-                            "default" => contract_clause_ids(
+                            "default" | "specialization" => contract_clause_ids(
                                 required_object(source, "contract").map_err(|error| {
                                     format!("{context} impl {name} selected method {method_name}: {error}")
                                 })?,
                                 &["clauses"],
                                 &format!("{context} impl {name} selected method {method_name}"),
                             ),
-                            _ => unreachable!(),
+                            _ => Err(format!(
+                                "{context} impl {name} selected method {method_name}: unsupported selected implementation `{selected_kind}`"
+                            )),
                         }?;
                         if selected_kind == "explicit" {
                             for (modifies_index, field) in required_array(source, "modifies")
@@ -341,13 +361,25 @@ fn derive_strategy_entries(
                             }
                         }
                         clause_ids.extend(invariants.iter().cloned());
-                        let strategy = ContractTestStrategy::new(
+                        let callable_kind =
+                            required_string(slot, "callable_kind").map_err(|error| {
+                                format!(
+                                    "{context} impl {name} selected method {method_name}: {error}"
+                                )
+                            })?;
+                        if !matches!(callable_kind, "sync" | "async") {
+                            return Err(format!(
+                                "{context} impl {name} selected method {method_name}: unsupported callable_kind `{callable_kind}`"
+                            ));
+                        }
+                        let mut strategy = ContractTestStrategy::new(
                             format!("{name}.{method_name}"),
                             &module.bytes,
-                            "sync",
+                            callable_kind,
                             classification,
                             clause_ids,
                         );
+                        strategy.return_kind = protocol_return_kind(return_type)?.to_owned();
                         strategy.bytes()?;
                         strategies.push((strategy, Some(init_symbol.clone())));
                     }
@@ -362,9 +394,17 @@ fn derive_strategy_entries(
 fn local_name(symbol: &str) -> Option<&str> {
     symbol.rsplit('.').next().filter(|name| !name.is_empty())
 }
+fn selected_origin(selected: &Value) -> Result<&str, String> {
+    selected
+        .get("origin")
+        .or_else(|| selected.get("kind"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "required selected `origin` must be a string".to_owned())
+}
 
 fn find_trait_method<'a>(
     modules: &'a [Value],
+
     trait_method: &str,
     context: &str,
 ) -> Result<(&'a Value, &'a Value), String> {
@@ -412,10 +452,15 @@ fn trait_substitutions(
         .find(|reference| {
             reference.get("kind").and_then(Value::as_str) == Some("named")
                 && reference.get("name").and_then(Value::as_str) == Some(trait_name)
-        })
-        .ok_or_else(|| format!("{context}: missing instantiated trait"))?;
+        });
     let generics = required_array(trait_declaration, "generics")
         .map_err(|error| format!("{context}: {error}"))?;
+    let Some(trait_reference) = trait_reference else {
+        return generics
+            .is_empty()
+            .then(BTreeMap::new)
+            .ok_or_else(|| format!("{context}: missing instantiated trait"));
+    };
     let arguments =
         required_array(trait_reference, "args").map_err(|error| format!("{context}: {error}"))?;
     if generics.len() != arguments.len() {
@@ -484,6 +529,13 @@ fn classify(
         Ok(Classification::Pure)
     } else {
         Ok(Classification::Effectful)
+    }
+}
+fn protocol_return_kind(return_type: &Value) -> Result<&'static str, String> {
+    match required_string(return_type, "kind")? {
+        "async_iterator" => Ok("async_iterator"),
+        "async_generator" => Ok("async_generator"),
+        _ => Ok("value"),
     }
 }
 

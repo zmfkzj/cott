@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.textfile_analysis_types import TextAnalysis
 
@@ -31,6 +32,7 @@ code points delimit words. No Unicode normalization is performed."""
     _result = _cott_validate_abi(_result, CottList[str], path="$.return")
     if not (((len(text) > 0) or (len(_result) == 0))):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.textfile_analysis.extract_casefolded_words", clause="ensures:1", phase="ensures", span={"end_byte":519,"end_column":44,"end_line":17,"start_byte":480,"start_column":5,"start_line":17}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, CottList[str], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def analyze_text(text: str) -> TextAnalysis:
@@ -61,6 +63,7 @@ alphanumeric nor whitespace."""
         raise CottContractViolation("ensures clause failed", symbol="curriculum.textfile_analysis.analyze_text", clause="ensures:2", phase="ensures", span={"end_byte":1005,"end_column":58,"end_line":30,"start_byte":952,"start_column":5,"start_line":30}, expected="true", actual="false")
     if not (((_result).special_characters <= (_result).total_characters)):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.textfile_analysis.analyze_text", clause="ensures:3", phase="ensures", span={"end_byte":1070,"end_column":65,"end_line":31,"start_byte":1010,"start_column":5,"start_line":31}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, TextAnalysis, path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["TextAnalysis", "analyze_text", "extract_casefolded_words"]

@@ -159,7 +159,7 @@ fn rejects_result_with_non_enum_error_type() {
 }
 
 #[test]
-fn rejects_alias_and_named_type_cycles() {
+fn rejects_alias_and_newtype_cycles() {
     let errors = diagnostics([source(
         "src/cycles.cott",
         "module cycles\nalias First = Second\nalias Second = First\nnewtype Left(Right)\nnewtype Right(Left)\n",
@@ -1043,4 +1043,605 @@ impl InvalidController for Controller:
             "missing diagnostic containing `{expected}`: {errors:#?}"
         );
     }
+}
+
+#[test]
+fn accepts_v04_async_trait_impl_methods_with_exact_async_default() {
+    let project = lower_project([source(
+        "src/v04_async.cott",
+        r#"module v04_async
+
+async fn fallback(receiver: Reader, value: I32) -> I32
+
+trait Reader:
+    async fn read(self, value: I32) -> I32 = fallback
+    async fn items(self) -> AsyncIterator[I32]
+    async fn conversation(self) -> AsyncGenerator[I32, Unit]
+
+impl BufferedReader for Reader:
+    async fn read(self, value: I32) -> I32:
+        requires true
+        ensures true
+    async fn items(self) -> AsyncIterator[I32]:
+        ensures true
+    async fn conversation(self) -> AsyncGenerator[I32, Unit]:
+        ensures true
+
+alias Items = AsyncIterator[I32]
+alias Conversation = AsyncGenerator[I32, Unit]
+"#,
+    )]);
+    assert_eq!(project.modules.len(), 1);
+}
+
+#[test]
+fn rejects_v04_default_and_impl_callable_kind_mismatches() {
+    let errors = diagnostics([source(
+        "src/v04_callable_kind_bad.cott",
+        r#"module v04_callable_kind_bad
+
+fn sync_default(receiver: AsyncReader, value: I32) -> I32
+async fn async_default(receiver: SyncReader, value: I32) -> I32
+async fn wrong_signature(receiver: SignatureReader) -> I32
+
+trait AsyncReader:
+    async fn read(self, value: I32) -> I32 = sync_default
+
+trait SyncReader:
+    fn read(self, value: I32) -> I32 = async_default
+
+trait SignatureReader:
+    async fn read(self, value: I32) -> I32 = wrong_signature
+
+trait AsyncWriter:
+    async fn write(self, value: I32) -> I32
+
+impl WrongAsyncReader for AsyncReader:
+    fn read(self, value: I32) -> I32:
+        ensures true
+
+impl ExactAsyncReader for SignatureReader:
+    async fn read(self, value: I32) -> I32:
+        ensures true
+
+impl Duplex for SyncReader + AsyncWriter:
+    fn read(self, value: I32) -> I32:
+        ensures true
+    async fn write(self, value: I32) -> I32:
+        ensures true
+"#,
+    )]);
+    assert!(errors.iter().all(|error| {
+        error.path == Path::new("src/v04_callable_kind_bad.cott")
+            && error.diagnostic.span.start < error.diagnostic.span.end
+    }));
+    for expected in [
+        "trait default must reference an async free function",
+        "trait default must reference a sync free function",
+        "trait default must take the trait receiver first and exactly match the method signature",
+        "impl method signature and callable kind must exactly match its trait method",
+        "impl effective methods must all have the same callable kind",
+    ] {
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.diagnostic.message.contains(expected)),
+            "missing diagnostic containing `{expected}`: {errors:#?}"
+        );
+    }
+}
+
+#[test]
+fn rejects_v04_protocol_arity_and_legacy_async_generator_shortcuts() {
+    let errors = diagnostics([source(
+        "src/v04_protocol_bad.cott",
+        r#"module v04_protocol_bad
+
+alias MissingIteratorItem = AsyncIterator
+alias ExtraIteratorItem = AsyncIterator[I32, U32]
+alias MissingGeneratorSend = AsyncGenerator[I32, Unit]
+alias ExtraGeneratorArgument = AsyncGenerator[I32, Unit, U32]
+
+trait NativeProtocol:
+    async fn iterator(self) -> Iterator[I32]
+    async fn generator(self) -> Generator[I32, Unit, I32]
+
+impl NativeProtocolImpl for NativeProtocol:
+    async fn iterator(self) -> Iterator[I32]:
+        ensures true
+    async fn generator(self) -> Generator[I32, Unit, I32]:
+        ensures true
+"#,
+    )]);
+    assert!(
+        errors.len() >= 6,
+        "expected protocol arity and legacy async-return diagnostics: {errors:#?}"
+    );
+    assert!(errors.iter().all(|error| {
+        error.path == Path::new("src/v04_protocol_bad.cott")
+            && error.diagnostic.span.start < error.diagnostic.span.end
+    }));
+    assert!(errors.iter().any(|error| {
+        error.diagnostic.message.contains("AsyncIterator") && error.diagnostic.message.contains("1")
+    }));
+    assert!(errors.iter().any(|error| {
+        error.diagnostic.message.contains("AsyncGenerator")
+            && error.diagnostic.message.contains("2")
+    }));
+    assert!(errors.iter().any(|error| {
+        error.diagnostic.message.contains("Iterator")
+            && error.diagnostic.message.contains("Generator")
+            && error.diagnostic.message.contains("Never")
+    }));
+}
+
+#[test]
+fn lowers_v05_order_independent_inheritance_and_coalesced_diamonds() {
+    lower_project([source(
+        "src/v05/inheritance.cott",
+        r#"module v05.inheritance
+
+trait Child[T] for Left[T] + Right[T]:
+    fn child(self) -> T
+
+trait Left[T] for Root[T]:
+    fn left(self) -> T
+
+trait Right[T] for Root[T]:
+    fn right(self) -> T
+
+trait Root[T]:
+    fn value(self) -> T
+"#,
+    )]);
+}
+
+#[test]
+fn rejects_v05_inheritance_cycles_and_conflicting_diamond_members() {
+    let errors = diagnostics([source(
+        "src/v05/inheritance_bad.cott",
+        r#"module v05.inheritance_bad
+
+trait First for Second:
+    fn first(self) -> I32
+
+trait Second for First:
+    fn second(self) -> I32
+
+trait Left:
+    fn read(self) -> I32
+
+trait Right:
+    fn read(self) -> Bool
+
+trait Conflict for Left + Right:
+    fn own(self) -> Unit
+"#,
+    )]);
+    assert!(errors.iter().all(|error| {
+        error.path == Path::new("src/v05/inheritance_bad.cott")
+            && error.diagnostic.span.start < error.diagnostic.span.end
+    }));
+    assert!(
+        errors.len() >= 2,
+        "expected cycle and diamond-conflict diagnostics: {errors:#?}"
+    );
+}
+
+#[test]
+fn lowers_v05_specializations_below_explicit_implementations() {
+    lower_project([source(
+        "src/v05/specialization.cott",
+        r#"module v05.specialization
+
+struct Concrete:
+    id: I32
+
+fn fallback(receiver: Concrete, value: I32) -> I32
+
+trait Reader:
+    fn read(self, value: I32) -> I32
+
+specialize Concrete for Reader:
+    read = v05.specialization.fallback
+
+impl Concrete for Reader:
+    fn read(self, value: I32) -> I32:
+        ensures true
+"#,
+    )]);
+}
+
+#[test]
+fn rejects_v05_duplicate_and_kind_mismatched_specializations() {
+    let duplicate_errors = diagnostics([source(
+        "src/v05/specialization_duplicate.cott",
+        r#"module v05.specialization_duplicate
+
+struct Concrete:
+    id: I32
+
+fn fallback(receiver: Concrete) -> I32
+
+trait Reader:
+    fn read(self) -> I32
+
+specialize Concrete for Reader:
+    read = v05.specialization_duplicate.fallback
+
+specialize Concrete for Reader:
+    read = v05.specialization_duplicate.fallback
+"#,
+    )]);
+    assert!(duplicate_errors.iter().all(|error| {
+        error.path == Path::new("src/v05/specialization_duplicate.cott")
+            && error.diagnostic.span.start < error.diagnostic.span.end
+    }));
+
+    let kind_errors = diagnostics([source(
+        "src/v05/specialization_kind.cott",
+        r#"module v05.specialization_kind
+
+struct Concrete:
+    id: I32
+
+async fn fallback(receiver: Concrete) -> I32
+
+trait Reader:
+    fn read(self) -> I32
+
+specialize Concrete for Reader:
+    read = v05.specialization_kind.fallback
+"#,
+    )]);
+    assert!(kind_errors.iter().all(|error| {
+        error.path == Path::new("src/v05/specialization_kind.cott")
+            && error.diagnostic.span.start < error.diagnostic.span.end
+    }));
+}
+
+#[test]
+fn lowers_v05_valid_variance_and_rejects_invalid_polarity() {
+    lower_project([source(
+        "src/v05/variance.cott",
+        r#"module v05.variance
+
+struct Producer[+T]:
+    value: T
+
+enum Choice[+T]:
+    Value(value: T)
+
+trait Source[+T]:
+    fn get(self) -> T
+
+trait Sink[-T]:
+    fn put(self, value: T) -> Unit
+"#,
+    )]);
+
+    let errors = diagnostics([source(
+        "src/v05/variance_bad.cott",
+        r#"module v05.variance_bad
+
+struct Invariant[T]:
+    value: T
+
+trait InvalidOutput[-T]:
+    fn get(self) -> T
+
+trait InvalidInput[+T]:
+    fn put(self, value: T) -> Unit
+
+trait HiddenByInvariantContainer[+T]:
+    fn get(self) -> Invariant[T]
+"#,
+    )]);
+    assert!(errors.iter().all(|error| {
+        error.path == Path::new("src/v05/variance_bad.cott")
+            && error.diagnostic.span.start < error.diagnostic.span.end
+    }));
+    assert!(
+        errors.len() >= 3,
+        "expected polarity and invariant-container diagnostics: {errors:#?}"
+    );
+}
+
+#[test]
+fn lowers_v05_nominal_dyn_and_rejects_invalid_dyn_targets() {
+    lower_project([source(
+        "src/v05/dyn.cott",
+        r#"module v05.dyn
+
+struct Concrete:
+    id: I32
+
+trait Reader:
+    fn read(self) -> I32
+
+impl Concrete for Reader:
+    fn read(self) -> I32:
+        ensures true
+
+alias Object = Dyn[Reader]
+"#,
+    )]);
+
+    let errors = diagnostics([source(
+        "src/v05/dyn_bad.cott",
+        r#"module v05.dyn_bad
+
+struct NotATrait:
+    id: I32
+
+trait Reader:
+    fn read(self) -> I32
+
+alias Missing = Dyn
+alias Extra = Dyn[Reader, I32]
+alias Structural = Dyn[NotATrait]
+"#,
+    )]);
+    assert!(errors.iter().all(|error| {
+        error.path == Path::new("src/v05/dyn_bad.cott")
+            && error.diagnostic.span.start < error.diagnostic.span.end
+    }));
+    assert!(
+        errors.len() >= 3,
+        "expected Dyn arity and non-trait target diagnostics: {errors:#?}"
+    );
+}
+
+#[test]
+fn accepts_v06_guarded_self_mutual_generic_and_enum_recursion() {
+    lower_project([source(
+        "src/recursive.cott",
+        r#"module recursive
+
+struct Chain[T]:
+    value: T
+    next: Option[Chain[T]]
+
+struct Left:
+    right: Option[Right]
+
+struct Right:
+    left: Result[Left, Stop]
+
+enum Stop:
+    Done
+
+struct Nested:
+    next: Option[Result[Nested, Stop]]
+
+enum Tree:
+    Empty
+    Branch(left: Tree, right: Tree)
+"#,
+    )]);
+}
+
+#[test]
+fn accepts_v06_zero_length_array_recursion() {
+    lower_project([source(
+        "src/recursive_arrays.cott",
+        r#"module recursive_arrays
+
+struct ArrayLoop:
+    children: Array[ArrayLoop, 0]
+"#,
+    )]);
+}
+
+#[test]
+fn accepts_v06_zero_length_array_const_expressions() {
+    lower_project([source(
+        "src/recursive_array_consts.cott",
+        r#"module recursive_array_consts
+
+const ZERO: U32 = 0
+
+struct Local:
+    children: Array[Local, ZERO]
+
+struct Arithmetic:
+    children: Array[Arithmetic, (1 - 1)]
+"#,
+    )]);
+
+    lower_project([
+        source("src/sizes.cott", "module sizes\nconst ZERO: U32 = 0\n"),
+        source(
+            "src/recursive_qualified.cott",
+            r#"module recursive_qualified
+use sizes.ZERO
+
+struct Qualified:
+    children: Array[Qualified, sizes.ZERO]
+"#,
+        ),
+    ]);
+}
+
+#[test]
+fn accepts_v06_composite_bound_outside_an_unrelated_generic_cycle() {
+    lower_project([source(
+        "src/recursive_bounds.cott",
+        r#"module recursive_bounds
+
+trait Owner[T: A + B, U: CycleA[U]]:
+    fn owner(self) -> Unit
+trait A:
+    fn a(self) -> Unit
+trait B:
+    fn b(self) -> Unit
+trait CycleA[V: CycleB[V]]:
+    fn cycle_a(self) -> Unit
+trait CycleB[V: Owner[Any, V]]:
+    fn cycle_b(self) -> Unit
+"#,
+    )]);
+}
+
+#[test]
+fn rejects_v06_nonempty_array_recursion() {
+    let errors = diagnostics([source(
+        "src/recursive_array_bad.cott",
+        r#"module recursive_array_bad
+
+struct Loop:
+    children: Array[Loop, 1]
+"#,
+    )]);
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.diagnostic.message.contains("unproductive type cycle")),
+        "expected nonempty array recursion to be rejected: {errors:#?}"
+    );
+}
+
+#[test]
+fn rejects_v06_recursion_through_iterators_and_generators() {
+    for ty in [
+        "Iterator[Loop]",
+        "AsyncIterator[Loop]",
+        "Generator[Loop, Unknown, Unit]",
+        "AsyncGenerator[Loop, Unknown]",
+    ] {
+        let source_text =
+            format!("module recursive_stream_bad\n\nstruct Loop:\n    stream: {ty}\n");
+        let errors = diagnostics([source("src/recursive_stream_bad.cott", &source_text)]);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.diagnostic.message.contains("unproductive type cycle")),
+            "expected recursion through {ty} to be rejected: {errors:#?}"
+        );
+    }
+}
+
+#[test]
+fn rejects_v06_unproductive_struct_cycles() {
+    let errors = diagnostics([source(
+        "src/recursive_bad.cott",
+        r#"module recursive_bad
+
+struct Direct:
+    next: Direct
+
+struct First:
+    second: Second
+
+struct Second:
+    first: First
+"#,
+    )]);
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.diagnostic.message.contains("unproductive type cycle")),
+        "expected unproductive recursion diagnostics: {errors:#?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .all(|error| error.path == Path::new("src/recursive_bad.cott"))
+    );
+}
+
+#[test]
+fn rejects_v06_result_recursion_without_a_finite_error_branch() {
+    let errors = diagnostics([source(
+        "src/recursive_result_bad.cott",
+        r#"module recursive_result_bad
+
+enum Loop:
+    Again(next: Result[Loop, Loop])
+"#,
+    )]);
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.diagnostic.message.contains("unproductive type cycle")),
+        "expected Result recursion without a finite error branch to be rejected: {errors:#?}"
+    );
+}
+
+#[test]
+fn rejects_v06_result_recursion_with_never_error_alternatives() {
+    for (path, source_text) in [
+        (
+            "src/recursive_never.cott",
+            r#"module recursive_never
+
+enum Loop:
+    Again(next: Result[Loop, Never])
+"#,
+        ),
+        (
+            "src/recursive_alias_never.cott",
+            r#"module recursive_alias_never
+
+alias NoValue = Never
+
+enum Loop:
+    Again(next: Result[Loop, NoValue])
+"#,
+        ),
+        (
+            "src/recursive_newtype_never.cott",
+            r#"module recursive_newtype_never
+
+newtype NoValue(Never)
+
+enum Loop:
+    Again(next: Result[Loop, NoValue])
+"#,
+        ),
+    ] {
+        let errors = diagnostics([source(path, source_text)]);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.diagnostic.message.contains("unproductive type cycle")),
+            "expected a Never error alternative to leave the recursion unproductive: {errors:#?}"
+        );
+    }
+}
+#[test]
+fn rejects_v06_cross_module_nominal_recursion() {
+    let errors = diagnostics([
+        source(
+            "src/left.cott",
+            r#"module left
+use right.Right
+
+struct Left:
+    right: Option[Right]
+"#,
+        ),
+        source(
+            "src/right.cott",
+            r#"module right
+use left.Left
+
+struct Right:
+    left: Option[Left]
+"#,
+        ),
+    ]);
+
+    assert!(
+        errors.iter().any(|error| {
+            error
+                .diagnostic
+                .message
+                .contains("type cycle cannot cross module boundaries")
+        }),
+        "expected cross-module recursion diagnostic: {errors:#?}"
+    );
 }

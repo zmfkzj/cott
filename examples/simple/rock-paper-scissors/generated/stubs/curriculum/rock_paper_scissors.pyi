@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottList, CottSet, Dyn, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.rock_paper_scissors_types import RoundResult as RoundResult, RoundResult_ComputerWins as RoundResult_ComputerWins, RoundResult_Tie as RoundResult_Tie, RoundResult_UserWins as RoundResult_UserWins, RpsMove as RpsMove, RpsMove_Paper as RpsMove_Paper, RpsMove_Rock as RpsMove_Rock, RpsMove_Scissors as RpsMove_Scissors
 """Return whether the user's move defeats the computer's move.

@@ -106,9 +106,9 @@ pub fn render_prompt(
     rules: Option<&[u8]>,
     write_path: &Path,
 ) -> Result<Vec<u8>, String> {
-    if is_default_impl_method(callable) {
+    if let Some(kind) = selected_implementation_kind(callable) {
         return Err(format!(
-            "compiler-owned default implementation method `{}` must not be sent to an agent",
+            "compiler-owned {kind} implementation method `{}` must not be sent to an agent",
             callable.cott_symbol
         ));
     }
@@ -125,8 +125,12 @@ pub fn render_prompt(
             callable.name
         ),
         PythonCallableKind::ImplMethod { concrete } => format!(
-            "Define exactly one canonical private top-level function `_cott_impl_{concrete}_{}`. You MAY additionally define private implementation helpers, private immutable constants, and invariant TypeVars. Each helper MUST be an undecorated, synchronous, fully annotated top-level function whose name starts with a single `_` but is neither dunder nor reserved `_cott_`; function names MUST be unique. Each constant MUST have a single-leading-underscore name that is neither dunder nor reserved `_cott_`, and be a literal `Final[bool|int|float|str|bytes]` value. Do not define classes, public helpers, mutable globals, decorators, async functions, variadic parameters, parameter defaults, or other executable top-level assignments. The compiler owns the public class `{concrete}` in `{}`; import it only as `from {} import {concrete}` for the `self` annotation and never construct, subclass, or redefine it.",
-            callable.name, callable.module, callable.module
+            "Define exactly one canonical private top-level function `_cott_impl_{concrete}_{}`. You MAY additionally define private implementation helpers, private immutable constants, and invariant TypeVars. Each helper MUST be an undecorated, synchronous, fully annotated top-level function whose name starts with a single `_` but is neither dunder nor reserved `_cott_`; function names MUST be unique. Each constant MUST have a single-leading-underscore name that is neither dunder nor reserved `_cott_`, and be a literal `Final[bool|int|float|str|bytes]` value. Do not define classes, public helpers, mutable globals, decorators, async functions, variadic parameters, parameter defaults, or other executable top-level assignments. The compiler owns the public class `{concrete}` and binds this helper as its method; never define a class or public method. Import `{concrete}` from `{}` only for the required `self: {concrete}` annotation. Sibling public method calls MUST use `self` (or its direct local alias) and their exact method name.",
+            callable.name, callable.module
+        ),
+        PythonCallableKind::AsyncImplMethod { concrete } => format!(
+            "Define exactly one canonical private top-level `async def` function `_cott_impl_{concrete}_{}`. You MAY additionally define private implementation helpers, private immutable constants, and invariant TypeVars. Each helper MUST be an undecorated, synchronous, fully annotated top-level function whose name starts with a single `_` but is neither dunder nor reserved `_cott_`; function names MUST be unique. Each constant MUST have a single-leading-underscore name that is neither dunder nor reserved `_cott_`, and be a literal `Final[bool|int|float|str|bytes]` value. Do not define classes, public helpers, mutable globals, decorators, additional async functions, variadic parameters, parameter defaults, or other executable top-level assignments. The compiler owns the public class `{concrete}` and binds this helper as its method; never define a class or public method. Import `{concrete}` from `{}` only for the required `self: {concrete}` annotation. Sibling public method calls MUST use `self` (or its direct local alias) and their exact method name. Await every call to an async Cott facade or sibling method, never await a synchronous one, and use concurrency only through a direct await of `asyncio.gather(...)` or `async with asyncio.TaskGroup() as <name>`.",
+            callable.name, callable.module
         ),
     };
     let external_types = external_types
@@ -134,10 +138,17 @@ pub fn render_prompt(
         .map(|(name, projection)| format!("{name} = {projection}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let mut prompt = format!("COTT_AGENT_PROMPT_V1\n\nTARGET\nSymbol: {}\nWrite path: {}\n\nIMPLEMENTATION OWNERSHIP\n{ownership}\n\nCANONICAL IR\n{}\n\nDOCS CONTRACTS EFFECTS\n{docs}\n\nRELEVANT TYPES\n{type_declarations}\n\nPYTHON EXTERNAL TYPE PROJECTIONS\n{external_types}\n\nBOUND SYMBOLS IMPORT RULES\n{bound_symbols}\n\nTYPE MODEL\nPreserve every declared annotation exactly. For Iterator and Generator returns, return the lazy object itself: do not iterate, materialize, normalize, or validate inner values. Use external declarations through their exact public generated aliases; their projected public APIs MAY be called when the contract requires it. Do not reconstruct external paths, use dynamic imports or reflection, or inspect and coerce external values merely to validate a contract. Any, Unknown, and inner values of Opaque or lazy types are evidence-only: preserve them without inspection, coercion, or validation. Preserve Opaque values and their declared tag boundary without inspecting their payload.\n", callable.cott_symbol, write_path.display(), String::from_utf8_lossy(selected_ir)).into_bytes();
+    let mut prompt = format!(
+        "COTT_AGENT_PROMPT_V1\n\nTARGET\nSymbol: {}\nWrite path: {}\n\nIMPLEMENTATION OWNERSHIP\n{ownership}\n\nCANONICAL IR\n{}\n\nDOCS CONTRACTS EFFECTS\n{docs}\n\nRELEVANT TYPES\n{type_declarations}\n\nPYTHON EXTERNAL TYPE PROJECTIONS\n{external_types}\n\nBOUND SYMBOLS IMPORT RULES\n{bound_symbols}\n\nTYPE MODEL\nPreserve every declared annotation exactly. For Iterator and Generator returns, return the lazy object itself: do not iterate, materialize, normalize, or validate inner values. Use external declarations through their exact public generated aliases; their projected public APIs MAY be called when the contract requires it. Do not reconstruct external paths, use dynamic imports or reflection, or inspect and coerce external values merely to validate a contract. `Dyn[Trait]` is a nominal runtime wrapper: import `Dyn` only from `cott_runtime`, construct it only as `Dyn(value=<compiler-generated concrete>, trait=<exact Trait Protocol>)`, and invoke a trait method only as `dyn.value.method(...)`; never substitute structural values or inspect either wrapper or value.\n",
+        callable.cott_symbol,
+        write_path.display(),
+        String::from_utf8_lossy(selected_ir)
+    )
+    .into_bytes();
     prompt.extend_from_slice(b"Standard ABI aliases, including integer widths, are annotations and MUST NOT be called. Construct result values only with top-level `cott_runtime.Ok(...)`/`cott_runtime.Err(...)`, never `Result.Ok`/`Result.Err`. Generated payload enum aliases have no members; import and construct top-level `<Enum>_<Variant>` classes from the exact generated `*_types` module, never `<Enum>.<Variant>`.\n");
     prompt.extend_from_slice(b"\nFACTORY TYPE MODEL\n`Factory[Concrete]` maps to `type[Concrete]`: it is the exact compiler-generated `Concrete` class object, never an instance, subclass, or arbitrary callable. Constructor calls MUST match `Concrete`'s inferred Cott init signature. Validation MUST NOT construct or invoke a Factory value.\n");
-    prompt.extend_from_slice(b"\nEFFECT CALLS\nCall Cott functions only by their exact imported facade name. Do not alias, store, return, pass, rebind, or shadow a Cott callable, and do not call a value whose Cott identity is dynamic. For an implementation target, a public sibling method of the same concrete may only be called through a parameter annotated with that concrete (normally `self`) or a direct local alias of one, as `<receiver>.<method>(...)`; it is a Cott call. Every direct or private-helper-reachable Cott call must be covered by the target function's declared effects. Imported stdlib, external projections, generated value constructors, and exact Factory constructors are effect leaves.\n");
+    prompt.extend_from_slice(b"\nDYN DISPATCH\nA `Dyn[Trait]` call is resolved only against that exact canonical trait origin and its declared inherited members; generic arguments remain part of its annotation. A nearer child member overrides a parent, while same-depth inherited members are ambiguous; unrelated traits with the same method name are not interchangeable. Await an async trait member and do not await a synchronous one.\n");
+    prompt.extend_from_slice(b"\nEFFECT CALLS\nCall Cott functions only by their exact imported facade name. Do not alias, store, return, pass, rebind, or shadow a Cott callable, and do not call a value whose Cott identity is dynamic except an exact `dyn.value.method(...)` invocation. For an implementation target, a public sibling method of the same concrete may only be called through a parameter annotated with that concrete (normally `self`) or a direct local alias of one, as `<receiver>.<method>(...)`; it is a Cott call. Every direct or private-helper-reachable Cott call must be covered by the target function's declared effects. Imported stdlib, external projections, generated value constructors, exact Dyn construction, and exact Factory constructors are effect leaves.\n");
     prompt.extend_from_slice(b"\nCONTAINER ABI\nVariadic Cott `Tuple[T, ...]` uses native `tuple[T, ...]`. Cott `Array[T, N]` uses `CottArray[T, Literal[N]]` and is constructed only as `CottArray(values=(...))`; Cott `Buffer[N]` uses `CottBuffer[Literal[N]]` and is constructed only as `CottBuffer(data=bytes.fromhex(\"...\"))`. Import `CottArray` and `CottBuffer` from `cott_runtime` and `Literal` from `typing` when required; never substitute Python primitives or call ABI aliases.\n");
     if let Some(existing) = existing {
         prompt.extend_from_slice(b"\nEXISTING IMPLEMENTATION\n");
@@ -155,15 +166,21 @@ pub fn render_prompt(
     Ok(prompt)
 }
 
-fn is_default_impl_method(callable: &PythonCallable) -> bool {
-    matches!(&callable.kind, PythonCallableKind::ImplMethod { .. })
-        && callable
+fn selected_implementation_kind(callable: &PythonCallable) -> Option<&str> {
+    matches!(
+        &callable.kind,
+        PythonCallableKind::ImplMethod { .. } | PythonCallableKind::AsyncImplMethod { .. }
+    )
+    .then(|| {
+        callable
             .declaration
             .get("selected")
             .and_then(serde_json::Value::as_object)
-            .and_then(|selected| selected.get("kind"))
+            .and_then(|selected| selected.get("origin"))
             .and_then(serde_json::Value::as_str)
-            == Some("default")
+    })
+    .flatten()
+    .filter(|kind| matches!(*kind, "default" | "specialization"))
 }
 
 pub fn run_agent(

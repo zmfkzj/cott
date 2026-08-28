@@ -35,6 +35,7 @@ pub enum PythonCallableKind {
     Function,
     AsyncFunction,
     ImplMethod { concrete: String },
+    AsyncImplMethod { concrete: String },
 }
 
 /// A callable selected from a plan.
@@ -189,7 +190,10 @@ impl PythonArtifactPlan {
                     .flatten()
                     .filter_map(|slot| {
                         let selected = slot.get("selected")?.as_object()?;
-                        if selected.get("kind")?.as_str()? != "default" {
+                        if !matches!(
+                            selected.get("origin")?.as_str()?,
+                            "default" | "specialization"
+                        ) {
                             return None;
                         }
                         let function = selected.get("function")?.as_object()?;
@@ -269,7 +273,7 @@ impl PythonArtifactPlan {
                                 else {
                                     continue;
                                 };
-                                let source = if selected.get("kind").and_then(Value::as_str)
+                                let source = if selected.get("origin").and_then(Value::as_str)
                                     == Some("explicit")
                                 {
                                     explicit
@@ -285,6 +289,7 @@ impl PythonArtifactPlan {
                                 } else {
                                     resolve_trait_default(
                                         implementation,
+                                        slot.get("trait_ref").and_then(Value::as_object),
                                         trait_method,
                                         selected,
                                         &trait_declarations,
@@ -296,9 +301,17 @@ impl PythonArtifactPlan {
                                 let Some(method_object) = method.as_object_mut() else {
                                     continue;
                                 };
+                                let callable_kind = slot
+                                    .get("callable_kind")
+                                    .and_then(Value::as_str)
+                                    .expect("validated implementation method callable_kind");
                                 method_object.insert(
                                     "name".to_owned(),
                                     Value::String(method_name.to_owned()),
+                                );
+                                method_object.insert(
+                                    "callable_kind".to_owned(),
+                                    Value::String(callable_kind.to_owned()),
                                 );
                                 method_object
                                     .insert("selected".to_owned(), Value::Object(selected.clone()));
@@ -325,8 +338,20 @@ impl PythonArtifactPlan {
                                             module.module, concrete, name
                                         ),
                                         name,
-                                        kind: PythonCallableKind::ImplMethod {
-                                            concrete: concrete.to_owned(),
+                                        kind: match method
+                                            .get("callable_kind")
+                                            .and_then(Value::as_str)
+                                            .expect("validated implementation method callable_kind")
+                                        {
+                                            "sync" => PythonCallableKind::ImplMethod {
+                                                concrete: concrete.to_owned(),
+                                            },
+                                            "async" => PythonCallableKind::AsyncImplMethod {
+                                                concrete: concrete.to_owned(),
+                                            },
+                                            _ => unreachable!(
+                                                "validated implementation method callable_kind"
+                                            ),
                                         },
                                         declaration: method,
                                         owner: Some(declaration.clone()),
@@ -548,17 +573,28 @@ fn required_array<'a>(
 fn validate_impl_selection(object: &Map<String, Value>) -> Result<(), String> {
     let selected = required_array(object, "selected_methods")?;
     let mut explicit = std::collections::BTreeSet::new();
+    let mut effective_callable_kind = None;
     for slot in selected {
         let slot = slot
             .as_object()
             .ok_or_else(|| "selected implementation method must be an object".to_owned())?;
         let trait_method = required_string(slot, "trait_method")?;
         let method_name = local_name(&trait_method);
+        let callable_kind = required_string(slot, "callable_kind")?;
+        if !matches!(callable_kind.as_str(), "sync" | "async") {
+            return Err("selected implementation method callable_kind is invalid".to_owned());
+        }
+        if effective_callable_kind
+            .replace(callable_kind.clone())
+            .is_some_and(|previous| previous != callable_kind)
+        {
+            return Err("implementation methods must have one callable_kind".to_owned());
+        }
         let selected = slot
             .get("selected")
             .and_then(Value::as_object)
             .ok_or_else(|| "selected implementation method is missing `selected`".to_owned())?;
-        let kind = required_string(selected, "kind")?;
+        let kind = required_string(selected, "origin")?;
         let function = selected
             .get("function")
             .and_then(Value::as_object)
@@ -574,8 +610,8 @@ fn validate_impl_selection(object: &Map<String, Value>) -> Result<(), String> {
             "explicit" => {
                 explicit.insert(method_name.to_owned());
             }
-            "default" => {}
-            _ => return Err("selected implementation method kind is invalid".to_owned()),
+            "default" | "specialization" => {}
+            _ => return Err("selected implementation method origin is invalid".to_owned()),
         }
     }
     for method in required_array(object, "methods")? {
@@ -583,6 +619,12 @@ fn validate_impl_selection(object: &Map<String, Value>) -> Result<(), String> {
             .as_object()
             .ok_or_else(|| "implementation method must be an object".to_owned())?;
         let name = required_string(method, "name")?;
+        let callable_kind = required_string(method, "callable_kind")?;
+        if !matches!(callable_kind.as_str(), "sync" | "async")
+            || effective_callable_kind.as_deref() != Some(callable_kind.as_str())
+        {
+            return Err("implementation methods must have one callable_kind".to_owned());
+        }
         if !explicit.contains(local_name(&name)) {
             return Err(format!(
                 "implementation method `{}` is absent from `selected_methods`",
@@ -595,21 +637,24 @@ fn validate_impl_selection(object: &Map<String, Value>) -> Result<(), String> {
 
 fn resolve_trait_default(
     implementation: &Map<String, Value>,
+    slot_trait_ref: Option<&Map<String, Value>>,
     trait_method: &str,
     selected: &Map<String, Value>,
     trait_declarations: &std::collections::BTreeMap<String, Value>,
 ) -> Option<Value> {
     let (trait_name, method_name) = trait_method.rsplit_once('.')?;
     let trait_declaration = trait_declarations.get(trait_name)?.as_object()?;
-    let trait_ref = implementation
-        .get("traits")?
-        .as_array()?
-        .iter()
-        .filter_map(Value::as_object)
-        .find(|trait_ref| {
-            trait_ref.get("kind").and_then(Value::as_str) == Some("named")
-                && trait_ref.get("name").and_then(Value::as_str) == Some(trait_name)
-        })?;
+    let trait_ref = slot_trait_ref.or_else(|| {
+        implementation
+            .get("traits")?
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_object)
+            .find(|trait_ref| {
+                trait_ref.get("kind").and_then(Value::as_str) == Some("named")
+                    && trait_ref.get("name").and_then(Value::as_str) == Some(trait_name)
+            })
+    })?;
     let mut method = trait_declaration
         .get("methods")?
         .as_array()?
@@ -618,7 +663,9 @@ fn resolve_trait_default(
             method.get("name").and_then(Value::as_str).map(local_name) == Some(method_name)
         })?
         .clone();
-    (method.get("default")? == selected.get("function")?).then_some(())?;
+    (selected.get("origin").and_then(Value::as_str) == Some("specialization")
+        || method.get("default")? == selected.get("function")?)
+    .then_some(())?;
     substitute_trait_arguments(&mut method, trait_declaration, trait_ref);
     Some(method)
 }

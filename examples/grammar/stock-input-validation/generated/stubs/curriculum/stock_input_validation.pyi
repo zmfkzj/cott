@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottList, CottSet, Dyn, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.stock_input_validation_types import Price as Price, Shares as Shares, StockInput as StockInput, StockInputError as StockInputError, StockInputError_EmptyName as StockInputError_EmptyName, StockInputError_NegativePrice as StockInputError_NegativePrice, StockInputError_NegativeShares as StockInputError_NegativeShares, StockInputError_NonFinitePrice as StockInputError_NonFinitePrice, StockName as StockName
 """Validates raw stock fields and constructs StockName, Shares, Price, and

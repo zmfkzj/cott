@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from store.catalog_types import Catalog, CatalogError, CatalogError_ItemNotFound, Item
 
@@ -49,6 +50,7 @@ def find_item(catalog: Catalog, sku: str) -> Result[Item, CatalogError]:
         return True
     if not (_cott_match_ensures_2()):
         raise CottContractViolation("ensures clause failed", symbol="store.catalog.find_item", clause="ensures:2", phase="ensures", span={"end_byte":382,"end_column":47,"end_line":21,"start_byte":340,"start_column":5,"start_line":21}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[Item, CatalogError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["Catalog", "CatalogError", "CatalogError_ItemNotFound", "Item", "find_item"]

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.rock_paper_scissors_types import RoundResult, RoundResult_ComputerWins, RoundResult_Tie, RoundResult_UserWins, RpsMove, RpsMove_Paper, RpsMove_Rock, RpsMove_Scissors
 
@@ -31,6 +32,7 @@ Ties and losing pairs return false."""
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.rock_paper_scissors.user_beats_computer", phase="implementation-call", span={"end_byte":414,"end_column":1,"end_line":21,"start_byte":143,"start_column":1,"start_line":13}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, bool, path="$.return")
+    _result = _cott_wrap_async_protocol(_result, bool, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def decide_round(user: RpsMove, computer: RpsMove) -> RoundResult:
@@ -54,6 +56,7 @@ user_beats_computer; the function performs no random selection."""
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.rock_paper_scissors.decide_round", phase="implementation-call", span={"end_byte":712,"end_column":1,"end_line":28,"start_byte":414,"start_column":1,"start_line":21}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, RoundResult, path="$.return")
+    _result = _cott_wrap_async_protocol(_result, RoundResult, path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["RoundResult", "RoundResult_ComputerWins", "RoundResult_Tie", "RoundResult_UserWins", "RpsMove", "RpsMove_Paper", "RpsMove_Rock", "RpsMove_Scissors", "decide_round", "user_beats_computer"]

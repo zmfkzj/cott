@@ -121,16 +121,26 @@ pub enum HirType {
         ok: Box<HirType>,
         error: Box<HirType>,
     },
+    Dyn {
+        trait_ref: Box<HirType>,
+    },
     Factory {
         instance: Box<HirType>,
     },
     Iterator {
         item: Box<HirType>,
     },
+    AsyncIterator {
+        item: Box<HirType>,
+    },
     Generator {
         yield_type: Box<HirType>,
         send_type: Box<HirType>,
         return_type: Box<HirType>,
+    },
+    AsyncGenerator {
+        yield_type: Box<HirType>,
+        send_type: Box<HirType>,
     },
     Opaque {
         tag: String,
@@ -193,10 +203,18 @@ pub enum HirGenericArg {
     Const(HirConstArgument),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HirVariance {
+    Invariant,
+    Covariant,
+    Contravariant,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HirGenericParam {
     Type {
         span: Span,
+        variance: HirVariance,
         name: String,
         bounds: Vec<HirType>,
         source_order: usize,
@@ -454,6 +472,7 @@ pub struct HirMethod {
     pub generics: Vec<HirGenericParam>,
     pub parameters: Vec<HirParameter>,
     pub return_type: HirType,
+    pub callable_kind: HirCallableKind,
     pub contract: HirContract,
     pub default: Option<HirVerifiedFunction>,
     pub public: bool,
@@ -469,15 +488,55 @@ pub struct HirVerifiedFunction {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HirSelectedImplementation {
-    Explicit { function: HirVerifiedFunction },
-    Default { function: HirVerifiedFunction },
+    Explicit {
+        function: HirVerifiedFunction,
+    },
+    Specialization {
+        specialization: SymbolId,
+        function: HirVerifiedFunction,
+    },
+    Default {
+        function: HirVerifiedFunction,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HirSelectedMethod {
     pub trait_method: SymbolId,
+    pub trait_ref: HirType,
     pub receiver_type: HirType,
+    pub parameters: Vec<HirParameter>,
+    pub return_type: HirType,
+    pub callable_kind: HirCallableKind,
     pub selected: HirSelectedImplementation,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirTraitParent {
+    pub span: Span,
+    pub trait_ref: HirType,
+    pub source_order: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirSpecializationMethod {
+    pub span: Span,
+    pub name: String,
+    pub trait_method: SymbolId,
+    pub callable_kind: HirCallableKind,
+    pub function: HirVerifiedFunction,
+    pub source_order: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirSpecialization {
+    pub id: SymbolId,
+    pub span: Span,
+    pub annotations: Vec<HirAnnotation>,
+    pub receiver_type: HirType,
+    pub trait_ref: HirType,
+    pub methods: Vec<HirSpecializationMethod>,
+    pub source_order: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -487,6 +546,8 @@ pub struct HirTrait {
     pub annotations: Vec<HirAnnotation>,
     pub doc: Option<HirDoc>,
     pub generics: Vec<HirGenericParam>,
+    pub parents: Vec<HirTraitParent>,
+    pub closure: Vec<HirType>,
     pub methods: Vec<HirMethod>,
     pub associated_types: Vec<HirAssociatedType>,
     pub public: bool,
@@ -517,6 +578,7 @@ pub struct HirImplMethod {
     pub self_span: Span,
     pub parameters: Vec<HirParameter>,
     pub return_type: HirType,
+    pub callable_kind: HirCallableKind,
     pub doc: Option<HirDoc>,
     pub contract: HirContract,
     pub modifies: Vec<SymbolId>,
@@ -613,6 +675,7 @@ pub enum HirDeclaration {
     Enum(HirEnum),
     Trait(HirTrait),
     Impl(HirImpl),
+    Specialization(HirSpecialization),
     Rule(HirRule),
     Const(HirConst),
     Resource(HirResource),
@@ -629,6 +692,7 @@ impl HirDeclaration {
             Self::Enum(value) => &value.id,
             Self::Trait(value) => &value.id,
             Self::Impl(value) => &value.id,
+            Self::Specialization(value) => &value.id,
             Self::Rule(value) => &value.id,
             Self::Const(value) => &value.id,
             Self::Resource(value) => &value.id,
@@ -645,6 +709,7 @@ impl HirDeclaration {
             Self::Enum(value) => &value.span,
             Self::Trait(value) => &value.span,
             Self::Impl(value) => &value.span,
+            Self::Specialization(value) => &value.span,
             Self::Rule(value) => &value.span,
             Self::Const(value) => &value.span,
             Self::Resource(value) => &value.span,
@@ -661,6 +726,7 @@ impl HirDeclaration {
             Self::Enum(value) => value.public,
             Self::Trait(value) => value.public,
             Self::Impl(value) => value.public,
+            Self::Specialization(_) => false,
             Self::Rule(value) => value.public,
             Self::Const(value) => value.public,
             Self::Resource(value) => value.public,
@@ -688,6 +754,121 @@ impl HirProject {
     pub fn new(modules: Vec<HirModule>) -> Self {
         Self { modules }
     }
+}
+
+/// Nominal assignability under declaration-site variance. `Dyn` is deliberately
+/// excluded: wrapping a concrete value is an explicit runtime operation.
+pub fn is_assignable(source: &HirType, target: &HirType, project: &HirProject) -> bool {
+    fn assignable(
+        source: &HirType,
+        target: &HirType,
+        variances: &BTreeMap<SymbolId, Vec<HirVariance>>,
+        traits: &BTreeMap<SymbolId, HirTrait>,
+        implementations: &BTreeMap<SymbolId, Vec<HirType>>,
+    ) -> bool {
+        if source == target {
+            return true;
+        }
+        let (
+            HirType::Named {
+                symbol: source_symbol,
+                args: source_args,
+            },
+            HirType::Named {
+                symbol: target_symbol,
+                args: target_args,
+            },
+        ) = (source, target)
+        else {
+            return false;
+        };
+        if source_symbol != target_symbol {
+            if let Some(effective) = instantiated_trait_members(source, traits) {
+                return effective
+                    .closure
+                    .iter()
+                    .any(|parent| assignable(parent, target, variances, traits, implementations));
+            }
+            return source_args.is_empty()
+                && implementations.get(source_symbol).is_some_and(|direct| {
+                    implemented_trait_refs(direct, traits)
+                        .iter()
+                        .any(|implemented| {
+                            assignable(implemented, target, variances, traits, implementations)
+                        })
+                });
+        }
+        if source_args.len() != target_args.len() {
+            return false;
+        }
+        source_args
+            .iter()
+            .zip(target_args)
+            .zip(
+                variances
+                    .get(source_symbol)
+                    .cloned()
+                    .unwrap_or_else(|| vec![HirVariance::Invariant; source_args.len()]),
+            )
+            .all(
+                |((source, target), variance)| match (source, target, variance) {
+                    (
+                        HirGenericArg::Type(source),
+                        HirGenericArg::Type(target),
+                        HirVariance::Covariant,
+                    ) => assignable(source, target, variances, traits, implementations),
+                    (
+                        HirGenericArg::Type(source),
+                        HirGenericArg::Type(target),
+                        HirVariance::Contravariant,
+                    ) => assignable(target, source, variances, traits, implementations),
+                    (source, target, HirVariance::Invariant) => source == target,
+                    _ => false,
+                },
+            )
+    }
+    let variances = project
+        .modules
+        .iter()
+        .flat_map(|module| module.declarations.iter())
+        .filter_map(|declaration| match declaration {
+            HirDeclaration::Struct(value) => Some((&value.id, &value.generics)),
+            HirDeclaration::Enum(value) => Some((&value.id, &value.generics)),
+            HirDeclaration::Trait(value) => Some((&value.id, &value.generics)),
+            _ => None,
+        })
+        .map(|(id, generics)| {
+            (
+                id.clone(),
+                generics
+                    .iter()
+                    .map(|generic| match generic {
+                        HirGenericParam::Type { variance, .. } => *variance,
+                        HirGenericParam::Const { .. } => HirVariance::Invariant,
+                    })
+                    .collect(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let traits = project
+        .modules
+        .iter()
+        .flat_map(|module| module.declarations.iter())
+        .filter_map(|declaration| match declaration {
+            HirDeclaration::Trait(value) => Some((value.id.clone(), value.clone())),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    let implementations = project
+        .modules
+        .iter()
+        .flat_map(|module| module.declarations.iter())
+        .filter_map(|declaration| match declaration {
+            HirDeclaration::Impl(value) => Some((value.id.clone(), value.traits.clone())),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    assignable(source, target, &variances, &traits, &implementations)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -947,6 +1128,7 @@ impl<'a> OwnedLower<'a> {
                     ),
                     Declaration::Resource(v) => (&v.name, OwnedDeclKind::Resource),
                     Declaration::Function(v) => (&v.name, OwnedDeclKind::Function),
+                    Declaration::Specialize(_) => continue,
                 };
                 declarations.insert(SymbolId::new(modules[index].clone(), name.clone()), kind);
             }
@@ -1130,6 +1312,9 @@ impl<'a> OwnedLower<'a> {
                 HirType::Iterator { item } => HirType::Iterator {
                     item: Box::new(resolve(lower, item, seen)),
                 },
+                HirType::AsyncIterator { item } => HirType::AsyncIterator {
+                    item: Box::new(resolve(lower, item, seen)),
+                },
                 HirType::Generator {
                     yield_type,
                     send_type,
@@ -1138,6 +1323,16 @@ impl<'a> OwnedLower<'a> {
                     yield_type: Box::new(resolve(lower, yield_type, seen)),
                     send_type: Box::new(resolve(lower, send_type, seen)),
                     return_type: Box::new(resolve(lower, return_type, seen)),
+                },
+                HirType::AsyncGenerator {
+                    yield_type,
+                    send_type,
+                } => HirType::AsyncGenerator {
+                    yield_type: Box::new(resolve(lower, yield_type, seen)),
+                    send_type: Box::new(resolve(lower, send_type, seen)),
+                },
+                HirType::Dyn { trait_ref } => HirType::Dyn {
+                    trait_ref: Box::new(resolve(lower, trait_ref, seen)),
                 },
                 HirType::Result { ok, error } => HirType::Result {
                     ok: Box::new(resolve(lower, ok, seen)),
@@ -1154,11 +1349,12 @@ impl<'a> OwnedLower<'a> {
     }
 
     fn transparent_expression(&mut self, mut expression: HirExpr) -> HirExpr {
+        let mut visited = HashSet::new();
         loop {
             let HirType::Named { symbol, .. } = &expression.ty else {
                 return expression;
             };
-            if self.newtype_carrier(symbol).is_none()
+            if !visited.insert(symbol.clone())
                 || !matches!(
                     &expression.kind,
                     HirExprKind::ParameterRef(_)
@@ -1170,7 +1366,9 @@ impl<'a> OwnedLower<'a> {
             {
                 return expression;
             }
-            let carrier = self.newtype_carrier(symbol).unwrap();
+            let Some(carrier) = self.newtype_carrier(symbol) else {
+                return expression;
+            };
             expression = HirExpr {
                 span: expression.span.clone(),
                 ty: carrier,
@@ -1674,7 +1872,9 @@ impl<'a> OwnedLower<'a> {
         };
         let mut candidates = trait_ids
             .into_iter()
-            .filter(|trait_id| self.trait_associated_type(trait_id, name))
+            .flat_map(|trait_id| self.trait_associated_types(&trait_id, name))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect::<Vec<_>>();
         if candidates.len() != 1 {
             self.error(
@@ -1701,24 +1901,47 @@ impl<'a> OwnedLower<'a> {
         })
     }
 
-    fn trait_associated_type(&self, trait_id: &SymbolId, name: &str) -> bool {
-        self.modules
-            .iter()
-            .position(|module| module == &trait_id.module)
-            .is_some_and(|module| {
-                self.parsed.sources[module]
-                    .syntax
-                    .declarations
-                    .iter()
-                    .any(|declaration| {
-                        matches!(
-                            declaration,
-                            Declaration::Trait(value)
-                                if value.name == trait_id.name
-                                    && value.associated_types.iter().any(|item| item.name == name)
-                        )
-                    })
-            })
+    fn trait_associated_types(&self, trait_id: &SymbolId, name: &str) -> BTreeSet<SymbolId> {
+        fn collect(
+            lower: &OwnedLower<'_>,
+            trait_id: &SymbolId,
+            name: &str,
+            seen: &mut BTreeSet<SymbolId>,
+            out: &mut BTreeSet<SymbolId>,
+        ) {
+            if !seen.insert(trait_id.clone()) {
+                return;
+            }
+            let Some(module) = lower
+                .modules
+                .iter()
+                .position(|module| module == &trait_id.module)
+            else {
+                return;
+            };
+            if let Some(value) = lower.parsed.sources[module]
+                .syntax
+                .declarations
+                .iter()
+                .find_map(|declaration| match declaration {
+                    Declaration::Trait(value) if value.name == trait_id.name => Some(value),
+                    _ => None,
+                })
+            {
+                if value.associated_types.iter().any(|item| item.name == name) {
+                    out.insert(trait_id.clone());
+                }
+                for parent in &value.parents {
+                    if let Some(parent) = lower.lookup(module, &parent.path) {
+                        collect(lower, &parent, name, seen, out);
+                    }
+                }
+            }
+            seen.remove(trait_id);
+        }
+        let mut out = BTreeSet::new();
+        collect(self, trait_id, name, &mut BTreeSet::new(), &mut out);
+        out
     }
 
     fn declaration_traits(&mut self, symbol: &SymbolId) -> Vec<HirType> {
@@ -1834,7 +2057,28 @@ impl<'a> OwnedLower<'a> {
                         instance: Box::new(instance),
                     };
                 }
-                "List" | "Set" | "Option" | "Iterator" => {
+                "Dyn" => {
+                    self.arity(module, value, 1, &name);
+                    let trait_ref = type_at(self, 0);
+                    if !matches!(
+                        &trait_ref,
+                        HirType::Named { symbol, .. }
+                            if matches!(
+                                self.declarations.get(symbol),
+                                Some(OwnedDeclKind::Trait { .. })
+                            )
+                    ) {
+                        self.error(
+                            module,
+                            value.span.clone(),
+                            "Dyn argument must resolve to a nominal trait",
+                        );
+                    }
+                    return HirType::Dyn {
+                        trait_ref: Box::new(trait_ref),
+                    };
+                }
+                "List" | "Set" | "Option" | "Iterator" | "AsyncIterator" => {
                     self.arity(module, value, 1, &name);
                     let item = Box::new(type_at(self, 0));
                     return match name.as_str() {
@@ -1842,6 +2086,7 @@ impl<'a> OwnedLower<'a> {
                         "Set" => HirType::Set { item },
                         "Option" => HirType::Option { item },
                         "Iterator" => HirType::Iterator { item },
+                        "AsyncIterator" => HirType::AsyncIterator { item },
                         _ => unreachable!(),
                     };
                 }
@@ -1944,6 +2189,13 @@ impl<'a> OwnedLower<'a> {
                         yield_type: Box::new(type_at(self, 0)),
                         send_type: Box::new(type_at(self, 1)),
                         return_type: Box::new(type_at(self, 2)),
+                    };
+                }
+                "AsyncGenerator" => {
+                    self.arity(module, value, 2, &name);
+                    return HirType::AsyncGenerator {
+                        yield_type: Box::new(type_at(self, 0)),
+                        send_type: Box::new(type_at(self, 1)),
                     };
                 }
                 _ => {}
@@ -2059,8 +2311,18 @@ impl<'a> OwnedLower<'a> {
             .iter()
             .enumerate()
             .map(|(source_order, value)| match value {
-                ast::GenericParam::Type { span, name, bounds } => HirGenericParam::Type {
+                ast::GenericParam::Type {
+                    span,
+                    variance,
+                    name,
+                    bounds,
+                } => HirGenericParam::Type {
                     span: span.clone(),
+                    variance: match variance {
+                        ast::Variance::Invariant => HirVariance::Invariant,
+                        ast::Variance::Covariant => HirVariance::Covariant,
+                        ast::Variance::Contravariant => HirVariance::Contravariant,
+                    },
                     name: name.clone(),
                     bounds: bounds
                         .iter()
@@ -2741,6 +3003,15 @@ fn const_argument_type(value: &HirConstArgument) -> HirConstType {
     }
 }
 
+fn async_return_disallowed(ty: &HirType) -> bool {
+    matches!(
+        ty,
+        HirType::Iterator { .. }
+            | HirType::Generator { .. }
+            | HirType::Primitive(PrimitiveType::Never)
+    )
+}
+
 fn owned_has_unresolved_type(ty: &HirType) -> bool {
     match ty {
         HirType::TypeParameter { .. } | HirType::Opaque { .. } => true,
@@ -2749,11 +3020,15 @@ fn owned_has_unresolved_type(ty: &HirType) -> bool {
             HirGenericArg::Type(arg) => owned_has_unresolved_type(arg),
             HirGenericArg::Const(arg) => hir_const_argument_has_parameter(arg),
         }),
-        HirType::Factory { instance } => owned_has_unresolved_type(instance),
+        HirType::Factory { instance }
+        | HirType::Dyn {
+            trait_ref: instance,
+        } => owned_has_unresolved_type(instance),
         HirType::List { item }
         | HirType::Set { item }
         | HirType::Option { item }
-        | HirType::Iterator { item } => owned_has_unresolved_type(item),
+        | HirType::Iterator { item }
+        | HirType::AsyncIterator { item } => owned_has_unresolved_type(item),
         HirType::Tuple { items } => items.iter().any(owned_has_unresolved_type),
         HirType::Array { item, length } => {
             owned_has_unresolved_type(item) || hir_const_argument_has_parameter(length)
@@ -2774,6 +3049,10 @@ fn owned_has_unresolved_type(ty: &HirType) -> bool {
                 || owned_has_unresolved_type(send_type)
                 || owned_has_unresolved_type(return_type)
         }
+        HirType::AsyncGenerator {
+            yield_type,
+            send_type,
+        } => owned_has_unresolved_type(yield_type) || owned_has_unresolved_type(send_type),
         HirType::Primitive(_) => false,
     }
 }
@@ -4074,7 +4353,7 @@ impl<'a> OwnedLower<'a> {
             | HirType::TypeParameter { .. }
             | HirType::AssociatedProjection { .. } => false,
             HirType::Primitive(_) | HirType::Opaque { .. } => true,
-            HirType::Factory { .. } => false,
+            HirType::Factory { .. } | HirType::Dyn { .. } => false,
             HirType::Named { symbol, args } => {
                 matches!(
                     self.declarations.get(symbol),
@@ -4091,7 +4370,8 @@ impl<'a> OwnedLower<'a> {
             HirType::List { item }
             | HirType::Set { item }
             | HirType::Option { item }
-            | HirType::Iterator { item } => self.state_type_allowed(item),
+            | HirType::Iterator { item }
+            | HirType::AsyncIterator { item } => self.state_type_allowed(item),
             HirType::Tuple { items } => items.iter().all(|item| self.state_type_allowed(item)),
             HirType::Array { item, length } => {
                 self.state_type_allowed(item) && !hir_const_argument_has_parameter(length)
@@ -4112,6 +4392,10 @@ impl<'a> OwnedLower<'a> {
                     && self.state_type_allowed(send_type)
                     && self.state_type_allowed(return_type)
             }
+            HirType::AsyncGenerator {
+                yield_type,
+                send_type,
+            } => self.state_type_allowed(yield_type) && self.state_type_allowed(send_type),
         }
     }
 
@@ -4161,11 +4445,15 @@ impl<'a> OwnedLower<'a> {
             else {
                 return None;
             };
-            if function.callable_kind != ast::CallableKind::Sync {
+            if function.callable_kind != method.callable_kind {
+                let expected = match method.callable_kind {
+                    ast::CallableKind::Sync => "a sync",
+                    ast::CallableKind::Async => "an async",
+                };
                 self.error(
                     module,
                     path.span.clone(),
-                    "trait default must reference a sync free function",
+                    format!("trait default must reference {expected} free function"),
                 );
                 return None;
             }
@@ -4224,20 +4512,27 @@ impl<'a> OwnedLower<'a> {
                     })
                     .collect(),
             };
-            let signature_matches = function.parameters.len() == method.parameters.len() + 1
-                && function.parameters.first().is_some_and(|parameter| {
-                    self.ty(function_module, &parameter.ty, &function_scope) == receiver
+            let function_parameters = function
+                .parameters
+                .iter()
+                .enumerate()
+                .map(|(order, parameter)| {
+                    self.parameter(function_module, parameter, &function_scope, order)
                 })
-                && function
-                    .parameters
-                    .iter()
-                    .skip(1)
-                    .zip(&method.parameters)
-                    .all(|(function, trait_method)| {
-                        function.name == trait_method.name
-                            && self.ty(function_module, &function.ty, &function_scope)
-                                == self.ty(module, &trait_method.ty, trait_scope)
-                    })
+                .collect::<Vec<_>>();
+            let trait_parameters = method
+                .parameters
+                .iter()
+                .enumerate()
+                .map(|(order, parameter)| self.parameter(module, parameter, trait_scope, order))
+                .collect::<Vec<_>>();
+            let signature_matches = function_parameters.len() == trait_parameters.len() + 1
+                && function_parameters.first().is_some_and(|parameter| {
+                    parameter.ty == receiver
+                        && parameter.kind == HirParameterKind::Positional
+                        && parameter.default.is_none()
+                })
+                && same_parameter_shapes(&function_parameters[1..], &trait_parameters)
                 && self.ty(function_module, &function.return_type, &function_scope)
                     == self.ty(module, &method.return_type, trait_scope);
             if !signature_matches {
@@ -4258,272 +4553,6 @@ impl<'a> OwnedLower<'a> {
         resolved
     }
 
-    fn validate_impl_methods(
-        &mut self,
-        module: usize,
-        impl_id: &SymbolId,
-        impl_span: &Span,
-        traits: &[HirType],
-        associated_types: &[HirAssociatedTypeAssignment],
-        methods: &[HirImplMethod],
-    ) -> Vec<HirSelectedMethod> {
-        struct RequiredMethod {
-            name: String,
-            parameters: Vec<(String, HirType)>,
-            return_type: HirType,
-            trait_methods: Vec<SymbolId>,
-            defaults: Vec<HirVerifiedFunction>,
-        }
-
-        let mut required = Vec::<RequiredMethod>::new();
-        for trait_ref in traits {
-            let HirType::Named { symbol, args } = trait_ref else {
-                continue;
-            };
-            let Some(source_module) = self
-                .modules
-                .iter()
-                .position(|candidate| candidate == &symbol.module)
-            else {
-                continue;
-            };
-            let Some((generics, trait_methods)) = self.parsed.sources[source_module]
-                .syntax
-                .declarations
-                .iter()
-                .find_map(|declaration| match declaration {
-                    Declaration::Trait(value) if value.name == symbol.name => {
-                        Some((value.generics.clone(), value.methods.clone()))
-                    }
-                    _ => None,
-                })
-            else {
-                continue;
-            };
-            let scope = GenericScope::from_declared(&generics);
-            let substitutions = generics
-                .iter()
-                .map(|generic| match generic {
-                    ast::GenericParam::Type { name, .. }
-                    | ast::GenericParam::Const { name, .. } => name.clone(),
-                })
-                .zip(args.iter().cloned())
-                .collect::<HashMap<_, _>>();
-            for trait_method in &trait_methods {
-                let parameters = trait_method
-                    .parameters
-                    .iter()
-                    .map(|parameter| {
-                        (
-                            parameter.name.clone(),
-                            substitute_associated_type(
-                                substitute_hir_type(
-                                    self.ty(source_module, &parameter.ty, &scope),
-                                    &substitutions,
-                                ),
-                                associated_types,
-                            ),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let return_type = substitute_associated_type(
-                    substitute_hir_type(
-                        self.ty(source_module, &trait_method.return_type, &scope),
-                        &substitutions,
-                    ),
-                    associated_types,
-                );
-                let trait_method_id = SymbolId::new(
-                    symbol.module.clone(),
-                    format!("{}.{}", symbol.name, trait_method.name),
-                );
-                let default =
-                    self.default_function(source_module, symbol, trait_method, &generics, &scope);
-                if let Some(existing) = required
-                    .iter_mut()
-                    .find(|existing| existing.name == trait_method.name)
-                {
-                    if existing.parameters != parameters || existing.return_type != return_type {
-                        self.error(
-                            module,
-                            trait_method.span.clone(),
-                            "impl traits have incompatible methods with the same name",
-                        );
-                    } else {
-                        existing.trait_methods.push(trait_method_id);
-                        if let Some(default) = default
-                            && !existing.defaults.contains(&default)
-                        {
-                            existing.defaults.push(default);
-                        }
-                    }
-                } else {
-                    required.push(RequiredMethod {
-                        name: trait_method.name.clone(),
-                        parameters,
-                        return_type,
-                        trait_methods: vec![trait_method_id],
-                        defaults: default.into_iter().collect(),
-                    });
-                }
-            }
-        }
-
-        let mut explicit = BTreeMap::<String, usize>::new();
-        for (index, method) in methods.iter().enumerate() {
-            if explicit.insert(method.name.clone(), index).is_some() {
-                self.error(
-                    module,
-                    method.span.clone(),
-                    format!("duplicate impl method `{}`", method.name),
-                );
-                continue;
-            }
-            let Some(required) = required
-                .iter()
-                .find(|required| required.name == method.name)
-            else {
-                self.error(
-                    module,
-                    method.span.clone(),
-                    "impl method is not declared by its traits",
-                );
-                continue;
-            };
-            if method.return_type != required.return_type
-                || method
-                    .parameters
-                    .iter()
-                    .map(|parameter| (parameter.name.clone(), parameter.ty.clone()))
-                    .collect::<Vec<_>>()
-                    != required.parameters
-            {
-                self.error(
-                    module,
-                    method.span.clone(),
-                    "impl method signature must exactly match its trait method",
-                );
-            }
-        }
-
-        let receiver_type = HirType::Named {
-            symbol: impl_id.clone(),
-            args: Vec::new(),
-        };
-        let mut selected = Vec::new();
-        for required in required {
-            let selected_implementation = if let Some(index) = explicit.get(&required.name) {
-                let method = &methods[*index];
-                HirSelectedImplementation::Explicit {
-                    function: HirVerifiedFunction {
-                        module: impl_id.module.clone(),
-                        symbol: format!("{}.{}", impl_id.name, method.name),
-                        verified_facade: format!(
-                            "{}.{}.{}",
-                            impl_id.module.as_string(),
-                            impl_id.name,
-                            method.name
-                        ),
-                    },
-                }
-            } else if required.defaults.len() == 1 {
-                HirSelectedImplementation::Default {
-                    function: required.defaults.into_iter().next().unwrap(),
-                }
-            } else {
-                if required.defaults.is_empty() {
-                    self.error(
-                        module,
-                        impl_span.clone(),
-                        format!("impl is missing trait method `{}`", required.name),
-                    );
-                } else {
-                    self.error(
-                        module,
-                        impl_span.clone(),
-                        format!(
-                            "ambiguous trait defaults for method `{}`; declare an explicit impl method",
-                            required.name
-                        ),
-                    );
-                }
-                continue;
-            };
-            for trait_method in required.trait_methods {
-                selected.push(HirSelectedMethod {
-                    trait_method,
-                    receiver_type: receiver_type.clone(),
-                    selected: selected_implementation.clone(),
-                });
-            }
-        }
-        selected
-    }
-    fn associated_requirements(
-        &mut self,
-        traits: &[HirType],
-    ) -> Vec<(SymbolId, String, Vec<HirType>)> {
-        let mut requirements = Vec::new();
-        for trait_ref in traits {
-            let HirType::Named { symbol, args } = trait_ref else {
-                continue;
-            };
-            let Some(module) = self
-                .modules
-                .iter()
-                .position(|module| module == &symbol.module)
-            else {
-                continue;
-            };
-            let Some((generics, associated_types)) = self.parsed.sources[module]
-                .syntax
-                .declarations
-                .iter()
-                .find_map(|declaration| match declaration {
-                    Declaration::Trait(value) if value.name == symbol.name => {
-                        Some((value.generics.clone(), value.associated_types.clone()))
-                    }
-                    _ => None,
-                })
-            else {
-                continue;
-            };
-            let substitutions = generics
-                .iter()
-                .map(|generic| match generic {
-                    ast::GenericParam::Type { name, .. }
-                    | ast::GenericParam::Const { name, .. } => name.clone(),
-                })
-                .zip(args.iter().cloned())
-                .collect::<HashMap<_, _>>();
-            let scope = GenericScope::from_declared(&generics);
-            for associated in associated_types {
-                requirements.push((
-                    symbol.clone(),
-                    associated.name,
-                    associated
-                        .bounds
-                        .iter()
-                        .map(|bound| {
-                            substitute_hir_type(self.ty(module, bound, &scope), &substitutions)
-                        })
-                        .collect(),
-                ));
-            }
-        }
-        requirements
-    }
-
-    fn associated_assignment_satisfies(&mut self, value: &HirType, bound: &HirType) -> bool {
-        value == bound
-            || matches!(
-                value,
-                HirType::Named { symbol, .. }
-
-                    if self.declarations.get(symbol) == Some(&OwnedDeclKind::Impl)
-                        && self.declaration_traits(symbol).iter().any(|trait_ref| trait_ref == bound)
-            )
-    }
     fn resource_state_ref(
         &mut self,
         module: usize,
@@ -4755,6 +4784,33 @@ impl<'a> OwnedLower<'a> {
             Declaration::Trait(value) => {
                 let scope = GenericScope::from_declared(&value.generics);
                 let trait_id = id_for(&value.name);
+                let parents = value
+                    .parents
+                    .iter()
+                    .enumerate()
+                    .map(|(source_order, parent)| {
+                        let trait_ref = self.ty(module, parent, &scope);
+                        if !matches!(
+                            &trait_ref,
+                            HirType::Named { symbol, .. }
+                                if matches!(
+                                    self.declarations.get(symbol),
+                                    Some(OwnedDeclKind::Trait { .. })
+                                )
+                        ) {
+                            self.error(
+                                module,
+                                parent.span.clone(),
+                                "trait parent must resolve to a trait",
+                            );
+                        }
+                        HirTraitParent {
+                            span: parent.span.clone(),
+                            trait_ref,
+                            source_order,
+                        }
+                    })
+                    .collect::<Vec<_>>();
                 let mut associated_names = BTreeSet::new();
                 let associated_types = value
                     .associated_types
@@ -4810,35 +4866,54 @@ impl<'a> OwnedLower<'a> {
                         text: v.text.clone(),
                     }),
                     generics: self.generics(module, &value.generics),
+                    parents,
+                    closure: Vec::new(),
                     methods: value
                         .methods
                         .iter()
                         .enumerate()
-                        .map(|(i, method)| HirMethod {
-                            id: SymbolId::new(
-                                trait_id.module.clone(),
-                                format!("{}.{}", trait_id.name, method.name),
-                            ),
-                            span: method.span.clone(),
-                            doc: None,
-                            generics: Vec::new(),
-                            parameters: method
-                                .parameters
-                                .iter()
-                                .enumerate()
-                                .map(|(j, p)| self.parameter(module, p, &scope, j))
-                                .collect(),
-                            return_type: self.ty(module, &method.return_type, &scope),
-                            contract: HirContract::default(),
-                            default: self.default_function(
-                                module,
-                                &trait_id,
-                                method,
-                                &value.generics,
-                                &scope,
-                            ),
-                            public: true,
-                            source_order: i,
+                        .map(|(i, method)| {
+                            let return_type = self.ty(module, &method.return_type, &scope);
+                            let callable_kind = match method.callable_kind {
+                                ast::CallableKind::Sync => HirCallableKind::Sync,
+                                ast::CallableKind::Async => HirCallableKind::Async,
+                            };
+                            if callable_kind == HirCallableKind::Async
+                                && async_return_disallowed(&return_type)
+                            {
+                                self.error(
+                                    module,
+                                    method.return_type.span.clone(),
+                                    "async trait method cannot return Iterator, Generator, or Never",
+                                );
+                            }
+                            HirMethod {
+                                id: SymbolId::new(
+                                    trait_id.module.clone(),
+                                    format!("{}.{}", trait_id.name, method.name),
+                                ),
+                                span: method.span.clone(),
+                                doc: None,
+                                generics: Vec::new(),
+                                parameters: method
+                                    .parameters
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(j, p)| self.parameter(module, p, &scope, j))
+                                    .collect(),
+                                return_type,
+                                callable_kind,
+                                contract: HirContract::default(),
+                                default: self.default_function(
+                                    module,
+                                    &trait_id,
+                                    method,
+                                    &value.generics,
+                                    &scope,
+                                ),
+                                public: true,
+                                source_order: i,
+                            }
                         })
                         .collect(),
                     associated_types,
@@ -4869,85 +4944,22 @@ impl<'a> OwnedLower<'a> {
                         _ => self.error(module, source.span.clone(), "impl target must be a trait"),
                     }
                 }
-                let requirements = self.associated_requirements(&traits);
-                let mut assigned_names = BTreeSet::new();
                 let associated_types = value
                     .associated_types
                     .iter()
                     .enumerate()
-                    .filter_map(|(source_order, assignment)| {
-                        if !assigned_names.insert(assignment.name.clone()) {
-                            self.error(
-                                module,
-                                assignment.span.clone(),
-                                format!(
-                                    "duplicate associated type assignment `{}`",
-                                    assignment.name
-                                ),
-                            );
-                            return None;
-                        }
-                        let candidates = requirements
-                            .iter()
-                            .filter(|(_, name, _)| name == &assignment.name)
-                            .collect::<Vec<_>>();
-                        if candidates.len() != 1 {
-                            self.error(
-                                module,
-                                assignment.span.clone(),
-                                if candidates.is_empty() {
-                                    format!("unknown associated type `{}`", assignment.name)
-                                } else {
-                                    format!(
-                                        "associated type assignment `{}` is ambiguous",
-                                        assignment.name
-                                    )
-                                },
-                            );
-                            return None;
-                        }
-                        let (trait_id, name, bounds) = candidates[0];
-                        let ty = self.ty(module, &assignment.ty, &GenericScope::default());
-                        if associated_type_contains(&ty, trait_id, name) {
-                            self.error(
-                                module,
-                                assignment.span.clone(),
-                                "associated type assignment must not be cyclic",
-                            );
-                        }
-                        for bound in bounds {
-                            if !self.associated_assignment_satisfies(&ty, bound) {
-                                self.error(
-                                    module,
-                                    assignment.span.clone(),
-                                    "associated type assignment does not satisfy its bound",
-                                );
-                            }
-                        }
-                        Some(HirAssociatedTypeAssignment {
-                            id: SymbolId::new(
-                                id.module.clone(),
-                                format!("{}.{}.{}", id.name, trait_id.name, name),
-                            ),
-                            span: assignment.span.clone(),
-                            trait_id: trait_id.clone(),
-                            name: name.clone(),
-                            ty,
-                            source_order,
-                        })
+                    .map(|(source_order, assignment)| HirAssociatedTypeAssignment {
+                        id: SymbolId::new(
+                            id.module.clone(),
+                            format!("{}.pending.{}", id.name, assignment.name),
+                        ),
+                        span: assignment.span.clone(),
+                        trait_id: SymbolId::new(id.module.clone(), "pending"),
+                        name: assignment.name.clone(),
+                        ty: self.ty(module, &assignment.ty, &GenericScope::default()),
+                        source_order,
                     })
                     .collect::<Vec<_>>();
-                for (trait_id, name, _) in &requirements {
-                    if !associated_types.iter().any(|assignment| {
-                        assignment.trait_id == *trait_id && assignment.name == *name
-                    }) {
-                        self.error(
-                            module,
-                            value.span.clone(),
-                            format!("impl is missing associated type assignment `{}`", name),
-                        );
-                    }
-                }
                 let state = value
                     .state
                     .iter()
@@ -5231,6 +5243,19 @@ impl<'a> OwnedLower<'a> {
                         }
                         let return_type =
                             self.ty(module, &method.return_type, &GenericScope::default());
+                        let callable_kind = match method.callable_kind {
+                            ast::CallableKind::Sync => HirCallableKind::Sync,
+                            ast::CallableKind::Async => HirCallableKind::Async,
+                        };
+                        if callable_kind == HirCallableKind::Async
+                            && async_return_disallowed(&return_type)
+                        {
+                            self.error(
+                                module,
+                                method.return_type.span.clone(),
+                                "async impl method cannot return Iterator, Generator, or Never",
+                            );
+                        }
                         let old_fields = state
                             .iter()
                             .map(|field| {
@@ -5329,6 +5354,7 @@ impl<'a> OwnedLower<'a> {
                             self_span: method.self_span.clone(),
                             parameters,
                             return_type,
+                            callable_kind,
                             doc,
                             contract,
                             modifies,
@@ -5337,14 +5363,7 @@ impl<'a> OwnedLower<'a> {
                         }
                     })
                     .collect::<Vec<_>>();
-                let selected_methods = self.validate_impl_methods(
-                    module,
-                    &id,
-                    &value.span,
-                    &traits,
-                    &associated_types,
-                    &methods,
-                );
+                let selected_methods = Vec::new();
                 HirDeclaration::Impl(HirImpl {
                     id,
                     span: value.span.clone(),
@@ -5357,6 +5376,111 @@ impl<'a> OwnedLower<'a> {
                     associated_types,
                     selected_methods,
                     public: true,
+                    source_order: order,
+                })
+            }
+            Declaration::Specialize(value) => {
+                let receiver_path =
+                    ast::QualifiedName::new(value.span.clone(), vec![value.name.clone()]);
+                let receiver_type = self.ty(
+                    module,
+                    &ast::Type {
+                        span: value.span.clone(),
+                        path: receiver_path,
+                        arguments: Vec::new(),
+                    },
+                    &GenericScope::default(),
+                );
+                if !matches!(
+                    &receiver_type,
+                    HirType::Named { symbol, args }
+                        if args.is_empty()
+                            && self.declarations.get(symbol) == Some(&OwnedDeclKind::Impl)
+                ) {
+                    self.error(
+                        module,
+                        value.span.clone(),
+                        "specialization receiver must resolve to an impl declaration",
+                    );
+                }
+                let trait_ref = self.ty(module, &value.trait_, &GenericScope::default());
+                let trait_symbol = match &trait_ref {
+                    HirType::Named { symbol, .. }
+                        if matches!(
+                            self.declarations.get(symbol),
+                            Some(OwnedDeclKind::Trait { .. })
+                        ) =>
+                    {
+                        Some(symbol.clone())
+                    }
+                    _ => {
+                        self.error(
+                            module,
+                            value.trait_.span.clone(),
+                            "specialization target must resolve to a trait",
+                        );
+                        None
+                    }
+                };
+                let id = SymbolId::new(
+                    self.modules[module].clone(),
+                    format!(
+                        "specialize.{}.for.{}",
+                        value.name,
+                        trait_symbol
+                            .as_ref()
+                            .map(SymbolId::as_string)
+                            .unwrap_or_else(|| "invalid".into())
+                    ),
+                );
+                let methods = value
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(source_order, entry)| {
+                        let symbol = self.resolve(module, &entry.target, &entry.target.span)?;
+                        if self.declarations.get(&symbol) != Some(&OwnedDeclKind::Function) {
+                            self.error(
+                                module,
+                                entry.target.span.clone(),
+                                "specialization target must reference a free function",
+                            );
+                            return None;
+                        }
+                        Some(HirSpecializationMethod {
+                            span: entry.span.clone(),
+                            name: entry.name.clone(),
+                            trait_method: SymbolId::new(
+                                trait_symbol
+                                    .as_ref()
+                                    .map(|symbol| symbol.module.clone())
+                                    .unwrap_or_else(|| self.modules[module].clone()),
+                                format!(
+                                    "{}.{}",
+                                    trait_symbol
+                                        .as_ref()
+                                        .map(|symbol| symbol.name.as_str())
+                                        .unwrap_or("invalid"),
+                                    entry.name
+                                ),
+                            ),
+                            callable_kind: HirCallableKind::Sync,
+                            function: HirVerifiedFunction {
+                                module: symbol.module.clone(),
+                                symbol: symbol.name.clone(),
+                                verified_facade: symbol.as_string(),
+                            },
+                            source_order,
+                        })
+                    })
+                    .collect();
+                HirDeclaration::Specialization(HirSpecialization {
+                    id,
+                    span: value.span.clone(),
+                    annotations: lower_annotations(&value.annotations),
+                    receiver_type,
+                    trait_ref,
+                    methods,
                     source_order: order,
                 })
             }
@@ -5793,13 +5917,7 @@ impl<'a> OwnedLower<'a> {
                     ast::CallableKind::Sync => HirCallableKind::Sync,
                     ast::CallableKind::Async => HirCallableKind::Async,
                 };
-                if callable_kind == HirCallableKind::Async
-                    && matches!(
-                        &return_type,
-                        HirType::Iterator { .. }
-                            | HirType::Generator { .. }
-                            | HirType::Primitive(PrimitiveType::Never)
-                    )
+                if callable_kind == HirCallableKind::Async && async_return_disallowed(&return_type)
                 {
                     self.error(
                         module,
@@ -5918,6 +6036,9 @@ fn substitute_associated_type(ty: HirType, assignments: &[HirAssociatedTypeAssig
         HirType::Iterator { item } => HirType::Iterator {
             item: Box::new(substitute_associated_type(*item, assignments)),
         },
+        HirType::AsyncIterator { item } => HirType::AsyncIterator {
+            item: Box::new(substitute_associated_type(*item, assignments)),
+        },
         HirType::Generator {
             yield_type,
             send_type,
@@ -5926,6 +6047,16 @@ fn substitute_associated_type(ty: HirType, assignments: &[HirAssociatedTypeAssig
             yield_type: Box::new(substitute_associated_type(*yield_type, assignments)),
             send_type: Box::new(substitute_associated_type(*send_type, assignments)),
             return_type: Box::new(substitute_associated_type(*return_type, assignments)),
+        },
+        HirType::AsyncGenerator {
+            yield_type,
+            send_type,
+        } => HirType::AsyncGenerator {
+            yield_type: Box::new(substitute_associated_type(*yield_type, assignments)),
+            send_type: Box::new(substitute_associated_type(*send_type, assignments)),
+        },
+        HirType::Dyn { trait_ref } => HirType::Dyn {
+            trait_ref: Box::new(substitute_associated_type(*trait_ref, assignments)),
         },
         HirType::Factory { instance } => HirType::Factory {
             instance: Box::new(substitute_associated_type(*instance, assignments)),
@@ -5955,7 +6086,9 @@ fn associated_type_contains(ty: &HirType, trait_id: &SymbolId, name: &str) -> bo
         | HirType::Set { item }
         | HirType::Option { item }
         | HirType::Iterator { item }
-        | HirType::Factory { instance: item } => associated_type_contains(item, trait_id, name),
+        | HirType::AsyncIterator { item }
+        | HirType::Factory { instance: item }
+        | HirType::Dyn { trait_ref: item } => associated_type_contains(item, trait_id, name),
         HirType::Map { key, value } => {
             associated_type_contains(key, trait_id, name)
                 || associated_type_contains(value, trait_id, name)
@@ -5977,7 +6110,17 @@ fn associated_type_contains(ty: &HirType, trait_id: &SymbolId, name: &str) -> bo
                 || associated_type_contains(send_type, trait_id, name)
                 || associated_type_contains(return_type, trait_id, name)
         }
-        HirType::Primitive(_) | HirType::TypeParameter { .. } | HirType::Buffer { .. } | HirType::Opaque { .. } => false,
+        HirType::AsyncGenerator {
+            yield_type,
+            send_type,
+        } => {
+            associated_type_contains(yield_type, trait_id, name)
+                || associated_type_contains(send_type, trait_id, name)
+        }
+        HirType::Primitive(_)
+        | HirType::TypeParameter { .. }
+        | HirType::Buffer { .. }
+        | HirType::Opaque { .. } => false,
     }
 }
 
@@ -6114,6 +6257,9 @@ fn substitute_hir_type(ty: HirType, substitutions: &HashMap<String, HirGenericAr
         HirType::Option { item } => HirType::Option {
             item: Box::new(substitute_hir_type(*item, substitutions)),
         },
+        HirType::AsyncIterator { item } => HirType::AsyncIterator {
+            item: Box::new(substitute_hir_type(*item, substitutions)),
+        },
         HirType::Iterator { item } => HirType::Iterator {
             item: Box::new(substitute_hir_type(*item, substitutions)),
         },
@@ -6125,6 +6271,16 @@ fn substitute_hir_type(ty: HirType, substitutions: &HashMap<String, HirGenericAr
             yield_type: Box::new(substitute_hir_type(*yield_type, substitutions)),
             send_type: Box::new(substitute_hir_type(*send_type, substitutions)),
             return_type: Box::new(substitute_hir_type(*return_type, substitutions)),
+        },
+        HirType::AsyncGenerator {
+            yield_type,
+            send_type,
+        } => HirType::AsyncGenerator {
+            yield_type: Box::new(substitute_hir_type(*yield_type, substitutions)),
+            send_type: Box::new(substitute_hir_type(*send_type, substitutions)),
+        },
+        HirType::Dyn { trait_ref } => HirType::Dyn {
+            trait_ref: Box::new(substitute_hir_type(*trait_ref, substitutions)),
         },
         HirType::Factory { instance } => HirType::Factory {
             instance: Box::new(substitute_hir_type(*instance, substitutions)),
@@ -6164,6 +6320,1120 @@ fn substitute_const_argument(
     }
 }
 
+#[derive(Clone)]
+struct EffectiveTrait {
+    closure: Vec<HirType>,
+    methods: Vec<HirMethod>,
+    associated_types: Vec<HirAssociatedType>,
+}
+
+fn hir_type_key(value: &HirType) -> String {
+    format!("{value:?}")
+}
+
+fn trait_substitutions(
+    generics: &[HirGenericParam],
+    args: &[HirGenericArg],
+) -> HashMap<String, HirGenericArg> {
+    generics
+        .iter()
+        .map(|generic| generic.name().to_owned())
+        .zip(args.iter().cloned())
+        .collect()
+}
+
+fn instantiate_method(
+    mut value: HirMethod,
+    substitutions: &HashMap<String, HirGenericArg>,
+) -> HirMethod {
+    for parameter in &mut value.parameters {
+        parameter.ty = substitute_hir_type(parameter.ty.clone(), substitutions);
+    }
+    value.return_type = substitute_hir_type(value.return_type, substitutions);
+    value
+}
+
+fn instantiate_associated_type(
+    mut value: HirAssociatedType,
+    substitutions: &HashMap<String, HirGenericArg>,
+) -> HirAssociatedType {
+    value.bounds = value
+        .bounds
+        .into_iter()
+        .map(|bound| substitute_hir_type(bound, substitutions))
+        .collect();
+    value
+}
+
+fn same_parameter_shape(left: &HirParameter, right: &HirParameter) -> bool {
+    left.name == right.name
+        && left.ty == right.ty
+        && left.kind == right.kind
+        && left.default == right.default
+}
+
+fn same_parameter_shapes(left: &[HirParameter], right: &[HirParameter]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| same_parameter_shape(left, right))
+}
+
+fn specialization_signature_matches(
+    function: &HirFunction,
+    receiver_type: &HirType,
+    method: &HirMethod,
+) -> bool {
+    function.generics.is_empty()
+        && function.callable_kind == method.callable_kind
+        && function.parameters.len() == method.parameters.len() + 1
+        && function.parameters.first().is_some_and(|parameter| {
+            parameter.ty == *receiver_type
+                && parameter.kind == HirParameterKind::Positional
+                && parameter.default.is_none()
+        })
+        && same_parameter_shapes(&function.parameters[1..], &method.parameters)
+        && function.return_type == method.return_type
+}
+fn same_method_shape(left: &HirMethod, right: &HirMethod) -> bool {
+    left.generics == right.generics
+        && same_parameter_shapes(&left.parameters, &right.parameters)
+        && left.return_type == right.return_type
+        && left.callable_kind == right.callable_kind
+}
+
+fn same_associated_shape(left: &HirAssociatedType, right: &HirAssociatedType) -> bool {
+    left.id == right.id && left.bounds == right.bounds
+}
+
+fn hir_method_name(method: &HirMethod) -> &str {
+    method
+        .id
+        .name
+        .rsplit_once('.')
+        .map_or(method.id.name.as_str(), |(_, name)| name)
+}
+
+fn push_trait_ref(values: &mut Vec<HirType>, value: HirType) {
+    if !values.iter().any(|existing| existing == &value) {
+        values.push(value);
+    }
+}
+
+fn merge_effective_trait(
+    into: &mut EffectiveTrait,
+    from: EffectiveTrait,
+    conflicts: &mut Vec<String>,
+) {
+    for trait_ref in from.closure {
+        push_trait_ref(&mut into.closure, trait_ref);
+    }
+    for method in from.methods {
+        if let Some(existing) = into
+            .methods
+            .iter()
+            .find(|existing| hir_method_name(existing) == hir_method_name(&method))
+        {
+            if !same_method_shape(existing, &method) {
+                conflicts.push(format!(
+                    "inherited trait methods conflict for `{}`",
+                    hir_method_name(&method)
+                ));
+            } else if existing.id != method.id {
+                into.methods.push(method);
+            }
+        } else {
+            into.methods.push(method);
+        }
+    }
+    for associated in from.associated_types {
+        if let Some(existing) = into
+            .associated_types
+            .iter()
+            .find(|existing| existing.name == associated.name)
+        {
+            if !same_associated_shape(existing, &associated) {
+                conflicts.push(format!(
+                    "inherited associated types conflict for `{}`",
+                    associated.name
+                ));
+            }
+        } else {
+            into.associated_types.push(associated);
+        }
+    }
+}
+
+fn effective_trait(
+    trait_ref: &HirType,
+    traits: &BTreeMap<SymbolId, HirTrait>,
+    memo: &mut HashMap<String, EffectiveTrait>,
+    visiting: &mut BTreeSet<SymbolId>,
+    conflicts: &mut Vec<String>,
+) -> Option<EffectiveTrait> {
+    let HirType::Named { symbol, args } = trait_ref else {
+        return None;
+    };
+    let key = hir_type_key(trait_ref);
+    if let Some(value) = memo.get(&key) {
+        return Some(value.clone());
+    }
+    let declaration = traits.get(symbol)?;
+    if !visiting.insert(symbol.clone()) {
+        return None;
+    }
+    let substitutions = trait_substitutions(&declaration.generics, args);
+    let mut effective = EffectiveTrait {
+        closure: Vec::new(),
+        methods: Vec::new(),
+        associated_types: Vec::new(),
+    };
+    for parent in &declaration.parents {
+        let parent_ref = substitute_hir_type(parent.trait_ref.clone(), &substitutions);
+        push_trait_ref(&mut effective.closure, parent_ref.clone());
+        if let Some(parent_effective) =
+            effective_trait(&parent_ref, traits, memo, visiting, conflicts)
+        {
+            merge_effective_trait(&mut effective, parent_effective, conflicts);
+        }
+    }
+    for method in &declaration.methods {
+        merge_effective_trait(
+            &mut effective,
+            EffectiveTrait {
+                closure: Vec::new(),
+                methods: vec![instantiate_method(method.clone(), &substitutions)],
+                associated_types: Vec::new(),
+            },
+            conflicts,
+        );
+    }
+    for associated in &declaration.associated_types {
+        merge_effective_trait(
+            &mut effective,
+            EffectiveTrait {
+                closure: Vec::new(),
+                methods: Vec::new(),
+                associated_types: vec![instantiate_associated_type(
+                    associated.clone(),
+                    &substitutions,
+                )],
+            },
+            conflicts,
+        );
+    }
+    let mut instantiated = BTreeMap::<SymbolId, HirType>::new();
+    for trait_ref in &effective.closure {
+        let HirType::Named { symbol, .. } = trait_ref else {
+            continue;
+        };
+        if let Some(existing) = instantiated.insert(symbol.clone(), trait_ref.clone())
+            && existing != *trait_ref
+        {
+            conflicts.push(format!(
+                "trait diamond instantiates `{}` with incompatible arguments",
+                symbol.as_string()
+            ));
+        }
+    }
+    visiting.remove(symbol);
+    effective.closure.sort_by_key(hir_type_key);
+    memo.insert(key, effective.clone());
+    Some(effective)
+}
+
+fn instantiated_trait_members(
+    trait_ref: &HirType,
+    traits: &BTreeMap<SymbolId, HirTrait>,
+) -> Option<EffectiveTrait> {
+    let HirType::Named { symbol, args } = trait_ref else {
+        return None;
+    };
+    let declaration = traits.get(symbol)?;
+    let substitutions = trait_substitutions(&declaration.generics, args);
+    Some(EffectiveTrait {
+        closure: declaration
+            .closure
+            .iter()
+            .cloned()
+            .map(|parent| substitute_hir_type(parent, &substitutions))
+            .collect(),
+        methods: declaration
+            .methods
+            .iter()
+            .cloned()
+            .map(|method| instantiate_method(method, &substitutions))
+            .collect(),
+        associated_types: declaration
+            .associated_types
+            .iter()
+            .cloned()
+            .map(|associated| instantiate_associated_type(associated, &substitutions))
+            .collect(),
+    })
+}
+
+fn trait_member_owner(id: &SymbolId) -> SymbolId {
+    SymbolId::new(
+        id.module.clone(),
+        id.name
+            .rsplit_once('.')
+            .map_or_else(|| id.name.clone(), |(owner, _)| owner.to_owned()),
+    )
+}
+
+fn implemented_trait_refs(
+    direct: &[HirType],
+    traits: &BTreeMap<SymbolId, HirTrait>,
+) -> Vec<HirType> {
+    let mut out = Vec::new();
+    for trait_ref in direct {
+        push_trait_ref(&mut out, trait_ref.clone());
+        if let Some(effective) = instantiated_trait_members(trait_ref, traits) {
+            for parent in effective.closure {
+                push_trait_ref(&mut out, parent);
+            }
+        }
+    }
+    out.sort_by_key(hir_type_key);
+    out
+}
+
+fn trait_cycle_span(
+    id: &SymbolId,
+    traits: &BTreeMap<SymbolId, HirTrait>,
+    visiting: &mut BTreeSet<SymbolId>,
+    visited: &mut BTreeSet<SymbolId>,
+) -> Option<Span> {
+    if !visiting.insert(id.clone()) {
+        return None;
+    }
+    let mut cycle = None;
+    if let Some(declaration) = traits.get(id) {
+        for parent in &declaration.parents {
+            let HirType::Named { symbol, .. } = &parent.trait_ref else {
+                continue;
+            };
+            if visiting.contains(symbol) {
+                cycle = Some(parent.span.clone());
+                break;
+            }
+            if !visited.contains(symbol)
+                && let Some(span) = trait_cycle_span(symbol, traits, visiting, visited)
+            {
+                cycle = Some(span);
+                break;
+            }
+        }
+    }
+    visiting.remove(id);
+    visited.insert(id.clone());
+    cycle
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Polarity {
+    Covariant,
+    Contravariant,
+    Neutral,
+}
+
+fn compose_polarity(outer: Polarity, variance: HirVariance) -> Polarity {
+    match (outer, variance) {
+        (Polarity::Neutral, _) | (_, HirVariance::Invariant) => Polarity::Neutral,
+        (value, HirVariance::Covariant) => value,
+        (Polarity::Covariant, HirVariance::Contravariant) => Polarity::Contravariant,
+        (Polarity::Contravariant, HirVariance::Contravariant) => Polarity::Covariant,
+    }
+}
+
+fn variance_violations(
+    ty: &HirType,
+    polarity: Polarity,
+    declared: &BTreeMap<String, HirVariance>,
+    variances: &BTreeMap<SymbolId, Vec<HirVariance>>,
+    violations: &mut BTreeSet<String>,
+) {
+    match ty {
+        HirType::TypeParameter { name } => {
+            if let Some(variance) = declared.get(name)
+                && ((*variance == HirVariance::Covariant && polarity != Polarity::Covariant)
+                    || (*variance == HirVariance::Contravariant
+                        && polarity != Polarity::Contravariant))
+            {
+                violations.insert(name.clone());
+            }
+        }
+        HirType::Named { symbol, args } => {
+            for (argument, variance) in args.iter().zip(
+                variances
+                    .get(symbol)
+                    .cloned()
+                    .unwrap_or_else(|| vec![HirVariance::Invariant; args.len()]),
+            ) {
+                if let HirGenericArg::Type(value) = argument {
+                    variance_violations(
+                        value,
+                        compose_polarity(polarity, variance),
+                        declared,
+                        variances,
+                        violations,
+                    );
+                }
+            }
+        }
+        HirType::List { item }
+        | HirType::Set { item }
+        | HirType::Array { item, .. }
+        | HirType::Factory { instance: item }
+        | HirType::Dyn { trait_ref: item } => {
+            variance_violations(item, Polarity::Neutral, declared, variances, violations);
+        }
+        HirType::Map { key, value } => {
+            variance_violations(key, Polarity::Neutral, declared, variances, violations);
+            variance_violations(value, Polarity::Neutral, declared, variances, violations);
+        }
+        HirType::Tuple { items } => {
+            for item in items {
+                variance_violations(item, polarity, declared, variances, violations);
+            }
+        }
+        HirType::Option { item } | HirType::Iterator { item } | HirType::AsyncIterator { item } => {
+            variance_violations(item, polarity, declared, variances, violations);
+        }
+        HirType::Result { ok, error } => {
+            variance_violations(ok, polarity, declared, variances, violations);
+            variance_violations(error, polarity, declared, variances, violations);
+        }
+        HirType::Generator {
+            yield_type,
+            send_type,
+            return_type,
+        } => {
+            variance_violations(yield_type, polarity, declared, variances, violations);
+            variance_violations(
+                send_type,
+                compose_polarity(polarity, HirVariance::Contravariant),
+                declared,
+                variances,
+                violations,
+            );
+            variance_violations(return_type, polarity, declared, variances, violations);
+        }
+        HirType::AsyncGenerator {
+            yield_type,
+            send_type,
+        } => {
+            variance_violations(yield_type, polarity, declared, variances, violations);
+            variance_violations(
+                send_type,
+                compose_polarity(polarity, HirVariance::Contravariant),
+                declared,
+                variances,
+                violations,
+            );
+        }
+        HirType::AssociatedProjection { base, .. } => {
+            variance_violations(base, polarity, declared, variances, violations);
+        }
+        HirType::Primitive(_) | HirType::Buffer { .. } | HirType::Opaque { .. } => {}
+    }
+}
+impl<'a> OwnedLower<'a> {
+    fn finalize_v7(&mut self, modules: &mut [HirModule]) {
+        let module_indices = modules
+            .iter()
+            .enumerate()
+            .map(|(index, module)| (module.id.clone(), index))
+            .collect::<BTreeMap<_, _>>();
+        let traits = modules
+            .iter()
+            .flat_map(|module| module.declarations.iter())
+            .filter_map(|declaration| match declaration {
+                HirDeclaration::Trait(value) => Some((value.id.clone(), value.clone())),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut visiting = BTreeSet::new();
+        let mut visited = BTreeSet::new();
+        for (id, trait_) in &traits {
+            if !visited.contains(id)
+                && let Some(span) = trait_cycle_span(id, &traits, &mut visiting, &mut visited)
+            {
+                if let Some(module) = module_indices.get(&trait_.id.module) {
+                    self.error(*module, span, "trait inheritance cycle");
+                }
+            }
+        }
+        let mut memo = HashMap::new();
+        for module in modules.iter_mut() {
+            for declaration in &mut module.declarations {
+                let HirDeclaration::Trait(trait_) = declaration else {
+                    continue;
+                };
+                let self_ref = HirType::Named {
+                    symbol: trait_.id.clone(),
+                    args: trait_
+                        .generics
+                        .iter()
+                        .map(|generic| match generic {
+                            HirGenericParam::Type { name, .. } => {
+                                HirGenericArg::Type(HirType::TypeParameter { name: name.clone() })
+                            }
+                            HirGenericParam::Const { name, ty, .. } => {
+                                HirGenericArg::Const(HirConstArgument::Parameter {
+                                    name: name.clone(),
+                                    ty: *ty,
+                                })
+                            }
+                        })
+                        .collect(),
+                };
+                let mut conflicts = Vec::new();
+                if let Some(effective) = effective_trait(
+                    &self_ref,
+                    &traits,
+                    &mut memo,
+                    &mut BTreeSet::new(),
+                    &mut conflicts,
+                ) {
+                    trait_.closure = effective.closure;
+                    trait_.methods = effective.methods;
+                    trait_.associated_types = effective.associated_types;
+                }
+                conflicts.sort();
+                conflicts.dedup();
+                for message in conflicts {
+                    self.error(module.source_order, trait_.span.clone(), message);
+                }
+            }
+        }
+        self.validate_composite_bound_cycles(modules);
+        self.validate_variance(modules);
+        self.resolve_specializations_and_dispatch(modules, &module_indices);
+    }
+
+    fn validate_composite_bound_cycles(&mut self, modules: &[HirModule]) {
+        let trait_ids = modules
+            .iter()
+            .flat_map(|module| module.declarations.iter())
+            .filter_map(|declaration| match declaration {
+                HirDeclaration::Trait(value) => Some(value.id.clone()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let graph = modules
+            .iter()
+            .flat_map(|module| module.declarations.iter())
+            .filter_map(|declaration| match declaration {
+                HirDeclaration::Trait(value) => Some(value),
+                _ => None,
+            })
+            .map(|trait_| {
+                let edges = trait_
+                    .generics
+                    .iter()
+                    .filter_map(|generic| match generic {
+                        HirGenericParam::Type { bounds, .. } => Some(bounds),
+                        HirGenericParam::Const { .. } => None,
+                    })
+                    .flatten()
+                    .filter_map(|bound| match bound {
+                        HirType::Named { symbol, .. } if trait_ids.contains(symbol) => {
+                            Some(symbol.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect::<BTreeSet<_>>();
+                (trait_.id.clone(), edges)
+            })
+            .collect::<BTreeMap<_, _>>();
+        fn reaches(
+            current: &SymbolId,
+            target: &SymbolId,
+            graph: &BTreeMap<SymbolId, BTreeSet<SymbolId>>,
+            seen: &mut BTreeSet<SymbolId>,
+        ) -> bool {
+            graph.get(current).is_some_and(|next| {
+                next.iter().any(|next| {
+                    next == target
+                        || (seen.insert(next.clone()) && reaches(next, target, graph, seen))
+                })
+            })
+        }
+        for module in modules {
+            for declaration in &module.declarations {
+                let HirDeclaration::Trait(trait_) = declaration else {
+                    continue;
+                };
+                for generic in &trait_.generics {
+                    let HirGenericParam::Type { span, bounds, .. } = generic else {
+                        continue;
+                    };
+                    if bounds.len() >= 2 && bounds.iter().any(|bound| {
+                        matches!(bound, HirType::Named { symbol, .. } if trait_ids.contains(symbol)
+                                && (symbol == &trait_.id
+                                    || reaches(symbol, &trait_.id, &graph, &mut BTreeSet::new())))
+                    }) {
+                        self.error(
+                            module.source_order,
+                            span.clone(),
+                            "multi-bound generic intersection participates in a cyclic trait bound graph",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn validate_variance(&mut self, modules: &[HirModule]) {
+        let variances = modules
+            .iter()
+            .flat_map(|module| module.declarations.iter())
+            .filter_map(|declaration| match declaration {
+                HirDeclaration::Struct(value) => Some((&value.id, &value.generics)),
+                HirDeclaration::Enum(value) => Some((&value.id, &value.generics)),
+                HirDeclaration::Trait(value) => Some((&value.id, &value.generics)),
+                _ => None,
+            })
+            .map(|(id, generics)| {
+                (
+                    id.clone(),
+                    generics
+                        .iter()
+                        .map(|generic| match generic {
+                            HirGenericParam::Type { variance, .. } => *variance,
+                            HirGenericParam::Const { .. } => HirVariance::Invariant,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        for module in modules {
+            for declaration in &module.declarations {
+                let (generics, types): (&[HirGenericParam], Vec<(&HirType, Polarity)>) =
+                    match declaration {
+                        HirDeclaration::Struct(value) => (
+                            &value.generics,
+                            value
+                                .fields
+                                .iter()
+                                .map(|field| (&field.ty, Polarity::Covariant))
+                                .collect(),
+                        ),
+                        HirDeclaration::Enum(value) => (
+                            &value.generics,
+                            value
+                                .variants
+                                .iter()
+                                .flat_map(|variant| {
+                                    variant
+                                        .fields
+                                        .iter()
+                                        .map(|field| (&field.ty, Polarity::Covariant))
+                                })
+                                .collect(),
+                        ),
+                        HirDeclaration::Trait(value) => (
+                            &value.generics,
+                            value
+                                .parents
+                                .iter()
+                                .map(|parent| (&parent.trait_ref, Polarity::Covariant))
+                                .chain(value.methods.iter().flat_map(|method| {
+                                    method
+                                        .parameters
+                                        .iter()
+                                        .map(|parameter| (&parameter.ty, Polarity::Contravariant))
+                                        .chain(std::iter::once((
+                                            &method.return_type,
+                                            Polarity::Covariant,
+                                        )))
+                                }))
+                                .chain(value.associated_types.iter().flat_map(|associated| {
+                                    associated
+                                        .bounds
+                                        .iter()
+                                        .map(|bound| (bound, Polarity::Covariant))
+                                }))
+                                .collect(),
+                        ),
+                        _ => continue,
+                    };
+                let declared = generics
+                    .iter()
+                    .filter_map(|generic| match generic {
+                        HirGenericParam::Type { name, variance, .. } => {
+                            Some((name.clone(), *variance))
+                        }
+                        HirGenericParam::Const { .. } => None,
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                let mut violations = BTreeSet::new();
+                for (ty, polarity) in types {
+                    variance_violations(ty, polarity, &declared, &variances, &mut violations);
+                }
+                for name in violations {
+                    if let Some(HirGenericParam::Type { span, variance, .. }) =
+                        generics.iter().find(|generic| generic.name() == name)
+                    {
+                        let word = match variance {
+                            HirVariance::Covariant => "covariant",
+                            HirVariance::Contravariant => "contravariant",
+                            HirVariance::Invariant => unreachable!(),
+                        };
+                        self.error(
+                            module.source_order,
+                            span.clone(),
+                            format!("{word} parameter `{name}` is used in an invalid polarity"),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn resolve_specializations_and_dispatch(
+        &mut self,
+        modules: &mut [HirModule],
+        _module_indices: &BTreeMap<ModuleId, usize>,
+    ) {
+        let traits = modules
+            .iter()
+            .flat_map(|module| module.declarations.iter())
+            .filter_map(|declaration| match declaration {
+                HirDeclaration::Trait(value) => Some((value.id.clone(), value.clone())),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        let implementations = modules
+            .iter()
+            .flat_map(|module| module.declarations.iter())
+            .filter_map(|declaration| match declaration {
+                HirDeclaration::Impl(value) => Some((value.id.clone(), value.clone())),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        let functions = modules
+            .iter()
+            .flat_map(|module| module.declarations.iter())
+            .filter_map(|declaration| match declaration {
+                HirDeclaration::Function(value) => Some((value.id.clone(), value.clone())),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        for module in modules.iter_mut() {
+            for declaration in &mut module.declarations {
+                let HirDeclaration::Specialization(specialization) = declaration else {
+                    continue;
+                };
+                let Some(receiver) = (match &specialization.receiver_type {
+                    HirType::Named { symbol, .. } => implementations.get(symbol),
+                    _ => None,
+                }) else {
+                    continue;
+                };
+                let implemented = implemented_trait_refs(&receiver.traits, &traits);
+                if !implemented
+                    .iter()
+                    .any(|value| value == &specialization.trait_ref)
+                {
+                    self.error(
+                        module.source_order,
+                        specialization.span.clone(),
+                        "specialization trait must be implemented by its receiver",
+                    );
+                }
+                let slots = instantiated_trait_members(&specialization.trait_ref, &traits)
+                    .map(|effective| effective.methods)
+                    .unwrap_or_default();
+                let mut names = BTreeSet::new();
+                let mut resolved = Vec::new();
+                for mut entry in specialization.methods.clone() {
+                    if !names.insert(entry.name.clone()) {
+                        self.error(
+                            module.source_order,
+                            entry.span.clone(),
+                            format!("duplicate specialization method `{}`", entry.name),
+                        );
+                        continue;
+                    }
+                    let function_id =
+                        SymbolId::new(entry.function.module.clone(), entry.function.symbol.clone());
+                    let Some(function) = functions.get(&function_id) else {
+                        continue;
+                    };
+                    let named = slots
+                        .iter()
+                        .filter(|slot| hir_method_name(slot) == entry.name)
+                        .collect::<Vec<_>>();
+                    if named.is_empty() {
+                        self.error(
+                            module.source_order,
+                            entry.span.clone(),
+                            format!(
+                                "specialization method `{}` is not declared by its trait",
+                                entry.name
+                            ),
+                        );
+                        continue;
+                    }
+                    let Some(slot) = named
+                        .into_iter()
+                        .filter(|slot| {
+                            specialization_signature_matches(
+                                function,
+                                &specialization.receiver_type,
+                                slot,
+                            )
+                        })
+                        .min_by_key(|slot| slot.id.clone())
+                    else {
+                        self.error(
+                            module.source_order,
+                            entry.span.clone(),
+                            "specialization target must exactly match its concrete receiver, trait signature, and callable kind",
+                        );
+                        continue;
+                    };
+                    entry.trait_method = slot.id.clone();
+                    entry.callable_kind = slot.callable_kind;
+                    resolved.push(entry);
+                }
+                resolved.sort_by_key(|entry| entry.source_order);
+                specialization.methods = resolved;
+            }
+        }
+
+        let specializations = modules
+            .iter()
+            .flat_map(|module| module.declarations.iter())
+            .filter_map(|declaration| match declaration {
+                HirDeclaration::Specialization(value) => Some(value.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for module in modules.iter_mut() {
+            for declaration in &mut module.declarations {
+                let HirDeclaration::Impl(implementation) = declaration else {
+                    continue;
+                };
+                let implemented = implemented_trait_refs(&implementation.traits, &traits);
+                let selection_assignments = implementation
+                    .associated_types
+                    .iter()
+                    .filter_map(|assignment| {
+                        let mut candidates = Vec::new();
+                        for trait_ref in &implemented {
+                            let HirType::Named { symbol, .. } = trait_ref else {
+                                continue;
+                            };
+                            let Some(effective) = instantiated_trait_members(trait_ref, &traits)
+                            else {
+                                continue;
+                            };
+                            for associated in effective.associated_types {
+                                if trait_member_owner(&associated.id) == *symbol
+                                    && associated.name == assignment.name
+                                {
+                                    candidates.push(trait_member_owner(&associated.id));
+                                }
+                            }
+                        }
+                        (candidates.len() == 1).then(|| {
+                            let mut assignment = assignment.clone();
+                            assignment.trait_id = candidates.pop().unwrap();
+                            assignment
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                struct RequiredMethod {
+                    method: HirMethod,
+                    trait_ref: HirType,
+                    defaults: Vec<HirVerifiedFunction>,
+                }
+
+                let mut requirements = Vec::<RequiredMethod>::new();
+                for trait_ref in &implemented {
+                    let Some(effective) = instantiated_trait_members(trait_ref, &traits) else {
+                        continue;
+                    };
+                    let HirType::Named { symbol, .. } = trait_ref else {
+                        continue;
+                    };
+                    for mut method in effective
+                        .methods
+                        .into_iter()
+                        .filter(|method| trait_member_owner(&method.id) == *symbol)
+                    {
+                        method.parameters = method
+                            .parameters
+                            .into_iter()
+                            .map(|mut parameter| {
+                                parameter.ty = substitute_associated_type(
+                                    parameter.ty,
+                                    &selection_assignments,
+                                );
+                                parameter
+                            })
+                            .collect();
+                        method.return_type =
+                            substitute_associated_type(method.return_type, &selection_assignments);
+                        if let Some(existing) = requirements.iter_mut().find(|existing| {
+                            hir_method_name(&existing.method) == hir_method_name(&method)
+                        }) {
+                            if !same_method_shape(&existing.method, &method) {
+                                self.error(
+                                    module.source_order,
+                                    implementation.span.clone(),
+                                    format!(
+                                        "impl traits have incompatible methods with the same name `{}`",
+                                        hir_method_name(&method)
+                                    ),
+                                );
+                            } else {
+                                if let Some(default) = method.default.clone()
+                                    && !existing.defaults.contains(&default)
+                                {
+                                    existing.defaults.push(default);
+                                }
+                                if method.id < existing.method.id {
+                                    existing.method = method;
+                                    existing.trait_ref = trait_ref.clone();
+                                }
+                            }
+                        } else {
+                            requirements.push(RequiredMethod {
+                                defaults: method.default.clone().into_iter().collect(),
+                                method,
+                                trait_ref: trait_ref.clone(),
+                            });
+                        }
+                    }
+                }
+                let mut explicit = BTreeMap::new();
+                for (index, method) in implementation.methods.iter().enumerate() {
+                    if explicit.insert(method.name.clone(), index).is_some() {
+                        self.error(
+                            module.source_order,
+                            method.span.clone(),
+                            format!("duplicate impl method `{}`", method.name),
+                        );
+                    }
+                }
+                let mut selected = Vec::new();
+                let mut effective_kind = None;
+                for required in requirements {
+                    let RequiredMethod {
+                        method: required,
+                        trait_ref,
+                        defaults,
+                    } = required;
+                    let selected_implementation = if let Some(index) =
+                        explicit.get(hir_method_name(&required))
+                    {
+                        let method = &implementation.methods[*index];
+                        if method.return_type != required.return_type
+                            || !same_parameter_shapes(&method.parameters, &required.parameters)
+                            || method.callable_kind != required.callable_kind
+                        {
+                            self.error(
+                                module.source_order,
+                                method.span.clone(),
+                                "impl method signature and callable kind must exactly match its trait method",
+                            );
+                        }
+                        HirSelectedImplementation::Explicit {
+                            function: HirVerifiedFunction {
+                                module: implementation.id.module.clone(),
+                                symbol: format!("{}.{}", implementation.id.name, method.name),
+                                verified_facade: format!(
+                                    "{}.{}.{}",
+                                    implementation.id.module.as_string(),
+                                    implementation.id.name,
+                                    method.name
+                                ),
+                            },
+                        }
+                    } else {
+                        let required_method = required.id.clone();
+                        let candidates = specializations
+                            .iter()
+                            .filter(|specialization| {
+                                specialization.receiver_type
+                                    == HirType::Named {
+                                        symbol: implementation.id.clone(),
+                                        args: Vec::new(),
+                                    }
+                            })
+                            .flat_map(|specialization| {
+                                let required_method = required_method.clone();
+                                specialization.methods.iter().filter_map(move |method| {
+                                    (method.trait_method == required_method).then_some((
+                                        specialization.id.clone(),
+                                        method.function.clone(),
+                                    ))
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        if candidates.len() == 1 {
+                            HirSelectedImplementation::Specialization {
+                                specialization: candidates[0].0.clone(),
+                                function: candidates[0].1.clone(),
+                            }
+                        } else if candidates.len() > 1 {
+                            self.error(
+                                module.source_order,
+                                implementation.span.clone(),
+                                format!(
+                                    "ambiguous specializations for trait method `{}`",
+                                    hir_method_name(&required)
+                                ),
+                            );
+                            continue;
+                        } else if defaults.len() == 1 {
+                            HirSelectedImplementation::Default {
+                                function: defaults.into_iter().next().unwrap(),
+                            }
+                        } else {
+                            self.error(
+                                module.source_order,
+                                implementation.span.clone(),
+                                if defaults.is_empty() {
+                                    format!("impl is missing trait method `{}`", hir_method_name(&required))
+                                } else {
+                                    format!(
+                                        "ambiguous trait defaults for method `{}`; declare an explicit impl method",
+                                        hir_method_name(&required)
+                                    )
+                                },
+                            );
+                            continue;
+                        }
+                    };
+                    if effective_kind.is_some_and(|kind| kind != required.callable_kind) {
+                        self.error(
+                            module.source_order,
+                            implementation.span.clone(),
+                            "impl effective methods must all have the same callable kind",
+                        );
+                    } else {
+                        effective_kind = Some(required.callable_kind);
+                    }
+                    selected.push(HirSelectedMethod {
+                        trait_method: required.id.clone(),
+                        trait_ref,
+                        receiver_type: HirType::Named {
+                            symbol: implementation.id.clone(),
+                            args: Vec::new(),
+                        },
+                        parameters: required.parameters.clone(),
+                        return_type: required.return_type.clone(),
+                        callable_kind: required.callable_kind,
+                        selected: selected_implementation,
+                    });
+                }
+                selected.sort_by_key(|value| value.trait_method.clone());
+                implementation.selected_methods = selected;
+
+                let mut requirements = Vec::<(SymbolId, String, Vec<HirType>)>::new();
+                for trait_ref in &implemented {
+                    let Some(effective) = instantiated_trait_members(trait_ref, &traits) else {
+                        continue;
+                    };
+                    for associated in effective.associated_types {
+                        let owner = trait_member_owner(&associated.id);
+                        if owner
+                            != match trait_ref {
+                                HirType::Named { symbol, .. } => symbol.clone(),
+                                _ => continue,
+                            }
+                        {
+                            continue;
+                        }
+                        if !requirements.iter().any(|(id, name, bounds)| {
+                            *id == owner && *name == associated.name && *bounds == associated.bounds
+                        }) {
+                            requirements.push((owner, associated.name, associated.bounds));
+                        }
+                    }
+                }
+                let mut assigned = BTreeSet::new();
+                for assignment in &mut implementation.associated_types {
+                    if !assigned.insert(assignment.name.clone()) {
+                        self.error(
+                            module.source_order,
+                            assignment.span.clone(),
+                            format!("duplicate associated type assignment `{}`", assignment.name),
+                        );
+                        continue;
+                    }
+                    let candidates = requirements
+                        .iter()
+                        .filter(|(_, name, _)| name == &assignment.name)
+                        .collect::<Vec<_>>();
+                    if candidates.len() != 1 {
+                        self.error(
+                            module.source_order,
+                            assignment.span.clone(),
+                            if candidates.is_empty() {
+                                format!("unknown associated type `{}`", assignment.name)
+                            } else {
+                                format!(
+                                    "associated type assignment `{}` is ambiguous",
+                                    assignment.name
+                                )
+                            },
+                        );
+                        continue;
+                    }
+                    let (trait_id, name, bounds) = candidates[0];
+                    assignment.trait_id = trait_id.clone();
+                    assignment.id = SymbolId::new(
+                        implementation.id.module.clone(),
+                        format!("{}.{}.{}", implementation.id.name, trait_id.name, name),
+                    );
+                    if associated_type_contains(&assignment.ty, trait_id, name) {
+                        self.error(
+                            module.source_order,
+                            assignment.span.clone(),
+                            "associated type assignment must not be cyclic",
+                        );
+                    }
+                    for bound in bounds {
+                        let satisfies = assignment.ty == *bound
+                            || matches!(
+                                &assignment.ty,
+                                HirType::Named { symbol, .. }
+                                    if symbol == &implementation.id
+                                        && implemented.iter().any(|trait_ref| trait_ref == bound)
+                            );
+                        if !satisfies {
+                            self.error(
+                                module.source_order,
+                                assignment.span.clone(),
+                                "associated type assignment does not satisfy its bound",
+                            );
+                        }
+                    }
+                }
+                for (trait_id, name, _) in &requirements {
+                    if !implementation.associated_types.iter().any(|assignment| {
+                        assignment.trait_id == *trait_id && assignment.name == *name
+                    }) {
+                        self.error(
+                            module.source_order,
+                            implementation.span.clone(),
+                            format!("impl is missing associated type assignment `{}`", name),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
 fn owned_module_path(root: &Path, source: &Path) -> Result<Vec<String>, String> {
     let relative = if source.is_absolute() {
         source
@@ -6207,18 +7477,801 @@ fn owned_module_path(root: &Path, source: &Path) -> Result<Vec<String>, String> 
     }
 }
 
-fn owned_type_paths(value: &ast::Type, out: &mut Vec<ast::QualifiedName>) {
-    out.push(value.path.clone());
-    for argument in &value.arguments {
-        match &argument.kind {
-            GenericArgKind::Type(inner) => owned_type_paths(inner, out),
-            GenericArgKind::Const(value) => {
-                owned_visit_const_expr(value, &mut |path| out.push(path.clone()))
+#[derive(Clone)]
+struct OwnedTypeDependency {
+    from: SymbolId,
+    to: SymbolId,
+    span: Span,
+    guarded: bool,
+    result_guards: Vec<ast::Type>,
+    enum_variant: Option<usize>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum OwnedRecursiveTypeKind {
+    Alias,
+    Newtype,
+    Struct,
+    Enum,
+}
+
+fn owned_type_guard(value: &ast::Type) -> bool {
+    matches!(
+        value.path.segments.last().map(String::as_str),
+        Some("Option" | "List" | "Set" | "Map")
+    )
+}
+
+fn owned_array_is_empty(
+    value: &ast::Type,
+    from: &SymbolId,
+    parsed: &ParsedProject,
+    modules: &[ModuleId],
+    declarations: &BTreeMap<SymbolId, usize>,
+    imports: &[BTreeMap<String, SymbolId>],
+) -> bool {
+    matches!(
+        value.path.segments.last().map(String::as_str),
+        Some("Array")
+    ) && value
+        .arguments
+        .get(1)
+        .and_then(|argument| match &argument.kind {
+            GenericArgKind::Const(value) => Some(value),
+            _ => None,
+        })
+        .and_then(|value| {
+            owned_const_length(
+                value,
+                from,
+                parsed,
+                modules,
+                declarations,
+                imports,
+                &mut BTreeSet::new(),
+            )
+        })
+        == Some(0)
+}
+
+fn owned_const_length(
+    value: &ConstExpr,
+    from: &SymbolId,
+    parsed: &ParsedProject,
+    modules: &[ModuleId],
+    declarations: &BTreeMap<SymbolId, usize>,
+    imports: &[BTreeMap<String, SymbolId>],
+    visiting: &mut BTreeSet<SymbolId>,
+) -> Option<u64> {
+    let ConstExpr::Expression(value) = value else {
+        return None;
+    };
+    owned_integer_expression(
+        value,
+        from,
+        parsed,
+        modules,
+        declarations,
+        imports,
+        visiting,
+    )
+}
+
+fn owned_integer_expression(
+    value: &Expr,
+    from: &SymbolId,
+    parsed: &ParsedProject,
+    modules: &[ModuleId],
+    declarations: &BTreeMap<SymbolId, usize>,
+    imports: &[BTreeMap<String, SymbolId>],
+    visiting: &mut BTreeSet<SymbolId>,
+) -> Option<u64> {
+    match &value.kind {
+        ExprKind::Literal(ast::Literal {
+            kind: LiteralKind::Integer(value),
+            ..
+        }) => value.replace('_', "").parse().ok(),
+        ExprKind::Name(path) => {
+            let name = path.segments.last()?.clone();
+            let symbol = if path.segments.len() == 1 {
+                let local = SymbolId::new(from.module.clone(), name.clone());
+                declarations
+                    .contains_key(&local)
+                    .then_some(local)
+                    .or_else(|| {
+                        modules
+                            .iter()
+                            .position(|module| module == &from.module)
+                            .and_then(|module| imports[module].get(&name).cloned())
+                    })?
+            } else {
+                let symbol = SymbolId::new(
+                    ModuleId::new(path.segments[..path.segments.len() - 1].to_vec()),
+                    name,
+                );
+                declarations.contains_key(&symbol).then_some(symbol)?
+            };
+            let source = *declarations.get(&symbol)?;
+            let declaration =
+                parsed.sources[source]
+                    .syntax
+                    .declarations
+                    .iter()
+                    .find_map(|declaration| match declaration {
+                        Declaration::Const(value) if value.name == symbol.name => Some(value),
+                        _ => None,
+                    })?;
+            if !visiting.insert(symbol.clone()) {
+                return None;
             }
-            GenericArgKind::Ambiguous { ty, value } => {
-                owned_type_paths(ty, out);
-                owned_visit_const_expr(value, &mut |path| out.push(path.clone()));
+            let length = owned_const_length(
+                &declaration.value,
+                &symbol,
+                parsed,
+                modules,
+                declarations,
+                imports,
+                visiting,
+            );
+            visiting.remove(&symbol);
+            length
+        }
+        ExprKind::Parenthesized(value) => owned_integer_expression(
+            value,
+            from,
+            parsed,
+            modules,
+            declarations,
+            imports,
+            visiting,
+        ),
+        ExprKind::Unary { op, operand } => {
+            let value = owned_integer_expression(
+                operand,
+                from,
+                parsed,
+                modules,
+                declarations,
+                imports,
+                visiting,
+            )?;
+            match op {
+                UnaryOp::Plus => Some(value),
+                UnaryOp::Minus if value == 0 => Some(0),
+                UnaryOp::Minus | UnaryOp::Not => None,
             }
+        }
+        ExprKind::Binary { left, op, right } => {
+            let left = owned_integer_expression(
+                left,
+                from,
+                parsed,
+                modules,
+                declarations,
+                imports,
+                visiting,
+            )?;
+            let right = owned_integer_expression(
+                right,
+                from,
+                parsed,
+                modules,
+                declarations,
+                imports,
+                visiting,
+            )?;
+            match op {
+                BinaryOp::Add => left.checked_add(right),
+                BinaryOp::Subtract => left.checked_sub(right),
+                BinaryOp::Multiply => left.checked_mul(right),
+                BinaryOp::Divide => (right != 0).then(|| left / right),
+                BinaryOp::Remainder => (right != 0).then(|| left % right),
+                BinaryOp::Or | BinaryOp::And => None,
+            }
+        }
+        ExprKind::Unit
+        | ExprKind::Comparison { .. }
+        | ExprKind::Field { .. }
+        | ExprKind::OldStateField { .. }
+        | ExprKind::Literal(_) => None,
+    }
+}
+
+fn owned_collect_type_dependencies(
+    value: &ast::Type,
+    from: &SymbolId,
+    guarded: bool,
+    enum_variant: Option<usize>,
+    array_is_empty: &impl Fn(&ast::Type) -> bool,
+    resolve: &impl Fn(&ast::QualifiedName) -> Option<SymbolId>,
+    out: &mut Vec<OwnedTypeDependency>,
+) {
+    let mut pending = vec![(value, guarded, Vec::<&ast::Type>::new())];
+    while let Some((value, guarded, result_guards)) = pending.pop() {
+        if let Some(to) = resolve(&value.path) {
+            out.push(OwnedTypeDependency {
+                from: from.clone(),
+                to,
+                span: value.span.clone(),
+                guarded,
+                result_guards: result_guards.iter().map(|guard| (*guard).clone()).collect(),
+                enum_variant,
+            });
+        }
+        let guarded = guarded || owned_type_guard(value);
+        let empty_array = array_is_empty(value);
+        let result = value
+            .path
+            .segments
+            .last()
+            .is_some_and(|name| name == "Result");
+        for (index, argument) in value.arguments.iter().enumerate().rev() {
+            let (GenericArgKind::Type(inner) | GenericArgKind::Ambiguous { ty: inner, .. }) =
+                &argument.kind
+            else {
+                continue;
+            };
+            if empty_array && index == 0 {
+                continue;
+            }
+            let mut guards = result_guards.clone();
+            if result && index < 2 {
+                if let Some(other) =
+                    value
+                        .arguments
+                        .get(1 - index)
+                        .and_then(|argument| match &argument.kind {
+                            GenericArgKind::Type(value)
+                            | GenericArgKind::Ambiguous { ty: value, .. } => Some(value),
+                            GenericArgKind::Const(_) => None,
+                        })
+                {
+                    guards.push(other);
+                }
+            }
+            pending.push((inner, guarded, guards));
+        }
+    }
+}
+
+fn owned_type_terminates_outside_scc(
+    value: &ast::Type,
+    from: &SymbolId,
+    parsed: &ParsedProject,
+    modules: &[ModuleId],
+    declarations: &BTreeMap<SymbolId, usize>,
+    imports: &[BTreeMap<String, SymbolId>],
+    indexes: &BTreeMap<SymbolId, usize>,
+    members: &[bool],
+) -> bool {
+    owned_type_terminates_outside_scc_with_visited(
+        value,
+        from,
+        parsed,
+        modules,
+        declarations,
+        imports,
+        indexes,
+        members,
+        &mut BTreeSet::new(),
+    )
+}
+
+fn owned_type_terminates_outside_scc_with_visited(
+    value: &ast::Type,
+    from: &SymbolId,
+    parsed: &ParsedProject,
+    modules: &[ModuleId],
+    declarations: &BTreeMap<SymbolId, usize>,
+    imports: &[BTreeMap<String, SymbolId>],
+    indexes: &BTreeMap<SymbolId, usize>,
+    members: &[bool],
+    visited: &mut BTreeSet<SymbolId>,
+) -> bool {
+    let mut values = HashMap::<*const ast::Type, bool>::new();
+    let mut pending = vec![(value, false)];
+    while let Some((value, resolved)) = pending.pop() {
+        let key = value as *const ast::Type;
+        if resolved {
+            let arguments = value
+                .arguments
+                .iter()
+                .filter_map(|argument| match &argument.kind {
+                    GenericArgKind::Type(value) | GenericArgKind::Ambiguous { ty: value, .. } => {
+                        Some(value)
+                    }
+                    GenericArgKind::Const(_) => None,
+                })
+                .map(|value| {
+                    values
+                        .get(&(value as *const ast::Type))
+                        .copied()
+                        .unwrap_or(false)
+                })
+                .collect::<Vec<_>>();
+            let name = value.path.segments.last().map(String::as_str);
+            let terminates = match name {
+                Some("Never") => false,
+                Some("Array")
+                    if owned_array_is_empty(
+                        value,
+                        from,
+                        parsed,
+                        modules,
+                        declarations,
+                        imports,
+                    ) =>
+                {
+                    true
+                }
+                Some("Option" | "List" | "Set" | "Map" | "Buffer") => true,
+                Some(
+                    "Dyn" | "Factory" | "Iterator" | "AsyncIterator" | "Generator"
+                    | "AsyncGenerator",
+                ) => false,
+                Some("Result") => arguments.iter().any(|value| *value),
+                _ => {
+                    let target = if value.path.segments.len() == 1 {
+                        let local = SymbolId::new(
+                            from.module.clone(),
+                            value.path.segments.last().cloned().unwrap_or_default(),
+                        );
+                        declarations
+                            .contains_key(&local)
+                            .then_some(local)
+                            .or_else(|| {
+                                modules
+                                    .iter()
+                                    .position(|module| module == &from.module)
+                                    .and_then(|module| {
+                                        imports[module]
+                                            .get(value.path.segments.last().unwrap())
+                                            .cloned()
+                                    })
+                            })
+                    } else {
+                        let target = SymbolId::new(
+                            ModuleId::new(
+                                value.path.segments[..value.path.segments.len() - 1].to_vec(),
+                            ),
+                            value.path.segments.last().cloned().unwrap_or_default(),
+                        );
+                        declarations.contains_key(&target).then_some(target)
+                    };
+                    let in_component = target
+                        .as_ref()
+                        .and_then(|target| indexes.get(target))
+                        .is_some_and(|index| members[*index]);
+                    let nominal = target.as_ref().map_or(true, |target| {
+                        owned_alias_or_newtype_terminates(
+                            target,
+                            parsed,
+                            modules,
+                            declarations,
+                            imports,
+                            indexes,
+                            members,
+                            visited,
+                        )
+                        .unwrap_or_else(|| {
+                            declarations.get(target).is_none_or(|source| {
+                                parsed.sources[*source]
+                                    .syntax
+                                    .declarations
+                                    .iter()
+                                    .find_map(|declaration| match declaration {
+                                        Declaration::Enum(value) if value.name == target.name => {
+                                            Some(value)
+                                        }
+                                        _ => None,
+                                    })
+                                    .is_none_or(|value| !value.variants.is_empty())
+                            })
+                        })
+                    });
+                    !in_component && nominal && arguments.iter().all(|value| *value)
+                }
+            };
+            values.insert(key, terminates);
+        } else if !values.contains_key(&key) {
+            pending.push((value, true));
+            for argument in value.arguments.iter().rev() {
+                if let GenericArgKind::Type(value) | GenericArgKind::Ambiguous { ty: value, .. } =
+                    &argument.kind
+                {
+                    pending.push((value, false));
+                }
+            }
+        }
+    }
+    values
+        .get(&(value as *const ast::Type))
+        .copied()
+        .unwrap_or(false)
+}
+
+fn owned_alias_or_newtype_terminates(
+    target: &SymbolId,
+    parsed: &ParsedProject,
+    modules: &[ModuleId],
+    declarations: &BTreeMap<SymbolId, usize>,
+    imports: &[BTreeMap<String, SymbolId>],
+    indexes: &BTreeMap<SymbolId, usize>,
+    members: &[bool],
+    visited: &mut BTreeSet<SymbolId>,
+) -> Option<bool> {
+    let source = *declarations.get(target)?;
+    let carrier =
+        parsed.sources[source].syntax.declarations.iter().find_map(
+            |declaration| match declaration {
+                Declaration::Alias(value) if value.name == target.name => Some(&value.target),
+                Declaration::Newtype(value) if value.name == target.name => Some(&value.underlying),
+                _ => None,
+            },
+        )?;
+    if !visited.insert(target.clone()) {
+        return Some(false);
+    }
+    let terminates = owned_type_terminates_outside_scc_with_visited(
+        carrier,
+        target,
+        parsed,
+        modules,
+        declarations,
+        imports,
+        indexes,
+        members,
+        visited,
+    );
+    visited.remove(target);
+    Some(terminates)
+}
+
+fn owned_cycle_path(
+    edge_targets: &[usize],
+    outgoing: &[Vec<usize>],
+    members: &[bool],
+    include: impl Fn(usize) -> bool,
+) -> Option<Vec<usize>> {
+    let mut state = vec![0_u8; outgoing.len()];
+    for root in 0..outgoing.len() {
+        if !members[root] || state[root] != 0 {
+            continue;
+        }
+        let mut stack = vec![(root, 0_usize)];
+        let mut path_edges = Vec::new();
+        state[root] = 1;
+        while let Some((node, next)) = stack.last().copied() {
+            if next == outgoing[node].len() {
+                state[node] = 2;
+                stack.pop();
+                if !path_edges.is_empty() {
+                    path_edges.pop();
+                }
+                continue;
+            }
+            stack.last_mut().expect("cycle walk stack is nonempty").1 += 1;
+            let edge = outgoing[node][next];
+            let target = edge_targets[edge];
+            if !members[target] || !include(edge) {
+                continue;
+            }
+            match state[target] {
+                0 => {
+                    state[target] = 1;
+                    path_edges.push(edge);
+                    stack.push((target, 0));
+                }
+                1 => {
+                    let start = stack
+                        .iter()
+                        .position(|(candidate, _)| *candidate == target)
+                        .expect("active cycle target is on the walk stack");
+                    let mut cycle = path_edges[start..].to_vec();
+                    cycle.push(edge);
+                    return Some(cycle);
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+fn owned_type_cycle_message(edges: &[OwnedTypeDependency], cycle: &[usize]) -> String {
+    let mut path = vec![edges[cycle[0]].from.as_string()];
+    path.extend(cycle.iter().map(|edge| edges[*edge].to.as_string()));
+    path.join(" -> ")
+}
+
+fn owned_report_type_cycle(
+    parsed: &ParsedProject,
+    declarations: &BTreeMap<SymbolId, usize>,
+    edges: &[OwnedTypeDependency],
+    cycle: &[usize],
+    message: &str,
+    errors: &mut Vec<ProjectDiagnostic>,
+) {
+    for edge in cycle {
+        let dependency = &edges[*edge];
+        let Some(&module) = declarations.get(&dependency.from) else {
+            continue;
+        };
+        errors.push(ProjectDiagnostic {
+            path: parsed.sources[module].path.clone(),
+            diagnostic: Diagnostic::new(message, dependency.span.clone()),
+        });
+    }
+}
+
+fn owned_validate_type_cycles(
+    parsed: &ParsedProject,
+    modules: &[ModuleId],
+    declarations: &BTreeMap<SymbolId, usize>,
+    imports: &[BTreeMap<String, SymbolId>],
+    errors: &mut Vec<ProjectDiagnostic>,
+) {
+    let mut kinds = BTreeMap::new();
+    let mut enum_variants = BTreeMap::new();
+    let mut dependencies = Vec::new();
+    for (module_index, source) in parsed.sources.iter().enumerate() {
+        let Some(module) = modules.get(module_index) else {
+            continue;
+        };
+        let resolve = |path: &ast::QualifiedName| {
+            let name = path.segments.last()?.clone();
+            if path.segments.len() == 1 {
+                let local = SymbolId::new(module.clone(), name.clone());
+                declarations
+                    .contains_key(&local)
+                    .then_some(local)
+                    .or_else(|| imports[module_index].get(&name).cloned())
+            } else {
+                let symbol = SymbolId::new(
+                    ModuleId::new(path.segments[..path.segments.len() - 1].to_vec()),
+                    name,
+                );
+                declarations.contains_key(&symbol).then_some(symbol)
+            }
+        };
+        for declaration in &source.syntax.declarations {
+            let (id, kind) = match declaration {
+                Declaration::Alias(value) => (
+                    SymbolId::new(module.clone(), value.name.clone()),
+                    OwnedRecursiveTypeKind::Alias,
+                ),
+                Declaration::Newtype(value) => (
+                    SymbolId::new(module.clone(), value.name.clone()),
+                    OwnedRecursiveTypeKind::Newtype,
+                ),
+                Declaration::Struct(value) => (
+                    SymbolId::new(module.clone(), value.name.clone()),
+                    OwnedRecursiveTypeKind::Struct,
+                ),
+                Declaration::Enum(value) => (
+                    SymbolId::new(module.clone(), value.name.clone()),
+                    OwnedRecursiveTypeKind::Enum,
+                ),
+                _ => continue,
+            };
+            kinds.insert(id.clone(), kind);
+            let array_is_empty = |value: &ast::Type| {
+                owned_array_is_empty(value, &id, parsed, modules, declarations, imports)
+            };
+            match declaration {
+                Declaration::Alias(value) => owned_collect_type_dependencies(
+                    &value.target,
+                    &id,
+                    false,
+                    None,
+                    &array_is_empty,
+                    &resolve,
+                    &mut dependencies,
+                ),
+                Declaration::Newtype(value) => owned_collect_type_dependencies(
+                    &value.underlying,
+                    &id,
+                    false,
+                    None,
+                    &array_is_empty,
+                    &resolve,
+                    &mut dependencies,
+                ),
+                Declaration::Struct(value) => {
+                    for field in &value.fields {
+                        owned_collect_type_dependencies(
+                            &field.ty,
+                            &id,
+                            false,
+                            None,
+                            &array_is_empty,
+                            &resolve,
+                            &mut dependencies,
+                        );
+                    }
+                }
+                Declaration::Enum(value) => {
+                    enum_variants.insert(id.clone(), value.variants.len());
+                    for (variant, value) in value.variants.iter().enumerate() {
+                        for parameter in &value.parameters {
+                            owned_collect_type_dependencies(
+                                &parameter.ty,
+                                &id,
+                                false,
+                                Some(variant),
+                                &array_is_empty,
+                                &resolve,
+                                &mut dependencies,
+                            );
+                        }
+                    }
+                }
+                _ => unreachable!("recursive type declaration was classified above"),
+            }
+        }
+    }
+    let vertices = kinds.keys().cloned().collect::<Vec<_>>();
+    let indexes = vertices
+        .iter()
+        .enumerate()
+        .map(|(index, symbol)| (symbol.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut edges = Vec::new();
+    let mut edge_sources = Vec::new();
+    let mut edge_targets = Vec::new();
+    for dependency in dependencies {
+        let Some(&source) = indexes.get(&dependency.from) else {
+            continue;
+        };
+        let Some(&target) = indexes.get(&dependency.to) else {
+            continue;
+        };
+        edge_sources.push(source);
+        edge_targets.push(target);
+        edges.push(dependency);
+    }
+    let mut outgoing = vec![Vec::new(); vertices.len()];
+    let mut incoming = vec![Vec::new(); vertices.len()];
+    for (edge, (&source, &target)) in edge_sources.iter().zip(&edge_targets).enumerate() {
+        outgoing[source].push(edge);
+        incoming[target].push(source);
+    }
+    let mut visited = vec![false; vertices.len()];
+    let mut order = Vec::with_capacity(vertices.len());
+    for root in 0..vertices.len() {
+        if visited[root] {
+            continue;
+        }
+        let mut stack = vec![(root, 0_usize)];
+        visited[root] = true;
+        while let Some((node, next)) = stack.last().copied() {
+            if next == outgoing[node].len() {
+                order.push(node);
+                stack.pop();
+                continue;
+            }
+            stack.last_mut().expect("SCC walk stack is nonempty").1 += 1;
+            let target = edge_targets[outgoing[node][next]];
+            if !visited[target] {
+                visited[target] = true;
+                stack.push((target, 0));
+            }
+        }
+    }
+    let mut assigned = vec![false; vertices.len()];
+    for root in order.into_iter().rev() {
+        if assigned[root] {
+            continue;
+        }
+        let mut members = vec![false; vertices.len()];
+        let mut stack = vec![root];
+        assigned[root] = true;
+        members[root] = true;
+        let mut count = 0;
+        while let Some(node) = stack.pop() {
+            count += 1;
+            for &source in &incoming[node] {
+                if !assigned[source] {
+                    assigned[source] = true;
+                    members[source] = true;
+                    stack.push(source);
+                }
+            }
+        }
+        let recursive = count > 1
+            || (count == 1
+                && outgoing[root]
+                    .iter()
+                    .any(|edge| edge_targets[*edge] == root));
+        if !recursive {
+            continue;
+        }
+        let cycle = owned_cycle_path(&edge_targets, &outgoing, &members, |_| true)
+            .expect("strongly connected type component has a cycle");
+        let message_path = owned_type_cycle_message(&edges, &cycle);
+        let component_modules = members
+            .iter()
+            .enumerate()
+            .filter(|(_, member)| **member)
+            .map(|(index, _)| vertices[index].module.clone())
+            .collect::<BTreeSet<_>>();
+        if component_modules.len() != 1 {
+            owned_report_type_cycle(
+                parsed,
+                declarations,
+                &edges,
+                &cycle,
+                &format!("type cycle cannot cross module boundaries: {message_path}"),
+                errors,
+            );
+            continue;
+        }
+        if members.iter().enumerate().any(|(index, member)| {
+            *member
+                && matches!(
+                    kinds.get(&vertices[index]).copied(),
+                    Some(OwnedRecursiveTypeKind::Alias | OwnedRecursiveTypeKind::Newtype)
+                )
+        }) {
+            owned_report_type_cycle(
+                parsed,
+                declarations,
+                &edges,
+                &cycle,
+                &format!("cyclic alias or newtype definition: {message_path}"),
+                errors,
+            );
+            continue;
+        }
+        let edge_guarded = edges
+            .iter()
+            .map(|edge| {
+                edge.guarded
+                    || edge.result_guards.iter().any(|guard| {
+                        owned_type_terminates_outside_scc(
+                            guard,
+                            &edge.from,
+                            parsed,
+                            modules,
+                            declarations,
+                            imports,
+                            &indexes,
+                            &members,
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+        let terminating_enums = (0..vertices.len())
+            .filter(|index| {
+                members[*index]
+                    && kinds.get(&vertices[*index]) == Some(&OwnedRecursiveTypeKind::Enum)
+                    && (0..enum_variants
+                        .get(&vertices[*index])
+                        .copied()
+                        .unwrap_or_default())
+                        .any(|variant| {
+                            !outgoing[*index].iter().any(|edge| {
+                                members[edge_targets[*edge]]
+                                    && edges[*edge].enum_variant == Some(variant)
+                                    && !edge_guarded[*edge]
+                            })
+                        })
+            })
+            .collect::<BTreeSet<_>>();
+        if let Some(cycle) = owned_cycle_path(&edge_targets, &outgoing, &members, |edge| {
+            !edge_guarded[edge] && !terminating_enums.contains(&edge_sources[edge])
+        }) {
+            owned_report_type_cycle(
+                parsed,
+                declarations,
+                &edges,
+                &cycle,
+                &format!(
+                    "unproductive type cycle: {}",
+                    owned_type_cycle_message(&edges, &cycle)
+                ),
+                errors,
+            );
         }
     }
 }
@@ -6343,6 +8396,9 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
             }
         }
         Declaration::Trait(value) => {
+            for parent in &value.parents {
+                owned_visit_type(parent, &mut visit);
+            }
             for associated in &value.associated_types {
                 for bound in &associated.bounds {
                     owned_visit_type(bound, &mut visit);
@@ -6393,6 +8449,12 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
                 for clause in &method.clauses {
                     owned_visit_clause(clause, &mut visit);
                 }
+            }
+        }
+        Declaration::Specialize(value) => {
+            owned_visit_type(&value.trait_, &mut visit);
+            for entry in &value.entries {
+                visit(&entry.target);
             }
         }
         Declaration::Resource(_) => {}
@@ -6451,7 +8513,6 @@ fn owned_qualified_owner(
         .any(|declaration| {
             matches!(
                 declaration,
-
                 Declaration::Enum(value)
                     if value.name == enum_symbol.name
                         && value
@@ -6492,6 +8553,7 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
                 Declaration::Enum(value) => (&value.name, true),
                 Declaration::Trait(value) => (&value.name, true),
                 Declaration::Impl(value) => (&value.name, true),
+                Declaration::Specialize(value) => (&value.name, true),
                 Declaration::Rule(value) => (&value.name, true),
                 Declaration::Resource(value) => (&value.name, true),
                 Declaration::Const(value) => (&value.name, false),
@@ -6511,22 +8573,26 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
                     format!("invalid name `{name}` for declaration"),
                 );
             }
-            if owned_primitive(name).is_some()
-                || matches!(
-                    name.as_str(),
-                    "List"
-                        | "Set"
-                        | "Map"
-                        | "Tuple"
-                        | "Array"
-                        | "Buffer"
-                        | "Option"
-                        | "Result"
-                        | "Factory"
-                        | "Iterator"
-                        | "Generator"
-                        | "Opaque"
-                )
+            if !matches!(declaration, Declaration::Specialize(_))
+                && (owned_primitive(name).is_some()
+                    || matches!(
+                        name.as_str(),
+                        "List"
+                            | "Set"
+                            | "Map"
+                            | "Tuple"
+                            | "Array"
+                            | "Buffer"
+                            | "Option"
+                            | "Result"
+                            | "Dyn"
+                            | "Factory"
+                            | "Iterator"
+                            | "Generator"
+                            | "AsyncIterator"
+                            | "AsyncGenerator"
+                            | "Opaque"
+                    ))
             {
                 report(
                     declaration.span().clone(),
@@ -6552,6 +8618,18 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
                         report(
                             span.clone(),
                             format!("duplicate generic parameter `{name}`"),
+                        );
+                    }
+                    if let ast::GenericParam::Type { variance, .. } = generic
+                        && *variance != ast::Variance::Invariant
+                        && !matches!(
+                            declaration,
+                            Declaration::Struct(_) | Declaration::Enum(_) | Declaration::Trait(_)
+                        )
+                    {
+                        report(
+                            span.clone(),
+                            "variance markers are only allowed on struct, enum, and trait type parameters".into(),
                         );
                     }
                 }
@@ -6639,6 +8717,23 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
                                     format!("duplicate parameter `{}`", parameter.name),
                                 );
                             }
+                        }
+                    }
+                }
+                Declaration::Specialize(value) => {
+                    let mut methods = BTreeSet::new();
+                    for entry in &value.entries {
+                        if !owned_valid_snake(&entry.name) {
+                            report(
+                                entry.span.clone(),
+                                format!("invalid specialization method `{}`", entry.name),
+                            );
+                        }
+                        if !methods.insert(&entry.name) {
+                            report(
+                                entry.span.clone(),
+                                format!("duplicate specialization method `{}`", entry.name),
+                            );
                         }
                     }
                 }
@@ -6764,13 +8859,18 @@ fn owned_preflight(
                 Declaration::Enum(v) => &v.name,
                 Declaration::Trait(v) => &v.name,
                 Declaration::Impl(v) => &v.name,
+                Declaration::Specialize(_) => continue,
                 Declaration::Rule(v) => &v.name,
                 Declaration::Resource(v) => &v.name,
                 Declaration::Const(v) => &v.name,
                 Declaration::Function(v) => &v.name,
             };
             let id = SymbolId::new(module.clone(), name.clone());
-            if declarations.insert(id.clone(), module_index).is_some() {
+            let struct_backed_impl = matches!(declaration, Declaration::Impl(_))
+                && source.syntax.declarations.iter().any(|candidate| {
+                    matches!(candidate, Declaration::Struct(value) if value.name == *name)
+                });
+            if declarations.insert(id.clone(), module_index).is_some() && !struct_backed_impl {
                 errors.push(ProjectDiagnostic {
                     path: source.path.clone(),
                     diagnostic: Diagnostic::new(
@@ -6780,111 +8880,6 @@ fn owned_preflight(
                 });
             }
         }
-    }
-    let mut type_dependencies = BTreeMap::<SymbolId, BTreeSet<SymbolId>>::new();
-    for (module_index, source) in parsed.sources.iter().enumerate() {
-        let Some(module) = modules.get(module_index) else {
-            continue;
-        };
-        for declaration in &source.syntax.declarations {
-            let (name, types): (&String, Vec<&ast::Type>) =
-                match declaration {
-                    Declaration::Alias(v) => (&v.name, vec![&v.target]),
-                    Declaration::Newtype(v) => (&v.name, vec![&v.underlying]),
-                    Declaration::Struct(v) => (&v.name, v.fields.iter().map(|f| &f.ty).collect()),
-                    Declaration::Enum(v) => (
-                        &v.name,
-                        v.variants
-                            .iter()
-                            .flat_map(|v| v.parameters.iter().map(|p| &p.ty))
-                            .collect(),
-                    ),
-                    Declaration::Impl(v) => (
-                        &v.name,
-                        v.traits
-                            .iter()
-                            .chain(v.state.iter().map(|field| &field.ty))
-                            .chain(v.initializer.iter().flat_map(|init| {
-                                init.parameters.iter().map(|parameter| &parameter.ty)
-                            }))
-                            .chain(v.methods.iter().flat_map(|method| {
-                                method
-                                    .parameters
-                                    .iter()
-                                    .map(|parameter| &parameter.ty)
-                                    .chain(std::iter::once(&method.return_type))
-                            }))
-                            .collect(),
-                    ),
-                    Declaration::Resource(v) => (&v.name, Vec::new()),
-                    Declaration::Rule(v) => (&v.name, v.base.as_ref().into_iter().collect()),
-                    _ => continue,
-                };
-            let current = SymbolId::new(module.clone(), name.clone());
-            let mut paths = Vec::new();
-            for ty in types {
-                owned_type_paths(ty, &mut paths);
-            }
-            for path in paths {
-                let target_name = path.segments.last().cloned().unwrap_or_default();
-                let target = if path.segments.len() == 1 {
-                    SymbolId::new(module.clone(), target_name)
-                } else {
-                    SymbolId::new(
-                        ModuleId::new(path.segments[..path.segments.len() - 1].to_vec()),
-                        target_name,
-                    )
-                };
-                if declarations.contains_key(&target) {
-                    type_dependencies
-                        .entry(current.clone())
-                        .or_default()
-                        .insert(target);
-                }
-            }
-        }
-    }
-    fn visit_type_cycle(
-        symbol: &SymbolId,
-        deps: &BTreeMap<SymbolId, BTreeSet<SymbolId>>,
-        state: &mut HashMap<SymbolId, u8>,
-        declarations: &BTreeMap<SymbolId, usize>,
-        parsed: &ParsedProject,
-        errors: &mut Vec<ProjectDiagnostic>,
-    ) {
-        if state.get(symbol) == Some(&2) {
-            return;
-        }
-        if state.get(symbol) == Some(&1) {
-            if let Some(index) = declarations.get(symbol) {
-                errors.push(ProjectDiagnostic {
-                    path: parsed.sources[*index].path.clone(),
-                    diagnostic: Diagnostic::new(
-                        format!("cyclic type reference involving `{}`", symbol.as_string()),
-                        parsed.sources[*index].syntax.module.span.clone(),
-                    ),
-                });
-            }
-            return;
-        }
-        state.insert(symbol.clone(), 1);
-        if let Some(children) = deps.get(symbol) {
-            for child in children {
-                visit_type_cycle(child, deps, state, declarations, parsed, errors);
-            }
-        }
-        state.insert(symbol.clone(), 2);
-    }
-    let mut type_state = HashMap::new();
-    for symbol in type_dependencies.keys() {
-        visit_type_cycle(
-            symbol,
-            &type_dependencies,
-            &mut type_state,
-            &declarations,
-            parsed,
-            &mut errors,
-        );
     }
     let mut imports = vec![BTreeMap::<String, SymbolId>::new(); parsed.sources.len()];
     let mut dependencies = vec![BTreeSet::new(); parsed.sources.len()];
@@ -6998,6 +8993,7 @@ fn owned_preflight(
     for index in 0..parsed.sources.len() {
         visit(index, &dependencies, &mut state, parsed, &mut errors);
     }
+    owned_validate_type_cycles(parsed, &modules, &declarations, &imports, &mut errors);
     if errors.is_empty() {
         Ok(())
     } else {
@@ -7106,7 +9102,11 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
                 visit(value, modules, path, span, errors);
             }
             HirType::Factory { instance } => visit(instance, modules, path, span, errors),
-            HirType::List { item } | HirType::Option { item } | HirType::Iterator { item } => {
+            HirType::Dyn { trait_ref } => visit(trait_ref, modules, path, span, errors),
+            HirType::List { item }
+            | HirType::Option { item }
+            | HirType::Iterator { item }
+            | HirType::AsyncIterator { item } => {
                 visit(item, modules, path, span, errors);
             }
             HirType::Tuple { items } => {
@@ -7124,6 +9124,13 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
                 visit(yield_type, modules, path, span, errors);
                 visit(send_type, modules, path, span, errors);
                 visit(return_type, modules, path, span, errors);
+            }
+            HirType::AsyncGenerator {
+                yield_type,
+                send_type,
+            } => {
+                visit(yield_type, modules, path, span, errors);
+                visit(send_type, modules, path, span, errors);
             }
             HirType::Result { ok, error } => {
                 visit(ok, modules, path, span, errors);
@@ -7164,6 +9171,8 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
                     );
                 }
                 HirDeclaration::Trait(value) => {
+                    types.extend(value.parents.iter().map(|parent| &parent.trait_ref));
+                    types.extend(value.closure.iter());
                     for method in &value.methods {
                         types.extend(method.parameters.iter().map(|parameter| &parameter.ty));
                         types.push(&method.return_type);
@@ -7188,6 +9197,10 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
                             .iter()
                             .map(|associated| &associated.ty),
                     );
+                }
+                HirDeclaration::Specialization(value) => {
+                    types.push(&value.receiver_type);
+                    types.push(&value.trait_ref);
                 }
                 HirDeclaration::Const(value) => types.push(&value.ty),
                 HirDeclaration::Function(value) => {
@@ -7286,9 +9299,10 @@ pub fn lower_with_effects(
         .err()
         .unwrap_or_default();
     let mut lowerer = OwnedLower::new(&parsed);
-    let modules = (0..parsed.sources.len())
+    let mut modules = (0..parsed.sources.len())
         .map(|index| lowerer.module(index))
         .collect::<Vec<_>>();
+    lowerer.finalize_v7(&mut modules);
     errors.extend(lowerer.errors);
     if errors.is_empty() {
         validate_hash_stable_keys(&modules, &mut errors);

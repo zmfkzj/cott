@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.flashcard_schedule_types import FlashcardScheduleError, FlashcardScheduleError_DateOverflow, FlashcardScheduleError_EaseOutOfRange, FlashcardScheduleError_ZeroEase, Rating, Rating_Again, Rating_Easy, Rating_Good, Rating_Hard, Review, ScheduledCard
 
@@ -47,6 +48,7 @@ priority over EaseOutOfRange."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.flashcard_schedule.validate_review_ease", phase="error", span={"end_byte":798,"end_column":1,"end_line":36,"start_byte":352,"start_column":1,"start_line":25}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.flashcard_schedule.validate_review_ease", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    _result = _cott_wrap_async_protocol(_result, Result[Unit, FlashcardScheduleError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def schedule_review(review: Review) -> Result[ScheduledCard, FlashcardScheduleError]:
@@ -114,6 +116,7 @@ the maximum U32 due day."""
         return True
     if not (_cott_match_ensures_3()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.flashcard_schedule.schedule_review", clause="ensures:3", phase="ensures", span={"end_byte":1524,"end_column":89,"end_line":48,"start_byte":1440,"start_column":5,"start_line":48}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[ScheduledCard, FlashcardScheduleError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["FlashcardScheduleError", "FlashcardScheduleError_DateOverflow", "FlashcardScheduleError_EaseOutOfRange", "FlashcardScheduleError_ZeroEase", "Rating", "Rating_Again", "Rating_Easy", "Rating_Good", "Rating_Hard", "Review", "ScheduledCard", "schedule_review", "validate_review_ease"]

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.split_file_types import SplitFileError, SplitFileError_InvalidChunkSize, SplitFileError_OutputLimitExceeded, SplitRequest
 
@@ -44,6 +45,7 @@ chunks. InvalidChunkSize is checked before OutputLimitExceeded."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.split_file.validate_split_request", phase="error", span={"end_byte":634,"end_column":1,"end_line":21,"start_byte":160,"start_column":1,"start_line":11}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.split_file.validate_split_request", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    _result = _cott_wrap_async_protocol(_result, Result[Unit, SplitFileError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def split_lines(request: SplitRequest) -> Result[CottList[CottList[str]], SplitFileError]:
@@ -81,6 +83,7 @@ omitted or duplicated."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.split_file.split_lines", phase="error", span={"end_byte":1144,"end_column":1,"end_line":31,"start_byte":634,"start_column":1,"start_line":21}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.split_file.split_lines", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    _result = _cott_wrap_async_protocol(_result, Result[CottList[CottList[str]], SplitFileError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["SplitFileError", "SplitFileError_InvalidChunkSize", "SplitFileError_OutputLimitExceeded", "SplitRequest", "split_lines", "validate_split_request"]

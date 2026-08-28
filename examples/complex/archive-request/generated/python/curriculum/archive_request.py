@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.archive_request_types import ArchivePlan, ArchiveRequest, ArchiveRequestError, ArchiveRequestError_EmptySelection, ArchiveRequestError_InvalidUrl, CaptureKind, CaptureKind_Html, CaptureKind_Media
 
@@ -49,6 +50,7 @@ InvalidUrl."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.archive_request.canonicalize_archive_url", clause="ensures:1", phase="ensures", span={"end_byte":689,"end_column":62,"end_line":28,"start_byte":632,"start_column":5,"start_line":28}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[str, ArchiveRequestError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def compose_archive_plan(canonical_url: str, include_html: bool, include_media: bool) -> ArchivePlan:
@@ -73,6 +75,7 @@ kinds. HTML precedes media when both kinds are selected."""
     _result = _cott_validate_abi(_result, ArchivePlan, path="$.return")
     if not (((_result).canonical_url == canonical_url)):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.archive_request.compose_archive_plan", clause="ensures:1", phase="ensures", span={"end_byte":1057,"end_column":50,"end_line":40,"start_byte":1012,"start_column":5,"start_line":40}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, ArchivePlan, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def plan_archive(request: ArchiveRequest) -> Result[ArchivePlan, ArchiveRequestError]:
@@ -117,6 +120,7 @@ malformed URLs return InvalidUrl."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.archive_request.plan_archive", clause="ensures:1", phase="ensures", span={"end_byte":1465,"end_column":84,"end_line":51,"start_byte":1386,"start_column":5,"start_line":51}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[ArchivePlan, ArchiveRequestError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["ArchivePlan", "ArchiveRequest", "ArchiveRequestError", "ArchiveRequestError_EmptySelection", "ArchiveRequestError_InvalidUrl", "CaptureKind", "CaptureKind_Html", "CaptureKind_Media", "canonicalize_archive_url", "compose_archive_plan", "plan_archive"]

@@ -5,7 +5,8 @@ use cott::diagnostics::Span;
 use cott::hir::{
     HirCallableKind, HirClause, HirClauseKind, HirConstArgument, HirContract, HirDeclaration,
     HirDoc, HirExpr, HirExprKind, HirGenericArg, HirGenericParam, HirPattern, HirPatternKind,
-    HirTrait, HirType, HirValue, ModuleId, PrimitiveType, SymbolId, lower,
+    HirTrait, HirType, HirValue, HirVariance, ModuleId, PrimitiveType, SymbolId, is_assignable,
+    lower,
 };
 
 fn span() -> Span {
@@ -26,6 +27,7 @@ fn owned_hir_preserves_trait_bounds_types_contract_order_and_pattern_identity() 
 
     let bounded = HirGenericParam::Type {
         span: at.clone(),
+        variance: HirVariance::Invariant,
         name: "T".into(),
         bounds: vec![HirType::Named {
             symbol: trait_id.clone(),
@@ -83,6 +85,8 @@ fn owned_hir_preserves_trait_bounds_types_contract_order_and_pattern_identity() 
             text: "renders values".into(),
         }),
         generics: vec![bounded],
+        parents: vec![],
+        closure: vec![],
         methods: vec![],
         associated_types: vec![],
         public: true,
@@ -1019,6 +1023,18 @@ fn rejects_invalid_agent_type_arities_and_opaque_boundaries() {
             "type constructor `Generator` expects 3 argument(s), got 2",
         ),
         (
+            "module invalid\nstruct Value:\n    item: AsyncIterator[U8, U16]\n",
+            "type constructor `AsyncIterator` expects 1 argument(s), got 2",
+        ),
+        (
+            "module invalid\nstruct Value:\n    item: AsyncGenerator[U8]\n",
+            "type constructor `AsyncGenerator` expects 2 argument(s), got 1",
+        ),
+        (
+            "module invalid\nalias Stream = Iterator[U8]\nasync fn stream() -> Stream\n",
+            "async function cannot return Iterator, Generator, or Never",
+        ),
+        (
             "module invalid\nstruct Value:\n    item: Opaque[\"Invalid\"]\n",
             "Opaque tag must match [a-z][a-z0-9._-]{0,63}",
         ),
@@ -1288,5 +1304,352 @@ impl DoorController for Controller:
     assert_eq!(
         controller.methods[0].transitions[1].field.as_string(),
         "lifecycle_transitions.DoorController.backup"
+    );
+}
+
+#[test]
+fn lowers_async_protocol_types_and_impl_method_kinds() {
+    let parsed = parse_project([SourceFile::new(
+        "src/async_protocols.cott",
+        r#"module async_protocols
+
+trait Stream:
+    async fn next(self) -> AsyncIterator[I32]
+
+impl AsyncStream for Stream:
+    async fn next(self) -> AsyncIterator[I32]:
+        ensures true
+
+async fn protocol_source() -> AsyncGenerator[I32, Unit]
+fn protocols(items: AsyncIterator[I32]) -> AsyncGenerator[I32, Unit]
+"#,
+    )])
+    .expect("async protocol fixture must parse");
+    let project = lower(Path::new("src"), parsed).expect("async protocol fixture must lower");
+    let declarations = &project.modules[0].declarations;
+    let HirDeclaration::Trait(stream) = &declarations[0] else {
+        panic!("first declaration must be trait");
+    };
+    assert_eq!(stream.methods[0].callable_kind, HirCallableKind::Async);
+    assert_eq!(
+        stream.methods[0].return_type,
+        HirType::AsyncIterator {
+            item: Box::new(HirType::Primitive(PrimitiveType::I32))
+        }
+    );
+    let HirDeclaration::Impl(implementation) = &declarations[1] else {
+        panic!("second declaration must be impl");
+    };
+    assert_eq!(
+        implementation.methods[0].callable_kind,
+        HirCallableKind::Async
+    );
+    assert_eq!(
+        implementation.methods[0].return_type,
+        HirType::AsyncIterator {
+            item: Box::new(HirType::Primitive(PrimitiveType::I32))
+        }
+    );
+    assert_eq!(
+        implementation.selected_methods[0].callable_kind,
+        HirCallableKind::Async
+    );
+    let HirDeclaration::Function(protocol_source) = &declarations[2] else {
+        panic!("third declaration must be function");
+    };
+    assert_eq!(protocol_source.callable_kind, HirCallableKind::Async);
+    assert_eq!(
+        protocol_source.return_type,
+        HirType::AsyncGenerator {
+            yield_type: Box::new(HirType::Primitive(PrimitiveType::I32)),
+            send_type: Box::new(HirType::Primitive(PrimitiveType::Unit)),
+        }
+    );
+    let HirDeclaration::Function(protocols) = &declarations[3] else {
+        panic!("fourth declaration must be function");
+    };
+    assert_eq!(
+        protocols.parameters[0].ty,
+        HirType::AsyncIterator {
+            item: Box::new(HirType::Primitive(PrimitiveType::I32))
+        }
+    );
+    assert_eq!(
+        protocols.return_type,
+        HirType::AsyncGenerator {
+            yield_type: Box::new(HirType::Primitive(PrimitiveType::I32)),
+            send_type: Box::new(HirType::Primitive(PrimitiveType::Unit)),
+        }
+    );
+}
+
+#[test]
+fn lowers_v7_inherited_trait_closure_and_nominal_dyn_type() {
+    let parsed = parse_project([SourceFile::new(
+        "src/v05_hir.cott",
+        r#"module v05_hir
+
+trait Parent:
+    fn read(self) -> I32
+
+trait Child for Parent:
+    fn write(self) -> I32
+
+impl Concrete for Child:
+    fn read(self) -> I32:
+        ensures true
+    fn write(self) -> I32:
+        ensures true
+
+alias Dynamic = Dyn[Child]
+"#,
+    )])
+    .expect("v0.5 fixture must parse");
+    let project = lower(Path::new("src"), parsed).expect("v0.5 fixture must lower");
+    let declarations = &project.modules[0].declarations;
+    let HirDeclaration::Trait(child) = &declarations[1] else {
+        panic!("second declaration must be child trait");
+    };
+    assert_eq!(child.parents.len(), 1);
+    assert_eq!(child.closure.len(), 1);
+    assert_eq!(child.methods.len(), 2);
+    let HirDeclaration::Alias(dynamic) = &declarations[3] else {
+        panic!("fourth declaration must be Dyn alias");
+    };
+    assert!(matches!(dynamic.target, HirType::Dyn { .. }));
+}
+
+#[test]
+fn coalesces_equal_multi_trait_method_signatures() {
+    let parsed = parse_project([SourceFile::new(
+        "src/v05_coalesce.cott",
+        r#"module v05_coalesce
+
+trait Reader:
+    fn read(self) -> I32
+
+trait Writer:
+    fn read(self) -> I32
+
+impl Concrete for Reader + Writer:
+    fn read(self) -> I32:
+        ensures true
+"#,
+    )])
+    .expect("coalesced method fixture must parse");
+    let project = lower(Path::new("src"), parsed).expect("equal methods must coalesce");
+    let HirDeclaration::Impl(implementation) = &project.modules[0].declarations[2] else {
+        panic!("third declaration must be impl");
+    };
+    assert_eq!(implementation.selected_methods.len(), 1);
+}
+
+#[test]
+fn trait_assignability_uses_instantiated_parent_closure() {
+    let parsed = parse_project([SourceFile::new(
+        "src/v05_assignable.cott",
+        r#"module v05_assignable
+
+trait Parent[+T]:
+    fn value(self) -> T
+
+trait Child[+T] for Parent[T]:
+    fn child(self) -> T
+"#,
+    )])
+    .expect("assignability fixture must parse");
+    let project = lower(Path::new("src"), parsed).expect("assignability fixture must lower");
+    let HirDeclaration::Trait(parent) = &project.modules[0].declarations[0] else {
+        panic!("first declaration must be parent");
+    };
+    let HirDeclaration::Trait(child) = &project.modules[0].declarations[1] else {
+        panic!("second declaration must be child");
+    };
+    let argument = HirGenericArg::Type(HirType::Primitive(PrimitiveType::I32));
+    assert!(is_assignable(
+        &HirType::Named {
+            symbol: child.id.clone(),
+            args: vec![argument.clone()],
+        },
+        &HirType::Named {
+            symbol: parent.id.clone(),
+            args: vec![argument],
+        },
+        &project,
+    ));
+}
+
+#[test]
+fn rejects_diamond_with_conflicting_parent_instantiations() {
+    let parsed = parse_project([SourceFile::new(
+        "src/v05_diamond_args.cott",
+        r#"module v05_diamond_args
+
+trait Root[T]:
+    fn value(self) -> T
+
+trait Left for Root[I32]:
+
+trait Right for Root[Bool]:
+
+trait Child for Left + Right:
+    fn child(self) -> Unit
+"#,
+    )])
+    .expect("diamond fixture must parse");
+    let errors = lower(Path::new("src"), parsed)
+        .expect_err("incompatible parent instantiations must reject");
+    assert!(errors.iter().any(|error| {
+        error
+            .diagnostic
+            .message
+            .contains("trait diamond instantiates")
+    }));
+}
+
+#[test]
+fn rejects_multi_trait_method_parameter_shape_mismatch() {
+    let parsed = parse_project([SourceFile::new(
+        "src/v05_parameter_shape.cott",
+        r#"module v05_parameter_shape
+
+trait Reader:
+    fn read(self, value: I32) -> I32
+
+trait Writer:
+    fn read(self, amount: I32) -> I32
+
+impl Concrete for Reader + Writer:
+    fn read(self, value: I32) -> I32:
+        ensures true
+"#,
+    )])
+    .expect("parameter-shape fixture must parse");
+    let errors =
+        lower(Path::new("src"), parsed).expect_err("different parameter names must not coalesce");
+    assert!(errors.iter().any(|error| {
+        error
+            .diagnostic
+            .message
+            .contains("incompatible methods with the same name")
+    }));
+}
+
+#[test]
+fn rejects_cyclic_multi_bound_trait_intersection_but_allows_single_bounds() {
+    let cyclic = parse_project([SourceFile::new(
+        "src/v05_bound_cycle.cott",
+        r#"module v05_bound_cycle
+
+trait A[T: B[T] + C]:
+    fn a(self) -> T
+
+trait B[T: A[T]]:
+    fn b(self) -> T
+
+trait C:
+    fn c(self) -> Unit
+"#,
+    )])
+    .expect("cyclic bound fixture must parse");
+    let errors =
+        lower(Path::new("src"), cyclic).expect_err("cyclic multi-bound intersection must reject");
+    assert!(errors.iter().any(|error| {
+        error
+            .diagnostic
+            .message
+            .contains("multi-bound generic intersection")
+    }));
+
+    let allowed = parse_project([SourceFile::new(
+        "src/v05_single_bound_cycle.cott",
+        r#"module v05_single_bound_cycle
+
+trait Left[T: Right[T]]:
+    fn left(self) -> T
+
+trait Right[T: Left[T]]:
+    fn right(self) -> T
+"#,
+    )])
+    .expect("single-bound fixture must parse");
+    lower(Path::new("src"), allowed).expect("single-bound cycle remains forward-reference-safe");
+}
+
+#[test]
+fn lowers_v06_safe_multibound_outside_a_single_bound_cycle() {
+    let parsed = parse_project([SourceFile::new(
+        "src/v06_safe_bounds.cott",
+        r#"module v06_safe_bounds
+
+trait Owner[T: A + B, U: CycleA[U]]:
+    fn owner(self) -> Unit
+trait A:
+    fn a(self) -> Unit
+trait B:
+    fn b(self) -> Unit
+trait CycleA[V: CycleB[V]]:
+    fn cycle_a(self) -> Unit
+trait CycleB[V: Owner[Any, V]]:
+    fn cycle_b(self) -> Unit
+"#,
+    )])
+    .expect("safe multi-bound fixture must parse");
+
+    lower(Path::new("src"), parsed)
+        .expect("a T multi-bound unrelated to the U-only cycle must lower");
+}
+
+#[test]
+fn lowers_v06_generic_recursion_as_symbolic_named_types() {
+    let parsed = parse_project([SourceFile::new(
+        "src/recursive.cott",
+        r#"module recursive
+
+struct Chain[T]:
+    value: T
+    next: Option[Chain[T]]
+"#,
+    )])
+    .expect("recursive fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("guarded recursion should lower");
+    let module = &project.modules[0];
+    let HirDeclaration::Struct(chain) = &module.declarations[0] else {
+        panic!("expected recursive struct");
+    };
+
+    assert_eq!(
+        chain.fields[1].ty,
+        HirType::Option {
+            item: Box::new(HirType::Named {
+                symbol: symbol(&module.id, "Chain"),
+                args: vec![HirGenericArg::Type(HirType::TypeParameter {
+                    name: "T".into(),
+                })],
+            }),
+        }
+    );
+}
+
+#[test]
+fn recursive_nominal_types_are_not_hash_stable_keys() {
+    let parsed = parse_project([SourceFile::new(
+        "src/recursive_key.cott",
+        r#"module recursive_key
+
+struct Node:
+    next: Option[Node]
+
+struct Index:
+    nodes: Set[Node]
+"#,
+    )])
+    .expect("recursive key fixture should parse");
+    let errors = lower(Path::new("src"), parsed).expect_err("recursive nominal key must fail");
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.diagnostic.message == "Set item type must be hash-stable")
     );
 }

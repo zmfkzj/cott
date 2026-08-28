@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.backup_plan_types import BackupPath, BackupPlan, BackupPlanError, BackupPlanError_BlankContentId, BackupPlanError_DuplicatePath, BackupPlanError_EmptyPath, BackupPlanRequest
 
@@ -40,6 +41,7 @@ Duplicate detection includes every earlier valid path."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.backup_plan.validate_backup_request", phase="error", span={"end_byte":783,"end_column":1,"end_line":33,"start_byte":330,"start_column":1,"start_line":20}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.backup_plan.validate_backup_request", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    _result = _cott_wrap_async_protocol(_result, Result[Unit, BackupPlanError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def classify_backup_paths(paths: CottList[BackupPath], known_content_ids: CottSet[str]) -> BackupPlan:
@@ -69,6 +71,7 @@ Known content is reused; unknown content contributes its path for upload."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.backup_plan.classify_backup_paths", clause="ensures:1", phase="ensures", span={"end_byte":1139,"end_column":87,"end_line":39,"start_byte":1057,"start_column":5,"start_line":39}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, BackupPlan, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def plan_backup(request: BackupPlanRequest) -> Result[BackupPlan, BackupPlanError]:
@@ -108,6 +111,7 @@ upload and reuse lists."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.backup_plan.plan_backup", clause="ensures:1", phase="ensures", span={"end_byte":1468,"end_column":106,"end_line":49,"start_byte":1367,"start_column":5,"start_line":49}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[BackupPlan, BackupPlanError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["BackupPath", "BackupPlan", "BackupPlanError", "BackupPlanError_BlankContentId", "BackupPlanError_DuplicatePath", "BackupPlanError_EmptyPath", "BackupPlanRequest", "classify_backup_paths", "plan_backup", "validate_backup_request"]

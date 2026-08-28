@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cott.dev/schema/generation/v2",
-  "title": "cott generation record v2",
+  "$id": "https://cott.dev/schema/generation/v5",
+  "title": "cott generation record v5",
   "type": "object",
   "required": ["schema_version", "current", "last_verified"],
   "additionalProperties": false,
   "properties": {
-    "schema_version": {"const": 2},
+    "schema_version": {"const": 5},
     "current": {"$ref": "#/$defs/snapshot"},
     "last_verified": {"anyOf": [{"$ref": "#/$defs/snapshot"}, {"type": "null"}]}
   },
@@ -49,50 +49,55 @@
       "required": ["generation_schema", "canonical_ir_schema", "runtime_abi"],
       "additionalProperties": false,
       "properties": {
-        "generation_schema": {"const": 2},
-        "canonical_ir_schema": {"const": 5},
-        "runtime_abi": {"const": 2}
+        "generation_schema": {"const": 5},
+        "canonical_ir_schema": {"const": 7},
+        "runtime_abi": {"const": 5}
       }
     },
     "implementation": {
       "type": "object",
-      "required": ["cott_symbol", "owner", "python_symbol", "source_origin", "runtime_origin", "content_hash"],
+      "required": ["cott_symbol", "kind", "callable_kind", "concrete", "method", "selection", "owner", "python_symbol", "source_origin", "runtime_origin", "content_hash"],
       "additionalProperties": false,
       "properties": {
         "cott_symbol": {"type": "string"},
-        "kind": {"enum": ["function", "async_function", "impl_method"]},
+        "kind": {"enum": ["function", "async_function", "impl_method", "async_impl_method"]},
+        "callable_kind": {"enum": ["sync", "async"]},
         "concrete": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
         "method": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+        "selection": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/dispatch_selection"}]},
         "owner": {"enum": ["manifest", "agent"]},
         "python_symbol": {"type": "string"},
         "source_origin": {"type": "string"},
         "runtime_origin": {"type": "string"},
         "content_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       },
-      "anyOf": [
-        {
-          "not": {
-            "anyOf": [
-              {"required": ["kind"]},
-              {"required": ["concrete"]},
-              {"required": ["method"]}
-            ]
-          }
-        },
-        {
-          "required": ["kind", "concrete", "method"]
-        }
-      ],
       "allOf": [
         {
-          "if": {"properties": {"kind": {"enum": ["function", "async_function"]}}, "required": ["kind"]},
-          "then": {"properties": {"concrete": {"type": "null"}, "method": {"type": "null"}}}
+          "if": {"properties": {"kind": {"const": "function"}}, "required": ["kind"]},
+          "then": {"properties": {"callable_kind": {"const": "sync"}, "concrete": {"type": "null"}, "method": {"type": "null"}, "selection": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "async_function"}}, "required": ["kind"]},
+          "then": {"properties": {"callable_kind": {"const": "async"}, "concrete": {"type": "null"}, "method": {"type": "null"}, "selection": {"type": "null"}}}
         },
         {
           "if": {"properties": {"kind": {"const": "impl_method"}}, "required": ["kind"]},
-          "then": {"properties": {"concrete": {"type": "string", "minLength": 1}, "method": {"type": "string", "minLength": 1}}}
+          "then": {"properties": {"callable_kind": {"const": "sync"}, "concrete": {"type": "string", "minLength": 1}, "method": {"type": "string", "minLength": 1}, "selection": {"$ref": "#/$defs/dispatch_selection"}}}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "async_impl_method"}}, "required": ["kind"]},
+          "then": {"properties": {"callable_kind": {"const": "async"}, "concrete": {"type": "string", "minLength": 1}, "method": {"type": "string", "minLength": 1}, "selection": {"$ref": "#/$defs/dispatch_selection"}}}
         }
       ]
+    },
+    "dispatch_selection": {
+      "type": "object",
+      "required": ["kind", "trait_method"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"const": "explicit"},
+        "trait_method": {"type": "string", "minLength": 1}
+      }
     },
     "source_span": {
       "type": "object",
@@ -109,13 +114,24 @@
     },
     "unresolved": {
       "type": "object",
-      "required": ["cott_symbol", "kind", "span"],
+      "required": ["cott_symbol", "kind", "callable_kind", "span"],
       "additionalProperties": false,
       "properties": {
         "cott_symbol": {"type": "string"},
-        "kind": {"enum": ["function", "async_function", "impl_method"]},
+        "kind": {"enum": ["function", "async_function", "impl_method", "async_impl_method"]},
+        "callable_kind": {"enum": ["sync", "async"]},
         "span": {"$ref": "#/$defs/source_span"}
-      }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"enum": ["function", "impl_method"]}}, "required": ["kind"]},
+          "then": {"properties": {"callable_kind": {"const": "sync"}}}
+        },
+        {
+          "if": {"properties": {"kind": {"enum": ["async_function", "async_impl_method"]}}, "required": ["kind"]},
+          "then": {"properties": {"callable_kind": {"const": "async"}}}
+        }
+      ]
     },
     "dependency": {
       "type": "object",
@@ -180,6 +196,7 @@
         "changed_fields": {
           "type": "object",
           "properties": {
+            "callable_kind": {"$ref": "#/$defs/implementation_field_change"},
             "content_hash": {"$ref": "#/$defs/implementation_field_change"},
             "concrete": {"$ref": "#/$defs/implementation_field_change"},
             "kind": {"$ref": "#/$defs/implementation_field_change"},

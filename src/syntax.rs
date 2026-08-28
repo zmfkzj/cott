@@ -14,6 +14,7 @@ pub enum Keyword {
     Enum,
     Trait,
     Impl,
+    Specialize,
     For,
     State,
     Resource,

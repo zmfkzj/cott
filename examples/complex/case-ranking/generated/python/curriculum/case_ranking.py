@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.case_ranking_types import CaseRanking, CaseRankingError, CaseRankingError_BlankCaseId, CaseRankingError_BlankTerm, CaseRankingError_DuplicateCaseId, CaseRankingError_EmptyQuery, CaseRankingRequest, CaseRecord
 
@@ -34,6 +35,7 @@ including for empty sets and otherwise unvalidated records."""
         raise CottContractViolation("ensures clause failed", symbol="curriculum.case_ranking.score_case_overlap", clause="ensures:1", phase="ensures", span={"end_byte":696,"end_column":38,"end_line":29,"start_byte":663,"start_column":5,"start_line":29}, expected="true", actual="false")
     if not ((_result <= len((case).terms))):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.case_ranking.score_case_overlap", clause="ensures:2", phase="ensures", span={"end_byte":733,"end_column":37,"end_line":30,"start_byte":701,"start_column":5,"start_line":30}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, U64, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def order_matching_cases(query_terms: CottSet[str], cases: CottList[CaseRecord]) -> CaseRanking:
@@ -58,6 +60,7 @@ identifier. Inputs need not have passed request validation."""
     _result = _cott_validate_abi(_result, CaseRanking, path="$.return")
     if not ((len((_result).case_ids) <= len(cases))):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.case_ranking.order_matching_cases", clause="ensures:1", phase="ensures", span={"end_byte":1127,"end_column":45,"end_line":41,"start_byte":1087,"start_column":5,"start_line":41}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, CaseRanking, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def rank_cases(request: CaseRankingRequest) -> Result[CaseRanking, CaseRankingError]:
@@ -102,6 +105,7 @@ input order for blank identifiers, duplicate identifiers, and blank terms."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.case_ranking.rank_cases", clause="ensures:1", phase="ensures", span={"end_byte":1563,"end_column":76,"end_line":52,"start_byte":1492,"start_column":5,"start_line":52}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[CaseRanking, CaseRankingError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["CaseRanking", "CaseRankingError", "CaseRankingError_BlankCaseId", "CaseRankingError_BlankTerm", "CaseRankingError_DuplicateCaseId", "CaseRankingError_EmptyQuery", "CaseRankingRequest", "CaseRecord", "order_matching_cases", "rank_cases", "score_case_overlap"]

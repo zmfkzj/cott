@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.reputation_types import Reputation, ReputationError, ReputationError_NegativeStarting, ReputationError_ReputationOverflow, ReputationError_WouldBecomeNegative, ReputationEvent, ReputationEvent_AcceptedAnswer, ReputationEvent_Downvote, ReputationEvent_Upvote, ReputationRequest
 
@@ -29,6 +30,7 @@ Upvotes add 10, downvotes subtract 2, and accepted answers add 15."""
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.reputation.reputation_delta", phase="implementation-call", span={"end_byte":526,"end_column":1,"end_line":29,"start_byte":301,"start_column":1,"start_line":20}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, I32, path="$.return")
+    _result = _cott_wrap_async_protocol(_result, I32, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def calculate_reputation(request: ReputationRequest) -> Result[Reputation, ReputationError]:
@@ -82,6 +84,7 @@ reject the first event that would overflow I32 or make the score negative."""
         return True
     if not (_cott_match_ensures_2()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.reputation.calculate_reputation", clause="ensures:2", phase="ensures", span={"end_byte":1009,"end_column":68,"end_line":38,"start_byte":946,"start_column":5,"start_line":38}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[Reputation, ReputationError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["Reputation", "ReputationError", "ReputationError_NegativeStarting", "ReputationError_ReputationOverflow", "ReputationError_WouldBecomeNegative", "ReputationEvent", "ReputationEvent_AcceptedAnswer", "ReputationEvent_Downvote", "ReputationEvent_Upvote", "ReputationRequest", "calculate_reputation", "reputation_delta"]

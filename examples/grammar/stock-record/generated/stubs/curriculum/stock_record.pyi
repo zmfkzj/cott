@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottList, CottSet, Dyn, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.stock_record_types import StockRecord as StockRecord, StockRecordError as StockRecordError, StockRecordError_EmptyName as StockRecordError_EmptyName, StockRecordError_NegativePrice as StockRecordError_NegativePrice, StockRecordError_NegativeShares as StockRecordError_NegativeShares, StockRecordError_NonFinitePrice as StockRecordError_NonFinitePrice, StockRecordError_ValuationOverflow as StockRecordError_ValuationOverflow
 """Computes the value of a validated stock record.

@@ -2,6 +2,7 @@ use serde_json::Value;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use cott::binding::{BindingOwner, ResolvedBinding, resolve_bindings};
@@ -377,7 +378,7 @@ fn emits_complete_deterministic_python_artifact_tree() {
     let generation: serde_json::Value =
         serde_json::from_slice(bytes(&first.files, "generation.json"))
             .expect("generation record should be JSON");
-    assert_eq!(generation["schema_version"], 2);
+    assert_eq!(generation["schema_version"], 5);
     assert_eq!(generation["current"]["verified"], false);
     assert!(generation["current"].get("project").is_none());
     assert!(generation["current"].get("entry").is_none());
@@ -638,6 +639,11 @@ impl CounterState for Counter:
     assert_eq!(implementation["kind"], "impl_method");
     assert_eq!(implementation["concrete"], "CounterState");
     assert_eq!(implementation["method"], "advance");
+    assert_eq!(implementation["callable_kind"], "sync");
+    assert_eq!(
+        implementation["selection"],
+        serde_json::json!({"kind": "explicit", "trait_method": "app.Counter.advance"})
+    );
     assert_eq!(
         generation["current"]["public_python_symbols"]["app"],
         serde_json::json!(["Counter", "CounterState", "Resource"])
@@ -1313,6 +1319,74 @@ fn emits_async_free_function_facade_stub_and_provenance() {
         generation["current"]["implementations"][0]["kind"],
         "async_function"
     );
+    assert_eq!(
+        generation["current"]["implementations"][0]["callable_kind"],
+        "async"
+    );
+}
+
+#[test]
+fn emits_async_impl_methods_with_reentrant_lock_and_finalization() {
+    let temp = TempDir::new();
+    fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest");
+    fs::create_dir_all(temp.path.join("src")).expect("source");
+    fs::write(
+        temp.path.join("src/app.cott"),
+        "module app\n\ntrait Counter:\n    async fn advance(self, amount: I32) -> I32\n\nimpl CounterState for Counter:\n    state:\n        count: I32 = 0\n        stable: Bool = true\n    async fn advance(self, amount: I32) -> I32:\n        modifies self.count\n",
+    )
+    .expect("source");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("config");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources")).expect("parse");
+    let ir = render(&lower(&paths.source_dir, parsed).expect("lower")).expect("render");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("plan");
+    let implementation = b"async def _cott_impl_CounterState_advance(self: CounterState, amount: int) -> int:\n    self.count += amount\n    return self.count\n";
+    let binding = ResolvedBinding {
+        module: "app".to_owned(),
+        function: "advance".to_owned(),
+        cott_symbol: "app.CounterState.advance".to_owned(),
+        kind: PythonCallableKind::AsyncImplMethod {
+            concrete: "CounterState".to_owned(),
+        },
+        implementation_module: "_cott_impl.app.CounterState.advance".to_owned(),
+        implementation_function: "_cott_impl_CounterState_advance".to_owned(),
+        owner: BindingOwner::Agent,
+        source: temp
+            .path
+            .join("python/_cott_impl/app/CounterState/advance.py"),
+        generated_relative: PathBuf::from("_cott_impl/app/CounterState/advance.py"),
+        bytes: implementation.to_vec(),
+        sha256: sha256_hex(implementation),
+    };
+    let emission = emit(&config, &plan, &ir, &[binding]).expect("async impl emission");
+    let facade = String::from_utf8_lossy(bytes(&emission.files, "python/app.py"));
+    let types = String::from_utf8_lossy(bytes(&emission.files, "python/app_types.py"));
+    let stub = String::from_utf8_lossy(bytes(&emission.files, "stubs/app.pyi"));
+    let generation: serde_json::Value =
+        serde_json::from_slice(bytes(&emission.files, "generation.json")).expect("generation");
+    assert!(types.contains("async def advance(self, amount: I32) -> I32:"));
+    assert!(facade.contains("async def advance(self: CounterState, amount: I32) -> I32:"));
+    assert!(facade.contains("async with self._cott_lock:"));
+    assert!(facade.contains("_result = await _implementation(self, amount)"));
+    assert!(facade.contains("except BaseException as _error:"));
+    assert!(facade.contains("if isinstance(_error, _asyncio.CancelledError):"));
+    assert!(facade.contains("validator=_cott_validate_abi"));
+    assert!(facade.contains("exceptional frame clause failed"));
+    assert!(facade.contains("if self.stable is not _cott_old_stable:"));
+    assert!(stub.contains("async def advance(self: CounterState, amount: I32) -> I32: ..."));
+    assert_eq!(
+        generation["current"]["implementations"][0]["kind"],
+        "async_impl_method"
+    );
+    assert_eq!(
+        generation["current"]["implementations"][0]["callable_kind"],
+        "async"
+    );
+    assert_eq!(
+        generation["current"]["implementations"][0]["selection"],
+        serde_json::json!({"kind": "explicit", "trait_method": "app.Counter.advance"})
+    );
 }
 
 #[test]
@@ -1332,4 +1406,485 @@ fn qualifies_hidden_associated_typevars_by_canonical_trait_identity() {
     assert!(alpha.contains("_cott_alpha_Reader_alpha_Reader_Item = TypeVar"));
     assert!(beta.contains("_cott_beta_Reader_beta_Reader_Item = TypeVar"));
     assert!(!alpha.contains("_cott_beta_Reader_beta_Reader_Item"));
+}
+
+#[test]
+fn emits_specialization_target_instead_of_trait_default() {
+    let temp = TempDir::new();
+    fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source should be writable");
+    fs::write(
+        temp.path.join("src/app.cott"),
+        r#"module app
+
+
+fn default_read(receiver: Reader, value: I32) -> I32
+fn specialized_read(receiver: ReaderState, value: I32) -> I32
+
+trait Reader:
+    fn read(self, value: I32) -> I32 = app.default_read
+    fn label(self) -> Unit
+
+specialize ReaderState for Reader:
+    read = app.specialized_read
+
+impl ReaderState for Reader:
+    fn label(self) -> Unit:
+        ensures true
+"#,
+    )
+    .expect("source should be writable");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources should be discovered"))
+            .expect("source should parse");
+    let ir = render(&lower(&paths.source_dir, parsed).expect("source should lower"))
+        .expect("source should render");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
+    let method = plan
+        .callables()
+        .into_iter()
+        .find(|callable| callable.cott_symbol == "app.ReaderState.read")
+        .expect("specialized dispatch slot should be callable");
+    assert_eq!(method.declaration["selected"]["origin"], "specialization");
+    assert_eq!(
+        method.declaration["selected"]["function"]["verified_facade"],
+        "app.specialized_read"
+    );
+    let implementation =
+        b"def specialized_read(receiver: object, value: int) -> int:\n    return value\n";
+    let binding = ResolvedBinding {
+        module: "app".to_owned(),
+        function: "specialized_read".to_owned(),
+        cott_symbol: "app.specialized_read".to_owned(),
+        kind: PythonCallableKind::Function,
+        implementation_module: "_cott_impl.app.specialized_read".to_owned(),
+        implementation_function: "specialized_read".to_owned(),
+        owner: BindingOwner::Agent,
+        source: temp.path.join("python/_cott_impl/app/specialized_read.py"),
+        generated_relative: PathBuf::from("_cott_impl/app/specialized_read.py"),
+        bytes: implementation.to_vec(),
+        sha256: sha256_hex(implementation),
+    };
+    let emission = emit(&config, &plan, &ir, &[binding]).expect("specialization should emit");
+    let facade = String::from_utf8_lossy(bytes(&emission.files, "python/app.py"));
+    assert!(
+        facade.contains("_cott_default_ReaderState_read = specialized_read"),
+        "{facade}"
+    );
+    assert!(
+        !facade.contains("_cott_default_ReaderState_read = default_read"),
+        "{facade}"
+    );
+}
+
+#[test]
+fn inherited_cross_module_default_imports_parent_markers_and_dispatch() {
+    let temp = TempDir::new();
+    fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source should be writable");
+    fs::write(
+        temp.path.join("src/parent.cott"),
+        r#"module parent
+
+trait Parent:
+    fn read(self, value: I32) -> I32 = parent.default_read
+
+fn default_read(receiver: Parent, value: I32) -> I32
+"#,
+    )
+    .expect("parent source should be writable");
+    fs::write(
+        temp.path.join("src/child.cott"),
+        r#"module child
+
+use parent.Parent
+
+trait Child for Parent:
+    fn label(self) -> Unit
+
+impl ChildState for Child:
+    fn label(self) -> Unit:
+        ensures true
+"#,
+    )
+    .expect("child source should be writable");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources should be discovered"))
+            .expect("sources should parse");
+    let ir = render(&lower(&paths.source_dir, parsed).expect("sources should lower"))
+        .expect("sources should render");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
+    let implementation =
+        b"def default_read(receiver: object, value: int) -> int:\n    return value\n";
+    let binding = ResolvedBinding {
+        module: "parent".to_owned(),
+        function: "default_read".to_owned(),
+        cott_symbol: "parent.default_read".to_owned(),
+        kind: PythonCallableKind::Function,
+        implementation_module: "_cott_impl.parent.default_read".to_owned(),
+        implementation_function: "default_read".to_owned(),
+        owner: BindingOwner::Agent,
+        source: temp.path.join("python/_cott_impl/parent/default_read.py"),
+        generated_relative: PathBuf::from("_cott_impl/parent/default_read.py"),
+        bytes: implementation.to_vec(),
+        sha256: sha256_hex(implementation),
+    };
+    let emission = emit(&config, &plan, &ir, &[binding]).expect("inherited default should emit");
+    let facade = String::from_utf8_lossy(bytes(&emission.files, "python/child.py"));
+    assert!(
+        facade.contains("from parent_types import Parent"),
+        "{facade}"
+    );
+    assert!(
+        facade.contains("from parent import default_read as _cott_default_ChildState_read"),
+        "{facade}"
+    );
+    assert!(
+        facade.contains("_cott_traits = (Child, Parent,)"),
+        "{facade}"
+    );
+}
+
+#[test]
+fn emits_bounded_distinct_associated_projections_and_imports_them() {
+    let temp = TempDir::new();
+    fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    fs::write(
+        temp.path.join("src/provider.cott"),
+        r#"module provider
+
+trait Comparable:
+    fn compare(self, other: I32) -> I32
+
+trait Serializable:
+    fn serialize(self) -> I32
+
+trait Reader:
+    type Item: Comparable + Serializable
+    fn read(self) -> Reader.Item
+"#,
+    )
+    .expect("source should be writable");
+    fs::write(
+        temp.path.join("src/consumer.cott"),
+        r#"module consumer
+use provider.Reader
+
+struct Named[T]:
+    value: T
+
+fn pair[T: Reader, U: Reader, A, B](left: T.Item, right: U.Item, named_a: T.Item, named_b: U.Item) -> Tuple[T.Item,U.Item]
+"#,
+    )
+    .expect("source should be writable");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources should be discovered"))
+            .expect("source should parse");
+    let mut ir = render(&lower(&paths.source_dir, parsed).expect("source should lower"))
+        .expect("source should render");
+    let named_a_base = serde_json::json!({
+        "args": [{"kind": "type", "type": {"kind": "type_parameter", "name": "A"}}],
+        "kind": "named",
+        "name": "consumer.Named",
+    });
+    let named_b_base = serde_json::json!({
+        "args": [{"kind": "type", "type": {"kind": "type_parameter", "name": "B"}}],
+        "kind": "named",
+        "name": "consumer.Named",
+    });
+    let module = ir
+        .modules
+        .iter_mut()
+        .find(|module| module.module.as_string() == "consumer")
+        .expect("consumer module must exist");
+    let mut value: Value = serde_json::from_slice(&module.bytes).expect("consumer IR must be JSON");
+    let parameters = value["declarations"]
+        .as_array_mut()
+        .expect("consumer declarations must be an array")
+        .iter_mut()
+        .find(|declaration| declaration["name"] == "consumer.pair")
+        .expect("pair declaration must exist")["parameters"]
+        .as_array_mut()
+        .expect("pair parameters must be an array");
+    for (name, base) in [("named_a", &named_a_base), ("named_b", &named_b_base)] {
+        parameters
+            .iter_mut()
+            .find(|parameter| parameter["name"] == name)
+            .unwrap_or_else(|| panic!("{name} parameter must exist"))["type"] = serde_json::json!({
+            "base": base,
+            "kind": "associated_projection",
+            "name": "Item",
+            "trait": "provider.Reader",
+        });
+    }
+    module.bytes = serde_json::to_vec(&value).expect("consumer IR should serialize");
+    module.bytes.push(b'\n');
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
+    let implementation = b"def pair(left: object, right: object, named_a: object, named_b: object) -> object:\n    return (left, right)\n";
+    let binding = ResolvedBinding {
+        module: "consumer".to_owned(),
+        function: "pair".to_owned(),
+        cott_symbol: "consumer.pair".to_owned(),
+        kind: PythonCallableKind::Function,
+        implementation_module: "_cott_impl.consumer.pair".to_owned(),
+        implementation_function: "pair".to_owned(),
+        owner: BindingOwner::Agent,
+        source: temp.path.join("python/_cott_impl/consumer/pair.py"),
+        generated_relative: PathBuf::from("_cott_impl/consumer/pair.py"),
+        bytes: implementation.to_vec(),
+        sha256: sha256_hex(implementation),
+    };
+    let emission = emit(&config, &plan, &ir, &[binding]).expect("projections should emit");
+    let provider_types =
+        String::from_utf8_lossy(bytes(&emission.files, "python/provider_types.py"));
+    let types = String::from_utf8_lossy(bytes(&emission.files, "python/consumer_types.py"));
+    let facade = String::from_utf8_lossy(bytes(&emission.files, "python/consumer.py"));
+    let stub = String::from_utf8_lossy(bytes(&emission.files, "stubs/consumer.pyi"));
+    let associated_item = "_cott_provider_Reader_Item";
+    let t_item = format!(
+        "{associated_item}_{}",
+        sha256_hex(br#"{"kind":"type_parameter","name":"T"}"#)
+    );
+    let u_item = format!(
+        "{associated_item}_{}",
+        sha256_hex(br#"{"kind":"type_parameter","name":"U"}"#)
+    );
+    let named_a_item = format!(
+        "{associated_item}_{}",
+        sha256_hex(&serde_json::to_vec(&named_a_base).expect("named A base should serialize"))
+    );
+    let named_b_item = format!(
+        "{associated_item}_{}",
+        sha256_hex(&serde_json::to_vec(&named_b_base).expect("named B base should serialize"))
+    );
+    let associated_declaration = "_cott_provider_Reader_provider_Reader_Item";
+    let composite = format!(
+        "class _cott_{associated_declaration}_Bounds(Comparable, Serializable, Protocol):\n    pass"
+    );
+    assert!(provider_types.contains(&composite), "{provider_types}");
+    assert!(
+        provider_types.contains(&format!(
+            "{associated_declaration} = TypeVar(\"{associated_declaration}\", bound=_cott_{associated_declaration}_Bounds)"
+        )),
+        "{provider_types}"
+    );
+    assert!(
+        types.contains("from provider_types import Comparable, Reader, Serializable"),
+        "{types}"
+    );
+    for projection in [&t_item, &u_item, &named_a_item, &named_b_item] {
+        assert!(
+            types.contains(&format!(
+                "class _cott_{projection}_Bounds(Comparable, Serializable, Protocol)"
+            )),
+            "{types}"
+        );
+        assert!(
+            types.contains(&format!(
+                "{projection} = TypeVar(\"{projection}\", bound=_cott_{projection}_Bounds)"
+            )),
+            "{types}"
+        );
+    }
+    let signature = format!(
+        "def pair(left: {t_item}, right: {u_item}, named_a: {named_a_item}, named_b: {named_b_item}) -> tuple[{t_item}, {u_item}]"
+    );
+    for output in [facade.as_ref(), stub.as_ref()] {
+        assert!(output.contains("from consumer_types import"), "{output}");
+        for projection in [&t_item, &u_item, &named_a_item, &named_b_item] {
+            assert!(output.contains(projection), "{output}");
+        }
+        assert!(output.contains(&signature), "{output}");
+    }
+}
+
+#[test]
+fn imports_cross_module_methodless_closure_ancestor_markers() {
+    let files = emit_sources(&[
+        (
+            "marker.cott",
+            "module marker\n\ntrait Marker:\n    type Tag\n",
+        ),
+        (
+            "parent.cott",
+            "module parent\nuse marker.Marker\n\ntrait Parent for Marker:\n",
+        ),
+        (
+            "child.cott",
+            r#"module child
+use parent.Parent
+
+trait Child for Parent:
+    fn read(self) -> I32
+
+impl ChildState for Child:
+    type Tag = I32
+    fn read(self) -> I32:
+        ensures true
+"#,
+        ),
+    ]);
+    let facade = String::from_utf8_lossy(bytes(&files, "python/child.py"));
+    let stub = String::from_utf8_lossy(bytes(&files, "stubs/child.pyi"));
+    assert!(
+        facade.contains("from marker_types import Marker") && facade.contains("_cott_traits"),
+        "{facade}"
+    );
+    assert!(stub.contains("class ChildState:"), "{stub}");
+}
+
+#[test]
+fn preserves_cross_module_generic_inherited_trait_specs() {
+    let files = emit_sources(&[
+        (
+            "parent.cott",
+            r#"module parent
+
+trait Parent[T]:
+    fn parent(self, value: T) -> T
+"#,
+        ),
+        (
+            "child.cott",
+            r#"module child
+use parent.Parent
+
+trait Child[U] for Parent[U]:
+    fn child(self, value: U) -> U
+
+impl ChildState for Child[I32]:
+    fn parent(self, value: I32) -> I32:
+        ensures result == value
+    fn child(self, value: I32) -> I32:
+        ensures result == value
+"#,
+        ),
+    ]);
+    let facade = String::from_utf8_lossy(bytes(&files, "python/child.py"));
+    assert!(facade.contains("from child_types import Child"), "{facade}");
+    assert!(
+        facade.contains("from parent_types import Parent"),
+        "{facade}"
+    );
+    assert!(
+        facade.contains("_cott_traits = (Child, Parent,)")
+            && facade.contains("_cott_trait_specs = (Child[I32], Parent[I32],)"),
+        "{facade}"
+    );
+    assert!(
+        !facade.contains("Child[U]") && !facade.contains("Parent[U]"),
+        "{facade}"
+    );
+}
+
+#[test]
+fn imports_staged_local_traits_and_associated_bounds() {
+    if Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let files = emit_sources(&[(
+        "ordered.cott",
+        r#"module ordered
+
+trait Child for Parent:
+    fn child(self) -> I32
+
+trait Uses[T: Marker + Serializable]:
+    fn apply(self, value: T) -> T
+
+trait SelfBound[T: SelfBound[T]]:
+    fn recurse(self, value: T) -> T
+
+trait Left[T: Right[T]]:
+    fn left(self, value: T) -> T
+
+trait Right[T: Left[T]]:
+    fn right(self, value: T) -> T
+
+trait Comparable:
+    fn compare(self, other: I32) -> I32
+
+trait Marker:
+    fn mark(self) -> I32
+
+trait Serializable:
+    fn serialize(self) -> I32
+
+trait Parent:
+    type One: Comparable
+    type Both: Comparable + Serializable
+    fn one(self) -> Parent.One
+    fn both(self) -> Parent.Both
+"#,
+    )]);
+    let temp = TempDir::new();
+    for (relative, content) in &files {
+        let path = temp.path.join(relative);
+        fs::create_dir_all(path.parent().expect("generated artifact parent"))
+            .expect("generated artifact parent should be writable");
+        fs::write(path, content).expect("generated artifact should be writable");
+    }
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg("import ordered, ordered_types; assert ordered_types.Parent in ordered_types.Child.__bases__")
+        .current_dir(temp.path.join("python"))
+        .output()
+        .expect("python3 should import generated artifacts");
+    assert!(
+        output.status.success(),
+        "generated staged trait imports failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn preserves_empty_enum_hashes_and_rejects_payload_enum_hashes() {
+    if Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let files = emit_sources(&[(
+        "tree.cott",
+        r#"module tree
+
+enum Tree:
+    Empty
+    Branch(next: Option[Tree])
+"#,
+    )]);
+    let types = String::from_utf8_lossy(bytes(&files, "python/tree_types.py"));
+    assert!(
+        types.contains("class Tree_Empty:\n    pass"),
+        "payload-free variant lost its generated hash:\n{types}"
+    );
+    assert!(
+        types.contains("class Tree_Branch:\n    __hash__ = None"),
+        "payload variant must be unhashable:\n{types}"
+    );
+    let temp = TempDir::new();
+    for (relative, content) in &files {
+        let path = temp.path.join(relative);
+        fs::create_dir_all(path.parent().expect("generated artifact parent"))
+            .expect("generated artifact parent should be writable");
+        fs::write(path, content).expect("generated artifact should be writable");
+    }
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg("from tree_types import Tree_Branch, Tree_Empty; assert hash(Tree_Empty()); assert Tree_Branch.__hash__ is None")
+        .current_dir(temp.path.join("python"))
+        .output()
+        .expect("python3 should import generated enum artifacts");
+    assert!(
+        output.status.success(),
+        "generated enum hash behavior failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

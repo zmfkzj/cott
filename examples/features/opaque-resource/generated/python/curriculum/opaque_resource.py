@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.opaque_resource_types import HandleBundle, HandleError, HandleError_InvalidHandle, TextBuffer
 
@@ -42,6 +43,7 @@ def wrap_handle(raw_id: U64) -> Result[HandleBundle, HandleError]:
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.opaque_resource.wrap_handle", phase="error", span={"end_byte":395,"end_column":1,"end_line":20,"start_byte":157,"start_column":1,"start_line":11}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.opaque_resource.wrap_handle", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    _result = _cott_wrap_async_protocol(_result, Result[HandleBundle, HandleError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def extract_handle_id(bundle: HandleBundle) -> U64:
@@ -63,6 +65,7 @@ def extract_handle_id(bundle: HandleBundle) -> U64:
     _result = _cott_validate_abi(_result, U64, path="$.return")
     if not ((_result > 0)):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.opaque_resource.extract_handle_id", clause="ensures:1", phase="ensures", span={"end_byte":569,"end_column":23,"end_line":25,"start_byte":551,"start_column":5,"start_line":25}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, U64, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def iter_lines(buffer: TextBuffer) -> Iterator[str]:
@@ -82,6 +85,7 @@ def iter_lines(buffer: TextBuffer) -> Iterator[str]:
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.opaque_resource.iter_lines", phase="implementation-call", span={"end_byte":749,"end_column":1,"end_line":36,"start_byte":587,"start_column":1,"start_line":29}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Iterator[str], path="$.return")
+    _result = _cott_wrap_async_protocol(_result, Iterator[str], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def echo_values(values: Iterator[Any]) -> Generator[Any, object, U64]:
@@ -101,6 +105,7 @@ def echo_values(values: Iterator[Any]) -> Generator[Any, object, U64]:
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.opaque_resource.echo_values", phase="implementation-call", span={"end_byte":934,"end_column":1,"end_line":42,"start_byte":749,"start_column":1,"start_line":36}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Generator[Any, object, U64], path="$.return")
+    _result = _cott_wrap_async_protocol(_result, Generator[Any, object, U64], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["HandleBundle", "HandleError", "HandleError_InvalidHandle", "TextBuffer", "echo_values", "extract_handle_id", "iter_lines", "wrap_handle"]

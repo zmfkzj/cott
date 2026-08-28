@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.module_export_snapshot_types import ModuleSnapshot
 
@@ -35,6 +36,7 @@ every I64 value, including both bounds and equal input values."""
         raise CottContractViolation("ensures clause failed", symbol="curriculum.module_export_snapshot.build_snapshot", clause="ensures:1", phase="ensures", span={"end_byte":542,"end_column":44,"end_line":15,"start_byte":503,"start_column":5,"start_line":15}, expected="true", actual="false")
     if not (((_result).module_x == module_x)):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.module_export_snapshot.build_snapshot", clause="ensures:2", phase="ensures", span={"end_byte":582,"end_column":40,"end_line":16,"start_byte":547,"start_column":5,"start_line":16}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, ModuleSnapshot, path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["ModuleSnapshot", "build_snapshot"]

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.expense_split_types import Balance, BalanceSheet, Expense, ExpenseSplitError, ExpenseSplitError_BlankPayer, ExpenseSplitError_DuplicateParticipant, ExpenseSplitError_EmptyParticipants, ExpenseSplitError_PayerNotParticipant, ExpenseSplitError_ZeroAmount, Settlement, Transfer
 
@@ -64,6 +65,7 @@ finite Expense."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.expense_split.calculate_balances", clause="ensures:1", phase="ensures", span={"end_byte":1171,"end_column":111,"end_line":42,"start_byte":1065,"start_column":5,"start_line":42}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[BalanceSheet, ExpenseSplitError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def settle_balances(balances: BalanceSheet) -> Settlement:
@@ -88,6 +90,7 @@ pure function terminates for every finite BalanceSheet."""
     _result = _cott_validate_abi(_result, Settlement, path="$.return")
     if not ((len((_result).transfers) <= (len((balances).debtors) + len((balances).creditors)))):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.expense_split.settle_balances", clause="ensures:1", phase="ensures", span={"end_byte":1961,"end_column":84,"end_line":60,"start_byte":1882,"start_column":5,"start_line":60}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Settlement, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def settle_expense(expense: Expense) -> Result[Settlement, ExpenseSplitError]:
@@ -139,6 +142,7 @@ error unchanged, and greedily settle every successful balance sheet."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.expense_split.settle_expense", clause="ensures:1", phase="ensures", span={"end_byte":2315,"end_column":90,"end_line":70,"start_byte":2230,"start_column":5,"start_line":70}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[Settlement, ExpenseSplitError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["Balance", "BalanceSheet", "Expense", "ExpenseSplitError", "ExpenseSplitError_BlankPayer", "ExpenseSplitError_DuplicateParticipant", "ExpenseSplitError_EmptyParticipants", "ExpenseSplitError_PayerNotParticipant", "ExpenseSplitError_ZeroAmount", "Settlement", "Transfer", "calculate_balances", "settle_balances", "settle_expense"]

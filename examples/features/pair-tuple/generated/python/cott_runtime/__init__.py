@@ -2,6 +2,7 @@
 # This module intentionally depends only on Python's standard library.
 from __future__ import annotations
 
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import ast as _ast
 import hashlib as _hashlib
@@ -16,10 +17,10 @@ import sys as _sys
 import sysconfig as _sysconfig
 import threading as _threading
 import types as _types
-from collections.abc import Generator as _Generator, Iterable, Iterator, Mapping, Sequence, Set
+from collections.abc import AsyncGenerator as _AsyncGenerator, AsyncIterator as _AsyncIterator, Generator as _Generator, Iterable, Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass
 from pathlib import Path as _Path
-from typing import Annotated, Any, Generic, Literal, Never, TypeAlias, TypeVar, Union, get_args as _get_args, get_origin as _get_origin, get_type_hints as _get_type_hints, final as _final, overload
+from typing import Annotated, Any, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, get_args as _get_args, get_origin as _get_origin, get_type_hints as _get_type_hints, final as _final, overload
 _COTT_PATH_TYPE = type(_Path())
 
 
@@ -29,10 +30,11 @@ _COTT_PATH_TYPE = type(_Path())
 PROJECT_NAME = 'pair-tuple'
 _COTT_PROJECT_NAME = PROJECT_NAME
 PROJECT_VERSION = '0.1.0'
-_COTT_RUNTIME_ABI = "2"
-_COTT_RUNTIME_VERSION = '0.3.0'
+_COTT_RUNTIME_ABI = "5"
+_COTT_RUNTIME_VERSION = '0.6.0'
 
 
+_S = TypeVar("_S")
 _T = TypeVar("_T")
 _E = TypeVar("_E")
 _K = TypeVar("_K")
@@ -40,6 +42,40 @@ _V = TypeVar("_V")
 _T1 = TypeVar("_T1")
 _T2 = TypeVar("_T2")
 _N = TypeVar("_N", bound=int)
+
+_COTT_PROTOCOL_META = type(Protocol)
+_COTT_DYN_SEAL = object()
+
+
+@_final
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Dyn(Generic[_T]):
+    value: _T
+    trait: object
+    _seal: object = _dataclasses.field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_seal", _COTT_DYN_SEAL)
+        _cott_validate_dyn(self, path="$")
+
+
+def _cott_validate_dyn(value: object, expected: object | None = None, *, path: str) -> Dyn[object]:
+    if type(value) is not Dyn or getattr(value, "_seal", None) is not _COTT_DYN_SEAL:
+        raise CottContractViolation(f"{path} is not an exact Dyn value", phase="validation")
+    trait = value.trait
+    trait_origin = _get_origin(trait) or trait
+    if type(trait_origin) is not _COTT_PROTOCOL_META or trait_origin.__dict__.get("_cott_trait") is not True:
+        raise CottContractViolation(f"{path} trait is not an exact generated Protocol", phase="validation")
+    traits = type(value.value).__dict__.get("_cott_traits")
+    specs = type(value.value).__dict__.get("_cott_trait_specs")
+    if type(traits) is not tuple or trait_origin not in traits or type(specs) is not tuple or trait not in specs:
+        raise CottContractViolation(f"{path} value does not carry the requested exact trait", phase="validation")
+    if expected is not None and not isinstance(expected, TypeVar) and trait != expected:
+        raise CottContractViolation(f"{path} has the wrong Dyn trait", phase="validation")
+    return value
+
+AsyncIterator: TypeAlias = _AsyncIterator
+AsyncGenerator: TypeAlias = _AsyncGenerator
 
 @_final
 @dataclass(frozen=True, slots=True)
@@ -393,8 +429,7 @@ class JsonArray:
     def __post_init__(self) -> None:
         if type(self.value) is not CottList:
             raise CottContractViolation("JsonArray.value must be CottList", phase="validation")
-        for item in self.value:
-            _cott_validate_json(item)
+        _cott_validate_json(self)
 
 @_final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -405,32 +440,75 @@ class JsonObject:
     def __post_init__(self) -> None:
         if type(self.value) is not FrozenMap:
             raise CottContractViolation("JsonObject.value must be FrozenMap", phase="validation")
-        for key, item in self.value.items():
-            if type(key) is not str:
-                raise CottContractViolation("JsonObject keys must be str", phase="validation")
-            _cott_validate_json(item)
+        _cott_validate_json(self)
 
 JsonValue: TypeAlias = Union[JsonNull, JsonBoolean, JsonInteger, JsonFloat, JsonString, JsonArray, JsonObject]
 
+_COTT_MISSING = object()
+_COTT_JSON_ANNOTATION = object()
 
-def _cott_validate_json(value: object) -> None:
-    if type(value) in (JsonNull, JsonBoolean, JsonInteger, JsonFloat, JsonString):
+@_final
+class _CottTraversal:
+    __slots__ = ("active", "completed", "nodes")
+
+    def __init__(self) -> None:
+        self.active: set[tuple[int, object]] = set()
+        self.completed: dict[tuple[int, object], object] = {}
+        self.nodes = 0
+
+    def enter(self, value: object, annotation: object, path: str, depth: int) -> tuple[tuple[int, object], object]:
+        if depth > 64:
+            raise _CottTraversalFailure(f"{path} exceeds ABI traversal depth 64", phase="validation")
+        self.nodes += 1
+        if self.nodes > 1024:
+            raise _CottTraversalFailure(f"{path} exceeds ABI traversal node limit 1024", phase="validation")
+        try:
+            key = (id(value), annotation)
+            hash(key)
+        except TypeError:
+            key = (id(value), id(annotation))
+        cached = self.completed.get(key, _COTT_MISSING)
+        if cached is not _COTT_MISSING:
+            return key, cached
+        if key in self.active:
+            raise _CottTraversalFailure(f"{path} contains an active value cycle", phase="validation")
+        self.active.add(key)
+        return key, _COTT_MISSING
+
+    def complete(self, key: tuple[int, object], value: object) -> None:
+        self.active.remove(key)
+        self.completed[key] = value
+
+    def abandon(self, key: tuple[int, object]) -> None:
+        self.active.discard(key)
+
+
+def _cott_validate_json(value: object, *, path: str = "$", _state: _CottTraversal | None = None, _depth: int = 0) -> None:
+    state = _state or _CottTraversal()
+    key, cached = state.enter(value, _COTT_JSON_ANNOTATION, path, _depth)
+    if cached is not _COTT_MISSING:
         return
-    if type(value) is JsonArray:
-        if type(value.value) is not CottList:
-            raise CottContractViolation("JsonArray.value must be CottList", phase="validation")
-        for item in value.value:
-            _cott_validate_json(item)
-        return
-    if type(value) is JsonObject:
-        if type(value.value) is not FrozenMap:
-            raise CottContractViolation("JsonObject.value must be FrozenMap", phase="validation")
-        for key, item in value.value.items():
-            if type(key) is not str:
-                raise CottContractViolation("JsonObject keys must be str", phase="validation")
-            _cott_validate_json(item)
-        return
-    raise CottContractViolation("value is not a JsonValue", phase="validation")
+    try:
+        if type(value) in (JsonNull, JsonBoolean, JsonInteger, JsonFloat, JsonString):
+            pass
+        elif type(value) is JsonArray:
+            if type(value.value) is not CottList:
+                raise CottContractViolation(f"{path}.value must be CottList", phase="validation")
+            for index, item in enumerate(value.value):
+                _cott_validate_json(item, path=f"{path}.value[{index}]", _state=state, _depth=_depth + 1)
+        elif type(value) is JsonObject:
+            if type(value.value) is not FrozenMap:
+                raise CottContractViolation(f"{path}.value must be FrozenMap", phase="validation")
+            for key_value, item in value.value.items():
+                if type(key_value) is not str:
+                    raise CottContractViolation(f"{path}.value keys must be str", phase="validation")
+                _cott_validate_json(item, path=f"{path}.value[{key_value!r}]", _state=state, _depth=_depth + 1)
+        else:
+            raise CottContractViolation(f"{path} is not a JsonValue", phase="validation")
+    except BaseException:
+        state.abandon(key)
+        raise
+    state.complete(key, value)
 
 
 def _cott_fixed_length(annotation: object, path: str) -> int:
@@ -456,8 +534,22 @@ def _cott_substitute_type(annotation: object, substitutions: dict[object, object
     return annotation
 
 
-def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") -> object:
+def _cott_validate_abi(value: object, annotation: object, *, path: str = "$", _state: _CottTraversal | None = None, _depth: int = 0) -> object:
     """Validate an ABI value recursively and normalize concrete numeric aliases."""
+    state = _state or _CottTraversal()
+    key, cached = state.enter(value, annotation, path, _depth)
+    if cached is not _COTT_MISSING:
+        return cached
+    try:
+        result = _cott_validate_abi_value(value, annotation, path, state, _depth)
+    except BaseException:
+        state.abandon(key)
+        raise
+    state.complete(key, result)
+    return result
+
+
+def _cott_validate_abi_value(value: object, annotation: object, path: str, state: _CottTraversal, depth: int) -> object:
     origin = _get_origin(annotation)
     args = _get_args(annotation)
     if origin is Annotated:
@@ -473,14 +565,18 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") ->
                     raise CottContractViolation(f"{path} does not match external ABI type", phase="validation")
             return value
         normalized = _cott_normalize_scalar(value, annotation)
-        return _cott_validate_abi(normalized, args[0], path=path)
+        return _cott_validate_abi(normalized, args[0], path=path, _state=state, _depth=depth + 1)
     if origin in (Union, _types.UnionType):
         for candidate in args:
             try:
-                return _cott_validate_abi(value, candidate, path=path)
+                return _cott_validate_abi(value, candidate, path=path, _state=state, _depth=depth + 1)
+            except _CottTraversalFailure:
+                raise
             except CottContractViolation:
                 pass
         raise CottContractViolation(f"{path} does not match ABI union", phase="validation")
+    if origin is Dyn or annotation is Dyn:
+        return _cott_validate_dyn(value, args[0] if args else None, path=path)
     if origin is Literal:
         if any(type(value) is type(candidate) and value == candidate for candidate in args):
             return value
@@ -489,10 +585,16 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") ->
         if len(args) == 1 and value is args[0]:
             return value
         raise CottContractViolation(f"{path} does not match ABI Factory", phase="validation")
-    if annotation is Any or annotation is object:
+    if annotation is Any or annotation is object or isinstance(annotation, TypeVar):
         return value
-    if isinstance(annotation, TypeVar):
-        return value
+    if origin is _AsyncGenerator or annotation is _AsyncGenerator:
+        if isinstance(value, _AsyncGenerator):
+            return value
+        raise CottContractViolation(f"{path} does not match ABI async generator", phase="validation")
+    if origin is _AsyncIterator or annotation is _AsyncIterator:
+        if isinstance(value, _AsyncIterator):
+            return value
+        raise CottContractViolation(f"{path} does not match ABI async iterator", phase="validation")
     if origin is _Generator or annotation is _Generator:
         if isinstance(value, _Generator):
             return value
@@ -503,11 +605,7 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") ->
         raise CottContractViolation(f"{path} does not match ABI iterator", phase="validation")
     protocol = origin if isinstance(origin, type) and getattr(origin, "_is_protocol", False) else annotation
     if isinstance(protocol, type) and getattr(protocol, "_is_protocol", False):
-        missing = [
-            name
-            for name, member in protocol.__dict__.items()
-            if not name.startswith("_") and callable(member) and not hasattr(value, name)
-        ]
+        missing = [name for name, member in protocol.__dict__.items() if not name.startswith("_") and callable(member) and not hasattr(value, name)]
         if not missing:
             return value
         raise CottContractViolation(f"{path} does not implement trait members: {', '.join(missing)}", phase="validation")
@@ -523,14 +621,16 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") ->
         return value
     if annotation is bytes and type(value) is bytes:
         return value
+    if annotation is Nothing and type(value) is Nothing:
+        return value
     if annotation is _Path and type(value) is _COTT_PATH_TYPE:
         return value
     if origin is Some and type(value) is Some:
-        return Some(value=_cott_validate_abi(value.value, args[0] if args else Any, path=path))
+        return Some(value=_cott_validate_abi(value.value, args[0] if args else Any, path=f"{path}.value", _state=state, _depth=depth + 1))
     if origin is Ok and type(value) is Ok:
-        return Ok(value=_cott_validate_abi(value.value, args[0] if args else Any, path=path))
+        return Ok(value=_cott_validate_abi(value.value, args[0] if args else Any, path=f"{path}.value", _state=state, _depth=depth + 1))
     if origin is Err and type(value) is Err:
-        return Err(error=_cott_validate_abi(value.error, args[0] if args else Any, path=path))
+        return Err(error=_cott_validate_abi(value.error, args[0] if args else Any, path=f"{path}.error", _state=state, _depth=depth + 1))
     if origin is Opaque and type(value) is Opaque:
         tags = _get_args(args[0]) if args and _get_origin(args[0]) is Literal else ()
         if len(tags) != 1 or type(tags[0]) is not str or value.tag != tags[0]:
@@ -538,33 +638,27 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") ->
         return value
     if origin is CottList and type(value) is CottList:
         item_type = args[0] if args else Any
-        return CottList(values=(_cott_validate_abi(item, item_type, path=path) for item in value))
+        return CottList(values=(_cott_validate_abi(item, item_type, path=f"{path}[{index}]", _state=state, _depth=depth + 1) for index, item in enumerate(value)))
     if origin is CottSet and type(value) is CottSet:
         item_type = args[0] if args else Any
-        return CottSet(values=(_cott_validate_abi(item, item_type, path=path) for item in value))
+        return CottSet(values=(_cott_validate_abi(item, item_type, path=f"{path}[{index}]", _state=state, _depth=depth + 1) for index, item in enumerate(value)))
     if origin is FrozenMap and type(value) is FrozenMap:
         key_type, item_type = args if len(args) == 2 else (Any, Any)
         return FrozenMap(values={
-            _cott_validate_abi(key, key_type, path=path): _cott_validate_abi(item, item_type, path=path)
-            for key, item in value.items()
+            _cott_validate_abi(key_value, key_type, path=f"{path}.key", _state=state, _depth=depth + 1): _cott_validate_abi(item, item_type, path=f"{path}[{key_value!r}]", _state=state, _depth=depth + 1)
+            for key_value, item in value.items()
         })
     if origin is tuple:
         if type(value) is not tuple or len(value) != len(args):
             raise CottContractViolation(f"{path} does not match ABI tuple", phase="validation")
-        return tuple(
-            _cott_validate_abi(item, item_type, path=f"{path}[{index}]")
-            for index, (item, item_type) in enumerate(zip(value, args))
-        )
+        return tuple(_cott_validate_abi(item, item_type, path=f"{path}[{index}]", _state=state, _depth=depth + 1) for index, (item, item_type) in enumerate(zip(value, args)))
     if origin is CottArray:
         if type(value) is not CottArray or len(args) != 2:
             raise CottContractViolation(f"{path} does not match ABI array", phase="validation")
         length = _cott_fixed_length(args[1], path)
         if len(value) != length:
             raise CottContractViolation(f"{path} has the wrong array length", phase="validation")
-        return CottArray(values=(
-            _cott_validate_abi(item, args[0], path=f"{path}[{index}]")
-            for index, item in enumerate(value)
-        ))
+        return CottArray(values=(_cott_validate_abi(item, args[0], path=f"{path}[{index}]", _state=state, _depth=depth + 1) for index, item in enumerate(value)))
     if origin is CottBuffer:
         if type(value) is not CottBuffer or len(args) != 1:
             raise CottContractViolation(f"{path} does not match ABI buffer", phase="validation")
@@ -575,83 +669,80 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") ->
     nominal = origin if isinstance(origin, type) and _dataclasses.is_dataclass(origin) else annotation
     if isinstance(nominal, type) and type(value) is nominal:
         if nominal is JsonArray or nominal is JsonObject:
-            _cott_validate_json(value)
+            _cott_validate_json(value, path=path, _state=state, _depth=depth + 1)
             return value
         if _dataclasses.is_dataclass(nominal):
             substitutions = dict(zip(getattr(nominal, "__parameters__", ()), args))
             hints = _get_type_hints(nominal, include_extras=True)
             return nominal(**{
-                field.name: _cott_validate_abi(
-                    getattr(value, field.name),
-                    _cott_substitute_type(hints.get(field.name, Any), substitutions),
-                    path=f"{path}.{field.name}",
-                )
+                field.name: _cott_validate_abi(getattr(value, field.name), _cott_substitute_type(hints.get(field.name, Any), substitutions), path=f"{path}.{field.name}", _state=state, _depth=depth + 1)
                 for field in _dataclasses.fields(nominal)
             })
         return value
     raise CottContractViolation(f"{path} does not match ABI type", phase="validation")
 
 
-def _cott_normalize_f32_abi(value: object, annotation: object, *, path: str = "$") -> object:
+def _cott_normalize_f32_abi(value: object, annotation: object, *, path: str = "$", _state: _CottTraversal | None = None, _depth: int = 0) -> object:
     """Normalize every concretely typed F32 while leaving other validation disabled."""
+    state = _state or _CottTraversal()
+    key, cached = state.enter(value, annotation, path, _depth)
+    if cached is not _COTT_MISSING:
+        return cached
+    try:
+        result = _cott_normalize_f32_abi_value(value, annotation, path, state, _depth)
+    except BaseException:
+        state.abandon(key)
+        raise
+    state.complete(key, result)
+    return result
+
+
+def _cott_normalize_f32_abi_value(value: object, annotation: object, path: str, state: _CottTraversal, depth: int) -> object:
     origin = _get_origin(annotation)
     args = _get_args(annotation)
-    if annotation is Any or annotation is object:
+    if origin is Dyn and type(value) is Dyn or annotation is Any or annotation is object:
         return value
     if origin is Annotated:
         if any(isinstance(item, CottExternal) for item in args[1:]):
             return value
         metadata = next((item for item in args[1:] if isinstance(item, CottFloat)), None)
         return _cott_normalize_f32(value) if metadata is not None and metadata.bits == 32 else value
-    if origin is _Generator or annotation is _Generator or origin is Iterator or annotation is Iterator:
+    if origin in (_AsyncGenerator, _AsyncIterator, _Generator, Iterator) or annotation in (_AsyncGenerator, _AsyncIterator, _Generator, Iterator):
         return value
     if origin in (Union, _types.UnionType):
         for candidate in args:
             candidate_origin = _get_origin(candidate)
-            if (candidate_origin is not None and type(value) is candidate_origin) or (
-                isinstance(candidate, type) and type(value) is candidate
-            ):
-                return _cott_normalize_f32_abi(value, candidate, path=path)
+            if candidate_origin is Annotated or (candidate_origin is not None and type(value) is candidate_origin) or (isinstance(candidate, type) and type(value) is candidate):
+                return _cott_normalize_f32_abi(value, candidate, path=path, _state=state, _depth=depth + 1)
         return value
     if origin is Some and type(value) is Some:
-        return Some(value=_cott_normalize_f32_abi(value.value, args[0] if args else Any, path=path))
+        return Some(value=_cott_normalize_f32_abi(value.value, args[0] if args else Any, path=f"{path}.value", _state=state, _depth=depth + 1))
     if origin is Ok and type(value) is Ok:
-        return Ok(value=_cott_normalize_f32_abi(value.value, args[0] if args else Any, path=path))
+        return Ok(value=_cott_normalize_f32_abi(value.value, args[0] if args else Any, path=f"{path}.value", _state=state, _depth=depth + 1))
     if origin is Err and type(value) is Err:
-        return Err(error=_cott_normalize_f32_abi(value.error, args[0] if args else Any, path=path))
+        return Err(error=_cott_normalize_f32_abi(value.error, args[0] if args else Any, path=f"{path}.error", _state=state, _depth=depth + 1))
     if origin is CottList and type(value) is CottList:
-        return CottList(values=(_cott_normalize_f32_abi(item, args[0], path=path) for item in value))
+        return CottList(values=(_cott_normalize_f32_abi(item, args[0], path=f"{path}[{index}]", _state=state, _depth=depth + 1) for index, item in enumerate(value)))
     if origin is CottSet and type(value) is CottSet:
-        return CottSet(values=(_cott_normalize_f32_abi(item, args[0], path=path) for item in value))
+        return CottSet(values=(_cott_normalize_f32_abi(item, args[0], path=f"{path}[{index}]", _state=state, _depth=depth + 1) for index, item in enumerate(value)))
     if origin is FrozenMap and type(value) is FrozenMap:
         return FrozenMap(values={
-            _cott_normalize_f32_abi(key, args[0], path=path): _cott_normalize_f32_abi(item, args[1], path=path)
-            for key, item in value.items()
+            _cott_normalize_f32_abi(key_value, args[0], path=f"{path}.key", _state=state, _depth=depth + 1): _cott_normalize_f32_abi(item, args[1], path=f"{path}[{key_value!r}]", _state=state, _depth=depth + 1)
+            for key_value, item in value.items()
         })
     if origin is tuple and type(value) is tuple and len(value) == len(args):
-        return tuple(
-            _cott_normalize_f32_abi(item, item_type, path=f"{path}[{index}]")
-            for index, (item, item_type) in enumerate(zip(value, args))
-        )
+        return tuple(_cott_normalize_f32_abi(item, item_type, path=f"{path}[{index}]", _state=state, _depth=depth + 1) for index, (item, item_type) in enumerate(zip(value, args)))
     if origin is CottArray and type(value) is CottArray and len(args) == 2:
-        return CottArray(values=(
-            _cott_normalize_f32_abi(item, args[0], path=f"{path}[{index}]")
-            for index, item in enumerate(value)
-        ))
+        return CottArray(values=(_cott_normalize_f32_abi(item, args[0], path=f"{path}[{index}]", _state=state, _depth=depth + 1) for index, item in enumerate(value)))
     nominal = origin if isinstance(origin, type) and _dataclasses.is_dataclass(origin) else annotation
     if isinstance(nominal, type) and type(value) is nominal and _dataclasses.is_dataclass(nominal):
         substitutions = dict(zip(getattr(nominal, "__parameters__", ()), args))
         hints = _get_type_hints(nominal, include_extras=True)
         return nominal(**{
-            field.name: _cott_normalize_f32_abi(
-                getattr(value, field.name),
-                _cott_substitute_type(hints.get(field.name, Any), substitutions),
-                path=f"{path}.{field.name}",
-            )
+            field.name: _cott_normalize_f32_abi(getattr(value, field.name), _cott_substitute_type(hints.get(field.name, Any), substitutions), path=f"{path}.{field.name}", _state=state, _depth=depth + 1)
             for field in _dataclasses.fields(nominal)
         })
     return value
-
 
 class CottContractViolation(Exception):
     """Raised when a generated contract or provenance check is violated."""
@@ -686,6 +777,204 @@ class CottContractViolation(Exception):
                 detail += f" [{label}={value}]"
         super().__init__(detail)
 
+@_final
+class _CottTraversalFailure(CottContractViolation):
+    pass
+
+
+@_final
+class _CottAsyncRLock:
+    __slots__ = ("_lock", "_owner", "_depth")
+
+    def __init__(self) -> None:
+        self._lock = _asyncio.Lock()
+        self._owner: object | None = None
+        self._depth = 0
+
+    async def __aenter__(self) -> _CottAsyncRLock:
+        task = _asyncio.current_task()
+        if task is None:
+            raise RuntimeError("Cott async lock requires an asyncio task")
+        if self._owner is task:
+            self._depth += 1
+            return self
+        await self._lock.acquire()
+        self._owner = task
+        self._depth = 1
+        return self
+
+    async def __aexit__(self, _type: object, _value: object, _traceback: object) -> bool:
+        task = _asyncio.current_task()
+        if self._owner is not task:
+            raise RuntimeError("Cott async lock released by a non-owner task")
+        self._depth -= 1
+        if self._depth == 0:
+            self._owner = None
+            self._lock.release()
+        return False
+
+
+class _CottAsyncIterator(_AsyncIterator[_T]):
+    __slots__ = ("_iterator", "_item_type", "_path", "_validator", "_active", "_closed")
+
+    def __init__(self, iterator: _AsyncIterator[object], item_type: object, path: str, validator: object) -> None:
+        self._iterator = iterator
+        self._item_type = item_type
+        self._path = path
+        self._validator = validator
+        self._active = False
+        self._closed = False
+
+    def __aiter__(self) -> _CottAsyncIterator[_T]:
+        return self
+
+    def _begin(self) -> None:
+        if self._active:
+            raise CottContractViolation("concurrent async protocol operation", phase="async-lifecycle")
+        self._active = True
+
+    async def __anext__(self) -> _T:
+        if self._closed:
+            raise StopAsyncIteration
+        self._begin()
+        try:
+            value = await self._iterator.__anext__()
+        except StopAsyncIteration:
+            self._closed = True
+            raise
+        finally:
+            self._active = False
+        return _cott_wrap_async_protocol(value, self._item_type, path=f"{self._path}.yield", validator=self._validator)
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._begin()
+        try:
+            close = getattr(self._iterator, "aclose", None)
+            if close is not None:
+                await close()
+            self._closed = True
+        finally:
+            self._active = False
+
+
+class _CottAsyncGenerator(_CottAsyncIterator[_T], _AsyncGenerator[_T, _S]):
+    __slots__ = ("_generator", "_send_type", "_started")
+
+    def __init__(self, generator: _AsyncGenerator[object, object], yield_type: object, send_type: object, path: str, validator: object) -> None:
+        super().__init__(generator, yield_type, path, validator)
+        self._generator = generator
+        self._send_type = send_type
+        self._started = False
+
+    async def __anext__(self) -> _T:
+        self._started = True
+        return await super().__anext__()
+
+    async def asend(self, value: _S) -> _T:
+        if self._closed:
+            raise StopAsyncIteration
+        if self._started or value is not None:
+            value = self._validator(value, self._send_type, path=f"{self._path}.send")
+        self._started = True
+        self._begin()
+        try:
+            result = await self._generator.asend(value)
+        except StopAsyncIteration:
+            self._closed = True
+            raise
+        finally:
+            self._active = False
+        return _cott_wrap_async_protocol(result, self._item_type, path=f"{self._path}.yield", validator=self._validator)
+
+    async def athrow(self, *args: object) -> _T:
+        if self._closed:
+            raise StopAsyncIteration
+        self._started = True
+        self._begin()
+        try:
+            result = await self._generator.athrow(*args)
+        except StopAsyncIteration:
+            self._closed = True
+            raise
+        finally:
+            self._active = False
+        return _cott_wrap_async_protocol(result, self._item_type, path=f"{self._path}.yield", validator=self._validator)
+
+
+def _cott_wrap_async_protocol(value: object, annotation: object, *, path: str = "$", validator: object = _cott_validate_abi) -> object:
+    origin = _get_origin(annotation)
+    args = _get_args(annotation)
+    if origin is _AsyncGenerator or annotation is _AsyncGenerator:
+        value = validator(value, annotation, path=path)
+        yield_type, send_type = (args + (Any, Any))[:2]
+        if (
+            isinstance(value, _CottAsyncGenerator)
+            and value._item_type == yield_type
+            and value._send_type == send_type
+            and value._validator is validator
+        ):
+            return value
+        return _CottAsyncGenerator(value, yield_type, send_type, path, validator)
+    if origin is _AsyncIterator or annotation is _AsyncIterator:
+        value = validator(value, annotation, path=path)
+        item_type = args[0] if args else Any
+        if (
+            isinstance(value, _CottAsyncIterator)
+            and value._item_type == item_type
+            and value._validator is validator
+        ):
+            return value
+        return _CottAsyncIterator(value, item_type, path, validator)
+    value = validator(value, annotation, path=path)
+    if origin in (Union, _types.UnionType):
+        for candidate in args:
+            try:
+                return _cott_wrap_async_protocol(value, candidate, path=path, validator=validator)
+            except CottContractViolation:
+                pass
+        return value
+    if origin is Some and type(value) is Some:
+        return Some(value=_cott_wrap_async_protocol(value.value, args[0] if args else Any, path=f"{path}.value", validator=validator))
+    if origin is Ok and type(value) is Ok:
+        return Ok(value=_cott_wrap_async_protocol(value.value, args[0] if args else Any, path=f"{path}.value", validator=validator))
+    if origin is Err and type(value) is Err:
+        return Err(error=_cott_wrap_async_protocol(value.error, args[0] if args else Any, path=f"{path}.error", validator=validator))
+    if origin is CottList and type(value) is CottList:
+        return CottList(values=(_cott_wrap_async_protocol(item, args[0] if args else Any, path=f"{path}[{index}]", validator=validator) for index, item in enumerate(value)))
+    if origin is CottSet and type(value) is CottSet:
+        return CottSet(values=(_cott_wrap_async_protocol(item, args[0] if args else Any, path=path, validator=validator) for item in value))
+    if origin is FrozenMap and type(value) is FrozenMap:
+        key_type, item_type = args if len(args) == 2 else (Any, Any)
+        return FrozenMap(values={
+            _cott_wrap_async_protocol(key, key_type, path=f"{path}.key", validator=validator): _cott_wrap_async_protocol(item, item_type, path=f"{path}[{key!r}]", validator=validator)
+            for key, item in value.items()
+        })
+    if origin is tuple and type(value) is tuple:
+        return tuple(
+            _cott_wrap_async_protocol(item, item_type, path=f"{path}[{index}]", validator=validator)
+            for index, (item, item_type) in enumerate(zip(value, args))
+        )
+    if origin is CottArray and type(value) is CottArray:
+        return CottArray(values=(
+            _cott_wrap_async_protocol(item, args[0] if args else Any, path=f"{path}[{index}]", validator=validator)
+            for index, item in enumerate(value)
+        ))
+    nominal = origin if isinstance(origin, type) and _dataclasses.is_dataclass(origin) else annotation
+    if isinstance(nominal, type) and type(value) is nominal and _dataclasses.is_dataclass(nominal):
+        substitutions = dict(zip(getattr(nominal, "__parameters__", ()), args))
+        hints = _get_type_hints(nominal, include_extras=True)
+        return nominal(**{
+            field.name: _cott_wrap_async_protocol(
+                getattr(value, field.name),
+                _cott_substitute_type(hints.get(field.name, Any), substitutions),
+                path=f"{path}.{field.name}",
+                validator=validator,
+            )
+            for field in _dataclasses.fields(nominal)
+        })
+    return value
 
 def _cott_display(value: object) -> str:
     if value is UNIT:
@@ -997,9 +1286,18 @@ def _cott_is_agent_run(value: object) -> bool:
 
 
 def _cott_is_unresolved(value: object) -> bool:
-    if type(value) is not dict or set(value) != {"cott_symbol", "kind", "span"}:
+    if type(value) is not dict or set(value) != {"cott_symbol", "kind", "callable_kind", "span"}:
         return False
-    if type(value["cott_symbol"]) is not str or not value["cott_symbol"] or value["kind"] not in ("function", "async_function", "impl_method"):
+    kind = value["kind"]
+    callable_kind = value["callable_kind"]
+    if (
+        type(value["cott_symbol"]) is not str
+        or not value["cott_symbol"]
+        or kind not in ("function", "async_function", "impl_method", "async_impl_method")
+        or callable_kind not in ("sync", "async")
+        or (kind in ("function", "impl_method") and callable_kind != "sync")
+        or (kind in ("async_function", "async_impl_method") and callable_kind != "async")
+    ):
         return False
     span = value["span"]
     if type(span) is not dict or set(span) != {"start_byte", "end_byte", "start_line", "start_column", "end_line", "end_column"}:
@@ -1030,7 +1328,7 @@ def _cott_validate_generation_snapshot(snapshot: object, label: str) -> dict[obj
         type(compatibility) is not dict
         or set(compatibility) != {"generation_schema", "canonical_ir_schema", "runtime_abi"}
         or any(type(compatibility[key]) is not int for key in compatibility)
-        or compatibility != {"generation_schema": 2, "canonical_ir_schema": 5, "runtime_abi": 2}
+        or compatibility != {"generation_schema": 5, "canonical_ir_schema": 7, "runtime_abi": 5}
     ):
         raise _cott_violation(f"{label} generation compatibility is incompatible")
     for field in ("inputs", "ir", "managed_files"):
@@ -1049,7 +1347,7 @@ def _cott_validate_generation_snapshot(snapshot: object, label: str) -> dict[obj
     if type(implementations) is not list:
         raise _cott_violation(f"{label} generation implementations must be an array")
     for implementation in implementations:
-        complete = {"cott_symbol", "owner", "python_symbol", "source_origin", "runtime_origin", "content_hash", "kind", "concrete", "method"}
+        complete = {"cott_symbol", "kind", "callable_kind", "concrete", "method", "selection", "owner", "python_symbol", "source_origin", "runtime_origin", "content_hash"}
         if type(implementation) is not dict or set(implementation) != complete:
             raise _cott_violation("generation implementation is malformed")
         if (
@@ -1059,11 +1357,29 @@ def _cott_validate_generation_snapshot(snapshot: object, label: str) -> dict[obj
         ):
             raise _cott_violation("generation implementation is malformed")
         kind = implementation["kind"]
+        callable_kind = implementation["callable_kind"]
         concrete = implementation["concrete"]
         method = implementation["method"]
-        if kind in ("function", "async_function") and concrete is None and method is None:
+        selection = implementation["selection"]
+        if (
+            (kind, callable_kind) in (("function", "sync"), ("async_function", "async"))
+            and concrete is None
+            and method is None
+            and selection is None
+        ):
             continue
-        if kind == "impl_method" and type(concrete) is str and concrete and type(method) is str and method:
+        if (
+            (kind, callable_kind) in (("impl_method", "sync"), ("async_impl_method", "async"))
+            and type(concrete) is str
+            and concrete
+            and type(method) is str
+            and method
+            and type(selection) is dict
+            and set(selection) == {"kind", "trait_method"}
+            and selection["kind"] == "explicit"
+            and type(selection["trait_method"]) is str
+            and selection["trait_method"]
+        ):
             continue
         raise _cott_violation("generation implementation kind is malformed")
     dependencies = snapshot["dependencies"]
@@ -1102,7 +1418,7 @@ def _cott_validate_generation_identity(snapshot: dict[object, object]) -> str:
         current.pop(key)
     expected_id = _cott_sha256(
         _json.dumps(
-            {"domain": "cott.generation.v2", "schema_version": 2, "current": current},
+            {"domain": "cott.generation.v5", "schema_version": 5, "current": current},
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,
@@ -1125,7 +1441,7 @@ def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symb
         type(current_record) is not dict
         or set(current_record) != {"schema_version", "current", "last_verified"}
         or type(current_record["schema_version"]) is not int
-        or current_record["schema_version"] != 2
+        or current_record["schema_version"] != 5
     ):
         raise _cott_violation("generation record is malformed")
     current = _cott_validate_generation_snapshot(current_record["current"], "current")
@@ -1145,19 +1461,21 @@ def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symb
     selected_python_symbol = f"{relative_path[:-3].replace('/', '.')}:{symbol}"
     matches = []
     for implementation in implementations:
-        kind = implementation.get("kind")
-        concrete = implementation.get("concrete")
-        method = implementation.get("method")
-        if kind is None:
-            if symbol.startswith("_cott_impl_"):
-                raise _cott_violation("generation implementation kind is malformed")
-            kind = "function"
-        if kind == "function":
+        kind = implementation["kind"]
+        callable_kind = implementation["callable_kind"]
+        concrete = implementation["concrete"]
+        method = implementation["method"]
+        if (kind, callable_kind) in (("function", "sync"), ("async_function", "async")):
             if concrete is not None or method is not None:
                 raise _cott_violation("free-function provenance must not name an implementation method")
-        elif kind == "impl_method":
+        elif (kind, callable_kind) in (
+            ("impl_method", "sync"),
+            ("async_impl_method", "async"),
+        ):
             if not concrete.isidentifier() or not method.isidentifier():
                 raise _cott_violation("implementation-method provenance is malformed")
+        else:
+            raise _cott_violation("generation implementation kind is malformed")
         if (
             implementation["runtime_origin"] == selected_origin
             and implementation["python_symbol"] == selected_python_symbol
@@ -1268,7 +1586,7 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
 
 
 __all__ = [
-    "CottArray", "CottBuffer", "CottContractViolation", "CottExternal", "CottFloat", "CottInt", "CottList", "CottSet", "Err", "F32", "F64", "FrozenMap",
+    "AsyncGenerator", "AsyncIterator", "CottArray", "CottBuffer", "CottContractViolation", "CottExternal", "CottFloat", "CottInt", "CottList", "CottSet", "Dyn", "Err", "F32", "F64", "FrozenMap",
     "I8", "I16", "I32", "I64", "JsonArray", "JsonBoolean", "JsonFloat", "JsonInteger", "JsonNull", "JsonObject", "JsonString", "JsonValue",
     "Never", "Nothing", "Ok", "Opaque", "Option", "PROJECT_NAME", "PROJECT_VERSION", "Result", "Some", "U8", "U16", "U32", "U64", "UNIT", "Unit",
 ]

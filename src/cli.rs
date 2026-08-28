@@ -174,10 +174,13 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
                     0
                 }
                 Err(messages) => {
+                    let proof_disproved = messages
+                        .iter()
+                        .any(|message| crate::proof::is_disproved_error(message));
                     for message in messages {
                         eprintln!("error: {message}");
                     }
-                    4
+                    if proof_disproved { 3 } else { 4 }
                 }
             },
             Err(code) => code,
@@ -1432,6 +1435,13 @@ fn generate_project(
             return 4;
         }
     };
+    if let Some(stale) = resolution.stale.first() {
+        eprintln!(
+            "error: {}: stale durable agent implementation",
+            display_path(&paths.root, stale)
+        );
+        return 4;
+    }
     let callables = plan
         .callables()
         .into_iter()
@@ -1551,14 +1561,17 @@ fn generate_project(
                     "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, UNIT, Some, Nothing, CottList, CottSet, FrozenMap, CottArray, and CottBuffer from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict; native `tuple[...]` annotations and `(a, b)` values are required for Cott Tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` is the annotation and `UNIT` is its only value; return `Ok(value=UNIT)` for Result[Unit, E]. For Option annotations use the top-level `Some(value=...)` and `Nothing()` variants, never `Option.Some` or `Option.Nothing`; narrow an Option with structural `match` before reading a Some payload. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={{}}), CottArray(values=xs), and CottBuffer(data=xs); Cott Tuple uses native `tuple[...]` annotations and `(a, b)` values. For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err, raise, catch, or inspect Result. Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `{0}_types` module, never `<Enum>.<Variant>`. `typing.cast` MAY be used only from a concrete external SDK return to its declared external projection when upstream stubs are incompatible; never cast Cott-owned values. Do not use classes, mutable module state, `Any`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. For other modules import public generated symbols only through `from {0} import name` and generated value types only through `from {0}_types import Type`. Do not import concrete facade classes from generated type modules.",
                     callable.module
                 ),
-                PythonCallableKind::ImplMethod { concrete } => format!(
-                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. The canonical function's leading `self` annotation must be `{concrete}`. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, UNIT, Some, Nothing, CottList, CottSet, FrozenMap, CottArray, and CottBuffer from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict; native `tuple[...]` annotations and `(a, b)` values are required for Cott Tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` is the annotation and `UNIT` is its only value; return `Ok(value=UNIT)` for Result[Unit, E]. For Option annotations use the top-level `Some(value=...)` and `Nothing()` variants, never `Option.Some` or `Option.Nothing`; narrow an Option with structural `match` before reading a Some payload. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={{}}), CottArray(values=xs), and CottBuffer(data=xs); Cott Tuple uses native `tuple[...]` annotations and `(a, b)` values. For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err, raise, catch, or inspect Result. Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `{0}_types` module, never `<Enum>.<Variant>`. `typing.cast` MAY be used only from a concrete external SDK return to its declared external projection when upstream stubs are incompatible; never cast Cott-owned values. Do not use classes, mutable module state, `Any`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. The compiler-owned concrete facade class `{concrete}` is absent from `{0}_types`; import it exactly as `from {0} import {concrete}` for the `self` annotation. Generated value-type imports remain `from {0}_types import Type`.",
-                    callable.module
+                PythonCallableKind::ImplMethod { concrete }
+                | PythonCallableKind::AsyncImplMethod { concrete } => format!(
+                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. The canonical function's leading `self` annotation must be `{concrete}`. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, UNIT, Some, Nothing, CottList, CottSet, FrozenMap, CottArray, and CottBuffer from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict; native `tuple[...]` annotations and `(a, b)` values are required for Cott Tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use ordinary arithmetic and comparisons and return the result directly, never call or construct a numeric alias. The compiler owns the public concrete facade; define only the private implementation function and never define a class or public method.",
                 ),
             };
-            if matches!(&callable.kind, PythonCallableKind::AsyncFunction) {
+            if matches!(
+                &callable.kind,
+                PythonCallableKind::AsyncFunction | PythonCallableKind::AsyncImplMethod { .. }
+            ) {
                 target_rules.push_str(
-                    "\nThe canonical function MUST be an exact undecorated top-level `async def`; private helpers remain synchronous. Await every exact async Cott facade call and never await a synchronous Cott facade.\n",
+                    "\nThe canonical function MUST be an exact undecorated top-level `async def`; private helpers remain synchronous. Await every exact async Cott facade call and never await a synchronous Cott facade. Detached task APIs (`create_task`, `ensure_future`, `Task`, and loop task creation) are forbidden; only direct awaited `asyncio.gather(...)` and `async with asyncio.TaskGroup() as <name>` are allowed.\n",
                 );
             }
             target_rules.push_str(
@@ -1688,7 +1701,8 @@ fn generate_project(
                 PythonCallableKind::Function | PythonCallableKind::AsyncFunction => {
                     format!("_cott_impl.{}.{}", callable.module, callable.name)
                 }
-                PythonCallableKind::ImplMethod { concrete } => {
+                PythonCallableKind::ImplMethod { concrete }
+                | PythonCallableKind::AsyncImplMethod { concrete } => {
                     format!(
                         "_cott_impl.{}.{concrete}.{}",
                         callable.module, callable.name

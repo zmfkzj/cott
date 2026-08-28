@@ -225,7 +225,10 @@ pub fn emit(
                     .get("selected")
                     .and_then(Value::as_object)
                     .filter(|selected| {
-                        selected.get("kind").and_then(Value::as_str) == Some("default")
+                        matches!(
+                            selected.get("origin").and_then(Value::as_str),
+                            Some("default" | "specialization")
+                        )
                     })
                     .and_then(|selected| selected.get("function"))
                     .and_then(Value::as_object)
@@ -236,13 +239,15 @@ pub fn emit(
                     .get("verified_facade")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                if !callables
-                    .get(verified_facade)
-                    .is_some_and(|callable| matches!(&callable.kind, PythonCallableKind::Function))
-                {
+                if !callables.get(verified_facade).is_some_and(|callable| {
+                    matches!(
+                        &callable.kind,
+                        PythonCallableKind::Function | PythonCallableKind::AsyncFunction
+                    )
+                }) {
                     diagnostics.push(diag(
                         module_path(&module.module),
-                        "trait default dispatch must depend on a verified free-function facade",
+                        "trait default or specialization dispatch must depend on a verified free-function facade",
                     ));
                 }
             }
@@ -381,9 +386,10 @@ pub fn emit(
     for module in modules.values() {
         let mut owners = BTreeMap::<String, BTreeSet<String>>::new();
         for imports in [
-            referenced_imports(module, &declarations),
+            referenced_imports(module, &modules, &declarations),
             factory_concrete_imports(module, &declarations),
             resolved_method_imports(module, &modules, &declarations),
+            concrete_trait_marker_imports(module, &modules),
         ] {
             for (source, names) in imports {
                 for name in names {
@@ -533,21 +539,56 @@ pub fn emit(
                 .with_extension("")
                 .to_string_lossy()
                 .replace('/', ".");
-            let (kind, concrete, method) = match &binding.kind {
-                PythonCallableKind::Function => ("function", Value::Null, Value::Null),
-                PythonCallableKind::AsyncFunction => ("async_function", Value::Null, Value::Null),
+            let (kind, callable_kind, concrete, method) = match &binding.kind {
+                PythonCallableKind::Function => ("function", "sync", Value::Null, Value::Null),
+                PythonCallableKind::AsyncFunction => {
+                    ("async_function", "async", Value::Null, Value::Null)
+                }
                 PythonCallableKind::ImplMethod { concrete } => (
                     "impl_method",
+                    "sync",
                     Value::String(concrete.clone()),
                     Value::String(binding.function.clone()),
                 ),
+                PythonCallableKind::AsyncImplMethod { concrete } => (
+                    "async_impl_method",
+                    "async",
+                    Value::String(concrete.clone()),
+                    Value::String(binding.function.clone()),
+                ),
+            };
+            let selection = match &binding.kind {
+                PythonCallableKind::ImplMethod { .. }
+                | PythonCallableKind::AsyncImplMethod { .. } => callables
+                    .get(&binding.cott_symbol)
+                    .and_then(|callable| {
+                        (callable
+                            .declaration
+                            .get("selected")
+                            .and_then(Value::as_object)?
+                            .get("origin")
+                            .and_then(Value::as_str)
+                            == Some("explicit"))
+                        .then(|| {
+                            callable
+                                .declaration
+                                .get("trait_method")
+                                .and_then(Value::as_str)
+                        })
+                        .flatten()
+                    })
+                    .map(|trait_method| json!({"kind": "explicit", "trait_method": trait_method}))
+                    .unwrap_or(Value::Null),
+                PythonCallableKind::Function | PythonCallableKind::AsyncFunction => Value::Null,
             };
             json!({
                 "content_hash": format!("sha256:{}", binding.sha256),
                 "concrete": concrete,
                 "cott_symbol": binding.cott_symbol,
+                "callable_kind": callable_kind,
                 "kind": kind,
                 "method": method,
+                "selection": selection,
                 "owner": match binding.owner {
                     BindingOwner::Manifest => "manifest",
                     BindingOwner::Agent => "agent",
@@ -573,6 +614,18 @@ pub fn emit(
     let unresolved = callables
         .values()
         .filter(|callable| !seen_bindings.contains(&callable.cott_symbol))
+        .filter(|callable| {
+            matches!(
+                &callable.kind,
+                PythonCallableKind::Function | PythonCallableKind::AsyncFunction
+            ) || callable
+                .declaration
+                .get("selected")
+                .and_then(Value::as_object)
+                .and_then(|selected| selected.get("origin"))
+                .and_then(Value::as_str)
+                == Some("explicit")
+        })
         .map(|callable| {
             let span = callable
                 .declaration
@@ -590,6 +643,14 @@ pub fn emit(
                     PythonCallableKind::Function => UnresolvedKind::Function,
                     PythonCallableKind::AsyncFunction => UnresolvedKind::AsyncFunction,
                     PythonCallableKind::ImplMethod { .. } => UnresolvedKind::ImplMethod,
+                    PythonCallableKind::AsyncImplMethod { .. } => UnresolvedKind::AsyncImplMethod,
+                },
+                callable_kind: match &callable.kind {
+                    PythonCallableKind::Function | PythonCallableKind::ImplMethod { .. } => {
+                        "sync".to_owned()
+                    }
+                    PythonCallableKind::AsyncFunction
+                    | PythonCallableKind::AsyncImplMethod { .. } => "async".to_owned(),
                 },
                 span: SourceSpan {
                     start_byte: coordinate("start_byte"),
@@ -868,6 +929,15 @@ fn validate_declaration(
                         unsupported(module, "trait method must be an object", diagnostics);
                         continue;
                     };
+                    match required_string(method, "callable_kind", module, diagnostics).as_deref() {
+                        Some("sync" | "async") => {}
+                        Some(other) => unsupported(
+                            module,
+                            format!("trait method callable_kind `{other}` is unsupported"),
+                            diagnostics,
+                        ),
+                        None => {}
+                    }
                     if let Some(parameters) =
                         required_array(method, "parameters", module, diagnostics)
                     {
@@ -949,11 +1019,20 @@ fn validate_declaration(
                     );
                     continue;
                 };
+                match required_string(method, "callable_kind", module, diagnostics).as_deref() {
+                    Some("sync" | "async") => {}
+                    Some(other) => unsupported(
+                        module,
+                        format!("implementation method callable_kind `{other}` is unsupported"),
+                        diagnostics,
+                    ),
+                    None => {}
+                }
                 validate_dispatch_slot(method, module, diagnostics);
                 if method
                     .get("selected")
                     .and_then(Value::as_object)
-                    .and_then(|selected| selected.get("kind"))
+                    .and_then(|selected| selected.get("origin"))
                     .and_then(Value::as_str)
                     == Some("explicit")
                     && let Some(name) = method
@@ -995,6 +1074,15 @@ fn validate_declaration(
                     );
                     continue;
                 };
+                match required_string(method, "callable_kind", module, diagnostics).as_deref() {
+                    Some("sync" | "async") => {}
+                    Some(other) => unsupported(
+                        module,
+                        format!("implementation method callable_kind `{other}` is unsupported"),
+                        diagnostics,
+                    ),
+                    None => {}
+                }
                 if let Some(transitions) =
                     required_array(method, "transitions", module, diagnostics)
                 {
@@ -1021,6 +1109,42 @@ fn validate_declaration(
                 .flatten()
             {
                 validate_clause_guard(invariant, module, diagnostics);
+            }
+        }
+        "specialization" => {
+            if let Some(receiver) = required_value(object, "receiver_type", module, diagnostics) {
+                validate_type(receiver, module, diagnostics);
+            }
+            if let Some(trait_ref) = required_value(object, "trait", module, diagnostics) {
+                validate_type(trait_ref, module, diagnostics);
+            }
+            if let Some(methods) = required_array(object, "methods", module, diagnostics) {
+                for method in methods.iter().filter_map(Value::as_object) {
+                    required_string(method, "name", module, diagnostics);
+                    required_string(method, "trait_method", module, diagnostics);
+                    match required_string(method, "callable_kind", module, diagnostics).as_deref() {
+                        Some("sync" | "async") => {}
+                        Some(other) => unsupported(
+                            module,
+                            format!("specialization method callable_kind `{other}` is unsupported"),
+                            diagnostics,
+                        ),
+                        None => {}
+                    }
+                    let Some(function) = required_value(method, "function", module, diagnostics)
+                        .and_then(Value::as_object)
+                    else {
+                        unsupported(
+                            module,
+                            "specialization method function must be an object",
+                            diagnostics,
+                        );
+                        continue;
+                    };
+                    required_string(function, "module", module, diagnostics);
+                    required_string(function, "symbol", module, diagnostics);
+                    required_string(function, "verified_facade", module, diagnostics);
+                }
             }
         }
         "const" => {
@@ -1164,6 +1288,15 @@ fn validate_dispatch_slot(
     diagnostics: &mut Vec<EmitDiagnostic>,
 ) {
     required_string(method, "trait_method", module, diagnostics);
+    match required_string(method, "callable_kind", module, diagnostics).as_deref() {
+        Some("sync" | "async") => {}
+        Some(other) => unsupported(
+            module,
+            format!("dispatch slot callable_kind `{other}` is unsupported"),
+            diagnostics,
+        ),
+        None => {}
+    }
     if let Some(receiver) = required_value(method, "receiver_type", module, diagnostics) {
         validate_type(receiver, module, diagnostics);
     }
@@ -1178,12 +1311,12 @@ fn validate_dispatch_slot(
         return;
     };
     if !matches!(
-        selected.get("kind").and_then(Value::as_str),
-        Some("explicit" | "default")
+        selected.get("origin").and_then(Value::as_str),
+        Some("explicit" | "default" | "specialization")
     ) {
         unsupported(
             module,
-            "dispatch slot kind must be explicit or default",
+            "dispatch slot origin must be explicit, specialization, or default",
             diagnostics,
         );
     }
@@ -1477,9 +1610,14 @@ fn validate_type(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnost
                 validate_type(base, module, diagnostics);
             }
         }
-        "list" | "set" | "option" | "iterator" => {
+        "list" | "set" | "option" | "iterator" | "async_iterator" => {
             if let Some(item) = required_value(object, "item", module, diagnostics) {
                 validate_type(item, module, diagnostics);
+            }
+        }
+        "dyn" => {
+            if let Some(trait_ref) = required_value(object, "trait", module, diagnostics) {
+                validate_type(trait_ref, module, diagnostics);
             }
         }
         "factory" => {
@@ -1517,6 +1655,13 @@ fn validate_type(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnost
         }
         "generator" => {
             for field in ["yield", "send", "return"] {
+                if let Some(item) = required_value(object, field, module, diagnostics) {
+                    validate_type(item, module, diagnostics);
+                }
+            }
+        }
+        "async_generator" => {
+            for field in ["yield", "send"] {
                 if let Some(item) = required_value(object, field, module, diagnostics) {
                     validate_type(item, module, diagnostics);
                 }
@@ -1750,6 +1895,100 @@ fn validate_value(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnos
     }
 }
 
+fn ordered_trait_declarations(
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+) -> Vec<&Value> {
+    fn collect_local_trait_references(
+        value: &Value,
+        traits: &BTreeMap<String, &Value>,
+        references: &mut BTreeSet<String>,
+    ) {
+        if let Some(object) = value.as_object() {
+            if object.get("kind").and_then(Value::as_str) == Some("named")
+                && let Some(name) = object.get("name").and_then(Value::as_str)
+                && traits.contains_key(name)
+            {
+                references.insert(name.to_owned());
+            }
+            for child in object.values() {
+                collect_local_trait_references(child, traits, references);
+            }
+        } else if let Some(values) = value.as_array() {
+            for value in values {
+                collect_local_trait_references(value, traits, references);
+            }
+        }
+    }
+
+    fn visit<'a>(
+        name: &str,
+        traits: &BTreeMap<String, &'a Value>,
+        visiting: &mut BTreeSet<String>,
+        complete: &mut BTreeSet<String>,
+        ordered: &mut Vec<&'a Value>,
+    ) {
+        if complete.contains(name) || !visiting.insert(name.to_owned()) {
+            return;
+        }
+        let declaration = traits.get(name).expect("known local trait");
+        for parent in declaration
+            .get("parents")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|parent| parent.get("trait"))
+            .filter_map(|trait_ref| trait_ref.get("name"))
+            .filter_map(Value::as_str)
+        {
+            if traits.contains_key(parent) {
+                visit(parent, traits, visiting, complete, ordered);
+            }
+        }
+        let mut bound_traits = BTreeSet::new();
+        for generic in declaration
+            .get("generics")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(bounds) = generic.get("bounds") {
+                collect_local_trait_references(bounds, traits, &mut bound_traits);
+            }
+        }
+        for bound_trait in bound_traits {
+            visit(&bound_trait, traits, visiting, complete, ordered);
+        }
+        visiting.remove(name);
+        complete.insert(name.to_owned());
+        ordered.push(declaration);
+    }
+
+    let traits = module
+        .declarations
+        .iter()
+        .filter(|declaration| declaration.get("kind").and_then(Value::as_str) == Some("trait"))
+        .filter_map(|declaration| {
+            declaration
+                .get("name")
+                .and_then(Value::as_str)
+                .map(|name| (name.to_owned(), declaration))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut visiting = BTreeSet::new();
+    let mut complete = BTreeSet::new();
+    let mut ordered = Vec::new();
+    for declaration in &module.declarations {
+        if let Some(name) = declaration
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| traits.contains_key(*name))
+        {
+            visit(name, &traits, &mut visiting, &mut complete, &mut ordered);
+        }
+    }
+    ordered
+}
+
 fn render_types(
     module: &crate::python::artifact_plan::PythonArtifactModule,
     modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
@@ -1757,12 +1996,12 @@ fn render_types(
     external_types: &BTreeMap<String, String>,
 ) -> Vec<u8> {
     let mut out = String::from(
-        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport dataclasses as _dataclasses\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import Annotated, Any, Final, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable\n\nfrom cott_runtime import CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_normalize_f32, _cott_validate_abi\n",
+        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport dataclasses as _dataclasses\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import Annotated, Any, Final, ForwardRef, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable\n\nfrom cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_normalize_f32, _cott_validate_abi\n",
     );
     for (source, name, alias) in external_imports(module, external_types) {
         writeln!(out, "from {source} import {name} as {alias}").unwrap();
     }
-    let imports = referenced_imports(module, declarations);
+    let imports = referenced_imports(module, modules, declarations);
     for (source, names) in &imports {
         writeln!(
             out,
@@ -1784,18 +2023,59 @@ fn render_types(
     if !imports.is_empty() || !factory_imports.is_empty() {
         out.push('\n');
     }
-    let has_generics = module.declarations.iter().any(|declaration| {
-        declaration
-            .get("generics")
-            .and_then(Value::as_array)
-            .is_some_and(|parameters| !parameters.is_empty())
-    });
-    render_generic_typevars(&mut out, module, declarations, false, true);
-    render_associated_typevars(&mut out, module, declarations);
-    if has_generics {
+    let mut rendered_typevars = BTreeSet::new();
+    for declaration in ordered_trait_declarations(module) {
+        render_generic_typevars_for_declaration(
+            &mut out,
+            module,
+            declarations,
+            declaration
+                .as_object()
+                .expect("validated trait declaration"),
+            false,
+            true,
+            true,
+            &mut rendered_typevars,
+        );
+        render_type_declaration(
+            &mut out,
+            declaration,
+            module,
+            modules,
+            declarations,
+            external_types,
+        );
+    }
+    let has_associated_typevars =
+        render_associated_typevars(&mut out, module, modules, declarations);
+    for declaration in &module.declarations {
+        let Some(object) = declaration.as_object() else {
+            continue;
+        };
+        if matches!(
+            object.get("kind").and_then(Value::as_str),
+            Some("trait" | "function")
+        ) {
+            continue;
+        }
+        render_generic_typevars_for_declaration(
+            &mut out,
+            module,
+            declarations,
+            object,
+            false,
+            true,
+            true,
+            &mut rendered_typevars,
+        );
+    }
+    if !rendered_typevars.is_empty() || has_associated_typevars {
         out.push('\n');
     }
     for declaration in &module.declarations {
+        if declaration.get("kind").and_then(Value::as_str) == Some("trait") {
+            continue;
+        }
         render_type_declaration(
             &mut out,
             declaration,
@@ -2049,15 +2329,31 @@ fn render_type_declaration(
             .unwrap();
         }
         "trait" => {
-            let base = if generics.is_empty() {
+            let mut bases = object
+                .get("parents")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|parent| parent.get("trait"))
+                .map(|trait_ref| {
+                    render_type_with_names(trait_ref, &module.module, declarations, &typevar_names)
+                })
+                .collect::<Vec<_>>();
+            bases.push(if generics.is_empty() {
                 "Protocol".to_owned()
             } else {
                 format!("Protocol[{generics}]")
-            };
-            writeln!(out, "@runtime_checkable\nclass {name}({base}):").unwrap();
+            });
+            writeln!(
+                out,
+                "@runtime_checkable\nclass {name}({}):",
+                bases.join(", ")
+            )
+            .unwrap();
+            out.push_str("    _cott_trait = True\n");
             let methods = object.get("methods").and_then(Value::as_array).unwrap();
             if methods.is_empty() {
-                out.push_str("    pass\n\n");
+                out.push('\n');
             } else {
                 for method in methods {
                     let method = method.as_object().unwrap();
@@ -2087,7 +2383,12 @@ fn render_type_declaration(
                     );
                     writeln!(
                         out,
-                        "    def {method_name}({signature}) -> {return_type}:\n        ...\n"
+                        "    {}def {method_name}({signature}) -> {return_type}:\n        ...\n",
+                        if method.get("callable_kind").and_then(Value::as_str) == Some("async") {
+                            "async "
+                        } else {
+                            ""
+                        }
                     )
                     .unwrap();
                 }
@@ -2234,12 +2535,168 @@ fn associated_typevar_name(trait_name: &str, associated_name: &str) -> String {
         associated_name.replace('.', "_")
     )
 }
+fn associated_projection_typevar_name(object: &serde_json::Map<String, Value>) -> String {
+    let trait_name = object
+        .get("trait")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let associated_name = object
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let base_identity = serde_json::to_vec(
+        object
+            .get("base")
+            .expect("validated associated projection base"),
+    )
+    .expect("canonical associated base serializes");
+    format!(
+        "{}_{}",
+        associated_typevar_name(trait_name, associated_name),
+        sha256_hex(&base_identity)
+    )
+}
+
+fn collect_associated_projection_typevars(
+    value: &Value,
+    projections: &mut BTreeMap<String, (String, String)>,
+) {
+    if let Some(object) = value.as_object() {
+        if object.get("kind").and_then(Value::as_str) == Some("associated_projection")
+            && let (Some(trait_name), Some(associated_name)) = (
+                object.get("trait").and_then(Value::as_str),
+                object.get("name").and_then(Value::as_str),
+            )
+        {
+            projections
+                .entry(associated_projection_typevar_name(object))
+                .or_insert_with(|| (trait_name.to_owned(), associated_name.to_owned()));
+        }
+        for value in object.values() {
+            collect_associated_projection_typevars(value, projections);
+        }
+    } else if let Some(values) = value.as_array() {
+        for value in values {
+            collect_associated_projection_typevars(value, projections);
+        }
+    }
+}
+
+fn trait_declaration<'a>(
+    modules: &'a BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+    trait_name: &str,
+) -> Option<&'a serde_json::Map<String, Value>> {
+    modules
+        .values()
+        .flat_map(|module| &module.declarations)
+        .filter_map(Value::as_object)
+        .find(|declaration| {
+            declaration.get("kind").and_then(Value::as_str) == Some("trait")
+                && declaration.get("name").and_then(Value::as_str) == Some(trait_name)
+        })
+}
+
+fn associated_type_bounds<'a>(
+    modules: &'a BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+    trait_name: &str,
+    associated_name: &str,
+) -> Vec<&'a Value> {
+    trait_declaration(modules, trait_name)
+        .and_then(|trait_declaration| trait_declaration.get("associated_types"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+        .find(|associated| {
+            associated
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| {
+                    name == associated_name || local_name(name) == local_name(associated_name)
+                })
+        })
+        .and_then(|associated| associated.get("bounds"))
+        .and_then(Value::as_array)
+        .map(|bounds| bounds.iter().collect())
+        .unwrap_or_default()
+}
+
+fn associated_projection_typevars(
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+) -> BTreeMap<String, (String, String)> {
+    let mut projections = BTreeMap::new();
+    for declaration in &module.declarations {
+        collect_associated_projection_typevars(declaration, &mut projections);
+    }
+    loop {
+        let before = projections.len();
+        for (trait_name, associated_name) in projections.values().cloned().collect::<Vec<_>>() {
+            for bound in associated_type_bounds(modules, &trait_name, &associated_name) {
+                collect_associated_projection_typevars(bound, &mut projections);
+            }
+        }
+        if projections.len() == before {
+            return projections;
+        }
+    }
+}
+
+fn render_typevar_bound(
+    bound: &Value,
+    module: &str,
+    declarations: &BTreeMap<String, String>,
+    typevar_names: Option<&BTreeMap<String, String>>,
+) -> String {
+    let rendered = typevar_names
+        .map(|names| render_type_with_names(bound, module, declarations, names))
+        .unwrap_or_else(|| render_type(bound, module, declarations));
+    if let Some(name) = bound.get("name").and_then(Value::as_str)
+        && bound.get("kind").and_then(Value::as_str) == Some("named")
+        && name
+            .rsplit_once('.')
+            .is_some_and(|(source, _)| source == module)
+        && declarations.contains_key(name)
+    {
+        return format!("ForwardRef({})", json_string(&rendered));
+    }
+    rendered
+}
+fn render_typevar_with_bounds(
+    out: &mut String,
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    declarations: &BTreeMap<String, String>,
+    typevar: &str,
+    bounds: &[&Value],
+) {
+    match bounds {
+        [] => writeln!(out, "{typevar} = TypeVar({})", json_string(typevar)).unwrap(),
+        [bound] => writeln!(
+            out,
+            "{typevar} = TypeVar({}, bound={})",
+            json_string(typevar),
+            render_typevar_bound(bound, &module.module, declarations, None)
+        )
+        .unwrap(),
+        _ => {
+            render_bound_protocol(out, module, declarations, typevar, bounds);
+            writeln!(
+                out,
+                "{typevar} = TypeVar({}, bound=_cott_{typevar}_Bounds)",
+                json_string(typevar)
+            )
+            .unwrap();
+        }
+    }
+}
 
 fn render_associated_typevars(
     out: &mut String,
     module: &crate::python::artifact_plan::PythonArtifactModule,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
     declarations: &BTreeMap<String, String>,
-) {
+) -> bool {
+    let mut rendered = false;
     for trait_declaration in module
         .declarations
         .iter()
@@ -2266,42 +2723,30 @@ fn render_associated_typevars(
                 .and_then(Value::as_array)
                 .map(|bounds| bounds.iter().collect::<Vec<_>>())
                 .unwrap_or_default();
-            let typevar = associated_typevar_name(trait_name, name);
-            match bounds.as_slice() {
-                [] => writeln!(out, "{typevar} = TypeVar({})", json_string(&typevar)).unwrap(),
-                [bound] => writeln!(
-                    out,
-                    "{typevar} = TypeVar({}, bound={})",
-                    json_string(&typevar),
-                    render_type(bound, &module.module, declarations)
-                )
-                .unwrap(),
-                _ => {
-                    render_bound_protocol(out, module, declarations, &typevar, &bounds);
-                    writeln!(
-                        out,
-                        "{typevar} = TypeVar({}, bound=_cott_{typevar}_Bounds)",
-                        json_string(&typevar)
-                    )
-                    .unwrap();
-                }
-            }
+            render_typevar_with_bounds(
+                out,
+                module,
+                declarations,
+                &associated_typevar_name(trait_name, name),
+                &bounds,
+            );
+            rendered = true;
         }
     }
-    if module.declarations.iter().any(|declaration| {
-        declaration.get("kind").and_then(Value::as_str) == Some("trait")
-            && declaration
-                .get("associated_types")
-                .and_then(Value::as_array)
-                .is_some_and(|types| !types.is_empty())
-    }) {
-        out.push('\n');
+    for (typevar, (trait_name, associated_name)) in associated_projection_typevars(module, modules)
+    {
+        let bounds = associated_type_bounds(modules, &trait_name, &associated_name);
+        render_typevar_with_bounds(out, module, declarations, &typevar, &bounds);
+        rendered = true;
     }
+    rendered
 }
+
 fn associated_typevar_names(
     module: &crate::python::artifact_plan::PythonArtifactModule,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
 ) -> Vec<String> {
-    module
+    let mut names = module
         .declarations
         .iter()
         .filter_map(Value::as_object)
@@ -2319,7 +2764,9 @@ fn associated_typevar_names(
                 .filter_map(|associated| associated.get("name").and_then(Value::as_str))
                 .map(move |associated| associated_typevar_name(trait_name, associated))
         })
-        .collect()
+        .collect::<BTreeSet<_>>();
+    names.extend(associated_projection_typevars(module, modules).into_keys());
+    names.into_iter().collect()
 }
 
 fn generic_typevar_names(
@@ -2342,6 +2789,90 @@ fn generic_typevar_names(
         .collect()
 }
 
+fn render_generic_typevars_for_declaration(
+    out: &mut String,
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    declarations: &BTreeMap<String, String>,
+    object: &serde_json::Map<String, Value>,
+    functions_only: bool,
+    render_composites: bool,
+    render_protocols: bool,
+    rendered: &mut BTreeSet<String>,
+) {
+    let typevar_names = generic_typevar_names(module, object, functions_only);
+    for generic in object
+        .get("generics")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(name) = generic.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let bounds = generic
+            .get("bounds")
+            .and_then(Value::as_array)
+            .map(|bounds| bounds.iter().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let typevar = generic_typevar_name(module, object, name, functions_only);
+        if !rendered.insert(typevar.clone()) {
+            continue;
+        }
+        let variance = if matches!(
+            object.get("kind").and_then(Value::as_str),
+            Some("struct" | "enum" | "trait")
+        ) && generic.get("kind").and_then(Value::as_str) == Some("type")
+        {
+            match generic.get("variance").and_then(Value::as_str) {
+                Some("covariant") => ", covariant=True",
+                Some("contravariant") => ", contravariant=True",
+                _ => "",
+            }
+        } else {
+            ""
+        };
+        if bounds.len() > 1 && render_composites && render_protocols {
+            render_bound_protocol(out, module, declarations, &typevar, &bounds);
+        }
+        let declaration = match generic.get("kind").and_then(Value::as_str) {
+            Some("const") => format!(
+                ", bound={}",
+                generic
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .map(render_const_generic_type)
+                    .unwrap_or("int")
+            ),
+            Some("type") => match bounds.as_slice() {
+                [bound] => format!(
+                    "{variance}, bound={}",
+                    if render_protocols {
+                        render_typevar_bound(
+                            bound,
+                            &module.module,
+                            declarations,
+                            Some(&typevar_names),
+                        )
+                    } else {
+                        render_type(bound, &module.module, declarations)
+                    }
+                ),
+                [_first, ..] if render_composites => {
+                    format!("{variance}, bound=_cott_{typevar}_Bounds")
+                }
+                _ => variance.to_owned(),
+            },
+            _ => String::new(),
+        };
+        writeln!(
+            out,
+            "{typevar} = TypeVar({}{declaration})",
+            json_string(&typevar)
+        )
+        .unwrap();
+    }
+}
+
 fn render_generic_typevars(
     out: &mut String,
     module: &crate::python::artifact_plan::PythonArtifactModule,
@@ -2359,52 +2890,16 @@ fn render_generic_typevars(
         {
             continue;
         }
-        for generic in object
-            .get("generics")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            let Some(name) = generic.get("name").and_then(Value::as_str) else {
-                continue;
-            };
-            let bounds = generic
-                .get("bounds")
-                .and_then(Value::as_array)
-                .map(|bounds| bounds.iter().collect::<Vec<_>>())
-                .unwrap_or_default();
-            let typevar = generic_typevar_name(module, object, name, functions_only);
-            if !rendered.insert(typevar.clone()) {
-                continue;
-            }
-            let declaration = match generic.get("kind").and_then(Value::as_str) {
-                Some("const") => format!(
-                    ", bound={}",
-                    generic
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .map(render_const_generic_type)
-                        .unwrap_or("int")
-                ),
-                Some("type") => match bounds.as_slice() {
-                    [bound] => format!(
-                        ", bound={}",
-                        render_type(bound, &module.module, declarations)
-                    ),
-                    [_first, ..] if render_composites => {
-                        format!(", bound=_cott_{typevar}_Bounds")
-                    }
-                    _ => String::new(),
-                },
-                _ => String::new(),
-            };
-            writeln!(
-                out,
-                "{typevar} = TypeVar({}{declaration})",
-                json_string(&typevar)
-            )
-            .unwrap();
-        }
+        render_generic_typevars_for_declaration(
+            out,
+            module,
+            declarations,
+            object,
+            functions_only,
+            render_composites,
+            false,
+            &mut rendered,
+        );
     }
 }
 fn render_bound_protocol(
@@ -2653,6 +3148,7 @@ fn validate_impl_selections(
 fn same_selected_method(left: &Value, right: &Value) -> bool {
     [
         "selected",
+        "callable_kind",
         "parameters",
         "return_type",
         "contract",
@@ -2695,7 +3191,7 @@ fn resolve_impl_slot(
     let trait_method = slot.get("trait_method")?.as_str()?;
     let method_name = local_name(trait_method);
     let selected = slot.get("selected")?.as_object()?;
-    let mut method = match selected.get("kind")?.as_str()? {
+    let mut method = match selected.get("origin")?.as_str()? {
         "explicit" => implementation
             .get("methods")?
             .as_array()?
@@ -2704,11 +3200,21 @@ fn resolve_impl_slot(
                 method.get("name").and_then(Value::as_str).map(local_name) == Some(method_name)
             })?
             .clone(),
-        "default" => resolve_trait_default(implementation, trait_method, selected, modules)?,
+        "default" | "specialization" => resolve_trait_default(
+            implementation,
+            slot.get("trait_ref").and_then(Value::as_object),
+            trait_method,
+            selected,
+            modules,
+        )?,
         _ => return None,
     };
     let method = method.as_object_mut()?;
     method.insert("name".to_owned(), Value::String(method_name.to_owned()));
+    method.insert(
+        "callable_kind".to_owned(),
+        slot.get("callable_kind")?.clone(),
+    );
     method.insert("selected".to_owned(), Value::Object(selected.clone()));
     method.insert(
         "receiver_type".to_owned(),
@@ -2718,7 +3224,10 @@ fn resolve_impl_slot(
         "trait_method".to_owned(),
         Value::String(trait_method.to_owned()),
     );
-    if selected.get("kind").and_then(Value::as_str) == Some("default") {
+    if matches!(
+        selected.get("origin").and_then(Value::as_str),
+        Some("default" | "specialization")
+    ) {
         let (contracts, effects) = default_method_contract(method);
         method.insert("contracts".to_owned(), contracts);
         method.insert("effects".to_owned(), effects);
@@ -2767,6 +3276,7 @@ fn default_method_contract(method: &serde_json::Map<String, Value>) -> (Value, V
 
 fn resolve_trait_default(
     implementation: &serde_json::Map<String, Value>,
+    slot_trait_ref: Option<&serde_json::Map<String, Value>>,
     trait_method: &str,
     selected: &serde_json::Map<String, Value>,
     modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
@@ -2780,15 +3290,17 @@ fn resolve_trait_default(
             declaration.get("kind").and_then(Value::as_str) == Some("trait")
                 && declaration.get("name").and_then(Value::as_str) == Some(trait_name)
         })?;
-    let trait_ref = implementation
-        .get("traits")?
-        .as_array()?
-        .iter()
-        .filter_map(Value::as_object)
-        .find(|trait_ref| {
-            trait_ref.get("kind").and_then(Value::as_str) == Some("named")
-                && trait_ref.get("name").and_then(Value::as_str) == Some(trait_name)
-        })?;
+    let trait_ref = slot_trait_ref.or_else(|| {
+        implementation
+            .get("traits")?
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_object)
+            .find(|trait_ref| {
+                trait_ref.get("kind").and_then(Value::as_str) == Some("named")
+                    && trait_ref.get("name").and_then(Value::as_str) == Some(trait_name)
+            })
+    })?;
     let mut method = trait_declaration
         .get("methods")?
         .as_array()?
@@ -2797,7 +3309,9 @@ fn resolve_trait_default(
             method.get("name").and_then(Value::as_str).map(local_name) == Some(method_name)
         })?
         .clone();
-    (method.get("default")? == selected.get("function")?).then_some(())?;
+    (selected.get("origin").and_then(Value::as_str) == Some("specialization")
+        || method.get("default")? == selected.get("function")?)
+    .then_some(())?;
     substitute_trait_arguments(&mut method, trait_declaration, trait_ref);
     Some(method)
 }
@@ -2924,7 +3438,12 @@ fn default_dispatch<'a>(
     method
         .get("selected")
         .and_then(Value::as_object)
-        .filter(|selected| selected.get("kind").and_then(Value::as_str) == Some("default"))
+        .filter(|selected| {
+            matches!(
+                selected.get("origin").and_then(Value::as_str),
+                Some("default" | "specialization")
+            )
+        })
         .and_then(|selected| selected.get("function"))
         .and_then(Value::as_object)
 }
@@ -2935,19 +3454,23 @@ fn default_alias(implementation: &str, method: &str) -> String {
 
 fn default_dispatch_resolved(
     function: &serde_json::Map<String, Value>,
+    callable_kind: &str,
     bindings: &[ResolvedBinding],
 ) -> bool {
     let Some(module) = function.get("module").and_then(Value::as_str) else {
         return false;
     };
-
     let Some(symbol) = function.get("symbol").and_then(Value::as_str) else {
         return false;
     };
     bindings.iter().any(|binding| {
         binding.module == module
             && binding.function == symbol
-            && matches!(&binding.kind, PythonCallableKind::Function)
+            && matches!(
+                (&binding.kind, callable_kind),
+                (PythonCallableKind::Function, "sync")
+                    | (PythonCallableKind::AsyncFunction, "async")
+            )
     })
 }
 fn resolved_method_imports(
@@ -3036,7 +3559,14 @@ fn render_default_aliases(
             let Some(function) = default_dispatch(method) else {
                 continue;
             };
-            if !default_dispatch_resolved(function, bindings) {
+            if !default_dispatch_resolved(
+                function,
+                method
+                    .get("callable_kind")
+                    .and_then(Value::as_str)
+                    .expect("validated default callable_kind"),
+                bindings,
+            ) {
                 continue;
             }
             let target_module = function
@@ -3073,12 +3603,12 @@ fn render_facade(
     modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
 ) -> Vec<u8> {
     let mut out = String::from(
-        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport dataclasses as _dataclasses\nimport threading as _threading\nfrom pathlib import Path\nfrom typing import Any, Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi\n",
+        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport asyncio as _asyncio\nimport dataclasses as _dataclasses\nimport threading as _threading\nfrom pathlib import Path\nfrom typing import Any, Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol\n",
     );
     let names = exported_names(module);
     let mut local_imports = type_exported_names(module);
     local_imports.extend(function_bound_protocol_names(module));
-    local_imports.extend(associated_typevar_names(module));
+    local_imports.extend(associated_typevar_names(module, modules));
     if !local_imports.is_empty() {
         writeln!(
             out,
@@ -3088,8 +3618,11 @@ fn render_facade(
         )
         .unwrap();
     }
-    let mut imports = referenced_imports(module, declarations);
+    let mut imports = referenced_imports(module, modules, declarations);
     for (source, names) in resolved_method_imports(module, modules, declarations) {
+        imports.entry(source).or_default().extend(names);
+    }
+    for (source, names) in concrete_trait_marker_imports(module, modules) {
         imports.entry(source).or_default().extend(names);
     }
     for (source, names) in imports {
@@ -3272,6 +3805,12 @@ fn render_facade(
                 )
                 .unwrap();
             }
+            writeln!(
+                out,
+                "    _result = _cott_wrap_async_protocol(_result, {return_type}, path=\"$.return\", validator={})",
+                async_protocol_validator(boundary, test_only),
+            )
+            .unwrap();
             out.push_str("    return _result\n");
         }
         if object
@@ -3307,6 +3846,69 @@ fn render_facade(
     out.into_bytes()
 }
 
+fn concrete_trait_marker_names(
+    implementation: &serde_json::Map<String, Value>,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for trait_name in implementation
+        .get("traits")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|trait_ref| trait_ref.get("name").and_then(Value::as_str))
+    {
+        names.insert(trait_name.to_owned());
+        if let Some(closure) = trait_declaration(modules, trait_name)
+            .and_then(|trait_declaration| trait_declaration.get("closure"))
+            .and_then(Value::as_array)
+        {
+            names.extend(
+                closure
+                    .iter()
+                    .filter_map(|trait_ref| trait_ref.get("name").and_then(Value::as_str))
+                    .map(str::to_owned),
+            );
+        }
+    }
+    names
+}
+
+fn concrete_trait_markers(
+    implementation: &serde_json::Map<String, Value>,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+) -> BTreeSet<String> {
+    concrete_trait_marker_names(implementation, modules)
+        .into_iter()
+        .map(|name| local_name(&name).to_owned())
+        .collect()
+}
+
+fn concrete_trait_marker_imports(
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut imports = BTreeMap::<String, BTreeSet<String>>::new();
+    for implementation in module
+        .declarations
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|declaration| declaration.get("kind").and_then(Value::as_str) == Some("impl"))
+    {
+        for name in concrete_trait_marker_names(implementation, modules) {
+            if let Some((source, local)) = name.rsplit_once('.')
+                && source != module.module
+            {
+                imports
+                    .entry(source.to_owned())
+                    .or_default()
+                    .insert(local.to_owned());
+            }
+        }
+    }
+    imports
+}
+
 fn render_impl_classes(
     out: &mut String,
     module: &crate::python::artifact_plan::PythonArtifactModule,
@@ -3335,7 +3937,55 @@ fn render_impl_classes(
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or_default();
+        let async_impl = implementation
+            .get("selected_methods")
+            .and_then(Value::as_array)
+            .and_then(|methods| methods.first())
+            .and_then(|method| method.get("callable_kind"))
+            .and_then(Value::as_str)
+            == Some("async");
         writeln!(out, "\n@final\nclass {name}:").unwrap();
+        let traits = concrete_trait_markers(implementation, modules);
+        let traits = if traits.is_empty() {
+            "()".to_owned()
+        } else {
+            format!("({},)", traits.into_iter().collect::<Vec<_>>().join(", "))
+        };
+        writeln!(out, "    _cott_traits = {traits}").unwrap();
+        let mut trait_specs = BTreeSet::new();
+        for trait_ref in implementation
+            .get("traits")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            trait_specs.insert(render_type(trait_ref, &module.module, declarations));
+            if let (Some(name), Some(trait_ref_object)) = (
+                trait_ref.get("name").and_then(Value::as_str),
+                trait_ref.as_object(),
+            ) && let Some(trait_declaration) = trait_declaration(modules, name)
+                && let Some(closure) = trait_declaration.get("closure").and_then(Value::as_array)
+            {
+                for closure_ref in closure {
+                    let mut closure_ref = closure_ref.clone();
+                    substitute_trait_arguments(
+                        &mut closure_ref,
+                        trait_declaration,
+                        trait_ref_object,
+                    );
+                    trait_specs.insert(render_type(&closure_ref, &module.module, declarations));
+                }
+            }
+        }
+        let trait_specs = if trait_specs.is_empty() {
+            "()".to_owned()
+        } else {
+            format!(
+                "({},)",
+                trait_specs.into_iter().collect::<Vec<_>>().join(", ")
+            )
+        };
+        writeln!(out, "    _cott_trait_specs = {trait_specs}").unwrap();
         let slots = state
             .iter()
             .filter_map(|field| field.get("name").and_then(Value::as_str))
@@ -3421,7 +4071,11 @@ fn render_impl_classes(
             )
             .unwrap();
         }
-        out.push_str("        self._cott_lock = _threading.RLock()\n");
+        out.push_str(if async_impl {
+            "        self._cott_lock = _CottAsyncRLock()\n"
+        } else {
+            "        self._cott_lock = _threading.RLock()\n"
+        });
         if let Some(init) = init {
             let contract =
                 impl_contract_callable(init, &format!("{}.{}", module.module, name), false);
@@ -3448,7 +4102,16 @@ fn render_impl_classes(
                 .iter()
                 .find(|binding| binding.cott_symbol == cott_symbol);
             if (default.is_none() && binding.is_none())
-                || default.is_some_and(|function| !default_dispatch_resolved(function, bindings))
+                || default.is_some_and(|function| {
+                    !default_dispatch_resolved(
+                        function,
+                        method
+                            .get("callable_kind")
+                            .and_then(Value::as_str)
+                            .expect("validated default callable_kind"),
+                        bindings,
+                    )
+                })
             {
                 continue;
             }
@@ -3471,9 +4134,11 @@ fn render_impl_classes(
                 &module.module,
                 declarations,
             );
+            let asynchronous = method.get("callable_kind").and_then(Value::as_str) == Some("async");
             writeln!(
                 out,
-                "\n    def {method_name}({signature}) -> {return_type}:"
+                "\n    {}def {method_name}({signature}) -> {return_type}:",
+                if asynchronous { "async " } else { "" }
             )
             .unwrap();
             if let Some(doc) = method
@@ -3489,7 +4154,11 @@ fn render_impl_classes(
                 )
                 .unwrap();
             }
-            out.push_str("        with self._cott_lock:\n");
+            out.push_str(if asynchronous {
+                "        async with self._cott_lock:\n"
+            } else {
+                "        with self._cott_lock:\n"
+            });
             for field in state {
                 let field_name = field
                     .get("name")
@@ -3512,7 +4181,8 @@ fn render_impl_classes(
                 let alias = default_alias(name, method_name);
                 writeln!(
                     out,
-                    "                _result = {alias}(self{}{})",
+                    "                _result = {}{alias}(self{}{})",
+                    if asynchronous { "await " } else { "" },
                     if call.is_empty() { "" } else { ", " },
                     call
                 )
@@ -3531,30 +4201,54 @@ fn render_impl_classes(
                 .unwrap();
                 writeln!(
                     out,
-                    "                _result = _implementation(self{}{})",
+                    "                _result = {}_implementation(self{}{})",
+                    if asynchronous { "await " } else { "" },
                     if call.is_empty() { "" } else { ", " },
                     call
                 )
                 .unwrap();
             }
-            writeln!(
-                out,
-                "            except CottContractViolation as _error:\n                if _error.symbol is None or _error.symbol == \"_cott_load\":\n                    _error.symbol = {}\n                if _error.span is None:\n                    _error.span = {span}\n                raise",
-                json_string(&cott_symbol),
-            )
-            .unwrap();
-            writeln!(
-                out,
-                "            except SystemExit as _error:\n                raise CottContractViolation(\"implementation raised SystemExit\", symbol={}, phase=\"implementation-call\", span={span}, expected=\"ordinary return\", actual=\"SystemExit\") from _error",
-                json_string(&cott_symbol),
-            )
-            .unwrap();
-            writeln!(
-                out,
-                "            except Exception as _error:\n                raise CottContractViolation(\"implementation raised an undeclared exception\", symbol={}, phase=\"implementation-call\", span={span}, expected=\"declared Result error or ordinary return\", actual=type(_error).__name__) from _error",
-                json_string(&cott_symbol),
-            )
-            .unwrap();
+            if asynchronous {
+                out.push_str("            except BaseException as _error:\n");
+                render_async_exception_finalization(
+                    out,
+                    state,
+                    method,
+                    implementation,
+                    module,
+                    declarations,
+                    &cott_symbol,
+                    &span,
+                    name,
+                );
+                writeln!(
+                    out,
+                    "                if isinstance(_error, _asyncio.CancelledError):\n                    raise\n                if isinstance(_error, CottContractViolation):\n                    if _error.symbol is None or _error.symbol == \"_cott_load\":\n                        _error.symbol = {}\n                    if _error.span is None:\n                        _error.span = {span}\n                    raise\n                if isinstance(_error, SystemExit):\n                    raise CottContractViolation(\"implementation raised SystemExit\", symbol={}, phase=\"implementation-call\", span={span}, expected=\"ordinary return\", actual=\"SystemExit\") from _error\n                if isinstance(_error, Exception):\n                    raise CottContractViolation(\"implementation raised an undeclared exception\", symbol={}, phase=\"implementation-call\", span={span}, expected=\"declared Result error or ordinary return\", actual=type(_error).__name__) from _error\n                raise",
+                    json_string(&cott_symbol),
+                    json_string(&cott_symbol),
+                    json_string(&cott_symbol),
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    out,
+                    "            except CottContractViolation as _error:\n                if _error.symbol is None or _error.symbol == \"_cott_load\":\n                    _error.symbol = {}\n                if _error.span is None:\n                    _error.span = {span}\n                raise",
+                    json_string(&cott_symbol),
+                )
+                .unwrap();
+                writeln!(
+                    out,
+                    "            except SystemExit as _error:\n                raise CottContractViolation(\"implementation raised SystemExit\", symbol={}, phase=\"implementation-call\", span={span}, expected=\"ordinary return\", actual=\"SystemExit\") from _error",
+                    json_string(&cott_symbol),
+                )
+                .unwrap();
+                writeln!(
+                    out,
+                    "            except Exception as _error:\n                raise CottContractViolation(\"implementation raised an undeclared exception\", symbol={}, phase=\"implementation-call\", span={span}, expected=\"declared Result error or ordinary return\", actual=type(_error).__name__) from _error",
+                    json_string(&cott_symbol),
+                )
+                .unwrap();
+            }
             let never = is_never(method.get("return_type"));
             if !never {
                 render_abi_assignment(out, "_result", &return_type, 12, boundary, test_only);
@@ -3658,11 +4352,122 @@ fn render_impl_classes(
                 &format!("{}.{}", module.module, name),
                 12,
             );
+            writeln!(
+                out,
+                "            _result = _cott_wrap_async_protocol(_result, {return_type}, path=\"$.return\", validator={})",
+                async_protocol_validator(boundary, test_only),
+            )
+            .unwrap();
             out.push_str("            return _result\n");
         }
     }
 }
 
+fn render_async_exception_finalization(
+    out: &mut String,
+    state: &[Value],
+    method: &serde_json::Map<String, Value>,
+    implementation: &serde_json::Map<String, Value>,
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    declarations: &BTreeMap<String, String>,
+    cott_symbol: &str,
+    span: &str,
+    concrete: &str,
+) {
+    for field in state {
+        let field_name = field
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let ty = render_type(field.get("type").unwrap(), &module.module, declarations);
+        writeln!(
+            out,
+            "                self.{field_name} = _cott_validate_abi(self.{field_name}, {ty}, path={})",
+            json_string(&format!("$.{field_name}"))
+        )
+        .unwrap();
+    }
+    let transitions = method
+        .get("transitions")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for transition in transitions {
+        let field_name = local_name(
+            transition
+                .get("field")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        );
+        let from = enum_variant_name(
+            transition
+                .get("from")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        );
+        let to = enum_variant_name(
+            transition
+                .get("to")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        );
+        writeln!(
+            out,
+            "                if _cott_old_{field_name} is not {from}():\n                    raise CottContractViolation(\"exceptional resource transition source failed\", symbol={}, phase=\"exceptional-transitions\", span={span}, expected={}, actual=repr(_cott_old_{field_name}))\n                if self.{field_name} is not _cott_old_{field_name} and self.{field_name} is not {to}():\n                    raise CottContractViolation(\"exceptional resource transition target failed\", symbol={}, phase=\"exceptional-transitions\", span={span}, expected={}, actual=repr(self.{field_name}))",
+            json_string(cott_symbol),
+            json_string(&format!("_cott_old_{field_name} is {from}")),
+            json_string(cott_symbol),
+            json_string(&format!("self.{field_name} is old or {to}")),
+        )
+        .unwrap();
+    }
+    let modifies = method
+        .get("modifies")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for field in state {
+        let field_name = field
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if modifies
+            .iter()
+            .chain(
+                transitions
+                    .iter()
+                    .map(|transition| transition.get("field").unwrap()),
+            )
+            .any(|value| local_name(value.as_str().unwrap_or_default()) == field_name)
+        {
+            continue;
+        }
+        writeln!(
+            out,
+            "                if self.{field_name} is not _cott_old_{field_name}:\n                    raise CottContractViolation(\"exceptional frame clause failed\", symbol={}, phase=\"exceptional-frame\", span={span}, expected={}, actual={})",
+            json_string(cott_symbol),
+            json_string(&format!("self.{field_name} unchanged")),
+            json_string(&format!("self.{field_name} changed")),
+        )
+        .unwrap();
+    }
+    render_invariants(
+        out,
+        implementation,
+        &format!("{}.{}", module.module, concrete),
+        16,
+    );
+}
+
+fn async_protocol_validator(boundary: bool, test_only: bool) -> &'static str {
+    if boundary {
+        "_cott_validate_abi"
+    } else if test_only {
+        "(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)"
+    } else {
+        "_cott_normalize_f32_abi"
+    }
+}
 fn render_impl_parameters(
     parameters: &[Value],
     module: &str,
@@ -4362,11 +5167,11 @@ fn render_stub(
     modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
 ) -> Vec<u8> {
     let mut out = String::from(
-        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nfrom pathlib import Path\nfrom typing import Any, Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit\n",
+        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nfrom pathlib import Path\nfrom typing import Any, Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottList, CottSet, Dyn, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit\n",
     );
     let names = exported_names(module);
     let mut type_names = type_exported_names(module);
-    type_names.extend(associated_typevar_names(module));
+    type_names.extend(associated_typevar_names(module, modules));
     if !type_names.is_empty() {
         writeln!(
             out,
@@ -4380,7 +5185,7 @@ fn render_stub(
         )
         .unwrap();
     }
-    let mut imports = referenced_imports(module, declarations);
+    let mut imports = referenced_imports(module, modules, declarations);
     for (source, names) in resolved_method_imports(module, modules, declarations) {
         imports.entry(source).or_default().extend(names);
     }
@@ -4523,12 +5328,19 @@ fn render_impl_stubs(
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             let cott_symbol = format!("{}.{}.{}", module.module, name, method_name);
-            if default_dispatch(method)
-                .is_some_and(|function| !default_dispatch_resolved(function, bindings))
-                || (default_dispatch(method).is_none()
-                    && !bindings
-                        .iter()
-                        .any(|binding| binding.cott_symbol == cott_symbol))
+            if default_dispatch(method).is_some_and(|function| {
+                !default_dispatch_resolved(
+                    function,
+                    method
+                        .get("callable_kind")
+                        .and_then(Value::as_str)
+                        .expect("validated default callable_kind"),
+                    bindings,
+                )
+            }) || (default_dispatch(method).is_none()
+                && !bindings
+                    .iter()
+                    .any(|binding| binding.cott_symbol == cott_symbol))
             {
                 continue;
             }
@@ -4551,7 +5363,12 @@ fn render_impl_stubs(
             );
             writeln!(
                 out,
-                "    def {method_name}({signature}) -> {return_type}: ..."
+                "    {}def {method_name}({signature}) -> {return_type}: ...",
+                if method.get("callable_kind").and_then(Value::as_str) == Some("async") {
+                    "async "
+                } else {
+                    ""
+                }
             )
             .unwrap();
         }
@@ -4652,16 +5469,7 @@ fn render_type_with_names(
                 .cloned()
                 .unwrap_or_else(|| name.to_owned())
         }
-        "associated_projection" => associated_typevar_name(
-            object
-                .get("trait")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-            object
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-        ),
+        "associated_projection" => associated_projection_typevar_name(object),
         "list" => format!(
             "CottList[{}]",
             render_type_with_names(
@@ -4792,6 +5600,30 @@ fn render_type_with_names(
                 typevar_names
             )
         ),
+        "async_iterator" => format!(
+            "AsyncIterator[{}]",
+            render_type_with_names(
+                object.get("item").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            )
+        ),
+        "async_generator" => format!(
+            "AsyncGenerator[{}, {}]",
+            render_type_with_names(
+                object.get("yield").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            ),
+            render_type_with_names(
+                object.get("send").unwrap(),
+                module,
+                declarations,
+                typevar_names
+            )
+        ),
         "opaque" => format!(
             "Opaque[Literal[{}]]",
             json_string(
@@ -4799,6 +5631,15 @@ fn render_type_with_names(
                     .get("tag")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
+            )
+        ),
+        "dyn" => format!(
+            "Dyn[{}]",
+            render_type_with_names(
+                object.get("trait").expect("validated Dyn trait"),
+                module,
+                declarations,
+                typevar_names
             )
         ),
         other => unreachable!("validated canonical type kind `{other}`"),
@@ -5089,6 +5930,7 @@ fn external_imports(
 
 fn referenced_imports(
     module: &crate::python::artifact_plan::PythonArtifactModule,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
     declarations: &BTreeMap<String, String>,
 ) -> BTreeMap<String, BTreeSet<String>> {
     let mut imports = BTreeMap::new();
@@ -5102,6 +5944,18 @@ fn referenced_imports(
             .unwrap_or_default();
         for ty in declaration_types(object, kind) {
             collect_named(ty, &module.module, declarations, &mut imports);
+        }
+        if kind == "trait" {
+            for parent in object
+                .get("parents")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(trait_ref) = parent.get("trait") {
+                    collect_named(trait_ref, &module.module, declarations, &mut imports);
+                }
+            }
         }
         for generic in object
             .get("generics")
@@ -5203,6 +6057,13 @@ fn referenced_imports(
             if let Some(refinement) = object.get("refinement") {
                 collect_references(refinement, &module.module, declarations, &mut imports);
             }
+        }
+    }
+    for (trait_name, associated_name) in
+        associated_projection_typevars(module, modules).into_values()
+    {
+        for bound in associated_type_bounds(modules, &trait_name, &associated_name) {
+            collect_named(bound, &module.module, declarations, &mut imports);
         }
     }
     imports
@@ -5308,21 +6169,6 @@ fn collect_references(
             if let Some(base) = object.get("base") {
                 collect_named(base, module, declarations, imports);
             }
-            if let Some(trait_name) = object.get("trait").and_then(Value::as_str)
-                && let Some((source, _)) = trait_name.rsplit_once('.')
-                && source != module
-            {
-                imports
-                    .entry(source.to_owned())
-                    .or_default()
-                    .insert(associated_typevar_name(
-                        trait_name,
-                        object
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default(),
-                    ));
-            }
         }
         _ => {}
     }
@@ -5405,9 +6251,7 @@ fn collect_named(
                 .into_iter()
                 .flatten()
             {
-                if argument.get("kind").and_then(Value::as_str) == Some("type")
-                    && let Some(ty) = argument.get("type")
-                {
+                if let Some(ty) = argument.get("type") {
                     collect_named(ty, module, declarations, imports);
                 }
             }
@@ -5415,21 +6259,6 @@ fn collect_named(
         "associated_projection" => {
             if let Some(base) = object.get("base") {
                 collect_named(base, module, declarations, imports);
-            }
-            if let Some(trait_name) = object.get("trait").and_then(Value::as_str)
-                && let Some((source, _)) = trait_name.rsplit_once('.')
-                && source != module
-            {
-                imports
-                    .entry(source.to_owned())
-                    .or_default()
-                    .insert(associated_typevar_name(
-                        trait_name,
-                        object
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default(),
-                    ));
             }
         }
         "list" | "set" | "option" | "iterator" => {
@@ -5507,12 +6336,7 @@ fn validate_named(
                         | "trait"
                 )
             ) {
-                unsupported(
-                    module,
-                    format!("unknown or non-type named declaration `{name}`"),
-                    diagnostics,
-                );
-                return;
+                unsupported(module, format!("unknown named type `{name}`"), diagnostics);
             }
             let expected = generic_parameters
                 .get(name)
@@ -5937,7 +6761,9 @@ fn binding_path(module: &str, kind: &PythonCallableKind, function: &str) -> Path
     for segment in module.split('.') {
         path.push(segment);
     }
-    if let PythonCallableKind::ImplMethod { concrete } = kind {
+    if let PythonCallableKind::ImplMethod { concrete }
+    | PythonCallableKind::AsyncImplMethod { concrete } = kind
+    {
         path.push(concrete);
     }
     path.push(format!("{function}.py"));

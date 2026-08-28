@@ -6,9 +6,9 @@ use serde_json::{Value, json};
 
 use crate::hash::sha256_hex;
 
-pub const GENERATION_SCHEMA_VERSION: u32 = 2;
-pub const CANONICAL_IR_SCHEMA_VERSION: u32 = 5;
-pub const RUNTIME_ABI_VERSION: u32 = 2;
+pub const GENERATION_SCHEMA_VERSION: u32 = 5;
+pub const CANONICAL_IR_SCHEMA_VERSION: u32 = 7;
+pub const RUNTIME_ABI_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -59,13 +59,14 @@ pub enum UnresolvedKind {
     Function,
     AsyncFunction,
     ImplMethod,
+    AsyncImplMethod,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct UnresolvedRecord {
     pub cott_symbol: String,
     pub kind: UnresolvedKind,
+    pub callable_kind: String,
     pub span: SourceSpan,
 }
 
@@ -205,13 +206,17 @@ fn normalized_implementation_identity(
         identity.insert(field.to_owned(), implementation.get(field)?.clone());
     }
     identity.insert(
+        "callable_kind".to_owned(),
+        implementation.get("callable_kind")?.clone(),
+    );
+    identity.insert(
         "kind".to_owned(),
         implementation
             .get("kind")
             .cloned()
             .unwrap_or_else(|| Value::String("function".to_owned())),
     );
-    for field in ["concrete", "method"] {
+    for field in ["concrete", "method", "selection"] {
         identity.insert(
             field.to_owned(),
             implementation.get(field).cloned().unwrap_or(Value::Null),
@@ -328,7 +333,7 @@ fn normalized_generation_identity(snapshot: &GenerationSnapshot) -> Result<Value
         object.remove(key);
     }
     Ok(json!({
-        "domain": "cott.generation.v2",
+        "domain": "cott.generation.v5",
         "schema_version": GENERATION_SCHEMA_VERSION,
         "current": current,
     }))
@@ -343,6 +348,16 @@ fn validate_unresolved_records(unresolved: &[UnresolvedRecord]) -> Result<(), St
         if !symbols.insert(&record.cott_symbol) {
             return Err(format!(
                 "generation record contains duplicate unresolved callable `{}`",
+                record.cott_symbol
+            ));
+        }
+        let expected_callable_kind = match record.kind {
+            UnresolvedKind::Function | UnresolvedKind::ImplMethod => "sync",
+            UnresolvedKind::AsyncFunction | UnresolvedKind::AsyncImplMethod => "async",
+        };
+        if record.callable_kind != expected_callable_kind {
+            return Err(format!(
+                "generation unresolved callable `{}` has an incompatible callable_kind",
                 record.cott_symbol
             ));
         }
@@ -380,24 +395,25 @@ fn validate_implementation_records(implementations: &Value) -> Result<(), String
                 "generation record contains duplicate implementation `{symbol}`"
             ));
         }
-        match object.get("kind").and_then(Value::as_str) {
-            None if object.get("concrete").is_none()
-                && object.get("method").is_none()
-                && !object
-                    .get("python_symbol")
-                    .and_then(Value::as_str)
-                    .and_then(|value| value.rsplit_once(':').map(|(_, function)| function))
-                    .is_some_and(|function| function.starts_with("_cott_impl_")) => {}
-            Some("function" | "async_function") => {
+        let callable_kind = object
+            .get("callable_kind")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                format!("generation implementation `{symbol}` is missing callable_kind")
+            })?;
+        let selection = object.get("selection").unwrap_or(&Value::Null);
+        match (object.get("kind").and_then(Value::as_str), callable_kind) {
+            (Some("function"), "sync") | (Some("async_function"), "async") => {
                 if object.get("concrete") != Some(&Value::Null)
                     || object.get("method") != Some(&Value::Null)
+                    || selection != &Value::Null
                 {
                     return Err(format!(
                         "function implementation `{symbol}` must not name a concrete or method"
                     ));
                 }
             }
-            Some("impl_method") => {
+            (Some("impl_method"), "sync") | (Some("async_impl_method"), "async") => {
                 let concrete = object
                     .get("concrete")
                     .and_then(Value::as_str)
@@ -417,6 +433,24 @@ fn validate_implementation_records(implementations: &Value) -> Result<(), String
                         "implementation method `{symbol}` does not match `{concrete}.{method}`"
                     ));
                 }
+                let valid_selection = selection.as_object().is_some_and(|selection| {
+                    selection.len() == 2
+                        && selection.get("kind").and_then(Value::as_str) == Some("explicit")
+                        && selection
+                            .get("trait_method")
+                            .and_then(Value::as_str)
+                            .is_some_and(|trait_method| !trait_method.is_empty())
+                });
+                if !valid_selection {
+                    return Err(format!(
+                        "implementation method `{symbol}` has invalid selection provenance"
+                    ));
+                }
+            }
+            (Some("function" | "async_function" | "impl_method" | "async_impl_method"), _) => {
+                return Err(format!(
+                    "generation implementation `{symbol}` has an incompatible callable_kind"
+                ));
             }
             _ => {
                 return Err(format!(

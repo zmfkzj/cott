@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottList, CottSet, Dyn, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.flashcard_schedule_types import FlashcardScheduleError as FlashcardScheduleError, FlashcardScheduleError_DateOverflow as FlashcardScheduleError_DateOverflow, FlashcardScheduleError_EaseOutOfRange as FlashcardScheduleError_EaseOutOfRange, FlashcardScheduleError_ZeroEase as FlashcardScheduleError_ZeroEase, Rating as Rating, Rating_Again as Rating_Again, Rating_Easy as Rating_Easy, Rating_Good as Rating_Good, Rating_Hard as Rating_Hard, Review as Review, ScheduledCard as ScheduledCard
 """Validates the ease value used by flashcard scheduling. ZeroEase takes

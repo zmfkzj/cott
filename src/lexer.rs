@@ -437,6 +437,7 @@ fn keyword(word: &str) -> Option<Keyword> {
         "enum" => Keyword::Enum,
         "trait" => Keyword::Trait,
         "impl" => Keyword::Impl,
+        "specialize" => Keyword::Specialize,
         "for" => Keyword::For,
         "state" => Keyword::State,
         "resource" => Keyword::Resource,

@@ -34,7 +34,7 @@ fn checked_in_canonical_ir_schema_is_parseable() {
     );
     assert_eq!(
         object.get("$id").and_then(serde_json::Value::as_str),
-        Some("https://cott.dev/schema/canonical-ir/v5")
+        Some("https://cott.dev/schema/canonical-ir/v7")
     );
     assert_eq!(
         object
@@ -44,14 +44,21 @@ fn checked_in_canonical_ir_schema_is_parseable() {
             .and_then(serde_json::Value::as_object)
             .and_then(|version| version.get("const"))
             .and_then(serde_json::Value::as_u64),
-        Some(5)
+        Some(7)
     );
 
     let definitions = object
         .get("$defs")
         .and_then(serde_json::Value::as_object)
         .expect("canonical IR schema must define $defs");
-    for definition in ["pattern", "contract", "effect", "tfactory"] {
+    for definition in [
+        "pattern",
+        "contract",
+        "effect",
+        "tfactory",
+        "tdyn",
+        "specialization",
+    ] {
         assert!(
             definitions.contains_key(definition),
             "canonical IR schema must define $defs.{definition}"
@@ -64,6 +71,30 @@ fn checked_in_canonical_ir_schema_is_parseable() {
     assert_eq!(factory["required"], serde_json::json!(["instance", "kind"]));
     assert_eq!(factory["additionalProperties"], false);
     assert_eq!(factory["properties"]["instance"]["$ref"], "#/$defs/tn");
+    assert_eq!(
+        definitions["tdyn"]["properties"]["trait"]["$ref"],
+        "#/$defs/tn"
+    );
+
+    for definition in ["tasync_iterator", "tasync_generator"] {
+        assert!(
+            definitions.contains_key(definition),
+            "canonical IR schema must define $defs.{definition}"
+        );
+    }
+    assert_eq!(
+        definitions["tasync_generator"]["required"],
+        serde_json::json!(["kind", "yield", "send"])
+    );
+    for definition in ["method", "impl_method", "selected_method"] {
+        assert!(
+            definitions[definition]["required"]
+                .as_array()
+                .expect("method schema must declare required fields")
+                .contains(&serde_json::json!("callable_kind")),
+            "canonical IR schema must require callable kind on {definition}"
+        );
+    }
 }
 
 fn source(path: &str, text: &str) -> SourceFile {
@@ -124,8 +155,10 @@ alias Anything = Any
 alias UnknownValue = Unknown
 alias Imported = PyIterator
 alias Stream = Generator[Opaque["yield"], Unknown, Iterator[Opaque["handle"]]]
+alias AsyncStream = AsyncGenerator[Opaque["async-yield"], Opaque["async-send"]]
 
 fn consume(items: Iterator[Opaque["handle"]]) -> Stream
+fn consume_async(items: AsyncIterator[Opaque["async-handle"]]) -> AsyncStream
 "#,
     )])
     .expect("advanced type fixture must parse");
@@ -265,7 +298,7 @@ fn renders_and_closes_advanced_type_nodes() {
     assert_eq!(first.modules[0].bytes, second.modules[0].bytes);
 
     let text = json(&first.modules[0]);
-    assert!(text.contains(r#""schema_version":5"#));
+    assert!(text.contains(r#""schema_version":7"#));
     assert_in_order(
         text,
         &[
@@ -285,9 +318,15 @@ fn renders_and_closes_advanced_type_nodes() {
     assert!(text.contains(
         r#"{"kind":"generator","return":{"item":{"kind":"opaque","tag":"handle"},"kind":"iterator"},"send":{"kind":"primitive","name":"unknown"},"yield":{"kind":"opaque","tag":"yield"}}"#,
     ));
+    assert!(text.contains(
+        r#"{"kind":"async_generator","send":{"kind":"opaque","tag":"async-send"},"yield":{"kind":"opaque","tag":"async-yield"}}"#,
+    ));
+    assert!(text.contains(
+        r#"{"item":{"kind":"opaque","tag":"async-handle"},"kind":"async_iterator"}"#,
+    ));
 
     let value = load(&first.modules[0].bytes).expect("advanced canonical IR must load");
-    assert_eq!(value["schema_version"], 5);
+    assert_eq!(value["schema_version"], 7);
     assert_eq!(value["declarations"][0]["kind"], "external_type");
     let external = value["declarations"][0]
         .as_object()
@@ -311,7 +350,7 @@ fn renders_and_closes_factory_type_nodes() {
     ));
 
     let value = load(&rendered.modules[0].bytes).expect("Factory canonical IR must load");
-    assert_eq!(value["schema_version"], 5);
+    assert_eq!(value["schema_version"], 7);
     let declarations = value["declarations"].as_array().expect("declarations");
     let alias = declarations
         .iter()
@@ -642,7 +681,7 @@ fn schema_rejects_malformed_impl_nodes() {
 }
 
 #[test]
-fn renders_v5_associated_async_and_resource_identity() {
+fn renders_v7_associated_async_and_resource_identity() {
     let parsed = parse_project([source(
         "src/v03.cott",
         r#"module v03
@@ -671,7 +710,7 @@ async fn fetch() -> I32
     let rendered = render(&project).expect("v0.3 HIR must render");
     let value = load(&rendered.modules[0].bytes).expect("v0.3 IR must load");
     let declarations = value["declarations"].as_array().expect("declarations");
-    assert_eq!(value["schema_version"], 5);
+    assert_eq!(value["schema_version"], 7);
     assert_eq!(
         declarations[0]["associated_types"][0]["name"],
         "v03.Stream.Item"
@@ -683,6 +722,12 @@ async fn fetch() -> I32
     assert_eq!(
         declarations[3]["callable_kind"],
         serde_json::Value::String("async".into())
+    );
+    assert_eq!(declarations[0]["methods"][0]["callable_kind"], "sync");
+    assert_eq!(declarations[1]["methods"][0]["callable_kind"], "sync");
+    assert_eq!(
+        declarations[1]["selected_methods"][0]["callable_kind"],
+        "sync"
     );
     assert_eq!(declarations[2]["states"][0]["name"], "v03.Door.Open");
     assert_eq!(declarations[2]["edges"][0]["to"], "v03.Door.Closed");
@@ -713,6 +758,72 @@ async fn fetch() -> I32
         missing_resource_edges,
         "resource without graph edges must fail",
     );
+}
+
+#[test]
+fn renders_v7_inheritance_specialization_variance_and_dyn_slots() {
+    let parsed = parse_project([source(
+        "src/v05_ir.cott",
+        r#"module v05_ir
+
+trait Parent:
+    fn read(self) -> I32
+
+trait Child for Parent:
+    fn write(self) -> I32
+
+fn fallback(receiver: Concrete) -> I32
+
+specialize Concrete for Child:
+    read = v05_ir.fallback
+
+impl Concrete for Child:
+    fn read(self) -> I32:
+        ensures true
+    fn write(self) -> I32:
+        ensures true
+
+alias Dynamic = Dyn[Child]
+"#,
+    )])
+    .expect("v0.5 fixture must parse");
+    let project = cott::hir::lower(Path::new("src"), parsed).expect("v0.5 fixture must lower");
+    let rendered = render(&project).expect("v0.5 HIR must render");
+    let value = load(&rendered.modules[0].bytes).expect("v0.5 canonical IR must load");
+    let declarations = value["declarations"].as_array().expect("declarations");
+    let child = declarations
+        .iter()
+        .find(|declaration| declaration["name"] == "v05_ir.Child")
+        .expect("child trait");
+    assert_eq!(child["parents"].as_array().expect("parents").len(), 1);
+    assert_eq!(child["closure"].as_array().expect("closure").len(), 1);
+    let specialization = declarations
+        .iter()
+        .find(|declaration| declaration["kind"] == "specialization")
+        .expect("specialization");
+    assert_eq!(
+        specialization["methods"][0]["trait_method"],
+        "v05_ir.Parent.read"
+    );
+    assert_eq!(specialization["public"], false);
+    let implementation = declarations
+        .iter()
+        .find(|declaration| declaration["kind"] == "impl")
+        .expect("implementation");
+    assert_eq!(
+        implementation["selected_methods"][0]["selected"]["origin"],
+        "explicit"
+    );
+    assert!(
+        implementation["selected_methods"][0]
+            .get("parameters")
+            .is_some()
+    );
+    let dynamic = declarations
+        .iter()
+        .find(|declaration| declaration["name"] == "v05_ir.Dynamic")
+        .expect("dynamic alias");
+    assert_eq!(dynamic["target"]["kind"], "dyn");
 }
 
 #[test]
@@ -860,4 +971,52 @@ struct Holder:
     assert_eq!(arithmetic["op"], "add");
     assert_eq!(arithmetic["left"]["symbol"], "foo.consumer.FOUR");
     assert_eq!(arithmetic["right"]["value"], 1);
+}
+
+#[test]
+fn renders_v06_recursive_named_types_deterministically_and_loads_them() {
+    let parsed = parse_project([source(
+        "src/recursive.cott",
+        r#"module recursive
+
+struct Chain[T]:
+    value: T
+    next: Option[Chain[T]]
+
+enum Tree:
+    Empty
+    Branch(left: Tree, right: Tree)
+"#,
+    )])
+    .expect("recursive IR fixture must parse");
+    let project = cott::hir::lower(Path::new("src"), parsed)
+        .expect("guarded recursive IR fixture must lower");
+
+    let first = render(&project).expect("recursive HIR must render");
+    let second = render(&project).expect("recursive HIR must render twice");
+    assert_eq!(first.modules[0].bytes, second.modules[0].bytes);
+
+    let value = load(&first.modules[0].bytes).expect("recursive canonical IR must load");
+    assert_eq!(value["schema_version"], 7);
+    let chain = value["declarations"]
+        .as_array()
+        .expect("declarations")
+        .iter()
+        .find(|declaration| declaration["name"] == "recursive.Chain")
+        .expect("Chain declaration");
+    let next = chain["fields"]
+        .as_array()
+        .expect("Chain fields")
+        .iter()
+        .find(|field| field["name"] == "next")
+        .expect("next field");
+    assert_eq!(next["type"]["kind"], "option");
+    assert_eq!(next["type"]["item"]["kind"], "named");
+    assert_eq!(next["type"]["item"]["name"], "recursive.Chain");
+    assert_eq!(next["type"]["item"]["args"][0]["kind"], "type");
+    assert_eq!(
+        next["type"]["item"]["args"][0]["type"]["kind"],
+        "type_parameter"
+    );
+    assert_eq!(next["type"]["item"]["args"][0]["type"]["name"], "T");
 }

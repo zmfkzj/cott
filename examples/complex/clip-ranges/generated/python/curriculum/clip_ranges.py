@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.clip_ranges_types import ClipPlan, ClipRangeError, ClipRangeError_EmptyRanges, ClipRangeError_PastDuration, ClipRangeError_StartNotBeforeEnd, ClipRangeError_TotalOverflow, ClipRequest, TimeRange
 
@@ -30,6 +31,7 @@ The caller must establish that the range starts before it ends."""
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.clip_ranges.range_duration_ms", phase="implementation-call", span={"end_byte":572,"end_column":1,"end_line":29,"start_byte":313,"start_column":1,"start_line":21}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, U64, path="$.return")
+    _result = _cott_wrap_async_protocol(_result, U64, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def plan_clip_ranges(request: ClipRequest) -> Result[ClipPlan, ClipRangeError]:
@@ -83,6 +85,7 @@ and their durations are accumulated with checked U64 arithmetic."""
         return True
     if not (_cott_match_ensures_2()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.clip_ranges.plan_clip_ranges", clause="ensures:2", phase="ensures", span={"end_byte":1083,"end_column":51,"end_line":38,"start_byte":1037,"start_column":5,"start_line":38}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[ClipPlan, ClipRangeError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["ClipPlan", "ClipRangeError", "ClipRangeError_EmptyRanges", "ClipRangeError_PastDuration", "ClipRangeError_StartNotBeforeEnd", "ClipRangeError_TotalOverflow", "ClipRequest", "TimeRange", "plan_clip_ranges", "range_duration_ms"]

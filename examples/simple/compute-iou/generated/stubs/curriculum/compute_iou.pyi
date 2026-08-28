@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottList, CottSet, Dyn, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.compute_iou_types import Box as Box, IntersectionUnion as IntersectionUnion, IouError as IouError, IouError_AreaOverflow as IouError_AreaOverflow, IouError_InvalidGroundTruthBox as IouError_InvalidGroundTruthBox, IouError_InvalidPredictedBox as IouError_InvalidPredictedBox, IouError_NonFiniteOutput as IouError_NonFiniteOutput, IouError_ZeroUnion as IouError_ZeroUnion
 """Validates two inclusive-pixel boxes and returns their intersection and union

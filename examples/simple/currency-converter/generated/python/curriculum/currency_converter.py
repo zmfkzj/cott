@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.currency_converter_types import ConversionRequest, CurrencyError, CurrencyError_DuplicateRate, CurrencyError_InvalidCurrencyCode, CurrencyError_MissingRate, CurrencyError_NegativeQuantity, CurrencyError_NonFiniteQuantity, CurrencyError_NonFiniteRate, CurrencyError_NonFiniteResult, CurrencyError_NonPositiveRate, Rate
 
@@ -52,6 +53,7 @@ rate. Empty, singleton, and longer lists follow these same rules."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.currency_converter.validate_conversion_request", phase="error", span={"end_byte":1771,"end_column":1,"end_line":52,"start_byte":378,"start_column":1,"start_line":23}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.currency_converter.validate_conversion_request", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    _result = _cott_wrap_async_protocol(_result, Result[Unit, CurrencyError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def convert_currency(request: ConversionRequest) -> Result[F64, CurrencyError]:
@@ -102,6 +104,7 @@ even. Ok contains the resulting finite, non-negative F64 value."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.currency_converter.convert_currency", clause="ensures:1", phase="ensures", span={"end_byte":2727,"end_column":45,"end_line":69,"start_byte":2687,"start_column":5,"start_line":69}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[F64, CurrencyError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["ConversionRequest", "CurrencyError", "CurrencyError_DuplicateRate", "CurrencyError_InvalidCurrencyCode", "CurrencyError_MissingRate", "CurrencyError_NegativeQuantity", "CurrencyError_NonFiniteQuantity", "CurrencyError_NonFiniteRate", "CurrencyError_NonFiniteResult", "CurrencyError_NonPositiveRate", "Rate", "convert_currency", "validate_conversion_request"]

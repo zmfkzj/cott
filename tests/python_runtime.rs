@@ -91,6 +91,7 @@ fn generated_runtime_exercises_abi_and_provenance_loader() {
 
     let script = format!(
         r#"from pathlib import Path
+import asyncio
 import dataclasses
 import hashlib
 import json
@@ -98,11 +99,11 @@ import platform
 import sys
 import sysconfig
 from collections.abc import Generator, Iterator
-from typing import Annotated, Any, Generic, Literal, Protocol, TypeVar
+from typing import Annotated, Any, Generic, Literal, Protocol, TypeVar, Union
 
 import cott_runtime as _runtime
 from cott_runtime import *
-from cott_runtime import _cott_load, _cott_normalize_f32_abi, _cott_normalize_scalar, _cott_validate_abi
+from cott_runtime import _cott_load, _cott_normalize_f32_abi, _cott_normalize_scalar, _cott_validate_abi, _cott_wrap_async_protocol
 assert "CottExternal" in _runtime.__all__
 assert _runtime.PROJECT_VERSION == "0.3.0"
 
@@ -114,27 +115,83 @@ class Box(Generic[_T]):
 normalized = _cott_normalize_f32_abi(Box(1.234567), Box[F32])
 assert normalized.value == _runtime._cott_normalize_f32(1.234567)
 
-_good = dict(cott_symbol="demo.run", kind="function", concrete=None, method=None, owner="manifest", python_symbol="_cott_impl.demo.run:run", source_origin="python/cott_bindings/demo/run.py", runtime_origin="_cott_impl/demo/run.py", content_hash="sha256:{good_hash}")
-_bad = dict(cott_symbol="demo.bad", kind="function", concrete=None, method=None, owner="manifest", python_symbol="_cott_impl.demo.bad:bad", source_origin="python/cott_bindings/demo/bad.py", runtime_origin="_cott_impl/demo/bad.py", content_hash="sha256:{bad_hash}")
-_external = dict(cott_symbol="demo.external", kind="function", concrete=None, method=None, owner="manifest", python_symbol="_cott_impl.demo.external:external", source_origin="python/cott_bindings/demo/external.py", runtime_origin="_cott_impl/demo/external.py", content_hash="sha256:{external_hash}")
-_method = dict(cott_symbol="demo.CounterState.advance", kind="impl_method", concrete="CounterState", method="advance", owner="agent", python_symbol="_cott_impl.demo.CounterState.advance:_cott_impl_CounterState_advance", source_origin="python/_cott_impl/demo/CounterState/advance.py", runtime_origin="_cott_impl/demo/CounterState/advance.py", content_hash="sha256:{method_hash}")
-_async = dict(cott_symbol="demo.async_run", kind="async_function", concrete=None, method=None, owner="agent", python_symbol="_cott_impl.demo.async_run:async_run", source_origin="python/cott_bindings/demo/async_run.py", runtime_origin="_cott_impl/demo/async_run.py", content_hash="sha256:{good_hash}")
-_unresolved = dict(cott_symbol="demo.missing", kind="async_function", span=dict(start_byte=1, end_byte=2, start_line=1, start_column=1, end_line=1, end_column=2))
+@dataclasses.dataclass(frozen=True)
+class Node:
+    value: F32
+    next: "Option[Node]"
+
+@dataclasses.dataclass(frozen=True)
+class Pair:
+    left: "Option[Node]"
+    right: "Option[Node]"
+
+_leaf = Node(1.234567, Nothing())
+_finite = Node(1.234567, Some(value=_leaf))
+_normalized_finite = _cott_validate_abi(_finite, Node)
+assert _normalized_finite.value == _runtime._cott_normalize_f32(1.234567)
+assert _normalized_finite.next.value.value == _runtime._cott_normalize_f32(1.234567)
+_shared = Pair(Some(value=_leaf), Some(value=_leaf))
+_normalized_shared = _cott_normalize_f32_abi(_shared, Pair)
+assert _normalized_shared.left.value is _normalized_shared.right.value
+_cyclic = Node(1.0, Nothing())
+object.__setattr__(_cyclic, "next", Some(value=_cyclic))
+for _traverse in (_cott_validate_abi, _cott_normalize_f32_abi):
+    try:
+        _traverse(_cyclic, Node)
+    except CottContractViolation as error:
+        assert "active value cycle" in error.message
+        assert "$.next.value" in error.message
+    else:
+        raise AssertionError("cyclic recursive value was accepted")
+_deep = Node(1.0, Nothing())
+for _ in range(70):
+    _deep = Node(1.0, Some(value=_deep))
+try:
+    _cott_validate_abi(_deep, Node)
+except CottContractViolation as error:
+    assert "depth 64" in error.message
+else:
+    raise AssertionError("deep recursive value was accepted")
+_many = CottList(values=range(1025))
+try:
+    _cott_validate_abi(_many, CottList[I32])
+except CottContractViolation as error:
+    assert "node limit 1024" in error.message
+else:
+    raise AssertionError("wide ABI value was accepted")
+for _key in ("active value cycle", "exceeds ABI traversal"):
+    _map = FrozenMap(values={{_key: "ok"}})
+    assert _cott_validate_abi(_map, FrozenMap[str, Union[bytes, str]]) == _map
+_json_cycle = JsonArray(value=CottList(values=[JsonNull()]))
+object.__setattr__(_json_cycle, "value", CottList(values=[_json_cycle]))
+try:
+    _runtime._cott_validate_json(_json_cycle)
+except CottContractViolation as error:
+    assert "active value cycle" in error.message
+else:
+    raise AssertionError("cyclic JsonValue was accepted")
+
+_good = dict(cott_symbol="demo.run", kind="function", callable_kind="sync", concrete=None, method=None, selection=None, owner="manifest", python_symbol="_cott_impl.demo.run:run", source_origin="python/cott_bindings/demo/run.py", runtime_origin="_cott_impl/demo/run.py", content_hash="sha256:{good_hash}")
+_bad = dict(cott_symbol="demo.bad", kind="function", callable_kind="sync", concrete=None, method=None, selection=None, owner="manifest", python_symbol="_cott_impl.demo.bad:bad", source_origin="python/cott_bindings/demo/bad.py", runtime_origin="_cott_impl/demo/bad.py", content_hash="sha256:{bad_hash}")
+_external = dict(cott_symbol="demo.external", kind="function", callable_kind="sync", concrete=None, method=None, selection=None, owner="manifest", python_symbol="_cott_impl.demo.external:external", source_origin="python/cott_bindings/demo/external.py", runtime_origin="_cott_impl/demo/external.py", content_hash="sha256:{external_hash}")
+_method = dict(cott_symbol="demo.CounterState.advance", kind="impl_method", callable_kind="sync", concrete="CounterState", method="advance", selection=dict(kind="explicit", trait_method="demo.Counter.advance"), owner="agent", python_symbol="_cott_impl.demo.CounterState.advance:_cott_impl_CounterState_advance", source_origin="python/_cott_impl/demo/CounterState/advance.py", runtime_origin="_cott_impl/demo/CounterState/advance.py", content_hash="sha256:{method_hash}")
+_async = dict(cott_symbol="demo.async_run", kind="async_function", callable_kind="async", concrete=None, method=None, selection=None, owner="agent", python_symbol="_cott_impl.demo.async_run:async_run", source_origin="python/cott_bindings/demo/async_run.py", runtime_origin="_cott_impl/demo/async_run.py", content_hash="sha256:{good_hash}")
+_unresolved = dict(cott_symbol="demo.missing", kind="async_function", callable_kind="async", span=dict(start_byte=1, end_byte=2, start_line=1, start_column=1, end_line=1, end_column=2))
 def _generation_id(current: dict) -> str:
     identity = dict(current)
     for key in ("generation_id", "verified", "verification", "agent_runs"):
         identity.pop(key)
-    payload = dict(domain="cott.generation.v2", schema_version=2, current=identity)
+    payload = dict(domain="cott.generation.v5", schema_version=5, current=identity)
     return "sha256:" + hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n").hexdigest()
 
 _current = dict(generation_id="", verified=True, project_version="0.3.0", compatibility=dict(
-    generation_schema=2, canonical_ir_schema=5, runtime_abi=2,
+    generation_schema=5, canonical_ir_schema=7, runtime_abi=5,
 ), inputs={{}}, tools=dict(
     python=dict(implementation=sys.implementation.name, version=platform.python_version(), cache_tag=sys.implementation.cache_tag, os=sys.platform, machine=platform.machine(), platform=sysconfig.get_platform(), executable=str(Path(sys.executable).resolve()), content_hash="sha256:"+hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest()),
     runtime=dict(abi=_runtime._COTT_RUNTIME_ABI, version=_runtime._COTT_RUNTIME_VERSION),
 ), ir={{}}, contract_surface={{}}, public_python_symbols={{"demo":["CounterState","bad","external","run"],"support":["helper"]}}, implementations=[_good, _bad, _external, _method, _async], dependencies=[], managed_files={{}}, unresolved=[_unresolved], verification=None, agent_runs=[])
 _current["generation_id"] = _generation_id(_current)
-Path("generation.json").write_text(json.dumps(dict(schema_version=2, current=_current, last_verified=None), sort_keys=True, separators=(",", ":")) + "\n")
+Path("generation.json").write_text(json.dumps(dict(schema_version=5, current=_current, last_verified=None), sort_keys=True, separators=(",", ":")) + "\n")
 assert _runtime._cott_validate_generation_snapshot(_current, "current") is _current
 _invalid_unresolved = dict(_current)
 _invalid_unresolved["unresolved"] = [dict(_unresolved, span=dict(_unresolved["span"], end_line=0))]
@@ -196,6 +253,100 @@ assert _cott_normalize_f32_abi(_poison_iterator, Iterator[F32]) is _poison_itera
 _poison_generator_value = _poison_generator()
 assert _cott_validate_abi(_poison_generator_value, Generator[int, None, None]) is _poison_generator_value
 assert _cott_normalize_f32_abi(_poison_generator_value, Generator[F32, None, None]) is _poison_generator_value
+
+class _AsyncYieldOnce:
+    def __init__(self):
+        self.emitted = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.emitted:
+            raise StopAsyncIteration
+        await asyncio.sleep(0)
+        self.emitted = True
+        return 1.234567
+
+
+class _AsyncValue:
+    def __init__(self, value):
+        self.value = value
+        self.emitted = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.emitted:
+            raise StopAsyncIteration
+        self.emitted = True
+        return self.value
+
+async def _raw_async_generator():
+    sent = yield 1.234567
+    yield sent
+
+
+async def _exercise_async_runtime():
+    lock = _runtime._CottAsyncRLock()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    order = []
+
+    async def holder():
+        async with lock:
+            async with lock:
+                order.append("reentrant")
+            entered.set()
+            await release.wait()
+            order.append("holder")
+
+    async def contender():
+        await entered.wait()
+        async with lock:
+            order.append("contender")
+
+    async def unlock():
+        await entered.wait()
+        await asyncio.sleep(0)
+        release.set()
+
+    await asyncio.gather(holder(), contender(), unlock())
+    assert order == ["reentrant", "holder", "contender"]
+
+    raw_iterator = _AsyncYieldOnce()
+    iterator = _cott_wrap_async_protocol(raw_iterator, AsyncIterator[F32])
+    assert not raw_iterator.emitted
+    results = await asyncio.gather(iterator.__anext__(), iterator.__anext__(), return_exceptions=True)
+    assert any(isinstance(result, CottContractViolation) for result in results)
+    assert any(result == _runtime._cott_normalize_f32(1.234567) for result in results if type(result) is float)
+    await iterator.aclose()
+
+    generator = _cott_wrap_async_protocol(_raw_async_generator(), AsyncGenerator[F32, F32])
+    first = await generator.__anext__()
+    second = await generator.asend(1.234567)
+    assert first == _runtime._cott_normalize_f32(1.234567)
+    assert second == _runtime._cott_normalize_f32(1.234567)
+    await generator.aclose()
+
+    nested = _cott_wrap_async_protocol(Some(value=_AsyncValue(1.234567)), Option[AsyncIterator[F32]])
+    assert await nested.value.__anext__() == _runtime._cott_normalize_f32(1.234567)
+    boxed = _cott_wrap_async_protocol(
+        Box(Some(value=_AsyncValue(1.234567))),
+        Box[Option[AsyncIterator[F32]]],
+    )
+    assert await boxed.value.value.__anext__() == _runtime._cott_normalize_f32(1.234567)
+    off = _cott_wrap_async_protocol(_AsyncValue(1.0), AsyncIterator[F32], validator=_cott_normalize_f32_abi)
+    assert _cott_wrap_async_protocol(off, AsyncIterator[F32]) is not off
+    assert await off.__anext__() == 1.0
+
+    initial_send = _cott_wrap_async_protocol(_raw_async_generator(), AsyncGenerator[F32, I32])
+    assert await initial_send.asend(None) == _runtime._cott_normalize_f32(1.234567)
+    await initial_send.aclose()
+
+
+asyncio.run(_exercise_async_runtime())
 
 
 class _External:
@@ -445,6 +596,144 @@ else:
     assert!(
         output.status.success(),
         "generated runtime failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn generated_runtime_imports_async_protocol_support() {
+    if Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let temp = TempDir::new();
+    write_runtime(&temp.path);
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(
+            "from cott_runtime import AsyncGenerator, AsyncIterator, _CottAsyncRLock, _cott_wrap_async_protocol; assert AsyncGenerator and AsyncIterator and _CottAsyncRLock and _cott_wrap_async_protocol",
+        )
+        .current_dir(&temp.path)
+        .output()
+        .expect("python3 should import generated runtime");
+    assert!(
+        output.status.success(),
+        "generated runtime import failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn generated_runtime_validates_generic_dyn_exactly() {
+    if Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let temp = TempDir::new();
+    write_runtime(&temp.path);
+    let script = r#"
+from typing import Protocol, TypeVar
+
+import cott_runtime as _runtime
+from cott_runtime import CottContractViolation, Dyn, I32, U32, _cott_validate_abi
+
+_Item = TypeVar("_Item")
+
+
+class Reader(Protocol[_Item]):
+    _cott_trait = True
+
+    def read(self, value: _Item) -> _Item: ...
+
+class Parent(Protocol[_Item]):
+    _cott_trait = True
+
+    def parent(self, value: _Item) -> _Item: ...
+
+
+class OtherReader(Protocol[_Item]):
+    _cott_trait = True
+
+    def read(self, value: _Item) -> _Item: ...
+
+
+class Concrete:
+    _cott_traits = (Reader,)
+
+    def read(self, value: int) -> int:
+        return value
+
+class ParentConcrete:
+    _cott_traits = (Parent,)
+
+    def parent(self, value: int) -> int:
+        return value
+
+
+class StructuralReader:
+    def read(self, value: int) -> int:
+        return value
+
+
+reader_i32 = Reader[I32]
+Concrete._cott_trait_specs = (reader_i32,)
+value = Dyn(value=Concrete(), trait=reader_i32)
+assert value.trait is reader_i32
+assert value.value.read(7) == 7
+assert _cott_validate_abi(value, Dyn[Reader[I32]]) is value
+parent_i32 = Parent[I32]
+ParentConcrete._cott_trait_specs = (parent_i32,)
+parent_value = Dyn(value=ParentConcrete(), trait=parent_i32)
+assert _cott_validate_abi(parent_value, Dyn[Parent[I32]]) is parent_value
+try:
+    _cott_validate_abi(parent_value, Dyn[Parent[str]])
+except CottContractViolation as error:
+    assert error.phase == "validation"
+else:
+    raise AssertionError("Dyn accepted Parent with the wrong generic argument")
+for annotation in (Dyn[Reader[str]], Dyn[Reader[U32]], Dyn[OtherReader[I32]]):
+    try:
+        _cott_validate_abi(value, annotation)
+    except CottContractViolation as error:
+        assert error.phase == "validation"
+    else:
+        raise AssertionError("Dyn accepted the wrong full trait alias")
+for candidate, trait in ((Concrete(), Reader[str]), (Concrete(), OtherReader[I32]), (StructuralReader(), reader_i32)):
+    try:
+        Dyn(value=candidate, trait=trait)
+    except CottContractViolation as error:
+        assert error.phase == "validation"
+    else:
+        raise AssertionError("Dyn accepted a non-exact trait carrier")
+
+def _forged_dyn(value, trait, sealed=False):
+    forged = object.__new__(Dyn)
+    object.__setattr__(forged, "value", value)
+    object.__setattr__(forged, "trait", trait)
+    if sealed:
+        object.__setattr__(forged, "_seal", _runtime._COTT_DYN_SEAL)
+    return forged
+
+for forged in (
+    _forged_dyn(Concrete(), reader_i32),
+    _forged_dyn(Concrete(), Reader[str], sealed=True),
+    _forged_dyn(StructuralReader(), reader_i32, sealed=True),
+):
+    try:
+        _cott_validate_abi(forged, Dyn[Reader[I32]])
+    except CottContractViolation as error:
+        assert error.phase == "validation"
+    else:
+        raise AssertionError("forged Dyn passed boundary validation")
+"#;
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(script)
+        .current_dir(&temp.path)
+        .output()
+        .expect("python3 should execute generated runtime");
+    assert!(
+        output.status.success(),
+        "generated runtime Dyn validation failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

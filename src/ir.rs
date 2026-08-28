@@ -11,8 +11,8 @@ use crate::hir::{
     HirEffect, HirExpr, HirExprKind, HirField, HirGenericArg, HirGenericParam, HirImplInitializer,
     HirImplMethod, HirMatchGuard, HirMethod, HirModule, HirParameter, HirParameterKind, HirPattern,
     HirPatternKind, HirProject, HirReference, HirResource, HirResourceTerminal,
-    HirResourceTransition, HirSelectedImplementation, HirType, HirUnaryOp, HirValue, HirVariant,
-    PrimitiveType,
+    HirResourceTransition, HirSelectedImplementation, HirType, HirUnaryOp, HirValue, HirVariance,
+    HirVariant, PrimitiveType,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -108,7 +108,7 @@ fn render_module(module: &HirModule) -> CanonicalModule {
     json.string(&module.id.as_string());
     json.comma();
     json.key("schema_version");
-    json.number("5");
+    json.number("7");
     json.comma();
     json.key("source");
     json.string(&source_string(&module.source));
@@ -234,6 +234,35 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
                 &value.generics,
             );
             json.comma();
+            json.key("parents");
+            json.array_start();
+            for (index, parent) in value.parents.iter().enumerate() {
+                if index != 0 {
+                    json.comma();
+                }
+                json.object_start();
+                json.key("source_order");
+                json.number_usize(parent.source_order);
+                json.comma();
+                json.key("span");
+                render_span(json, &parent.span);
+                json.comma();
+                json.key("trait");
+                render_type(json, &parent.trait_ref);
+                json.object_end();
+            }
+            json.array_end();
+            json.comma();
+            json.key("closure");
+            json.array_start();
+            for (index, trait_ref) in value.closure.iter().enumerate() {
+                if index != 0 {
+                    json.comma();
+                }
+                render_type(json, trait_ref);
+            }
+            json.array_end();
+            json.comma();
             json.key("methods");
             json.array_start();
             for (i, method) in value.methods.iter().enumerate() {
@@ -334,6 +363,68 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
                 render_type(json, trait_ref);
             }
             json.array_end();
+            json.object_end();
+        }
+        HirDeclaration::Specialization(value) => {
+            json.object_start();
+            json.key("annotations");
+            render_annotations(json, &value.annotations);
+            json.comma();
+            json.key("doc");
+            json.null();
+            json.comma();
+            json.key("generics");
+            json.array_start();
+            json.array_end();
+            json.comma();
+            json.key("kind");
+            json.string("specialization");
+            json.comma();
+            json.key("methods");
+            json.array_start();
+            for (index, method) in value.methods.iter().enumerate() {
+                if index != 0 {
+                    json.comma();
+                }
+                json.object_start();
+                json.key("callable_kind");
+                json.string(callable_kind(method.callable_kind));
+                json.comma();
+                json.key("function");
+                render_verified_function(json, &method.function);
+                json.comma();
+                json.key("name");
+                json.string(&method.name);
+                json.comma();
+                json.key("source_order");
+                json.number_usize(method.source_order);
+                json.comma();
+                json.key("span");
+                render_span(json, &method.span);
+                json.comma();
+                json.key("trait_method");
+                json.string(&method.trait_method.as_string());
+                json.object_end();
+            }
+            json.array_end();
+            json.comma();
+            json.key("name");
+            json.string(&value.id.as_string());
+            json.comma();
+            json.key("public");
+            json.boolean(false);
+            json.comma();
+            json.key("receiver_type");
+            render_type(json, &value.receiver_type);
+            json.comma();
+            json.key("source_order");
+            json.number_usize(value.source_order);
+            json.comma();
+            json.key("span");
+            render_span(json, &value.span);
+            json.comma();
+            json.key("trait");
+            render_type(json, &value.trait_ref);
             json.object_end();
         }
         HirDeclaration::Rule(value) => {
@@ -486,6 +577,7 @@ fn render_generics(json: &mut Json, values: &[HirGenericParam]) {
         match value {
             HirGenericParam::Type {
                 span,
+                variance,
                 name,
                 bounds,
                 source_order,
@@ -511,6 +603,13 @@ fn render_generics(json: &mut Json, values: &[HirGenericParam]) {
                 json.comma();
                 json.key("span");
                 render_span(json, span);
+                json.comma();
+                json.key("variance");
+                json.string(match variance {
+                    HirVariance::Invariant => "invariant",
+                    HirVariance::Covariant => "covariant",
+                    HirVariance::Contravariant => "contravariant",
+                });
             }
             HirGenericParam::Const {
                 span,
@@ -748,6 +847,13 @@ fn render_type(json: &mut Json, ty: &HirType) {
             json.key("kind");
             json.string("iterator");
         }
+        HirType::AsyncIterator { item } => {
+            json.key("item");
+            render_type(json, item);
+            json.comma();
+            json.key("kind");
+            json.string("async_iterator");
+        }
         HirType::Generator {
             yield_type,
             send_type,
@@ -764,6 +870,26 @@ fn render_type(json: &mut Json, ty: &HirType) {
             json.comma();
             json.key("yield");
             render_type(json, yield_type);
+        }
+        HirType::AsyncGenerator {
+            yield_type,
+            send_type,
+        } => {
+            json.key("kind");
+            json.string("async_generator");
+            json.comma();
+            json.key("send");
+            render_type(json, send_type);
+            json.comma();
+            json.key("yield");
+            render_type(json, yield_type);
+        }
+        HirType::Dyn { trait_ref } => {
+            json.key("kind");
+            json.string("dyn");
+            json.comma();
+            json.key("trait");
+            render_type(json, trait_ref);
         }
         HirType::Factory { instance } => {
             json.key("instance");
@@ -1033,6 +1159,9 @@ fn render_resource_transition(json: &mut Json, value: &HirResourceTransition) {
 
 fn render_method(json: &mut Json, value: &HirMethod) {
     json.object_start();
+    json.key("callable_kind");
+    json.string(callable_kind(value.callable_kind));
+    json.comma();
     json.key("contract");
     render_contract(json, &value.contract);
     json.comma();
@@ -1091,8 +1220,17 @@ fn render_selected_methods(json: &mut Json, values: &[crate::hir::HirSelectedMet
             json.comma();
         }
         json.object_start();
+        json.key("callable_kind");
+        json.string(callable_kind(value.callable_kind));
+        json.comma();
+        json.key("parameters");
+        render_parameters(json, &value.parameters);
+        json.comma();
         json.key("receiver_type");
         render_type(json, &value.receiver_type);
+        json.comma();
+        json.key("return_type");
+        render_type(json, &value.return_type);
         json.comma();
         json.key("selected");
         json.object_start();
@@ -1101,14 +1239,27 @@ fn render_selected_methods(json: &mut Json, values: &[crate::hir::HirSelectedMet
                 json.key("function");
                 render_verified_function(json, function);
                 json.comma();
-                json.key("kind");
+                json.key("origin");
                 json.string("explicit");
+            }
+            HirSelectedImplementation::Specialization {
+                specialization,
+                function,
+            } => {
+                json.key("function");
+                render_verified_function(json, function);
+                json.comma();
+                json.key("origin");
+                json.string("specialization");
+                json.comma();
+                json.key("specialization");
+                json.string(&specialization.as_string());
             }
             HirSelectedImplementation::Default { function } => {
                 json.key("function");
                 render_verified_function(json, function);
                 json.comma();
-                json.key("kind");
+                json.key("origin");
                 json.string("default");
             }
         }
@@ -1116,6 +1267,9 @@ fn render_selected_methods(json: &mut Json, values: &[crate::hir::HirSelectedMet
         json.comma();
         json.key("trait_method");
         json.string(&value.trait_method.as_string());
+        json.comma();
+        json.key("trait_ref");
+        render_type(json, &value.trait_ref);
         json.object_end();
     }
     json.array_end();
@@ -1136,6 +1290,9 @@ fn render_impl_initializer(json: &mut Json, value: &HirImplInitializer) {
 
 fn render_impl_method(json: &mut Json, value: &HirImplMethod) {
     json.object_start();
+    json.key("callable_kind");
+    json.string(callable_kind(value.callable_kind));
+    json.comma();
     json.key("contracts");
     render_impl_contract(json, value.doc.as_ref(), &value.contract, true);
     json.comma();

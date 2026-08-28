@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from foo.bar_types import BarError, BarError_InvalidPayload, BarError_ProcessingFailed, BarError_ServiceUnavailable, BarOptions, InputPayload, MAX_PAYLOAD_SIZE, OutputPayload, PayloadFormat, PayloadFormat_Raw, PayloadFormat_Structured, PayloadFormat_Text, PayloadSize, Probability
 
@@ -66,6 +67,7 @@ def validate_payload(data: InputPayload) -> Result[InputPayload, BarError]:
         return True
     if not (_cott_match_ensures_3()):
         raise CottContractViolation("ensures clause failed", symbol="foo.bar.validate_payload", clause="ensures:3", phase="ensures", span={"end_byte":988,"end_column":68,"end_line":42,"start_byte":925,"start_column":5,"start_line":42}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[InputPayload, BarError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def process_payload_bytes(data: bytes, options: BarOptions) -> Result[bytes, BarError]:
@@ -105,6 +107,7 @@ def process_payload_bytes(data: bytes, options: BarOptions) -> Result[bytes, Bar
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="foo.bar.process_payload_bytes", clause="ensures:1", phase="ensures", span={"end_byte":1305,"end_column":54,"end_line":53,"start_byte":1256,"start_column":5,"start_line":53}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[bytes, BarError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def build_output(data: bytes, source_size: PayloadSize, format: PayloadFormat) -> OutputPayload:
@@ -132,6 +135,7 @@ def build_output(data: bytes, source_size: PayloadSize, format: PayloadFormat) -
         raise CottContractViolation("ensures clause failed", symbol="foo.bar.build_output", clause="ensures:2", phase="ensures", span={"end_byte":1676,"end_column":46,"end_line":66,"start_byte":1635,"start_column":5,"start_line":66}, expected="true", actual="false")
     if not (((_result).format == format)):
         raise CottContractViolation("ensures clause failed", symbol="foo.bar.build_output", clause="ensures:3", phase="ensures", span={"end_byte":1712,"end_column":36,"end_line":67,"start_byte":1681,"start_column":5,"start_line":67}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, OutputPayload, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def process_bar(data: InputPayload, options: BarOptions) -> Result[OutputPayload, BarError]:
@@ -191,6 +195,7 @@ def process_bar(data: InputPayload, options: BarOptions) -> Result[OutputPayload
         return True
     if not (_cott_match_ensures_3()):
         raise CottContractViolation("ensures clause failed", symbol="foo.bar.process_bar", clause="ensures:3", phase="ensures", span={"end_byte":2114,"end_column":62,"end_line":78,"start_byte":2057,"start_column":5,"start_line":78}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[OutputPayload, BarError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["BarError", "BarError_InvalidPayload", "BarError_ProcessingFailed", "BarError_ServiceUnavailable", "BarOptions", "InputPayload", "MAX_PAYLOAD_SIZE", "OutputPayload", "PayloadFormat", "PayloadFormat_Raw", "PayloadFormat_Structured", "PayloadFormat_Text", "PayloadSize", "Probability", "build_output", "process_bar", "process_payload_bytes", "validate_payload"]

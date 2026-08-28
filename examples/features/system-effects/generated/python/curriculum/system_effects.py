@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.system_effects_types import SystemError, SystemError_AccessDenied, SystemError_PathNotFound
 
@@ -27,6 +28,7 @@ def inspect_file_path(target: Path) -> Result[Path, SystemError]:
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.system_effects.inspect_file_path", phase="implementation-call", span={"end_byte":275,"end_column":1,"end_line":14,"start_byte":112,"start_column":1,"start_line":7}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[Path, SystemError], path="$.return")
+    _result = _cott_wrap_async_protocol(_result, Result[Path, SystemError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def format_env_variable(var_name: str, fallback: str) -> str:
@@ -51,6 +53,7 @@ def format_env_variable(var_name: str, fallback: str) -> str:
     _result = _cott_validate_abi(_result, str, path="$.return")
     if not ((len(_result) >= len(fallback))):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.system_effects.format_env_variable", clause="ensures:2", phase="ensures", span={"end_byte":495,"end_column":39,"end_line":21,"start_byte":461,"start_column":5,"start_line":21}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["SystemError", "SystemError_AccessDenied", "SystemError_PathNotFound", "format_env_variable", "inspect_file_path"]

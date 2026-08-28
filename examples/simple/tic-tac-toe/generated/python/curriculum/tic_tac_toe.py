@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.tic_tac_toe_types import Cell, Cell_Empty, Cell_O, Cell_X, MoveError, MoveError_InvalidBoard, MoveError_InvalidPosition, MoveError_InvalidTurn, MoveError_Occupied, MoveError_Terminal, MoveResult, Outcome, Outcome_Draw, Outcome_InProgress, Outcome_OWins, Outcome_XWins, Player, Player_O, Player_X
 
@@ -45,6 +46,7 @@ count is inconsistent with that player having moved last."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.tic_tac_toe.validate_board_state", phase="error", span={"end_byte":804,"end_column":1,"end_line":41,"start_byte":333,"start_column":1,"start_line":30}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.tic_tac_toe.validate_board_state", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    _result = _cott_wrap_async_protocol(_result, Result[Unit, MoveError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def apply_tic_tac_toe_move(board: CottList[Cell], player: Player, position: I64) -> Result[MoveResult, MoveError]:
@@ -103,6 +105,7 @@ next_player is the other player even after a win or draw."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.tic_tac_toe.apply_tic_tac_toe_move", clause="ensures:1", phase="ensures", span={"end_byte":1740,"end_column":53,"end_line":60,"start_byte":1692,"start_column":5,"start_line":60}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[MoveResult, MoveError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["Cell", "Cell_Empty", "Cell_O", "Cell_X", "MoveError", "MoveError_InvalidBoard", "MoveError_InvalidPosition", "MoveError_InvalidTurn", "MoveError_Occupied", "MoveError_Terminal", "MoveResult", "Outcome", "Outcome_Draw", "Outcome_InProgress", "Outcome_OWins", "Outcome_XWins", "Player", "Player_O", "Player_X", "apply_tic_tac_toe_move", "validate_board_state"]

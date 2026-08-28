@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.experiment_ranking_types import ExperimentRankingError, ExperimentRankingError_BlankRunId, ExperimentRankingError_DuplicateRunId, ExperimentRankingError_EmptyRuns, ExperimentRankingError_NonFiniteScore, Ranking, RankingRequest, RunMetric
 
@@ -68,6 +69,7 @@ contains every input run_id exactly once."""
         return True
     if not (_cott_match_ensures_2()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.experiment_ranking.order_run_ids", clause="ensures:2", phase="ensures", span={"end_byte":1110,"end_column":58,"end_line":39,"start_byte":1057,"start_column":5,"start_line":39}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[CottList[str], ExperimentRankingError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def rank_experiments(request: RankingRequest) -> Result[Ranking, ExperimentRankingError]:
@@ -120,6 +122,7 @@ identifier in the successful order."""
         return True
     if not (_cott_match_ensures_2()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.experiment_ranking.rank_experiments", clause="ensures:2", phase="ensures", span={"end_byte":1780,"end_column":66,"end_line":56,"start_byte":1719,"start_column":5,"start_line":56}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[Ranking, ExperimentRankingError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["ExperimentRankingError", "ExperimentRankingError_BlankRunId", "ExperimentRankingError_DuplicateRunId", "ExperimentRankingError_EmptyRuns", "ExperimentRankingError_NonFiniteScore", "Ranking", "RankingRequest", "RunMetric", "order_run_ids", "rank_experiments"]

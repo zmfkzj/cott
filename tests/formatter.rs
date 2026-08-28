@@ -255,3 +255,91 @@ async fn fetch() -> I32:
     assert_eq!(output, expected);
     assert_eq!(formatted(&output), expected);
 }
+
+#[test]
+fn formats_v04_async_trait_impl_methods_and_protocol_types() {
+    let source = r#"module v04.surface
+
+async fn fallback(receiver:Reader,value:I32)->I32
+
+trait Reader:
+  async fn read(self,value:I32)->I32=fallback
+
+impl BufferedReader for Reader:
+  async fn read(self,value:I32)->I32:
+    requires true
+    ensures true
+
+alias Items=AsyncIterator[I32]
+alias Conversation=AsyncGenerator[I32,Unit]
+"#;
+    let expected = r#"module v04.surface
+
+async fn fallback(receiver: Reader, value: I32) -> I32
+
+trait Reader:
+    async fn read(self, value: I32) -> I32 = fallback
+
+impl BufferedReader for Reader:
+    async fn read(self, value: I32) -> I32:
+        requires true
+
+        ensures true
+
+alias Items = AsyncIterator[I32]
+
+alias Conversation = AsyncGenerator[I32, Unit]
+"#;
+    let output = formatted(source);
+    assert_eq!(output, expected);
+    assert_eq!(formatted(&output), output);
+}
+
+#[test]
+fn formats_v05_inheritance_specialization_variance_and_dyn() {
+    let source = r#"module v05.surface
+
+struct Producer[+T]:
+  value:T
+
+trait Reader[T] for Display[T]+Clone:
+  fn read(self,value:T)->T
+
+struct BufferedReader:
+  id:I32
+
+fn fallback(receiver:BufferedReader,value:I32)->I32
+
+trait NumberReader:
+  fn read(self,value:I32)->I32
+
+specialize BufferedReader for NumberReader:
+  read=v05.surface.fallback
+
+alias DynamicReader=Dyn[NumberReader]
+"#;
+    let expected = r#"module v05.surface
+
+struct Producer[+T]:
+    value: T
+
+trait Reader[T] for Display[T] + Clone:
+    fn read(self, value: T) -> T
+
+struct BufferedReader:
+    id: I32
+
+fn fallback(receiver: BufferedReader, value: I32) -> I32
+
+trait NumberReader:
+    fn read(self, value: I32) -> I32
+
+specialize BufferedReader for NumberReader:
+    read = v05.surface.fallback
+
+alias DynamicReader = Dyn[NumberReader]
+"#;
+    let output = formatted(source);
+    assert_eq!(output, expected);
+    assert_eq!(formatted(&output), output);
+}

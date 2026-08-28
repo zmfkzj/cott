@@ -2,11 +2,11 @@ use crate::ast::{
     Annotation, BinaryOp, CallableKind, Clause, ClauseKind, CompareOp, ConstExpr, Declaration,
     DocBlock, Expr, ExprKind, File, FunctionBody, GenericArgKind, GenericParam, LiteralKind,
     MatchGuard, Pattern, PatternKind, QualifiedName, RuleClause, RuleClauseAction, Type, UnaryOp,
+    Variance,
 };
 use crate::diagnostics::{Diagnostic, Span};
 use crate::syntax::{Cst, TokenKind};
-
-/// Renders the closed v0.3 grammar in one deterministic representation while
+/// Renders the closed v0.5 grammar in one deterministic representation while
 /// retaining literal spelling, decoded doc content, and comment attachment.
 pub fn format(cst: &Cst, ast: &File) -> Result<Vec<u8>, Diagnostic> {
     let source = std::str::from_utf8(&cst.source).map_err(|_| {
@@ -229,9 +229,27 @@ impl<'a> Printer<'a> {
             Declaration::Trait(value) => {
                 self.annotations(&value.annotations);
                 self.doc(value.doc.as_ref(), 0);
+                let parents = if value.parents.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " for {}",
+                        value
+                            .parents
+                            .iter()
+                            .map(|parent| self.ty(parent))
+                            .collect::<Vec<_>>()
+                            .join(" + ")
+                    )
+                };
                 self.push(
                     0,
-                    format!("trait {}{}:", value.name, self.generics(&value.generics)),
+                    format!(
+                        "trait {}{}{}:",
+                        value.name,
+                        self.generics(&value.generics),
+                        parents
+                    ),
                 );
                 self.inline_line(self.keyword_line(&value.span, "trait "));
                 for associated in &value.associated_types {
@@ -267,7 +285,20 @@ impl<'a> Printer<'a> {
                             .map(|value| format!(" = {}", qname(value)))
                             .unwrap_or_default()
                     );
-                    self.comma_list(1, format!("fn {}(", method.name), parameters, suffix);
+                    self.comma_list(
+                        1,
+                        format!(
+                            "{}fn {}(",
+                            if method.callable_kind == CallableKind::Async {
+                                "async "
+                            } else {
+                                ""
+                            },
+                            method.name
+                        ),
+                        parameters,
+                        suffix,
+                    );
                     self.inline_for(&method.span);
                 }
             }
@@ -354,13 +385,34 @@ impl<'a> Printer<'a> {
                     }));
                     self.comma_list(
                         1,
-                        format!("fn {}(", method.name),
+                        format!(
+                            "{}fn {}(",
+                            if method.callable_kind == CallableKind::Async {
+                                "async "
+                            } else {
+                                ""
+                            },
+                            method.name
+                        ),
                         parameters,
                         format!(") -> {}:", self.ty(&method.return_type)),
                     );
                     self.inline_line(self.keyword_line(&method.span, "fn "));
                     self.impl_clauses(&method.clauses);
                     wrote_section = true;
+                }
+            }
+            Declaration::Specialize(value) => {
+                self.annotations(&value.annotations);
+                self.push(
+                    0,
+                    format!("specialize {} for {}:", value.name, self.ty(&value.trait_)),
+                );
+                self.inline_line(self.keyword_line(&value.span, "specialize "));
+                for entry in &value.entries {
+                    self.leading(entry.span.start, 1);
+                    self.push(1, format!("{} = {}", entry.name, qname(&entry.target)));
+                    self.inline_for(&entry.span);
                 }
             }
             Declaration::Resource(value) => {
@@ -674,16 +726,30 @@ impl<'a> Printer<'a> {
             generics
                 .iter()
                 .map(|generic| match generic {
-                    GenericParam::Type { name, bounds, .. } if bounds.is_empty() => name.clone(),
-                    GenericParam::Type { name, bounds, .. } => format!(
-                        "{}: {}",
+                    GenericParam::Type {
+                        variance,
                         name,
-                        bounds
-                            .iter()
-                            .map(|bound| self.ty(bound))
-                            .collect::<Vec<_>>()
-                            .join(" + ")
-                    ),
+                        bounds,
+                        ..
+                    } => {
+                        let marker = match variance {
+                            Variance::Invariant => "",
+                            Variance::Covariant => "+",
+                            Variance::Contravariant => "-",
+                        };
+                        if bounds.is_empty() {
+                            format!("{marker}{name}")
+                        } else {
+                            format!(
+                                "{marker}{name}: {}",
+                                bounds
+                                    .iter()
+                                    .map(|bound| self.ty(bound))
+                                    .collect::<Vec<_>>()
+                                    .join(" + ")
+                            )
+                        }
+                    }
                     GenericParam::Const { name, ty, .. } => {
                         format!("const {name}: {}", ty.name())
                     }

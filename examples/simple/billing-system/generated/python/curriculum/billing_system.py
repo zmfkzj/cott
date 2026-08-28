@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.billing_system_types import BillTotals, BillingError, BillingError_DuplicateItem, BillingError_NegativeQuantity, BillingError_WrongCategory, BillingItem, BillingItem_Coke, BillingItem_Daal, BillingItem_Dettol, BillingItem_Fanta, BillingItem_Flour, BillingItem_FoodOil, BillingItem_HandGloves, BillingItem_Limka, BillingItem_Maggi, BillingItem_Mask, BillingItem_Mazza, BillingItem_MountainDuo, BillingItem_Newsprin, BillingItem_Rice, BillingItem_Sanitizer, BillingItem_Sprite, BillingItem_ThermalGun, BillingItem_Wheat, Quantity
 
@@ -40,6 +41,7 @@ def validate_bill_lines(medical: CottList[Quantity], grocery: CottList[Quantity]
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.billing_system.validate_bill_lines", phase="error", span={"end_byte":1265,"end_column":1,"end_line":54,"start_byte":565,"start_column":1,"start_line":41}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.billing_system.validate_bill_lines", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    _result = _cott_wrap_async_protocol(_result, Result[Unit, BillingError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def calculate_bill(medical: CottList[Quantity], grocery: CottList[Quantity], drinks: CottList[Quantity]) -> Result[BillTotals, BillingError]:
@@ -82,6 +84,7 @@ A validation error is returned unchanged. On success, the total is the sum of al
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.billing_system.calculate_bill", clause="ensures:1", phase="ensures", span={"end_byte":2250,"end_column":53,"end_line":65,"start_byte":2202,"start_column":5,"start_line":65}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[BillTotals, BillingError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["BillTotals", "BillingError", "BillingError_DuplicateItem", "BillingError_NegativeQuantity", "BillingError_WrongCategory", "BillingItem", "BillingItem_Coke", "BillingItem_Daal", "BillingItem_Dettol", "BillingItem_Fanta", "BillingItem_Flour", "BillingItem_FoodOil", "BillingItem_HandGloves", "BillingItem_Limka", "BillingItem_Maggi", "BillingItem_Mask", "BillingItem_Mazza", "BillingItem_MountainDuo", "BillingItem_Newsprin", "BillingItem_Rice", "BillingItem_Sanitizer", "BillingItem_Sprite", "BillingItem_ThermalGun", "BillingItem_Wheat", "Quantity", "calculate_bill", "validate_bill_lines"]

@@ -20,8 +20,11 @@ fn strategy_has_fixed_deterministic_limits() {
         vec!["requires:0".to_owned()],
     );
     assert_eq!(strategy.candidate_limit, 64);
+    assert_eq!(strategy.node_limit, 64);
     assert_eq!(strategy.container_length_limit, 3);
     assert_eq!(strategy.json_depth_limit, 4);
+    assert_eq!(strategy.lifecycle_limit, 3);
+    assert_eq!(strategy.return_kind, "value");
     let bytes = strategy.bytes().expect("schema-valid strategy");
     assert!(
         String::from_utf8(bytes)
@@ -151,6 +154,7 @@ fn impl_method(
         "effects": effects,
         "modifies": modifies,
         "name": name,
+        "callable_kind": "sync",
         "parameters": [],
         "return_type": {"kind": "primitive", "name": return_name},
         "span": span(),
@@ -181,16 +185,20 @@ fn implementation(
         .map(|method| {
             let method_name = method["name"].as_str().expect("method name");
             json!({
+                "callable_kind": method["callable_kind"],
+                "parameters": method["parameters"],
                 "receiver_type": {"args": [], "kind": "named", "name": name},
+                "return_type": method["return_type"],
                 "selected": {
                     "function": {
                         "module": module,
                         "symbol": format!("{implementation}.{method_name}"),
                         "verified_facade": format!("{name}.{method_name}")
                     },
-                    "kind": "explicit"
+                    "origin": "explicit"
                 },
-                "trait_method": format!("fixture.Counter.{method_name}")
+                "trait_method": format!("fixture.Counter.{method_name}"),
+                "trait_ref": {"args": [], "kind": "named", "name": "fixture.Counter"}
             })
         })
         .collect::<Vec<_>>();
@@ -223,7 +231,7 @@ fn module(name: &str, declarations: Vec<Value>) -> CanonicalModule {
         "declarations": declarations,
         "imports": [],
         "module": name,
-        "schema_version": 5,
+        "schema_version": 7,
         "source": format!("{name}.cott")
     });
     CanonicalModule {
@@ -350,6 +358,50 @@ fn derived_free_function_strategy_carries_async_callable_kind() {
 }
 
 #[test]
+fn derived_impl_strategy_carries_async_callable_and_protocol_return_kinds() {
+    let mut method = impl_method("stream", "unit", &[], &[], &[], &[], &[]);
+    method["callable_kind"] = json!("async");
+    method["return_type"] = json!({
+        "kind": "async_generator",
+        "send": {"kind": "primitive", "name": "i32"},
+        "yield": {"kind": "primitive", "name": "bool"},
+    });
+    let strategy = derive_strategies(&CanonicalIr {
+        modules: vec![module(
+            "fixture",
+            vec![implementation(
+                "fixture.Stream",
+                Some((vec![], vec![])),
+                &[],
+                vec![method],
+            )],
+        )],
+    })
+    .expect("async impl strategy")
+    .into_iter()
+    .find(|strategy| strategy.symbol == "fixture.Stream.stream")
+    .expect("method strategy");
+    assert_eq!(strategy.callable_kind, "async");
+    assert_eq!(strategy.return_kind, "async_generator");
+}
+
+#[test]
+fn derived_async_iterator_strategy_carries_protocol_return_kind() {
+    let mut declaration = function("async_fixture.stream", "unit", &[], &[]);
+    declaration["return_type"] = json!({
+        "kind": "async_iterator",
+        "item": {"kind": "primitive", "name": "bool"},
+    });
+    let strategy = derive_strategies(&CanonicalIr {
+        modules: vec![module("async_fixture", vec![declaration])],
+    })
+    .expect("async iterator strategy")
+    .pop()
+    .expect("one strategy");
+    assert_eq!(strategy.return_kind, "async_iterator");
+}
+
+#[test]
 fn derived_impl_strategies_follow_canonical_member_order_and_cover_all_clauses() {
     let ir = CanonicalIr {
         modules: vec![module(
@@ -457,6 +509,7 @@ fn selected_slots_resolve_explicit_and_concrete_default_signatures() {
         },
         "doc": null,
         "generics": [],
+        "callable_kind": "sync",
         "kind": "method",
         "name": "Default.read",
         "parameters": [],
@@ -473,11 +526,14 @@ fn selected_slots_resolve_explicit_and_concrete_default_signatures() {
             "kind": "type",
             "name": "T",
             "source_order": 0,
-            "span": span()
+            "span": span(),
+            "variance": "invariant"
         }],
         "kind": "trait",
         "associated_types": [],
+        "closure": [],
         "methods": [trait_method],
+        "parents": [],
         "name": "fixture.Default",
         "public": true,
         "source_order": 0,
@@ -495,16 +551,24 @@ fn selected_slots_resolve_explicit_and_concrete_default_signatures() {
         "name": "fixture.UsesDefault",
         "public": true,
         "selected_methods": [{
+            "callable_kind": "sync",
+            "parameters": [],
             "receiver_type": {"args": [], "kind": "named", "name": "fixture.UsesDefault"},
+            "return_type": {"kind": "primitive", "name": "never"},
             "selected": {
                 "function": {
                     "module": "fixture",
                     "symbol": "Default.fallback",
                     "verified_facade": "fixture.Default.fallback"
                 },
-                "kind": "default"
+                "origin": "default"
             },
-            "trait_method": "fixture.Default.read"
+            "trait_method": "fixture.Default.read",
+            "trait_ref": {
+                "args": [{"kind": "type", "type": {"kind": "primitive", "name": "never"}}],
+                "kind": "named",
+                "name": "fixture.Default"
+            }
         }],
         "source_order": 1,
         "span": span(),
@@ -528,6 +592,76 @@ fn selected_slots_resolve_explicit_and_concrete_default_signatures() {
     );
     assert_eq!(strategies[1].classification, Classification::Never);
     assert_eq!(strategies[1].clause_ids, ["ensures:11"]);
+}
+
+#[test]
+fn selected_slots_coalesce_inherited_specializations_in_diamonds() {
+    let method = json!({
+        "contract": {"clauses": [impl_clause("ensures", 19)], "effects": []},
+        "default": null,
+        "doc": null,
+        "generics": [],
+        "callable_kind": "sync",
+        "kind": "method",
+        "name": "fixture.Parent.read",
+        "parameters": [],
+        "public": true,
+        "return_type": {"kind": "primitive", "name": "bool"},
+        "source_order": 0,
+        "span": span()
+    });
+    let parent = json!({
+        "annotations": [], "doc": null, "generics": [], "kind": "trait",
+        "associated_types": [], "closure": [], "methods": [method], "name": "fixture.Parent",
+        "parents": [], "public": true, "source_order": 0, "span": span()
+    });
+    let child = json!({
+        "annotations": [], "doc": null, "generics": [], "kind": "trait",
+        "associated_types": [], "closure": [{"args": [], "kind": "named", "name": "fixture.Parent"}],
+        "methods": [], "name": "fixture.Child",
+        "parents": [{
+            "source_order": 0,
+            "span": span(),
+            "trait": {"args": [], "kind": "named", "name": "fixture.Parent"}
+        }],
+        "public": true, "source_order": 1, "span": span()
+    });
+    let selected = json!({
+        "callable_kind": "sync",
+        "parameters": [],
+        "receiver_type": {"args": [], "kind": "named", "name": "fixture.Concrete"},
+        "return_type": {"kind": "primitive", "name": "bool"},
+        "selected": {
+            "origin": "specialization",
+            "function": {
+                "module": "fixture", "symbol": "specialized_read",
+                "verified_facade": "fixture.specialized_read"
+            },
+            "specialization": "fixture.specialized_read"
+        },
+        "trait_method": "fixture.Parent.read",
+        "trait_ref": {"args": [], "kind": "named", "name": "fixture.Parent"}
+    });
+    let implementation = json!({
+        "annotations": [], "doc": null, "generics": [], "associated_types": [],
+        "init": null, "invariants": [], "kind": "impl", "methods": [],
+        "name": "fixture.Concrete", "public": true,
+        "selected_methods": [selected.clone(), selected],
+        "source_order": 2, "span": span(), "state": [],
+        "traits": [{"args": [], "kind": "named", "name": "fixture.Child"}]
+    });
+    let strategies = derive_strategies(&CanonicalIr {
+        modules: vec![module("fixture", vec![parent, child, implementation])],
+    })
+    .expect("inherited specialization strategies");
+    assert_eq!(
+        strategies
+            .iter()
+            .map(|strategy| strategy.symbol.as_str())
+            .collect::<Vec<_>>(),
+        ["fixture.Concrete.init", "fixture.Concrete.read"]
+    );
+    assert_eq!(strategies[1].clause_ids, ["ensures:19"]);
 }
 
 #[test]
@@ -631,7 +765,7 @@ fn contract_runner_observes_local_result_error_variant() {
         }
     };
 
-    for (relative, bytes) in render_runtime("demo", "0.3.0") {
+    for (relative, bytes) in render_runtime("demo", "0.4.0") {
         let path = root.join(relative);
         fs::create_dir_all(path.parent().expect("runtime file parent")).expect("runtime parent");
         fs::write(path, bytes).expect("runtime file");
@@ -672,20 +806,23 @@ fn contract_runner_observes_local_result_error_variant() {
             }],
             "imports": [],
             "module": "demo",
-            "schema_version": 5,
+            "schema_version": 6,
             "source": "demo.cott"
         }],
         "runtime_validation": "boundary",
         "strategies": [{
             "callable_kind": "sync",
+            "return_kind": "value",
             "classification": "pure",
             "clause_ids": ["error:0"],
-            "schema_version": 1,
+            "schema_version": 3,
             "seed": "sha256:test",
             "symbol": "demo.run",
             "candidate_limit": 64,
+            "node_limit": 64,
             "container_length_limit": 3,
-            "json_depth_limit": 4
+            "json_depth_limit": 4,
+            "lifecycle_limit": 3
         }]
     });
     let mut child = Command::new("python3")
@@ -742,7 +879,7 @@ fn run_contract_runner(source: &str, request: Value) -> Option<std::process::Out
             .as_nanos()
     ));
     fs::create_dir(&root).expect("contract runner fixture directory");
-    for (relative, bytes) in render_runtime("demo", "0.3.0") {
+    for (relative, bytes) in render_runtime("demo", "0.4.0") {
         let path = root.join(relative);
         fs::create_dir_all(path.parent().expect("runtime file parent")).expect("runtime parent");
         fs::write(path, bytes).expect("runtime file");
@@ -775,14 +912,17 @@ fn run_contract_runner(source: &str, request: Value) -> Option<std::process::Out
 fn runner_strategy(symbol: &str, clause_ids: Vec<String>) -> Value {
     json!({
         "callable_kind": "sync",
+        "return_kind": "value",
         "classification": "pure",
         "clause_ids": clause_ids,
-        "schema_version": 1,
+        "schema_version": 3,
         "seed": "sha256:test",
         "symbol": symbol,
         "candidate_limit": 64,
+        "node_limit": 64,
         "container_length_limit": 3,
-        "json_depth_limit": 4
+        "json_depth_limit": 4,
+        "lifecycle_limit": 3
     })
 }
 
@@ -862,16 +1002,20 @@ fn runner_impl(methods: Vec<Value>) -> Value {
         .map(|method| {
             let name = method["name"].as_str().expect("method name");
             json!({
+                "callable_kind": method["callable_kind"],
+                "parameters": method["parameters"],
                 "receiver_type": {"args": [], "kind": "named", "name": "demo.Counter"},
+                "return_type": method["return_type"],
                 "selected": {
                     "function": {
                         "module": "demo",
                         "symbol": format!("Counter.{name}"),
                         "verified_facade": format!("demo.Counter.{name}")
                     },
-                    "kind": "explicit"
+                    "origin": "explicit"
                 },
-                "trait_method": format!("demo.Counter.{name}")
+                "trait_method": format!("demo.Counter.{name}"),
+                "trait_ref": {"args": [], "kind": "named", "name": "demo.Counter"}
             })
         })
         .collect::<Vec<_>>();
@@ -912,6 +1056,7 @@ fn runner_method(name: &str, modifies: Vec<&str>, mut contracts: Value) -> Value
         "effects": [],
         "modifies": modifies,
         "name": name,
+        "callable_kind": "sync",
         "parameters": [],
         "return_type": {"kind": "primitive", "name": "i32"},
         "span": span(),
@@ -925,7 +1070,7 @@ fn runner_request(declaration: Value, strategies: Vec<Value>) -> Value {
             "declarations": [declaration],
             "imports": [],
             "module": "demo",
-            "schema_version": 5,
+            "schema_version": 7,
             "source": "demo.cott"
         }],
         "runtime_validation": "boundary",
@@ -965,6 +1110,263 @@ fn contract_runner_generates_homogeneous_tuple_candidates() {
         report["contracts"][0]["evidence"][0]["grade"],
         "test observation"
     );
+}
+
+#[test]
+fn contract_runner_constructs_terminating_recursive_enum_candidates_stably() {
+    let declaration = runner_function(
+        "demo.accepts_tree",
+        vec![runner_clause(
+            "ensures",
+            0,
+            runner_literal(json!({"kind": "bool", "value": true})),
+        )],
+    );
+    let source = "from __future__ import annotations\nimport dataclasses\n\n@dataclasses.dataclass(frozen=True)\nclass Tree_Leaf:\n    value: int\n\n@dataclasses.dataclass(frozen=True)\nclass Tree_Branch:\n    child: Tree\n\nTree = Tree_Leaf | Tree_Branch\n\ndef accepts_tree(value: Tree) -> int:\n    return 0\n";
+    let request = runner_request(
+        declaration,
+        vec![runner_strategy(
+            "demo.accepts_tree",
+            vec!["ensures:0".to_owned()],
+        )],
+    );
+    let Some(first) = run_contract_runner(source, request.clone()) else {
+        return;
+    };
+    let Some(second) = run_contract_runner(source, request) else {
+        return;
+    };
+    assert!(
+        first.status.success() && second.status.success(),
+        "contract runner failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert_eq!(first.stdout, second.stdout);
+    let report: Value = serde_json::from_slice(&first.stdout).expect("contract report JSON");
+    assert_eq!(
+        report["contracts"][0]["evidence"][0]["grade"],
+        "test observation"
+    );
+}
+
+#[test]
+fn contract_runner_marks_required_recursive_input_unobserved() {
+    let declaration = runner_function(
+        "demo.accepts_infinite",
+        vec![runner_clause(
+            "ensures",
+            0,
+            runner_literal(json!({"kind": "bool", "value": true})),
+        )],
+    );
+    let Some(output) = run_contract_runner(
+        "from __future__ import annotations\nimport dataclasses\n\n@dataclasses.dataclass(frozen=True)\nclass Infinite:\n    child: Infinite\n\ndef accepts_infinite(value: Infinite) -> int:\n    raise AssertionError('recursive candidate must not be allocated')\n",
+        runner_request(
+            declaration,
+            vec![runner_strategy(
+                "demo.accepts_infinite",
+                vec!["ensures:0".to_owned()],
+            )],
+        ),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    let evidence = &report["contracts"][0]["evidence"][0];
+    assert_eq!(evidence["grade"], "unobserved");
+    assert_eq!(
+        evidence["reason"],
+        "input parameter `value` required recursive value `Infinite` has no finite candidate"
+    );
+}
+
+#[test]
+fn contract_runner_distinguishes_candidate_depth_and_node_exhaustion() {
+    let declaration = runner_function(
+        "demo.accepts_nested",
+        vec![runner_clause(
+            "ensures",
+            0,
+            runner_literal(json!({"kind": "bool", "value": true})),
+        )],
+    );
+    let mut depth_strategy = runner_strategy("demo.accepts_nested", vec!["ensures:0".to_owned()]);
+    depth_strategy["json_depth_limit"] = json!(1);
+    let Some(depth_output) = run_contract_runner(
+        "def accepts_nested(value: tuple[tuple[int]]) -> int:\n    return 0\n",
+        runner_request(declaration.clone(), vec![depth_strategy]),
+    ) else {
+        return;
+    };
+    assert!(
+        depth_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&depth_output.stderr)
+    );
+    let depth_report: Value =
+        serde_json::from_slice(&depth_output.stdout).expect("contract report JSON");
+    assert_eq!(
+        depth_report["contracts"][0]["evidence"][0]["reason"],
+        "input parameter `value` candidate depth limit (1) exhausted"
+    );
+
+    let mut node_strategy = runner_strategy("demo.accepts_nested", vec!["ensures:0".to_owned()]);
+    node_strategy["node_limit"] = json!(1);
+    let Some(node_output) = run_contract_runner(
+        "from __future__ import annotations\nimport dataclasses\n\n@dataclasses.dataclass(frozen=True)\nclass Node:\n    child: Node | None\n\ndef accepts_nested(value: Node) -> int:\n    return 0\n",
+        runner_request(declaration, vec![node_strategy]),
+    ) else {
+        return;
+    };
+    assert!(
+        node_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&node_output.stderr)
+    );
+    let node_report: Value =
+        serde_json::from_slice(&node_output.stdout).expect("contract report JSON");
+    assert_eq!(
+        node_report["contracts"][0]["evidence"][0]["reason"],
+        "input parameter `value` candidate node limit (1) exhausted"
+    );
+}
+
+#[test]
+fn contract_runner_observes_empty_containers_with_unavailable_elements() {
+    let declaration = runner_function(
+        "demo.accepts_empty",
+        vec![runner_clause(
+            "ensures",
+            0,
+            runner_literal(json!({"kind": "bool", "value": true})),
+        )],
+    );
+    let Some(output) = run_contract_runner(
+        "import typing\nimport cott_runtime\n\ndef accepts_empty(values: cott_runtime.CottList[typing.Any], mapping: cott_runtime.FrozenMap[object, typing.Annotated[int, cott_runtime.CottExternal('outside')]], array: cott_runtime.CottArray[typing.Any, typing.Literal[0]]) -> int:\n    return len(values) + len(mapping) + len(array)\n",
+        runner_request(
+            declaration,
+            vec![runner_strategy(
+                "demo.accepts_empty",
+                vec!["ensures:0".to_owned()],
+            )],
+        ),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    assert_eq!(
+        report["contracts"][0]["evidence"][0]["grade"],
+        "test observation"
+    );
+}
+
+#[test]
+fn contract_runner_observes_recursive_empty_container_candidate() {
+    let declaration = runner_function(
+        "demo.accepts_node",
+        vec![runner_clause(
+            "ensures",
+            0,
+            runner_literal(json!({"kind": "bool", "value": true})),
+        )],
+    );
+    let Some(output) = run_contract_runner(
+        "from __future__ import annotations\nimport dataclasses\nimport cott_runtime\n\n@dataclasses.dataclass(frozen=True)\nclass Node:\n    children: cott_runtime.CottList[Node]\n\ndef accepts_node(value: Node) -> int:\n    return len(value.children)\n",
+        runner_request(
+            declaration,
+            vec![runner_strategy(
+                "demo.accepts_node",
+                vec!["ensures:0".to_owned()],
+            )],
+        ),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    assert_eq!(
+        report["contracts"][0]["evidence"][0]["grade"],
+        "test observation"
+    );
+}
+
+#[test]
+fn contract_runner_observes_recursive_generic_enum_empty_variant() {
+    let declaration = runner_function(
+        "demo.accepts_tree",
+        vec![runner_clause(
+            "ensures",
+            0,
+            runner_literal(json!({"kind": "bool", "value": true})),
+        )],
+    );
+    let Some(output) = run_contract_runner(
+        "from __future__ import annotations\nimport dataclasses\nimport typing\n\nT = typing.TypeVar('T')\n\n@dataclasses.dataclass(frozen=True)\nclass Tree_Empty(typing.Generic[T]):\n    pass\n\n@dataclasses.dataclass(frozen=True)\nclass Tree_Node(typing.Generic[T]):\n    child: Tree[T]\n\nTree = Tree_Empty[T] | Tree_Node[T]\n\ndef accepts_tree(value: Tree[typing.Any]) -> int:\n    return 0\n",
+        runner_request(
+            declaration,
+            vec![runner_strategy(
+                "demo.accepts_tree",
+                vec!["ensures:0".to_owned()],
+            )],
+        ),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    assert_eq!(
+        report["contracts"][0]["evidence"][0]["grade"],
+        "test observation"
+    );
+}
+
+#[test]
+fn contract_runner_marks_required_unknown_generic_field_unobserved() {
+    let declaration = runner_function(
+        "demo.accepts_box",
+        vec![runner_clause(
+            "ensures",
+            0,
+            runner_literal(json!({"kind": "bool", "value": true})),
+        )],
+    );
+    let Some(output) = run_contract_runner(
+        "import dataclasses\nimport typing\n\nT = typing.TypeVar('T')\n\n@dataclasses.dataclass(frozen=True)\nclass Box(typing.Generic[T]):\n    value: T\n\ndef accepts_box(value: Box[object]) -> int:\n    raise AssertionError('unknown generic field must not be synthesized')\n",
+        runner_request(
+            declaration,
+            vec![runner_strategy(
+                "demo.accepts_box",
+                vec!["ensures:0".to_owned()],
+            )],
+        ),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    assert_eq!(report["contracts"][0]["evidence"][0]["grade"], "unobserved");
 }
 
 #[test]
@@ -1035,6 +1437,93 @@ fn contract_runner_marks_any_inputs_unobserved_without_executing() {
         evidence["reason"],
         json!("input parameter `value` is Any and is not automatically generated")
     );
+}
+
+#[test]
+fn contract_runner_marks_dyn_inputs_unobserved_without_concrete_case() {
+    let declaration = runner_function(
+        "demo.accepts_dynamic",
+        vec![runner_clause(
+            "requires",
+            0,
+            runner_literal(json!({"kind": "bool", "value": true})),
+        )],
+    );
+    let Some(output) = run_contract_runner(
+        "import typing\nimport cott_runtime\n\nclass Reader(typing.Protocol):\n    def read(self) -> int: ...\n\ndef accepts_dynamic(value: cott_runtime.Dyn[Reader]) -> int:\n    raise AssertionError('Dyn input must not be synthesized')\n",
+        runner_request(
+            declaration,
+            vec![runner_strategy(
+                "demo.accepts_dynamic",
+                vec!["requires:0".to_owned()],
+            )],
+        ),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "contract runner failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    let evidence = &report["contracts"][0]["evidence"][0];
+    assert_eq!(evidence["grade"], json!("unobserved"));
+    assert_eq!(evidence["valid_cases"], json!(0));
+    assert_eq!(
+        evidence["reason"],
+        json!(
+            "input parameter `value` is Dyn[Reader] without a compiler-owned initialized concrete case and is not automatically generated"
+        )
+    );
+}
+
+#[test]
+fn contract_runner_matches_generic_dyn_candidates_by_origin_and_exact_specification() {
+    let accepts = runner_method(
+        "accepts",
+        vec![],
+        json!({"requires": [], "ensures": [], "errors": []}),
+    );
+    let rejects = runner_method(
+        "rejects",
+        vec![],
+        json!({"requires": [], "ensures": [], "errors": []}),
+    );
+    let declaration = runner_impl(vec![accepts, rejects]);
+    let Some(output) = run_contract_runner(
+        "import typing\nimport cott_runtime\n\nT = typing.TypeVar('T')\n\nclass GenericTrait(typing.Protocol[T]):\n    _cott_trait = True\n    def read(self) -> T: ...\n\nclass Counter:\n    _cott_traits = (GenericTrait,)\n    _cott_trait_specs = (GenericTrait[cott_runtime.I32],)\n\n    def __init__(self) -> None:\n        self.count = 0\n        self.guard = 0\n\n    def read(self) -> cott_runtime.I32:\n        return 0\n\n    def accepts(self, value: cott_runtime.Dyn[GenericTrait[cott_runtime.I32]]) -> int:\n        return value.value.read()\n\n    def rejects(self, value: cott_runtime.Dyn[GenericTrait[str]]) -> int:\n        raise AssertionError('Dyn with the wrong generic specification must not be selected')\n",
+        runner_request(
+            declaration,
+            vec![
+                runner_strategy("demo.Counter.init", vec!["invariant:0".to_owned()]),
+                runner_strategy("demo.Counter.accepts", vec!["invariant:0".to_owned()]),
+                runner_strategy("demo.Counter.rejects", vec!["invariant:0".to_owned()]),
+            ],
+        ),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    let accepts = report["contracts"]
+        .as_array()
+        .expect("contracts")
+        .iter()
+        .find(|evidence| evidence["symbol"] == "demo.Counter.accepts")
+        .expect("accepts evidence");
+    let rejects = report["contracts"]
+        .as_array()
+        .expect("contracts")
+        .iter()
+        .find(|evidence| evidence["symbol"] == "demo.Counter.rejects")
+        .expect("rejects evidence");
+    assert_eq!(accepts["evidence"][0]["grade"], "test observation");
+    assert_eq!(rejects["evidence"][0]["grade"], "unobserved");
 }
 
 #[test]
@@ -1392,6 +1881,177 @@ fn contract_runner_constructs_methods_only_from_init_validated_cases() {
             .iter()
             .all(|contract| contract["evidence"][0]["grade"] == "test observation"),
         "unexpected report: {report}"
+    );
+}
+
+#[test]
+fn contract_runner_observes_and_closes_pure_async_protocols() {
+    let mut iterator = runner_function(
+        "demo.stream",
+        vec![runner_clause(
+            "ensures",
+            0,
+            runner_literal(json!({"kind": "bool", "value": true})),
+        )],
+    );
+    iterator["return_type"] = json!({
+        "kind": "async_iterator",
+        "item": {"kind": "primitive", "name": "i32"},
+    });
+    let mut iterator_strategy = runner_strategy("demo.stream", vec!["ensures:0".to_owned()]);
+    iterator_strategy["return_kind"] = json!("async_iterator");
+    let Some(output) = run_contract_runner(
+        "import collections.abc\n\nclass Stream(collections.abc.AsyncIterator):\n    def __init__(self): self.steps = 0; self.closed = False\n    def __aiter__(self): return self\n    async def __anext__(self):\n        if self.closed or self.steps == 3: raise StopAsyncIteration\n        self.steps += 1\n        return self.steps\n    async def aclose(self): self.closed = True\n\ndef stream() -> collections.abc.AsyncIterator[int]:\n    return Stream()\n",
+        runner_request(iterator, vec![iterator_strategy]),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "contract runner failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    assert_eq!(report["lifecycle"][0]["lifecycle_steps"], 3);
+    assert_eq!(report["lifecycle"][0]["lifecycle_sent"], false);
+    assert_eq!(report["lifecycle"][0]["lifecycle_closed"], true);
+    assert_eq!(
+        report["lifecycle"][0]["lifecycle_reason"],
+        "observation limit reached"
+    );
+
+    let mut generator = runner_function(
+        "demo.generate",
+        vec![runner_clause(
+            "ensures",
+            0,
+            runner_literal(json!({"kind": "bool", "value": true})),
+        )],
+    );
+    generator["return_type"] = json!({
+        "kind": "async_generator",
+        "send": {"kind": "primitive", "name": "i32"},
+        "yield": {"kind": "primitive", "name": "i32"},
+    });
+    let mut generator_strategy = runner_strategy("demo.generate", vec!["ensures:0".to_owned()]);
+    generator_strategy["return_kind"] = json!("async_generator");
+    let Some(output) = run_contract_runner(
+        "import collections.abc\n\nasync def values():\n    _ = yield 1\n\ndef generate() -> collections.abc.AsyncGenerator[int, int]:\n    return values()\n",
+        runner_request(generator, vec![generator_strategy]),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "contract runner failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    assert_eq!(report["lifecycle"][0]["lifecycle_steps"], 1);
+    assert_eq!(report["lifecycle"][0]["lifecycle_sent"], true);
+    assert_eq!(report["lifecycle"][0]["lifecycle_closed"], true);
+    assert_eq!(
+        report["lifecycle"][0]["lifecycle_reason"],
+        "protocol completed"
+    );
+}
+
+#[test]
+fn contract_runner_trusts_effectful_async_protocol_declarations() {
+    let mut declaration = runner_function(
+        "demo.stream",
+        vec![runner_clause(
+            "ensures",
+            0,
+            runner_literal(json!({"kind": "bool", "value": true})),
+        )],
+    );
+    declaration["return_type"] = json!({
+        "kind": "async_iterator",
+        "item": {"kind": "primitive", "name": "i32"},
+    });
+    let mut strategy = runner_strategy("demo.stream", vec!["ensures:0".to_owned()]);
+    strategy["classification"] = json!("effectful");
+    strategy["return_kind"] = json!("async_iterator");
+    let Some(output) = run_contract_runner("", runner_request(declaration, vec![strategy])) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "contract runner failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    assert_eq!(
+        report["contracts"][0]["evidence"][0]["grade"],
+        "trust declaration"
+    );
+    assert_eq!(report["lifecycle"], json!([]));
+}
+
+#[test]
+fn contract_runner_awaits_async_impl_methods() {
+    let mut method = runner_method(
+        "read",
+        vec![],
+        json!({"requires": [], "ensures": [], "errors": []}),
+    );
+    method["callable_kind"] = json!("async");
+    method["return_type"] = json!({
+        "kind": "async_iterator",
+        "item": {"kind": "primitive", "name": "i32"},
+    });
+    let declaration = runner_impl(vec![method]);
+    let mut strategy = runner_strategy("demo.Counter.read", vec!["invariant:0".to_owned()]);
+    strategy["callable_kind"] = json!("async");
+    strategy["return_kind"] = json!("async_iterator");
+    let Some(output) = run_contract_runner(
+        "import collections.abc\n\nclass Stream(collections.abc.AsyncIterator):\n    def __init__(self): self.step = 0; self.closed = False\n    def __aiter__(self): return self\n    async def __anext__(self):\n        if self.closed or self.step == 3: raise StopAsyncIteration\n        self.step += 1\n        return self.step\n    async def aclose(self): self.closed = True\n\nclass Counter:\n    def __init__(self) -> None:\n        self.count = 0\n        self.guard = 0\n\n    async def read(self) -> collections.abc.AsyncIterator[int]:\n        return Stream()\n",
+        runner_request(declaration, vec![strategy]),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "contract runner failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    assert_eq!(
+        report["contracts"][0]["evidence"][0]["grade"],
+        "test observation"
+    );
+    assert_eq!(report["lifecycle"][0]["symbol"], "demo.Counter.read");
+    assert_eq!(report["lifecycle"][0]["lifecycle_steps"], 3);
+    assert_eq!(report["lifecycle"][0]["lifecycle_closed"], true);
+}
+
+#[test]
+fn contract_runner_fails_later_protocol_close_without_hanging() {
+    let mut declaration = runner_function(
+        "demo.stream",
+        vec![runner_clause(
+            "ensures",
+            0,
+            runner_literal(json!({"kind": "bool", "value": true})),
+        )],
+    );
+    declaration["return_type"] = json!({
+        "kind": "async_iterator",
+        "item": {"kind": "primitive", "name": "i32"},
+    });
+    let mut strategy = runner_strategy("demo.stream", vec!["ensures:0".to_owned()]);
+    strategy["return_kind"] = json!("async_iterator");
+    let Some(output) = run_contract_runner(
+        "import asyncio\nimport collections.abc\n\ncreated = 0\n\nclass Stream(collections.abc.AsyncIterator):\n    def __init__(self, number): self.number = number\n    def __aiter__(self): return self\n    async def __anext__(self): raise StopAsyncIteration\n    async def aclose(self):\n        if self.number == 1: return\n        while True:\n            try: await asyncio.sleep(0)\n            except asyncio.CancelledError: pass\n\ndef stream(value: int) -> collections.abc.AsyncIterator[int]:\n    global created\n    created += 1\n    return Stream(created)\n",
+        runner_request(declaration, vec![strategy]),
+    ) else {
+        return;
+    };
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("demo.stream: cancellation-resistant protocol close")
     );
 }
 

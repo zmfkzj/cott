@@ -255,6 +255,7 @@ impl Parser {
                     Keyword::Enum => "enum",
                     Keyword::Trait => "trait",
                     Keyword::Impl => "impl",
+                    Keyword::Specialize => "specialize",
                     Keyword::For => "for",
                     Keyword::State => "state",
                     Keyword::Resource => "resource",
@@ -394,6 +395,15 @@ impl Parser {
                 }
                 Some(Declaration::Impl(self.parse_impl(annotations)?))
             }
+            TokenKind::Keyword(Keyword::Specialize) => {
+                if let Some(doc) = doc {
+                    self.error(
+                        "top-level documentation must precede a type or constant declaration",
+                        doc.span,
+                    );
+                }
+                Some(Declaration::Specialize(self.parse_specialize(annotations)?))
+            }
             _ => {
                 self.error("expected declaration", self.span_here());
                 None
@@ -482,7 +492,7 @@ impl Parser {
     ) -> Option<StructDecl> {
         let st = self.keyword(Keyword::Struct)?.span;
         let (name, _) = self.name("type name")?;
-        let generics = self.parse_generics()?;
+        let generics = self.parse_generics(true)?;
         self.expect(TokenKind::Colon, "expected `:` after struct")?;
         self.newline();
         self.expect(TokenKind::Indent, "expected indented struct fields")?;
@@ -513,7 +523,7 @@ impl Parser {
     ) -> Option<EnumDecl> {
         let st = self.keyword(Keyword::Enum)?.span;
         let (name, _) = self.name("type name")?;
-        let generics = self.parse_generics()?;
+        let generics = self.parse_generics(true)?;
         self.expect(TokenKind::Colon, "expected `:` after enum")?;
         self.newline();
         self.expect(TokenKind::Indent, "expected indented enum variants")?;
@@ -544,9 +554,35 @@ impl Parser {
     ) -> Option<TraitDecl> {
         let st = self.keyword(Keyword::Trait)?.span;
         let (name, _) = self.name("trait name")?;
-        let generics = self.parse_generics()?;
+        let generics = self.parse_generics(true)?;
+        let mut parents = Vec::new();
+        if self.at(&TokenKind::Keyword(Keyword::For)) {
+            self.bump();
+            parents.push(self.parse_type()?);
+            while self.at(&TokenKind::Plus) {
+                self.bump();
+                parents.push(self.parse_type()?);
+            }
+        }
         self.expect(TokenKind::Colon, "expected `:` after trait")?;
         self.newline();
+        if !self.at(&TokenKind::Indent) {
+            if parents.is_empty() {
+                self.error("expected indented trait members", self.span_here());
+                return None;
+            }
+            let end = self.tokens[self.pos - 1].span.clone();
+            return Some(TraitDecl {
+                span: Self::join(st, end),
+                annotations,
+                doc,
+                name,
+                generics,
+                parents,
+                associated_types: Vec::new(),
+                methods: Vec::new(),
+            });
+        }
         self.expect(TokenKind::Indent, "expected indented trait members")?;
         let mut associated_types = Vec::new();
         let mut methods = Vec::new();
@@ -566,14 +602,11 @@ impl Parser {
                 }
                 TokenKind::Keyword(Keyword::Fn) => {
                     saw_method = true;
-                    methods.push(self.parse_trait_method()?);
+                    methods.push(self.parse_trait_method(CallableKind::Sync)?);
                 }
                 TokenKind::Keyword(Keyword::Async) => {
-                    self.error(
-                        "async is only allowed on top-level functions",
-                        self.span_here(),
-                    );
-                    self.recover_line();
+                    saw_method = true;
+                    methods.push(self.parse_trait_method(CallableKind::Async)?);
                 }
                 _ => {
                     self.error("expected trait associated type or method", self.span_here());
@@ -582,6 +615,9 @@ impl Parser {
             }
             self.skip_newlines();
         }
+        if parents.is_empty() && associated_types.is_empty() && methods.is_empty() {
+            self.error("trait requires a member or direct parent", self.span_here());
+        }
         let end = self.bump().span;
         Some(TraitDecl {
             span: Self::join(st, end),
@@ -589,6 +625,7 @@ impl Parser {
             doc,
             name,
             generics,
+            parents,
             associated_types,
             methods,
         })
@@ -763,7 +800,7 @@ impl Parser {
     ) -> Option<RuleDecl> {
         let st = self.keyword(Keyword::Rule)?.span;
         let (name, _) = self.name("rule name")?;
-        let generics = self.parse_generics()?;
+        let generics = self.parse_generics(false)?;
         let base = if self.at(&TokenKind::LParen) {
             self.bump();
             let b = self.parse_type()?;
@@ -881,8 +918,13 @@ impl Parser {
             parameters,
         })
     }
-    fn parse_trait_method(&mut self) -> Option<TraitMethod> {
-        let st = self.keyword(Keyword::Fn)?.span;
+    fn parse_trait_method(&mut self, callable_kind: CallableKind) -> Option<TraitMethod> {
+        let st = if callable_kind == CallableKind::Async {
+            self.keyword(Keyword::Async)?.span
+        } else {
+            self.span_here()
+        };
+        self.keyword(Keyword::Fn)?;
         let (name, _) = self.name("function name")?;
         self.expect(TokenKind::LParen, "expected `(`")?;
         let self_tok = self.keyword(Keyword::SelfValue)?;
@@ -911,6 +953,7 @@ impl Parser {
             self_span: self_tok.span,
             parameters: params,
             return_type: ret,
+            callable_kind,
             default,
         })
     }
@@ -922,7 +965,7 @@ impl Parser {
     ) -> Option<FunctionDecl> {
         self.keyword(Keyword::Fn)?;
         let (name, _) = self.name("function name")?;
-        let generics = self.parse_generics()?;
+        let generics = self.parse_generics(false)?;
         self.expect(TokenKind::LParen, "expected `(`")?;
         let params = self.parse_parameters(true)?;
         self.expect(TokenKind::RParen, "expected `)`")?;
@@ -1047,15 +1090,12 @@ impl Parser {
         while self.at(&TokenKind::Keyword(Keyword::Fn))
             || self.at(&TokenKind::Keyword(Keyword::Async))
         {
-            if self.at(&TokenKind::Keyword(Keyword::Async)) {
-                self.error(
-                    "async is only allowed on top-level functions",
-                    self.span_here(),
-                );
-                self.recover_line();
+            let callable_kind = if self.at(&TokenKind::Keyword(Keyword::Async)) {
+                CallableKind::Async
             } else {
-                methods.push(self.parse_impl_method()?);
-            }
+                CallableKind::Sync
+            };
+            methods.push(self.parse_impl_method(callable_kind)?);
             self.skip_newlines();
         }
         while self.at(&TokenKind::Keyword(Keyword::Type)) {
@@ -1094,11 +1134,66 @@ impl Parser {
             "expected `=` in associated type assignment",
         )?;
         let ty = self.parse_type()?;
+
         self.newline();
         Some(AssociatedTypeAssignment {
             span: Self::join(st, ty.span.clone()),
             name,
             ty,
+        })
+    }
+    fn parse_specialize(&mut self, annotations: Vec<Annotation>) -> Option<SpecializeDecl> {
+        let st = self.keyword(Keyword::Specialize)?.span;
+        let (name, _) = self.name("specialized concrete type name")?;
+        self.keyword(Keyword::For)?;
+        let trait_ = self.parse_type()?;
+        self.expect(TokenKind::Colon, "expected `:` after specialized trait")?;
+        self.newline();
+        self.expect(
+            TokenKind::Indent,
+            "expected indented specialization entries",
+        )?;
+        let mut entries = Vec::new();
+        self.skip_newlines();
+        while !self.at(&TokenKind::Dedent) && !self.eof() {
+            let start = self.span_here();
+            let Some((name, _)) = self.name("specialized method name") else {
+                self.recover_line();
+                self.skip_newlines();
+                continue;
+            };
+            self.expect(TokenKind::Equal, "expected `=` in specialization entry")?;
+            let target = match self.parse_qname() {
+                Some(target) => target,
+                None => {
+                    self.recover_line();
+                    self.skip_newlines();
+                    continue;
+                }
+            };
+            self.newline();
+            entries.push(SpecializeEntry {
+                span: Self::join(start, target.span.clone()),
+                name,
+                target,
+            });
+            self.skip_newlines();
+        }
+        if entries.is_empty() {
+            self.error(
+                "specialization requires at least one method entry",
+                self.span_here(),
+            );
+        }
+        let end = self
+            .expect(TokenKind::Dedent, "expected end of specialization entries")?
+            .span;
+        Some(SpecializeDecl {
+            span: Self::join(st, end),
+            annotations,
+            name,
+            trait_,
+            entries,
         })
     }
 
@@ -1155,8 +1250,13 @@ impl Parser {
             clauses,
         })
     }
-    fn parse_impl_method(&mut self) -> Option<ImplMethod> {
-        let st = self.keyword(Keyword::Fn)?.span;
+    fn parse_impl_method(&mut self, callable_kind: CallableKind) -> Option<ImplMethod> {
+        let st = if callable_kind == CallableKind::Async {
+            self.keyword(Keyword::Async)?.span
+        } else {
+            self.span_here()
+        };
+        self.keyword(Keyword::Fn)?;
         let (name, _) = self.name("method name")?;
         self.expect(TokenKind::LParen, "expected `(` after method name")?;
         let self_span = self.keyword(Keyword::SelfValue)?.span;
@@ -1182,6 +1282,7 @@ impl Parser {
             self_span,
             parameters,
             return_type,
+            callable_kind,
             clauses,
         })
     }
@@ -1534,7 +1635,6 @@ impl Parser {
                 return None;
             }
         };
-        self.newline();
         let text = match t.kind.clone() {
             TokenKind::TripleString(s) => s,
             _ => String::new(),
@@ -1571,7 +1671,7 @@ impl Parser {
         }
         Some(QualifiedName::new(Self::join(fs, end), segs))
     }
-    fn parse_generics(&mut self) -> Option<Vec<GenericParam>> {
+    fn parse_generics(&mut self, allow_variance: bool) -> Option<Vec<GenericParam>> {
         if !self.at(&TokenKind::LBracket) {
             return Some(Vec::new());
         }
@@ -1579,8 +1679,28 @@ impl Parser {
         let mut out = Vec::new();
         if !self.at(&TokenKind::RBracket) {
             loop {
+                let (variance, marker_span) = match self.current().kind.clone() {
+                    TokenKind::Plus => (Variance::Covariant, Some(self.bump().span)),
+                    TokenKind::Minus => (Variance::Contravariant, Some(self.bump().span)),
+                    _ => (Variance::Invariant, None),
+                };
+                if marker_span.is_some()
+                    && !allow_variance
+                    && !self.at(&TokenKind::Keyword(Keyword::Const))
+                {
+                    self.error(
+                        "variance markers are allowed only on struct, enum, and trait type parameters",
+                        marker_span.clone().unwrap(),
+                    );
+                }
                 if self.at(&TokenKind::Keyword(Keyword::Const)) {
-                    let start = self.bump().span;
+                    let const_span = self.bump().span;
+                    if let Some(marker_span) = marker_span {
+                        self.error(
+                            "variance marker is not allowed on const generic parameters",
+                            marker_span,
+                        );
+                    }
                     let (name, _) = self.name("const generic parameter")?;
                     self.expect(
                         TokenKind::Colon,
@@ -1601,7 +1721,7 @@ impl Parser {
                         }
                     };
                     out.push(GenericParam::Const {
-                        span: Self::join(start, kind_span),
+                        span: Self::join(const_span, kind_span),
                         name,
                         ty,
                     });
@@ -1621,7 +1741,8 @@ impl Parser {
                         .map(|value| value.span.clone())
                         .unwrap_or(ns.clone());
                     out.push(GenericParam::Type {
-                        span: Self::join(ns, end),
+                        span: Self::join(marker_span.unwrap_or(ns), end),
+                        variance,
                         name,
                         bounds,
                     });

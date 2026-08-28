@@ -96,6 +96,20 @@ impl WriterState for Writer:
     )
 }
 
+fn async_impl_fixture() -> Fixture {
+    fixture(
+        r#"module api.service
+
+trait Reader:
+    async fn read(self, amount: I32) -> I32
+
+impl ReaderState for Reader:
+    async fn read(self, amount: I32) -> I32:
+        ensures result == amount
+"#,
+    )
+}
+
 fn default_impl_fixture() -> Fixture {
     fixture(
         r#"module api.service
@@ -201,17 +215,57 @@ fn record_agent_provenance(fixture: &Fixture, symbol: &str, source: &PathBuf, by
         .into_iter()
         .find(|callable| callable.cott_symbol == symbol)
         .expect("provenance symbol is a planned callable");
+    let trait_method = callable
+        .declaration
+        .get("trait_method")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
     let function = callable.name;
-    let (kind, concrete, method, implementation_function) = match callable.kind {
-        PythonCallableKind::Function => ("function", None, None, function),
-        PythonCallableKind::AsyncFunction => ("async_function", None, None, function),
+    let (kind, callable_kind, concrete, method, implementation_function, selection) = match callable
+        .kind
+    {
+        PythonCallableKind::Function => (
+            "function",
+            "sync",
+            None,
+            None,
+            function,
+            serde_json::Value::Null,
+        ),
+        PythonCallableKind::AsyncFunction => (
+            "async_function",
+            "async",
+            None,
+            None,
+            function,
+            serde_json::Value::Null,
+        ),
         PythonCallableKind::ImplMethod { concrete } => {
             let implementation_function = format!("_cott_impl_{concrete}_{function}");
             (
                 "impl_method",
+                "sync",
                 Some(concrete),
                 Some(function),
                 implementation_function,
+                serde_json::json!({
+                    "kind": "explicit",
+                    "trait_method": trait_method.expect("implementation method has a trait method"),
+                }),
+            )
+        }
+        PythonCallableKind::AsyncImplMethod { concrete } => {
+            let implementation_function = format!("_cott_impl_{concrete}_{function}");
+            (
+                "async_impl_method",
+                "async",
+                Some(concrete),
+                Some(function),
+                implementation_function,
+                serde_json::json!({
+                    "kind": "explicit",
+                    "trait_method": trait_method.expect("implementation method has a trait method"),
+                }),
             )
         }
     };
@@ -234,8 +288,10 @@ fn record_agent_provenance(fixture: &Fixture, symbol: &str, source: &PathBuf, by
             implementations: serde_json::json!([{
                 "cott_symbol": symbol,
                 "kind": kind,
+                "callable_kind": callable_kind,
                 "concrete": concrete,
                 "method": method,
+                "selection": selection,
                 "owner": "agent",
                 "python_symbol": format!("{runtime_module}:{implementation_function}"),
                 "source_origin": source
@@ -435,6 +491,198 @@ fn async_functions_use_the_free_function_path_and_require_async_def() {
 }
 
 #[test]
+fn async_impl_methods_are_agent_only_and_require_exact_async_helpers() {
+    let mut fixture = async_impl_fixture();
+    fixture.config.python.implementations.insert(
+        "api.service.ReaderState.read".to_owned(),
+        "cott_bindings.api.service.reader:read".to_owned(),
+    );
+    let diagnostics = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect_err("async impl methods must never be manifest-bindable");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("implementation methods are agent-only")
+    );
+    fixture
+        .config
+        .python
+        .implementations
+        .remove("api.service.ReaderState.read");
+
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("async impl method is unresolved without an agent source");
+    let unresolved = &resolution.unresolved[0];
+    assert_eq!(
+        unresolved.kind,
+        PythonCallableKind::AsyncImplMethod {
+            concrete: "ReaderState".to_owned()
+        }
+    );
+    assert_eq!(
+        unresolved.source,
+        fixture
+            .paths
+            .python_source_dir
+            .join("_cott_impl/api/service/ReaderState/read.py")
+    );
+    assert_eq!(
+        unresolved.expected_implementation_function,
+        "_cott_impl_ReaderState_read"
+    );
+
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.ReaderState.read",
+        b"from api.service import ReaderState\n\nasync def _cott_impl_ReaderState_read(self: ReaderState, amount: int) -> int:\n    return await self.read(amount)\n",
+    )
+    .expect("async impl method must await its exact async self method");
+    let error = validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.ReaderState.read",
+        b"from api.service import ReaderState\n\ndef _cott_impl_ReaderState_read(self: ReaderState, amount: int) -> int:\n    return amount\n",
+    )
+    .expect_err("async impl method must use async def");
+    assert!(error.contains("must be an exact top-level async def"));
+    let error = validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.ReaderState.read",
+        b"from api.service import ReaderState\n\nasync def _cott_impl_ReaderState_read(self: ReaderState, amount: int) -> int:\n    return self.read(amount)\n",
+    )
+    .expect_err("async self methods must be awaited");
+    assert!(error.contains("async Cott callable `api.service.ReaderState.read` must be awaited"));
+    let path = unresolved.source.clone();
+    let bytes = b"from api.service import ReaderState\n\nasync def _cott_impl_ReaderState_read(self: ReaderState, amount: int) -> int:\n    return amount\n";
+    fs::create_dir_all(path.parent().expect("async impl method has a parent")).unwrap();
+    fs::write(&path, bytes).unwrap();
+    record_agent_provenance(&fixture, "api.service.ReaderState.read", &path, bytes);
+    let record: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            fixture
+                .paths
+                .generated_dir
+                .parent()
+                .expect("generation record has a parent")
+                .join("generation.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        record["current"]["implementations"][0]["kind"],
+        "async_impl_method"
+    );
+    assert_eq!(
+        record["current"]["implementations"][0]["callable_kind"],
+        "async"
+    );
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("provenance-backed async impl method must resolve");
+    assert_eq!(resolution.resolved.len(), 1);
+    assert_eq!(
+        resolution.resolved[0].implementation_module,
+        "_cott_impl.api.service.ReaderState.read"
+    );
+}
+
+#[test]
+fn async_bindings_allow_only_structured_concurrency() {
+    let fixture = async_fixture();
+    for source in [
+        b"import asyncio\n\nasync def run() -> object:\n    return await asyncio.gather()\n".as_slice(),
+        b"import asyncio\n\nasync def run() -> object:\n    async with asyncio.TaskGroup() as group:\n        group.create_task(asyncio.sleep(0))\n    return None\n".as_slice(),
+    ] {
+        validate_candidate(
+            &fixture.config,
+            &fixture.paths,
+            &fixture.plan,
+            "api.service.run",
+            source,
+        )
+        .expect("structured concurrency must be accepted");
+    }
+    for source in [
+        b"import asyncio\n\nasync def run() -> object:\n    return asyncio.create_task(asyncio.sleep(0))\n".as_slice(),
+        b"import asyncio\n\nasync def run() -> object:\n    return asyncio.ensure_future(asyncio.sleep(0))\n".as_slice(),
+        b"import asyncio\n\nasync def run() -> object:\n    return asyncio.Task(asyncio.sleep(0))\n".as_slice(),
+        b"import asyncio\n\nasync def run() -> object:\n    loop: object = asyncio.get_running_loop()\n    return loop.create_task(asyncio.sleep(0))\n".as_slice(),
+        b"from asyncio import create_task as spawn\n\nasync def run() -> object:\n    return spawn(asyncio.sleep(0))\n".as_slice(),
+    ] {
+        let error = validate_candidate(
+            &fixture.config,
+            &fixture.paths,
+            &fixture.plan,
+            "api.service.run",
+            source,
+        )
+        .expect_err("detached task APIs must fail closed");
+        assert!(error.contains("detached task APIs are not allowed"), "{error}");
+    }
+    let error = validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        b"import asyncio\n\nasync def run() -> object:\n    return asyncio.gather()\n",
+    )
+    .expect_err("gather must be directly awaited");
+    assert!(error.contains("asyncio.gather must be directly awaited"));
+}
+
+#[test]
+fn async_bindings_reject_reflection_and_callable_escapes_for_task_apis() {
+    let fixture = async_fixture();
+    for (source, expected) in [
+        (
+            b"import asyncio\n\nasync def run() -> object:\n    return getattr(asyncio, \"create_task\")(asyncio.sleep(0))\n".as_slice(),
+            "runtime reflection `getattr` is not allowed",
+        ),
+        (
+            b"import asyncio\n\nasync def run() -> object:\n    return asyncio.__getattribute__(\"create_task\")(asyncio.sleep(0))\n".as_slice(),
+            "runtime reflection `__getattribute__` is not allowed",
+        ),
+        (
+            b"import asyncio\n\nasync def run() -> object:\n    loop: object = asyncio.get_running_loop()\n    return getattr(loop, \"create_task\")(asyncio.sleep(0))\n".as_slice(),
+            "runtime reflection `getattr` is not allowed",
+        ),
+        (
+            b"import asyncio\n\nasync def run() -> object:\n    worker: object = asyncio.create_task\n    return worker(asyncio.sleep(0))\n".as_slice(),
+            "asyncio concurrency APIs may only be used as exact structured calls",
+        ),
+    ] {
+        let error = validate_candidate(
+            &fixture.config,
+            &fixture.paths,
+            &fixture.plan,
+            "api.service.run",
+            source,
+        )
+        .expect_err("task APIs must not escape through reflection or rebinding");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn async_bindings_reject_native_async_generator_functions() {
+    let fixture = async_fixture();
+    let error = validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        b"async def run() -> object:\n    yield None\n",
+    )
+    .expect_err("async generators are protocol values, not native implementation functions");
+    assert!(error.contains("native async-generator functions are not allowed"));
+}
+
+#[test]
 fn async_effect_calls_require_await() {
     let fixture = fixture(
         "module api.service\n\nasync fn fetch() -> Unit:\n    effects [network]\n\nfn sync() -> Unit\n\nasync fn run() -> Unit:\n    effects [network]\n",
@@ -570,6 +818,7 @@ fn resolves_provenance_backed_impl_methods_to_their_helper() {
     .expect("method generation record is JSON");
     let implementation = &record["current"]["implementations"][0];
     assert_eq!(implementation["kind"], "impl_method");
+    assert_eq!(implementation["callable_kind"], "sync");
     assert_eq!(implementation["concrete"], "ReaderState");
     assert_eq!(implementation["method"], "read");
     assert_eq!(
@@ -636,7 +885,7 @@ fn rejects_malformed_impl_method_provenance_records() {
     let record: serde_json::Value =
         serde_json::from_slice(&fs::read(&generation).expect("method generation record"))
             .expect("method generation record is JSON");
-    for missing in ["kind", "concrete", "method"] {
+    for missing in ["kind", "callable_kind", "concrete", "method"] {
         let mut incomplete = record.clone();
         incomplete["current"]["implementations"][0]
             .as_object_mut()
@@ -1365,6 +1614,142 @@ fn verifies_transitive_effects_of_public_impl_self_calls() {
         b"from api.service import ReaderState\n\ndef _cott_impl_ReaderState_write(self: ReaderState) -> object:\n    return self.read()\n",
     )
     .expect("a declared effect covers an implementation sibling call");
+}
+
+#[test]
+fn dyn_effect_dispatch_is_trait_keyed_and_await_checked() {
+    let direct = fixture(
+        "module api.service\n\ntrait Reader:\n    fn read(self) -> Unit\n\ntrait Writer:\n    fn read(self) -> Unit\n\nimpl ReaderState for Reader:\n    fn read(self) -> Unit:\n        effects [network]\n\nimpl WriterState for Writer:\n    fn read(self) -> Unit:\n        effects [database.write]\n\nfn run(value: Dyn[Reader]) -> Unit:\n    effects [network]\n\nfn pure(value: Dyn[Reader]) -> Unit\n",
+    );
+    validate_candidate(
+        &direct.config,
+        &direct.paths,
+        &direct.plan,
+        "api.service.run",
+        b"from cott_runtime import Dyn\nfrom api.service import Reader\n\ndef run(value: Dyn[Reader]) -> object:\n    alias = value\n    return alias.value.read()\n",
+    )
+    .expect("a Dyn receiver alias dispatches only its exact trait member effects");
+    let error = validate_candidate(
+        &direct.config,
+        &direct.paths,
+        &direct.plan,
+        "api.service.pure",
+        b"from cott_runtime import Dyn\nfrom api.service import Reader\n\ndef pure(value: Dyn[Reader]) -> object:\n    return value.value.read()\n",
+    )
+    .expect_err("Dyn member effects must reach the target");
+    assert!(
+        error.contains(
+            "effect `network` reaches `pure` through pure -> dyn.api.service.Reader.read"
+        ),
+        "{error}"
+    );
+    let error = validate_candidate(
+        &direct.config,
+        &direct.paths,
+        &direct.plan,
+        "api.service.run",
+        b"from cott_runtime import Dyn\nfrom api.service import Reader\n\ndef run(value: Dyn[Reader]) -> object:\n    return value.value.missing()\n",
+    )
+    .expect_err("unknown Dyn members reject");
+    assert!(
+        error.contains("Dyn trait `api.service.Reader` has no method `missing`"),
+        "{error}"
+    );
+
+    let inherited = fixture(
+        "module api.service\n\ntrait Parent:\n    fn read(self) -> Unit\n\ntrait Child for Parent:\n    fn write(self) -> Unit\n\nimpl ChildState for Child:\n    fn read(self) -> Unit:\n        effects [network]\n    fn write(self) -> Unit:\n        effects []\n\nfn run(value: Dyn[Child]) -> Unit:\n    effects [network]\n",
+    );
+    validate_candidate(
+        &inherited.config,
+        &inherited.paths,
+        &inherited.plan,
+        "api.service.run",
+        b"from cott_runtime import Dyn\nfrom api.service import Child\n\ndef run(value: Dyn[Child]) -> object:\n    return value.value.read()\n",
+    )
+    .expect("a Dyn child resolves inherited members through its canonical closure");
+
+    let asynchronous = fixture(
+        "module api.service\n\ntrait Reader:\n    async fn read(self) -> Unit\n\nimpl ReaderState for Reader:\n    async fn read(self) -> Unit:\n        effects [network]\n\nasync fn run(value: Dyn[Reader]) -> Unit:\n    effects [network]\n",
+    );
+    let error = validate_candidate(
+        &asynchronous.config,
+        &asynchronous.paths,
+        &asynchronous.plan,
+        "api.service.run",
+        b"from cott_runtime import Dyn\nfrom api.service import Reader\n\nasync def run(value: Dyn[Reader]) -> object:\n    return value.value.read()\n",
+    )
+    .expect_err("async Dyn members require await");
+    assert!(
+        error.contains("async Cott callable `dyn.api.service.Reader.read` must be awaited"),
+        "{error}"
+    );
+    validate_candidate(
+        &asynchronous.config,
+        &asynchronous.paths,
+        &asynchronous.plan,
+        "api.service.run",
+        b"from cott_runtime import Dyn\nfrom api.service import Reader\n\nasync def run(value: Dyn[Reader]) -> object:\n    return await value.value.read()\n",
+    )
+    .expect("awaited async Dyn member is valid");
+
+    let generic = fixture(
+        "module api.service\n\ntrait Reader[T]:\n    fn read(self) -> Unit\n\nimpl ReaderState for Reader[I32]:\n    fn read(self) -> Unit:\n        effects [network]\n\nimpl TextReaderState for Reader[Str]:\n    fn read(self) -> Unit:\n        effects [database.write]\n\nfn run(value: Dyn[Reader[I32]]) -> Unit:\n    effects [network]\n",
+    );
+    validate_candidate(
+        &generic.config,
+        &generic.paths,
+        &generic.plan,
+        "api.service.run",
+        b"from cott_runtime import Dyn, I32\nfrom api.service import Reader\n\ndef run(value: Dyn[Reader[I32]]) -> object:\n    return value.value.read()\n",
+    )
+    .expect("generic Dyn annotations resolve their canonical trait origin");
+
+    let const_generic = fixture(
+        "module api.service\n\ntrait Reader[const N: U32]:\n    fn read(self) -> Unit\n\nimpl ReaderState for Reader[2]:\n    fn read(self) -> Unit:\n        effects [network]\n\nfn run(value: Dyn[Reader[2]]) -> Unit:\n    effects [network]\n",
+    );
+    validate_candidate(
+        &const_generic.config,
+        &const_generic.paths,
+        &const_generic.plan,
+        "api.service.run",
+        b"from typing import Literal\nfrom cott_runtime import Dyn\nfrom api.service import Reader\n\ndef run(value: Dyn[Reader[Literal[2]]]) -> object:\n    return value.value.read()\n",
+    )
+    .expect("Dyn const-generic annotations retain their normalized canonical trait reference");
+    let override_ = fixture(
+        "module api.service\n\ntrait Parent:\n    async fn read(self) -> Unit\n\ntrait Child for Parent:\n    async fn read(self) -> Unit\n\nimpl ChildState for Child:\n    async fn read(self) -> Unit:\n        effects [database.write]\n\nasync fn run(value: Dyn[Child]) -> Unit:\n    effects [database.write]\n",
+    );
+    let error = validate_candidate(
+        &override_.config,
+        &override_.paths,
+        &override_.plan,
+        "api.service.run",
+        b"from cott_runtime import Dyn\nfrom api.service import Child\n\nasync def run(value: Dyn[Child]) -> object:\n    return value.value.read()\n",
+    )
+    .expect_err("an overriding async child member requires await");
+    assert!(
+        error.contains("async Cott callable `dyn.api.service.Child.read` must be awaited"),
+        "{error}"
+    );
+    validate_candidate(
+        &override_.config,
+        &override_.paths,
+        &override_.plan,
+        "api.service.run",
+        b"from cott_runtime import Dyn\nfrom api.service import Child\n\nasync def run(value: Dyn[Child]) -> object:\n    return await value.value.read()\n",
+    )
+    .expect("child override effects and callable kind win over its parent");
+
+    let diamond = fixture(
+        "module api.service\n\ntrait Left:\n    fn read(self) -> Unit\n\ntrait Right:\n    fn read(self) -> Unit\n\ntrait Child for Left + Right:\n    fn write(self) -> Unit\n\nfn run(value: Dyn[Child]) -> Unit\n",
+    );
+    validate_candidate(
+        &diamond.config,
+        &diamond.paths,
+        &diamond.plan,
+        "api.service.run",
+        b"from cott_runtime import Dyn\nfrom api.service import Child\n\ndef run(value: Dyn[Child]) -> object:\n    return value.value.read()\n",
+    )
+    .expect("compatible same-depth inherited Dyn members coalesce");
 }
 
 #[test]

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.parse_assignment_types import Assignment, ParseAssignmentError, ParseAssignmentError_EmptyName, ParseAssignmentError_MissingEquals
 
@@ -55,6 +56,7 @@ return the trimmed name and value."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.parse_assignment.parse_assignment", clause="ensures:1", phase="ensures", span={"end_byte":855,"end_column":61,"end_line":25,"start_byte":799,"start_column":5,"start_line":25}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[Assignment, ParseAssignmentError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["Assignment", "ParseAssignmentError", "ParseAssignmentError_EmptyName", "ParseAssignmentError_MissingEquals", "parse_assignment"]

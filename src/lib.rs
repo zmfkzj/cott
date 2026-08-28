@@ -16,6 +16,7 @@ pub mod syntax;
 
 pub mod parser;
 pub mod project;
+pub mod proof;
 pub mod provenance;
 pub mod python;
 pub mod python_emit;

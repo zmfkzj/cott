@@ -122,6 +122,9 @@ fn prompt_has_fixed_sections_and_final_instruction() {
         "FACTORY TYPE MODEL\n`Factory[Concrete]` maps to `type[Concrete]`: it is the exact compiler-generated `Concrete` class object, never an instance, subclass, or arbitrary callable. Constructor calls MUST match `Concrete`'s inferred Cott init signature. Validation MUST NOT construct or invoke a Factory value."
     ));
     assert!(text.contains(
+        "`Dyn[Trait]` is a nominal runtime wrapper: import `Dyn` only from `cott_runtime`, construct it only as `Dyn(value=<compiler-generated concrete>, trait=<exact Trait Protocol>)`, and invoke a trait method only as `dyn.value.method(...)`; never substitute structural values or inspect either wrapper or value."
+    ));
+    assert!(text.contains(
         "EFFECT CALLS\nCall Cott functions only by their exact imported facade name. Do not alias, store, return, pass, rebind, or shadow a Cott callable"
     ));
     assert!(text.contains(
@@ -162,6 +165,38 @@ fn async_prompt_requires_the_exact_definition_and_awaits() {
 }
 
 #[test]
+fn async_method_prompt_requires_the_exact_private_async_helper() {
+    let prompt = render_prompt(
+        &PythonCallable {
+            module: "app".to_owned(),
+            cott_symbol: "app.Reader.fetch".to_owned(),
+            name: "fetch".to_owned(),
+            kind: PythonCallableKind::AsyncImplMethod {
+                concrete: "Reader".to_owned(),
+            },
+            declaration: serde_json::json!({}),
+            owner: Some(serde_json::json!({})),
+        },
+        br#"{"module":"app"}"#,
+        "docs",
+        "types",
+        &BTreeMap::new(),
+        "bound",
+        None,
+        None,
+        Path::new("python/_cott_impl/app/Reader/fetch.py"),
+    )
+    .expect("async method prompt");
+    let text = String::from_utf8(prompt).expect("UTF-8 prompt");
+    assert!(
+        text.contains("canonical private top-level `async def` function `_cott_impl_Reader_fetch`")
+    );
+    assert!(text.contains("additional async functions"));
+    assert!(text.contains("Await every call to an async Cott facade or sibling method"));
+    assert!(text.contains("asyncio.TaskGroup"));
+}
+
+#[test]
 fn method_prompt_allows_private_helpers_and_constants() {
     let prompt = render_prompt(
         &PythonCallable {
@@ -195,4 +230,33 @@ fn method_prompt_allows_private_helpers_and_constants() {
     assert!(text.contains(
         "The compiler-owned concrete facade class `Reader` is absent from `foo.bar_types`; import it exactly as `from foo.bar import Reader` for the `self` annotation. Generated value-type imports remain `from foo.bar_types import Type`."
     ));
+}
+
+#[test]
+fn specialization_prompt_is_rejected_as_compiler_owned() {
+    let error = render_prompt(
+        &PythonCallable {
+            module: "app".to_owned(),
+            cott_symbol: "app.Reader.fetch".to_owned(),
+            name: "fetch".to_owned(),
+            kind: PythonCallableKind::AsyncImplMethod {
+                concrete: "Reader".to_owned(),
+            },
+            declaration: serde_json::json!({"selected": {"origin": "specialization"}}),
+            owner: Some(serde_json::json!({})),
+        },
+        br#"{"module":"app"}"#,
+        "docs",
+        "types",
+        &BTreeMap::new(),
+        "bound",
+        None,
+        None,
+        Path::new("python/_cott_impl/app/Reader/fetch.py"),
+    )
+    .expect_err("specialization target is compiler-owned");
+    assert_eq!(
+        error,
+        "compiler-owned specialization implementation method `app.Reader.fetch` must not be sent to an agent"
+    );
 }

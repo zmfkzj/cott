@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.stock_record_types import StockRecord, StockRecordError, StockRecordError_EmptyName, StockRecordError_NegativePrice, StockRecordError_NegativeShares, StockRecordError_NonFinitePrice, StockRecordError_ValuationOverflow
 
@@ -53,6 +54,7 @@ ValuationOverflow is returned when the binary64 product is not finite."""
         return True
     if not (_cott_match_ensures_3()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.stock_record.value_record", clause="ensures:3", phase="ensures", span={"end_byte":618,"end_column":45,"end_line":26,"start_byte":578,"start_column":5,"start_line":26}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[F64, StockRecordError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def value_stock_record(record: StockRecord) -> Result[F64, StockRecordError]:
@@ -106,6 +108,7 @@ NegativePrice in source order. A valid record is valued by value_record."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.stock_record.value_stock_record", clause="ensures:1", phase="ensures", span={"end_byte":1008,"end_column":45,"end_line":38,"start_byte":968,"start_column":5,"start_line":38}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[F64, StockRecordError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["StockRecord", "StockRecordError", "StockRecordError_EmptyName", "StockRecordError_NegativePrice", "StockRecordError_NegativeShares", "StockRecordError_NonFinitePrice", "StockRecordError_ValuationOverflow", "value_record", "value_stock_record"]

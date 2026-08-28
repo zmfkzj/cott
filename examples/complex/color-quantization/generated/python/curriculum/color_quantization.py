@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.color_quantization_types import ColorQuantizationError, ColorQuantizationError_EmptyPixels, ColorQuantizationError_ZeroMaxColors, Palette, QuantizeRequest, Rgb
 
@@ -32,6 +33,7 @@ components. Empty pixels or a zero limit produces an empty list."""
     _result = _cott_validate_abi(_result, CottList[Rgb], path="$.return")
     if not ((len(_result) <= len(pixels))):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.color_quantization.rank_palette_colors", clause="ensures:1", phase="ensures", span={"end_byte":607,"end_column":37,"end_line":26,"start_byte":575,"start_column":5,"start_line":26}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, CottList[Rgb], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def quantize_colors(request: QuantizeRequest) -> Result[Palette, ColorQuantizationError]:
@@ -79,6 +81,7 @@ rank_palette_colors and construct the resulting palette."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.color_quantization.quantize_colors", clause="ensures:1", phase="ensures", span={"end_byte":926,"end_column":57,"end_line":36,"start_byte":874,"start_column":5,"start_line":36}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[Palette, ColorQuantizationError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["ColorQuantizationError", "ColorQuantizationError_EmptyPixels", "ColorQuantizationError_ZeroMaxColors", "Palette", "QuantizeRequest", "Rgb", "quantize_colors", "rank_palette_colors"]

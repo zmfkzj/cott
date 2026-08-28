@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottList, CottSet, Dyn, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.experiment_ranking_types import ExperimentRankingError as ExperimentRankingError, ExperimentRankingError_BlankRunId as ExperimentRankingError_BlankRunId, ExperimentRankingError_DuplicateRunId as ExperimentRankingError_DuplicateRunId, ExperimentRankingError_EmptyRuns as ExperimentRankingError_EmptyRuns, ExperimentRankingError_NonFiniteScore as ExperimentRankingError_NonFiniteScore, Ranking as Ranking, RankingRequest as RankingRequest, RunMetric as RunMetric
 """Validate and deterministically order experiment runs.

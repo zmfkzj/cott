@@ -962,13 +962,66 @@ fn completes() -> Never
 }
 
 #[test]
-fn rejects_v03_forbidden_async_returns_associated_ordering_and_resource_forms() {
+fn parses_v04_async_trait_impl_methods_and_protocol_types() {
+    parse(
+        r#"module v04.surface
+
+async fn fallback(receiver: Reader, value: I32) -> I32
+
+trait Reader:
+    async fn read(self, value: I32) -> I32 = fallback
+
+impl BufferedReader for Reader:
+    async fn read(self, value: I32) -> I32:
+        requires true
+        ensures true
+
+alias Items = AsyncIterator[I32]
+alias Conversation = AsyncGenerator[I32, Unit]
+"#,
+    )
+    .expect("v0.4 async trait and impl surface should parse");
+}
+
+#[test]
+fn parses_mixed_async_and_sync_impl_members_for_semantic_rejection() {
+    parse(
+        r#"module v04.mixed
+
+trait SyncReader:
+    fn read(self) -> I32
+
+trait AsyncWriter:
+    async fn write(self, value: I32) -> I32
+
+impl Duplex for SyncReader + AsyncWriter:
+    fn read(self) -> I32:
+        ensures true
+    async fn write(self, value: I32) -> I32:
+        ensures true
+"#,
+    )
+    .expect("mixed callable kinds are syntactically valid and rejected semantically");
+}
+
+#[test]
+fn rejects_noncanonical_v04_async_member_spellings() {
     for source in [
-        "module v03.bad\nasync trait Stream:\n    fn next(self) -> I32\n",
-        "module v03.bad\ntrait Stream:\n    async fn next(self) -> I32\n",
+        "module v04.bad\nasync trait Reader:\n    fn read(self) -> I32\n",
+        "module v04.bad\ntrait Reader:\n    fn read(self) -> async I32\n",
+        "module v04.bad\ntrait Reader:\n    async init(self) -> I32\n",
+        "module v04.bad\ntrait Reader:\n    async fn read(self) -> I32 = async fallback\n",
+        "module v04.bad\nimpl BufferedReader for Reader:\n    init async(self) -> Unit\n",
+    ] {
+        assert_rejected(source);
+    }
+}
+
+#[test]
+fn rejects_v03_v04_forbidden_async_returns_associated_ordering_and_resource_forms() {
+    for source in [
         "module v03.bad\ntrait Stream:\n    fn next(self) -> I32\n    type Item\n",
         "module v03.bad\ntrait Stream:\n    type Item\n    fn next(self) -> I32\nimpl Reader for Stream:\n    state:\n        value: I32 = 0\n    type Item = I32\n    fn next(self) -> I32:\n        ensures true\n",
-        "module v03.bad\nimpl Reader for Stream:\n    async fn next(self) -> I32:\n        ensures true\n",
         "module v03.bad\nasync fn stream() -> Iterator[I32]\n",
         "module v03.bad\nasync fn generate() -> Generator[I32, Unit, Unit]\n",
         "module v03.bad\nasync fn never() -> Never\n",
@@ -987,4 +1040,103 @@ fn rejects_v03_forbidden_async_returns_associated_ordering_and_resource_forms() 
     ] {
         assert_rejected(source);
     }
+}
+
+#[test]
+fn parses_v05_inheritance_specialization_variance_and_dyn() {
+    parse(
+        r#"module v05.surface
+
+struct Producer[+T]:
+    value: T
+
+enum Choice[+T]:
+    Value(value: T)
+
+trait Base[T]:
+    fn value(self) -> T
+
+trait Left[T] for Base[T]:
+    fn left(self) -> T
+
+trait Right[T] for Base[T]:
+    fn right(self) -> T
+
+trait Child[T] for Left[T] + Right[T]:
+    fn child(self) -> T
+
+trait Sink[-T]:
+    fn push(self, value: T) -> Unit
+
+struct BufferedReader:
+    id: I32
+
+fn fallback(receiver: BufferedReader, value: I32) -> I32
+
+trait Reader:
+    fn read(self, value: I32) -> I32
+
+specialize BufferedReader for Reader:
+    read = v05.surface.fallback
+
+alias DynamicReader = Dyn[Reader]
+"#,
+    )
+    .expect("v0.5 inheritance, specialization, variance, and Dyn syntax should parse");
+}
+
+#[test]
+fn rejects_malformed_v05_inheritance_specialization_and_variance_syntax() {
+    for source in [
+        "module v05.bad\ntrait Parent:\n    fn read(self) -> I32\ntrait Child for Parent +:\n    fn write(self) -> I32\n",
+        "module v05.bad\ntrait Reader:\n    fn read(self) -> I32\nspecialize BufferedReader Reader:\n    read = v05.bad.fallback\n",
+        "module v05.bad\ntrait Reader:\n    fn read(self) -> I32\nspecialize BufferedReader for Reader:\n    fn read = v05.bad.fallback\n",
+        "module v05.bad\nfn identity[+T](value: T) -> T\n",
+        "module v05.bad\nstruct Sized[+const N: U32]:\n    value: U8\n",
+        "module v05.bad\nrule Illegal[+T]:\n    requires true\n",
+        "module v05.bad\ntrait Broken[+]:\n    fn read(self) -> I32\n",
+    ] {
+        assert_rejected(source);
+    }
+}
+
+#[test]
+fn parses_v06_guarded_recursive_nominal_types() {
+    let file = parse(
+        r#"module recursive
+
+struct Chain[T]:
+    value: T
+    next: Option[Chain[T]]
+
+struct Left:
+    right: Option[Right]
+
+struct Right:
+    left: Result[Left, Stop]
+
+enum Stop:
+    Done
+
+enum Tree:
+    Empty
+    Branch(left: Tree, right: Tree)
+"#,
+    )
+    .expect("guarded recursive nominal types should parse");
+
+    assert!(matches!(
+        &file.declarations[..],
+        [
+            Declaration::Struct(chain),
+            Declaration::Struct(left),
+            Declaration::Struct(right),
+            Declaration::Enum(stop),
+            Declaration::Enum(tree),
+        ] if chain.name == "Chain"
+            && left.name == "Left"
+            && right.name == "Right"
+            && stop.name == "Stop"
+            && tree.name == "Tree"
+    ));
 }

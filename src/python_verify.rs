@@ -12,7 +12,8 @@ use crate::hash::sha256_hex;
 use crate::ir::CanonicalIr;
 use crate::manifest::ProjectConfig;
 use crate::project::ProjectPaths;
-use crate::provenance::GenerationRecord;
+use crate::proof::prove_contracts;
+use crate::provenance::{GenerationRecord, RUNTIME_ABI_VERSION};
 use crate::python::artifact_plan::{PythonArtifactPlan, PythonCallableKind};
 use crate::sandbox::{BindMounts, NetworkAccess, ResourceLimits, SandboxSpec, run};
 use crate::version::{is_at_least, parse_version};
@@ -85,6 +86,28 @@ pub fn verify_python(
     }
 }
 
+fn callable_identity(
+    kind: &PythonCallableKind,
+    name: &str,
+) -> (&'static str, &'static str, Value, Value) {
+    match kind {
+        PythonCallableKind::Function => ("function", "sync", Value::Null, Value::Null),
+        PythonCallableKind::AsyncFunction => ("async_function", "async", Value::Null, Value::Null),
+        PythonCallableKind::ImplMethod { concrete } => (
+            "impl_method",
+            "sync",
+            Value::String(concrete.clone()),
+            Value::String(name.to_owned()),
+        ),
+        PythonCallableKind::AsyncImplMethod { concrete } => (
+            "async_impl_method",
+            "async",
+            Value::String(concrete.clone()),
+            Value::String(name.to_owned()),
+        ),
+    }
+}
+
 fn verify_in_scratch(
     config: &ProjectConfig,
     paths: &ProjectPaths,
@@ -95,6 +118,7 @@ fn verify_in_scratch(
     type_checker: &Path,
     scratch: &Path,
 ) -> Result<VerificationEvidence, String> {
+    let contract_proofs = prove_contracts(ir, scope)?;
     let python_probe = process(
         interpreter,
         vec![
@@ -237,16 +261,10 @@ fn verify_in_scratch(
         let callable = callable_symbols.get(symbol).ok_or_else(|| {
             format!("generation record contains unknown implementation `{symbol}`")
         })?;
-        let (kind, concrete, method) = match &callable.kind {
-            PythonCallableKind::Function => ("function", Value::Null, Value::Null),
-            PythonCallableKind::AsyncFunction => ("async_function", Value::Null, Value::Null),
-            PythonCallableKind::ImplMethod { concrete } => (
-                "impl_method",
-                Value::String(concrete.clone()),
-                Value::String(callable.name.clone()),
-            ),
-        };
+        let (kind, callable_kind, concrete, method) =
+            callable_identity(&callable.kind, &callable.name);
         if implementation.get("kind").and_then(Value::as_str) != Some(kind)
+            || implementation.get("callable_kind").and_then(Value::as_str) != Some(callable_kind)
             || implementation.get("concrete") != Some(&concrete)
             || implementation.get("method") != Some(&method)
         {
@@ -266,6 +284,7 @@ fn verify_in_scratch(
                 PythonCallableKind::Function => "function",
                 PythonCallableKind::AsyncFunction => "async_function",
                 PythonCallableKind::ImplMethod { .. } => "impl_method",
+                PythonCallableKind::AsyncImplMethod { .. } => "async_impl_method",
             };
             let implementation = implementation_symbols
                 .get(&callable.cott_symbol)
@@ -321,7 +340,8 @@ fn verify_in_scratch(
                 PythonCallableKind::Function | PythonCallableKind::AsyncFunction => {
                     (callable.name.as_str(), None)
                 }
-                PythonCallableKind::ImplMethod { concrete } => {
+                PythonCallableKind::ImplMethod { concrete }
+                | PythonCallableKind::AsyncImplMethod { concrete } => {
                     let expected_path = Path::new("_cott_impl")
                         .join(callable.module.replace('.', "/"))
                         .join(concrete)
@@ -430,7 +450,7 @@ fn verify_in_scratch(
             "platform": python["platform"],
             "version": python_version,
         },
-        "runtime": {"abi": "2", "version": env!("CARGO_PKG_VERSION")},
+        "runtime": {"abi": RUNTIME_ABI_VERSION.to_string(), "version": env!("CARGO_PKG_VERSION")},
     });
     let mut candidate_tools = tools.clone();
     candidate_tools["python"] = json!({
@@ -488,7 +508,7 @@ for item in json.loads(sys.argv[1]):
  actual_signature=inspect.signature(implementation)
  expected_hints={name:hint(value) for name,value in typing.get_type_hints(facade,include_extras=True).items()}
  actual_hints={name:hint(value) for name,value in typing.get_type_hints(implementation,include_extras=True).items()}
- expected_async=item['callable_kind']=='async_function'
+ expected_async=item['callable_kind'] in ('async_function','async_impl_method')
  if shape(actual_signature) != shape(expected_signature) or actual_hints != expected_hints or inspect.iscoroutinefunction(facade) != expected_async or inspect.iscoroutinefunction(implementation) != expected_async:
   raise TypeError(f"{item['symbol']} implementation callable kind/signature {actual_signature} {actual_hints!r} != {expected_signature} {expected_hints!r}")
  out[item['symbol']]={'callable_kind':item['callable_kind'],'implementation_module':implementation.__module__,'implementation_name':implementation.__name__,'module':facade.__module__,'name':facade.__qualname__,'runtime_validation':{name:runtime_validation(value) for name,value in typing.get_type_hints(facade,include_extras=True).items()},'signature':str(expected_signature)}
@@ -525,6 +545,7 @@ print(json.dumps(out,sort_keys=True,separators=(',',':')))
     candidate_guard.keep = true;
     let report = json!({
         "contract_tests": contract_report,
+        "contract_proofs": contract_proofs,
         "runtime_capability": {
             "grade": "runtime check",
             "sandbox": "bubblewrap",
@@ -1178,5 +1199,18 @@ mod tests {
         assert_eq!(basedpyright_version("basedpyright 1.40.0"), Some("1.40.0"));
         assert_eq!(basedpyright_version("1.39.9"), Some("1.39.9"));
         assert_eq!(basedpyright_version("basedpyright 1.39.8"), None);
+    }
+    #[test]
+    fn async_impl_identity_requires_async_provenance() {
+        let (kind, callable_kind, concrete, method) = callable_identity(
+            &PythonCallableKind::AsyncImplMethod {
+                concrete: "ReaderState".to_owned(),
+            },
+            "read",
+        );
+        assert_eq!(kind, "async_impl_method");
+        assert_eq!(callable_kind, "async");
+        assert_eq!(concrete, Value::String("ReaderState".to_owned()));
+        assert_eq!(method, Value::String("read".to_owned()));
     }
 }

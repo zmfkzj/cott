@@ -236,11 +236,53 @@ const TRACEABILITY: &[(u8, &[&str])] = &[
             "cli::tests::final_commit_faults_preserve_exact_ownership_states_and_resume",
         ],
     ),
+    (
+        37,
+        &[
+            "ir::checked_in_canonical_ir_schema_is_parseable",
+            "cli::emits_complete_tree_and_verifies_exact_bytes",
+            "python_runtime::generated_runtime_exercises_abi_and_provenance_loader",
+        ],
+    ),
+    (
+        38,
+        &[
+            "binding::async_impl_methods_are_agent_only_and_require_exact_async_helpers",
+            "python_emit::emits_async_impl_methods_with_reentrant_lock_and_finalization",
+        ],
+    ),
+    (
+        39,
+        &[
+            "contract_test::contract_runner_observes_and_closes_pure_async_protocols",
+            "contract_test::contract_runner_awaits_async_functions_and_detects_task_leaks",
+        ],
+    ),
+    (
+        40,
+        &[
+            "semantic::lowers_v05_order_independent_inheritance_and_coalesced_diamonds",
+            "semantic::lowers_v05_specializations_below_explicit_implementations",
+            "semantic::lowers_v05_valid_variance_and_rejects_invalid_polarity",
+            "python_runtime::generated_runtime_validates_generic_dyn_exactly",
+        ],
+    ),
+    (
+        41,
+        &[
+            "semantic::accepts_v06_guarded_self_mutual_generic_and_enum_recursion",
+            "contract_test::contract_runner_constructs_terminating_recursive_enum_candidates_stably",
+            "python_runtime::generated_runtime_exercises_abi_and_provenance_loader",
+            "cli::verify_records_no_baseline_implementation_comparison",
+            "cli::verify_rejects_disproved_static_requires_without_mutating_generation_record",
+            "cli::verify_records_unsupported_static_requires_as_nonfatal_unknown",
+        ],
+    ),
 ];
 
 #[test]
-fn all_36_architecture_acceptance_criteria_map_to_named_assertions() {
-    assert_eq!(TRACEABILITY.len(), 36);
+fn all_41_architecture_acceptance_criteria_map_to_named_assertions() {
+    assert_eq!(TRACEABILITY.len(), 41);
     for (index, (criterion, assertions)) in TRACEABILITY.iter().enumerate() {
         assert_eq!(*criterion as usize, index + 1);
         assert!(!assertions.is_empty());

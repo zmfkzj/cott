@@ -1,5 +1,9 @@
 module curriculum.json_transform
 
+enum JsonChain:
+    End
+    Link(value: Str, next: Option[JsonChain])
+
 enum JsonTransformError:
     NotAnObject
     MissingField(field_name: Str)
@@ -8,6 +12,8 @@ async fn wrap_scalar_json(key: Str, value: Str) -> JsonValue:
     doc """
     Wrap a string key-value pair into a structured JsonValue object.
     """
+
+    requires key.len > 0
 
     effects []
 

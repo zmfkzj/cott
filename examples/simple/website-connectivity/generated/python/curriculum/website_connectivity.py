@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.website_connectivity_types import ConnectivityStatus, ConnectivityStatus_NotWorking, ConnectivityStatus_Working, WebsiteClassification, WebsiteObservation, WebsiteObservationError, WebsiteObservationError_EmptyUrl, WebsiteObservationError_InvalidStatusCode
 
@@ -61,6 +62,7 @@ Status 200 maps to Working; every other accepted status maps to NotWorking."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.website_connectivity.classify_observation", clause="ensures:1", phase="ensures", span={"end_byte":948,"end_column":79,"end_line":33,"start_byte":874,"start_column":5,"start_line":33}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[WebsiteClassification, WebsiteObservationError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def classify_websites(observations: CottList[WebsiteObservation]) -> Result[CottList[WebsiteClassification], WebsiteObservationError]:
@@ -104,6 +106,7 @@ classification per observation in the same order; empty input succeeds."""
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.website_connectivity.classify_websites", clause="ensures:1", phase="ensures", span={"end_byte":1737,"end_column":82,"end_line":52,"start_byte":1660,"start_column":5,"start_line":52}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[CottList[WebsiteClassification], WebsiteObservationError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["ConnectivityStatus", "ConnectivityStatus_NotWorking", "ConnectivityStatus_Working", "WebsiteClassification", "WebsiteObservation", "WebsiteObservationError", "WebsiteObservationError_EmptyUrl", "WebsiteObservationError_InvalidStatusCode", "classify_observation", "classify_websites"]

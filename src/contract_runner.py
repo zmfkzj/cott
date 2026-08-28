@@ -57,14 +57,30 @@ def substitute(annotation, substitutions):
         return annotation
 
 
+def dyn_name(annotation):
+    args = typing.get_args(annotation)
+    trait = args[0] if args else None
+    return f"Dyn[{getattr(trait, '__name__', repr(trait))}]"
+
+
 def non_generatable(annotation, substitutions=None):
     annotation = substitute(annotation, substitutions or {})
+    if typing.get_origin(annotation) is cott_runtime.Dyn:
+        return f"{dyn_name(annotation)} without a compiler-owned initialized concrete case"
     if annotation is typing.Any:
         return "Any"
     if annotation is object:
         return "Unknown"
     origin = typing.get_origin(annotation)
     args = typing.get_args(annotation)
+    target = origin or annotation
+    target_name = getattr(target, "__name__", "")
+    if inspect.isclass(target) and dataclasses.is_dataclass(target):
+        return None
+    if target in (list, set, dict) or target_name in {"CottList", "CottSet", "FrozenMap"}:
+        return None
+    if target_name == "CottArray" and fixed_length(args[1] if len(args) == 2 else None) == 0:
+        return None
     if origin is typing.Annotated:
         if any(type(value).__name__ == "CottExternal" for value in args[1:]):
             return "external type"
@@ -84,28 +100,196 @@ def non_generatable(annotation, substitutions=None):
     )
 
 
-def input_candidate_reason(function):
+def input_candidate_reason(function, strategy=None, dyn_values=()):
     hints = callable_hints(function)
     signature = inspect.signature(function)
+    strategy = strategy or {}
     for parameter in signature.parameters.values():
         annotation = hints.get(parameter.name, parameter.annotation)
+        if typing.get_origin(annotation) is cott_runtime.Dyn and dyn_values:
+            continue
         reason = non_generatable(annotation)
         if reason is not None:
             return (
                 f"input parameter `{parameter.name}` is {reason} and is not "
                 "automatically generated"
             )
+        reason = candidate_failure_reason(
+            annotation,
+            container_length_limit=strategy.get("container_length_limit", 3),
+            json_depth_limit=strategy.get("json_depth_limit", 4),
+            node_limit=strategy.get("node_limit", 64),
+        )
+        if reason is not None:
+            return f"input parameter `{parameter.name}` {reason}"
     return None
 
-def candidates(annotation, depth=0, substitutions=None, container_length_limit=3, json_depth_limit=4):
+def candidate_failure_reason(
+    annotation,
+    substitutions=None,
+    depth=0,
+    container_length_limit=3,
+    json_depth_limit=4,
+    node_limit=64,
+    active_nominals=(),
+):
     substitutions = substitutions or {}
     annotation = substitute(annotation, substitutions)
     if depth >= json_depth_limit:
-        return []
-    if non_generatable(annotation, substitutions) is not None:
+        return f"candidate depth limit ({json_depth_limit}) exhausted"
+    if node_limit < 1:
+        return f"candidate node limit ({node_limit}) exhausted"
+    reason = non_generatable(annotation, substitutions)
+    if reason is not None:
+        return reason
+    origin = typing.get_origin(annotation)
+    args = typing.get_args(annotation)
+    if origin is typing.Annotated:
+        return candidate_failure_reason(
+            args[0], substitutions, depth, container_length_limit, json_depth_limit,
+            node_limit, active_nominals,
+        )
+    if origin in (typing.Union, types.UnionType):
+        reasons = [
+            candidate_failure_reason(
+                argument, substitutions, depth + 1, container_length_limit,
+                json_depth_limit, node_limit, active_nominals,
+            )
+            for argument in args
+        ]
+        return next(iter(reasons), None) if reasons and all(reasons) else None
+    if annotation in (type(None), bool, int, float, str, bytes, cott_runtime.Unit, pathlib.Path):
+        return None
+    target = origin or annotation
+    target_name = getattr(target, "__name__", "")
+    if target_name == "CottBuffer":
+        length = fixed_length(args[0] if args else None)
+        return None if length is not None and length <= container_length_limit else "fixed buffer length exceeds candidate container limit"
+    if target_name == "CottArray":
+        length = fixed_length(args[1] if len(args) == 2 else None)
+        if length is None or length > container_length_limit:
+            return "fixed array length exceeds candidate container limit"
+        return None if length == 0 else candidate_failure_reason(
+            args[0], substitutions, depth + 1, container_length_limit, json_depth_limit,
+            (node_limit - 1) // length, active_nominals,
+        )
+    if target is tuple and len(args) == 2 and args[1] is Ellipsis:
+        return None
+    if target is tuple:
+        return next(
+            (
+                reason
+                for item_type in args
+                if (reason := candidate_failure_reason(
+                    item_type, substitutions, depth + 1, container_length_limit,
+                    json_depth_limit, (node_limit - 1) // max(len(args), 1), active_nominals,
+                ))
+            ),
+            None,
+        )
+    if target in (list, set, dict) or target_name in {"CottList", "CottSet", "FrozenMap"}:
+        return None
+    if inspect.isclass(target) and dataclasses.is_dataclass(target):
+        key = (target, tuple(map(repr, args)))
+        if key in active_nominals:
+            return f"required recursive value `{target.__name__}` has no finite candidate"
+        parameters = getattr(target, "__parameters__", ())
+        nested = dict(substitutions)
+        nested.update(zip(parameters, args))
+        try:
+            hints = typing.get_type_hints(target, include_extras=True)
+        except Exception:
+            hints = {field.name: field.type for field in dataclasses.fields(target)}
+        fields = dataclasses.fields(target)
+        child_limit = (node_limit - 1) // max(len(fields), 1)
+        if fields and child_limit < 1:
+            return f"candidate node limit ({node_limit}) exhausted"
+        return next(
+            (
+                reason
+                for field in fields
+                if (reason := candidate_failure_reason(
+                    hints.get(field.name, field.type), nested, depth + 1,
+                    container_length_limit, json_depth_limit, child_limit,
+                    (*active_nominals, key),
+                ))
+            ),
+            None,
+        )
+    return "unsupported input type"
+
+def candidates(
+    annotation,
+    depth=0,
+    substitutions=None,
+    container_length_limit=3,
+    json_depth_limit=4,
+    node_limit=64,
+    dyn_values=(),
+    active_nominals=(),
+):
+    substitutions = substitutions or {}
+    annotation = substitute(annotation, substitutions)
+    if depth >= json_depth_limit or node_limit < 1:
         return []
     origin = typing.get_origin(annotation)
     args = typing.get_args(annotation)
+    if origin is cott_runtime.Dyn:
+        trait = args[0] if args else None
+        trait_origin = typing.get_origin(trait) or trait
+        return unique(
+            cott_runtime.Dyn(value=value, trait=trait)
+            for value in dyn_values
+            if trait_origin in type(value).__dict__.get("_cott_traits", ())
+            and trait in type(value).__dict__.get("_cott_trait_specs", ())
+        )
+    target = origin or annotation
+    target_name = getattr(target, "__name__", "")
+    if target in (list, set, dict) or target_name in {
+        "CottList",
+        "CottSet",
+        "FrozenMap",
+    }:
+        child_limit = (node_limit - 1) // max(container_length_limit, 1)
+        element_values = (
+            candidates(
+                args[0], depth + 1, substitutions, container_length_limit, json_depth_limit,
+                child_limit, dyn_values, active_nominals,
+            )
+            if args
+            else []
+        )
+        if target in (dict,) or target_name == "FrozenMap":
+            key_values = element_values[:min(1, container_length_limit)]
+            value_values = (
+                candidates(
+                    args[1], depth + 1, substitutions, container_length_limit, json_depth_limit,
+                    child_limit, dyn_values, active_nominals,
+                )
+                if len(args) > 1
+                else []
+            )
+            value_values = value_values[:min(1, container_length_limit)]
+            raw = [{}]
+            if key_values and value_values:
+                raw.append({key_values[0]: value_values[0]})
+            if target is dict:
+                return raw
+            return [target(values=value) for value in raw]
+        raw = [
+            [],
+            element_values[:min(1, container_length_limit)],
+            element_values[:container_length_limit],
+        ]
+        if target is list:
+            return raw
+        if target is set:
+            return [set(value) for value in raw]
+        if target is tuple:
+            return [tuple(value) for value in raw]
+        return [target(values=value) for value in raw]
+    if non_generatable(annotation, substitutions) is not None:
+        return []
     if origin is typing.Annotated:
         metadata = args[1:]
         integer = next(
@@ -129,16 +313,16 @@ def candidates(annotation, depth=0, substitutions=None, container_length_limit=3
         if floating is not None:
             return [-1.0, -0.0, 0.0, 0.5, 1.0]
         return candidates(
-            args[0], depth, substitutions, container_length_limit, json_depth_limit
+            args[0], depth, substitutions, container_length_limit, json_depth_limit,
+            node_limit, dyn_values, active_nominals,
         )
-    if origin is typing.Literal:
-        return list(args)
     if origin in (typing.Union, types.UnionType):
         return unique(
             value
             for argument in args
             for value in candidates(
-                argument, depth + 1, substitutions, container_length_limit, json_depth_limit
+                argument, depth + 1, substitutions, container_length_limit, json_depth_limit,
+                node_limit, dyn_values, active_nominals,
             )
         )
     if annotation is type(None):
@@ -157,8 +341,6 @@ def candidates(annotation, depth=0, substitutions=None, container_length_limit=3
         return [cott_runtime.UNIT]
     if annotation is pathlib.Path:
         return [pathlib.Path("/tmp/cott-contract-path")]
-    target = origin or annotation
-    target_name = getattr(target, "__name__", "")
     if target_name == "CottBuffer":
         length = fixed_length(args[0] if args else None)
         if length is None or length > container_length_limit:
@@ -171,8 +353,11 @@ def candidates(annotation, depth=0, substitutions=None, container_length_limit=3
         length = fixed_length(args[1] if len(args) == 2 else None)
         if length is None or length > container_length_limit:
             return []
+        if length == 0:
+            return [target(values=())]
         element_values = candidates(
-            args[0], depth + 1, substitutions, container_length_limit, json_depth_limit
+            args[0], depth + 1, substitutions, container_length_limit, json_depth_limit,
+            (node_limit - 1) // max(length, 1), dyn_values, active_nominals,
         ) if args else []
         if length and not element_values:
             return []
@@ -182,13 +367,16 @@ def candidates(annotation, depth=0, substitutions=None, container_length_limit=3
         ]
     if target is tuple and len(args) == 2 and args[1] is Ellipsis:
         values = candidates(
-            args[0], depth + 1, substitutions, container_length_limit, json_depth_limit
+            args[0], depth + 1, substitutions, container_length_limit, json_depth_limit,
+            (node_limit - 1) // max(container_length_limit, 1), dyn_values, active_nominals,
         )[:container_length_limit]
         return unique([(), *((value,) for value in values), tuple(values)])
     if target is tuple:
+        child_limit = (node_limit - 1) // max(len(args), 1)
         pools = [
             candidates(
-                item_type, depth + 1, substitutions, container_length_limit, json_depth_limit
+                item_type, depth + 1, substitutions, container_length_limit, json_depth_limit,
+                child_limit, dyn_values, active_nominals,
             )[:container_length_limit]
             for item_type in args
         ]
@@ -196,45 +384,12 @@ def candidates(annotation, depth=0, substitutions=None, container_length_limit=3
             return []
         return [tuple(items) for items in itertools.islice(itertools.product(*pools), 16)]
 
-    if target in (list, set, dict) or target_name in {
-        "CottList",
-        "CottSet",
-        "FrozenMap",
-    }:
-        element_values = (
-            candidates(args[0], depth + 1, substitutions, container_length_limit, json_depth_limit)
-            if args
-            else []
-        )
-        if target in (dict,) or target_name == "FrozenMap":
-            key_values = element_values[:min(1, container_length_limit)]
-            value_values = (
-                candidates(args[1], depth + 1, substitutions, container_length_limit, json_depth_limit)
-                if len(args) > 1
-                else []
-            )
-            value_values = value_values[:min(1, container_length_limit)]
-            raw = [{}]
-            if key_values and value_values:
-                raw.append({key_values[0]: value_values[0]})
-            if target is dict:
-                return raw
-            return [target(values=value) for value in raw]
-        raw = [
-            [],
-            element_values[:min(1, container_length_limit)],
-            element_values[:container_length_limit],
-        ]
-        if target is list:
-            return raw
-        if target is set:
-            return [set(value) for value in raw]
-        if target is tuple:
-            return [tuple(value) for value in raw]
-        return [target(values=value) for value in raw]
     if target is cott_runtime.Opaque:
         return []
     if inspect.isclass(target) and dataclasses.is_dataclass(target):
+        key = (target, tuple(map(repr, args)))
+        if key in active_nominals:
+            return []
         parameters = getattr(target, "__parameters__", ())
         nested = dict(substitutions)
         nested.update(zip(parameters, args))
@@ -243,6 +398,9 @@ def candidates(annotation, depth=0, substitutions=None, container_length_limit=3
         except Exception:
             hints = {field.name: field.type for field in dataclasses.fields(target)}
         fields = dataclasses.fields(target)
+        child_limit = (node_limit - 1) // max(len(fields), 1)
+        if fields and child_limit < 1:
+            return []
         pools = []
         for field in fields:
             pool = candidates(
@@ -251,6 +409,9 @@ def candidates(annotation, depth=0, substitutions=None, container_length_limit=3
                 nested,
                 container_length_limit,
                 json_depth_limit,
+                child_limit,
+                dyn_values,
+                (*active_nominals, key),
             )
             if not pool:
                 return []
@@ -505,11 +666,12 @@ def validate_candidate(value, annotation):
     return cott_runtime._cott_validate_abi(value, annotation)
 
 
-def invoke_cases(function, strategy=None):
+def invoke_cases(function, strategy=None, dyn_values=()):
     hints = callable_hints(function)
     signature = inspect.signature(function)
     strategy = strategy or {}
     candidate_limit = strategy.get("candidate_limit", 64)
+    node_limit = strategy.get("node_limit", 64)
     container_length_limit = strategy.get("container_length_limit", 3)
     json_depth_limit = strategy.get("json_depth_limit", 4)
     pools = []
@@ -520,6 +682,8 @@ def invoke_cases(function, strategy=None):
                 annotation,
                 container_length_limit=container_length_limit,
                 json_depth_limit=json_depth_limit,
+                node_limit=node_limit,
+                dyn_values=dyn_values,
             )
             if annotation is not inspect.Parameter.empty
             else []
@@ -608,9 +772,10 @@ def resolved_impl_methods(module_values, implementation):
         trait_method = slot["trait_method"]
         trait_name, method_name = trait_method.rsplit(".", 1)
         selected = slot["selected"]
-        if selected["kind"] == "explicit" and local(selected["function"]["symbol"]) != method_name:
+        origin = selected.get("origin", selected.get("kind"))
+        if origin == "explicit" and local(selected["function"]["symbol"]) != method_name:
             raise AssertionError(f"{implementation['name']}.{method_name}: selected function does not match trait method")
-        if selected["kind"] == "explicit":
+        if origin == "explicit":
             source = next(
                 (
                     method for method in implementation["methods"]
@@ -621,7 +786,7 @@ def resolved_impl_methods(module_values, implementation):
             if source is None:
                 raise AssertionError(f"{implementation['name']}.{method_name}: missing explicit method")
             method = dict(source)
-        elif selected["kind"] == "default":
+        elif origin in ("default", "specialization"):
             trait = next(
                 (
                     declaration
@@ -633,19 +798,24 @@ def resolved_impl_methods(module_values, implementation):
             )
             if trait is None:
                 raise AssertionError(f"{implementation['name']}.{method_name}: missing trait declaration")
-            trait_reference = next(
+            trait_reference = slot.get("trait_ref") or next(
                 (
                     reference for reference in implementation["traits"]
                     if reference["kind"] == "named" and reference["name"] == trait_name
                 ),
                 None,
             )
-            if trait_reference is None or len(trait["generics"]) != len(trait_reference["args"]):
+            if trait_reference is None:
+                if trait["generics"]:
+                    raise AssertionError(f"{implementation['name']}.{method_name}: invalid trait instantiation")
+                substitutions = {}
+            elif len(trait["generics"]) != len(trait_reference["args"]):
                 raise AssertionError(f"{implementation['name']}.{method_name}: invalid trait instantiation")
-            substitutions = {
-                generic["name"]: argument["type"] if argument["kind"] == "type" else argument["value"]
-                for generic, argument in zip(trait["generics"], trait_reference["args"])
-            }
+            else:
+                substitutions = {
+                    generic["name"]: argument["type"] if argument["kind"] == "type" else argument["value"]
+                    for generic, argument in zip(trait["generics"], trait_reference["args"])
+                }
             source = next(
                 (method for method in trait["methods"] if local(method["name"]) == method_name),
                 None,
@@ -686,6 +856,91 @@ def unexecuted(clauses, strategy, effectful_reason, never_reason):
         return observed, None, None
     grade = "trust declaration" if strategy["classification"] == "effectful" else "unobserved"
     return observed, grade, effectful_reason if grade == "trust declaration" else never_reason
+async def bounded(awaitable, symbol, action):
+    task = asyncio.Task(awaitable, loop=asyncio.get_running_loop())
+    try:
+        done, pending = await asyncio.wait((task,), timeout=0.1)
+    except asyncio.CancelledError:
+        task.cancel()
+        _, pending = await asyncio.wait((task,), timeout=0.1)
+        if pending:
+            print(f"{symbol}: cancellation-resistant {action}", file=sys.stderr, flush=True)
+            os._exit(1)
+        raise
+    if not pending:
+        return task.result()
+    task.cancel()
+    _, pending = await asyncio.wait(pending, timeout=0.1)
+    if pending:
+        print(f"{symbol}: cancellation-resistant {action}", file=sys.stderr, flush=True)
+        os._exit(1)
+    raise AssertionError(f"{symbol}: {action} timed out")
+
+
+async def close_protocol(result, symbol):
+    close = getattr(result, "aclose", None)
+    if not callable(close):
+        raise AssertionError(f"{symbol}: protocol result does not support aclose")
+    await bounded(invoke_facade(close, (), {}, symbol, "async"), symbol, "protocol close")
+
+
+async def observe_protocol(result, strategy, hints, symbol):
+    kind = strategy["return_kind"]
+    if kind == "value":
+        return None
+    if kind not in ("async_iterator", "async_generator"):
+        raise AssertionError(f"{symbol}: unsupported return_kind `{kind}`")
+    if not callable(getattr(result, "__anext__", None)):
+        raise AssertionError(f"{symbol}: expected {kind} protocol result")
+    if kind == "async_generator" and not callable(getattr(result, "asend", None)):
+        raise AssertionError(f"{symbol}: expected async_generator protocol result")
+    lifecycle = {
+        "symbol": symbol,
+        "lifecycle_steps": 0,
+        "lifecycle_sent": False,
+        "lifecycle_closed": False,
+        "lifecycle_reason": None,
+    }
+    try:
+        send_value = OMIT
+        if kind == "async_generator":
+            send = typing.get_args(hints["return"])
+            send = send[1] if len(send) > 1 else type(None)
+            values = candidates(
+                send,
+                container_length_limit=strategy["container_length_limit"],
+                json_depth_limit=strategy["json_depth_limit"],
+            )
+            if values:
+                send_value = values[0]
+        for step in range(strategy["lifecycle_limit"]):
+            sending = kind == "async_generator" and step and send_value is not OMIT
+            operation = result.asend if sending else result.__anext__
+            args = (send_value,) if sending else ()
+            if sending:
+                lifecycle["lifecycle_sent"] = True
+            try:
+                await bounded(
+                    invoke_facade(operation, args, {}, symbol, "async"),
+                    symbol,
+                    "protocol lifecycle step",
+                )
+            except StopAsyncIteration:
+                lifecycle["lifecycle_reason"] = "protocol completed"
+                break
+            lifecycle["lifecycle_steps"] += 1
+        else:
+            lifecycle["lifecycle_reason"] = "observation limit reached"
+    except asyncio.CancelledError:
+        raise
+    except cott_runtime.CottContractViolation as error:
+        raise AssertionError(f"{symbol}: lazy protocol contract violation: {error}") from error
+    finally:
+        await close_protocol(result, symbol)
+        lifecycle["lifecycle_closed"] = True
+    return lifecycle
+
+
 
 
 async def invoke_facade(function, args, kwargs, symbol, callable_kind):
@@ -693,13 +948,19 @@ async def invoke_facade(function, args, kwargs, symbol, callable_kind):
     before = asyncio.all_tasks()
     created = []
     previous_factory = loop.get_task_factory()
+    original_task = asyncio.Task
+
+    def tracked_task(coroutine, *args, **kwargs):
+        task = original_task(coroutine, *args, **kwargs)
+        created.append(task)
+        return task
 
     def task_factory(loop, coroutine, context=None):
         if previous_factory is None:
             task = (
-                asyncio.Task(coroutine, loop=loop, context=context)
+                original_task(coroutine, loop=loop, context=context)
                 if context is not None
-                else asyncio.Task(coroutine, loop=loop)
+                else original_task(coroutine, loop=loop)
             )
         elif context is None:
             task = previous_factory(loop, coroutine)
@@ -708,6 +969,7 @@ async def invoke_facade(function, args, kwargs, symbol, callable_kind):
         created.append(task)
         return task
 
+    asyncio.Task = tracked_task
     loop.set_task_factory(task_factory)
     try:
         result = function(*args, **kwargs)
@@ -717,6 +979,7 @@ async def invoke_facade(function, args, kwargs, symbol, callable_kind):
             await asyncio.sleep(0)
         finally:
             loop.set_task_factory(previous_factory)
+            asyncio.Task = original_task
         created = (set(created) | (asyncio.all_tasks() - before)) - before
         failures = []
         pending = []
@@ -759,7 +1022,7 @@ async def run_function(module_value, declaration, strategy):
         "Never-returning function is not automatically executed",
     )
     if grade is not None:
-        return observed, grade, reason
+        return observed, grade, reason, None
     callable_kind = strategy["callable_kind"]
     if callable_kind not in ("sync", "async"):
         raise AssertionError(f"{symbol}: unsupported callable_kind `{callable_kind}`")
@@ -768,9 +1031,10 @@ async def run_function(module_value, declaration, strategy):
     if hasattr(module, "_cott_set_test_context"):
         module._cott_set_test_context(True)
     valid_cases = 0
+    lifecycle = None
     hints = callable_hints(function)
     cases = invoke_cases(function, strategy)
-    candidate_reason = input_candidate_reason(function) if not cases else None
+    candidate_reason = input_candidate_reason(function, strategy) if not cases else None
     for args, kwargs, environment in cases:
         requirements = [clause for clause in clauses if clause["kind"] == "requires"]
         try:
@@ -783,6 +1047,10 @@ async def run_function(module_value, declaration, strategy):
         except cott_runtime.CottContractViolation as error:
             raise AssertionError(f"{symbol}: facade contract violation for generated valid case: {error}") from error
         result = cott_runtime._cott_validate_abi(result, hints["return"])
+        if lifecycle is None:
+            lifecycle = await observe_protocol(result, strategy, hints, symbol)
+        elif strategy["return_kind"] != "value":
+            await close_protocol(result, symbol)
         valid_cases += 1
         conditional_error = next(
             (
@@ -817,8 +1085,8 @@ async def run_function(module_value, declaration, strategy):
         return observed, "unobserved", (
             candidate_reason
             or "no valid input candidate satisfied refinements and requires"
-        )
-    return observed, "test observation", None
+        ), lifecycle
+    return observed, "test observation", None, lifecycle
 
 
 def run_initializer(module, implementation, strategy):
@@ -833,7 +1101,7 @@ def run_initializer(module, implementation, strategy):
         "Never-returning initializer is not automatically executed",
     )
     raw_cases = invoke_cases(facade, strategy)
-    candidate_reason = input_candidate_reason(facade) if not raw_cases else None
+    candidate_reason = input_candidate_reason(facade, strategy) if not raw_cases else None
     if grade is not None:
         return clauses, observed, grade, reason, raw_cases
     valid_cases = 0
@@ -873,9 +1141,11 @@ def run_initializer(module, implementation, strategy):
     return clauses, observed, "test observation", None, accepted
 
 
-def run_method(module, implementation, method, strategy, constructor_cases):
+async def run_method(module, implementation, method, strategy, constructor_cases):
     symbol = strategy["symbol"]
     method_name = local(symbol)
+    if strategy["callable_kind"] not in ("sync", "async"):
+        raise AssertionError(f"{symbol}: unsupported callable_kind `{strategy['callable_kind']}`")
     facade = getattr(module, local(implementation["name"]))
     clauses = impl_clauses(
         method.get("contracts", {}),
@@ -890,17 +1160,18 @@ def run_method(module, implementation, method, strategy, constructor_cases):
         "Never-returning method is not automatically executed",
     )
     if grade is not None:
-        return clauses, observed, grade, reason
+        return clauses, observed, grade, reason, None
     if not constructor_cases:
         return clauses, observed, "unobserved", (
-            input_candidate_reason(facade)
+            input_candidate_reason(facade, strategy)
             or "no valid constructor candidate satisfied refinements and requires"
-        )
+        ), None
     probe = facade(*constructor_cases[0][0], **constructor_cases[0][1])
     bound_method = getattr(probe, method_name)
-    cases = invoke_cases(bound_method, strategy)
-    candidate_reason = input_candidate_reason(bound_method) if not cases else None
+    cases = invoke_cases(bound_method, strategy, (probe,))
+    candidate_reason = input_candidate_reason(bound_method, strategy, (probe,)) if not cases else None
     valid_cases = 0
+    lifecycle = None
     requirements = [clause for clause in clauses if clause["kind"] == "requires"]
     state = [local(field["name"]) for field in implementation.get("state", ())]
     permitted = {local(field) for field in method.get("modifies", ())}
@@ -919,11 +1190,19 @@ def run_method(module, implementation, method, strategy, constructor_cases):
         except Exception as error:
             raise AssertionError(f"{symbol}: independent requires evaluation failed: {error}") from error
         old = {field: getattr(receiver, field) for field in state}
+        bound_method = getattr(receiver, method_name)
+        hints = callable_hints(bound_method)
         try:
-            result = getattr(receiver, method_name)(*method_args, **method_kwargs)
+            result = await invoke_facade(
+                bound_method, method_args, method_kwargs, symbol, strategy["callable_kind"]
+            )
         except cott_runtime.CottContractViolation as error:
             raise AssertionError(f"{symbol}: facade contract violation for generated valid case: {error}") from error
-        result = cott_runtime._cott_validate_abi(result, callable_hints(getattr(receiver, method_name))["return"])
+        result = cott_runtime._cott_validate_abi(result, hints["return"])
+        if lifecycle is None:
+            lifecycle = await observe_protocol(result, strategy, hints, symbol)
+        elif strategy["return_kind"] != "value":
+            await close_protocol(result, symbol)
         valid_cases += 1
         conditional_error = next(
             (
@@ -976,8 +1255,8 @@ def run_method(module, implementation, method, strategy, constructor_cases):
         return clauses, observed, "unobserved", (
             candidate_reason
             or "no valid input candidate satisfied refinements and requires"
-        )
-    return clauses, observed, "test observation", None
+        ), lifecycle
+    return clauses, observed, "test observation", None, lifecycle
 
 
 def evidence(symbol, clauses, observed, grade, reason, request):
@@ -998,14 +1277,17 @@ async def main():
     request = json.load(__import__("sys").stdin)
     strategies = {strategy["symbol"]: strategy for strategy in request["strategies"]}
     contracts = []
+    lifecycle = []
     for module_value in request["modules"]:
         for declaration in module_value["declarations"]:
             if declaration["kind"] == "function":
                 strategy = strategies.get(declaration["name"])
                 if strategy is None:
                     continue
-                observed, grade, reason = await run_function(module_value, declaration, strategy)
+                observed, grade, reason, observation = await run_function(module_value, declaration, strategy)
                 contracts.extend(evidence(declaration["name"], declaration["contract"]["clauses"], observed, grade, reason, request))
+                if observation is not None:
+                    lifecycle.append(observation)
             elif declaration["kind"] == "impl":
                 init_symbol = f"{module_value['module']}.{local(declaration['name'])}.init"
                 init_strategy = strategies.get(init_symbol)
@@ -1024,7 +1306,8 @@ async def main():
                         )
                         method_strategies.append((method, symbol, strategy, clauses))
                 pure_method_needs_execution = any(
-                    strategy["classification"] == "pure" and bool(clauses)
+                    strategy["classification"] == "pure"
+                    and (bool(clauses) or strategy["return_kind"] != "value")
                     for _, _, strategy, clauses in method_strategies
                 )
                 needs_execution = pure_method_needs_execution or (
@@ -1062,11 +1345,13 @@ async def main():
                     clauses, observed, grade, reason, initializer_cases = run_initializer(module, declaration, init_strategy)
                     contracts.extend(evidence(init_symbol, clauses, observed, grade, reason, request))
                 for method, symbol, strategy, _ in method_strategies:
-                    clauses, observed, grade, reason = run_method(
+                    clauses, observed, grade, reason, observation = await run_method(
                         module, declaration, method, strategy, initializer_cases
                     )
                     contracts.extend(evidence(symbol, clauses, observed, grade, reason, request))
-    print(json.dumps({"contracts": contracts}, sort_keys=True, separators=(",", ":")))
+                    if observation is not None:
+                        lifecycle.append(observation)
+    print(json.dumps({"contracts": contracts, "lifecycle": lifecycle}, sort_keys=True, separators=(",", ":")))
 
 
 asyncio.run(main())

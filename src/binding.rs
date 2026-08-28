@@ -92,12 +92,15 @@ pub fn resolve_implementations(
     let mut diagnostics = Vec::new();
     for symbol in config.python.implementations.keys() {
         match callables.get(symbol) {
-            Some(callable) if is_default_impl_method(callable) => diagnostics.push(BindingDiagnostic {
-                path: paths.manifest.clone(),
-                message: format!(
-                    "implementation binding key `{symbol}` names a compiler-owned default implementation method"
-                ),
-            }),
+            Some(callable) if is_compiler_owned_selected_method(callable) => {
+                diagnostics.push(BindingDiagnostic {
+                    path: paths.manifest.clone(),
+                    message: format!(
+                        "implementation binding key `{symbol}` names a compiler-owned {} implementation method",
+                        selected_implementation_kind(callable).expect("compiler-owned selection has a kind"),
+                    ),
+                })
+            }
             Some(PythonCallable {
                 kind: PythonCallableKind::Function | PythonCallableKind::AsyncFunction,
                 ..
@@ -118,13 +121,15 @@ pub fn resolve_implementations(
     }
     for callable in callables
         .values()
-        .filter(|callable| is_default_impl_method(callable))
+        .filter(|callable| is_compiler_owned_selected_method(callable))
     {
-        let Some(symbol) = default_verified_facade(callable) else {
+        let kind =
+            selected_implementation_kind(callable).expect("compiler-owned selection has a kind");
+        let Some(symbol) = selected_verified_facade(callable) else {
             diagnostics.push(BindingDiagnostic {
                 path: paths.python_source_dir.clone(),
                 message: format!(
-                    "default implementation method `{}` has no verified facade dependency",
+                    "{kind} implementation method `{}` has no verified facade dependency",
                     callable.cott_symbol
                 ),
             });
@@ -140,7 +145,7 @@ pub fn resolve_implementations(
             diagnostics.push(BindingDiagnostic {
                 path: paths.python_source_dir.clone(),
                 message: format!(
-                    "default implementation method `{}` references non-callable verified facade `{symbol}`",
+                    "{kind} implementation method `{}` references non-callable verified facade `{symbol}`",
                     callable.cott_symbol
                 ),
             });
@@ -182,7 +187,7 @@ pub fn resolve_implementations(
     let mut unresolved = Vec::new();
     let mut expected_agent_files = BTreeSet::new();
     for (symbol, callable) in callables {
-        if is_default_impl_method(&callable) {
+        if is_compiler_owned_selected_method(&callable) {
             continue;
         }
         let Some(segments) = module_segments(&callable.module) else {
@@ -197,7 +202,7 @@ pub fn resolve_implementations(
         for segment in segments {
             agent_source.push(segment);
         }
-        if let PythonCallableKind::ImplMethod { concrete } = &callable.kind {
+        if let Some(concrete) = impl_concrete(&callable.kind) {
             agent_source.push(concrete);
         }
         agent_source.push(format!("{}.py", callable.name));
@@ -547,9 +552,11 @@ pub fn validate_candidate(
     if matches.len() != 1 {
         return Err(format!("ambiguous canonical function `{function}`"));
     }
-    if is_default_impl_method(&callable) {
+    if is_compiler_owned_selected_method(&callable) {
+        let kind =
+            selected_implementation_kind(&callable).expect("compiler-owned selection has a kind");
         return Err(format!(
-            "compiler-owned default implementation method `{}` does not accept an agent implementation",
+            "compiler-owned {kind} implementation method `{}` does not accept an agent implementation",
             callable.cott_symbol
         ));
     }
@@ -692,29 +699,34 @@ fn module_segments(module: &str) -> Option<Vec<&str>> {
     .then_some(segments)
 }
 
-fn is_default_impl_method(callable: &PythonCallable) -> bool {
-    matches!(&callable.kind, PythonCallableKind::ImplMethod { .. })
-        && callable
-            .declaration
-            .get("selected")
-            .and_then(serde_json::Value::as_object)
-            .and_then(|selected| selected.get("kind"))
-            .and_then(serde_json::Value::as_str)
-            == Some("default")
-}
-
-fn default_verified_facade(callable: &PythonCallable) -> Option<&str> {
-    callable
+fn selected_implementation_kind(callable: &PythonCallable) -> Option<&str> {
+    let kind = callable
         .declaration
         .get("selected")
-        .and_then(serde_json::Value::as_object)
-        .filter(|selected| {
-            selected.get("kind").and_then(serde_json::Value::as_str) == Some("default")
-        })
-        .and_then(|selected| selected.get("function"))
-        .and_then(serde_json::Value::as_object)
-        .and_then(|function| function.get("verified_facade"))
-        .and_then(serde_json::Value::as_str)
+        .and_then(|selected| selected.get("origin"))
+        .and_then(serde_json::Value::as_str)?;
+    matches!(kind, "default" | "specialization").then_some(kind)
+}
+
+fn is_compiler_owned_selected_method(callable: &PythonCallable) -> bool {
+    impl_concrete(&callable.kind).is_some() && selected_implementation_kind(callable).is_some()
+}
+
+fn selected_verified_facade(callable: &PythonCallable) -> Option<&str> {
+    let selected = callable
+        .declaration
+        .get("selected")
+        .and_then(serde_json::Value::as_object)?;
+    selected_implementation_kind(callable)?;
+    let function = selected
+        .get("function")
+        .and_then(serde_json::Value::as_object)?;
+    let module = function.get("module").and_then(serde_json::Value::as_str)?;
+    let symbol = function.get("symbol").and_then(serde_json::Value::as_str)?;
+    let facade = function
+        .get("verified_facade")
+        .and_then(serde_json::Value::as_str)?;
+    (facade == format!("{module}.{symbol}")).then_some(facade)
 }
 
 fn is_free_function(kind: &PythonCallableKind) -> bool {
@@ -725,29 +737,34 @@ fn is_free_function(kind: &PythonCallableKind) -> bool {
 }
 
 fn is_async_function(kind: &PythonCallableKind) -> bool {
-    matches!(kind, PythonCallableKind::AsyncFunction)
+    matches!(
+        kind,
+        PythonCallableKind::AsyncFunction | PythonCallableKind::AsyncImplMethod { .. }
+    )
+}
+
+fn impl_concrete(kind: &PythonCallableKind) -> Option<&str> {
+    match kind {
+        PythonCallableKind::ImplMethod { concrete }
+        | PythonCallableKind::AsyncImplMethod { concrete } => Some(concrete),
+        _ => None,
+    }
 }
 
 fn expected_implementation_function(callable: &PythonCallable) -> String {
-    match &callable.kind {
-        PythonCallableKind::Function | PythonCallableKind::AsyncFunction => callable.name.clone(),
-        PythonCallableKind::ImplMethod { concrete } => {
-            format!("_cott_impl_{concrete}_{}", callable.name)
-        }
+    match impl_concrete(&callable.kind) {
+        Some(concrete) => format!("_cott_impl_{concrete}_{}", callable.name),
+        None => callable.name.clone(),
     }
 }
 
 fn agent_implementation_module(callable: &PythonCallable) -> String {
-    match &callable.kind {
-        PythonCallableKind::Function | PythonCallableKind::AsyncFunction => {
-            format!("_cott_impl.{}.{}", callable.module, callable.name)
-        }
-        PythonCallableKind::ImplMethod { concrete } => {
-            format!(
-                "_cott_impl.{}.{concrete}.{}",
-                callable.module, callable.name
-            )
-        }
+    match impl_concrete(&callable.kind) {
+        Some(concrete) => format!(
+            "_cott_impl.{}.{concrete}.{}",
+            callable.module, callable.name
+        ),
+        None => format!("_cott_impl.{}.{}", callable.module, callable.name),
     }
 }
 
@@ -916,6 +933,10 @@ fn validate_source(
             "builtins" | "__builtins__" => {
                 add_error(String::from("builtin reflection is not allowed"))
             }
+            "getattr" | "setattr" | "delattr" | "hasattr" | "dir" | "vars" | "globals"
+            | "locals" | "__getattr__" | "__getattribute__" | "attrgetter" | "methodcaller" => {
+                add_error(format!("runtime reflection `{token}` is not allowed"))
+            }
             "__file__" | "__path__" | "__spec__" | "__loader__" | "__package__" => {
                 add_error(format!("runtime reflection `{token}` is not allowed"))
             }
@@ -970,7 +991,18 @@ struct EffectGraph {
     impl_concrete: Option<String>,
     impl_methods: BTreeMap<String, String>,
     async_function: bool,
+    dyn_closures: BTreeMap<String, BTreeMap<String, usize>>,
+    dyn_specializations: BTreeMap<String, String>,
+    dyn_methods: BTreeMap<(String, String), String>,
+    dyn_dispatches: BTreeMap<(String, String), String>,
+    dyn_conflicts: BTreeSet<(String, String)>,
+    dyn_aliases: BTreeMap<String, String>,
     errors: BTreeSet<String>,
+}
+
+#[derive(Clone)]
+struct DynReceiver {
+    trait_ref: String,
 }
 
 #[derive(Clone, Default)]
@@ -981,6 +1013,8 @@ struct LocalEffects {
     parameters: BTreeSet<String>,
     assigned: BTreeSet<String>,
     impl_receivers: BTreeSet<String>,
+    dyn_receivers: BTreeMap<String, DynReceiver>,
+    task_groups: BTreeSet<String>,
 }
 
 fn record_effect_cott_call(
@@ -1018,37 +1052,24 @@ fn inspect_effects(
         }
     };
     let plan_callables = plan.callables();
-    let impl_methods = match &callable.kind {
-        PythonCallableKind::ImplMethod { concrete } => plan_callables
+    let impl_methods = impl_concrete(&callable.kind).map_or_else(BTreeMap::new, |concrete| {
+        plan_callables
             .iter()
-            .filter_map(|candidate| match &candidate.kind {
-                PythonCallableKind::ImplMethod {
-                    concrete: candidate_concrete,
-                } if candidate.module == callable.module && candidate_concrete == concrete => {
-                    Some((candidate.name.clone(), candidate.cott_symbol.clone()))
-                }
-                _ => None,
+            .filter(|candidate| {
+                candidate.module == callable.module
+                    && impl_concrete(&candidate.kind) == Some(concrete)
             })
-            .collect(),
-        _ => BTreeMap::new(),
-    };
+            .map(|candidate| (candidate.name.clone(), candidate.cott_symbol.clone()))
+            .collect()
+    });
     let mut graph = EffectGraph {
         cott: plan_callables
             .iter()
             .filter(|candidate| {
                 is_free_function(&candidate.kind)
-                    || matches!(
-                        (&callable.kind, &candidate.kind),
-                        (
-                            PythonCallableKind::ImplMethod {
-                                concrete: target_concrete
-                            },
-                            PythonCallableKind::ImplMethod {
-                                concrete: candidate_concrete
-                            }
-                        ) if candidate.module == callable.module
-                            && candidate_concrete == target_concrete
-                    )
+                    || (candidate.module == callable.module
+                        && impl_concrete(&candidate.kind).is_some()
+                        && impl_concrete(&candidate.kind) == impl_concrete(&callable.kind))
             })
             .map(|candidate| {
                 (
@@ -1059,17 +1080,15 @@ fn inspect_effects(
             .collect(),
         async_cott: plan_callables
             .iter()
-            .filter(|candidate| matches!(&candidate.kind, PythonCallableKind::AsyncFunction))
+            .filter(|candidate| is_async_function(&candidate.kind))
             .map(|candidate| candidate.cott_symbol.clone())
             .collect(),
-        impl_concrete: match &callable.kind {
-            PythonCallableKind::ImplMethod { concrete } => Some(concrete.clone()),
-            _ => None,
-        },
+        impl_concrete: impl_concrete(&callable.kind).map(str::to_owned),
         impl_methods,
         target_function: expected_function.to_owned(),
         ..EffectGraph::default()
     };
+    build_dyn_effects(&plan_callables, plan, &mut graph);
     graph.factory_parameters.extend(
         callable
             .declaration
@@ -1089,6 +1108,7 @@ fn inspect_effects(
     );
     for statement in &suite {
         collect_effect_imports(statement, &mut graph);
+        collect_dyn_imports(statement, &mut graph);
     }
     for statement in &suite {
         match statement {
@@ -1158,6 +1178,446 @@ fn declaration_effects(declaration: &serde_json::Value) -> BTreeSet<String> {
         })
         .map(str::to_owned)
         .collect()
+}
+
+fn named_trait_symbol(value: &serde_json::Value) -> Option<&str> {
+    (value.get("kind").and_then(serde_json::Value::as_str) == Some("named"))
+        .then(|| value.get("name").and_then(serde_json::Value::as_str))
+        .flatten()
+}
+
+fn canonical_trait_reference(value: &serde_json::Value) -> Option<String> {
+    let name = named_trait_symbol(value)?;
+    let args = value
+        .get("args")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(
+            |argument| match argument.get("kind").and_then(serde_json::Value::as_str) {
+                Some("type") => canonical_type_reference(argument.get("type")?),
+                Some("const") => argument.get("value").and_then(|value| {
+                    value
+                        .get("value")
+                        .map(serde_json::Value::to_string)
+                        .map(|value| format!("Literal[{value}]"))
+                }),
+                _ => None,
+            },
+        )
+        .collect::<Option<Vec<_>>>()?;
+    (!args.is_empty())
+        .then(|| format!("{}[{}]", name, args.join(",")))
+        .or_else(|| Some(name.to_owned()))
+}
+
+fn canonical_type_reference(value: &serde_json::Value) -> Option<String> {
+    let kind = value.get("kind").and_then(serde_json::Value::as_str)?;
+    let item = |name: &str| canonical_type_reference(value.get(name)?);
+    let pair = |left: &str, right: &str| {
+        Some(format!(
+            "{},{}",
+            canonical_type_reference(value.get(left)?)?,
+            canonical_type_reference(value.get(right)?)?
+        ))
+    };
+    match kind {
+        "named" => {
+            let name = named_trait_symbol(value)?.rsplit('.').next()?;
+            let args = value
+                .get("args")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(
+                    |argument| match argument.get("kind").and_then(serde_json::Value::as_str) {
+                        Some("type") => canonical_type_reference(argument.get("type")?),
+                        Some("const") => canonical_fixed_length(argument.get("value")?),
+                        _ => None,
+                    },
+                )
+                .collect::<Option<Vec<_>>>()?;
+            Some(if args.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{name}[{}]", args.join(","))
+            })
+        }
+        "type_parameter" => value
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        "primitive" => match value.get("name").and_then(serde_json::Value::as_str)? {
+            "bool" => Some("bool".to_owned()),
+            "i8" => Some("I8".to_owned()),
+            "i16" => Some("I16".to_owned()),
+            "i32" => Some("I32".to_owned()),
+            "i64" => Some("I64".to_owned()),
+            "u8" => Some("U8".to_owned()),
+            "u16" => Some("U16".to_owned()),
+            "u32" => Some("U32".to_owned()),
+            "u64" => Some("U64".to_owned()),
+            "f32" => Some("F32".to_owned()),
+            "f64" => Some("F64".to_owned()),
+            "str" => Some("str".to_owned()),
+            "bytes" => Some("bytes".to_owned()),
+            "path" => Some("Path".to_owned()),
+            "unit" => Some("Unit".to_owned()),
+            "json" => Some("JsonValue".to_owned()),
+            "any" => Some("Any".to_owned()),
+            "unknown" => Some("object".to_owned()),
+            "never" => Some("Never".to_owned()),
+            _ => None,
+        },
+        "list" => Some(format!("CottList[{}]", item("item")?)),
+        "set" => Some(format!("CottSet[{}]", item("item")?)),
+        "map" => Some(format!("FrozenMap[{}]", pair("key", "value")?)),
+        "option" => Some(format!("Option[{}]", item("item")?)),
+        "result" => Some(format!("Result[{}]", pair("ok", "error")?)),
+        "iterator" => Some(format!("Iterator[{}]", item("item")?)),
+        "async_iterator" => Some(format!("AsyncIterator[{}]", item("item")?)),
+        "factory" => Some(format!("type[{}]", item("instance")?)),
+        "dyn" => Some(format!("Dyn[{}]", item("trait")?)),
+        "array" => Some(format!(
+            "CottArray[{},{}]",
+            item("item")?,
+            canonical_fixed_length(value.get("length")?)?
+        )),
+        "buffer" => Some(format!(
+            "CottBuffer[{}]",
+            canonical_fixed_length(value.get("length")?)?
+        )),
+        "tuple" => value
+            .get("items")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| {
+                items
+                    .iter()
+                    .map(canonical_type_reference)
+                    .collect::<Option<Vec<_>>>()
+                    .map(|items| {
+                        if items.is_empty() {
+                            "tuple[()]".to_owned()
+                        } else {
+                            format!("tuple[{}]", items.join(","))
+                        }
+                    })
+            }),
+        "generator" => Some(format!(
+            "Generator[{},{},{}]",
+            item("yield")?,
+            item("send")?,
+            item("return")?
+        )),
+        "async_generator" => Some(format!(
+            "AsyncGenerator[{},{}]",
+            item("yield")?,
+            item("send")?
+        )),
+        "opaque" => Some(format!(
+            "Opaque[Literal[{}]]",
+            serde_json::to_string(value.get("tag")?.as_str()?).ok()?
+        )),
+        "associated_projection" => Some(format!(
+            "{}_{}_{}",
+            value.get("trait")?.as_str()?.replace('.', "_"),
+            value.get("name")?.as_str()?.replace('.', "_"),
+            sha256_hex(&serde_json::to_vec(value.get("base")?).ok()?)
+        )),
+        _ => None,
+    }
+}
+
+fn canonical_fixed_length(value: &serde_json::Value) -> Option<String> {
+    let value = value.get("value")?;
+    match value {
+        serde_json::Value::String(value)
+            if value.chars().all(|character| character.is_ascii_digit()) =>
+        {
+            Some(format!("Literal[{value}]"))
+        }
+        serde_json::Value::String(value) => {
+            Some(format!("Literal[{}]", serde_json::to_string(value).ok()?))
+        }
+        serde_json::Value::Number(value) => Some(format!("Literal[{value}]")),
+        _ => None,
+    }
+}
+
+fn trait_method_key(name: &str) -> Option<(&str, &str)> {
+    name.rsplit_once('.')
+}
+
+fn build_dyn_effects(
+    callables: &[PythonCallable],
+    plan: &PythonArtifactPlan,
+    graph: &mut EffectGraph,
+) {
+    let mut members = BTreeMap::new();
+    let mut parents = BTreeMap::<String, Vec<String>>::new();
+    let mut declared_closures = BTreeMap::<String, BTreeSet<String>>::new();
+    for (_, declaration) in plan.declarations() {
+        if declaration.get("kind").and_then(serde_json::Value::as_str) != Some("trait") {
+            continue;
+        }
+        let Some(trait_name) = declaration.get("name").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let mut closure = declaration
+            .get("closure")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(named_trait_symbol)
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        closure.insert(trait_name.to_owned());
+        declared_closures.insert(trait_name.to_owned(), closure);
+        parents.insert(
+            trait_name.to_owned(),
+            declaration
+                .get("parents")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|parent| parent.get("trait").and_then(named_trait_symbol))
+                .map(str::to_owned)
+                .collect(),
+        );
+        for method in declaration
+            .get("methods")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some((member_trait, method_name)) = method
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .and_then(trait_method_key)
+            else {
+                continue;
+            };
+            let Some(kind) = method
+                .get("callable_kind")
+                .and_then(serde_json::Value::as_str)
+            else {
+                continue;
+            };
+            members.insert(
+                (member_trait.to_owned(), method_name.to_owned()),
+                (kind.to_owned(), declaration_effects(method)),
+            );
+        }
+    }
+    for (trait_name, declared) in &declared_closures {
+        let mut closure = BTreeMap::new();
+        let mut pending = BTreeSet::from([(0usize, trait_name.clone())]);
+        while let Some((distance, current)) = pending.pop_first() {
+            if !declared.contains(&current)
+                || closure.get(&current).is_some_and(|best| *best <= distance)
+            {
+                continue;
+            }
+            closure.insert(current.clone(), distance);
+            for parent in parents.get(&current).into_iter().flatten() {
+                pending.insert((distance + 1, parent.clone()));
+            }
+        }
+        graph.dyn_closures.insert(trait_name.clone(), closure);
+    }
+    for trait_name in graph.dyn_closures.keys() {
+        graph
+            .dyn_specializations
+            .insert(trait_name.clone(), trait_name.clone());
+    }
+    for candidate in callables
+        .iter()
+        .filter_map(|candidate| candidate.owner.as_ref())
+    {
+        for slot in candidate
+            .get("selected_methods")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(trait_ref) = slot.get("trait_ref") else {
+                continue;
+            };
+            let Some(trait_name) = named_trait_symbol(trait_ref) else {
+                continue;
+            };
+            let Some(specialization) = canonical_trait_reference(trait_ref) else {
+                continue;
+            };
+            graph
+                .dyn_specializations
+                .insert(specialization, trait_name.to_owned());
+        }
+    }
+    let specializations = graph.dyn_specializations.clone();
+    for (specialization, trait_name) in specializations {
+        let Some(closure) = graph.dyn_closures.get(&trait_name) else {
+            continue;
+        };
+        let mut effective = BTreeMap::<String, (usize, String, (String, BTreeSet<String>))>::new();
+        for ((member_trait, method), kind) in &members {
+            let Some(distance) = closure.get(member_trait) else {
+                continue;
+            };
+            match effective.get(method) {
+                Some((best, _, existing_kind)) if *best < *distance => {}
+                Some((best, _, existing_kind)) if *best == *distance && existing_kind != kind => {
+                    graph
+                        .dyn_conflicts
+                        .insert((specialization.clone(), method.clone()));
+                }
+                Some((best, _, _)) if *best > *distance => {
+                    effective.insert(
+                        method.clone(),
+                        (*distance, member_trait.clone(), kind.clone()),
+                    );
+                    graph
+                        .dyn_conflicts
+                        .remove(&(specialization.clone(), method.clone()));
+                }
+                _ => {
+                    effective.insert(
+                        method.clone(),
+                        (*distance, member_trait.clone(), kind.clone()),
+                    );
+                }
+            }
+        }
+        for (method, (_, _, kind)) in effective {
+            if graph
+                .dyn_conflicts
+                .contains(&(specialization.clone(), method.clone()))
+            {
+                continue;
+            }
+            let symbol = format!("dyn.{specialization}.{method}");
+            graph
+                .dyn_methods
+                .insert((specialization.clone(), method.clone()), symbol.clone());
+            graph.cott.entry(symbol.clone()).or_default();
+            if kind.0 == "async" {
+                graph.async_cott.insert(symbol.clone());
+            }
+            graph
+                .dyn_dispatches
+                .insert((specialization.clone(), method), symbol);
+        }
+    }
+    for candidate in callables
+        .iter()
+        .filter(|candidate| impl_concrete(&candidate.kind).is_some())
+    {
+        let Some(owner) = &candidate.owner else {
+            continue;
+        };
+        for slot in owner
+            .get("selected_methods")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|slot| {
+                slot.get("trait_method") == candidate.declaration.get("trait_method")
+                    && slot.get("selected") == candidate.declaration.get("selected")
+            })
+        {
+            let Some(trait_ref) = slot.get("trait_ref") else {
+                continue;
+            };
+            let Some(case_trait) = named_trait_symbol(trait_ref) else {
+                continue;
+            };
+            let Some(case_specialization) = canonical_trait_reference(trait_ref) else {
+                continue;
+            };
+            let Some((member_trait, method)) = slot
+                .get("trait_method")
+                .and_then(serde_json::Value::as_str)
+                .and_then(trait_method_key)
+            else {
+                continue;
+            };
+            if !graph
+                .dyn_closures
+                .get(case_trait)
+                .is_some_and(|closure| closure.contains_key(member_trait))
+            {
+                continue;
+            }
+            let Some(symbol) = graph
+                .dyn_dispatches
+                .get(&(case_specialization.clone(), method.to_owned()))
+                .cloned()
+            else {
+                continue;
+            };
+            let expected_kind = if graph.async_cott.contains(&symbol) {
+                "async"
+            } else {
+                "sync"
+            };
+            if slot
+                .get("callable_kind")
+                .and_then(serde_json::Value::as_str)
+                != Some(expected_kind)
+            {
+                graph.errors.insert(format!(
+                    "Dyn trait method `{case_trait}.{method}` has inconsistent callable kinds"
+                ));
+                continue;
+            }
+            graph
+                .cott
+                .entry(symbol)
+                .or_default()
+                .extend(declaration_effects(&candidate.declaration));
+        }
+    }
+}
+
+fn collect_dyn_imports(statement: &ast::Stmt, graph: &mut EffectGraph) {
+    match statement {
+        ast::Stmt::Import(import) => {
+            for alias in &import.names {
+                let Some(binding) = alias.asname.as_ref() else {
+                    continue;
+                };
+                let module = alias.name.as_str();
+                if graph
+                    .dyn_closures
+                    .keys()
+                    .any(|trait_name| trait_name.starts_with(&format!("{module}.")))
+                {
+                    graph
+                        .dyn_aliases
+                        .insert(binding.as_str().to_owned(), module.to_owned());
+                }
+            }
+        }
+        ast::Stmt::ImportFrom(import) => {
+            let Some(module) = import.module.as_ref().map(|module| module.as_str()) else {
+                return;
+            };
+            for alias in &import.names {
+                let imported = alias.name.as_str();
+                let binding = alias.asname.as_ref().map_or(imported, |name| name.as_str());
+                let symbol = format!("{module}.{imported}");
+                if graph.dyn_closures.contains_key(&symbol)
+                    || graph
+                        .dyn_closures
+                        .keys()
+                        .any(|trait_name| trait_name.starts_with(&format!("{symbol}.")))
+                {
+                    graph.dyn_aliases.insert(binding.to_owned(), symbol);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn collect_effect_imports(statement: &ast::Stmt, graph: &mut EffectGraph) {
@@ -1275,6 +1735,20 @@ fn inspect_effect_arguments(
         }) {
             local.impl_receivers.insert(name.to_owned());
         }
+        if let Some(annotation) = argument
+            .def
+            .annotation
+            .as_deref()
+            .filter(|annotation| is_dyn_annotation(annotation))
+        {
+            if let Some(trait_name) = dyn_annotation_trait(annotation, graph) {
+                local.dyn_receivers.insert(name.to_owned(), trait_name);
+            } else {
+                graph.errors.insert(format!(
+                    "Dyn receiver `{name}` must name an exact canonical trait"
+                ));
+            }
+        }
         if !graph.leaves.contains(name) {
             local.parameters.insert(name.to_owned());
         }
@@ -1293,6 +1767,15 @@ fn inherit_impl_receiver(
     local: &mut LocalEffects,
     graph: &mut EffectGraph,
 ) {
+    if let (Some(target), Some(value)) = (expression_name(target), expression_name(value)) {
+        if let Some(trait_name) = local.dyn_receivers.get(value).cloned() {
+            local.dyn_receivers.insert(target.to_owned(), trait_name);
+        } else {
+            local.dyn_receivers.remove(target);
+        }
+    } else {
+        clear_dyn_receivers(target, local);
+    }
     match (expression_name(target), expression_name(value)) {
         (Some(target), Some(value)) => {
             if local.impl_receivers.contains(value) {
@@ -1354,6 +1837,25 @@ fn clear_impl_receivers(expression: &ast::Expr, local: &mut LocalEffects) {
             }
         }
         ast::Expr::Starred(starred) => clear_impl_receivers(&starred.value, local),
+        _ => {}
+    }
+}
+fn clear_dyn_receivers(expression: &ast::Expr, local: &mut LocalEffects) {
+    match expression {
+        ast::Expr::Name(name) => {
+            local.dyn_receivers.remove(name.id.as_str());
+        }
+        ast::Expr::List(list) => {
+            for element in &list.elts {
+                clear_dyn_receivers(element, local);
+            }
+        }
+        ast::Expr::Tuple(tuple) => {
+            for element in &tuple.elts {
+                clear_dyn_receivers(element, local);
+            }
+        }
+        ast::Expr::Starred(starred) => clear_dyn_receivers(&starred.value, local),
         _ => {}
     }
 }
@@ -1538,10 +2040,10 @@ fn inspect_effect_statement(
         }
         ast::Stmt::Pass(_) | ast::Stmt::Break(_) | ast::Stmt::Continue(_) => {}
         ast::Stmt::With(statement) => {
-            inspect_effect_with(&statement.items, &statement.body, local, graph)
+            inspect_effect_with(&statement.items, &statement.body, false, local, graph)
         }
         ast::Stmt::AsyncWith(statement) => {
-            inspect_effect_with(&statement.items, &statement.body, local, graph)
+            inspect_effect_with(&statement.items, &statement.body, true, local, graph)
         }
         ast::Stmt::Match(statement) => {
             inspect_effect_expression(&statement.subject, false, local, graph);
@@ -1610,16 +2112,44 @@ fn inspect_effect_statements(
 fn inspect_effect_with(
     items: &[ast::WithItem],
     body: &[ast::Stmt],
+    async_with: bool,
     local: &mut LocalEffects,
     graph: &mut EffectGraph,
 ) {
+    let mut task_groups = BTreeSet::new();
     for item in items {
+        if is_task_group_constructor(&item.context_expr) {
+            let Some(name) = async_with
+                .then(|| {
+                    item.optional_vars
+                        .as_ref()
+                        .and_then(|expression| expression_name(expression.as_ref()))
+                })
+                .flatten()
+            else {
+                graph.errors.insert(
+                    "TaskGroup must be used as `async with TaskGroup() as <name>`".to_owned(),
+                );
+                continue;
+            };
+            if !local.task_groups.insert(name.to_owned()) {
+                graph
+                    .errors
+                    .insert(format!("TaskGroup binding `{name}` must not be shadowed"));
+            } else {
+                task_groups.insert(name.to_owned());
+            }
+            continue;
+        }
         inspect_effect_expression(&item.context_expr, false, local, graph);
         if let Some(target) = &item.optional_vars {
             inspect_effect_target(target, local, graph);
         }
     }
     inspect_effect_statements(body, local, graph);
+    for name in task_groups {
+        local.task_groups.remove(&name);
+    }
 }
 
 fn inspect_effect_try(
@@ -1693,6 +2223,33 @@ fn inspect_effect_expression_with_await(
     graph: &mut EffectGraph,
 ) {
     if !callee {
+        if is_concurrency_api_reference(expression) {
+            graph.errors.insert(
+                "asyncio concurrency APIs may only be used as exact structured calls".to_owned(),
+            );
+            return;
+        }
+        if is_dyn_value(expression, local) {
+            graph.errors.insert(
+                "Dyn value may only be used for an exact `.value.<method>(...)` invocation"
+                    .to_owned(),
+            );
+            return;
+        }
+        if is_dyn_dispatch(expression, local) {
+            graph.errors.insert(
+                "Dyn method may only be used as an exact `.value.<method>(...)` invocation"
+                    .to_owned(),
+            );
+            return;
+        }
+        if matches!(expression, ast::Expr::Attribute(attribute) if dyn_receiver_name(&attribute.value, local).is_some())
+        {
+            graph
+                .errors
+                .insert("Dyn method invocation must go through `.value`".to_owned());
+            return;
+        }
         if let Some(symbol) = effect_cott_target(expression, graph)
             .or_else(|| effect_impl_self_target(expression, local, graph))
         {
@@ -1763,8 +2320,74 @@ fn inspect_effect_expression_with_await(
             }
         }
         ast::Expr::Call(expression) => {
+            if is_task_group_constructor_call(&expression.func) {
+                graph.errors.insert(
+                    "TaskGroup must be used as `async with TaskGroup() as <name>`".to_owned(),
+                );
+            }
+            if is_detached_task_call(&expression.func, local) {
+                graph
+                    .errors
+                    .insert("detached task APIs are not allowed".to_owned());
+            }
+            if is_gather_call(&expression.func) && !awaited {
+                graph
+                    .errors
+                    .insert("asyncio.gather must be directly awaited".to_owned());
+            }
             inspect_impl_receiver_call_base(&expression.func, local, graph);
-            let statically_resolved = if let Some(name) = expression_name(&expression.func) {
+            if is_dyn_constructor(&expression.func)
+                && (!expression.args.is_empty()
+                    || expression.keywords.len() != 2
+                    || expression
+                        .keywords
+                        .iter()
+                        .any(|keyword| keyword.arg.is_none())
+                    || !["value", "trait"].into_iter().all(|name| {
+                        expression
+                            .keywords
+                            .iter()
+                            .any(|keyword| keyword.arg.as_deref() == Some(name))
+                    }))
+            {
+                graph.errors.insert(
+                    "Dyn must be constructed exactly as `Dyn(value=<concrete>, trait=<Trait>)`"
+                        .to_owned(),
+                );
+            }
+            let statically_resolved = if is_dyn_constructor(&expression.func) {
+                true
+            } else if matches!(&*expression.func, ast::Expr::Attribute(attribute) if dyn_receiver_name(&attribute.value, local).is_some())
+            {
+                graph
+                    .errors
+                    .insert("Dyn method invocation must go through `.value`".to_owned());
+                false
+            } else if let Some((receiver, method)) = dyn_dispatch_method(&expression.func, local) {
+                let trait_ = local
+                    .dyn_receivers
+                    .get(receiver)
+                    .expect("Dyn dispatch receiver was checked");
+                if graph
+                    .dyn_conflicts
+                    .contains(&(trait_.trait_ref.clone(), method.to_owned()))
+                {
+                    graph.errors.insert(format!(
+                        "Dyn trait `{}` has ambiguous inherited method `{method}`",
+                        trait_.trait_ref
+                    ));
+                    false
+                } else if let Some(symbol) = dyn_dispatch_symbol(&trait_.trait_ref, method, graph) {
+                    record_effect_cott_call(&symbol, awaited, local, graph);
+                    true
+                } else {
+                    graph.errors.insert(format!(
+                        "Dyn trait `{}` has no method `{method}`",
+                        trait_.trait_ref
+                    ));
+                    false
+                }
+            } else if let Some(name) = expression_name(&expression.func) {
                 if graph.local.contains_key(name) {
                     if awaited {
                         graph
@@ -1873,7 +2496,7 @@ fn inspect_effect_expression_with_await(
             if graph.async_function {
                 graph
                     .errors
-                    .insert("async generators are not allowed".to_owned());
+                    .insert("native async-generator functions are not allowed".to_owned());
             }
             if let Some(value) = &expression.value {
                 inspect_effect_expression(value, false, local, graph);
@@ -1883,7 +2506,7 @@ fn inspect_effect_expression_with_await(
             if graph.async_function {
                 graph
                     .errors
-                    .insert("async generators are not allowed".to_owned());
+                    .insert("native async-generator functions are not allowed".to_owned());
             }
             inspect_effect_expression(&expression.value, false, local, graph)
         }
@@ -1904,6 +2527,45 @@ fn expression_name(expression: &ast::Expr) -> Option<&str> {
         ast::Expr::Name(name) => Some(name.id.as_str()),
         _ => None,
     }
+}
+
+fn call_leaf_name(expression: &ast::Expr) -> Option<&str> {
+    match expression {
+        ast::Expr::Name(name) => Some(name.id.as_str()),
+        ast::Expr::Attribute(attribute) => Some(attribute.attr.as_str()),
+        _ => None,
+    }
+}
+
+fn is_task_group_constructor(expression: &ast::Expr) -> bool {
+    matches!(expression, ast::Expr::Call(call) if is_task_group_constructor_call(&call.func))
+}
+
+fn is_task_group_constructor_call(function: &ast::Expr) -> bool {
+    call_leaf_name(function) == Some("TaskGroup")
+}
+
+fn is_gather_call(function: &ast::Expr) -> bool {
+    call_leaf_name(function) == Some("gather")
+}
+
+fn is_detached_task_call(function: &ast::Expr, local: &LocalEffects) -> bool {
+    match call_leaf_name(function) {
+        Some("ensure_future") | Some("Task") => true,
+        Some("create_task") => match function {
+            ast::Expr::Attribute(attribute) => !expression_name(&attribute.value)
+                .is_some_and(|name| local.task_groups.contains(name)),
+            _ => true,
+        },
+        _ => false,
+    }
+}
+
+fn is_concurrency_api_reference(expression: &ast::Expr) -> bool {
+    matches!(
+        call_leaf_name(expression),
+        Some("create_task" | "ensure_future" | "Task" | "gather" | "TaskGroup")
+    )
 }
 
 fn inspect_effect_comprehensions(
@@ -1931,12 +2593,139 @@ fn expression_dotted(expression: &ast::Expr) -> Option<String> {
         _ => None,
     }
 }
+fn is_dyn_annotation(expression: &ast::Expr) -> bool {
+    matches!(
+        expression,
+        ast::Expr::Subscript(subscript)
+            if expression_dotted(&subscript.value).as_deref().is_some_and(|name| name == "Dyn" || name == "cott_runtime.Dyn")
+    )
+}
+
+fn normalized_type_reference(expression: &ast::Expr) -> Option<String> {
+    match expression {
+        ast::Expr::Name(_) | ast::Expr::Attribute(_) => expression_dotted(expression),
+        ast::Expr::Subscript(subscript) => Some(format!(
+            "{}[{}]",
+            normalized_type_reference(&subscript.value)?,
+            normalized_type_reference(&subscript.slice)?
+        )),
+        ast::Expr::Tuple(tuple) => tuple
+            .elts
+            .iter()
+            .map(normalized_type_reference)
+            .collect::<Option<Vec<_>>>()
+            .map(|values| values.join(",")),
+        ast::Expr::Constant(constant) => match &constant.value {
+            ast::Constant::Int(value) => {
+                let value = value.to_string();
+                (!value.starts_with('-')).then_some(value)
+            }
+            ast::Constant::Str(value) => serde_json::to_string(value).ok(),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn trait_reference_origin(expression: &ast::Expr) -> Option<String> {
+    match expression {
+        ast::Expr::Subscript(subscript) => trait_reference_origin(&subscript.value),
+        _ => expression_dotted(expression),
+    }
+}
+
+fn canonical_dyn_trait_origin(origin: String, graph: &EffectGraph) -> Option<String> {
+    if graph.dyn_closures.contains_key(&origin) {
+        return Some(origin);
+    }
+    if let Some(trait_name) = graph.dyn_aliases.get(&origin) {
+        return graph
+            .dyn_closures
+            .contains_key(trait_name)
+            .then(|| trait_name.clone());
+    }
+    let (prefix, suffix) = origin.split_once('.')?;
+    let module = graph.dyn_aliases.get(prefix)?;
+    let trait_name = format!("{module}.{suffix}");
+    graph
+        .dyn_closures
+        .contains_key(&trait_name)
+        .then_some(trait_name)
+}
+
+fn dyn_annotation_trait(expression: &ast::Expr, graph: &EffectGraph) -> Option<DynReceiver> {
+    let ast::Expr::Subscript(subscript) = expression else {
+        return None;
+    };
+    let origin = trait_reference_origin(&subscript.slice)?;
+    let reference = normalized_type_reference(&subscript.slice)?;
+    let trait_symbol = canonical_dyn_trait_origin(origin.clone(), graph)?;
+    Some(DynReceiver {
+        trait_ref: format!(
+            "{trait_symbol}{}",
+            reference
+                .strip_prefix(&origin)
+                .expect("normalized Dyn trait reference has its origin")
+        ),
+    })
+}
+
+fn dyn_receiver_name<'a>(expression: &'a ast::Expr, local: &LocalEffects) -> Option<&'a str> {
+    expression_name(expression).filter(|name| local.dyn_receivers.contains_key(*name))
+}
+
+fn is_dyn_value(expression: &ast::Expr, local: &LocalEffects) -> bool {
+    matches!(
+        expression,
+        ast::Expr::Attribute(attribute)
+            if attribute.attr.as_str() == "value"
+                && dyn_receiver_name(&attribute.value, local).is_some()
+    )
+}
+
+fn is_dyn_dispatch(expression: &ast::Expr, local: &LocalEffects) -> bool {
+    matches!(
+        expression,
+        ast::Expr::Attribute(attribute) if is_dyn_value(&attribute.value, local)
+    )
+}
+
+fn dyn_dispatch_method<'a>(
+    expression: &'a ast::Expr,
+    local: &LocalEffects,
+) -> Option<(&'a str, &'a str)> {
+    let ast::Expr::Attribute(method) = expression else {
+        return None;
+    };
+    let ast::Expr::Attribute(value) = &*method.value else {
+        return None;
+    };
+    (value.attr.as_str() == "value").then_some((
+        dyn_receiver_name(&value.value, local)?,
+        method.attr.as_str(),
+    ))
+}
+
+fn dyn_dispatch_symbol(trait_name: &str, method: &str, graph: &EffectGraph) -> Option<String> {
+    graph
+        .dyn_dispatches
+        .get(&(trait_name.to_owned(), method.to_owned()))
+        .cloned()
+}
+fn is_dyn_constructor(expression: &ast::Expr) -> bool {
+    expression_dotted(expression)
+        .as_deref()
+        .is_some_and(|name| name == "Dyn" || name == "cott_runtime.Dyn")
+}
 
 fn inspect_impl_receiver_call_base(
     expression: &ast::Expr,
     local: &mut LocalEffects,
     graph: &mut EffectGraph,
 ) {
+    if is_dyn_dispatch(expression, local) {
+        return;
+    }
     let ast::Expr::Attribute(attribute) = expression else {
         return;
     };
@@ -2241,12 +3030,12 @@ fn inspect_function_definitions(
             } else {
                 expected_count += 1;
             }
-            let parameters = if let PythonCallableKind::ImplMethod { concrete } = &callable.kind {
+            let parameters = if let Some(concrete) = impl_concrete(&callable.kind) {
                 match parameters.split_first() {
                     Some((self_parameter, parameters))
                         if self_parameter.name == "self"
                             && !self_parameter.keyword_only
-                            && self_parameter.annotation == *concrete =>
+                            && self_parameter.annotation == concrete =>
                     {
                         parameters
                     }
@@ -2547,6 +3336,9 @@ fn inspect_imports(
             for item in rest.split(',') {
                 let item = item.trim();
                 let module = item.split_whitespace().next().unwrap_or_default();
+                if module == "cott_runtime" && item != "cott_runtime" {
+                    add_error("cott_runtime must not be imported with an alias".to_owned());
+                }
                 if is_generated_facade_or_package(module, generated_type_modules) {
                     continue;
                 }
@@ -2572,6 +3364,12 @@ fn inspect_imports(
             let module = module.trim();
             if module == "__future__" && imported.trim() != "annotations" {
                 add_error("only `from __future__ import annotations` is allowed".to_owned());
+            }
+            if module.split('.').next() == Some("asyncio") {
+                inspect_asyncio_concurrency_imports(imported, add_error);
+            }
+            if module == "cott_runtime" {
+                inspect_dyn_import(imported, add_error);
             }
             inspect_impl_concrete_import(
                 module,
@@ -2621,10 +3419,37 @@ fn inspect_imports(
     }
 }
 
+fn inspect_dyn_import(imported: &str, add_error: &mut impl FnMut(String)) {
+    for item in imported.split(',').map(str::trim) {
+        if item.split_whitespace().next() == Some("Dyn") && item != "Dyn" {
+            add_error("Dyn must be imported from cott_runtime without an alias".to_owned());
+        }
+    }
+}
+
+fn inspect_asyncio_concurrency_imports(imported: &str, add_error: &mut impl FnMut(String)) {
+    for item in imported.split(',').map(str::trim) {
+        let mut words = item.split_whitespace();
+        let Some(name) = words.next() else {
+            continue;
+        };
+        if words.next().is_none() {
+            continue;
+        }
+        match name {
+            "create_task" | "ensure_future" | "Task" => {
+                add_error("detached task APIs are not allowed".to_owned())
+            }
+            "gather" | "TaskGroup" => {
+                add_error("asyncio concurrency imports must not be aliased".to_owned())
+            }
+            _ => {}
+        }
+    }
+}
+
 fn impl_concrete_import_source(callable: &PythonCallable) -> Option<(&str, &str)> {
-    let PythonCallableKind::ImplMethod { concrete } = &callable.kind else {
-        return None;
-    };
+    let concrete = impl_concrete(&callable.kind)?;
     let owner = callable.owner.as_ref()?.get("name")?.as_str()?;
     let (facade, owner_concrete) = owner.rsplit_once('.')?;
     (facade == callable.module && owner_concrete == concrete).then_some((facade, concrete))

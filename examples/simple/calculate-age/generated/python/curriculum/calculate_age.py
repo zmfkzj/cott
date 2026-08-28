@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
+import asyncio as _asyncio
 import dataclasses as _dataclasses
 import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
 from curriculum.calculate_age_types import AgeError, AgeError_InvalidDate, AgeError_NegativeAge, AgeError_Overflow, AgeSummary
 
@@ -59,6 +60,7 @@ A February 29 anniversary falls on February 28 in a non-leap start year. Validat
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.calculate_age.calculate_age_days", clause="ensures:1", phase="ensures", span={"end_byte":630,"end_column":41,"end_line":26,"start_byte":594,"start_column":5,"start_line":26}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[I64, AgeError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def summarize_age(name: str, age_years: I64, today_year: I64, today_month: I64, today_day: I64) -> Result[AgeSummary, AgeError]:
@@ -135,6 +137,7 @@ On success, name is unchanged, years is age_years, months is age_years * 12, and
         return True
     if not (_cott_match_ensures_4()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.calculate_age.summarize_age", clause="ensures:4", phase="ensures", span={"end_byte":1425,"end_column":52,"end_line":48,"start_byte":1378,"start_column":5,"start_line":48}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[AgeSummary, AgeError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 __all__ = ["AgeError", "AgeError_InvalidDate", "AgeError_NegativeAge", "AgeError_Overflow", "AgeSummary", "calculate_age_days", "summarize_age"]
