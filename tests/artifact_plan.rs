@@ -63,6 +63,27 @@ impl AState for A:
     render(&project).expect("impl artifact fixture must render")
 }
 
+fn default_impl_fixture_ir() -> CanonicalIr {
+    let parsed = parse_project([source(
+        "src/api/service.cott",
+        r#"module api.service
+
+trait Reader:
+    fn read(self, amount: I32) -> I32 = api.service.default_read
+    fn label(self) -> Unit
+
+fn default_read(receiver: Reader, amount: I32) -> I32
+
+impl ReaderState for Reader:
+    fn label(self) -> Unit:
+        ensures true
+"#,
+    )])
+    .expect("default impl fixture must parse");
+    let project = lower(Path::new("src"), parsed).expect("default impl fixture must lower");
+    render(&project).expect("default impl fixture must render")
+}
+
 #[test]
 fn enumerates_modules_and_functions_deterministically_from_canonical_bytes() {
     let ir = fixture_ir();
@@ -219,6 +240,61 @@ fn impl_methods_keep_their_owner_and_concrete_identity() {
 }
 
 #[test]
+fn default_impl_methods_keep_only_the_verified_free_facade_dependency() {
+    let plan =
+        PythonArtifactPlan::from_ir(&default_impl_fixture_ir()).expect("canonical bytes must load");
+    let method = plan
+        .callables()
+        .into_iter()
+        .find(|callable| callable.cott_symbol == "api.service.ReaderState.read")
+        .expect("default impl method must remain a compiler dispatch slot");
+
+    assert_eq!(method.declaration["selected"]["kind"], "default");
+    assert_eq!(
+        method.declaration["selected"]["function"],
+        serde_json::json!({
+            "module": "api.service",
+            "symbol": "default_read",
+            "verified_facade": "api.service.default_read",
+        })
+    );
+}
+
+#[test]
+fn rejects_distinct_trait_defaults_for_one_multi_trait_impl() {
+    let parsed = parse_project([source(
+        "src/api/service.cott",
+        r#"module api.service
+
+trait Reader:
+    fn read(self) -> I32 = api.service.reader_read
+    fn label(self) -> Unit
+
+trait Writer:
+    fn read(self) -> I32 = api.service.writer_read
+    fn label(self) -> Unit
+
+fn reader_read(receiver: Reader) -> I32
+fn writer_read(receiver: Writer) -> I32
+
+impl State for Reader + Writer:
+    fn label(self) -> Unit:
+        ensures true
+"#,
+    )])
+    .expect("default conflict fixture must parse");
+
+    let errors = lower(Path::new("src"), parsed)
+        .expect_err("distinct inherited trait defaults must be ambiguous");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.diagnostic.message.contains("ambiguous")),
+        "expected a deterministic default ambiguity diagnostic: {errors:?}"
+    );
+}
+
+#[test]
 fn rejects_malformed_canonical_declarations_with_structured_error() {
     let mut ir = fixture_ir();
     let module = &mut ir.modules[0];
@@ -236,4 +312,54 @@ fn rejects_malformed_canonical_declarations_with_structured_error() {
         PythonArtifactPlanError::InvalidModule { .. }
     ));
     assert!(error.to_string().contains("canonical module"));
+}
+
+#[test]
+fn rejects_impl_without_selected_method_metadata() {
+    let mut ir = impl_fixture_ir();
+    let module = ir
+        .modules
+        .iter_mut()
+        .find(|module| module.module.as_string() == "a.mod")
+        .expect("fixture module must exist");
+    let mut value: serde_json::Value = serde_json::from_slice(&module.bytes).unwrap();
+    value["declarations"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|declaration| declaration["kind"] == "impl")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("selected_methods");
+    module.bytes = serde_json::to_vec(&value).unwrap();
+    module.bytes.push(b'\n');
+
+    let error = PythonArtifactPlan::from_ir(&ir).expect_err("selection metadata is required");
+    assert!(matches!(
+        error,
+        PythonArtifactPlanError::InvalidModule { .. }
+    ));
+}
+
+#[test]
+fn rejects_explicit_method_absent_from_selected_slots() {
+    let mut ir = impl_fixture_ir();
+    let module = ir
+        .modules
+        .iter_mut()
+        .find(|module| module.module.as_string() == "a.mod")
+        .expect("fixture module must exist");
+    let mut value: serde_json::Value = serde_json::from_slice(&module.bytes).unwrap();
+    value["declarations"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|declaration| declaration["kind"] == "impl")
+        .unwrap()["selected_methods"] = serde_json::json!([]);
+    module.bytes = serde_json::to_vec(&value).unwrap();
+    module.bytes.push(b'\n');
+
+    let error = PythonArtifactPlan::from_ir(&ir).expect_err("unselected method must reject");
+    assert!(error.to_string().contains("absent from `selected_methods`"));
 }

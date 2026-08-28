@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.validated_stock_types import Price as Price, Shares as Shares, Stock as Stock, StockName as StockName, ValuationError as ValuationError, ValuationError_Overflow as ValuationError_Overflow
 """Computes the market value of one validated stock position. StockName

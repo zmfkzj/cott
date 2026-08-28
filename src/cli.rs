@@ -1,6 +1,7 @@
+use serde::Serialize;
 #[cfg(test)]
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CString, OsString};
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{Read, Write};
@@ -25,8 +26,11 @@ use crate::diagnostics::{
 use crate::hash::sha256_hex;
 use crate::hir::lower_with_effects;
 use crate::ir::render;
+use crate::manifest::{ApiVersion, parse_api_version};
 use crate::project::{ProjectPaths, discover_sources_from_paths, load_config_with_paths};
-use crate::provenance::{AgentRun, AgentStatus, GenerationRecord, StreamDigest};
+use crate::provenance::{
+    AgentRun, AgentStatus, GenerationRecord, StreamDigest, compare_implementation_identities,
+};
 use crate::python::artifact_plan::{PythonArtifactPlan, PythonCallable, PythonCallableKind};
 use crate::python_emit::{Emission, EmitDiagnostic, emit};
 use crate::python_verify::verify_python;
@@ -76,6 +80,21 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
     let mut arguments = arguments.into_iter();
     let _program = arguments.next();
     let arguments: Vec<OsString> = arguments.collect();
+    if arguments.first().is_some_and(|command| command == "diff")
+        && arguments
+            .windows(2)
+            .filter(|pair| pair[0] == "--format" && pair[1] == "json")
+            .count()
+            == 1
+        && let Ok(Command::Diff {
+            baseline,
+            exit_code,
+            project,
+            format: OutputFormat::Json,
+        }) = parse_command(&arguments)
+    {
+        return diff_project(project, baseline, exit_code, OutputFormat::Json);
+    }
     let json_formats = arguments
         .windows(2)
         .filter(|pair| pair[0] == "--format" && pair[1] == "json")
@@ -146,8 +165,8 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
             baseline,
             exit_code,
             project,
-            ..
-        }) => diff_project(project, baseline, exit_code),
+            format,
+        }) => diff_project(project, baseline, exit_code, format),
         Ok(Command::Verify { project, .. }) => match plan(project) {
             Ok(plan) => match verify(&plan) {
                 Ok(()) => {
@@ -736,7 +755,9 @@ fn plan_with_session(session: ProjectSession) -> Result<PlannedProject, i32> {
             return Err(4);
         }
     };
-    if let Err(message) = enrich_generation_record(&paths, input_hashes, &mut emission) {
+    if let Err(message) =
+        enrich_generation_record(&paths, &config.project.version, input_hashes, &mut emission)
+    {
         eprintln!("error: {message}");
         return Err(4);
     }
@@ -823,6 +844,7 @@ fn capture_expected_inputs(
 
 fn enrich_generation_record(
     paths: &ProjectPaths,
+    project_version: &str,
     inputs: BTreeMap<String, String>,
     emission: &mut Emission,
 ) -> Result<(), String> {
@@ -832,6 +854,8 @@ fn enrich_generation_record(
         .ok_or_else(|| "emission omitted generation.json".to_owned())?;
     let mut record = GenerationRecord::parse(bytes)
         .map_err(|error| format!("invalid planned generation record: {error}"))?;
+    record.current.project_version = project_version.to_owned();
+    record.current.compatibility = crate::provenance::GenerationCompatibility::current();
     let mut dependencies = dependency_records(paths)?;
     let existing_path = artifact_root_for_paths(paths)?.join("generation.json");
     if existing_path.exists() {
@@ -849,6 +873,17 @@ fn enrich_generation_record(
         })?;
         merge_dependency_evidence(&mut dependencies, &existing.current.dependencies);
         record.last_verified = existing.last_verified;
+        let planned_runtime = record.current.tools.get("runtime").cloned();
+        merge_tool_evidence(&mut record.current.tools, &existing.current.tools);
+        let tools = record
+            .current
+            .tools
+            .as_object_mut()
+            .expect("planned generation tools are an object");
+        tools.insert("compiler".to_owned(), current_compiler_tool()?);
+        if let Some(runtime) = planned_runtime {
+            tools.insert("runtime".to_owned(), runtime);
+        }
         record.current.agent_runs = existing
             .current
             .agent_runs
@@ -909,6 +944,36 @@ fn merge_dependency_evidence(current: &mut serde_json::Value, existing: &serde_j
                 .insert("installed".to_owned(), installed.clone());
         }
     }
+}
+
+fn merge_tool_evidence(current: &mut serde_json::Value, existing: &serde_json::Value) {
+    let Some(planned) = current.as_object() else {
+        return;
+    };
+    let Some(existing) = existing.as_object() else {
+        return;
+    };
+    let mut merged = existing.clone();
+    for (tool, planned_record) in planned {
+        merged
+            .entry(tool.clone())
+            .or_insert_with(|| planned_record.clone());
+    }
+    *current = serde_json::Value::Object(merged);
+}
+
+fn current_compiler_tool() -> Result<serde_json::Value, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let executable = fs::canonicalize(executable).map_err(|error| error.to_string())?;
+    let content_hash = format!(
+        "sha256:{}",
+        sha256_hex(&fs::read(&executable).map_err(|error| error.to_string())?)
+    );
+    Ok(serde_json::json!({
+        "content_hash": content_hash,
+        "executable": executable,
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
 }
 
 fn dependency_records(paths: &ProjectPaths) -> Result<serde_json::Value, String> {
@@ -1158,7 +1223,9 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
             return 6;
         }
     };
-    if let Err(error) = enrich_generation_record(&paths, input_hashes, &mut emission) {
+    if let Err(error) =
+        enrich_generation_record(&paths, &config.project.version, input_hashes, &mut emission)
+    {
         eprintln!("error: {error}");
         return 4;
     }
@@ -1459,7 +1526,12 @@ fn generate_project(
             let fully_qualified = callable.cott_symbol.clone();
             let bound_symbols = bindings
                 .iter()
-                .filter(|binding| matches!(&binding.kind, PythonCallableKind::Function))
+                .filter(|binding| {
+                    matches!(
+                        &binding.kind,
+                        PythonCallableKind::Function | PythonCallableKind::AsyncFunction
+                    )
+                })
                 .map(|binding| format!("from {} import {}", binding.module, binding.function))
                 .collect::<Vec<_>>()
                 .join("\n");
@@ -1475,15 +1547,20 @@ fn generate_project(
                 .collect::<Vec<_>>()
                 .join("\n");
             let mut target_rules = match &callable.kind {
-                PythonCallableKind::Function => format!(
-                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, UNIT, Some, Nothing, CottList, CottSet, FrozenMap, and CottTuple2 from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict/tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` is the annotation and `UNIT` is its only value; return `Ok(value=UNIT)` for Result[Unit, E]. For Option annotations use the top-level `Some(value=...)` and `Nothing()` variants, never `Option.Some` or `Option.Nothing`; narrow an Option with structural `match` before reading a Some payload. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={{}}), and CottTuple2(first=a, second=b). For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err, raise, catch, or inspect Result. Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `{0}_types` module, never `<Enum>.<Variant>`. `typing.cast` MAY be used only from a concrete external SDK return to its declared external projection when upstream stubs are incompatible; never cast Cott-owned values. Do not use classes, mutable module state, `Any`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. For other modules import public generated symbols only through `from {0} import name` and generated value types only through `from {0}_types import Type`. Do not import concrete facade classes from generated type modules.",
+                PythonCallableKind::Function | PythonCallableKind::AsyncFunction => format!(
+                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, UNIT, Some, Nothing, CottList, CottSet, FrozenMap, CottArray, and CottBuffer from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict; native `tuple[...]` annotations and `(a, b)` values are required for Cott Tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` is the annotation and `UNIT` is its only value; return `Ok(value=UNIT)` for Result[Unit, E]. For Option annotations use the top-level `Some(value=...)` and `Nothing()` variants, never `Option.Some` or `Option.Nothing`; narrow an Option with structural `match` before reading a Some payload. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={{}}), CottArray(values=xs), and CottBuffer(data=xs); Cott Tuple uses native `tuple[...]` annotations and `(a, b)` values. For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err, raise, catch, or inspect Result. Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `{0}_types` module, never `<Enum>.<Variant>`. `typing.cast` MAY be used only from a concrete external SDK return to its declared external projection when upstream stubs are incompatible; never cast Cott-owned values. Do not use classes, mutable module state, `Any`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. For other modules import public generated symbols only through `from {0} import name` and generated value types only through `from {0}_types import Type`. Do not import concrete facade classes from generated type modules.",
                     callable.module
                 ),
                 PythonCallableKind::ImplMethod { concrete } => format!(
-                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. The canonical function's leading `self` annotation must be `{concrete}`. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, UNIT, Some, Nothing, CottList, CottSet, FrozenMap, and CottTuple2 from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict/tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` is the annotation and `UNIT` is its only value; return `Ok(value=UNIT)` for Result[Unit, E]. For Option annotations use the top-level `Some(value=...)` and `Nothing()` variants, never `Option.Some` or `Option.Nothing`; narrow an Option with structural `match` before reading a Some payload. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={{}}), and CottTuple2(first=a, second=b). For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err, raise, catch, or inspect Result. Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `{0}_types` module, never `<Enum>.<Variant>`. `typing.cast` MAY be used only from a concrete external SDK return to its declared external projection when upstream stubs are incompatible; never cast Cott-owned values. Do not use classes, mutable module state, `Any`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. The compiler-owned concrete facade class `{concrete}` is absent from `{0}_types`; import it exactly as `from {0} import {concrete}` for the `self` annotation. Generated value-type imports remain `from {0}_types import Type`.",
+                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. The canonical function's leading `self` annotation must be `{concrete}`. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, UNIT, Some, Nothing, CottList, CottSet, FrozenMap, CottArray, and CottBuffer from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict; native `tuple[...]` annotations and `(a, b)` values are required for Cott Tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` is the annotation and `UNIT` is its only value; return `Ok(value=UNIT)` for Result[Unit, E]. For Option annotations use the top-level `Some(value=...)` and `Nothing()` variants, never `Option.Some` or `Option.Nothing`; narrow an Option with structural `match` before reading a Some payload. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={{}}), CottArray(values=xs), and CottBuffer(data=xs); Cott Tuple uses native `tuple[...]` annotations and `(a, b)` values. For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err, raise, catch, or inspect Result. Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `{0}_types` module, never `<Enum>.<Variant>`. `typing.cast` MAY be used only from a concrete external SDK return to its declared external projection when upstream stubs are incompatible; never cast Cott-owned values. Do not use classes, mutable module state, `Any`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. The compiler-owned concrete facade class `{concrete}` is absent from `{0}_types`; import it exactly as `from {0} import {concrete}` for the `self` annotation. Generated value-type imports remain `from {0}_types import Type`.",
                     callable.module
                 ),
             };
+            if matches!(&callable.kind, PythonCallableKind::AsyncFunction) {
+                target_rules.push_str(
+                    "\nThe canonical function MUST be an exact undecorated top-level `async def`; private helpers remain synchronous. Await every exact async Cott facade call and never await a synchronous Cott facade.\n",
+                );
+            }
             target_rules.push_str(
                 "\nExact generated Cott facade modules MAY be imported directly or from their parent package, with an optional alias, for module-qualified access. Import generated value types for annotations through `from module_types import Type`, and do not import any other project-local module.\n",
             );
@@ -1608,7 +1685,7 @@ fn generate_project(
                 .to_path_buf();
             durable_sources.push((relative_source, bytes.clone()));
             let implementation_module = match &callable.kind {
-                PythonCallableKind::Function => {
+                PythonCallableKind::Function | PythonCallableKind::AsyncFunction => {
                     format!("_cott_impl.{}.{}", callable.module, callable.name)
                 }
                 PythonCallableKind::ImplMethod { concrete } => {
@@ -1642,7 +1719,9 @@ fn generate_project(
             return 4;
         }
     };
-    if let Err(message) = enrich_generation_record(&paths, input_hashes, &mut emission) {
+    if let Err(message) =
+        enrich_generation_record(&paths, &config.project.version, input_hashes, &mut emission)
+    {
         eprintln!("error: {message}");
         return 4;
     }
@@ -1755,6 +1834,7 @@ fn diff_project(
     project_argument: Option<PathBuf>,
     baseline: Option<PathBuf>,
     exit_code: bool,
+    format: OutputFormat,
 ) -> i32 {
     let Ok(root) = project_root(project_argument) else {
         return 2;
@@ -1831,65 +1911,170 @@ fn diff_project(
             return 1;
         }
     };
-    let report = generation_diff(&baseline_snapshot, &current);
-    if report.lines.is_empty() {
-        println!("NO CHANGE");
-    } else {
-        for (section, lines) in report.lines {
-            println!("{section}:");
-            for line in lines {
-                println!("- {line}");
-            }
+    let report = match generation_diff(&baseline_snapshot, &current) {
+        Ok(report) => report,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 2;
+        }
+    };
+    match format {
+        OutputFormat::Human => print_diff_report(&report),
+        OutputFormat::Json => {
+            serde_json::to_writer(std::io::stdout(), &report).expect("diff report is serializable");
+            println!();
         }
     }
-    if exit_code && report.breaking { 7 } else { 0 }
+    if exit_code && (report.breaking || !report.version_compatible) {
+        7
+    } else {
+        0
+    }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DiffClass {
+    Breaking,
+    Additive,
+    Documentation,
+    Implementation,
+    Dependency,
+    Toolchain,
+    Artifact,
+    VersionIncompatible,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DiffKind {
+    DeclarationAdded,
+    DeclarationRemoved,
+    RequiredParameterAdded,
+    RequiredParameterRemoved,
+    FieldAdded,
+    FieldRemoved,
+    EnumVariantAdded,
+    EnumVariantRemoved,
+    SemanticChanged,
+    PythonSymbolAdded,
+    PythonSymbolRemoved,
+    ImplementationChanged,
+    DependencyChanged,
+    InputChanged,
+    ToolchainChanged,
+    ArtifactChanged,
+    DocumentationChanged,
+    VersionIncompatible,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct DiffChange {
+    class: DiffClass,
+    kind: DiffKind,
+    subject: String,
+    message: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct MigrationAdvice {
+    kind: DiffKind,
+    subject: String,
+    message: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum VersionBump {
+    None,
+    Minor,
+    Major,
+}
+
+#[derive(Debug, Serialize)]
 struct DiffReport {
+    baseline_version: String,
+    current_version: String,
     breaking: bool,
-    lines: BTreeMap<&'static str, Vec<String>>,
+    version_compatible: bool,
+    required_version_bump: VersionBump,
+    changes: Vec<DiffChange>,
+    advice: Vec<MigrationAdvice>,
 }
 
 fn generation_diff(
     baseline: &crate::provenance::GenerationSnapshot,
     current: &crate::provenance::GenerationSnapshot,
-) -> DiffReport {
-    let mut lines = BTreeMap::<&'static str, Vec<String>>::new();
+) -> Result<DiffReport, String> {
+    let baseline_version = parse_api_version(&baseline.project_version)
+        .ok_or_else(|| "baseline project_version is invalid".to_owned())?;
+    let current_version = parse_api_version(&current.project_version)
+        .ok_or_else(|| "current project_version is invalid".to_owned())?;
+    if current_version < baseline_version {
+        return Err(format!(
+            "project version regressed from {baseline_version} to {current_version}"
+        ));
+    }
     let old = declarations_by_name(&baseline.contract_surface);
     let new = declarations_by_name(&current.contract_surface);
-    let mut breaking = false;
+    let mut changes = Vec::new();
+    let mut advice = Vec::new();
     for (name, declaration) in &old {
         match new.get(name) {
             None => {
-                breaking = true;
-                lines
-                    .entry("CONTRACT BREAKING")
-                    .or_default()
-                    .push(format!("{name} was removed"));
+                push_change(
+                    &mut changes,
+                    DiffClass::Breaking,
+                    DiffKind::DeclarationRemoved,
+                    name,
+                    format!("{name} was removed"),
+                );
+                advice.push(MigrationAdvice {
+                    kind: DiffKind::DeclarationRemoved,
+                    subject: name.clone(),
+                    message: format!("Remove uses of declaration `{name}`."),
+                });
             }
             Some(updated)
                 if normalized_declaration(declaration) != normalized_declaration(updated) =>
             {
-                breaking = true;
-                lines
-                    .entry("CONTRACT BREAKING")
-                    .or_default()
-                    .push(format!("{name} contract changed"));
+                if !structural_declaration_diff(
+                    name,
+                    declaration,
+                    updated,
+                    &mut changes,
+                    &mut advice,
+                ) {
+                    push_change(
+                        &mut changes,
+                        DiffClass::Breaking,
+                        DiffKind::SemanticChanged,
+                        name,
+                        format!("{name} contract changed"),
+                    );
+                }
             }
-            Some(updated) if declaration != updated => {
-                lines
-                    .entry("DOCUMENTATION")
-                    .or_default()
-                    .push(format!("{name} documentation changed"));
-            }
+            Some(updated) if declaration != updated => push_change(
+                &mut changes,
+                DiffClass::Documentation,
+                DiffKind::DocumentationChanged,
+                name,
+                format!("{name} documentation changed"),
+            ),
             Some(_) => {}
         }
     }
     for name in new.keys().filter(|name| !old.contains_key(*name)) {
-        lines
-            .entry("CONTRACT NON-BREAKING")
-            .or_default()
-            .push(format!("{name} was added"));
+        push_change(
+            &mut changes,
+            DiffClass::Additive,
+            DiffKind::DeclarationAdded,
+            name,
+            format!("{name} was added"),
+        );
+        advice.push(MigrationAdvice {
+            kind: DiffKind::DeclarationAdded,
+            subject: name.clone(),
+            message: format!("Adopt declaration `{name}` where its API is needed."),
+        });
     }
     let old_symbols = symbol_sets(&baseline.public_python_symbols);
     let new_symbols = symbol_sets(&current.public_python_symbols);
@@ -1899,33 +2084,54 @@ fn generation_diff(
                 .get(module)
                 .is_some_and(|new| new.contains(*symbol))
         }) {
-            breaking = true;
-            lines
-                .entry("CONTRACT BREAKING")
-                .or_default()
-                .push(format!("{module}.{symbol} Python symbol was removed"));
+            let subject = format!("{module}.{symbol}");
+            push_change(
+                &mut changes,
+                DiffClass::Breaking,
+                DiffKind::PythonSymbolRemoved,
+                &subject,
+                format!("{subject} Python symbol was removed"),
+            );
         }
     }
-    compare_implementations(
-        &baseline.implementations,
-        &current.implementations,
-        &mut lines,
-    );
+    for (module, symbols) in &new_symbols {
+        for symbol in symbols.iter().filter(|symbol| {
+            !old_symbols
+                .get(module)
+                .is_some_and(|old| old.contains(*symbol))
+        }) {
+            let subject = format!("{module}.{symbol}");
+            push_change(
+                &mut changes,
+                DiffClass::Additive,
+                DiffKind::PythonSymbolAdded,
+                &subject,
+                format!("{subject} Python symbol was added"),
+            );
+        }
+    }
+    compare_implementations(baseline, current, &mut changes);
     if baseline.dependencies != current.dependencies {
-        lines
-            .entry("DEPENDENCY")
-            .or_default()
-            .push("normalized dependency identity changed".to_owned());
+        push_change(
+            &mut changes,
+            DiffClass::Dependency,
+            DiffKind::DependencyChanged,
+            "dependencies",
+            "normalized dependency identity changed".to_owned(),
+        );
     }
     for (name, hash) in input_hashes(&baseline.inputs) {
         if current.inputs.get(&name) != Some(&hash)
             && !name.ends_with(".cott")
             && !name.ends_with(".py")
         {
-            lines
-                .entry("IMPLEMENTATION")
-                .or_default()
-                .push(format!("{name} input changed"));
+            push_change(
+                &mut changes,
+                DiffClass::Implementation,
+                DiffKind::InputChanged,
+                &name,
+                format!("{name} input changed"),
+            );
         }
     }
     for name in input_hashes(&current.inputs)
@@ -1933,51 +2139,313 @@ fn generation_diff(
         .filter(|name| baseline.inputs.get(*name).is_none())
     {
         if !name.ends_with(".cott") && !name.ends_with(".py") {
-            lines
-                .entry("IMPLEMENTATION")
-                .or_default()
-                .push(format!("{name} input was added"));
+            push_change(
+                &mut changes,
+                DiffClass::Implementation,
+                DiffKind::InputChanged,
+                name,
+                format!("{name} input was added"),
+            );
         }
     }
-    for tool in ["compiler", "runtime"] {
-        let old = baseline
-            .tools
-            .get(tool)
-            .and_then(|value| value.get("version"));
-        let new = current
-            .tools
-            .get(tool)
-            .and_then(|value| value.get("version"));
-        if old != new {
-            lines
-                .entry("TOOLCHAIN")
-                .or_default()
-                .push(format!("{tool} version changed"));
+    if same_target_platform(baseline, current) {
+        compare_tools(&baseline.tools, &current.tools, &mut changes);
+        compare_managed_files(
+            &baseline.managed_files,
+            &current.managed_files,
+            &mut changes,
+        );
+    }
+    let breaking = changes
+        .iter()
+        .any(|change| change.class == DiffClass::Breaking);
+    let required_version_bump = if breaking {
+        if baseline_version.major == 0 {
+            VersionBump::Minor
+        } else {
+            VersionBump::Major
+        }
+    } else if changes
+        .iter()
+        .any(|change| change.class == DiffClass::Additive)
+    {
+        VersionBump::Minor
+    } else {
+        VersionBump::None
+    };
+    let version_compatible =
+        version_bump_is_sufficient(baseline_version, current_version, required_version_bump);
+    if !version_compatible {
+        let subject = format!("{baseline_version} -> {current_version}");
+        push_change(
+            &mut changes,
+            DiffClass::VersionIncompatible,
+            DiffKind::VersionIncompatible,
+            &subject,
+            format!(
+                "VERSION INCOMPATIBLE: {required_version_bump:?} bump required for API changes"
+            ),
+        );
+    }
+    Ok(DiffReport {
+        baseline_version: baseline.project_version.clone(),
+        current_version: current.project_version.clone(),
+        breaking,
+        version_compatible,
+        required_version_bump,
+        changes,
+        advice,
+    })
+}
+
+fn push_change(
+    changes: &mut Vec<DiffChange>,
+    class: DiffClass,
+    kind: DiffKind,
+    subject: &str,
+    message: String,
+) {
+    changes.push(DiffChange {
+        class,
+        kind,
+        subject: subject.to_owned(),
+        message,
+    });
+}
+
+fn version_bump_is_sufficient(
+    baseline: ApiVersion,
+    current: ApiVersion,
+    required: VersionBump,
+) -> bool {
+    match required {
+        VersionBump::None => true,
+        VersionBump::Minor if baseline.major == 0 => {
+            current.major > 0 || current.minor > baseline.minor
+        }
+        VersionBump::Minor => {
+            current.major > baseline.major
+                || current.major == baseline.major && current.minor > baseline.minor
+        }
+        VersionBump::Major => current.major > baseline.major,
+    }
+}
+
+fn structural_declaration_diff(
+    subject: &str,
+    old: &serde_json::Value,
+    new: &serde_json::Value,
+    changes: &mut Vec<DiffChange>,
+    advice: &mut Vec<MigrationAdvice>,
+) -> bool {
+    let mut recognized = false;
+    let mut structural_changes = Vec::new();
+    let mut structural_advice = Vec::new();
+    for (field, added, removed, added_kind, removed_kind) in [
+        (
+            "parameters",
+            "required parameter",
+            "required parameter",
+            DiffKind::RequiredParameterAdded,
+            DiffKind::RequiredParameterRemoved,
+        ),
+        (
+            "fields",
+            "field",
+            "field",
+            DiffKind::FieldAdded,
+            DiffKind::FieldRemoved,
+        ),
+        (
+            "variants",
+            "enum variant",
+            "enum variant",
+            DiffKind::EnumVariantAdded,
+            DiffKind::EnumVariantRemoved,
+        ),
+    ] {
+        let Some(old_members) = named_members(old, field) else {
+            continue;
+        };
+        let Some(new_members) = named_members(new, field) else {
+            return false;
+        };
+        for (name, value) in &old_members {
+            match new_members.get(name) {
+                None => {
+                    recognized = true;
+                    let member = format!("{subject}.{name}");
+                    push_change(
+                        &mut structural_changes,
+                        DiffClass::Breaking,
+                        removed_kind,
+                        &member,
+                        format!("{member} {removed} was removed"),
+                    );
+                    structural_advice.push(MigrationAdvice {
+                        kind: removed_kind,
+                        subject: member,
+                        message: format!("Remove uses of the removed {removed} `{name}`."),
+                    });
+                }
+                Some(updated)
+                    if normalized_declaration(value) != normalized_declaration(updated) =>
+                {
+                    return false;
+                }
+                Some(_) => {}
+            }
+        }
+        for name in new_members
+            .keys()
+            .filter(|name| !old_members.contains_key(*name))
+        {
+            recognized = true;
+            let member = format!("{subject}.{name}");
+            push_change(
+                &mut structural_changes,
+                DiffClass::Breaking,
+                added_kind,
+                &member,
+                format!("{member} {added} was added"),
+            );
+            structural_advice.push(MigrationAdvice {
+                kind: added_kind,
+                subject: member,
+                message: format!("Supply the new {added} `{name}` where required."),
+            });
         }
     }
-    for values in lines.values_mut() {
-        values.sort();
-        values.dedup();
+    if let Some(old_methods) = named_members(old, "methods") {
+        let Some(new_methods) = named_members(new, "methods") else {
+            return false;
+        };
+        if old_methods.len() != new_methods.len() {
+            return false;
+        }
+        for (name, method) in old_methods {
+            let Some(updated) = new_methods.get(&name) else {
+                return false;
+            };
+            if normalized_declaration(&method) != normalized_declaration(updated) {
+                let mut method_changes = Vec::new();
+                let mut method_advice = Vec::new();
+                if !structural_declaration_diff(
+                    &format!("{subject}.{name}"),
+                    &method,
+                    updated,
+                    &mut method_changes,
+                    &mut method_advice,
+                ) {
+                    return false;
+                }
+                recognized = true;
+                structural_changes.extend(method_changes);
+                structural_advice.extend(method_advice);
+            }
+        }
     }
-    DiffReport { breaking, lines }
+    if !recognized {
+        return false;
+    }
+    let mut old = normalized_declaration(old);
+    let mut new = normalized_declaration(new);
+    for field in ["parameters", "fields", "variants", "methods"] {
+        old.as_object_mut()
+            .expect("declaration is an object")
+            .remove(field);
+        new.as_object_mut()
+            .expect("declaration is an object")
+            .remove(field);
+    }
+    if old != new {
+        return false;
+    }
+    changes.extend(structural_changes);
+    advice.extend(structural_advice);
+    true
+}
+
+fn named_members(
+    value: &serde_json::Value,
+    field: &str,
+) -> Option<BTreeMap<String, serde_json::Value>> {
+    value
+        .get(field)?
+        .as_array()?
+        .iter()
+        .map(|member| Some((member.get("name")?.as_str()?.to_owned(), member.clone())))
+        .collect()
+}
+
+fn print_diff_report(report: &DiffReport) {
+    if report.changes.is_empty() {
+        println!("NO CHANGE");
+        return;
+    }
+    for class in [
+        DiffClass::Breaking,
+        DiffClass::Additive,
+        DiffClass::Documentation,
+        DiffClass::Implementation,
+        DiffClass::Dependency,
+        DiffClass::Toolchain,
+        DiffClass::Artifact,
+        DiffClass::VersionIncompatible,
+    ] {
+        let changes = report
+            .changes
+            .iter()
+            .filter(|change| change.class == class)
+            .collect::<Vec<_>>();
+        if changes.is_empty() {
+            continue;
+        }
+        println!("{}:", diff_class_heading(class));
+        for change in changes {
+            println!("- {}", change.message);
+        }
+    }
+    if !report.advice.is_empty() {
+        println!("MIGRATION ADVICE:");
+        for advice in &report.advice {
+            println!("- {}", advice.message);
+        }
+    }
+}
+
+fn diff_class_heading(class: DiffClass) -> &'static str {
+    match class {
+        DiffClass::Breaking => "CONTRACT BREAKING",
+        DiffClass::Additive => "CONTRACT NON-BREAKING",
+        DiffClass::Documentation => "DOCUMENTATION",
+        DiffClass::Implementation => "IMPLEMENTATION",
+        DiffClass::Dependency => "DEPENDENCY",
+        DiffClass::Toolchain => "TOOLCHAIN",
+        DiffClass::Artifact => "ARTIFACT",
+        DiffClass::VersionIncompatible => "VERSION INCOMPATIBLE",
+    }
 }
 
 fn declarations_by_name(value: &serde_json::Value) -> BTreeMap<String, serde_json::Value> {
     value
         .as_object()
         .into_iter()
-        .flat_map(|modules| modules.values())
-        .filter_map(|module| {
+        .flat_map(|modules| modules.iter())
+        .flat_map(|(module_name, module)| {
             module
                 .get("declarations")
                 .and_then(serde_json::Value::as_array)
-        })
-        .flatten()
-        .filter_map(|declaration| {
-            Some((
-                declaration.get("name")?.as_str()?.to_owned(),
-                declaration.clone(),
-            ))
+                .into_iter()
+                .flatten()
+                .filter_map(move |declaration| {
+                    let name = declaration.get("name")?.as_str()?;
+                    let subject = name
+                        .contains('.')
+                        .then(|| name.to_owned())
+                        .unwrap_or_else(|| format!("{module_name}.{name}"));
+                    Some((subject, declaration.clone()))
+                })
         })
         .collect()
 }
@@ -2026,33 +2494,145 @@ fn symbol_sets(value: &serde_json::Value) -> BTreeMap<String, std::collections::
         .collect()
 }
 
-fn compare_implementations(
+fn same_target_platform(
+    baseline: &crate::provenance::GenerationSnapshot,
+    current: &crate::provenance::GenerationSnapshot,
+) -> bool {
+    let Some(baseline) = baseline
+        .tools
+        .get("python")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return false;
+    };
+    let Some(current) = current
+        .tools
+        .get("python")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return false;
+    };
+    ["os", "machine", "platform"].into_iter().all(|field| {
+        baseline
+            .get(field)
+            .is_some_and(|value| current.get(field) == Some(value))
+    })
+}
+
+fn compare_tools(
     baseline: &serde_json::Value,
     current: &serde_json::Value,
-    lines: &mut BTreeMap<&'static str, Vec<String>>,
+    changes: &mut Vec<DiffChange>,
 ) {
-    let index = |value: &serde_json::Value| {
-        value
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|implementation| {
-                Some((
-                    implementation.get("cott_symbol")?.as_str()?.to_owned(),
-                    implementation.clone(),
-                ))
-            })
-            .collect::<BTreeMap<_, _>>()
-    };
-    let old = index(baseline);
-    let new = index(current);
-    for symbol in old.keys().chain(new.keys()) {
-        if old.get(symbol) != new.get(symbol) {
-            lines
-                .entry("IMPLEMENTATION")
-                .or_default()
-                .push(format!("{symbol} implementation changed"));
+    let baseline = baseline.as_object();
+    let current = current.as_object();
+    let tools = baseline
+        .into_iter()
+        .flat_map(|tools| tools.keys())
+        .chain(current.into_iter().flat_map(|tools| tools.keys()))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    for tool in tools {
+        let before = baseline.and_then(|tools| tools.get(&tool));
+        let after = current.and_then(|tools| tools.get(&tool));
+        if before == after {
+            continue;
         }
+        let message = match (before, after) {
+            (None, Some(_)) => format!("{tool} toolchain was added"),
+            (Some(_), None) => format!("{tool} toolchain was removed"),
+            (Some(_), Some(_)) => format!("{tool} toolchain changed"),
+            (None, None) => unreachable!("tool belongs to a comparison index"),
+        };
+        push_change(
+            changes,
+            DiffClass::Toolchain,
+            DiffKind::ToolchainChanged,
+            &tool,
+            message,
+        );
+    }
+}
+
+fn compare_managed_files(
+    baseline: &BTreeMap<String, String>,
+    current: &BTreeMap<String, String>,
+    changes: &mut Vec<DiffChange>,
+) {
+    for path in baseline
+        .keys()
+        .chain(current.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+    {
+        let before = baseline.get(&path);
+        let after = current.get(&path);
+        if before == after {
+            continue;
+        }
+        let message = match (before, after) {
+            (None, Some(_)) => format!("{path} artifact was added"),
+            (Some(_), None) => format!("{path} artifact was removed"),
+            (Some(_), Some(_)) => format!("{path} artifact changed"),
+            (None, None) => unreachable!("artifact belongs to a comparison index"),
+        };
+        push_change(
+            changes,
+            DiffClass::Artifact,
+            DiffKind::ArtifactChanged,
+            &path,
+            message,
+        );
+    }
+}
+
+fn compare_implementations(
+    baseline: &crate::provenance::GenerationSnapshot,
+    current: &crate::provenance::GenerationSnapshot,
+    changes: &mut Vec<DiffChange>,
+) {
+    for entry in compare_implementation_identities(Some(baseline), current).entries {
+        let message = match entry.status {
+            "added" => format!("{} implementation was added", entry.cott_symbol),
+            "removed" => format!("{} implementation was removed", entry.cott_symbol),
+            "changed" => format!(
+                "{} implementation changed: {}",
+                entry.cott_symbol,
+                entry
+                    .changed_fields
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            "unchanged" => continue,
+            _ => unreachable!("implementation comparison has a known status"),
+        };
+        let async_kind_change = entry.changed_fields.get("kind").is_some_and(|change| {
+            matches!(
+                (&change.before, &change.after),
+                (
+                    serde_json::Value::String(before),
+                    serde_json::Value::String(after)
+                ) if (before == "function" && after == "async_function")
+                    || (before == "async_function" && after == "function")
+            )
+        });
+        push_change(
+            changes,
+            if async_kind_change {
+                DiffClass::Breaking
+            } else {
+                DiffClass::Implementation
+            },
+            if async_kind_change {
+                DiffKind::SemanticChanged
+            } else {
+                DiffKind::ImplementationChanged
+            },
+            &entry.cott_symbol,
+            message,
+        );
     }
 }
 
@@ -3164,19 +3744,38 @@ fn verify(plan: &PlannedProject) -> Result<(), Vec<String>> {
     if !expected_record.current.unresolved.is_empty() {
         mismatches.push(format!(
             "unresolved implementations: {}",
-            expected_record.current.unresolved.join(", ")
+            expected_record
+                .current
+                .unresolved
+                .iter()
+                .map(|record| record.cott_symbol.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     if !mismatches.is_empty() {
         return Err(mismatches);
     }
+    let implementation_comparison = compare_implementation_identities(
+        actual_record.last_verified.as_ref(),
+        &expected_record.current,
+    );
     let evidence = verify_python(&plan.config, &plan.paths, &artifact_root, &plan.ir, None)
         .map_err(|message| vec![message])?;
+    let mut verification = evidence.report;
+    verification
+        .as_object_mut()
+        .expect("verification evidence is an object")
+        .insert(
+            "implementation_comparison".to_owned(),
+            serde_json::to_value(implementation_comparison)
+                .map_err(|message| vec![message.to_string()])?,
+        );
     let mut record = expected_record;
     record.current.tools = evidence.tools;
     record.current.dependencies = evidence.dependencies;
     record.current.verified = true;
-    record.current.verification = evidence.report;
+    record.current.verification = verification;
     record
         .current
         .compute_generation_id()

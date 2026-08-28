@@ -31,6 +31,7 @@ pub struct ContractTestStrategy {
     pub candidate_limit: u32,
     pub container_length_limit: u32,
     pub json_depth_limit: u32,
+    pub callable_kind: String,
     pub classification: Classification,
     pub clause_ids: Vec<String>,
 }
@@ -39,6 +40,7 @@ impl ContractTestStrategy {
     pub fn new(
         symbol: impl Into<String>,
         ir_bytes: &[u8],
+        callable_kind: impl Into<String>,
         classification: Classification,
         clause_ids: Vec<String>,
     ) -> Self {
@@ -49,6 +51,7 @@ impl ContractTestStrategy {
             candidate_limit: 64,
             container_length_limit: 3,
             json_depth_limit: 4,
+            callable_kind: callable_kind.into(),
             classification,
             clause_ids,
         }
@@ -63,8 +66,8 @@ impl ContractTestStrategy {
     }
 }
 
-/// Derive metadata-only contract test strategies from canonical IR v2 module
-/// bytes, preserving canonical module, declaration, and impl-member order.
+/// Derive metadata-only contract test strategies from canonical IR v5 module
+/// bytes, preserving canonical module, declaration, and selected-slot order.
 pub fn derive_strategies(ir: &CanonicalIr) -> Result<Vec<ContractTestStrategy>, String> {
     Ok(derive_strategy_entries(ir)?
         .into_iter()
@@ -75,14 +78,18 @@ pub fn derive_strategies(ir: &CanonicalIr) -> Result<Vec<ContractTestStrategy>, 
 fn derive_strategy_entries(
     ir: &CanonicalIr,
 ) -> Result<Vec<(ContractTestStrategy, Option<String>)>, String> {
+    let modules = ir
+        .modules
+        .iter()
+        .enumerate()
+        .map(|(index, module)| {
+            crate::ir::load(&module.bytes).map_err(|error| format!("module {index}: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let mut strategies = Vec::new();
-    for (module_index, module) in ir.modules.iter().enumerate() {
-        let value = crate::ir::load(&module.bytes)
+    for (module_index, (module, value)) in ir.modules.iter().zip(&modules).enumerate() {
+        let declarations = required_array(value, "declarations")
             .map_err(|error| format!("module {module_index}: {error}"))?;
-        let declarations = value
-            .get("declarations")
-            .and_then(Value::as_array)
-            .ok_or_else(|| format!("module {module_index}: missing declarations"))?;
 
         for (declaration_index, declaration) in declarations.iter().enumerate() {
             let kind = required_string(declaration, "kind").map_err(|error| {
@@ -93,6 +100,13 @@ fn derive_strategy_entries(
                 "function" => {
                     let symbol = required_string(declaration, "name")
                         .map_err(|error| format!("{context}: {error}"))?;
+                    let callable_kind = required_string(declaration, "callable_kind")
+                        .map_err(|error| format!("{context} function {symbol}: {error}"))?;
+                    if !matches!(callable_kind, "sync" | "async") {
+                        return Err(format!(
+                            "{context} function {symbol}: unsupported callable_kind `{callable_kind}`"
+                        ));
+                    }
                     let return_type = required_object(declaration, "return_type")
                         .map_err(|error| format!("{context} function {symbol}: {error}"))?;
                     let contract = required_object(declaration, "contract")
@@ -112,6 +126,7 @@ fn derive_strategy_entries(
                     let strategy = ContractTestStrategy::new(
                         symbol,
                         &module.bytes,
+                        callable_kind,
                         classification,
                         clause_ids,
                     );
@@ -145,48 +160,191 @@ fn derive_strategy_entries(
                     let strategy = ContractTestStrategy::new(
                         init_symbol.clone(),
                         &module.bytes,
+                        "sync",
                         Classification::Pure,
                         init_clause_ids,
                     );
                     strategy.bytes()?;
                     strategies.push((strategy, None));
 
-                    let methods = required_array(declaration, "methods")
-                        .map_err(|error| format!("{context} impl {name}: {error}"))?;
-                    for (method_index, method) in methods.iter().enumerate() {
-                        let method_name = required_string(method, "name").map_err(|error| {
-                            format!("{context} impl {name} method {method_index}: {error}")
-                        })?;
-                        let method_context = format!("{context} impl {name} method {method_name}");
-                        let contracts = required_object(method, "contracts")
-                            .map_err(|error| format!("{method_context}: {error}"))?;
-                        let mut clause_ids = contract_clause_ids(
-                            contracts,
-                            &["requires", "ensures", "errors"],
-                            &method_context,
-                        )?;
-                        let modifies = required_array(method, "modifies")
-                            .map_err(|error| format!("{method_context}: {error}"))?;
-                        for (modifies_index, field) in modifies.iter().enumerate() {
-                            let field = field.as_str().ok_or_else(|| {
+                    let mut selected = Vec::<(String, Value, Value)>::new();
+                    for (slot_index, slot) in required_array(declaration, "selected_methods")
+                        .map_err(|error| format!("{context} impl {name}: {error}"))?
+                        .iter()
+                        .enumerate()
+                    {
+                        let trait_method =
+                            required_string(slot, "trait_method").map_err(|error| {
                                 format!(
-                                    "{method_context} modifies {modifies_index}: required field must be a string"
+                                    "{context} impl {name} selected method {slot_index}: {error}"
                                 )
                             })?;
-                            clause_ids.push(format!("modifies:{field}"));
+                        let method_name = local_name(trait_method).ok_or_else(|| {
+                            format!("{context} impl {name} selected method {slot_index}: invalid trait method")
+                        })?;
+                        let selected_impl = required_object(slot, "selected").map_err(|error| {
+                            format!("{context} impl {name} selected method {method_name}: {error}")
+                        })?;
+                        let selected_kind =
+                            required_string(selected_impl, "kind").map_err(|error| {
+                                format!(
+                                    "{context} impl {name} selected method {method_name}: {error}"
+                                )
+                            })?;
+                        let function =
+                            required_object(selected_impl, "function").map_err(|error| {
+                                format!(
+                                    "{context} impl {name} selected method {method_name}: {error}"
+                                )
+                            })?;
+                        if selected_kind == "explicit"
+                            && local_name(required_string(function, "symbol").map_err(|error| {
+                                format!(
+                                    "{context} impl {name} selected method {method_name}: {error}"
+                                )
+                            })?) != Some(method_name)
+                        {
+                            return Err(format!(
+                                "{context} impl {name} selected method {method_name}: selected function does not match trait method"
+                            ));
                         }
-                        clause_ids.extend(invariants.iter().cloned());
-                        let return_type = required_object(method, "return_type")
-                            .map_err(|error| format!("{method_context}: {error}"))?;
+                        let (source, substitutions) = match selected_kind {
+                            "explicit" => (
+                                required_array(declaration, "methods")
+                                    .map_err(|error| format!("{context} impl {name}: {error}"))?
+                                    .iter()
+                                    .find(|method| {
+                                        method.get("name").and_then(Value::as_str).and_then(local_name)
+                                            == Some(method_name)
+                                    })
+                                    .ok_or_else(|| {
+                                        format!("{context} impl {name} selected method {method_name}: missing explicit method")
+                                    })?,
+                                BTreeMap::new(),
+                            ),
+                            "default" => {
+                                let (trait_declaration, method) = find_trait_method(
+                                    &modules,
+                                    trait_method,
+                                    &format!("{context} impl {name} selected method {method_name}"),
+                                )?;
+                                (
+                                    method,
+                                    trait_substitutions(
+                                        declaration,
+                                        trait_declaration,
+                                        trait_method,
+                                        &format!("{context} impl {name} selected method {method_name}"),
+                                    )?,
+                                )
+                            }
+                            _ => {
+                                return Err(format!(
+                                    "{context} impl {name} selected method {method_name}: unsupported selected implementation `{selected_kind}`"
+                                ));
+                            }
+                        };
+                        let parameters = required_array(source, "parameters").map_err(|error| {
+                            format!("{context} impl {name} selected method {method_name}: {error}")
+                        })?;
+                        let parameter_types = parameters
+                            .iter()
+                            .enumerate()
+                            .map(|(parameter_index, parameter)| {
+                                required_field(parameter, "type")
+                                    .map(|ty| concretize(ty, &substitutions))
+                                    .map_err(|error| {
+                                        format!(
+                                            "{context} impl {name} selected method {method_name} parameter {parameter_index}: {error}"
+                                        )
+                                    })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let return_type = concretize(
+                            required_field(source, "return_type").map_err(|error| {
+                                format!(
+                                    "{context} impl {name} selected method {method_name}: {error}"
+                                )
+                            })?,
+                            &substitutions,
+                        );
+                        let signature = serde_json::json!({
+                            "parameters": parameter_types,
+                            "return_type": return_type,
+                        });
+                        if let Some((_, previous_signature, previous_selected)) = selected
+                            .iter()
+                            .find(|(selected_name, _, _)| selected_name == method_name)
+                        {
+                            if previous_signature != &signature
+                                || previous_selected != selected_impl
+                            {
+                                return Err(format!(
+                                    "{context} impl {name} selected method {method_name}: duplicate concrete slot differs"
+                                ));
+                            }
+                            continue;
+                        }
+                        selected.push((method_name.to_owned(), signature, selected_impl.clone()));
+
+                        let return_type = selected
+                            .last()
+                            .expect("selected method")
+                            .1
+                            .get("return_type")
+                            .expect("return type");
+                        let effects = match selected_kind {
+                            "explicit" => required_array(source, "effects"),
+                            "default" => required_object(source, "contract")
+                                .and_then(|contract| required_array(contract, "effects")),
+                            _ => unreachable!(),
+                        }
+                        .map_err(|error| {
+                            format!("{context} impl {name} selected method {method_name}: {error}")
+                        })?;
                         let classification = classify(
                             return_type,
-                            required_array(method, "effects")
-                                .map_err(|error| format!("{method_context}: {error}"))?,
-                            &method_context,
+                            effects,
+                            &format!("{context} impl {name} selected method {method_name}"),
                         )?;
+                        let mut clause_ids = match selected_kind {
+                            "explicit" => contract_clause_ids(
+                                required_object(source, "contracts").map_err(|error| {
+                                    format!("{context} impl {name} selected method {method_name}: {error}")
+                                })?,
+                                &["requires", "ensures", "errors"],
+                                &format!("{context} impl {name} selected method {method_name}"),
+                            ),
+                            "default" => contract_clause_ids(
+                                required_object(source, "contract").map_err(|error| {
+                                    format!("{context} impl {name} selected method {method_name}: {error}")
+                                })?,
+                                &["clauses"],
+                                &format!("{context} impl {name} selected method {method_name}"),
+                            ),
+                            _ => unreachable!(),
+                        }?;
+                        if selected_kind == "explicit" {
+                            for (modifies_index, field) in required_array(source, "modifies")
+                                .map_err(|error| {
+                                    format!("{context} impl {name} selected method {method_name}: {error}")
+                                })?
+                                .iter()
+                                .enumerate()
+                            {
+                                let field = field.as_str().ok_or_else(|| {
+                                    format!(
+                                        "{context} impl {name} selected method {method_name} modifies {modifies_index}: required field must be a string"
+                                    )
+                                })?;
+                                clause_ids.push(format!("modifies:{field}"));
+                            }
+                        }
+                        clause_ids.extend(invariants.iter().cloned());
                         let strategy = ContractTestStrategy::new(
                             format!("{name}.{method_name}"),
                             &module.bytes,
+                            "sync",
                             classification,
                             clause_ids,
                         );
@@ -199,6 +357,115 @@ fn derive_strategy_entries(
         }
     }
     Ok(strategies)
+}
+
+fn local_name(symbol: &str) -> Option<&str> {
+    symbol.rsplit('.').next().filter(|name| !name.is_empty())
+}
+
+fn find_trait_method<'a>(
+    modules: &'a [Value],
+    trait_method: &str,
+    context: &str,
+) -> Result<(&'a Value, &'a Value), String> {
+    let (trait_name, method_name) = trait_method
+        .rsplit_once('.')
+        .ok_or_else(|| format!("{context}: invalid trait method"))?;
+    for module in modules {
+        for declaration in
+            required_array(module, "declarations").map_err(|error| format!("{context}: {error}"))?
+        {
+            if declaration.get("kind").and_then(Value::as_str) != Some("trait")
+                || declaration.get("name").and_then(Value::as_str) != Some(trait_name)
+            {
+                continue;
+            }
+            let method = required_array(declaration, "methods")
+                .map_err(|error| format!("{context}: {error}"))?
+                .iter()
+                .find(|method| {
+                    method
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .and_then(local_name)
+                        == Some(method_name)
+                })
+                .ok_or_else(|| format!("{context}: missing trait method"))?;
+            return Ok((declaration, method));
+        }
+    }
+    Err(format!("{context}: missing trait declaration"))
+}
+
+fn trait_substitutions(
+    implementation: &Value,
+    trait_declaration: &Value,
+    trait_method: &str,
+    context: &str,
+) -> Result<BTreeMap<String, Value>, String> {
+    let (trait_name, _) = trait_method
+        .rsplit_once('.')
+        .ok_or_else(|| format!("{context}: invalid trait method"))?;
+    let trait_reference = required_array(implementation, "traits")
+        .map_err(|error| format!("{context}: {error}"))?
+        .iter()
+        .find(|reference| {
+            reference.get("kind").and_then(Value::as_str) == Some("named")
+                && reference.get("name").and_then(Value::as_str) == Some(trait_name)
+        })
+        .ok_or_else(|| format!("{context}: missing instantiated trait"))?;
+    let generics = required_array(trait_declaration, "generics")
+        .map_err(|error| format!("{context}: {error}"))?;
+    let arguments =
+        required_array(trait_reference, "args").map_err(|error| format!("{context}: {error}"))?;
+    if generics.len() != arguments.len() {
+        return Err(format!("{context}: trait generic arity differs"));
+    }
+    generics
+        .iter()
+        .zip(arguments)
+        .map(|(generic, argument)| {
+            let name =
+                required_string(generic, "name").map_err(|error| format!("{context}: {error}"))?;
+            let value = match required_string(argument, "kind")
+                .map_err(|error| format!("{context}: {error}"))?
+            {
+                "type" => required_field(argument, "type"),
+                "const" => required_field(argument, "value"),
+                _ => Err("unsupported generic argument".to_owned()),
+            }
+            .map_err(|error| format!("{context}: {error}"))?;
+            Ok((name.to_owned(), value.clone()))
+        })
+        .collect()
+}
+
+fn concretize(value: &Value, substitutions: &BTreeMap<String, Value>) -> Value {
+    if let Some(object) = value.as_object() {
+        if matches!(
+            object.get("kind").and_then(Value::as_str),
+            Some("type_parameter" | "parameter")
+        ) && let Some(name) = object.get("name").and_then(Value::as_str)
+            && let Some(replacement) = substitutions.get(name)
+        {
+            return replacement.clone();
+        }
+        return Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| (key.clone(), concretize(value, substitutions)))
+                .collect(),
+        );
+    }
+    if let Some(values) = value.as_array() {
+        return Value::Array(
+            values
+                .iter()
+                .map(|value| concretize(value, substitutions))
+                .collect(),
+        );
+    }
+    value.clone()
 }
 
 fn classify(
@@ -492,7 +759,25 @@ mod tests {
                             "name": "build",
                             "contracts": {},
                             "modifies": [],
+                            "parameters": [],
+                            "return_type": {"kind": "primitive", "name": "bool"},
                             "span": null,
+                        }],
+                        "selected_methods": [{
+                            "receiver_type": {
+                                "args": [],
+                                "kind": "named",
+                                "name": "missing.facade.Camera",
+                            },
+                            "trait_method": "missing.facade.Camera.build",
+                            "selected": {
+                                "kind": "explicit",
+                                "function": {
+                                    "module": "missing.facade",
+                                    "symbol": "Camera.build",
+                                    "verified_facade": "missing.facade.Camera.build",
+                                },
+                            },
                         }],
                     },
                 ],

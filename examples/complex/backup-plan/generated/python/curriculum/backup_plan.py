@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 from curriculum.backup_plan_types import BackupPath, BackupPlan, BackupPlanError, BackupPlanError_BlankContentId, BackupPlanError_DuplicatePath, BackupPlanError_EmptyPath, BackupPlanRequest
 
@@ -61,10 +61,14 @@ Known content is reused; unknown content contributes its path for upload."""
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.backup_plan.classify_backup_paths", phase="implementation-call", span={"end_byte":1157,"end_column":1,"end_line":43,"start_byte":783,"start_column":1,"start_line":33}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, BackupPlan, path="$.return")
-    if True:
-        plan = _result
-        if not (((len((plan).upload_paths) + len((plan).reused_content_ids)) <= len(paths))):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.backup_plan.classify_backup_paths", clause="ensures:1", phase="ensures", span={"end_byte":1139,"end_column":87,"end_line":39,"start_byte":1057,"start_column":5,"start_line":39}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if True:
+            plan = _cott_match_value
+            return (((len((plan).upload_paths) + len((plan).reused_content_ids)) <= len(paths)))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.backup_plan.classify_backup_paths", clause="ensures:1", phase="ensures", span={"end_byte":1139,"end_column":87,"end_line":39,"start_byte":1057,"start_column":5,"start_line":39}, expected="true", actual="false")
     return _result
 
 def plan_backup(request: BackupPlanRequest) -> Result[BackupPlan, BackupPlanError]:
@@ -96,10 +100,14 @@ upload and reuse lists."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.backup_plan.plan_backup", phase="error", span={"end_byte":1603,"end_column":1,"end_line":56,"start_byte":1157,"start_column":1,"start_line":43}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.backup_plan.plan_backup", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        plan = _result.value
-        if not (((len((plan).upload_paths) + len((plan).reused_content_ids)) <= len((request).paths))):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.backup_plan.plan_backup", clause="ensures:1", phase="ensures", span={"end_byte":1468,"end_column":106,"end_line":49,"start_byte":1367,"start_column":5,"start_line":49}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            plan = _cott_match_value.value
+            return (((len((plan).upload_paths) + len((plan).reused_content_ids)) <= len((request).paths)))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.backup_plan.plan_backup", clause="ensures:1", phase="ensures", span={"end_byte":1468,"end_column":106,"end_line":49,"start_byte":1367,"start_column":5,"start_line":49}, expected="true", actual="false")
     return _result
 
 __all__ = ["BackupPath", "BackupPlan", "BackupPlanError", "BackupPlanError_BlankContentId", "BackupPlanError_DuplicatePath", "BackupPlanError_EmptyPath", "BackupPlanRequest", "classify_backup_paths", "plan_backup", "validate_backup_request"]

@@ -518,6 +518,7 @@ fn declaration_name_and_doc(declaration: &Declaration) -> Option<(&str, Option<&
         Declaration::Const(value) => Some((&value.name, value.doc.as_ref())),
         Declaration::Function(value) => Some((&value.name, None)),
         Declaration::Impl(value) => Some((&value.name, None)),
+        Declaration::Resource(value) => Some((&value.name, value.doc.as_ref())),
         Declaration::Rule(value) => Some((&value.name, value.doc.as_ref())),
     }
 }

@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.currency_converter_types import ConversionRequest as ConversionRequest, CurrencyError as CurrencyError, CurrencyError_DuplicateRate as CurrencyError_DuplicateRate, CurrencyError_InvalidCurrencyCode as CurrencyError_InvalidCurrencyCode, CurrencyError_MissingRate as CurrencyError_MissingRate, CurrencyError_NegativeQuantity as CurrencyError_NegativeQuantity, CurrencyError_NonFiniteQuantity as CurrencyError_NonFiniteQuantity, CurrencyError_NonFiniteRate as CurrencyError_NonFiniteRate, CurrencyError_NonFiniteResult as CurrencyError_NonFiniteResult, CurrencyError_NonPositiveRate as CurrencyError_NonPositiveRate, Rate as Rate
 """Validates a currency conversion request and its complete EUR rate list,

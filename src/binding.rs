@@ -1,3 +1,4 @@
+use rustpython_parser::{Parse, ast};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
@@ -57,7 +58,7 @@ pub struct UnresolvedBinding {
     pub source: PathBuf,
 }
 
-/// Resolves every canonical planned function to the corresponding Python implementation.
+/// Resolves every agent- or manifest-owned canonical callable to its Python implementation.
 pub fn resolve_bindings(
     config: &ProjectConfig,
     paths: &ProjectPaths,
@@ -91,8 +92,14 @@ pub fn resolve_implementations(
     let mut diagnostics = Vec::new();
     for symbol in config.python.implementations.keys() {
         match callables.get(symbol) {
+            Some(callable) if is_default_impl_method(callable) => diagnostics.push(BindingDiagnostic {
+                path: paths.manifest.clone(),
+                message: format!(
+                    "implementation binding key `{symbol}` names a compiler-owned default implementation method"
+                ),
+            }),
             Some(PythonCallable {
-                kind: PythonCallableKind::Function,
+                kind: PythonCallableKind::Function | PythonCallableKind::AsyncFunction,
                 ..
             }) => {}
             Some(_) => diagnostics.push(BindingDiagnostic {
@@ -107,6 +114,36 @@ pub fn resolve_implementations(
                     "implementation binding key `{symbol}` does not name a public function"
                 ),
             }),
+        }
+    }
+    for callable in callables
+        .values()
+        .filter(|callable| is_default_impl_method(callable))
+    {
+        let Some(symbol) = default_verified_facade(callable) else {
+            diagnostics.push(BindingDiagnostic {
+                path: paths.python_source_dir.clone(),
+                message: format!(
+                    "default implementation method `{}` has no verified facade dependency",
+                    callable.cott_symbol
+                ),
+            });
+            continue;
+        };
+        if !matches!(
+            callables.get(symbol),
+            Some(PythonCallable {
+                kind: PythonCallableKind::Function | PythonCallableKind::AsyncFunction,
+                ..
+            })
+        ) {
+            diagnostics.push(BindingDiagnostic {
+                path: paths.python_source_dir.clone(),
+                message: format!(
+                    "default implementation method `{}` references non-callable verified facade `{symbol}`",
+                    callable.cott_symbol
+                ),
+            });
         }
     }
     if !diagnostics.is_empty() {
@@ -145,6 +182,9 @@ pub fn resolve_implementations(
     let mut unresolved = Vec::new();
     let mut expected_agent_files = BTreeSet::new();
     for (symbol, callable) in callables {
+        if is_default_impl_method(&callable) {
+            continue;
+        }
         let Some(segments) = module_segments(&callable.module) else {
             diagnostics.push(BindingDiagnostic {
                 path: paths.python_source_dir.clone(),
@@ -233,6 +273,7 @@ pub fn resolve_implementations(
             &source,
             &implementation_function,
             &callable,
+            plan,
             &local_imports,
             &generated_type_modules,
             &allowed_facade_imports,
@@ -494,9 +535,9 @@ pub fn validate_candidate(
             .collect();
         if matches
             .iter()
-            .any(|callable| matches!(&callable.kind, PythonCallableKind::Function))
+            .any(|callable| is_free_function(&callable.kind))
         {
-            matches.retain(|callable| matches!(&callable.kind, PythonCallableKind::Function));
+            matches.retain(|callable| is_free_function(&callable.kind));
         }
     }
     let callable = matches
@@ -506,10 +547,17 @@ pub fn validate_candidate(
     if matches.len() != 1 {
         return Err(format!("ambiguous canonical function `{function}`"));
     }
+    if is_default_impl_method(&callable) {
+        return Err(format!(
+            "compiler-owned default implementation method `{}` does not accept an agent implementation",
+            callable.cott_symbol
+        ));
+    }
     let factory_imports = factory_concrete_imports(plan, &callable);
     validate_source(
         source,
         &expected_implementation_function(&callable),
+        plan,
         &callable,
         &local_import_roots(config, plan),
         &generated_type_modules(plan),
@@ -535,8 +583,8 @@ fn local_import_roots(config: &ProjectConfig, plan: &PythonArtifactPlan) -> Hash
 
 fn allowed_facade_imports(plan: &PythonArtifactPlan) -> BTreeMap<String, BTreeSet<String>> {
     let mut imports = BTreeMap::<String, BTreeSet<String>>::new();
-    for callable in plan.public_callables() {
-        if matches!(&callable.kind, PythonCallableKind::Function) {
+    for callable in plan.callables() {
+        if is_free_function(&callable.kind) {
             imports
                 .entry(callable.module)
                 .or_default()
@@ -644,9 +692,45 @@ fn module_segments(module: &str) -> Option<Vec<&str>> {
     .then_some(segments)
 }
 
+fn is_default_impl_method(callable: &PythonCallable) -> bool {
+    matches!(&callable.kind, PythonCallableKind::ImplMethod { .. })
+        && callable
+            .declaration
+            .get("selected")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|selected| selected.get("kind"))
+            .and_then(serde_json::Value::as_str)
+            == Some("default")
+}
+
+fn default_verified_facade(callable: &PythonCallable) -> Option<&str> {
+    callable
+        .declaration
+        .get("selected")
+        .and_then(serde_json::Value::as_object)
+        .filter(|selected| {
+            selected.get("kind").and_then(serde_json::Value::as_str) == Some("default")
+        })
+        .and_then(|selected| selected.get("function"))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|function| function.get("verified_facade"))
+        .and_then(serde_json::Value::as_str)
+}
+
+fn is_free_function(kind: &PythonCallableKind) -> bool {
+    matches!(
+        kind,
+        PythonCallableKind::Function | PythonCallableKind::AsyncFunction
+    )
+}
+
+fn is_async_function(kind: &PythonCallableKind) -> bool {
+    matches!(kind, PythonCallableKind::AsyncFunction)
+}
+
 fn expected_implementation_function(callable: &PythonCallable) -> String {
     match &callable.kind {
-        PythonCallableKind::Function => callable.name.clone(),
+        PythonCallableKind::Function | PythonCallableKind::AsyncFunction => callable.name.clone(),
         PythonCallableKind::ImplMethod { concrete } => {
             format!("_cott_impl_{concrete}_{}", callable.name)
         }
@@ -655,7 +739,9 @@ fn expected_implementation_function(callable: &PythonCallable) -> String {
 
 fn agent_implementation_module(callable: &PythonCallable) -> String {
     match &callable.kind {
-        PythonCallableKind::Function => format!("_cott_impl.{}.{}", callable.module, callable.name),
+        PythonCallableKind::Function | PythonCallableKind::AsyncFunction => {
+            format!("_cott_impl.{}.{}", callable.module, callable.name)
+        }
         PythonCallableKind::ImplMethod { concrete } => {
             format!(
                 "_cott_impl.{}.{concrete}.{}",
@@ -756,6 +842,7 @@ fn read_binding(
     path: &Path,
     expected_function: &str,
     callable: &PythonCallable,
+    plan: &PythonArtifactPlan,
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
     allowed_facade_imports: &BTreeMap<String, BTreeSet<String>>,
@@ -776,6 +863,7 @@ fn read_binding(
     validate_source(
         text,
         expected_function,
+        plan,
         callable,
         local_imports,
         generated_type_modules,
@@ -789,6 +877,7 @@ fn read_binding(
 fn validate_source(
     source: &str,
     expected_function: &str,
+    plan: &PythonArtifactPlan,
     callable: &PythonCallable,
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
@@ -831,7 +920,9 @@ fn validate_source(
                 add_error(format!("runtime reflection `{token}` is not allowed"))
             }
             "agent" | "agents" => add_error(String::from("agent operations are not allowed")),
-            "async" => add_error(String::from("async implementation is not allowed")),
+            "async" if !is_async_function(&callable.kind) => {
+                add_error(String::from("async implementation is not allowed"))
+            }
             "global" | "nonlocal" => {
                 add_error(format!("function statement `{token}` is not allowed"))
             }
@@ -855,6 +946,7 @@ fn validate_source(
         &mut add_error,
     );
     inspect_function_definitions(&masked, expected_function, callable, &mut add_error);
+    inspect_effects(source, expected_function, callable, plan, &mut add_error);
     inspect_top_level(source, &masked, &mut add_error);
 
     if errors.is_empty() {
@@ -862,6 +954,1226 @@ fn validate_source(
     } else {
         Err(errors.join("; "))
     }
+}
+
+#[derive(Default)]
+struct EffectGraph {
+    async_cott: BTreeSet<String>,
+    cott: BTreeMap<String, BTreeSet<String>>,
+    imported: BTreeMap<String, String>,
+    modules: BTreeMap<String, String>,
+    module_roots: BTreeSet<String>,
+    leaves: BTreeSet<String>,
+    factory_parameters: BTreeSet<String>,
+    target_function: String,
+    local: BTreeMap<String, LocalEffects>,
+    impl_concrete: Option<String>,
+    impl_methods: BTreeMap<String, String>,
+    async_function: bool,
+    errors: BTreeSet<String>,
+}
+
+#[derive(Clone, Default)]
+struct LocalEffects {
+    local_calls: BTreeSet<String>,
+    cott_calls: BTreeSet<String>,
+    factory_parameters: BTreeSet<String>,
+    parameters: BTreeSet<String>,
+    assigned: BTreeSet<String>,
+    impl_receivers: BTreeSet<String>,
+}
+
+fn record_effect_cott_call(
+    symbol: &str,
+    awaited: bool,
+    local: &mut LocalEffects,
+    graph: &mut EffectGraph,
+) {
+    if graph.async_cott.contains(symbol) {
+        if !awaited {
+            graph
+                .errors
+                .insert(format!("async Cott callable `{symbol}` must be awaited"));
+        }
+    } else if awaited {
+        graph
+            .errors
+            .insert(format!("sync Cott callable `{symbol}` must not be awaited"));
+    }
+    local.cott_calls.insert(symbol.to_owned());
+}
+
+fn inspect_effects(
+    source: &str,
+    expected_function: &str,
+    callable: &PythonCallable,
+    plan: &PythonArtifactPlan,
+    add_error: &mut impl FnMut(String),
+) {
+    let suite = match ast::Suite::parse(source, "<binding>") {
+        Ok(suite) => suite,
+        Err(error) => {
+            add_error(format!("binding source is not valid Python: {error}"));
+            return;
+        }
+    };
+    let plan_callables = plan.callables();
+    let impl_methods = match &callable.kind {
+        PythonCallableKind::ImplMethod { concrete } => plan_callables
+            .iter()
+            .filter_map(|candidate| match &candidate.kind {
+                PythonCallableKind::ImplMethod {
+                    concrete: candidate_concrete,
+                } if candidate.module == callable.module && candidate_concrete == concrete => {
+                    Some((candidate.name.clone(), candidate.cott_symbol.clone()))
+                }
+                _ => None,
+            })
+            .collect(),
+        _ => BTreeMap::new(),
+    };
+    let mut graph = EffectGraph {
+        cott: plan_callables
+            .iter()
+            .filter(|candidate| {
+                is_free_function(&candidate.kind)
+                    || matches!(
+                        (&callable.kind, &candidate.kind),
+                        (
+                            PythonCallableKind::ImplMethod {
+                                concrete: target_concrete
+                            },
+                            PythonCallableKind::ImplMethod {
+                                concrete: candidate_concrete
+                            }
+                        ) if candidate.module == callable.module
+                            && candidate_concrete == target_concrete
+                    )
+            })
+            .map(|candidate| {
+                (
+                    candidate.cott_symbol.clone(),
+                    declaration_effects(&candidate.declaration),
+                )
+            })
+            .collect(),
+        async_cott: plan_callables
+            .iter()
+            .filter(|candidate| matches!(&candidate.kind, PythonCallableKind::AsyncFunction))
+            .map(|candidate| candidate.cott_symbol.clone())
+            .collect(),
+        impl_concrete: match &callable.kind {
+            PythonCallableKind::ImplMethod { concrete } => Some(concrete.clone()),
+            _ => None,
+        },
+        impl_methods,
+        target_function: expected_function.to_owned(),
+        ..EffectGraph::default()
+    };
+    graph.factory_parameters.extend(
+        callable
+            .declaration
+            .get("parameters")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|parameter| {
+                parameter
+                    .get("type")
+                    .and_then(|ty| ty.get("kind"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("factory")
+            })
+            .filter_map(|parameter| parameter.get("name").and_then(serde_json::Value::as_str))
+            .map(str::to_owned),
+    );
+    for statement in &suite {
+        collect_effect_imports(statement, &mut graph);
+    }
+    for statement in &suite {
+        match statement {
+            ast::Stmt::FunctionDef(function) => {
+                graph
+                    .local
+                    .insert(function.name.as_str().to_owned(), LocalEffects::default());
+            }
+            ast::Stmt::AsyncFunctionDef(function) => {
+                graph
+                    .local
+                    .insert(function.name.as_str().to_owned(), LocalEffects::default());
+            }
+            _ => {}
+        }
+    }
+    for statement in &suite {
+        match statement {
+            ast::Stmt::FunctionDef(function) => inspect_effect_function(
+                function.name.as_str(),
+                false,
+                &function.args,
+                &function.body,
+                &mut graph,
+            ),
+            ast::Stmt::AsyncFunctionDef(function) => inspect_effect_function(
+                function.name.as_str(),
+                true,
+                &function.args,
+                &function.body,
+                &mut graph,
+            ),
+            _ => {}
+        }
+    }
+    let declared = declaration_effects(&callable.declaration);
+    let actual = effect_union(expected_function, &graph, &mut BTreeSet::new());
+    for (effect, path) in actual {
+        if !declared.contains(&effect) {
+            graph.errors.insert(format!(
+                "effect `{effect}` reaches `{expected_function}` through {}",
+                path.join(" -> ")
+            ));
+        }
+    }
+    for error in graph.errors {
+        add_error(error);
+    }
+}
+
+fn declaration_effects(declaration: &serde_json::Value) -> BTreeSet<String> {
+    declaration
+        .get("effects")
+        .or_else(|| {
+            declaration
+                .get("contract")
+                .and_then(|contract| contract.get("effects"))
+        })
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|effect| {
+            effect
+                .get("key")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| effect.as_str())
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+fn collect_effect_imports(statement: &ast::Stmt, graph: &mut EffectGraph) {
+    match statement {
+        ast::Stmt::Import(import) => {
+            for alias in &import.names {
+                let module = alias.name.as_str();
+                if let Some(name) = &alias.asname {
+                    graph
+                        .modules
+                        .insert(name.as_str().to_owned(), module.to_owned());
+                } else {
+                    let root = module.split('.').next().unwrap_or(module);
+                    graph.module_roots.insert(root.to_owned());
+                    if !graph
+                        .cott
+                        .keys()
+                        .any(|symbol| symbol.starts_with(&format!("{module}.")))
+                    {
+                        graph.leaves.insert(root.to_owned());
+                    }
+                }
+            }
+        }
+        ast::Stmt::ImportFrom(import) => {
+            let Some(module) = import.module.as_ref().map(|module| module.as_str()) else {
+                return;
+            };
+            for alias in &import.names {
+                let imported = alias.name.as_str();
+                let binding = alias.asname.as_ref().map_or(imported, |name| name.as_str());
+                let symbol = format!("{module}.{imported}");
+                if graph.cott.contains_key(&symbol) {
+                    graph.imported.insert(binding.to_owned(), symbol);
+                } else {
+                    let child_module = format!("{module}.{imported}");
+                    if graph
+                        .cott
+                        .keys()
+                        .any(|symbol| symbol.starts_with(&format!("{child_module}.")))
+                    {
+                        graph.modules.insert(binding.to_owned(), child_module);
+                    }
+                    if !graph.modules.contains_key(binding)
+                        || imported.chars().next().is_some_and(char::is_uppercase)
+                    {
+                        graph.leaves.insert(binding.to_owned());
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn inspect_effect_function(
+    name: &str,
+    async_function: bool,
+    arguments: &ast::Arguments,
+    body: &[ast::Stmt],
+    graph: &mut EffectGraph,
+) {
+    let Some(mut local) = graph.local.get(name).cloned() else {
+        return;
+    };
+    if name == graph.target_function {
+        local.factory_parameters = graph.factory_parameters.clone();
+    }
+    graph.async_function = async_function;
+    inspect_effect_arguments(arguments, &mut local, graph);
+    for statement in body {
+        inspect_effect_statement(statement, &mut local, graph);
+    }
+    graph.async_function = false;
+    graph.local.insert(name.to_owned(), local);
+}
+
+fn inspect_effect_binding(name: &str, _local: &mut LocalEffects, graph: &mut EffectGraph) {
+    if graph.local.contains_key(name) {
+        graph
+            .errors
+            .insert(format!("helper `{name}` must not be shadowed"));
+    } else if let Some(symbol) = graph.imported.get(name) {
+        graph
+            .errors
+            .insert(format!("Cott callable `{symbol}` must not be shadowed"));
+    } else if let Some(module) = graph.modules.get(name) {
+        graph
+            .errors
+            .insert(format!("Cott facade `{module}` must not be shadowed"));
+    }
+}
+
+fn inspect_effect_arguments(
+    arguments: &ast::Arguments,
+    local: &mut LocalEffects,
+    graph: &mut EffectGraph,
+) {
+    for argument in arguments
+        .posonlyargs
+        .iter()
+        .chain(&arguments.args)
+        .chain(&arguments.kwonlyargs)
+    {
+        let name = argument.def.arg.as_str();
+        inspect_effect_binding(name, local, graph);
+        if graph.impl_concrete.as_deref().is_some_and(|concrete| {
+            argument
+                .def
+                .annotation
+                .as_deref()
+                .and_then(expression_dotted)
+                .as_deref()
+                == Some(concrete)
+        }) {
+            local.impl_receivers.insert(name.to_owned());
+        }
+        if !graph.leaves.contains(name) {
+            local.parameters.insert(name.to_owned());
+        }
+    }
+    for argument in [&arguments.vararg, &arguments.kwarg].into_iter().flatten() {
+        let name = argument.arg.as_str();
+        inspect_effect_binding(name, local, graph);
+        if !graph.leaves.contains(name) {
+            local.parameters.insert(name.to_owned());
+        }
+    }
+}
+fn inherit_impl_receiver(
+    target: &ast::Expr,
+    value: &ast::Expr,
+    local: &mut LocalEffects,
+    graph: &mut EffectGraph,
+) {
+    match (expression_name(target), expression_name(value)) {
+        (Some(target), Some(value)) => {
+            if local.impl_receivers.contains(value) {
+                local.impl_receivers.insert(target.to_owned());
+            } else {
+                local.impl_receivers.remove(target);
+            }
+        }
+        (None, _) if sequence_elements(target).is_some() && sequence_elements(value).is_some() => {
+            let targets = sequence_elements(target).expect("checked sequence target");
+            let values = sequence_elements(value).expect("checked sequence value");
+            if targets.len() == values.len() {
+                for (target, value) in targets.iter().zip(values) {
+                    inherit_impl_receiver(target, value, local, graph);
+                }
+                return;
+            }
+            clear_impl_receivers(target, local);
+            if expression_contains_impl_receiver(value, local) {
+                graph.errors.insert(
+                    "receiver alias containing a concrete implementation receiver is not statically analyzable"
+                        .to_owned(),
+                );
+            }
+        }
+        _ => {
+            clear_impl_receivers(target, local);
+            if expression_contains_impl_receiver(value, local) {
+                graph.errors.insert(
+                    "receiver alias containing a concrete implementation receiver is not statically analyzable"
+                        .to_owned(),
+                );
+            }
+        }
+    }
+}
+
+fn sequence_elements(expression: &ast::Expr) -> Option<&[ast::Expr]> {
+    match expression {
+        ast::Expr::List(list) => Some(&list.elts),
+        ast::Expr::Tuple(tuple) => Some(&tuple.elts),
+        _ => None,
+    }
+}
+
+fn clear_impl_receivers(expression: &ast::Expr, local: &mut LocalEffects) {
+    match expression {
+        ast::Expr::Name(name) => {
+            local.impl_receivers.remove(name.id.as_str());
+        }
+        ast::Expr::List(list) => {
+            for element in &list.elts {
+                clear_impl_receivers(element, local);
+            }
+        }
+        ast::Expr::Tuple(tuple) => {
+            for element in &tuple.elts {
+                clear_impl_receivers(element, local);
+            }
+        }
+        ast::Expr::Starred(starred) => clear_impl_receivers(&starred.value, local),
+        _ => {}
+    }
+}
+
+fn expression_contains_impl_receiver(expression: &ast::Expr, local: &LocalEffects) -> bool {
+    match expression {
+        ast::Expr::Name(name) => local.impl_receivers.contains(name.id.as_str()),
+        ast::Expr::Constant(_) => false,
+        ast::Expr::BoolOp(value) => value
+            .values
+            .iter()
+            .any(|value| expression_contains_impl_receiver(value, local)),
+        ast::Expr::NamedExpr(value) => expression_contains_impl_receiver(&value.value, local),
+        ast::Expr::BinOp(value) => {
+            expression_contains_impl_receiver(&value.left, local)
+                || expression_contains_impl_receiver(&value.right, local)
+        }
+        ast::Expr::UnaryOp(value) => expression_contains_impl_receiver(&value.operand, local),
+        ast::Expr::IfExp(value) => {
+            expression_contains_impl_receiver(&value.test, local)
+                || expression_contains_impl_receiver(&value.body, local)
+                || expression_contains_impl_receiver(&value.orelse, local)
+        }
+        ast::Expr::Dict(value) => value
+            .keys
+            .iter()
+            .flatten()
+            .chain(value.values.iter())
+            .any(|value| expression_contains_impl_receiver(value, local)),
+        ast::Expr::Set(value) => value
+            .elts
+            .iter()
+            .any(|value| expression_contains_impl_receiver(value, local)),
+        ast::Expr::List(value) => value
+            .elts
+            .iter()
+            .any(|value| expression_contains_impl_receiver(value, local)),
+        ast::Expr::Tuple(value) => value
+            .elts
+            .iter()
+            .any(|value| expression_contains_impl_receiver(value, local)),
+        ast::Expr::Compare(value) => {
+            expression_contains_impl_receiver(&value.left, local)
+                || value
+                    .comparators
+                    .iter()
+                    .any(|value| expression_contains_impl_receiver(value, local))
+        }
+        ast::Expr::Call(value) => {
+            expression_contains_impl_receiver(&value.func, local)
+                || value
+                    .args
+                    .iter()
+                    .chain(value.keywords.iter().map(|keyword| &keyword.value))
+                    .any(|value| expression_contains_impl_receiver(value, local))
+        }
+        ast::Expr::FormattedValue(value) => {
+            expression_contains_impl_receiver(&value.value, local)
+                || value
+                    .format_spec
+                    .as_deref()
+                    .is_some_and(|value| expression_contains_impl_receiver(value, local))
+        }
+        ast::Expr::JoinedStr(value) => value
+            .values
+            .iter()
+            .any(|value| expression_contains_impl_receiver(value, local)),
+        ast::Expr::Attribute(value) => expression_contains_impl_receiver(&value.value, local),
+        ast::Expr::Subscript(value) => {
+            expression_contains_impl_receiver(&value.value, local)
+                || expression_contains_impl_receiver(&value.slice, local)
+        }
+        ast::Expr::Starred(value) => expression_contains_impl_receiver(&value.value, local),
+        ast::Expr::ListComp(value) => {
+            expression_contains_impl_receiver(&value.elt, local)
+                || comprehensions_contain_impl_receiver(&value.generators, local)
+        }
+        ast::Expr::SetComp(value) => {
+            expression_contains_impl_receiver(&value.elt, local)
+                || comprehensions_contain_impl_receiver(&value.generators, local)
+        }
+        ast::Expr::DictComp(value) => {
+            expression_contains_impl_receiver(&value.key, local)
+                || expression_contains_impl_receiver(&value.value, local)
+                || comprehensions_contain_impl_receiver(&value.generators, local)
+        }
+        ast::Expr::GeneratorExp(value) => {
+            expression_contains_impl_receiver(&value.elt, local)
+                || comprehensions_contain_impl_receiver(&value.generators, local)
+        }
+        ast::Expr::Lambda(value) => {
+            value
+                .args
+                .posonlyargs
+                .iter()
+                .chain(&value.args.args)
+                .chain(&value.args.kwonlyargs)
+                .filter_map(|argument| argument.default.as_deref())
+                .any(|value| expression_contains_impl_receiver(value, local))
+                || expression_contains_impl_receiver(&value.body, local)
+        }
+        ast::Expr::Await(value) => expression_contains_impl_receiver(&value.value, local),
+        ast::Expr::Yield(value) => value
+            .value
+            .as_deref()
+            .is_some_and(|value| expression_contains_impl_receiver(value, local)),
+        ast::Expr::YieldFrom(value) => expression_contains_impl_receiver(&value.value, local),
+        ast::Expr::Slice(value) => [&value.lower, &value.upper, &value.step]
+            .into_iter()
+            .flatten()
+            .any(|value| expression_contains_impl_receiver(value, local)),
+    }
+}
+
+fn comprehensions_contain_impl_receiver(
+    comprehensions: &[ast::Comprehension],
+    local: &LocalEffects,
+) -> bool {
+    comprehensions.iter().any(|comprehension| {
+        expression_contains_impl_receiver(&comprehension.iter, local)
+            || comprehension
+                .ifs
+                .iter()
+                .any(|value| expression_contains_impl_receiver(value, local))
+    })
+}
+
+fn inspect_effect_statement(
+    statement: &ast::Stmt,
+    local: &mut LocalEffects,
+    graph: &mut EffectGraph,
+) {
+    match statement {
+        ast::Stmt::Return(statement) => {
+            if let Some(value) = &statement.value {
+                inspect_effect_expression(value, false, local, graph);
+            }
+        }
+        ast::Stmt::Delete(statement) => {
+            for target in &statement.targets {
+                inspect_effect_target(target, local, graph);
+            }
+        }
+        ast::Stmt::Assign(statement) => {
+            for target in &statement.targets {
+                inspect_effect_target(target, local, graph);
+            }
+            inspect_effect_expression(&statement.value, false, local, graph);
+            for target in &statement.targets {
+                inherit_impl_receiver(target, &statement.value, local, graph);
+            }
+        }
+        ast::Stmt::AugAssign(statement) => {
+            inspect_effect_target(&statement.target, local, graph);
+            inspect_effect_expression(&statement.value, false, local, graph);
+        }
+        ast::Stmt::AnnAssign(statement) => {
+            inspect_effect_target(&statement.target, local, graph);
+            if let Some(value) = &statement.value {
+                inspect_effect_expression(value, false, local, graph);
+                inherit_impl_receiver(&statement.target, value, local, graph);
+            }
+        }
+        ast::Stmt::For(statement) => {
+            inspect_effect_target(&statement.target, local, graph);
+            inspect_effect_expression(&statement.iter, false, local, graph);
+            inspect_effect_statements(&statement.body, local, graph);
+            inspect_effect_statements(&statement.orelse, local, graph);
+        }
+        ast::Stmt::While(statement) => {
+            inspect_effect_expression(&statement.test, false, local, graph);
+            inspect_effect_statements(&statement.body, local, graph);
+            inspect_effect_statements(&statement.orelse, local, graph);
+        }
+        ast::Stmt::If(statement) => {
+            inspect_effect_expression(&statement.test, false, local, graph);
+            inspect_effect_statements(&statement.body, local, graph);
+            inspect_effect_statements(&statement.orelse, local, graph);
+        }
+        ast::Stmt::Expr(statement) => {
+            inspect_effect_expression(&statement.value, false, local, graph)
+        }
+        ast::Stmt::Pass(_) | ast::Stmt::Break(_) | ast::Stmt::Continue(_) => {}
+        ast::Stmt::With(statement) => {
+            inspect_effect_with(&statement.items, &statement.body, local, graph)
+        }
+        ast::Stmt::AsyncWith(statement) => {
+            inspect_effect_with(&statement.items, &statement.body, local, graph)
+        }
+        ast::Stmt::Match(statement) => {
+            inspect_effect_expression(&statement.subject, false, local, graph);
+            for case in &statement.cases {
+                if let Some(guard) = &case.guard {
+                    inspect_effect_expression(guard, false, local, graph);
+                }
+                inspect_effect_statements(&case.body, local, graph);
+            }
+        }
+        ast::Stmt::Raise(statement) => {
+            for value in [&statement.exc, &statement.cause].into_iter().flatten() {
+                inspect_effect_expression(value, false, local, graph);
+            }
+        }
+        ast::Stmt::Try(statement) => inspect_effect_try(
+            &statement.body,
+            &statement.handlers,
+            &statement.orelse,
+            &statement.finalbody,
+            local,
+            graph,
+        ),
+        ast::Stmt::TryStar(statement) => inspect_effect_try(
+            &statement.body,
+            &statement.handlers,
+            &statement.orelse,
+            &statement.finalbody,
+            local,
+            graph,
+        ),
+        ast::Stmt::Assert(statement) => {
+            inspect_effect_expression(&statement.test, false, local, graph);
+            if let Some(message) = &statement.msg {
+                inspect_effect_expression(message, false, local, graph);
+            }
+        }
+        ast::Stmt::FunctionDef(_) | ast::Stmt::AsyncFunctionDef(_) | ast::Stmt::ClassDef(_) => {
+            graph
+                .errors
+                .insert("nested definitions are not allowed".to_owned());
+        }
+        ast::Stmt::Import(_) | ast::Stmt::ImportFrom(_) => {
+            graph
+                .errors
+                .insert("nested imports are not allowed".to_owned());
+        }
+        _ => {
+            graph
+                .errors
+                .insert("effect analysis does not support this Python statement".to_owned());
+        }
+    }
+}
+
+fn inspect_effect_statements(
+    statements: &[ast::Stmt],
+    local: &mut LocalEffects,
+    graph: &mut EffectGraph,
+) {
+    for statement in statements {
+        inspect_effect_statement(statement, local, graph);
+    }
+}
+
+fn inspect_effect_with(
+    items: &[ast::WithItem],
+    body: &[ast::Stmt],
+    local: &mut LocalEffects,
+    graph: &mut EffectGraph,
+) {
+    for item in items {
+        inspect_effect_expression(&item.context_expr, false, local, graph);
+        if let Some(target) = &item.optional_vars {
+            inspect_effect_target(target, local, graph);
+        }
+    }
+    inspect_effect_statements(body, local, graph);
+}
+
+fn inspect_effect_try(
+    body: &[ast::Stmt],
+    handlers: &[ast::ExceptHandler],
+    orelse: &[ast::Stmt],
+    finalbody: &[ast::Stmt],
+    local: &mut LocalEffects,
+    graph: &mut EffectGraph,
+) {
+    inspect_effect_statements(body, local, graph);
+    for handler in handlers {
+        let ast::ExceptHandler::ExceptHandler(handler) = handler;
+        if let Some(ty) = &handler.type_ {
+            inspect_effect_expression(ty, false, local, graph);
+        }
+        if let Some(name) = &handler.name {
+            inspect_effect_binding(name.as_str(), local, graph);
+        }
+        inspect_effect_statements(&handler.body, local, graph);
+    }
+    inspect_effect_statements(orelse, local, graph);
+    inspect_effect_statements(finalbody, local, graph);
+}
+
+fn inspect_effect_target(
+    expression: &ast::Expr,
+    local: &mut LocalEffects,
+    graph: &mut EffectGraph,
+) {
+    if let Some(name) = expression_name(expression) {
+        if graph.local.contains_key(name) {
+            graph
+                .errors
+                .insert(format!("helper `{name}` must not be rebound"));
+        } else if let Some(symbol) = graph.imported.get(name) {
+            graph
+                .errors
+                .insert(format!("Cott callable `{symbol}` must not be rebound"));
+        } else if let Some(module) = graph.modules.get(name) {
+            graph
+                .errors
+                .insert(format!("Cott facade `{module}` must not be rebound"));
+        } else {
+            local.assigned.insert(name.to_owned());
+        }
+    } else if let Some(symbol) = effect_cott_target(expression, graph)
+        .or_else(|| effect_impl_self_target(expression, local, graph))
+    {
+        graph
+            .errors
+            .insert(format!("Cott callable `{symbol}` must not be rebound"));
+    }
+    inspect_effect_expression(expression, false, local, graph);
+}
+
+fn inspect_effect_expression(
+    expression: &ast::Expr,
+    callee: bool,
+    local: &mut LocalEffects,
+    graph: &mut EffectGraph,
+) {
+    inspect_effect_expression_with_await(expression, callee, false, local, graph);
+}
+
+fn inspect_effect_expression_with_await(
+    expression: &ast::Expr,
+    callee: bool,
+    awaited: bool,
+    local: &mut LocalEffects,
+    graph: &mut EffectGraph,
+) {
+    if !callee {
+        if let Some(symbol) = effect_cott_target(expression, graph)
+            .or_else(|| effect_impl_self_target(expression, local, graph))
+        {
+            graph.errors.insert(format!(
+                "Cott callable `{symbol}` may only be used as an exact call"
+            ));
+            return;
+        }
+        if let Some(name) = expression_name(expression) {
+            if graph.local.contains_key(name) {
+                graph
+                    .errors
+                    .insert(format!("helper `{name}` may only be used as an exact call"));
+                return;
+            }
+        }
+    }
+    match expression {
+        ast::Expr::BoolOp(expression) => {
+            for value in &expression.values {
+                inspect_effect_expression(value, false, local, graph);
+            }
+        }
+        ast::Expr::NamedExpr(expression) => {
+            inspect_effect_target(&expression.target, local, graph);
+            inspect_effect_expression(&expression.value, false, local, graph);
+            inherit_impl_receiver(&expression.target, &expression.value, local, graph);
+        }
+        ast::Expr::BinOp(expression) => {
+            inspect_effect_expression(&expression.left, false, local, graph);
+            inspect_effect_expression(&expression.right, false, local, graph);
+        }
+        ast::Expr::UnaryOp(expression) => {
+            inspect_effect_expression(&expression.operand, false, local, graph)
+        }
+        ast::Expr::IfExp(expression) => {
+            inspect_effect_expression(&expression.test, false, local, graph);
+            inspect_effect_expression(&expression.body, false, local, graph);
+            inspect_effect_expression(&expression.orelse, false, local, graph);
+        }
+        ast::Expr::Dict(expression) => {
+            for key in expression.keys.iter().flatten() {
+                inspect_effect_expression(key, false, local, graph);
+            }
+            for value in &expression.values {
+                inspect_effect_expression(value, false, local, graph);
+            }
+        }
+        ast::Expr::Set(expression) => {
+            for value in &expression.elts {
+                inspect_effect_expression(value, false, local, graph);
+            }
+        }
+        ast::Expr::List(expression) => {
+            for value in &expression.elts {
+                inspect_effect_expression(value, false, local, graph);
+            }
+        }
+        ast::Expr::Tuple(expression) => {
+            for value in &expression.elts {
+                inspect_effect_expression(value, false, local, graph);
+            }
+        }
+        ast::Expr::Compare(expression) => {
+            inspect_effect_expression(&expression.left, false, local, graph);
+            for value in &expression.comparators {
+                inspect_effect_expression(value, false, local, graph);
+            }
+        }
+        ast::Expr::Call(expression) => {
+            inspect_impl_receiver_call_base(&expression.func, local, graph);
+            let statically_resolved = if let Some(name) = expression_name(&expression.func) {
+                if graph.local.contains_key(name) {
+                    if awaited {
+                        graph
+                            .errors
+                            .insert(format!("synchronous helper `{name}` must not be awaited"));
+                    }
+                    local.local_calls.insert(name.to_owned());
+                    true
+                } else if let Some(symbol) = graph.imported.get(name).cloned() {
+                    record_effect_cott_call(&symbol, awaited, local, graph);
+                    true
+                } else if (local.parameters.contains(name) || local.assigned.contains(name))
+                    && !local.factory_parameters.contains(name)
+                {
+                    graph
+                        .errors
+                        .insert(format!("dynamic Cott call `{name}` is not allowed"));
+                    false
+                } else {
+                    local.factory_parameters.contains(name)
+                        || graph.leaves.contains(name)
+                        || builtin_leaf(name)
+                }
+            } else if let Some(symbol) = effect_impl_self_target(&expression.func, local, graph) {
+                record_effect_cott_call(&symbol, awaited, local, graph);
+                true
+            } else if let Some(symbol) = effect_cott_target(&expression.func, graph) {
+                record_effect_cott_call(&symbol, awaited, local, graph);
+                true
+            } else if let Some(symbol) = cott_callable_origin(&expression.func, graph) {
+                graph
+                    .errors
+                    .insert(format!("dynamic Cott call `{symbol}` is not allowed"));
+                false
+            } else {
+                matches!(&*expression.func, ast::Expr::Attribute(_))
+            };
+            if !statically_resolved {
+                inspect_effect_expression(&expression.func, false, local, graph);
+                if expression_contains_impl_receiver(&expression.func, local)
+                    || expression
+                        .args
+                        .iter()
+                        .chain(expression.keywords.iter().map(|keyword| &keyword.value))
+                        .any(|value| expression_contains_impl_receiver(value, local))
+                {
+                    graph.errors.insert(
+                        "receiver call containing a concrete implementation receiver is not statically analyzable"
+                            .to_owned(),
+                    );
+                }
+            }
+            for argument in &expression.args {
+                inspect_effect_expression(argument, false, local, graph);
+            }
+            for keyword in &expression.keywords {
+                inspect_effect_expression(&keyword.value, false, local, graph);
+            }
+        }
+        ast::Expr::FormattedValue(expression) => {
+            inspect_effect_expression(&expression.value, false, local, graph);
+            if let Some(specification) = &expression.format_spec {
+                inspect_effect_expression(specification, false, local, graph);
+            }
+        }
+        ast::Expr::JoinedStr(expression) => {
+            for value in &expression.values {
+                inspect_effect_expression(value, false, local, graph);
+            }
+        }
+        ast::Expr::Attribute(expression) => {
+            inspect_effect_expression(&expression.value, false, local, graph);
+        }
+        ast::Expr::Subscript(expression) => {
+            inspect_effect_expression(&expression.value, false, local, graph);
+            inspect_effect_expression(&expression.slice, false, local, graph);
+        }
+        ast::Expr::Starred(expression) => {
+            inspect_effect_expression(&expression.value, false, local, graph)
+        }
+        ast::Expr::ListComp(expression) => {
+            inspect_effect_expression(&expression.elt, false, local, graph);
+            inspect_effect_comprehensions(&expression.generators, local, graph);
+        }
+        ast::Expr::SetComp(expression) => {
+            inspect_effect_expression(&expression.elt, false, local, graph);
+            inspect_effect_comprehensions(&expression.generators, local, graph);
+        }
+        ast::Expr::DictComp(expression) => {
+            inspect_effect_expression(&expression.key, false, local, graph);
+            inspect_effect_expression(&expression.value, false, local, graph);
+            inspect_effect_comprehensions(&expression.generators, local, graph);
+        }
+        ast::Expr::GeneratorExp(expression) => {
+            inspect_effect_expression(&expression.elt, false, local, graph);
+            inspect_effect_comprehensions(&expression.generators, local, graph);
+        }
+        ast::Expr::Lambda(expression) => {
+            inspect_effect_arguments(&expression.args, local, graph);
+            inspect_effect_expression(&expression.body, false, local, graph);
+        }
+        ast::Expr::Await(expression) => {
+            inspect_effect_expression_with_await(&expression.value, false, true, local, graph)
+        }
+        ast::Expr::Yield(expression) => {
+            if graph.async_function {
+                graph
+                    .errors
+                    .insert("async generators are not allowed".to_owned());
+            }
+            if let Some(value) = &expression.value {
+                inspect_effect_expression(value, false, local, graph);
+            }
+        }
+        ast::Expr::YieldFrom(expression) => {
+            if graph.async_function {
+                graph
+                    .errors
+                    .insert("async generators are not allowed".to_owned());
+            }
+            inspect_effect_expression(&expression.value, false, local, graph)
+        }
+        ast::Expr::Slice(expression) => {
+            for value in [&expression.lower, &expression.upper, &expression.step]
+                .into_iter()
+                .flatten()
+            {
+                inspect_effect_expression(value, false, local, graph);
+            }
+        }
+        ast::Expr::Constant(_) | ast::Expr::Name(_) => {}
+    }
+}
+
+fn expression_name(expression: &ast::Expr) -> Option<&str> {
+    match expression {
+        ast::Expr::Name(name) => Some(name.id.as_str()),
+        _ => None,
+    }
+}
+
+fn inspect_effect_comprehensions(
+    comprehensions: &[ast::Comprehension],
+    local: &mut LocalEffects,
+    graph: &mut EffectGraph,
+) {
+    for comprehension in comprehensions {
+        inspect_effect_target(&comprehension.target, local, graph);
+        inspect_effect_expression(&comprehension.iter, false, local, graph);
+        for condition in &comprehension.ifs {
+            inspect_effect_expression(condition, false, local, graph);
+        }
+    }
+}
+
+fn expression_dotted(expression: &ast::Expr) -> Option<String> {
+    match expression {
+        ast::Expr::Name(name) => Some(name.id.as_str().to_owned()),
+        ast::Expr::Attribute(attribute) => Some(format!(
+            "{}.{}",
+            expression_dotted(&attribute.value)?,
+            attribute.attr
+        )),
+        _ => None,
+    }
+}
+
+fn inspect_impl_receiver_call_base(
+    expression: &ast::Expr,
+    local: &mut LocalEffects,
+    graph: &mut EffectGraph,
+) {
+    let ast::Expr::Attribute(attribute) = expression else {
+        return;
+    };
+    if expression_name(&attribute.value).is_none() {
+        inspect_effect_expression(&attribute.value, false, local, graph);
+        if impl_receiver_name(&attribute.value, local).is_none()
+            && expression_contains_impl_receiver(&attribute.value, local)
+        {
+            graph.errors.insert(
+                "receiver call containing a concrete implementation receiver is not statically analyzable"
+                    .to_owned(),
+            );
+        }
+    }
+}
+
+fn impl_receiver_name<'a>(expression: &'a ast::Expr, local: &LocalEffects) -> Option<&'a str> {
+    match expression {
+        ast::Expr::Name(name) => local
+            .impl_receivers
+            .contains(name.id.as_str())
+            .then_some(name.id.as_str()),
+        ast::Expr::NamedExpr(named) => {
+            expression_name(&named.target).filter(|name| local.impl_receivers.contains(*name))
+        }
+        _ => None,
+    }
+}
+
+fn effect_impl_self_target(
+    expression: &ast::Expr,
+    local: &LocalEffects,
+    graph: &EffectGraph,
+) -> Option<String> {
+    let ast::Expr::Attribute(attribute) = expression else {
+        return None;
+    };
+    impl_receiver_name(&attribute.value, local)
+        .and_then(|_| graph.impl_methods.get(attribute.attr.as_str()))
+        .cloned()
+}
+
+fn effect_cott_target(expression: &ast::Expr, graph: &EffectGraph) -> Option<String> {
+    let dotted = expression_dotted(expression)?;
+    if let Some(symbol) = graph.imported.get(&dotted) {
+        return Some(symbol.clone());
+    }
+    let mut segments = dotted.split('.');
+    let first = segments.next()?;
+    let rest = segments.collect::<Vec<_>>();
+    let imported_facade = graph.modules.contains_key(first) || graph.module_roots.contains(first);
+    let resolved = graph
+        .modules
+        .get(first)
+        .map(|module| {
+            std::iter::once(module.as_str())
+                .chain(rest)
+                .collect::<Vec<_>>()
+                .join(".")
+        })
+        .unwrap_or(dotted);
+    (imported_facade && graph.cott.contains_key(&resolved)).then_some(resolved)
+}
+
+fn cott_callable_origin(expression: &ast::Expr, graph: &EffectGraph) -> Option<String> {
+    effect_cott_target(expression, graph).or_else(|| match expression {
+        ast::Expr::Attribute(attribute) => cott_callable_origin(&attribute.value, graph),
+        ast::Expr::Subscript(subscript) => cott_callable_origin(&subscript.value, graph),
+        ast::Expr::Starred(starred) => cott_callable_origin(&starred.value, graph),
+        _ => None,
+    })
+}
+
+fn builtin_leaf(name: &str) -> bool {
+    matches!(
+        name,
+        "abs"
+            | "aiter"
+            | "all"
+            | "anext"
+            | "any"
+            | "ascii"
+            | "bin"
+            | "bool"
+            | "breakpoint"
+            | "bytearray"
+            | "bytes"
+            | "callable"
+            | "chr"
+            | "classmethod"
+            | "complex"
+            | "delattr"
+            | "dict"
+            | "dir"
+            | "divmod"
+            | "enumerate"
+            | "filter"
+            | "float"
+            | "format"
+            | "frozenset"
+            | "getattr"
+            | "globals"
+            | "hasattr"
+            | "hash"
+            | "help"
+            | "hex"
+            | "id"
+            | "input"
+            | "int"
+            | "isinstance"
+            | "issubclass"
+            | "iter"
+            | "len"
+            | "list"
+            | "locals"
+            | "map"
+            | "max"
+            | "memoryview"
+            | "min"
+            | "next"
+            | "object"
+            | "oct"
+            | "open"
+            | "ord"
+            | "pow"
+            | "print"
+            | "property"
+            | "range"
+            | "repr"
+            | "reversed"
+            | "round"
+            | "set"
+            | "setattr"
+            | "slice"
+            | "sorted"
+            | "staticmethod"
+            | "str"
+            | "sum"
+            | "super"
+            | "tuple"
+            | "type"
+            | "vars"
+            | "zip"
+            | "BaseException"
+            | "BaseExceptionGroup"
+            | "BlockingIOError"
+            | "BrokenPipeError"
+            | "BufferError"
+            | "BytesWarning"
+            | "ChildProcessError"
+            | "ConnectionAbortedError"
+            | "ConnectionError"
+            | "ConnectionRefusedError"
+            | "ConnectionResetError"
+            | "DeprecationWarning"
+            | "EOFError"
+            | "EncodingWarning"
+            | "EnvironmentError"
+            | "Exception"
+            | "ExceptionGroup"
+            | "FileExistsError"
+            | "FileNotFoundError"
+            | "FloatingPointError"
+            | "FutureWarning"
+            | "GeneratorExit"
+            | "IOError"
+            | "ImportError"
+            | "ImportWarning"
+            | "IndentationError"
+            | "IndexError"
+            | "InterruptedError"
+            | "IsADirectoryError"
+            | "KeyError"
+            | "KeyboardInterrupt"
+            | "LookupError"
+            | "MemoryError"
+            | "ModuleNotFoundError"
+            | "NameError"
+            | "NotADirectoryError"
+            | "OSError"
+            | "OverflowError"
+            | "PendingDeprecationWarning"
+            | "PermissionError"
+            | "ProcessLookupError"
+            | "RecursionError"
+            | "ReferenceError"
+            | "ResourceWarning"
+            | "RuntimeError"
+            | "RuntimeWarning"
+            | "StopAsyncIteration"
+            | "StopIteration"
+            | "SyntaxError"
+            | "SyntaxWarning"
+            | "SystemError"
+            | "SystemExit"
+            | "TabError"
+            | "TimeoutError"
+            | "TypeError"
+            | "UnboundLocalError"
+            | "UnicodeDecodeError"
+            | "UnicodeEncodeError"
+            | "UnicodeError"
+            | "UnicodeTranslateError"
+            | "UnicodeWarning"
+            | "UserWarning"
+            | "ValueError"
+            | "Warning"
+            | "ZeroDivisionError"
+    )
+}
+
+fn effect_union(
+    function: &str,
+    graph: &EffectGraph,
+    visiting: &mut BTreeSet<String>,
+) -> BTreeMap<String, Vec<String>> {
+    if !visiting.insert(function.to_owned()) {
+        return BTreeMap::new();
+    }
+    let mut effects = BTreeMap::new();
+    if let Some(local) = graph.local.get(function) {
+        for symbol in &local.cott_calls {
+            if let Some(callee_effects) = graph.cott.get(symbol) {
+                for effect in callee_effects {
+                    effects.insert(effect.clone(), vec![function.to_owned(), symbol.clone()]);
+                }
+            }
+        }
+        for callee in &local.local_calls {
+            for (effect, mut path) in effect_union(callee, graph, visiting) {
+                path.insert(0, function.to_owned());
+                effects.entry(effect).or_insert(path);
+            }
+        }
+    }
+    visiting.remove(function);
+    effects
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -905,15 +2217,30 @@ fn inspect_function_definitions(
         }
     }
     for (line_number, line) in lines.iter().enumerate() {
-        if !line.starts_with("def ") {
+        let (async_definition, signature) = if line.starts_with("async def ") {
+            (true, collect_signature(&lines, line_number))
+        } else if line.starts_with("def ") {
+            (false, collect_signature(&lines, line_number))
+        } else {
             continue;
-        }
-        let signature = collect_signature(&lines, line_number);
-        let Some((name, parameters)) = parse_signature(&signature, add_error) else {
+        };
+        let signature = signature.strip_prefix("async ").unwrap_or(&signature);
+        let Some((name, parameters)) = parse_signature(signature, add_error) else {
             continue;
         };
         if name == expected_function {
-            expected_count += 1;
+            if async_definition != is_async_function(&callable.kind) {
+                add_error(format!(
+                    "function '{expected_function}' must be an exact top-level {}",
+                    if is_async_function(&callable.kind) {
+                        "async def"
+                    } else {
+                        "def"
+                    }
+                ));
+            } else {
+                expected_count += 1;
+            }
             let parameters = if let PythonCallableKind::ImplMethod { concrete } = &callable.kind {
                 match parameters.split_first() {
                     Some((self_parameter, parameters))
@@ -943,6 +2270,9 @@ fn inspect_function_definitions(
                 ));
             }
         } else {
+            if async_definition {
+                add_error(format!("helper function '{name}' must be synchronous"));
+            }
             if !private_name(&name) {
                 add_error(format!(
                     "helper function '{name}' must have a single private `_` prefix"
@@ -1122,6 +2452,7 @@ fn inspect_top_level(source: &str, masked: &str, add_error: &mut impl FnMut(Stri
             .chars()
             .all(|character| matches!(character, ',' | ')' | ']' | '}'));
         let allowed = line.starts_with("def ")
+            || line.starts_with("async def ")
             || line.starts_with("import ")
             || line.starts_with("from ")
             || line.starts_with('@')

@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.publication_workflow_types import PublicationAction as PublicationAction, PublicationAction_Approve as PublicationAction_Approve, PublicationAction_Submit as PublicationAction_Submit, PublicationAction_Withdraw as PublicationAction_Withdraw, PublicationRequest as PublicationRequest, PublicationState as PublicationState, PublicationState_Draft as PublicationState_Draft, PublicationState_InReview as PublicationState_InReview, PublicationState_Published as PublicationState_Published, PublicationState_Withdrawn as PublicationState_Withdrawn, PublicationWorkflowError as PublicationWorkflowError, PublicationWorkflowError_ApprovalRequired as PublicationWorkflowError_ApprovalRequired, PublicationWorkflowError_InvalidTransition as PublicationWorkflowError_InvalidTransition
 """Return the publication state selected by the workflow transition table, or

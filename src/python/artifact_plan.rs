@@ -33,6 +33,7 @@ pub struct PythonArtifactModule {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PythonCallableKind {
     Function,
+    AsyncFunction,
     ImplMethod { concrete: String },
 }
 
@@ -157,9 +158,49 @@ impl PythonArtifactPlan {
             })
             .collect()
     }
-    /// Enumerate public free functions and every implementation method in
-    /// deterministic module, declaration, and method source order.
+    /// Enumerate public free functions, trait-default free-function
+    /// dependencies, and every implementation method in deterministic module,
+    /// declaration, and method source order.
     pub fn callables(&self) -> Vec<PythonCallable> {
+        let trait_declarations = self
+            .modules
+            .iter()
+            .flat_map(|module| &module.declarations)
+            .filter_map(Value::as_object)
+            .filter(|declaration| declaration.get("kind").and_then(Value::as_str) == Some("trait"))
+            .filter_map(|declaration| {
+                Some((
+                    declaration.get("name")?.as_str()?.to_owned(),
+                    Value::Object(declaration.clone()),
+                ))
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let default_dependencies = self
+            .modules
+            .iter()
+            .flat_map(|module| &module.declarations)
+            .filter_map(Value::as_object)
+            .filter(|declaration| declaration.get("kind").and_then(Value::as_str) == Some("impl"))
+            .flat_map(|implementation| {
+                implementation
+                    .get("selected_methods")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|slot| {
+                        let selected = slot.get("selected")?.as_object()?;
+                        if selected.get("kind")?.as_str()? != "default" {
+                            return None;
+                        }
+                        let function = selected.get("function")?.as_object()?;
+                        Some(format!(
+                            "{}.{}",
+                            function.get("module")?.as_str()?,
+                            function.get("symbol")?.as_str()?
+                        ))
+                    })
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         self.modules
             .iter()
             .flat_map(|module| {
@@ -168,45 +209,127 @@ impl PythonArtifactPlan {
                     .iter()
                     .zip(&module.declaration_info)
                     .flat_map(|(declaration, info)| match info.kind.as_str() {
-                        "function" if info.public => vec![PythonCallable {
-                            module: module.module.clone(),
-                            cott_symbol: info.name.clone(),
-                            name: info
-                                .name
-                                .rsplit('.')
-                                .next()
-                                .expect("validated canonical function name")
-                                .to_owned(),
-                            kind: PythonCallableKind::Function,
-                            declaration: declaration.clone(),
-                            owner: None,
-                        }],
+                        "function"
+                            if info.public || default_dependencies.contains(info.name.as_str()) =>
+                        {
+                            let callable_kind = declaration
+                                .get("callable_kind")
+                                .and_then(Value::as_str)
+                                .expect("validated canonical function callable_kind");
+                            vec![PythonCallable {
+                                module: module.module.clone(),
+                                cott_symbol: info.name.clone(),
+                                name: info
+                                    .name
+                                    .rsplit('.')
+                                    .next()
+                                    .expect("validated canonical function name")
+                                    .to_owned(),
+                                kind: match callable_kind {
+                                    "sync" => PythonCallableKind::Function,
+                                    "async" => PythonCallableKind::AsyncFunction,
+                                    _ => unreachable!("validated canonical function callable_kind"),
+                                },
+                                declaration: declaration.clone(),
+                                owner: None,
+                            }]
+                        }
                         "impl" => {
+                            let implementation = declaration
+                                .as_object()
+                                .expect("validated canonical implementation declaration");
                             let concrete = info
                                 .name
                                 .rsplit('.')
                                 .next()
                                 .expect("validated canonical implementation name");
-                            declaration
+                            let explicit = declaration
                                 .get("methods")
+                                .and_then(Value::as_array)
+                                .map(Vec::as_slice)
+                                .unwrap_or_default();
+                            let mut selected_names = std::collections::BTreeSet::new();
+                            let mut methods = Vec::new();
+                            for slot in declaration
+                                .get("selected_methods")
                                 .and_then(Value::as_array)
                                 .into_iter()
                                 .flatten()
+                            {
+                                let Some(trait_method) =
+                                    slot.get("trait_method").and_then(Value::as_str)
+                                else {
+                                    continue;
+                                };
+                                let Some(method_name) = trait_method.rsplit('.').next() else {
+                                    continue;
+                                };
+                                let Some(selected) =
+                                    slot.get("selected").and_then(Value::as_object)
+                                else {
+                                    continue;
+                                };
+                                let source = if selected.get("kind").and_then(Value::as_str)
+                                    == Some("explicit")
+                                {
+                                    explicit
+                                        .iter()
+                                        .find(|method| {
+                                            method
+                                                .get("name")
+                                                .and_then(Value::as_str)
+                                                .map(local_name)
+                                                == Some(method_name)
+                                        })
+                                        .cloned()
+                                } else {
+                                    resolve_trait_default(
+                                        implementation,
+                                        trait_method,
+                                        selected,
+                                        &trait_declarations,
+                                    )
+                                };
+                                let Some(mut method) = source else {
+                                    continue;
+                                };
+                                let Some(method_object) = method.as_object_mut() else {
+                                    continue;
+                                };
+                                method_object.insert(
+                                    "name".to_owned(),
+                                    Value::String(method_name.to_owned()),
+                                );
+                                method_object
+                                    .insert("selected".to_owned(), Value::Object(selected.clone()));
+                                method_object.insert(
+                                    "receiver_type".to_owned(),
+                                    slot.get("receiver_type").cloned().unwrap_or(Value::Null),
+                                );
+                                method_object.insert(
+                                    "trait_method".to_owned(),
+                                    Value::String(trait_method.to_owned()),
+                                );
+                                if selected_names.insert(method_name.to_owned()) {
+                                    methods.push(method);
+                                }
+                            }
+                            methods
+                                .into_iter()
                                 .filter_map(|method| {
-                                    method.get("name").and_then(Value::as_str).map(|name| {
-                                        PythonCallable {
-                                            module: module.module.clone(),
-                                            cott_symbol: format!(
-                                                "{}.{}.{}",
-                                                module.module, concrete, name
-                                            ),
-                                            name: name.to_owned(),
-                                            kind: PythonCallableKind::ImplMethod {
-                                                concrete: concrete.to_owned(),
-                                            },
-                                            declaration: method.clone(),
-                                            owner: Some(declaration.clone()),
-                                        }
+                                    let name = method.get("name")?.as_str()?.to_owned();
+                                    Some(PythonCallable {
+                                        module: module.module.clone(),
+                                        cott_symbol: format!(
+                                            "{}.{}.{}",
+                                            module.module, concrete, name
+                                        ),
+                                        name,
+                                        kind: PythonCallableKind::ImplMethod {
+                                            concrete: concrete.to_owned(),
+                                        },
+                                        declaration: method,
+                                        owner: Some(declaration.clone()),
                                     })
                                 })
                                 .collect()
@@ -380,6 +503,23 @@ fn declaration_info(
             "declaration `name` must be a dotted name under its module",
         ));
     }
+    if kind == "function"
+        && !matches!(
+            object.get("callable_kind").and_then(Value::as_str),
+            Some("sync" | "async")
+        )
+    {
+        return Err(malformed(
+            module_index,
+            module,
+            declaration_index,
+            "missing or invalid `callable_kind` field",
+        ));
+    }
+    if kind == "impl" {
+        validate_impl_selection(object)
+            .map_err(|message| malformed(module_index, module, declaration_index, message))?;
+    }
     Ok(DeclarationInfo {
         name,
         kind,
@@ -404,6 +544,162 @@ fn required_array<'a>(
         .get(field)
         .and_then(Value::as_array)
         .ok_or_else(|| format!("missing or invalid `{field}` field"))
+}
+fn validate_impl_selection(object: &Map<String, Value>) -> Result<(), String> {
+    let selected = required_array(object, "selected_methods")?;
+    let mut explicit = std::collections::BTreeSet::new();
+    for slot in selected {
+        let slot = slot
+            .as_object()
+            .ok_or_else(|| "selected implementation method must be an object".to_owned())?;
+        let trait_method = required_string(slot, "trait_method")?;
+        let method_name = local_name(&trait_method);
+        let selected = slot
+            .get("selected")
+            .and_then(Value::as_object)
+            .ok_or_else(|| "selected implementation method is missing `selected`".to_owned())?;
+        let kind = required_string(selected, "kind")?;
+        let function = selected
+            .get("function")
+            .and_then(Value::as_object)
+            .ok_or_else(|| "selected implementation method is missing `function`".to_owned())?;
+        let function_module = required_string(function, "module")?;
+        let function_symbol = required_string(function, "symbol")?;
+        if required_string(function, "verified_facade")?
+            != format!("{function_module}.{function_symbol}")
+        {
+            return Err("selected implementation method has invalid provenance".to_owned());
+        }
+        match kind.as_str() {
+            "explicit" => {
+                explicit.insert(method_name.to_owned());
+            }
+            "default" => {}
+            _ => return Err("selected implementation method kind is invalid".to_owned()),
+        }
+    }
+    for method in required_array(object, "methods")? {
+        let method = method
+            .as_object()
+            .ok_or_else(|| "implementation method must be an object".to_owned())?;
+        let name = required_string(method, "name")?;
+        if !explicit.contains(local_name(&name)) {
+            return Err(format!(
+                "implementation method `{}` is absent from `selected_methods`",
+                local_name(&name)
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_trait_default(
+    implementation: &Map<String, Value>,
+    trait_method: &str,
+    selected: &Map<String, Value>,
+    trait_declarations: &std::collections::BTreeMap<String, Value>,
+) -> Option<Value> {
+    let (trait_name, method_name) = trait_method.rsplit_once('.')?;
+    let trait_declaration = trait_declarations.get(trait_name)?.as_object()?;
+    let trait_ref = implementation
+        .get("traits")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_object)
+        .find(|trait_ref| {
+            trait_ref.get("kind").and_then(Value::as_str) == Some("named")
+                && trait_ref.get("name").and_then(Value::as_str) == Some(trait_name)
+        })?;
+    let mut method = trait_declaration
+        .get("methods")?
+        .as_array()?
+        .iter()
+        .find(|method| {
+            method.get("name").and_then(Value::as_str).map(local_name) == Some(method_name)
+        })?
+        .clone();
+    (method.get("default")? == selected.get("function")?).then_some(())?;
+    substitute_trait_arguments(&mut method, trait_declaration, trait_ref);
+    Some(method)
+}
+
+fn substitute_trait_arguments(
+    value: &mut Value,
+    trait_declaration: &Map<String, Value>,
+    trait_ref: &Map<String, Value>,
+) {
+    let mut types = std::collections::BTreeMap::new();
+    let mut constants = std::collections::BTreeMap::new();
+    for (parameter, argument) in trait_declaration
+        .get("generics")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+        .zip(
+            trait_ref
+                .get("args")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten(),
+        )
+    {
+        let Some(name) = parameter.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        match parameter.get("kind").and_then(Value::as_str) {
+            Some("type") => {
+                if let Some(argument) = argument.get("type") {
+                    types.insert(name.to_owned(), argument.clone());
+                }
+            }
+            Some("const") => {
+                if let Some(argument) = argument.get("value") {
+                    constants.insert(name.to_owned(), argument.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    substitute_generic_arguments(value, &types, &constants);
+}
+
+fn substitute_generic_arguments(
+    value: &mut Value,
+    types: &std::collections::BTreeMap<String, Value>,
+    constants: &std::collections::BTreeMap<String, Value>,
+) {
+    let replacement = value.as_object().and_then(|object| {
+        match (
+            object.get("kind").and_then(Value::as_str),
+            object.get("name").and_then(Value::as_str),
+        ) {
+            (Some("type_parameter"), Some(name)) => types.get(name).cloned(),
+            (Some("parameter"), Some(name)) => constants.get(name).cloned(),
+            _ => None,
+        }
+    });
+    if let Some(replacement) = replacement {
+        *value = replacement;
+        return;
+    }
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                substitute_generic_arguments(value, types, constants);
+            }
+        }
+        Value::Object(object) => {
+            for value in object.values_mut() {
+                substitute_generic_arguments(value, types, constants);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn local_name(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
 }
 
 fn invalid_module(module_index: usize, module: String, message: String) -> PythonArtifactPlanError {

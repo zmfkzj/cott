@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.backup_plan_types import BackupPath as BackupPath, BackupPlan as BackupPlan, BackupPlanError as BackupPlanError, BackupPlanError_BlankContentId as BackupPlanError_BlankContentId, BackupPlanError_DuplicatePath as BackupPlanError_DuplicatePath, BackupPlanError_EmptyPath as BackupPlanError_EmptyPath, BackupPlanRequest as BackupPlanRequest
 """Validate backup paths in request order. For each path, EmptyPath takes

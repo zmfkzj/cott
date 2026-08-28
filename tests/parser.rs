@@ -1,6 +1,6 @@
 use cott::ast::{
-    BinaryOp, ClauseKind, Declaration, ExprKind, PatternKind, RuleClauseAction, TypeArg,
-    TypeArgKind, UnaryOp,
+    BinaryOp, ClauseKind, Declaration, ExprKind, GenericArgKind, GenericParam, PatternKind,
+    RuleClauseAction, UnaryOp,
 };
 use cott::parser::parse;
 
@@ -57,17 +57,21 @@ fn evaluate[T](x: T, y: T) -> Result[Maybe[T], Error]:
         other => panic!("expected struct first, got {other:?}"),
     };
     assert_eq!(structure.name, "Box");
-    assert_eq!(
-        structure
-            .generics
-            .iter()
-            .map(|param| param.name.as_str())
-            .collect::<Vec<_>>(),
-        ["T", "U"]
-    );
-    assert_eq!(structure.generics[0].bounds.len(), 2);
-    assert_eq!(structure.generics[0].bounds[0].path.segments, ["Display"]);
-    assert_eq!(structure.generics[0].bounds[1].path.segments, ["Clone"]);
+    assert!(matches!(
+        &structure.generics[..],
+        [
+            GenericParam::Type {
+                name: first,
+                bounds,
+                ..
+            },
+            GenericParam::Type { name: second, .. },
+        ] if first == "T"
+            && second == "U"
+            && matches!(&bounds[..], [first_bound, second_bound]
+                if first_bound.path.segments == ["Display"]
+                    && second_bound.path.segments == ["Clone"])
+    ));
     assert_eq!(
         structure
             .fields
@@ -83,14 +87,20 @@ fn evaluate[T](x: T, y: T) -> Result[Maybe[T], Error]:
     let opaque = &structure.fields[1].ty;
     assert_eq!(opaque.path.segments, ["Opaque"]);
     assert_eq!(opaque.arguments.len(), 1);
-    assert!(matches!(&opaque.arguments[0].kind, TypeArgKind::String(value) if value == "tag"));
+    assert!(matches!(
+        &opaque.arguments[0].kind,
+        GenericArgKind::Const(_)
+    ));
 
     let enumeration = match &file.declarations[1] {
         Declaration::Enum(value) => value,
         other => panic!("expected enum second, got {other:?}"),
     };
     assert_eq!(enumeration.name, "Maybe");
-    assert_eq!(enumeration.generics[0].name, "T");
+    assert!(matches!(
+        &enumeration.generics[..],
+        [GenericParam::Type { name, .. }] if name == "T"
+    ));
     assert_eq!(
         enumeration
             .variants
@@ -106,7 +116,10 @@ fn evaluate[T](x: T, y: T) -> Result[Maybe[T], Error]:
         other => panic!("expected trait third, got {other:?}"),
     };
     assert_eq!(trait_decl.name, "Show");
-    assert_eq!(trait_decl.generics[0].name, "T");
+    assert!(matches!(
+        &trait_decl.generics[..],
+        [GenericParam::Type { name, .. }] if name == "T"
+    ));
     assert_eq!(trait_decl.methods.len(), 1);
     assert_eq!(trait_decl.methods[0].name, "render");
     assert_eq!(trait_decl.methods[0].parameters[0].name, "value");
@@ -116,7 +129,10 @@ fn evaluate[T](x: T, y: T) -> Result[Maybe[T], Error]:
         other => panic!("expected function last, got {other:?}"),
     };
     assert_eq!(function.name, "evaluate");
-    assert_eq!(function.generics[0].name, "T");
+    assert!(matches!(
+        &function.generics[..],
+        [GenericParam::Type { name, .. }] if name == "T"
+    ));
     assert_eq!(
         function
             .parameters
@@ -135,7 +151,7 @@ fn evaluate[T](x: T, y: T) -> Result[Maybe[T], Error]:
         matches!(&clauses[0].kind, ClauseKind::Documentation(doc) if doc.text == "Contract documentation")
     );
     assert!(
-        matches!(&clauses[3].kind, ClauseKind::Error { error, when: Some(_) } if error.segments == ["Error", "Bad"])
+        matches!(&clauses[3].kind, ClauseKind::Error { error, when: Some(_), .. } if error.segments == ["Error", "Bad"])
     );
     if let ClauseKind::Effects { effects } = &clauses[4].kind {
         assert_eq!(effects.len(), 2);
@@ -146,7 +162,7 @@ fn evaluate[T](x: T, y: T) -> Result[Maybe[T], Error]:
     }
 
     let requires = match &clauses[1].kind {
-        ClauseKind::Requires { condition } => condition,
+        ClauseKind::Requires { condition, .. } => condition,
         other => panic!("expected requires clause, got {other:?}"),
     };
     let ExprKind::Binary {
@@ -199,17 +215,16 @@ fn evaluate[T](x: T, y: T) -> Result[Maybe[T], Error]:
         );
     };
 
-    let ensures_pattern = match &clauses[2].kind {
+    let ensures_guard = match &clauses[2].kind {
         ClauseKind::Ensures {
-            pattern: Some(pattern),
-            ..
-        } => pattern,
-        other => panic!("expected ensures pattern, got {other:?}"),
+            guard: Some(guard), ..
+        } => guard,
+        other => panic!("expected ensures match guard, got {other:?}"),
     };
-    let PatternKind::Variant { path, arguments } = &ensures_pattern.kind else {
+    let PatternKind::Variant { path, arguments } = &ensures_guard.pattern.kind else {
         panic!(
             "expected outer variant pattern, got {:?}",
-            ensures_pattern.kind
+            ensures_guard.pattern.kind
         );
     };
     assert_eq!(path.segments, ["Result", "Ok"]);
@@ -303,14 +318,16 @@ fn parses_compact_qualified_nested_contract() {
         other => panic!("expected function clauses, got {other:?}"),
     };
     let ClauseKind::Ensures {
-        pattern: Some(pattern),
-        ..
+        guard: Some(guard), ..
     } = &clauses[0].kind
     else {
-        panic!("expected ensures pattern, got {:?}", clauses[0].kind);
+        panic!("expected ensures match guard, got {:?}", clauses[0].kind);
     };
-    let PatternKind::Variant { path, arguments } = &pattern.kind else {
-        panic!("expected qualified variant pattern, got {:?}", pattern.kind);
+    let PatternKind::Variant { path, arguments } = &guard.pattern.kind else {
+        panic!(
+            "expected qualified variant pattern, got {:?}",
+            guard.pattern.kind
+        );
     };
     assert_eq!(path.segments, ["Result", "Ok"]);
     let PatternKind::Variant {
@@ -511,11 +528,11 @@ impl Counter for Reader + Writer:
                 ..
             },
             cott::ast::Clause {
-                kind: ClauseKind::Requires { .. },
+                kind: ClauseKind::Requires { guard: None, .. },
                 ..
             },
             cott::ast::Clause {
-                kind: ClauseKind::Ensures { pattern: None, .. },
+                kind: ClauseKind::Ensures { guard: None, .. },
                 ..
             },
         ]
@@ -656,7 +673,7 @@ fn inspect(value: Map[Str, Opaque["map-value"]]) -> Unknown
     assert_eq!(alias.target.path.segments, ["Opaque"]);
     assert!(matches!(
         &alias.target.arguments[0].kind,
-        TypeArgKind::String(tag) if tag == "alias"
+        GenericArgKind::Const(_)
     ));
 
     let Declaration::Newtype(newtype) = &file.declarations[2] else {
@@ -665,7 +682,7 @@ fn inspect(value: Map[Str, Opaque["map-value"]]) -> Unknown
     assert_eq!(newtype.underlying.path.segments, ["Opaque"]);
     assert!(matches!(
         &newtype.underlying.arguments[0].kind,
-        TypeArgKind::String(tag) if tag == "newtype"
+        GenericArgKind::Const(_)
     ));
 
     let Declaration::Struct(record) = &file.declarations[3] else {
@@ -675,7 +692,7 @@ fn inspect(value: Map[Str, Opaque["map-value"]]) -> Unknown
     assert_eq!(record.fields[1].ty.path.segments, ["Iterator"]);
     assert!(matches!(
         &record.fields[1].ty.arguments[0].kind,
-        TypeArgKind::Type(ty) if ty.path.segments == ["Any"]
+        GenericArgKind::Ambiguous { ty, .. } if ty.path.segments == ["Any"]
     ));
 
     let Declaration::Enum(response) = &file.declarations[4] else {
@@ -693,23 +710,23 @@ fn inspect(value: Map[Str, Opaque["map-value"]]) -> Unknown
     assert_eq!(method.parameters[0].ty.path.segments, ["List"]);
     assert!(matches!(
         &method.parameters[0].ty.arguments[0].kind,
-        TypeArgKind::Type(ty)
+        GenericArgKind::Type(ty)
             if ty.path.segments == ["Opaque"]
-                && matches!(&ty.arguments[0].kind, TypeArgKind::String(tag) if tag == "container")
+                && matches!(&ty.arguments[0].kind, GenericArgKind::Const(_))
     ));
     assert_eq!(method.return_type.path.segments, ["Generator"]);
     assert_eq!(method.return_type.arguments.len(), 3);
     assert!(matches!(
         &method.return_type.arguments[0].kind,
-        TypeArgKind::Type(ty) if ty.path.segments == ["Opaque"]
+        GenericArgKind::Type(ty) if ty.path.segments == ["Opaque"]
     ));
     assert!(matches!(
         &method.return_type.arguments[1].kind,
-        TypeArgKind::Type(ty) if ty.path.segments == ["Unknown"]
+        GenericArgKind::Ambiguous { ty, .. } if ty.path.segments == ["Unknown"]
     ));
     assert!(matches!(
         &method.return_type.arguments[2].kind,
-        TypeArgKind::Type(ty) if ty.path.segments == ["Any"]
+        GenericArgKind::Ambiguous { ty, .. } if ty.path.segments == ["Any"]
     ));
 
     let Declaration::Function(inspect) = &file.declarations[6] else {
@@ -719,9 +736,9 @@ fn inspect(value: Map[Str, Opaque["map-value"]]) -> Unknown
     assert_eq!(inspect.parameters[0].ty.arguments.len(), 2);
     assert!(matches!(
         &inspect.parameters[0].ty.arguments[1].kind,
-        TypeArgKind::Type(ty)
+        GenericArgKind::Type(ty)
             if ty.path.segments == ["Opaque"]
-                && matches!(&ty.arguments[0].kind, TypeArgKind::String(tag) if tag == "map-value")
+                && matches!(&ty.arguments[0].kind, GenericArgKind::Const(_))
     ));
     assert_eq!(inspect.return_type.path.segments, ["Unknown"]);
 }
@@ -752,8 +769,8 @@ fn parses_factory_type_arguments() {
     assert_eq!(handle.fields[0].ty.path.segments, ["Factory"]);
     assert!(matches!(
         &handle.fields[0].ty.arguments[..],
-        [TypeArg {
-            kind: TypeArgKind::Type(instance),
+        [cott::ast::GenericArg {
+            kind: GenericArgKind::Ambiguous { ty: instance, .. },
             ..
         }] if instance.path.segments == ["Concrete"]
     ));
@@ -762,4 +779,212 @@ fn parses_factory_type_arguments() {
     };
     assert_eq!(create.parameters[0].ty.path.segments, ["Factory"]);
     assert_eq!(create.return_type.path.segments, ["Factory"]);
+}
+
+#[test]
+fn parses_v02_const_generics_variadic_tuples_and_fixed_containers() {
+    let source = r#"module v02.types
+
+struct Matrix[T, const N: U32]:
+    values: Array[T, N]
+    bytes: Buffer[N]
+
+fn collect[T](items: Tuple[T, Str]) -> Tuple[T, I32, Bool]
+
+const PAIR: Tuple[U8, U8] = Tuple(1, 2)
+const VALUES: Array[U8, 2] = Array(1, 2)
+const BYTES: Buffer[2] = Buffer("00ff")
+"#;
+    parse(source).expect("v0.2 generic and fixed-container surface should parse");
+}
+
+#[test]
+fn parses_named_qualified_forwarded_and_arithmetic_const_arguments() {
+    let file = parse(
+        r#"module foo.consumer
+
+const THREE: U32 = 3
+
+struct Page[T, const N: U32]:
+    items: Array[T, N]
+
+struct Batch[const N: U32]:
+    page: Page[U8, N]
+
+struct Holder:
+    literal: Page[U8, 1 + 2]
+    named: Page[U8, THREE]
+    qualified: Page[U8, foo.sizes.THREE]
+    arithmetic: Page[U8, THREE + 1]
+"#,
+    )
+    .expect("const generic arguments should parse as expressions");
+    let Declaration::Struct(batch) = &file.declarations[2] else {
+        panic!("expected Batch declaration");
+    };
+    assert!(matches!(
+        &batch.fields[0].ty.arguments[1].kind,
+        GenericArgKind::Ambiguous {
+            value: cott::ast::ConstExpr::Expression(expr),
+            ..
+        } if matches!(&expr.kind, ExprKind::Name(path) if path.segments == ["N"])
+    ));
+    let Declaration::Struct(holder) = &file.declarations[3] else {
+        panic!("expected Holder declaration");
+    };
+    assert!(matches!(
+        &holder.fields[0].ty.arguments[1].kind,
+        GenericArgKind::Const(cott::ast::ConstExpr::Expression(expr))
+            if matches!(&expr.kind, ExprKind::Binary { op: BinaryOp::Add, .. })
+    ));
+    assert!(matches!(
+        &holder.fields[1].ty.arguments[1].kind,
+        GenericArgKind::Ambiguous {
+            value: cott::ast::ConstExpr::Expression(expr),
+            ..
+        } if matches!(&expr.kind, ExprKind::Name(path) if path.segments == ["THREE"])
+    ));
+    assert!(matches!(
+        &holder.fields[2].ty.arguments[1].kind,
+        GenericArgKind::Ambiguous {
+            value: cott::ast::ConstExpr::Expression(expr),
+            ..
+        } if matches!(&expr.kind, ExprKind::Name(path) if path.segments == ["foo", "sizes", "THREE"])
+    ));
+    assert!(matches!(
+        &holder.fields[3].ty.arguments[1].kind,
+        GenericArgKind::Const(cott::ast::ConstExpr::Expression(expr))
+            if matches!(&expr.kind, ExprKind::Binary { op: BinaryOp::Add, .. })
+    ));
+}
+
+#[test]
+fn rejects_malformed_v02_const_generic_and_container_syntax() {
+    for source in [
+        "module v02.bad\nstruct Missing[const N]:\n    value: U8\n",
+        "module v02.bad\nstruct Signed[const N: I32]:\n    value: U8\n",
+        "module v02.bad\nstruct MissingColon[const N U32]:\n    value: U8\n",
+        "module v02.bad\nstruct Unclosed[T, const N: U32:\n    value: T\n",
+        "module v02.bad\nfn broken[T const N: U32](value: T) -> T\n",
+        "module v02.bad\nconst VALUES: Array[U8, 2] = Array(1, 2\n",
+        "module v02.bad\nconst BYTES: Buffer[2] = Buffer(\"00ff\"\n",
+        "module v02.bad\nfn empty_tuple() -> Tuple[]\n",
+        "module v02.bad\nconst BYTES: Buffer[2] = Buffer(\"0F\")\n",
+    ] {
+        assert_rejected(source);
+    }
+}
+
+#[test]
+fn parses_v02_generalized_match_guards_and_legacy_ensures_pattern() {
+    let source = r#"module v02.guards
+
+enum Failure:
+    Bad
+
+enum State:
+    Ready(value: I32)
+
+trait Reader:
+    fn read(self) -> I32 = defaults.read
+
+impl Controller for Reader:
+    state:
+        current: State = State.Ready(1)
+    invariant self.current matches State.Ready(item) => item > 0
+    fn read(self) -> I32:
+        ensures result > 0
+
+fn guarded(value: Option[I32]) -> Result[I32, Failure]:
+    requires value matches Option.Some(input) => input > 0
+    ensures result matches Result.Ok(output) => output > 0
+    error Failure.Bad with value matches Option.Some(error_value) when error_value == 0
+
+fn legacy(value: I32) -> Result[I32, Failure]:
+    ensures Result.Ok(item) => item > 0
+"#;
+    parse(source).expect("all v0.2 match-guard spellings should parse");
+}
+
+#[test]
+fn rejects_non_declaration_trait_defaults() {
+    for source in [
+        "module v02.bad\ntrait Reader:\n    fn read(self) -> I32 = defaults.read()\n",
+        "module v02.bad\ntrait Reader:\n    fn read(self) -> I32 = 1\n",
+        "module v02.bad\nfn read() -> I32 = fallback\n",
+        "module v02.bad\ntrait Reader:\n    fn read(self) -> I32\nimpl Controller for Reader:\n    fn read(self) -> I32 = fallback\n",
+        "module v02.bad\ntrait Reader:\n    fn read(self) -> I32 = defaults.read:\n",
+    ] {
+        assert_rejected(source);
+    }
+}
+
+#[test]
+fn parses_v03_explicit_async_associated_types_projections_and_resource_transitions() {
+    parse(
+        r#"module v03.surface
+
+trait Stream[T]:
+    type Item: Display + Clone
+    fn next(self) -> T.Item
+
+trait Controller:
+    fn close(self) -> Unit
+
+resource Door:
+    initial Open
+    state Open
+    state Closed
+    terminal Closed
+    transition Open -> Closed
+
+impl DoorController for Controller:
+    type Item = I32
+    state:
+        primary: Door
+        backup: Door
+        audit: I32
+    fn close(self) -> Unit:
+        requires true
+        transitions self.primary: Door.Open -> Door.Closed, self.backup: Door.Open -> Door.Closed
+        modifies self.audit
+        ensures true
+
+async fn fetch() -> I32:
+    effects [IO]
+
+fn inspect[T](value: T.Item) -> T.Item
+
+fn completes() -> Never
+"#,
+    )
+    .expect("v0.3 public syntax should parse");
+}
+
+#[test]
+fn rejects_v03_forbidden_async_returns_associated_ordering_and_resource_forms() {
+    for source in [
+        "module v03.bad\nasync trait Stream:\n    fn next(self) -> I32\n",
+        "module v03.bad\ntrait Stream:\n    async fn next(self) -> I32\n",
+        "module v03.bad\ntrait Stream:\n    fn next(self) -> I32\n    type Item\n",
+        "module v03.bad\ntrait Stream:\n    type Item\n    fn next(self) -> I32\nimpl Reader for Stream:\n    state:\n        value: I32 = 0\n    type Item = I32\n    fn next(self) -> I32:\n        ensures true\n",
+        "module v03.bad\nimpl Reader for Stream:\n    async fn next(self) -> I32:\n        ensures true\n",
+        "module v03.bad\nasync fn stream() -> Iterator[I32]\n",
+        "module v03.bad\nasync fn generate() -> Generator[I32, Unit, Unit]\n",
+        "module v03.bad\nasync fn never() -> Never\n",
+        "module v03.bad\ntrait Stream:\n    type Item = I32\n",
+        "module v03.bad\nresource Door:\n    state Open\n    terminal Closed\n    transition Open -> Closed\n",
+        "module v03.bad\nresource Door:\n    initial Open\n    initial Open\n    state Open\n    state Closed\n    terminal Closed\n    transition Open -> Closed\n",
+        "module v03.bad\nresource Door:\n    initial Open\n    state Open\n    state Closed\n    terminal Closed\n    transition Open -> Closed\n    state Reopened\n",
+        "module v03.bad\nresource Door:\n    initial Open\n    state Open\n    state Closed\n    terminal Closed\n    transition Open Closed\n",
+        "module v03.bad\nresource Door:\n    initial Open\n    state state\n    terminal Closed\n    transition Open -> Closed\n",
+        "module v03.bad\nresource Door:\n    initial Open\n    state resource\n    terminal Closed\n    transition Open -> Closed\n",
+        "module v03.bad\nresource Door:\n    initial Open\n    state initial\n    terminal Closed\n    transition Open -> Closed\n",
+        "module v03.bad\nresource Door:\n    initial Open\n    state terminal\n    terminal Closed\n    transition Open -> Closed\n",
+        "module v03.bad\nresource Door:\n    initial Open\n    state transition\n    terminal Closed\n    transition Open -> Closed\n",
+        "module v03.bad\nresource Door:\n    initial Open\n    state transitions\n    terminal Closed\n    transition Open -> Closed\n",
+        "module v03.bad\nresource Door:\n    initial Open\n    state async\n    terminal Closed\n    transition Open -> Closed\n",
+    ] {
+        assert_rejected(source);
+    }
 }

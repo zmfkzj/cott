@@ -122,6 +122,9 @@ fn prompt_has_fixed_sections_and_final_instruction() {
         "FACTORY TYPE MODEL\n`Factory[Concrete]` maps to `type[Concrete]`: it is the exact compiler-generated `Concrete` class object, never an instance, subclass, or arbitrary callable. Constructor calls MUST match `Concrete`'s inferred Cott init signature. Validation MUST NOT construct or invoke a Factory value."
     ));
     assert!(text.contains(
+        "EFFECT CALLS\nCall Cott functions only by their exact imported facade name. Do not alias, store, return, pass, rebind, or shadow a Cott callable"
+    ));
+    assert!(text.contains(
         "Standard ABI aliases, including integer widths, are annotations and MUST NOT be called. Construct result values only with top-level `cott_runtime.Ok(...)`/`cott_runtime.Err(...)`, never `Result.Ok`/`Result.Err`. Generated payload enum aliases have no members; import and construct top-level `<Enum>_<Variant>` classes from the exact generated `*_types` module, never `<Enum>.<Variant>`."
     ));
     assert!(
@@ -129,6 +132,33 @@ fn prompt_has_fixed_sections_and_final_instruction() {
             "If the contract must change, report that and leave the target unresolved.\n"
         )
     );
+}
+
+#[test]
+fn async_prompt_requires_the_exact_definition_and_awaits() {
+    let prompt = render_prompt(
+        &PythonCallable {
+            module: "app".to_owned(),
+            cott_symbol: "app.fetch".to_owned(),
+            name: "fetch".to_owned(),
+            kind: PythonCallableKind::AsyncFunction,
+            declaration: serde_json::json!({}),
+            owner: None,
+        },
+        br#"{"module":"app"}"#,
+        "docs",
+        "types",
+        &BTreeMap::new(),
+        "bound",
+        None,
+        None,
+        Path::new("python/_cott_impl/app/fetch.py"),
+    )
+    .expect("async prompt");
+    let text = String::from_utf8(prompt).expect("UTF-8 prompt");
+    assert!(text.contains("canonical undecorated top-level `async def` function `fetch`"));
+    assert!(text.contains("Await every call to an async Cott facade"));
+    assert!(text.contains("additional async functions"));
 }
 
 #[test]

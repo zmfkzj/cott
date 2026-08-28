@@ -185,6 +185,25 @@ fn cott(root: &Path, arguments: &[&str]) -> Output {
         .output()
         .expect("cott should run")
 }
+
+fn recompute_generation_id(snapshot: &mut serde_json::Value) {
+    let mut current = snapshot.clone();
+    let current = current
+        .as_object_mut()
+        .expect("generation snapshot is an object");
+    for key in ["generation_id", "verified", "verification", "agent_runs"] {
+        current.remove(key);
+    }
+    let identity = serde_json::json!({
+        "domain": "cott.generation.v2",
+        "schema_version": 2,
+        "current": current,
+    });
+    let mut bytes = serde_json::to_vec(&identity).expect("canonical generation identity");
+    bytes.push(b'\n');
+    snapshot["generation_id"] =
+        serde_json::json!(format!("sha256:{}", cott::hash::sha256_hex(&bytes)));
+}
 #[test]
 fn source_commands_accept_the_normative_manifest_without_entry() {
     let project = normative_project();
@@ -212,6 +231,7 @@ e=pathlib.Path(sys.executable).resolve()
 r["current"]["tools"]["python"]={"cache_tag":sys.implementation.cache_tag,"content_hash":"sha256:"+hashlib.sha256(e.read_bytes()).hexdigest(),"executable":str(e),"implementation":sys.implementation.name,"machine":platform.machine(),"os":sys.platform,"platform":sysconfig.get_platform(),"version":platform.python_version()}
 i=dict(r["current"])
 for k in ("generation_id","verified","verification","agent_runs"): i.pop(k,None)
+i={"domain":"cott.generation.v2","schema_version":2,"current":i}
 r["current"]["generation_id"]="sha256:"+hashlib.sha256(json.dumps(i,ensure_ascii=False,separators=(",",":"),sort_keys=True).encode()+b"\n").hexdigest()
 p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True)+"\n")
 "#;
@@ -227,6 +247,30 @@ p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True
     );
 }
 
+fn retarget_last_verified_python_symbol(root: &Path, python_symbol: &str) {
+    let script = r#"import hashlib,json,pathlib,sys
+p=pathlib.Path("generated/generation.json")
+r=json.loads(p.read_bytes())
+s=r["last_verified"]
+s["implementations"][0]["python_symbol"]=sys.argv[1]
+i=dict(s)
+for k in ("generation_id","verified","verification","agent_runs"): i.pop(k,None)
+i={"domain":"cott.generation.v2","schema_version":2,"current":i}
+s["generation_id"]="sha256:"+hashlib.sha256(json.dumps(i,ensure_ascii=False,separators=(",",":"),sort_keys=True).encode()+b"\n").hexdigest()
+p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True)+"\n")
+"#;
+    let output = Command::new("python3")
+        .args(["-c", script, python_symbol])
+        .current_dir(root)
+        .output()
+        .expect("host Python should retarget verified implementation provenance");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn remove_free_function_callable_metadata(root: &Path) {
     let script = r#"import hashlib,json,pathlib
 p=pathlib.Path("generated/generation.json")
@@ -235,7 +279,8 @@ i=r["current"]["implementations"][0]
 for k in ("kind","concrete","method"): i.pop(k)
 c=dict(r["current"])
 for k in ("generation_id","verified","verification","agent_runs"): c.pop(k,None)
-r["current"]["generation_id"]="sha256:"+hashlib.sha256(json.dumps(c,ensure_ascii=False,separators=(",",":"),sort_keys=True).encode()+b"\n").hexdigest()
+i={"domain":"cott.generation.v2","schema_version":2,"current":c}
+r["current"]["generation_id"]="sha256:"+hashlib.sha256(json.dumps(i,ensure_ascii=False,separators=(",",":"),sort_keys=True).encode()+b"\n").hexdigest()
 p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True)+"\n")
 "#;
     let output = Command::new("python3")
@@ -248,6 +293,30 @@ p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn replace_generation_implementation_kind(path: &Path, kind: &str) -> (String, String) {
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&fs::read(path).expect("generation record")).expect("valid JSON");
+    let snapshot = record
+        .get_mut("current")
+        .expect("generation record has current snapshot");
+    let before = snapshot["generation_id"]
+        .as_str()
+        .expect("generation snapshot identity")
+        .to_owned();
+    snapshot["implementations"][0]["kind"] = serde_json::json!(kind);
+    recompute_generation_id(snapshot);
+    let after = snapshot["generation_id"]
+        .as_str()
+        .expect("updated generation snapshot identity")
+        .to_owned();
+    fs::write(
+        path,
+        serde_json::to_vec(&record).expect("generation record serialization"),
+    )
+    .expect("generation record should be writable");
+    (before, after)
 }
 
 #[test]
@@ -290,12 +359,412 @@ fn emits_complete_tree_and_verifies_exact_bytes() {
         String::from_utf8(verified.stdout).expect("stdout must be UTF-8"),
         "verified generated/python\n"
     );
+    let record: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json"))
+            .expect("verified generation record"),
+    )
+    .expect("verified generation record is JSON");
+    assert_eq!(
+        record["current"]["verification"]["static"]["runtime_signatures"]["app.run"]["callable_kind"],
+        "function"
+    );
 
     fs::write(project.path.join("generated/python/app.py"), "tampered\n")
         .expect("generated artifact should be writable");
     let rejected = cott(&project.path, &["verify"]);
     assert_eq!(rejected.status.code(), Some(4));
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("managed artifact differs"));
+}
+
+#[test]
+fn verify_records_no_baseline_implementation_comparison() {
+    let project = project();
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+
+    let verified = cott(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let record: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json"))
+            .expect("verified generation record"),
+    )
+    .expect("verified generation record is JSON");
+    assert_eq!(
+        record["current"]["verification"]["implementation_comparison"],
+        serde_json::json!({
+            "baseline_generation_id": null,
+            "status": "no_baseline",
+            "entries": []
+        })
+    );
+    assert_eq!(record["current"], record["last_verified"]);
+    let compared = cott(&project.path, &["verify"]);
+    assert!(
+        compared.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compared.stderr)
+    );
+    let stable = fs::read(project.path.join("generated/generation.json"))
+        .expect("compared generation record");
+    let repeated = cott(&project.path, &["verify"]);
+    assert!(
+        repeated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&repeated.stderr)
+    );
+    assert_eq!(
+        fs::read(project.path.join("generated/generation.json"))
+            .expect("repeated generation record"),
+        stable
+    );
+}
+
+#[test]
+fn emit_refreshes_stale_compiler_and_runtime_tool_versions() {
+    let project = project();
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let verified = cott(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let path = project.path.join("generated/generation.json");
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("verified generation record"))
+            .expect("verified generation record is JSON");
+    record["current"]["tools"]["compiler"] = serde_json::json!({
+        "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "executable": "/old/cott",
+        "version": "0.0.0"
+    });
+    record["current"]["tools"]["runtime"]["abi"] = serde_json::json!("0");
+    record["current"]["tools"]["runtime"]["version"] = serde_json::json!("0.0.0");
+    recompute_generation_id(&mut record["current"]);
+    fs::write(
+        &path,
+        serde_json::to_vec(&record).expect("stale generation record serialization"),
+    )
+    .expect("stale generation record should be writable");
+
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let regenerated: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("regenerated record"))
+            .expect("regenerated record is JSON");
+    assert_eq!(
+        regenerated["current"]["tools"]["compiler"]["version"],
+        env!("CARGO_PKG_VERSION")
+    );
+    assert_eq!(regenerated["current"]["tools"]["runtime"]["abi"], "2");
+    assert_eq!(
+        regenerated["current"]["tools"]["runtime"]["version"],
+        env!("CARGO_PKG_VERSION")
+    );
+    let executable =
+        fs::canonicalize(Path::new(env!("CARGO_BIN_EXE_cott"))).expect("canonical Cott executable");
+    assert_eq!(
+        regenerated["current"]["tools"]["compiler"]["executable"].as_str(),
+        Some(executable.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        regenerated["current"]["tools"]["compiler"]["content_hash"],
+        format!(
+            "sha256:{}",
+            cott::hash::sha256_hex(&fs::read(&executable).expect("test executable"))
+        )
+    );
+
+    let verified = cott(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let diff = cott(&project.path, &["diff"]);
+    assert!(
+        diff.status.success(),
+        "{}",
+        String::from_utf8_lossy(&diff.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(diff.stdout).expect("diff output is UTF-8"),
+        "NO CHANGE\n"
+    );
+}
+
+#[test]
+fn verify_compares_implementation_identity_without_importing_the_baseline() {
+    let project = project();
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let initial_verification = cott(&project.path, &["verify"]);
+    assert!(
+        initial_verification.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initial_verification.stderr)
+    );
+    fs::copy(
+        project.path.join("generated/generation.json"),
+        project.path.join("baseline.json"),
+    )
+    .expect("verified generation record should be copyable");
+    retarget_last_verified_python_symbol(&project.path, "effectful_baseline:run");
+    let compared_generation_id: serde_json::Value = serde_json::from_slice::<serde_json::Value>(
+        &fs::read(project.path.join("generated/generation.json"))
+            .expect("retargeted generation record"),
+    )
+    .expect("retargeted generation record is JSON")["last_verified"]["generation_id"]
+        .clone();
+    fs::write(
+        project.path.join("python/cott_bindings/app/run.py"),
+        "from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 8\n",
+    )
+    .expect("updated implementation should be writable");
+
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let diff = cott(&project.path, &["diff", "--baseline", "baseline.json"]);
+    assert!(
+        diff.status.success(),
+        "{}",
+        String::from_utf8_lossy(&diff.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&diff.stdout)
+            .contains("- app.run implementation changed: content_hash"),
+        "{}",
+        String::from_utf8_lossy(&diff.stdout)
+    );
+    let verified = cott(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let record: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json"))
+            .expect("verified generation record"),
+    )
+    .expect("verified generation record is JSON");
+    let comparison = &record["current"]["verification"]["implementation_comparison"];
+    assert_eq!(comparison["status"], "compared");
+    assert_eq!(comparison["baseline_generation_id"], compared_generation_id);
+    let entries = comparison["entries"]
+        .as_array()
+        .expect("implementation comparison entries");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["cott_symbol"], "app.run");
+    assert_eq!(entries[0]["status"], "changed");
+    let changed_fields = entries[0]["changed_fields"]
+        .as_object()
+        .expect("changed implementation fields");
+    assert_eq!(
+        changed_fields
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["content_hash", "python_symbol"]
+    );
+    assert_ne!(
+        changed_fields["content_hash"]["before"],
+        changed_fields["content_hash"]["after"]
+    );
+    assert_eq!(
+        changed_fields["python_symbol"]["before"],
+        "effectful_baseline:run"
+    );
+    assert_eq!(
+        changed_fields["python_symbol"]["after"],
+        "_cott_impl.app.run:run"
+    );
+    assert_eq!(record["current"], record["last_verified"]);
+}
+
+#[test]
+fn diff_marks_callable_kind_only_changes_as_contract_breaking() {
+    let project = project();
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let baseline = project.path.join("callable-kind-baseline.json");
+    fs::copy(project.path.join("generated/generation.json"), &baseline)
+        .expect("generation record should be copyable");
+    let (before, after) = replace_generation_implementation_kind(&baseline, "async_function");
+    assert_ne!(
+        before, after,
+        "callable kind participates in generation identity"
+    );
+
+    let diff = cott(
+        &project.path,
+        &["diff", "--baseline", "callable-kind-baseline.json"],
+    );
+
+    assert!(
+        diff.status.success(),
+        "{}",
+        String::from_utf8_lossy(&diff.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&diff.stdout);
+    assert!(stdout.contains("CONTRACT BREAKING:"), "{stdout}");
+    assert!(
+        stdout.contains("- app.run implementation changed: kind"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn async_callable_kind_changes_generation_identity_and_breaks_contracts() {
+    let project = project();
+    let initial = cott(&project.path, &["emit", "python"]);
+    assert!(
+        initial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
+    let baseline = project.path.join("sync-baseline.json");
+    fs::copy(project.path.join("generated/generation.json"), &baseline)
+        .expect("sync generation record should be copyable");
+    let sync_record: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json")).expect("sync generation record"),
+    )
+    .expect("sync generation record is JSON");
+    fs::write(
+        project.path.join("src/app.cott"),
+        "module app\n\nasync fn run() -> I32\n",
+    )
+    .expect("async source should be writable");
+    fs::write(
+        project.path.join("python/cott_bindings/app/run.py"),
+        "from cott_runtime import I32\n\n\nasync def run() -> I32:\n    return 7\n",
+    )
+    .expect("async binding should be writable");
+
+    let emitted = cott(&project.path, &["emit", "python"]);
+
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let async_record: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json")).expect("async generation record"),
+    )
+    .expect("async generation record is JSON");
+    assert_eq!(
+        sync_record["current"]["implementations"][0]["kind"],
+        "function"
+    );
+    assert_eq!(
+        async_record["current"]["implementations"][0]["kind"],
+        "async_function"
+    );
+    assert_ne!(
+        sync_record["current"]["generation_id"],
+        async_record["current"]["generation_id"]
+    );
+
+    let verified = cott(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let verified_record: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json"))
+            .expect("verified async generation record"),
+    )
+    .expect("verified async generation record is JSON");
+    assert_eq!(
+        verified_record["current"]["implementations"][0]["kind"],
+        "async_function"
+    );
+    assert_eq!(
+        verified_record["current"]["verification"]["static"]["runtime_signatures"]["app.run"]["callable_kind"],
+        "async_function"
+    );
+
+    let diff = cott(&project.path, &["diff", "--baseline", "sync-baseline.json"]);
+    assert!(
+        diff.status.success(),
+        "{}",
+        String::from_utf8_lossy(&diff.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&diff.stdout);
+    assert!(stdout.contains("CONTRACT BREAKING:"), "{stdout}");
+    assert!(
+        stdout.contains("- app.run implementation changed: content_hash, kind"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn emit_rejects_async_callable_with_sync_binding() {
+    let project = project();
+    fs::write(
+        project.path.join("src/app.cott"),
+        "module app\n\nasync fn run() -> I32\n",
+    )
+    .expect("async source should be writable");
+
+    let emitted = cott(&project.path, &["emit", "python"]);
+
+    assert!(
+        !emitted.status.success(),
+        "async canonical callable accepted a sync binding: {}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+}
+
+#[test]
+fn verify_rejects_malformed_provenance_before_implementation_comparison() {
+    let project = project();
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    fs::write(project.path.join("generated/generation.json"), "{}\n")
+        .expect("generation record should be writable");
+
+    let rejected = cott(&project.path, &["verify"]);
+
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr).contains("invalid generation provenance"),
+        "{}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
 }
 
 #[test]
@@ -489,8 +958,8 @@ case "$prompt" in
   *) printf '%s\n' 'missing prompt fragment: private Final constant policy' "$*" >&2; exit 64 ;;
 esac
 case "$prompt" in
-  *'Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={}), and CottTuple2(first=a, second=b).'*) ;;
-  *) printf '%s\n' 'missing prompt fragment: keyword-only contract containers' "$*" >&2; exit 64 ;;
+  *'Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={}), CottArray(values=xs), and CottBuffer(data=xs); Cott Tuple uses native `tuple[...]` annotations and `(a, b)` values.'*) ;;
+  *) printf '%s\n' 'missing prompt fragment: contract containers' "$*" >&2; exit 64 ;;
 esac
 case "$prompt" in
   *'For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err'*) ;;
@@ -896,15 +1365,37 @@ fn process_bar_generation_records_unresolved_and_verified_transitions() {
     .expect("initial generation JSON");
     assert_eq!(initial["current"]["verified"], false);
     assert_eq!(initial["current"]["implementations"], serde_json::json!([]));
+    let unresolved = initial["current"]["unresolved"]
+        .as_array()
+        .expect("typed unresolved records");
     assert_eq!(
-        initial["current"]["unresolved"],
-        serde_json::json!([
+        unresolved
+            .iter()
+            .map(|record| record["cott_symbol"]
+                .as_str()
+                .expect("canonical Cott symbol"))
+            .collect::<Vec<_>>(),
+        [
             "foo.bar.build_output",
             "foo.bar.process_bar",
             "foo.bar.process_payload_bytes",
             "foo.bar.validate_payload"
-        ])
+        ]
     );
+    for record in unresolved {
+        assert_eq!(record["kind"], "function");
+        let span = record["span"].as_object().expect("source span");
+        for field in [
+            "start_byte",
+            "end_byte",
+            "start_line",
+            "start_column",
+            "end_line",
+            "end_column",
+        ] {
+            assert!(span[field].is_u64(), "{field} must be typed");
+        }
+    }
     assert_eq!(initial["current"]["agent_runs"], serde_json::json!([]));
     assert!(initial["last_verified"].is_null());
 
@@ -1165,6 +1656,222 @@ esac
     assert_eq!(
         String::from_utf8(diff.stdout).expect("diff output should be UTF-8"),
         "NO CHANGE\n"
+    );
+}
+
+#[test]
+fn diff_enforces_version_compatibility_and_emits_closed_json() {
+    let project = project();
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    fs::copy(
+        project.path.join("generated/generation.json"),
+        project.path.join("baseline.json"),
+    )
+    .expect("baseline should be copyable");
+    let baseline: serde_json::Value =
+        serde_json::from_slice(&fs::read(project.path.join("baseline.json")).expect("baseline"))
+            .expect("baseline should be JSON");
+    assert_eq!(baseline["schema_version"], 2);
+    assert_eq!(baseline["current"]["project_version"], "0.1.0");
+    assert_eq!(
+        baseline["current"]["compatibility"],
+        serde_json::json!({
+            "generation_schema": 2,
+            "canonical_ir_schema": 5,
+            "runtime_abi": 2
+        })
+    );
+    let manifest = fs::read_to_string(project.path.join("cott.toml")).expect("manifest");
+    fs::write(
+        project.path.join("cott.toml"),
+        manifest.replace("version = \"0.1.0\"", "version = \"0.2.0\""),
+    )
+    .expect("manifest version should be writable");
+    let metadata =
+        fs::read_to_string(project.path.join("python/pyproject.toml")).expect("target metadata");
+    fs::write(
+        project.path.join("python/pyproject.toml"),
+        metadata.replace("version = \"0.1.0\"", "version = \"0.2.0\""),
+    )
+    .expect("target metadata version should be writable");
+    fs::write(
+        project.path.join("src/app.cott"),
+        "module app\n\nfn run() -> I64\n",
+    )
+    .expect("changed source should be writable");
+    fs::write(
+        project.path.join("python/cott_bindings/app/run.py"),
+        BINDING.replace("I32", "I64"),
+    )
+    .expect("changed binding should be writable");
+
+    let text = cott(
+        &project.path,
+        &["diff", "--baseline", "baseline.json", "--exit-code"],
+    );
+    assert_eq!(text.status.code(), Some(7));
+    let text = String::from_utf8(text.stdout).expect("diff text should be UTF-8");
+    assert!(text.contains("CONTRACT BREAKING:\n- app.run contract changed"));
+    assert!(!text.contains("VERSION INCOMPATIBLE"));
+
+    let json = cott(
+        &project.path,
+        &[
+            "diff",
+            "--baseline",
+            "baseline.json",
+            "--exit-code",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(json.stderr.is_empty());
+    assert_eq!(json.status.code(), Some(7));
+    let report: serde_json::Value =
+        serde_json::from_slice(&json.stdout).expect("diff JSON must be one report document");
+    assert_eq!(report["breaking"], true);
+    assert_eq!(report["version_compatible"], true);
+    assert_eq!(report["required_version_bump"], "minor");
+    assert!(
+        report["changes"]
+            .as_array()
+            .expect("changes")
+            .iter()
+            .any(|change| {
+                change["class"] == "breaking"
+                    && change["kind"] == "semantic_changed"
+                    && change["subject"] == "app.run"
+            })
+    );
+
+    let manifest = fs::read_to_string(project.path.join("cott.toml")).expect("manifest");
+    fs::write(
+        project.path.join("cott.toml"),
+        manifest.replace("version = \"0.2.0\"", "version = \"0.1.0\""),
+    )
+    .expect("manifest version should be writable");
+    let metadata =
+        fs::read_to_string(project.path.join("python/pyproject.toml")).expect("target metadata");
+    fs::write(
+        project.path.join("python/pyproject.toml"),
+        metadata.replace("version = \"0.2.0\"", "version = \"0.1.0\""),
+    )
+    .expect("target metadata version should be writable");
+    let incompatible = cott(
+        &project.path,
+        &["diff", "--baseline", "baseline.json", "--exit-code"],
+    );
+
+    assert_eq!(incompatible.status.code(), Some(7));
+    assert!(String::from_utf8_lossy(&incompatible.stdout).contains("VERSION INCOMPATIBLE"));
+
+    let bad = fs::read_to_string(project.path.join("baseline.json")).expect("baseline");
+    fs::write(
+        project.path.join("bad-baseline.json"),
+        bad.replace("\"runtime_abi\":2", "\"runtime_abi\":1"),
+    )
+    .expect("invalid baseline should be writable");
+    let rejected = cott(&project.path, &["diff", "--baseline", "bad-baseline.json"]);
+    assert_eq!(rejected.status.code(), Some(2));
+    assert!(rejected.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("invalid diff baseline"));
+}
+#[test]
+fn diff_reports_target_local_drift_only_for_matching_platform() {
+    let project = project();
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let baseline_path = project.path.join("baseline.json");
+    let mut baseline: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json")).expect("generation record"),
+    )
+    .expect("generation record is JSON");
+    baseline["current"]["tools"]["python"]["version"] = serde_json::json!("3.14.7");
+    baseline["current"]["tools"]["basedpyright"] = serde_json::json!({
+        "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "executable": "/other/basedpyright",
+        "version": "9.9.9"
+    });
+    baseline["current"]["tools"]["compiler"] = serde_json::json!({
+        "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "executable": "/other/cott",
+        "version": env!("CARGO_PKG_VERSION")
+    });
+    let artifact = baseline["current"]["managed_files"]
+        .as_object()
+        .expect("managed files")
+        .keys()
+        .next()
+        .cloned()
+        .expect("managed artifact");
+    baseline["current"]["managed_files"][artifact.as_str()] = serde_json::json!(
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    );
+    recompute_generation_id(&mut baseline["current"]);
+    fs::write(
+        &baseline_path,
+        serde_json::to_vec(&baseline).expect("baseline serialization"),
+    )
+    .expect("baseline should be writable");
+
+    let same_target = cott(
+        &project.path,
+        &["diff", "--baseline", "baseline.json", "--format", "json"],
+    );
+    assert!(
+        same_target.status.success(),
+        "{}",
+        String::from_utf8_lossy(&same_target.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&same_target.stdout).expect("diff JSON");
+    let changes = report["changes"].as_array().expect("diff changes");
+    for subject in ["python", "basedpyright", "compiler"] {
+        assert!(changes.iter().any(|change| {
+            change["class"] == "toolchain"
+                && change["kind"] == "toolchain_changed"
+                && change["subject"] == subject
+        }));
+    }
+    assert!(changes.iter().any(|change| {
+        change["class"] == "artifact"
+            && change["kind"] == "artifact_changed"
+            && change["subject"] == artifact
+    }));
+
+    baseline["current"]["tools"]["python"]["machine"] = serde_json::json!("other-machine");
+    recompute_generation_id(&mut baseline["current"]);
+    fs::write(
+        &baseline_path,
+        serde_json::to_vec(&baseline).expect("cross-target baseline serialization"),
+    )
+    .expect("cross-target baseline should be writable");
+    let cross_target = cott(
+        &project.path,
+        &["diff", "--baseline", "baseline.json", "--format", "json"],
+    );
+    assert!(
+        cross_target.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cross_target.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&cross_target.stdout).expect("cross-target diff JSON");
+    let changes = report["changes"]
+        .as_array()
+        .expect("cross-target diff changes");
+    assert!(
+        !changes
+            .iter()
+            .any(|change| change["class"] == "toolchain" || change["class"] == "artifact")
     );
 }
 

@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 from curriculum.move_2048_types import Board4, Direction, Direction_Down, Direction_Left, Direction_Right, Direction_Up, LineMove, Move2048Error, Move2048Error_InvalidBoardSize, Move2048Error_InvalidTile, Move2048Error_ScoreOverflow, MoveRequest, MoveResult
 
@@ -77,10 +77,14 @@ if a merged tile cannot fit U16 or the accumulated score cannot fit U32."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.move_2048.merge_move_line", phase="error", span={"end_byte":1287,"end_column":1,"end_line":56,"start_byte":769,"start_column":1,"start_line":42}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.move_2048.merge_move_line", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        moved = _result.value
-        if not ((len((moved).cells) == len(line))):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.move_2048.merge_move_line", clause="ensures:1", phase="ensures", span={"end_byte":1230,"end_column":60,"end_line":50,"start_byte":1175,"start_column":5,"start_line":50}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            moved = _cott_match_value.value
+            return ((len((moved).cells) == len(line)))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.move_2048.merge_move_line", clause="ensures:1", phase="ensures", span={"end_byte":1230,"end_column":60,"end_line":50,"start_byte":1175,"start_column":5,"start_line":50}, expected="true", actual="false")
     return _result
 
 def apply_2048_move(request: MoveRequest) -> Result[MoveResult, Move2048Error]:
@@ -118,10 +122,14 @@ merge scores, and whether any cell changed."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.move_2048.apply_2048_move", phase="error", span={"end_byte":1885,"end_column":1,"end_line":71,"start_byte":1287,"start_column":1,"start_line":56}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.move_2048.apply_2048_move", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        moved = _result.value
-        if not ((len(((moved).board).cells) == 16)):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.move_2048.apply_2048_move", clause="ensures:1", phase="ensures", span={"end_byte":1717,"end_column":60,"end_line":64,"start_byte":1662,"start_column":5,"start_line":64}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            moved = _cott_match_value.value
+            return ((len(((moved).board).cells) == 16))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.move_2048.apply_2048_move", clause="ensures:1", phase="ensures", span={"end_byte":1717,"end_column":60,"end_line":64,"start_byte":1662,"start_column":5,"start_line":64}, expected="true", actual="false")
     return _result
 
 __all__ = ["Board4", "Direction", "Direction_Down", "Direction_Left", "Direction_Right", "Direction_Up", "LineMove", "Move2048Error", "Move2048Error_InvalidBoardSize", "Move2048Error_InvalidTile", "Move2048Error_ScoreOverflow", "MoveRequest", "MoveResult", "apply_2048_move", "merge_move_line", "validate_2048_board"]

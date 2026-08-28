@@ -9,7 +9,10 @@ use cott::hir::lower;
 use cott::ir::render;
 use cott::manifest::ProjectConfig;
 use cott::project::{ProjectPaths, load_config_with_paths};
-use cott::provenance::{AgentRun, AgentStatus, GenerationRecord, GenerationSnapshot, StreamDigest};
+use cott::provenance::{
+    AgentRun, AgentStatus, GENERATION_SCHEMA_VERSION, GenerationCompatibility, GenerationRecord,
+    GenerationSnapshot, StreamDigest,
+};
 use cott::python::artifact_plan::{PythonArtifactPlan, PythonCallableKind};
 
 struct Fixture {
@@ -68,6 +71,10 @@ fn fixture_sources(sources: &[(&str, &str)]) -> Fixture {
     }
 }
 
+fn async_fixture() -> Fixture {
+    fixture("module api.service\n\nasync fn run() -> Unit\n")
+}
+
 fn impl_fixture() -> Fixture {
     fixture(
         r#"module api.service
@@ -87,6 +94,74 @@ impl WriterState for Writer:
         ensures result == amount
 "#,
     )
+}
+
+fn default_impl_fixture() -> Fixture {
+    fixture(
+        r#"module api.service
+
+trait Reader:
+    fn read(self, amount: I32) -> I32 = api.service.default_read
+    fn label(self) -> Unit
+
+fn default_read(receiver: Reader, amount: I32) -> I32
+
+impl ReaderState for Reader:
+    fn label(self) -> Unit:
+        ensures true
+"#,
+    )
+}
+
+fn default_override_fixture() -> Fixture {
+    fixture(
+        r#"module api.service
+
+trait Reader:
+    fn read(self, amount: I32) -> I32 = api.service.default_read
+
+fn default_read(receiver: Reader, amount: I32) -> I32
+
+impl ReaderState for Reader:
+    fn read(self, amount: I32) -> I32:
+        ensures result == amount
+"#,
+    )
+}
+
+fn install_default_dependencies(fixture: &mut Fixture) {
+    fixture.config.python.implementations.insert(
+        "api.service.default_read".to_owned(),
+        "cott_bindings.api.service.default_read:default_read".to_owned(),
+    );
+    let default_path = fixture
+        .paths
+        .python_source_dir
+        .join("cott_bindings/api/service/default_read.py");
+    fs::create_dir_all(
+        default_path
+            .parent()
+            .expect("default dependency has a parent"),
+    )
+    .unwrap();
+    fs::write(
+        default_path,
+        b"from api.service_types import Reader\n\ndef default_read(receiver: Reader, amount: int) -> int:\n    return amount\n",
+    )
+    .unwrap();
+    let label_path = fixture
+        .paths
+        .python_source_dir
+        .join("_cott_impl/api/service/ReaderState/label.py");
+    let label = b"from api.service import ReaderState\n\ndef _cott_impl_ReaderState_label(self: ReaderState) -> object:\n    return None\n";
+    fs::create_dir_all(
+        label_path
+            .parent()
+            .expect("label implementation has a parent"),
+    )
+    .unwrap();
+    fs::write(&label_path, label).unwrap();
+    record_agent_provenance(fixture, "api.service.ReaderState.label", &label_path, label);
 }
 
 fn factory_fixture() -> Fixture {
@@ -120,24 +195,37 @@ fn record_agent_provenance(fixture: &Fixture, symbol: &str, source: &PathBuf, by
     let generated_relative = source
         .strip_prefix(&fixture.paths.python_source_dir)
         .expect("agent source is rooted at the Python source");
-    let concrete = source
-        .parent()
-        .and_then(|path| path.file_name())
-        .and_then(|name| name.to_str())
-        .expect("agent method source has a concrete parent");
-    let method = source
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .expect("agent method source has a name");
+    let callable = fixture
+        .plan
+        .callables()
+        .into_iter()
+        .find(|callable| callable.cott_symbol == symbol)
+        .expect("provenance symbol is a planned callable");
+    let function = callable.name;
+    let (kind, concrete, method, implementation_function) = match callable.kind {
+        PythonCallableKind::Function => ("function", None, None, function),
+        PythonCallableKind::AsyncFunction => ("async_function", None, None, function),
+        PythonCallableKind::ImplMethod { concrete } => {
+            let implementation_function = format!("_cott_impl_{concrete}_{function}");
+            (
+                "impl_method",
+                Some(concrete),
+                Some(function),
+                implementation_function,
+            )
+        }
+    };
     let runtime_module = generated_relative
         .with_extension("")
         .to_string_lossy()
         .replace('/', ".");
     let mut record = GenerationRecord {
-        schema_version: 1,
+        schema_version: GENERATION_SCHEMA_VERSION,
         current: GenerationSnapshot {
             generation_id: String::new(),
             verified: false,
+            project_version: fixture.config.project.version.clone(),
+            compatibility: GenerationCompatibility::current(),
             inputs: serde_json::json!({}),
             tools: serde_json::json!({}),
             ir: serde_json::json!({}),
@@ -145,11 +233,11 @@ fn record_agent_provenance(fixture: &Fixture, symbol: &str, source: &PathBuf, by
             public_python_symbols: serde_json::json!({}),
             implementations: serde_json::json!([{
                 "cott_symbol": symbol,
-                "kind": "impl_method",
+                "kind": kind,
                 "concrete": concrete,
                 "method": method,
                 "owner": "agent",
-                "python_symbol": format!("{runtime_module}:_cott_impl_{concrete}_{method}"),
+                "python_symbol": format!("{runtime_module}:{implementation_function}"),
                 "source_origin": source
                     .strip_prefix(&fixture.paths.root)
                     .expect("agent source is rooted at the fixture")
@@ -297,6 +385,125 @@ fn reports_unresolved_canonical_planned_function() {
     );
 }
 
+#[test]
+fn async_functions_use_the_free_function_path_and_require_async_def() {
+    let fixture = async_fixture();
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("absent async implementation is unresolved");
+    assert_eq!(resolution.unresolved.len(), 1);
+    assert_eq!(
+        resolution.unresolved[0].kind,
+        PythonCallableKind::AsyncFunction
+    );
+    assert_eq!(
+        resolution.unresolved[0].source,
+        fixture
+            .paths
+            .python_source_dir
+            .join("_cott_impl/api/service/run.py")
+    );
+
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        b"async def run() -> object:\n    return None\n",
+    )
+    .expect("async free function must accept its exact async definition");
+
+    for (source, expected) in [
+        (
+            b"def run() -> object:\n    return None\n".as_slice(),
+            "must be an exact top-level async def",
+        ),
+        (
+            b"async def _helper() -> object:\n    return None\n\nasync def run() -> object:\n    return _helper()\n".as_slice(),
+            "helper function '_helper' must be synchronous",
+        ),
+    ] {
+        let error = validate_candidate(
+            &fixture.config,
+            &fixture.paths,
+            &fixture.plan,
+            "api.service.run",
+            source,
+        )
+        .expect_err("async callable definition must be exact");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn async_effect_calls_require_await() {
+    let fixture = fixture(
+        "module api.service\n\nasync fn fetch() -> Unit:\n    effects [network]\n\nfn sync() -> Unit\n\nasync fn run() -> Unit:\n    effects [network]\n",
+    );
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        b"from api.service import fetch\n\nasync def run() -> object:\n    return await fetch()\n",
+    )
+    .expect("awaited async facade call is valid");
+    let error = validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        b"from api.service import fetch\n\nasync def run() -> object:\n    return fetch()\n",
+    )
+    .expect_err("async facade calls must be awaited");
+    assert!(error.contains("async Cott callable `api.service.fetch` must be awaited"));
+    let error = validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        b"from api.service import sync\n\nasync def run() -> object:\n    return await sync()\n",
+    )
+    .expect_err("synchronous facade calls must not be awaited");
+    assert!(error.contains("sync Cott callable `api.service.sync` must not be awaited"));
+}
+
+#[test]
+fn effect_callable_identities_are_scoped_to_each_function() {
+    let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        b"def _helper() -> object:\n    len: int = 0\n    return len\n\ndef run() -> object:\n    return len(())\n",
+    )
+    .expect("a helper-local binding must not shadow builtin calls in another function");
+}
+#[test]
+fn resolves_provenance_backed_async_functions() {
+    let fixture = async_fixture();
+    let path = fixture
+        .paths
+        .python_source_dir
+        .join("_cott_impl/api/service/run.py");
+    let bytes = b"async def run() -> object:\n    return None\n";
+    fs::create_dir_all(path.parent().expect("async implementation has a parent")).unwrap();
+    fs::write(&path, bytes).unwrap();
+    record_agent_provenance(&fixture, "api.service.run", &path, bytes);
+
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("provenance-backed async implementation must resolve");
+    assert_eq!(resolution.resolved.len(), 1);
+    assert_eq!(
+        resolution.resolved[0].kind,
+        PythonCallableKind::AsyncFunction
+    );
+    assert_eq!(
+        resolution.resolved[0].implementation_module,
+        "_cott_impl.api.service.run"
+    );
+    assert_eq!(resolution.resolved[0].implementation_function, "run");
+}
 #[test]
 fn unresolved_impl_methods_have_distinct_canonical_symbols_and_nested_sources() {
     let fixture = impl_fixture();
@@ -465,6 +672,100 @@ fn rejects_manifest_bindings_for_impl_methods() {
 
     resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
         .expect_err("impl methods must never be manifest-bindable");
+}
+
+#[test]
+fn compiler_owned_default_method_uses_only_its_free_function_binding() {
+    let mut fixture = default_impl_fixture();
+    install_default_dependencies(&mut fixture);
+
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("a default method must not require an implementation helper");
+    assert_eq!(
+        resolution
+            .resolved
+            .iter()
+            .map(|binding| binding.cott_symbol.as_str())
+            .collect::<Vec<_>>(),
+        ["api.service.ReaderState.label", "api.service.default_read"]
+    );
+    assert!(resolution.unresolved.is_empty());
+    assert!(resolution.stale.is_empty());
+}
+
+#[test]
+fn explicit_impl_method_overrides_the_trait_default() {
+    let mut fixture = default_override_fixture();
+    fixture.config.python.implementations.insert(
+        "api.service.default_read".to_owned(),
+        "cott_bindings.api.service.default_read:default_read".to_owned(),
+    );
+    let path = fixture
+        .paths
+        .python_source_dir
+        .join("cott_bindings/api/service/default_read.py");
+    fs::create_dir_all(path.parent().expect("default dependency has a parent")).unwrap();
+    fs::write(
+        path,
+        b"from api.service_types import Reader\n\ndef default_read(receiver: Reader, amount: int) -> int:\n    return amount\n",
+    )
+    .unwrap();
+
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("an explicit implementation must override a trait default");
+    assert_eq!(
+        resolution
+            .unresolved
+            .iter()
+            .map(|binding| binding.cott_symbol.as_str())
+            .collect::<Vec<_>>(),
+        ["api.service.ReaderState.read"]
+    );
+}
+
+#[test]
+fn unresolved_default_dependency_never_requests_a_method_helper() {
+    let mut fixture = default_impl_fixture();
+    install_default_dependencies(&mut fixture);
+    fixture
+        .config
+        .python
+        .implementations
+        .remove("api.service.default_read");
+    fs::remove_file(
+        fixture
+            .paths
+            .python_source_dir
+            .join("cott_bindings/api/service/default_read.py"),
+    )
+    .unwrap();
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("a missing default dependency is an unresolved free function");
+    assert_eq!(resolution.unresolved.len(), 1);
+    assert_eq!(
+        resolution.unresolved[0].cott_symbol,
+        "api.service.default_read"
+    );
+    assert_eq!(
+        resolution.unresolved[0].source,
+        fixture
+            .paths
+            .python_source_dir
+            .join("_cott_impl/api/service/default_read.py")
+    );
+}
+
+#[test]
+fn rejects_manifest_bindings_for_compiler_owned_default_methods() {
+    let mut fixture = default_impl_fixture();
+    fixture.config.python.implementations.insert(
+        "api.service.ReaderState.read".to_owned(),
+        "cott_bindings.api.service.reader:read".to_owned(),
+    );
+
+    let diagnostics = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect_err("compiler-owned default methods must never be manifest-bindable");
+    assert!(diagnostics[0].message.contains("compiler-owned default"));
 }
 
 #[test]
@@ -807,6 +1108,344 @@ fn allows_public_function_imports_from_the_exact_canonical_facade() {
 }
 
 #[test]
+fn verifies_transitive_cott_effects_with_exact_facade_calls() {
+    let effects = fixture(
+        "module api.service\n\nfn net() -> Unit:\n    effects [network]\n\nfn database() -> Unit:\n    effects [database.write]\n\nfn run() -> Unit\n",
+    );
+    let direct = b"from api.service import net\n\ndef run() -> object:\n    return net()\n";
+    let error = validate_candidate(
+        &effects.config,
+        &effects.paths,
+        &effects.plan,
+        "api.service.run",
+        direct,
+    )
+    .expect_err("a pure function must not call an effectful Cott facade");
+    assert!(
+        error.contains("effect `network` reaches `run` through run -> api.service.net"),
+        "{error}"
+    );
+
+    let two_hop = b"from api.service import net\n\ndef _bridge() -> object:\n    return net()\n\ndef run() -> object:\n    return _bridge()\n";
+    let error = validate_candidate(
+        &effects.config,
+        &effects.paths,
+        &effects.plan,
+        "api.service.run",
+        two_hop,
+    )
+    .expect_err("private helper effects must reach the canonical function");
+    assert!(
+        error.contains("effect `network` reaches `run` through run -> _bridge -> api.service.net"),
+        "{error}"
+    );
+
+    let cycle = b"from api.service import net\n\ndef _a() -> object:\n    return _b()\n\ndef _b() -> object:\n    _a()\n    return net()\n\ndef run() -> object:\n    return _a()\n";
+    let error = validate_candidate(
+        &effects.config,
+        &effects.paths,
+        &effects.plan,
+        "api.service.run",
+        cycle,
+    )
+    .expect_err("recursive helper cycles must still expose their effects");
+    assert!(
+        error.contains("run -> _a -> _b -> api.service.net"),
+        "{error}"
+    );
+
+    let aliased_module =
+        b"import api.service as service\n\ndef run() -> object:\n    return service.net()\n";
+    let error = validate_candidate(
+        &effects.config,
+        &effects.paths,
+        &effects.plan,
+        "api.service.run",
+        aliased_module,
+    )
+    .expect_err("module facade aliases retain their exact Cott identity");
+    assert!(error.contains("api.service.net"), "{error}");
+    let parent_module =
+        b"from api import service as service\n\ndef run() -> object:\n    return service.net()\n";
+    let error = validate_candidate(
+        &effects.config,
+        &effects.paths,
+        &effects.plan,
+        "api.service.run",
+        parent_module,
+    )
+    .expect_err("parent-package facade imports retain their exact Cott identity");
+    assert!(error.contains("api.service.net"), "{error}");
+
+    let union = b"from api.service import database, net\n\ndef _left() -> object:\n    return net()\n\ndef _right() -> object:\n    return database()\n\ndef run() -> object:\n    _left()\n    return _right()\n";
+    let error = validate_candidate(
+        &effects.config,
+        &effects.paths,
+        &effects.plan,
+        "api.service.run",
+        union,
+    )
+    .expect_err("all reachable Cott effects must be declared");
+    assert!(
+        error.find("effect `database.write`").unwrap() < error.find("effect `network`").unwrap(),
+        "{error}"
+    );
+
+    let dynamic = fixture("module api.service\n\nfn run(work: I32) -> Unit\n");
+    let error = validate_candidate(
+        &dynamic.config,
+        &dynamic.paths,
+        &dynamic.plan,
+        "api.service.run",
+        b"def run(work: int) -> object:\n    return work()\n",
+    )
+    .expect_err("a parameter call has no stable Cott identity");
+    assert!(error.contains("dynamic Cott call `work`"), "{error}");
+    for (source, expected) in [
+        (
+            b"from api.service import net\n\ndef run() -> object:\n    return net\n".as_slice(),
+            "Cott callable `api.service.net` may only be used as an exact call",
+        ),
+        (
+            b"from api.service import net\n\ndef run() -> object:\n    net = 1\n    return None\n"
+                .as_slice(),
+            "Cott callable `api.service.net` must not be rebound",
+        ),
+    ] {
+        let error = validate_candidate(
+            &effects.config,
+            &effects.paths,
+            &effects.plan,
+            "api.service.run",
+            source,
+        )
+        .expect_err("Cott callable identities must not escape or rebind");
+        assert!(error.contains(expected), "{error}");
+    }
+
+    let shadowing = fixture(
+        "module api.service\n\nfn net() -> Unit:\n    effects [network]\n\nfn run(net: I32) -> Unit\n",
+    );
+    let error = validate_candidate(
+        &shadowing.config,
+        &shadowing.paths,
+        &shadowing.plan,
+        "api.service.run",
+        b"from api.service import net\n\ndef run(net: int) -> object:\n    return None\n",
+    )
+    .expect_err("parameters must not shadow imported Cott callables");
+    assert!(
+        error.contains("Cott callable `api.service.net` must not be shadowed"),
+        "{error}"
+    );
+}
+
+#[test]
+fn verifies_transitive_effects_of_public_impl_self_calls() {
+    let pure = fixture(
+        "module api.service\n\ntrait Reader:\n    fn read(self) -> Unit\n    fn write(self) -> Unit\n\nimpl ReaderState for Reader:\n    fn read(self) -> Unit:\n        effects [network]\n    fn write(self) -> Unit:\n        effects []\n",
+    );
+    let error = validate_candidate(
+        &pure.config,
+        &pure.paths,
+        &pure.plan,
+        "api.service.ReaderState.write",
+        b"from api.service import ReaderState\n\ndef _cott_impl_ReaderState_write(self: ReaderState) -> object:\n    return self.read()\n",
+    )
+    .expect_err("a pure implementation method must not call an effectful sibling");
+    assert!(
+        error.contains(
+            "effect `network` reaches `_cott_impl_ReaderState_write` through _cott_impl_ReaderState_write -> api.service.ReaderState.read"
+        ),
+        "{error}"
+    );
+
+    let error = validate_candidate(
+        &pure.config,
+        &pure.paths,
+        &pure.plan,
+        "api.service.ReaderState.write",
+        b"from api.service import ReaderState\n\ndef _a(receiver: ReaderState) -> object:\n    return _b(receiver)\n\ndef _b(receiver: ReaderState) -> object:\n    _a(receiver)\n    return receiver.read()\n\ndef _cott_impl_ReaderState_write(self: ReaderState) -> object:\n    return _a(self)\n",
+    )
+    .expect_err("helper cycles must retain public sibling effects");
+    assert!(
+        error.contains("_cott_impl_ReaderState_write -> _a -> _b -> api.service.ReaderState.read"),
+        "{error}"
+    );
+    let error = validate_candidate(
+        &pure.config,
+        &pure.paths,
+        &pure.plan,
+        "api.service.ReaderState.write",
+        b"from api.service import ReaderState\n\ndef _bridge(receiver: ReaderState) -> object:\n    (alias := receiver)\n    first, = (alias,)\n    return first.read()\n\ndef _cott_impl_ReaderState_write(self: ReaderState) -> object:\n    return _bridge(self)\n",
+    )
+    .expect_err("receiver aliases must retain public sibling effects");
+    assert!(
+        error.contains("_cott_impl_ReaderState_write -> _bridge -> api.service.ReaderState.read"),
+        "{error}"
+    );
+    let error = validate_candidate(
+        &pure.config,
+        &pure.paths,
+        &pure.plan,
+        "api.service.ReaderState.write",
+        b"from api.service import ReaderState\n\ndef _bridge(receiver: ReaderState) -> object:\n    return (alias := receiver).read()\n\ndef _cott_impl_ReaderState_write(self: ReaderState) -> object:\n    return _bridge(self)\n",
+    )
+    .expect_err("walrus receiver calls must retain public sibling effects");
+    assert!(
+        error.contains("_cott_impl_ReaderState_write -> _bridge -> api.service.ReaderState.read"),
+        "{error}"
+    );
+
+    let error = validate_candidate(
+        &pure.config,
+        &pure.paths,
+        &pure.plan,
+        "api.service.ReaderState.write",
+        b"from api.service import ReaderState\n\ndef _bridge(receiver: ReaderState) -> object:\n    alias = receiver if True else receiver\n    return alias.read()\n\ndef _cott_impl_ReaderState_write(self: ReaderState) -> object:\n    return _bridge(self)\n",
+    )
+    .expect_err("conditional receiver aliases must fail closed");
+    assert!(
+        error.contains(
+            "receiver alias containing a concrete implementation receiver is not statically analyzable"
+        ),
+        "{error}"
+    );
+    let error = validate_candidate(
+        &pure.config,
+        &pure.paths,
+        &pure.plan,
+        "api.service.ReaderState.write",
+        b"from api.service import ReaderState\n\ndef _bridge(receiver: ReaderState) -> object:\n    return (receiver if True else receiver).read()\n\ndef _cott_impl_ReaderState_write(self: ReaderState) -> object:\n    return _bridge(self)\n",
+    )
+    .expect_err("compound receiver call bases must fail closed");
+    assert!(
+        error.contains(
+            "receiver call containing a concrete implementation receiver is not statically analyzable"
+        ),
+        "{error}"
+    );
+    for source in [
+        b"from api.service import ReaderState\n\ndef _cott_impl_ReaderState_write(self: ReaderState) -> object:\n    return getattr(self, \"read\")()\n".as_slice(),
+        b"from api.service import ReaderState\n\ndef _cott_impl_ReaderState_write(self: ReaderState) -> object:\n    return (lambda value: value.read())(self)\n",
+    ] {
+        let error = validate_candidate(
+            &pure.config,
+            &pure.paths,
+            &pure.plan,
+            "api.service.ReaderState.write",
+            source,
+        )
+        .expect_err("dynamic receiver call construction must fail closed");
+        assert!(
+            error.contains(
+                "receiver call containing a concrete implementation receiver is not statically analyzable"
+            ),
+            "{error}"
+        );
+    }
+
+    validate_candidate(
+        &pure.config,
+        &pure.paths,
+        &pure.plan,
+        "api.service.ReaderState.write",
+        b"from api.service import ReaderState\n\ndef _cott_impl_ReaderState_write(self: ReaderState) -> object:\n    return self.external()\n",
+    )
+    .expect("unknown concrete attributes are non-Cott leaves");
+
+    let declared = fixture(
+        "module api.service\n\ntrait Reader:\n    fn read(self) -> Unit\n    fn write(self) -> Unit\n\nimpl ReaderState for Reader:\n    fn read(self) -> Unit:\n        effects [network]\n    fn write(self) -> Unit:\n        effects [network]\n",
+    );
+    validate_candidate(
+        &declared.config,
+        &declared.paths,
+        &declared.plan,
+        "api.service.ReaderState.write",
+        b"from api.service import ReaderState\n\ndef _cott_impl_ReaderState_write(self: ReaderState) -> object:\n    return self.read()\n",
+    )
+    .expect("a declared effect covers an implementation sibling call");
+}
+
+#[test]
+fn effect_verification_leaves_factories_and_stdlib_constructors_unexecuted() {
+    let factory = factory_fixture();
+    validate_candidate(
+        &factory.config,
+        &factory.paths,
+        &factory.plan,
+        "api.service.run",
+        b"from api.models import OrderState\n\ndef run(make: type[OrderState]) -> object:\n    return make()\n",
+    )
+    .expect("an exact Factory constructor is an effect leaf");
+    validate_candidate(
+        &factory.config,
+        &factory.paths,
+        &factory.plan,
+        "api.service.run",
+        b"from api.models import OrderState\n\ndef run(make: type[OrderState]) -> object:\n    return OrderState()\n",
+    )
+    .expect("a generated concrete constructor is an effect leaf");
+
+    let stdlib = fixture("module api.service\n\nfn run() -> Unit\n");
+    validate_candidate(
+        &stdlib.config,
+        &stdlib.paths,
+        &stdlib.plan,
+        "api.service.run",
+        b"import math\n\ndef run() -> object:\n    return math.sqrt(4.0)\n",
+    )
+    .expect("an imported stdlib call is an effect leaf");
+    validate_candidate(
+        &stdlib.config,
+        &stdlib.paths,
+        &stdlib.plan,
+        "api.service.run",
+        b"def run() -> object:\n    SystemExit(0)\n    return isinstance(1, int)\n",
+    )
+    .expect("permitted Python builtins are non-Cott effect leaves");
+    validate_candidate(
+        &stdlib.config,
+        &stdlib.paths,
+        &stdlib.plan,
+        "api.service.run",
+        b"def run() -> object:\n    return (\" value \".strip(), {\"key\": 1}.items())\n",
+    )
+    .expect("ordinary attribute calls are non-Cott leaves");
+}
+
+#[test]
+fn manifest_bindings_use_the_same_transitive_effect_verifier() {
+    let mut fixture = fixture(
+        "module api.service\n\nfn net() -> Unit:\n    effects [network]\n\nfn run() -> Unit\n",
+    );
+    fixture.config.python.implementations.insert(
+        "api.service.run".to_owned(),
+        "cott_bindings.api.service.run:run".to_owned(),
+    );
+    let path = fixture
+        .paths
+        .python_source_dir
+        .join("cott_bindings/api/service/run.py");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        b"from api.service import net\n\ndef run() -> object:\n    return net()\n",
+    )
+    .unwrap();
+    let diagnostics = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect_err("manifest bindings must reject undeclared transitive effects");
+    assert_eq!(diagnostics.len(), 1);
+    assert!(
+        diagnostics[0]
+            .message
+            .contains("effect `network` reaches `run` through run -> api.service.net"),
+        "{}",
+        diagnostics[0].message
+    );
+}
+
+#[test]
 fn rejects_aliased_private_and_non_facade_imports() {
     let fixture = fixture(
         "module api.service\n\nalias Count = I32\nconst LIMIT: I32 = 1\nfn helper() -> Unit\nfn run() -> Unit\n",
@@ -979,6 +1618,22 @@ fn accepts_only_import_roots_selected_in_uv_lock() {
         b"import locked_package\n\ndef run() -> object:\n    return None\n",
     )
     .expect("selected lockfile import must validate");
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        b"import locked_package\n\ndef run() -> object:\n    return locked_package.create()\n",
+    )
+    .expect("an imported locked external constructor is an effect leaf");
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        b"from locked_package import create\n\ndef run() -> object:\n    return create()\n",
+    )
+    .expect("a directly imported external callable is a non-Cott leaf");
     let error = validate_candidate(
         &fixture.config,
         &fixture.paths,

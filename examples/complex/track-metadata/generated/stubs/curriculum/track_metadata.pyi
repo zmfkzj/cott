@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.track_metadata_types import TrackDraft as TrackDraft, TrackMetadata as TrackMetadata, TrackMetadataError as TrackMetadataError, TrackMetadataError_BlankArtist as TrackMetadataError_BlankArtist, TrackMetadataError_BlankTitle as TrackMetadataError_BlankTitle, TrackMetadataError_ZeroTrackNumber as TrackMetadataError_ZeroTrackNumber
 """Removes leading and trailing Unicode whitespace from the title, artist,

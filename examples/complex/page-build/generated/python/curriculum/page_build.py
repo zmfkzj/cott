@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 from curriculum.page_build_types import BuiltPage, PageBuildError, PageBuildError_BlankTitle, PageBuildError_InvalidSlug, PageSource
 
@@ -91,10 +91,14 @@ accepted text is preserved. The output path is `<slug>/index.html`, and
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.page_build.build_page", phase="error", span={"end_byte":1404,"end_column":1,"end_line":49,"start_byte":771,"start_column":1,"start_line":34}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.page_build.build_page", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        page = _result.value
-        if not ((len((page).html) > 0)):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.page_build.build_page", clause="ensures:1", phase="ensures", span={"end_byte":1329,"end_column":49,"end_line":45,"start_byte":1285,"start_column":5,"start_line":45}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            page = _cott_match_value.value
+            return ((len((page).html) > 0))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.page_build.build_page", clause="ensures:1", phase="ensures", span={"end_byte":1329,"end_column":49,"end_line":45,"start_byte":1285,"start_column":5,"start_line":45}, expected="true", actual="false")
     return _result
 
 __all__ = ["BuiltPage", "PageBuildError", "PageBuildError_BlankTitle", "PageBuildError_InvalidSlug", "PageSource", "build_page", "escape_page_text", "render_page_html"]

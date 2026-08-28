@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 from curriculum.publication_workflow_types import PublicationAction, PublicationAction_Approve, PublicationAction_Submit, PublicationAction_Withdraw, PublicationRequest, PublicationState, PublicationState_Draft, PublicationState_InReview, PublicationState_Published, PublicationState_Withdrawn, PublicationWorkflowError, PublicationWorkflowError_ApprovalRequired, PublicationWorkflowError_InvalidTransition
 
@@ -29,10 +29,14 @@ Nothing when the state and action do not form a valid transition."""
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.publication_workflow.transition_target", phase="implementation-call", span={"end_byte":720,"end_column":1,"end_line":36,"start_byte":369,"start_column":1,"start_line":23}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Option[PublicationState], path="$.return")
-    if type(_result) is Some and True:
-        next = _result.value
-        if not ((next != current)):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.publication_workflow.transition_target", clause="ensures:1", phase="ensures", span={"end_byte":702,"end_column":49,"end_line":32,"start_byte":658,"start_column":5,"start_line":32}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Some and True:
+            next = _cott_match_value.value
+            return ((next != current))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.publication_workflow.transition_target", clause="ensures:1", phase="ensures", span={"end_byte":702,"end_column":49,"end_line":32,"start_byte":658,"start_column":5,"start_line":32}, expected="true", actual="false")
     return _result
 
 def transition_publication(request: PublicationRequest) -> Result[PublicationState, PublicationWorkflowError]:
@@ -67,10 +71,14 @@ def transition_publication(request: PublicationRequest) -> Result[PublicationSta
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.publication_workflow.transition_publication", phase="error", span={"end_byte":1249,"end_column":1,"end_line":49,"start_byte":720,"start_column":1,"start_line":36}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.publication_workflow.transition_publication", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        next = _result.value
-        if not ((next != (request).current)):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.publication_workflow.transition_publication", clause="ensures:1", phase="ensures", span={"end_byte":990,"end_column":55,"end_line":43,"start_byte":940,"start_column":5,"start_line":43}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            next = _cott_match_value.value
+            return ((next != (request).current))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.publication_workflow.transition_publication", clause="ensures:1", phase="ensures", span={"end_byte":990,"end_column":55,"end_line":43,"start_byte":940,"start_column":5,"start_line":43}, expected="true", actual="false")
     return _result
 
 __all__ = ["PublicationAction", "PublicationAction_Approve", "PublicationAction_Submit", "PublicationAction_Withdraw", "PublicationRequest", "PublicationState", "PublicationState_Draft", "PublicationState_InReview", "PublicationState_Published", "PublicationState_Withdrawn", "PublicationWorkflowError", "PublicationWorkflowError_ApprovalRequired", "PublicationWorkflowError_InvalidTransition", "transition_publication", "transition_target"]

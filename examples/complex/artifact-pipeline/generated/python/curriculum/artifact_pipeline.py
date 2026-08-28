@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 from curriculum.artifact_pipeline_types import ArtifactPipelineError, ArtifactPipelineError_BlankStepName, ArtifactPipelineError_Cycle, ArtifactPipelineError_DuplicateStep, ArtifactPipelineError_SelfDependency, ArtifactPipelineError_UnknownDependency, ArtifactPlan, BuildStep, Pipeline
 
@@ -40,10 +40,14 @@ errors. Ready steps are ordered lexicographically."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.artifact_pipeline.topologically_order_steps", phase="error", span={"end_byte":953,"end_column":1,"end_line":37,"start_byte":303,"start_column":1,"start_line":20}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.artifact_pipeline.topologically_order_steps", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        ordered_steps = _result.value
-        if not ((len(ordered_steps) == len(steps))):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.artifact_pipeline.topologically_order_steps", clause="ensures:1", phase="ensures", span={"end_byte":707,"end_column":71,"end_line":27,"start_byte":641,"start_column":5,"start_line":27}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            ordered_steps = _cott_match_value.value
+            return ((len(ordered_steps) == len(steps)))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.artifact_pipeline.topologically_order_steps", clause="ensures:1", phase="ensures", span={"end_byte":707,"end_column":71,"end_line":27,"start_byte":641,"start_column":5,"start_line":27}, expected="true", actual="false")
     return _result
 
 def plan_pipeline(pipeline: Pipeline) -> Result[ArtifactPlan, ArtifactPipelineError]:
@@ -75,10 +79,14 @@ and construct an artifact plan, propagating any ordering error unchanged."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.artifact_pipeline.plan_pipeline", phase="error", span={"end_byte":1538,"end_column":1,"end_line":52,"start_byte":953,"start_column":1,"start_line":37}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.artifact_pipeline.plan_pipeline", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        plan = _result.value
-        if not ((len((plan).ordered_steps) == len((pipeline).steps))):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.artifact_pipeline.plan_pipeline", clause="ensures:1", phase="ensures", span={"end_byte":1293,"end_column":76,"end_line":43,"start_byte":1222,"start_column":5,"start_line":43}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            plan = _cott_match_value.value
+            return ((len((plan).ordered_steps) == len((pipeline).steps)))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.artifact_pipeline.plan_pipeline", clause="ensures:1", phase="ensures", span={"end_byte":1293,"end_column":76,"end_line":43,"start_byte":1222,"start_column":5,"start_line":43}, expected="true", actual="false")
     return _result
 
 __all__ = ["ArtifactPipelineError", "ArtifactPipelineError_BlankStepName", "ArtifactPipelineError_Cycle", "ArtifactPipelineError_DuplicateStep", "ArtifactPipelineError_SelfDependency", "ArtifactPipelineError_UnknownDependency", "ArtifactPlan", "BuildStep", "Pipeline", "plan_pipeline", "topologically_order_steps"]

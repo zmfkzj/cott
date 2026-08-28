@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 from store.order_types import Order, OrderError, OrderError_EmptyOrder, OrderError_InvalidQuantity, OrderError_ItemUnavailable, OrderLine, OrderReceipt
 from store.catalog_types import Catalog, CatalogError
@@ -43,10 +43,14 @@ def validate_line(line: OrderLine) -> Result[OrderLine, OrderError]:
             raise CottContractViolation("returned error is not allowed", symbol="store.order.validate_line", phase="error", span={"end_byte":616,"end_column":1,"end_line":32,"start_byte":365,"start_column":1,"start_line":23}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="store.order.validate_line", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        valid = _result.value
-        if not (((valid).quantity > 0)):
-            raise CottContractViolation("ensures clause failed", symbol="store.order.validate_line", clause="ensures:1", phase="ensures", span={"end_byte":552,"end_column":51,"end_line":28,"start_byte":506,"start_column":5,"start_line":28}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            valid = _cott_match_value.value
+            return (((valid).quantity > 0))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="store.order.validate_line", clause="ensures:1", phase="ensures", span={"end_byte":552,"end_column":51,"end_line":28,"start_byte":506,"start_column":5,"start_line":28}, expected="true", actual="false")
     return _result
 
 def calculate_order(catalog: Catalog, order: Order) -> Result[OrderReceipt, OrderError]:
@@ -82,10 +86,14 @@ def calculate_order(catalog: Catalog, order: Order) -> Result[OrderReceipt, Orde
             raise CottContractViolation("returned error is not allowed", symbol="store.order.calculate_order", phase="error", span={"end_byte":1000,"end_column":1,"end_line":42,"start_byte":616,"start_column":1,"start_line":32}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="store.order.calculate_order", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        receipt = _result.value
-        if not (((receipt).order_id == (order).order_id)):
-            raise CottContractViolation("ensures clause failed", symbol="store.order.calculate_order", clause="ensures:1", phase="ensures", span={"end_byte":866,"end_column":69,"end_line":37,"start_byte":802,"start_column":5,"start_line":37}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            receipt = _cott_match_value.value
+            return (((receipt).order_id == (order).order_id))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="store.order.calculate_order", clause="ensures:1", phase="ensures", span={"end_byte":866,"end_column":69,"end_line":37,"start_byte":802,"start_column":5,"start_line":37}, expected="true", actual="false")
     return _result
 
 __all__ = ["Order", "OrderError", "OrderError_EmptyOrder", "OrderError_InvalidQuantity", "OrderError_ItemUnavailable", "OrderLine", "OrderReceipt", "calculate_order", "validate_line"]

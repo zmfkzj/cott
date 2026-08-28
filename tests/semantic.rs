@@ -383,7 +383,7 @@ fn nominal() -> Shape:
     };
     let result = function("result");
     let HirClauseKind::Ensures {
-        pattern: Some(ok), ..
+        guard: Some(ok), ..
     } = &result.contract.clauses[0].kind
     else {
         panic!("expected Result.Ok pattern");
@@ -391,14 +391,14 @@ fn nominal() -> Shape:
     let HirPatternKind::Variant {
         symbol: ok_symbol,
         arguments: ok_arguments,
-    } = &ok.kind
+    } = &ok.pattern.kind
     else {
         panic!("expected Result.Ok variant");
     };
     assert_eq!(ok_symbol.as_string(), "Result.Ok");
     assert_eq!(ok_arguments[0].ty, HirType::Primitive(PrimitiveType::I32));
     let HirClauseKind::Ensures {
-        pattern: Some(err), ..
+        guard: Some(err), ..
     } = &result.contract.clauses[1].kind
     else {
         panic!("expected Result.Err pattern");
@@ -406,7 +406,7 @@ fn nominal() -> Shape:
     let HirPatternKind::Variant {
         symbol: err_symbol,
         arguments: err_arguments,
-    } = &err.kind
+    } = &err.pattern.kind
     else {
         panic!("expected Result.Err variant");
     };
@@ -421,8 +421,7 @@ fn nominal() -> Shape:
 
     let option = function("option");
     let HirClauseKind::Ensures {
-        pattern: Some(some),
-        ..
+        guard: Some(some), ..
     } = &option.contract.clauses[0].kind
     else {
         panic!("expected Option.Some pattern");
@@ -430,14 +429,14 @@ fn nominal() -> Shape:
     let HirPatternKind::Variant {
         symbol: some_symbol,
         arguments: some_arguments,
-    } = &some.kind
+    } = &some.pattern.kind
     else {
         panic!("expected Option.Some variant");
     };
     assert_eq!(some_symbol.as_string(), "Option.Some");
     assert_eq!(some_arguments[0].ty, HirType::Primitive(PrimitiveType::I32));
     let HirClauseKind::Ensures {
-        pattern: Some(nothing),
+        guard: Some(nothing),
         ..
     } = &option.contract.clauses[1].kind
     else {
@@ -446,7 +445,7 @@ fn nominal() -> Shape:
     let HirPatternKind::Variant {
         symbol: nothing_symbol,
         arguments: nothing_arguments,
-    } = &nothing.kind
+    } = &nothing.pattern.kind
     else {
         panic!("expected Option.Nothing variant");
     };
@@ -455,8 +454,7 @@ fn nominal() -> Shape:
 
     let nominal = function("nominal");
     let HirClauseKind::Ensures {
-        pattern: Some(pair),
-        ..
+        guard: Some(pair), ..
     } = &nominal.contract.clauses[0].kind
     else {
         panic!("expected Shape.Pair pattern");
@@ -464,7 +462,7 @@ fn nominal() -> Shape:
     let HirPatternKind::Variant {
         symbol: pair_symbol,
         arguments: pair_arguments,
-    } = &pair.kind
+    } = &pair.pattern.kind
     else {
         panic!("expected Shape.Pair variant");
     };
@@ -525,7 +523,7 @@ enum Shape:
 use base.{Failure, Shape}
 
 fn run(value: I32) -> Result[Shape, Failure]:
-    ensures Result.Ok(result) => true
+    ensures Result.Ok(output) => true
     error Failure.Bad
 
 fn shape() -> Shape:
@@ -556,13 +554,12 @@ fn shape() -> Shape:
         })
         .expect("shape function should lower");
     let HirClauseKind::Ensures {
-        pattern: Some(pattern),
-        ..
+        guard: Some(guard), ..
     } = &shape.contract.clauses[0].kind
     else {
         panic!("expected nominal pattern");
     };
-    let HirPatternKind::Variant { symbol, arguments } = &pattern.kind else {
+    let HirPatternKind::Variant { symbol, arguments } = &guard.pattern.kind else {
         panic!("expected nominal variant");
     };
     assert_eq!(symbol.as_string(), "base.Shape.Value");
@@ -663,4 +660,387 @@ rule StrictAssignmentRule(BaseAssignmentRule):
         panic!("expected Error clause at index 2");
     };
     assert_eq!(variant.name, "ParseAssignmentError.EmptyName");
+}
+
+#[test]
+fn accepts_v02_const_generics_variadic_tuples_and_fixed_containers() {
+    let project = lower_project([source(
+        "src/v02_types.cott",
+        r#"module v02_types
+
+struct Matrix[T, const N: U32]:
+    values: Array[T, N]
+    bytes: Buffer[N]
+
+alias Triple = Tuple[U8, Str, Bool]
+alias ByteMatrix = Matrix[U8, 2]
+
+const PAIR: Tuple[U8, U8] = Tuple(1, 2)
+const VALUES: Array[U8, 2] = Array(1, 2)
+const BYTES: Buffer[2] = Buffer("00ff")
+"#,
+    )]);
+    assert_eq!(project.modules.len(), 1);
+}
+
+#[test]
+fn rejects_v02_const_generic_argument_and_fixed_container_errors() {
+    let errors = lower_diagnostics([source(
+        "src/v02_bad_types.cott",
+        r#"module v02_bad_types
+
+struct Matrix[T, const N: U32]:
+    values: Array[T, N]
+
+alias ConstInTypeSlot = Matrix[2, U8]
+alias TypeInConstSlot = Matrix[U8, Str]
+alias NegativeArray = Array[U8, -1]
+alias LegacyTuple2 = Tuple2[U8, U8]
+
+const WRONG_ARRAY: Array[U8, 2] = Array(1)
+const WRONG_BUFFER: Buffer[2] = Buffer("00")
+"#,
+    )]);
+    assert!(errors.iter().all(|error| {
+        error.path == Path::new("src/v02_bad_types.cott")
+            && error.diagnostic.span.start < error.diagnostic.span.end
+    }));
+    for expected in [
+        "generic argument kind must match its type parameter",
+        "generic argument kind must match its const parameter",
+        "const argument must evaluate to an unsigned integer",
+        "unknown type or declaration",
+    ] {
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.diagnostic.message.contains(expected)),
+            "missing diagnostic containing `{expected}`: {errors:#?}"
+        );
+    }
+    for container in ["Array", "Buffer"] {
+        assert!(errors.iter().any(|error| {
+            error.diagnostic.message.contains(container)
+                && error.diagnostic.message.contains("length")
+        }));
+    }
+}
+
+#[test]
+fn accepts_v02_generalized_match_guards_and_clause_local_bindings() {
+    let project = lower_project([source(
+        "src/v02_guards.cott",
+        r#"module v02_guards
+
+enum Failure:
+    Bad
+
+enum State:
+    Ready(value: I32)
+
+trait Reader:
+    fn read(self) -> I32
+
+impl Controller for Reader:
+    state:
+        current: State
+    invariant self.current matches State.Ready(item) => item > 0
+    init(current: State):
+        requires true
+    fn read(self) -> I32:
+        ensures result > 0
+
+fn guarded(value: Option[I32]) -> Result[I32, Failure]:
+    requires value matches Option.Some(input) => input > 0
+    ensures result matches Result.Ok(output) => output > 0
+    error Failure.Bad with value matches Option.Some(error_value) when error_value == 0
+
+fn legacy(value: I32) -> Result[I32, Failure]:
+    ensures Result.Ok(item) => item > 0
+"#,
+    )]);
+    assert_eq!(project.modules.len(), 1);
+}
+
+#[test]
+fn rejects_v02_match_guard_bindings_outside_their_clause() {
+    let errors = lower_diagnostics([source(
+        "src/v02_guard_scope.cott",
+        r#"module v02_guard_scope
+
+fn leaks(value: Option[I32]) -> Unit:
+    requires value matches Option.Some(item) => item > 0
+    ensures item > 0
+"#,
+    )]);
+    assert!(errors.iter().any(|error| {
+        error.path == Path::new("src/v02_guard_scope.cott")
+            && error.diagnostic.message.contains("item")
+    }));
+}
+
+#[test]
+fn rejects_result_reference_in_guarded_ensures_condition() {
+    let errors = lower_diagnostics([source(
+        "src/v02_guarded_result.cott",
+        r#"module v02_guarded_result
+
+fn choose(value: Option[U32]) -> U32:
+    ensures value matches Option.Some(item) => result == item
+"#,
+    )]);
+    assert!(errors.iter().any(|error| {
+        error.path == Path::new("src/v02_guarded_result.cott")
+            && error.diagnostic.message.contains("result")
+            && error.diagnostic.span.start < error.diagnostic.span.end
+    }));
+}
+
+#[test]
+fn accepts_v02_trait_default_references_and_rejects_invalid_targets() {
+    let project = lower_project([source(
+        "src/v02_defaults.cott",
+        r#"module v02_defaults
+
+fn fallback(receiver: Reader, value: I32) -> I32
+
+trait Reader:
+    fn read(self, value: I32) -> I32 = fallback
+"#,
+    )]);
+    assert_eq!(project.modules.len(), 1);
+
+    let errors = lower_diagnostics([source(
+        "src/v02_bad_defaults.cott",
+        r#"module v02_bad_defaults
+
+fn incompatible(receiver: Reader) -> I32
+
+trait Reader:
+    fn missing(self) -> I32 = absent
+    fn wrong(self, value: I32) -> I32 = incompatible
+"#,
+    )]);
+    assert!(errors.iter().all(|error| {
+        error.path == Path::new("src/v02_bad_defaults.cott")
+            && error.diagnostic.span.start < error.diagnostic.span.end
+    }));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.diagnostic.message.contains("absent"))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.diagnostic.message.contains("exactly match"))
+    );
+}
+
+#[test]
+fn accepts_v03_associated_type_assignment_and_projection_substitution() {
+    let project = lower_project([source(
+        "src/v03_associated.cott",
+        r#"module v03_associated
+
+trait Stream:
+    type Item
+    fn next(self) -> Stream.Item
+
+impl NumberStream for Stream:
+    type Item = I32
+    fn next(self) -> I32:
+        ensures true
+"#,
+    )]);
+    assert_eq!(project.modules.len(), 1);
+}
+
+#[test]
+fn rejects_v03_associated_type_duplicates_unknown_ambiguous_and_cyclic_uses() {
+    let errors = diagnostics([source(
+        "src/v03_associated_bad.cott",
+        r#"module v03_associated_bad
+
+trait Single:
+    type Item
+
+trait Left:
+    type Item
+
+trait Right:
+    type Item
+
+impl Duplicate for Single:
+    type Item = I32
+    type Item = I32
+    fn unused(self) -> Unit:
+        ensures true
+
+impl Unknown for Single:
+    type Missing = I32
+    fn unused(self) -> Unit:
+        ensures true
+
+impl Ambiguous for Left + Right:
+    type Item = I32
+    fn unused(self) -> Unit:
+        ensures true
+
+impl Cyclic for Single:
+    type Item = Single.Item
+    fn unused(self) -> Unit:
+        ensures true
+
+fn unknown_projection[T: Single](value: T.Missing) -> Unit
+fn ambiguous_projection[T: Left + Right](value: T.Item) -> Unit
+"#,
+    )]);
+    assert!(errors.iter().all(|error| {
+        error.path == Path::new("src/v03_associated_bad.cott")
+            && error.diagnostic.span.start < error.diagnostic.span.end
+    }));
+    for expected in [
+        "duplicate associated type assignment `Item`",
+        "unknown associated type `Missing`",
+        "associated type assignment `Item` is ambiguous",
+        "associated type assignment must not be cyclic",
+        "associated projection `T.Missing` is not declared by its trait bounds",
+        "associated projection `T.Item` is ambiguous",
+    ] {
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.diagnostic.message.contains(expected)),
+            "missing diagnostic containing `{expected}`: {errors:#?}"
+        );
+    }
+}
+
+#[test]
+fn accepts_v03_resource_graph_and_multiple_resource_field_transitions() {
+    let project = lower_project([source(
+        "src/v03_resource.cott",
+        r#"module v03_resource
+
+trait Controller:
+    fn close(self) -> Unit
+
+resource Door:
+    initial Open
+    state Open
+    state Closed
+    terminal Closed
+    transition Open -> Closed
+
+impl DoorController for Controller:
+    state:
+        primary: Door
+        backup: Door
+        audit: I32 = 0
+    init(primary: Door, backup: Door):
+        requires true
+    fn close(self) -> Unit:
+        requires true
+        transitions self.primary: Door.Open -> Door.Closed, self.backup: Door.Open -> Door.Closed
+        modifies self.audit
+        ensures true
+"#,
+    )]);
+    assert_eq!(project.modules.len(), 1);
+}
+
+#[test]
+fn rejects_v03_invalid_resource_graphs_and_transitions() {
+    let errors = diagnostics([source(
+        "src/v03_resource_bad.cott",
+        r#"module v03_resource_bad
+
+trait Controller:
+    fn wrong_owner(self) -> Unit
+    fn wrong_field(self) -> Unit
+    fn missing_edge(self) -> Unit
+    fn overlap(self) -> Unit
+    fn without_transition(self) -> Unit
+
+resource Door:
+    initial Open
+    state Open
+    state Closed
+    terminal Closed
+    transition Open -> Closed
+
+resource Other:
+    initial Open
+    state Open
+    state Closed
+    terminal Closed
+    transition Open -> Closed
+
+resource Broken:
+    initial Open
+    state Open
+    state Closed
+    terminal Closed
+    transition Open -> Missing
+
+resource Cyclic:
+    initial Open
+    state Open
+    state Closed
+    terminal Closed
+    transition Open -> Open
+
+impl InvalidController for Controller:
+    state:
+        primary: Door
+        count: I32 = 0
+    init(primary: Door):
+        requires true
+    fn wrong_owner(self) -> Unit:
+        requires true
+        transitions self.primary: Other.Open -> Other.Closed
+        modifies self.count
+        ensures true
+    fn wrong_field(self) -> Unit:
+        requires true
+        transitions self.count: Door.Open -> Door.Closed
+        modifies self.count
+        ensures true
+    fn missing_edge(self) -> Unit:
+        requires true
+        transitions self.primary: Door.Closed -> Door.Open
+        modifies self.count
+        ensures true
+    fn overlap(self) -> Unit:
+        requires true
+        transitions self.primary: Door.Open -> Door.Closed
+        modifies self.primary
+        ensures true
+    fn without_transition(self) -> Unit:
+        requires true
+        modifies self.primary
+        ensures true
+"#,
+    )]);
+    assert!(errors.iter().all(|error| {
+        error.path == Path::new("src/v03_resource_bad.cott")
+            && error.diagnostic.span.start < error.diagnostic.span.end
+    }));
+    for expected in [
+        "resource edge state must be declared",
+        "resource state must be reachable from its initial state",
+        "transition states must belong to the field resource",
+        "transitions field must be a resource state field",
+        "transition must match a declared resource edge",
+        "transitions field cannot overlap modifies",
+        "resource state fields must use transitions, not modifies",
+    ] {
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.diagnostic.message.contains(expected)),
+            "missing diagnostic containing `{expected}`: {errors:#?}"
+        );
+    }
 }

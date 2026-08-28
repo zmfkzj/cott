@@ -1,3 +1,4 @@
+import asyncio
 import collections.abc
 import dataclasses
 import importlib
@@ -5,8 +6,10 @@ import inspect
 import itertools
 import json
 import math
+import os
 import pathlib
 import struct
+import sys
 import types
 import typing
 
@@ -156,11 +159,47 @@ def candidates(annotation, depth=0, substitutions=None, container_length_limit=3
         return [pathlib.Path("/tmp/cott-contract-path")]
     target = origin or annotation
     target_name = getattr(target, "__name__", "")
-    if target in (list, set, tuple, dict) or target_name in {
+    if target_name == "CottBuffer":
+        length = fixed_length(args[0] if args else None)
+        if length is None or length > container_length_limit:
+            return []
+        return unique([
+            target(data=b"\x00" * length),
+            target(data=b"\xff" * length),
+        ])
+    if target_name == "CottArray":
+        length = fixed_length(args[1] if len(args) == 2 else None)
+        if length is None or length > container_length_limit:
+            return []
+        element_values = candidates(
+            args[0], depth + 1, substitutions, container_length_limit, json_depth_limit
+        ) if args else []
+        if length and not element_values:
+            return []
+        return [
+            target(values=() if length == 0 else (value,) * length)
+            for value in unique(element_values[:container_length_limit])
+        ]
+    if target is tuple and len(args) == 2 and args[1] is Ellipsis:
+        values = candidates(
+            args[0], depth + 1, substitutions, container_length_limit, json_depth_limit
+        )[:container_length_limit]
+        return unique([(), *((value,) for value in values), tuple(values)])
+    if target is tuple:
+        pools = [
+            candidates(
+                item_type, depth + 1, substitutions, container_length_limit, json_depth_limit
+            )[:container_length_limit]
+            for item_type in args
+        ]
+        if any(not pool for pool in pools):
+            return []
+        return [tuple(items) for items in itertools.islice(itertools.product(*pools), 16)]
+
+    if target in (list, set, dict) or target_name in {
         "CottList",
         "CottSet",
         "FrozenMap",
-        "CottTuple2",
     }:
         element_values = (
             candidates(args[0], depth + 1, substitutions, container_length_limit, json_depth_limit)
@@ -181,15 +220,6 @@ def candidates(annotation, depth=0, substitutions=None, container_length_limit=3
             if target is dict:
                 return raw
             return [target(values=value) for value in raw]
-        if target_name == "CottTuple2" or target is tuple and len(args) == 2:
-            right = candidates(
-                args[1], depth + 1, substitutions, container_length_limit, json_depth_limit
-            )
-            return [
-                target(first=a, second=b)
-                for a in element_values[:min(2, container_length_limit)]
-                for b in right[:min(2, container_length_limit)]
-            ]
         raw = [
             [],
             element_values[:min(1, container_length_limit)],
@@ -233,6 +263,13 @@ def candidates(annotation, depth=0, substitutions=None, container_length_limit=3
                 pass
         return unique(values)
     return []
+
+
+def fixed_length(annotation):
+    if typing.get_origin(annotation) is not typing.Literal:
+        return None
+    values = typing.get_args(annotation)
+    return values[0] if len(values) == 1 and type(values[0]) is int and values[0] >= 0 else None
 
 
 def decode_json(value):
@@ -282,11 +319,14 @@ def decode_value(value, module):
             decode_value(key, module): decode_value(item, module)
             for key, item in value["entries"]
         })
-    if kind == "tuple2":
-        return cott_runtime.CottTuple2(
-            first=decode_value(value["first"], module),
-            second=decode_value(value["second"], module),
+    if kind == "tuple":
+        return tuple(decode_value(item, module) for item in value["items"])
+    if kind == "array":
+        return cott_runtime.CottArray(
+            values=(decode_value(item, module) for item in value["items"])
         )
+    if kind == "buffer":
+        return cott_runtime.CottBuffer(data=bytes.fromhex(value["hex"]))
     if kind == "option":
         return (
             cott_runtime.Some(value=decode_value(value["value"], module))
@@ -402,23 +442,67 @@ def match_pattern(pattern, value, environment, module):
     if kind == "wildcard":
         return True
     if kind == "binding":
-        environment[pattern["name"]] = value
+        environment[local(pattern.get("name") or pattern["symbol"])] = value
         return True
-    if kind == "variant":
-        variant = resolve_symbol(pattern["symbol"], module)
+    if kind in ("variant", "result_ok", "result_err", "option_some", "option_none", "enum"):
+        variants = {
+            "result_ok": cott_runtime.Ok,
+            "result_err": cott_runtime.Err,
+            "option_some": cott_runtime.Some,
+            "option_none": cott_runtime.Nothing,
+        }
+        variant = variants.get(kind) or resolve_symbol(pattern["symbol"], module)
         if type(value) is not variant:
             return False
-        fields = dataclasses.fields(type(value))
-        for index, nested in enumerate(pattern["arguments"]):
-            if not match_pattern(nested, getattr(value, fields[index].name), environment, module):
+        for index, nested in enumerate(pattern.get("arguments", ())):
+            if variant in (cott_runtime.Ok, cott_runtime.Some):
+                field_value = value.value
+            elif variant is cott_runtime.Err:
+                field_value = value.error
+            else:
+                field_value = getattr(value, dataclasses.fields(type(value))[index].name)
+            if not match_pattern(nested, field_value, environment, module):
                 return False
         return True
     raise ValueError(f"unsupported canonical pattern {kind}")
 
 
+def guard_environment(clause, environment, module, receiver=None, result=None, old=None):
+    scoped = dict(environment)
+    guard = clause.get("guard")
+    if guard is None:
+        return True, scoped
+    value = evaluate(guard["scrutinee"], scoped, module, receiver, result, old)
+    return match_pattern(guard["pattern"], value, scoped, module), scoped
+
+def requires_holds(clause, environment, module, receiver=None, result=None, old=None):
+    matched, scoped = guard_environment(clause, environment, module, receiver, result, old)
+    return not matched or evaluate(clause["expression"], scoped, module, receiver, result, old)
+
+
+def condition_matches(clause, environment, module, receiver=None, result=None, old=None):
+    matched, scoped = guard_environment(clause, environment, module, receiver, result, old)
+    return matched and (
+        clause.get("when") is None
+        or evaluate(clause["when"], scoped, module, receiver, result, old)
+    )
+
+
+def checked_clause_environment(clause, environment, module, receiver=None, result=None, old=None):
+    return guard_environment(clause, environment, module, receiver, result, old)
+
+
+
 def callable_hints(function):
     target = function.__init__ if inspect.isclass(function) else function
     return typing.get_type_hints(target, include_extras=True)
+
+
+def validate_candidate(value, annotation):
+    args = typing.get_args(annotation)
+    if typing.get_origin(annotation) is tuple and len(args) == 2 and args[1] is Ellipsis and type(value) is tuple:
+        return tuple(cott_runtime._cott_validate_abi(item, args[0]) for item in value)
+    return cott_runtime._cott_validate_abi(value, annotation)
 
 
 def invoke_cases(function, strategy=None):
@@ -460,19 +544,19 @@ def invoke_cases(function, strategy=None):
                 annotation = hints.get(parameter.name, parameter.annotation)
                 if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
                     normalized = tuple(
-                        cott_runtime._cott_validate_abi(item, annotation) for item in value
+                        validate_candidate(item, annotation) for item in value
                     )
                     args.extend(normalized)
                     environment[parameter.name] = normalized
                 elif parameter.kind is inspect.Parameter.VAR_KEYWORD:
                     normalized = {
-                        key: cott_runtime._cott_validate_abi(item, annotation)
+                        key: validate_candidate(item, annotation)
                         for key, item in value.items()
                     }
                     kwargs.update(normalized)
                     environment[parameter.name] = normalized
                 else:
-                    normalized = cott_runtime._cott_validate_abi(value, annotation)
+                    normalized = validate_candidate(value, annotation)
                     environment[parameter.name] = normalized
                     if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
                         args.append(normalized)
@@ -497,7 +581,7 @@ def impl_clauses(contract, invariants=(), modifies=(), span=None):
         for clause in contract.get(name, ())
     ]
     clauses.extend(
-        {"kind": "invariant", "clause_id": clause["clause_id"], "expression": clause["expression"], "span": clause["span"]}
+        dict(clause, kind="invariant")
         for clause in invariants
     )
     clauses.extend(
@@ -505,6 +589,95 @@ def impl_clauses(contract, invariants=(), modifies=(), span=None):
         for field in modifies
     )
     return clauses
+
+
+def concretize(value, substitutions):
+    if isinstance(value, dict):
+        if value.get("kind") in ("type_parameter", "parameter") and value.get("name") in substitutions:
+            return substitutions[value["name"]]
+        return {key: concretize(item, substitutions) for key, item in value.items()}
+    if isinstance(value, list):
+        return [concretize(item, substitutions) for item in value]
+    return value
+
+
+def resolved_impl_methods(module_values, implementation):
+    resolved = []
+    by_name = {}
+    for slot in implementation["selected_methods"]:
+        trait_method = slot["trait_method"]
+        trait_name, method_name = trait_method.rsplit(".", 1)
+        selected = slot["selected"]
+        if selected["kind"] == "explicit" and local(selected["function"]["symbol"]) != method_name:
+            raise AssertionError(f"{implementation['name']}.{method_name}: selected function does not match trait method")
+        if selected["kind"] == "explicit":
+            source = next(
+                (
+                    method for method in implementation["methods"]
+                    if local(method["name"]) == method_name
+                ),
+                None,
+            )
+            if source is None:
+                raise AssertionError(f"{implementation['name']}.{method_name}: missing explicit method")
+            method = dict(source)
+        elif selected["kind"] == "default":
+            trait = next(
+                (
+                    declaration
+                    for module_value in module_values
+                    for declaration in module_value["declarations"]
+                    if declaration["kind"] == "trait" and declaration["name"] == trait_name
+                ),
+                None,
+            )
+            if trait is None:
+                raise AssertionError(f"{implementation['name']}.{method_name}: missing trait declaration")
+            trait_reference = next(
+                (
+                    reference for reference in implementation["traits"]
+                    if reference["kind"] == "named" and reference["name"] == trait_name
+                ),
+                None,
+            )
+            if trait_reference is None or len(trait["generics"]) != len(trait_reference["args"]):
+                raise AssertionError(f"{implementation['name']}.{method_name}: invalid trait instantiation")
+            substitutions = {
+                generic["name"]: argument["type"] if argument["kind"] == "type" else argument["value"]
+                for generic, argument in zip(trait["generics"], trait_reference["args"])
+            }
+            source = next(
+                (method for method in trait["methods"] if local(method["name"]) == method_name),
+                None,
+            )
+            if source is None:
+                raise AssertionError(f"{implementation['name']}.{method_name}: missing trait method")
+            method = concretize(source, substitutions)
+            clauses = method["contract"]["clauses"]
+            method["contracts"] = {
+                name: [clause for clause in clauses if clause["kind"] == kind]
+                for kind, name in (("requires", "requires"), ("ensures", "ensures"), ("error", "errors"))
+            }
+            method["effects"] = method["contract"]["effects"]
+            method["modifies"] = []
+        else:
+            raise AssertionError(f"{implementation['name']}.{method_name}: unsupported selected implementation")
+        method["name"] = method_name
+        signature = (
+            tuple(
+                json.dumps(parameter["type"], sort_keys=True, separators=(",", ":"))
+                for parameter in method["parameters"]
+            ),
+            json.dumps(method["return_type"], sort_keys=True, separators=(",", ":")),
+        )
+        previous = by_name.get(method_name)
+        if previous is not None:
+            if previous != (signature, selected):
+                raise AssertionError(f"{implementation['name']}.{method_name}: duplicate concrete slot differs")
+            continue
+        by_name[method_name] = (signature, selected)
+        resolved.append(method)
+    return resolved
 
 
 def unexecuted(clauses, strategy, effectful_reason, never_reason):
@@ -515,7 +688,68 @@ def unexecuted(clauses, strategy, effectful_reason, never_reason):
     return observed, grade, effectful_reason if grade == "trust declaration" else never_reason
 
 
-def run_function(module_value, declaration, strategy):
+async def invoke_facade(function, args, kwargs, symbol, callable_kind):
+    loop = asyncio.get_running_loop()
+    before = asyncio.all_tasks()
+    created = []
+    previous_factory = loop.get_task_factory()
+
+    def task_factory(loop, coroutine, context=None):
+        if previous_factory is None:
+            task = (
+                asyncio.Task(coroutine, loop=loop, context=context)
+                if context is not None
+                else asyncio.Task(coroutine, loop=loop)
+            )
+        elif context is None:
+            task = previous_factory(loop, coroutine)
+        else:
+            task = previous_factory(loop, coroutine, context=context)
+        created.append(task)
+        return task
+
+    loop.set_task_factory(task_factory)
+    try:
+        result = function(*args, **kwargs)
+        return await result if callable_kind == "async" else result
+    finally:
+        try:
+            await asyncio.sleep(0)
+        finally:
+            loop.set_task_factory(previous_factory)
+        created = (set(created) | (asyncio.all_tasks() - before)) - before
+        failures = []
+        pending = []
+        for task in created:
+            if task.done():
+                if task.cancelled():
+                    failures.append("cancelled")
+                elif exception := task.exception():
+                    failures.append(type(exception).__name__)
+            else:
+                pending.append(task)
+        leaked = len(pending)
+        for task in pending:
+            task.cancel()
+        if pending:
+            _, pending = await asyncio.wait(pending, timeout=0.1)
+            if pending:
+                print(
+                    f"{symbol}: cancellation-resistant task leak",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                os._exit(1)
+        if failures or leaked:
+            detail = (
+                f"child task failed with {failures[0]}"
+                if failures
+                else f"leaked {leaked} task(s)"
+            )
+            raise AssertionError(f"{symbol}: {detail}")
+
+
+async def run_function(module_value, declaration, strategy):
     symbol = declaration["name"]
     clauses = declaration["contract"]["clauses"]
     observed, grade, reason = unexecuted(
@@ -526,6 +760,9 @@ def run_function(module_value, declaration, strategy):
     )
     if grade is not None:
         return observed, grade, reason
+    callable_kind = strategy["callable_kind"]
+    if callable_kind not in ("sync", "async"):
+        raise AssertionError(f"{symbol}: unsupported callable_kind `{callable_kind}`")
     module = importlib.import_module(module_value["module"])
     function = getattr(module, local(symbol))
     if hasattr(module, "_cott_set_test_context"):
@@ -537,30 +774,35 @@ def run_function(module_value, declaration, strategy):
     for args, kwargs, environment in cases:
         requirements = [clause for clause in clauses if clause["kind"] == "requires"]
         try:
-            if not all(evaluate(clause["expression"], environment, module) for clause in requirements):
+            if not all(requires_holds(clause, environment, module) for clause in requirements):
                 continue
         except Exception as error:
             raise AssertionError(f"{symbol}: independent requires evaluation failed: {error}") from error
         try:
-            result = function(*args, **kwargs)
+            result = await invoke_facade(function, args, kwargs, symbol, callable_kind)
         except cott_runtime.CottContractViolation as error:
             raise AssertionError(f"{symbol}: facade contract violation for generated valid case: {error}") from error
         result = cott_runtime._cott_validate_abi(result, hints["return"])
         valid_cases += 1
-        conditional_error = None
-        for clause in clauses:
-            if clause["kind"] == "error" and clause.get("when") is not None:
-                if evaluate(clause["when"], environment, module, result=result):
-                    conditional_error = clause
-                    break
+        conditional_error = next(
+            (
+                clause
+                for clause in clauses
+                if clause["kind"] == "error"
+                and (clause.get("guard") is not None or clause.get("when") is not None)
+                and condition_matches(clause, environment, module, result=result)
+            ),
+            None,
+        )
         for clause in clauses:
             clause_id = clause_key(clause)
             if clause["kind"] == "requires":
                 observed[clause_id] += 1
             elif clause["kind"] == "ensures":
-                clause_environment = dict(environment)
-                pattern = clause.get("pattern")
-                if pattern is None or match_pattern(pattern, result, clause_environment, module):
+                matched, clause_environment = checked_clause_environment(
+                    clause, environment, module, result=result
+                )
+                if matched:
                     if not evaluate(clause["expression"], clause_environment, module, result=result):
                         raise AssertionError(f"{symbol}: ensures clause {clause_id} failed independently")
                     observed[clause_id] += 1
@@ -599,7 +841,7 @@ def run_initializer(module, implementation, strategy):
     requirements = [clause for clause in clauses if clause["kind"] == "requires"]
     for args, kwargs, environment in raw_cases:
         try:
-            if not all(evaluate(clause["expression"], environment, module) for clause in requirements):
+            if not all(requires_holds(clause, environment, module) for clause in requirements):
                 continue
         except Exception as error:
             raise AssertionError(f"{symbol}: independent requires evaluation failed: {error}") from error
@@ -614,9 +856,15 @@ def run_initializer(module, implementation, strategy):
             if clause["kind"] == "requires":
                 observed[clause_id] += 1
             elif clause["kind"] in ("ensures", "invariant"):
-                if not evaluate(clause["expression"], environment, module, receiver=receiver, result=receiver):
-                    raise AssertionError(f"{symbol}: {clause['kind']} clause {clause_id} failed independently")
-                observed[clause_id] += 1
+                matched, clause_environment = checked_clause_environment(
+                    clause, environment, module, receiver=receiver, result=receiver
+                )
+                if matched:
+                    if not evaluate(
+                        clause["expression"], clause_environment, module, receiver=receiver, result=receiver
+                    ):
+                        raise AssertionError(f"{symbol}: {clause['kind']} clause {clause_id} failed independently")
+                    observed[clause_id] += 1
     if valid_cases == 0:
         return clauses, observed, "unobserved", (
             candidate_reason
@@ -625,11 +873,10 @@ def run_initializer(module, implementation, strategy):
     return clauses, observed, "test observation", None, accepted
 
 
-def run_method(module, implementation, strategy, constructor_cases):
+def run_method(module, implementation, method, strategy, constructor_cases):
     symbol = strategy["symbol"]
     method_name = local(symbol)
     facade = getattr(module, local(implementation["name"]))
-    method = next(value for value in implementation["methods"] if value["name"] == method_name)
     clauses = impl_clauses(
         method.get("contracts", {}),
         implementation.get("invariants", ()),
@@ -664,7 +911,10 @@ def run_method(module, implementation, strategy, constructor_cases):
         receiver = facade(*args, **kwargs)
         method_args, method_kwargs, environment = case
         try:
-            if not all(evaluate(clause["expression"], environment, module, receiver=receiver) for clause in requirements):
+            if not all(
+                requires_holds(clause, environment, module, receiver=receiver)
+                for clause in requirements
+            ):
                 continue
         except Exception as error:
             raise AssertionError(f"{symbol}: independent requires evaluation failed: {error}") from error
@@ -677,10 +927,13 @@ def run_method(module, implementation, strategy, constructor_cases):
         valid_cases += 1
         conditional_error = next(
             (
-                clause for clause in clauses
+                clause
+                for clause in clauses
                 if clause["kind"] == "error"
-                and clause.get("when") is not None
-                and evaluate(clause["when"], environment, module, receiver, result, old)
+                and (clause.get("guard") is not None or clause.get("when") is not None)
+                and condition_matches(
+                    clause, environment, module, receiver=receiver, result=result, old=old
+                )
             ),
             None,
         )
@@ -689,10 +942,13 @@ def run_method(module, implementation, strategy, constructor_cases):
             if clause["kind"] == "requires":
                 observed[clause_id] += 1
             elif clause["kind"] == "ensures":
-                clause_environment = dict(environment)
-                pattern = clause.get("pattern")
-                if pattern is None or match_pattern(pattern, result, clause_environment, module):
-                    if not evaluate(clause["expression"], clause_environment, module, receiver, result, old):
+                matched, clause_environment = checked_clause_environment(
+                    clause, environment, module, receiver=receiver, result=result, old=old
+                )
+                if matched:
+                    if not evaluate(
+                        clause["expression"], clause_environment, module, receiver, result, old
+                    ):
                         raise AssertionError(f"{symbol}: ensures clause {clause_id} failed independently")
                     observed[clause_id] += 1
             elif clause["kind"] == "error":
@@ -707,9 +963,15 @@ def run_method(module, implementation, strategy, constructor_cases):
                         raise AssertionError(f"{symbol}: modifies clause {clause_id} failed independently")
                 observed[clause_id] += 1
             elif clause["kind"] == "invariant":
-                if not evaluate(clause["expression"], environment, module, receiver, result, old):
-                    raise AssertionError(f"{symbol}: invariant clause {clause_id} failed independently")
-                observed[clause_id] += 1
+                matched, clause_environment = checked_clause_environment(
+                    clause, environment, module, receiver=receiver, result=result, old=old
+                )
+                if matched:
+                    if not evaluate(
+                        clause["expression"], clause_environment, module, receiver, result, old
+                    ):
+                        raise AssertionError(f"{symbol}: invariant clause {clause_id} failed independently")
+                    observed[clause_id] += 1
     if valid_cases == 0:
         return clauses, observed, "unobserved", (
             candidate_reason
@@ -727,12 +989,12 @@ def evidence(symbol, clauses, observed, grade, reason, request):
             "grade": grade if grade != "test observation" or observed[clause_key(clause)] else "unobserved",
             "mode": request["runtime_validation"],
             "valid_cases": observed[clause_key(clause)],
-            "reason": reason if grade != "test observation" or reason else "no generated case exercised this conditional clause",
+            "reason": None if observed[clause_key(clause)] else reason or "no generated case exercised this conditional clause",
         }],
     } for clause in clauses]
 
 
-def main():
+async def main():
     request = json.load(__import__("sys").stdin)
     strategies = {strategy["symbol"]: strategy for strategy in request["strategies"]}
     contracts = []
@@ -742,7 +1004,7 @@ def main():
                 strategy = strategies.get(declaration["name"])
                 if strategy is None:
                     continue
-                observed, grade, reason = run_function(module_value, declaration, strategy)
+                observed, grade, reason = await run_function(module_value, declaration, strategy)
                 contracts.extend(evidence(declaration["name"], declaration["contract"]["clauses"], observed, grade, reason, request))
             elif declaration["kind"] == "impl":
                 init_symbol = f"{module_value['module']}.{local(declaration['name'])}.init"
@@ -750,7 +1012,7 @@ def main():
                 initializer = declaration.get("init") or {"contracts": {}, "parameters": []}
                 init_clauses = impl_clauses(initializer.get("contracts", {}), declaration.get("invariants", ()))
                 method_strategies = []
-                for method in declaration["methods"]:
+                for method in resolved_impl_methods(request["modules"], declaration):
                     symbol = f"{module_value['module']}.{local(declaration['name'])}.{method['name']}"
                     strategy = strategies.get(symbol)
                     if strategy is not None:
@@ -799,10 +1061,12 @@ def main():
                 if init_strategy is not None:
                     clauses, observed, grade, reason, initializer_cases = run_initializer(module, declaration, init_strategy)
                     contracts.extend(evidence(init_symbol, clauses, observed, grade, reason, request))
-                for _, symbol, strategy, _ in method_strategies:
-                    clauses, observed, grade, reason = run_method(module, declaration, strategy, initializer_cases)
+                for method, symbol, strategy, _ in method_strategies:
+                    clauses, observed, grade, reason = run_method(
+                        module, declaration, method, strategy, initializer_cases
+                    )
                     contracts.extend(evidence(symbol, clauses, observed, grade, reason, request))
     print(json.dumps({"contracts": contracts}, sort_keys=True, separators=(",", ":")))
 
 
-main()
+asyncio.run(main())

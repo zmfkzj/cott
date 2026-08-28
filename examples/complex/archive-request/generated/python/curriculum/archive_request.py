@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 from curriculum.archive_request_types import ArchivePlan, ArchiveRequest, ArchiveRequestError, ArchiveRequestError_EmptySelection, ArchiveRequestError_InvalidUrl, CaptureKind, CaptureKind_Html, CaptureKind_Media
 
@@ -20,7 +20,7 @@ InvalidUrl."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/archive_request/canonicalize_archive_url.py", "2b7991952431e3d2f0aeaffc4eb01cd99847b184afc485eea47cb9dd1fa78575", "canonicalize_archive_url", expected_project_name="archive-request", expected_cott_symbol="curriculum.archive_request.canonicalize_archive_url")
+        _implementation = _cott_load("_cott_impl/curriculum/archive_request/canonicalize_archive_url.py", "0cc25c3b0d29f1d5d98a2c49871d7d37ea60580b9d6b33c22b7a4abc65faf365", "canonicalize_archive_url", expected_project_name="archive-request", expected_cott_symbol="curriculum.archive_request.canonicalize_archive_url")
         _result = _implementation(url)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -41,10 +41,14 @@ InvalidUrl."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.archive_request.canonicalize_archive_url", phase="error", span={"end_byte":749,"end_column":1,"end_line":34,"start_byte":294,"start_column":1,"start_line":20}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.archive_request.canonicalize_archive_url", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        canonical_url = _result.value
-        if not ((len(canonical_url) > 0)):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.archive_request.canonicalize_archive_url", clause="ensures:1", phase="ensures", span={"end_byte":689,"end_column":62,"end_line":28,"start_byte":632,"start_column":5,"start_line":28}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            canonical_url = _cott_match_value.value
+            return ((len(canonical_url) > 0))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.archive_request.canonicalize_archive_url", clause="ensures:1", phase="ensures", span={"end_byte":689,"end_column":62,"end_line":28,"start_byte":632,"start_column":5,"start_line":28}, expected="true", actual="false")
     return _result
 
 def compose_archive_plan(canonical_url: str, include_html: bool, include_media: bool) -> ArchivePlan:
@@ -105,10 +109,14 @@ malformed URLs return InvalidUrl."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.archive_request.plan_archive", phase="error", span={"end_byte":1631,"end_column":1,"end_line":57,"start_byte":1075,"start_column":1,"start_line":44}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.archive_request.plan_archive", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        plan = _result.value
-        if not (((len((plan).canonical_url) > 0) and (len((plan).captures) > 0))):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.archive_request.plan_archive", clause="ensures:1", phase="ensures", span={"end_byte":1465,"end_column":84,"end_line":51,"start_byte":1386,"start_column":5,"start_line":51}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            plan = _cott_match_value.value
+            return (((len((plan).canonical_url) > 0) and (len((plan).captures) > 0)))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.archive_request.plan_archive", clause="ensures:1", phase="ensures", span={"end_byte":1465,"end_column":84,"end_line":51,"start_byte":1386,"start_column":5,"start_line":51}, expected="true", actual="false")
     return _result
 
 __all__ = ["ArchivePlan", "ArchiveRequest", "ArchiveRequestError", "ArchiveRequestError_EmptySelection", "ArchiveRequestError_InvalidUrl", "CaptureKind", "CaptureKind_Html", "CaptureKind_Media", "canonicalize_archive_url", "compose_archive_plan", "plan_archive"]

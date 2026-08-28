@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 from curriculum.inventory_reorder_types import InventoryReorderError, InventoryReorderError_BlankSku, InventoryReorderError_ReservedExceedsOnHand, InventoryReorderError_TargetBelowReorderPoint, ReorderPlan, ReorderRequest
 
@@ -44,10 +44,14 @@ ReservedExceedsOnHand when reservations cannot be subtracted safely."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.inventory_reorder.available_stock", phase="error", span={"end_byte":724,"end_column":1,"end_line":31,"start_byte":303,"start_column":1,"start_line":19}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.inventory_reorder.available_stock", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        available = _result.value
-        if not ((available == (on_hand - reserved))):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.inventory_reorder.available_stock", clause="ensures:1", phase="ensures", span={"end_byte":627,"end_column":68,"end_line":25,"start_byte":564,"start_column":5,"start_line":25}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            available = _cott_match_value.value
+            return ((available == (on_hand - reserved)))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.inventory_reorder.available_stock", clause="ensures:1", phase="ensures", span={"end_byte":627,"end_column":68,"end_line":25,"start_byte":564,"start_column":5,"start_line":25}, expected="true", actual="false")
     return _result
 
 def plan_reorder(request: ReorderRequest) -> Result[ReorderPlan, InventoryReorderError]:
@@ -94,14 +98,22 @@ plan."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.inventory_reorder.plan_reorder", phase="error", span={"end_byte":1841,"end_column":1,"end_line":48,"start_byte":724,"start_column":1,"start_line":31}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.inventory_reorder.plan_reorder", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        plan = _result.value
-        if not (((plan).sku == (request).sku)):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.inventory_reorder.plan_reorder", clause="ensures:1", phase="ensures", span={"end_byte":1199,"end_column":55,"end_line":40,"start_byte":1149,"start_column":5,"start_line":40}, expected="true", actual="false")
-    if type(_result) is Ok and True:
-        plan = _result.value
-        if not ((((((request).on_hand - (request).reserved) <= (request).reorder_point) and ((plan).order_qty == ((request).target_level - ((request).on_hand - (request).reserved)))) or ((((request).on_hand - (request).reserved) > (request).reorder_point) and ((plan).order_qty == 0)))):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.inventory_reorder.plan_reorder", clause="ensures:2", phase="ensures", span={"end_byte":1464,"end_column":265,"end_line":41,"start_byte":1204,"start_column":5,"start_line":41}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            plan = _cott_match_value.value
+            return (((plan).sku == (request).sku))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.inventory_reorder.plan_reorder", clause="ensures:1", phase="ensures", span={"end_byte":1199,"end_column":55,"end_line":40,"start_byte":1149,"start_column":5,"start_line":40}, expected="true", actual="false")
+    def _cott_match_ensures_2() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            plan = _cott_match_value.value
+            return ((((((request).on_hand - (request).reserved) <= (request).reorder_point) and ((plan).order_qty == ((request).target_level - ((request).on_hand - (request).reserved)))) or ((((request).on_hand - (request).reserved) > (request).reorder_point) and ((plan).order_qty == 0))))
+        return True
+    if not (_cott_match_ensures_2()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.inventory_reorder.plan_reorder", clause="ensures:2", phase="ensures", span={"end_byte":1464,"end_column":265,"end_line":41,"start_byte":1204,"start_column":5,"start_line":41}, expected="true", actual="false")
     return _result
 
 __all__ = ["InventoryReorderError", "InventoryReorderError_BlankSku", "InventoryReorderError_ReservedExceedsOnHand", "InventoryReorderError_TargetBelowReorderPoint", "ReorderPlan", "ReorderRequest", "available_stock", "plan_reorder"]

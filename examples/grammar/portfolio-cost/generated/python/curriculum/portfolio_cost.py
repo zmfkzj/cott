@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 from curriculum.portfolio_cost_types import Holding, PortfolioError, PortfolioError_NegativePrice, PortfolioError_NegativeShares, PortfolioError_NonFinitePrice, PortfolioError_TotalOverflow
 
@@ -51,10 +51,14 @@ ordinary F64 rounding and underflow are retained."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.portfolio_cost.calculate_portfolio_cost", phase="error", span={"end_byte":1339,"end_column":1,"end_line":37,"start_byte":178,"start_column":1,"start_line":13}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.portfolio_cost.calculate_portfolio_cost", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        total = _result.value
-        if not ((total >= 0)):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.portfolio_cost.calculate_portfolio_cost", clause="ensures:1", phase="ensures", span={"end_byte":1179,"end_column":45,"end_line":31,"start_byte":1139,"start_column":5,"start_line":31}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            total = _cott_match_value.value
+            return ((total >= 0))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.portfolio_cost.calculate_portfolio_cost", clause="ensures:1", phase="ensures", span={"end_byte":1179,"end_column":45,"end_line":31,"start_byte":1139,"start_column":5,"start_line":31}, expected="true", actual="false")
     return _result
 
 __all__ = ["Holding", "PortfolioError", "PortfolioError_NegativePrice", "PortfolioError_NegativeShares", "PortfolioError_NonFinitePrice", "PortfolioError_TotalOverflow", "calculate_portfolio_cost"]

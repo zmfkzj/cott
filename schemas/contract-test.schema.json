@@ -3,7 +3,7 @@
   "$id": "https://cott.dev/schema/contract-test/v1",
   "title": "cott contract test strategy",
   "type": "object",
-  "required": ["schema_version", "symbol", "seed", "candidate_limit", "container_length_limit", "json_depth_limit", "classification", "clause_ids"],
+  "required": ["schema_version", "symbol", "seed", "candidate_limit", "container_length_limit", "json_depth_limit", "callable_kind", "classification", "clause_ids"],
   "additionalProperties": false,
   "properties": {
     "schema_version": {"const": 1},
@@ -12,6 +12,7 @@
     "candidate_limit": {"const": 64},
     "container_length_limit": {"const": 3},
     "json_depth_limit": {"const": 4},
+    "callable_kind": {"enum": ["sync", "async"]},
     "classification": {"enum": ["pure", "effectful", "never"]},
     "clause_ids": {"type": "array", "items": {"type": "string"}}
   }

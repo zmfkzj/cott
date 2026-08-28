@@ -62,6 +62,10 @@ const TRACEABILITY: &[(u8, &[&str])] = &[
         &[
             "python_emit::emits_single_and_multiple_generic_trait_bounds",
             "python_emit::disambiguates_same_generic_name_with_different_bounds",
+            "semantic::accepts_v02_const_generics_variadic_tuples_and_fixed_containers",
+            "semantic::rejects_v02_const_generic_argument_and_fixed_container_errors",
+            "semantic::accepts_v03_associated_type_assignment_and_projection_substitution",
+            "semantic::rejects_v03_associated_type_duplicates_unknown_ambiguous_and_cyclic_uses",
         ],
     ),
     (
@@ -69,6 +73,8 @@ const TRACEABILITY: &[(u8, &[&str])] = &[
         &[
             "python_runtime::generated_runtime_exercises_abi_and_provenance_loader",
             "cli::generated_facades_enforce_contextual_and_exit_contracts",
+            "semantic::accepts_v02_generalized_match_guards_and_clause_local_bindings",
+            "semantic::rejects_v02_match_guard_bindings_outside_their_clause",
         ],
     ),
     (
@@ -80,6 +86,9 @@ const TRACEABILITY: &[(u8, &[&str])] = &[
         &[
             "hir::lowers_impl_state_contracts_and_old_state_fields",
             "hir::rejects_invalid_impl_state_init_and_trait_method_coverage",
+            "semantic::accepts_v02_trait_default_references_and_rejects_invalid_targets",
+            "semantic::accepts_v03_resource_graph_and_multiple_resource_field_transitions",
+            "semantic::rejects_v03_invalid_resource_graphs_and_transitions",
         ],
     ),
     (
@@ -204,6 +213,8 @@ const TRACEABILITY: &[(u8, &[&str])] = &[
             "formatter::lossless_formatter_normalizes_newlines_idempotently",
             "formatter::canonicalizes_spacing_indentation_lists_and_comments",
             "formatter::wraps_legal_comma_lists_at_one_hundred_columns",
+            "formatter::formats_v02_const_generics_match_guards_and_trait_defaults",
+            "formatter::formats_v03_async_associated_types_and_resource_transitions",
         ],
     ),
     (

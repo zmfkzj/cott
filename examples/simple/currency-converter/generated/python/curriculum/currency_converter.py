@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 from curriculum.currency_converter_types import ConversionRequest, CurrencyError, CurrencyError_DuplicateRate, CurrencyError_InvalidCurrencyCode, CurrencyError_MissingRate, CurrencyError_NegativeQuantity, CurrencyError_NonFiniteQuantity, CurrencyError_NonFiniteRate, CurrencyError_NonFiniteResult, CurrencyError_NonPositiveRate, Rate
 
@@ -31,7 +31,7 @@ rate. Empty, singleton, and longer lists follow these same rules."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/currency_converter/validate_conversion_request.py", "a1de9c25b328af3ac6e2b5eae6eb7ec9e1fc58a18e0576803792c35fba54f71e", "validate_conversion_request", expected_project_name="currency-converter", expected_cott_symbol="curriculum.currency_converter.validate_conversion_request")
+        _implementation = _cott_load("_cott_impl/curriculum/currency_converter/validate_conversion_request.py", "5622ab6f350238d42bc0860c9dd032b8f58e0ae9ad3001c80b03e53e57c524e9", "validate_conversion_request", expected_project_name="currency-converter", expected_cott_symbol="curriculum.currency_converter.validate_conversion_request")
         _result = _implementation(request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -73,7 +73,7 @@ even. Ok contains the resulting finite, non-negative F64 value."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/currency_converter/convert_currency.py", "93694eaed8b2576f6bcdd8d449c250f0035b068f81297f3721ed02cd8fd87cc5", "convert_currency", expected_project_name="currency-converter", expected_cott_symbol="curriculum.currency_converter.convert_currency")
+        _implementation = _cott_load("_cott_impl/curriculum/currency_converter/convert_currency.py", "ef54bab5f20f17ffbe4a7473eb4e360f0704d96aad366752b15865f1ac128e90", "convert_currency", expected_project_name="currency-converter", expected_cott_symbol="curriculum.currency_converter.convert_currency")
         _result = _implementation(request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -94,10 +94,14 @@ even. Ok contains the resulting finite, non-negative F64 value."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.currency_converter.convert_currency", phase="error", span={"end_byte":3064,"end_column":1,"end_line":81,"start_byte":1771,"start_column":1,"start_line":52}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.currency_converter.convert_currency", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        value = _result.value
-        if not ((value >= 0)):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.currency_converter.convert_currency", clause="ensures:1", phase="ensures", span={"end_byte":2727,"end_column":45,"end_line":69,"start_byte":2687,"start_column":5,"start_line":69}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            value = _cott_match_value.value
+            return ((value >= 0))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.currency_converter.convert_currency", clause="ensures:1", phase="ensures", span={"end_byte":2727,"end_column":45,"end_line":69,"start_byte":2687,"start_column":5,"start_line":69}, expected="true", actual="false")
     return _result
 
 __all__ = ["ConversionRequest", "CurrencyError", "CurrencyError_DuplicateRate", "CurrencyError_InvalidCurrencyCode", "CurrencyError_MissingRate", "CurrencyError_NegativeQuantity", "CurrencyError_NonFiniteQuantity", "CurrencyError_NonFiniteRate", "CurrencyError_NonFiniteResult", "CurrencyError_NonPositiveRate", "Rate", "convert_currency", "validate_conversion_request"]

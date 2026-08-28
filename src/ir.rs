@@ -6,11 +6,13 @@ use serde_json::Value;
 
 use crate::diagnostics::Span;
 use crate::hir::{
-    HirAnnotation, HirBinaryOp, HirClause, HirClauseKind, HirCompareOp, HirContract,
-    HirDeclaration, HirDoc, HirEffect, HirExpr, HirExprKind, HirField, HirGenericParam,
-    HirImplInitializer, HirImplMethod, HirMethod, HirModule, HirParameter, HirParameterKind,
-    HirPattern, HirPatternKind, HirProject, HirReference, HirType, HirUnaryOp, HirValue,
-    HirVariant, PrimitiveType,
+    HirAnnotation, HirAssociatedType, HirAssociatedTypeAssignment, HirBinaryOp, HirCallableKind,
+    HirClause, HirClauseKind, HirCompareOp, HirConstArgument, HirContract, HirDeclaration, HirDoc,
+    HirEffect, HirExpr, HirExprKind, HirField, HirGenericArg, HirGenericParam, HirImplInitializer,
+    HirImplMethod, HirMatchGuard, HirMethod, HirModule, HirParameter, HirParameterKind, HirPattern,
+    HirPatternKind, HirProject, HirReference, HirResource, HirResourceTerminal,
+    HirResourceTransition, HirSelectedImplementation, HirType, HirUnaryOp, HirValue, HirVariant,
+    PrimitiveType,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -106,7 +108,7 @@ fn render_module(module: &HirModule) -> CanonicalModule {
     json.string(&module.id.as_string());
     json.comma();
     json.key("schema_version");
-    json.number("3");
+    json.number("5");
     json.comma();
     json.key("source");
     json.string(&source_string(&module.source));
@@ -241,6 +243,9 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
                 render_method(json, method);
             }
             json.array_end();
+            json.comma();
+            json.key("associated_types");
+            render_associated_types(json, &value.associated_types);
             json.object_end();
         }
         HirDeclaration::Impl(value) => {
@@ -254,6 +259,9 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
             json.key("generics");
             json.array_start();
             json.array_end();
+            json.comma();
+            json.key("associated_types");
+            render_associated_type_assignments(json, &value.associated_types);
             json.comma();
             json.key("init");
             match &value.initializer {
@@ -273,6 +281,12 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
                 json.comma();
                 json.key("expression");
                 render_expr(json, &invariant.expression);
+                json.comma();
+                json.key("guard");
+                match &invariant.guard {
+                    Some(guard) => render_match_guard(json, guard),
+                    None => json.null(),
+                }
                 json.comma();
                 json.key("span");
                 render_span(json, &invariant.span);
@@ -298,6 +312,9 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
             json.comma();
             json.key("public");
             json.boolean(value.public);
+            json.comma();
+            json.key("selected_methods");
+            render_selected_methods(json, &value.selected_methods);
             json.comma();
             json.key("source_order");
             json.number_usize(value.source_order);
@@ -343,6 +360,7 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
             render_contract(json, &value.contract);
             json.object_end();
         }
+        HirDeclaration::Resource(value) => render_resource(json, value),
         HirDeclaration::Const(value) => {
             declaration_start(
                 json,
@@ -375,6 +393,9 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
                 value.source_order,
                 &value.generics,
             );
+            json.comma();
+            json.key("callable_kind");
+            json.string(callable_kind(value.callable_kind));
             json.comma();
             json.key("parameters");
             render_parameters(json, &value.parameters);
@@ -462,27 +483,139 @@ fn render_generics(json: &mut Json, values: &[HirGenericParam]) {
             json.comma();
         }
         json.object_start();
-        json.key("bounds");
-        json.array_start();
-        for (j, bound) in value.bounds.iter().enumerate() {
-            if j != 0 {
+        match value {
+            HirGenericParam::Type {
+                span,
+                name,
+                bounds,
+                source_order,
+            } => {
+                json.key("bounds");
+                json.array_start();
+                for (j, bound) in bounds.iter().enumerate() {
+                    if j != 0 {
+                        json.comma();
+                    }
+                    render_type(json, bound);
+                }
+                json.array_end();
                 json.comma();
+                json.key("kind");
+                json.string("type");
+                json.comma();
+                json.key("name");
+                json.string(name);
+                json.comma();
+                json.key("source_order");
+                json.number_usize(*source_order);
+                json.comma();
+                json.key("span");
+                render_span(json, span);
             }
-            render_type(json, bound);
+            HirGenericParam::Const {
+                span,
+                name,
+                ty,
+                source_order,
+            } => {
+                json.key("kind");
+                json.string("const");
+                json.comma();
+                json.key("name");
+                json.string(name);
+                json.comma();
+                json.key("source_order");
+                json.number_usize(*source_order);
+                json.comma();
+                json.key("span");
+                render_span(json, span);
+                json.comma();
+                json.key("type");
+                json.string(ty.name());
+            }
         }
-        json.array_end();
-        json.comma();
-        json.key("name");
-        json.string(&value.name);
-        json.comma();
-        json.key("source_order");
-        json.number_usize(value.source_order);
-        json.comma();
-        json.key("span");
-        render_span(json, &value.span);
         json.object_end();
     }
     json.array_end();
+}
+
+fn render_generic_arg(json: &mut Json, value: &HirGenericArg) {
+    json.object_start();
+    match value {
+        HirGenericArg::Type(value) => {
+            json.key("kind");
+            json.string("type");
+            json.comma();
+            json.key("type");
+            render_type(json, value);
+        }
+        HirGenericArg::Const(value) => {
+            json.key("kind");
+            json.string("const");
+            json.comma();
+            json.key("value");
+            render_const_argument(json, value);
+        }
+    }
+    json.object_end();
+}
+
+fn render_const_argument(json: &mut Json, value: &HirConstArgument) {
+    json.object_start();
+    match value {
+        HirConstArgument::Value { value, ty } => {
+            json.key("kind");
+            json.string("value");
+            json.comma();
+            json.key("type");
+            json.string(ty.name());
+            json.comma();
+            json.key("value");
+            json.number(&value.to_string());
+        }
+        HirConstArgument::Parameter { name, ty } => {
+            json.key("kind");
+            json.string("parameter");
+            json.comma();
+            json.key("name");
+            json.string(name);
+            json.comma();
+            json.key("type");
+            json.string(ty.name());
+        }
+        HirConstArgument::Reference { symbol, ty } => {
+            json.key("kind");
+            json.string("reference");
+            json.comma();
+            json.key("symbol");
+            json.string(&symbol.as_string());
+            json.comma();
+            json.key("type");
+            json.string(ty.name());
+        }
+        HirConstArgument::Binary {
+            op,
+            left,
+            right,
+            ty,
+        } => {
+            json.key("kind");
+            json.string("binary");
+            json.comma();
+            json.key("left");
+            render_const_argument(json, left);
+            json.comma();
+            json.key("op");
+            json.string(binary_name(*op));
+            json.comma();
+            json.key("right");
+            render_const_argument(json, right);
+            json.comma();
+            json.key("type");
+            json.string(ty.name());
+        }
+    }
+    json.object_end();
 }
 
 fn render_type(json: &mut Json, ty: &HirType) {
@@ -502,7 +635,7 @@ fn render_type(json: &mut Json, ty: &HirType) {
                 if i != 0 {
                     json.comma();
                 }
-                render_type(json, arg);
+                render_generic_arg(json, arg);
             }
             json.array_end();
             json.comma();
@@ -518,6 +651,23 @@ fn render_type(json: &mut Json, ty: &HirType) {
             json.comma();
             json.key("name");
             json.string(name);
+        }
+        HirType::AssociatedProjection {
+            base,
+            trait_id,
+            name,
+        } => {
+            json.key("base");
+            render_type(json, base);
+            json.comma();
+            json.key("kind");
+            json.string("associated_projection");
+            json.comma();
+            json.key("name");
+            json.string(name);
+            json.comma();
+            json.key("trait");
+            json.string(&trait_id.as_string());
         }
         HirType::List { item } => {
             json.key("item");
@@ -543,15 +693,36 @@ fn render_type(json: &mut Json, ty: &HirType) {
             json.key("value");
             render_type(json, value);
         }
-        HirType::Tuple2 { first, second } => {
-            json.key("first");
-            render_type(json, first);
+        HirType::Tuple { items } => {
+            json.key("items");
+            json.array_start();
+            for (index, item) in items.iter().enumerate() {
+                if index != 0 {
+                    json.comma();
+                }
+                render_type(json, item);
+            }
+            json.array_end();
             json.comma();
             json.key("kind");
-            json.string("tuple2");
+            json.string("tuple");
+        }
+        HirType::Array { item, length } => {
+            json.key("item");
+            render_type(json, item);
             json.comma();
-            json.key("second");
-            render_type(json, second);
+            json.key("kind");
+            json.string("array");
+            json.comma();
+            json.key("length");
+            render_const_argument(json, length);
+        }
+        HirType::Buffer { length } => {
+            json.key("kind");
+            json.string("buffer");
+            json.comma();
+            json.key("length");
+            render_const_argument(json, length);
         }
         HirType::Option { item } => {
             json.key("item");
@@ -692,6 +863,7 @@ fn render_variants(json: &mut Json, values: &[HirVariant]) {
         json.comma();
         json.key("span");
         render_span(json, &value.span);
+
         json.comma();
         json.key("symbol");
         json.string(&value.symbol.as_string());
@@ -699,10 +871,176 @@ fn render_variants(json: &mut Json, values: &[HirVariant]) {
     }
     json.array_end();
 }
+fn render_associated_types(json: &mut Json, values: &[HirAssociatedType]) {
+    json.array_start();
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
+        json.object_start();
+        json.key("bounds");
+        json.array_start();
+        for (index, bound) in value.bounds.iter().enumerate() {
+            if index != 0 {
+                json.comma();
+            }
+            render_type(json, bound);
+        }
+        json.array_end();
+        json.comma();
+        json.key("name");
+        json.string(&value.id.as_string());
+        json.comma();
+        json.key("source_order");
+        json.number_usize(value.source_order);
+        json.comma();
+        json.key("span");
+        render_span(json, &value.span);
+        json.object_end();
+    }
+    json.array_end();
+}
+
+fn render_associated_type_assignments(json: &mut Json, values: &[HirAssociatedTypeAssignment]) {
+    json.array_start();
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
+        json.object_start();
+        json.key("name");
+        json.string(&value.id.as_string());
+        json.comma();
+        json.key("source_order");
+        json.number_usize(value.source_order);
+        json.comma();
+        json.key("span");
+        render_span(json, &value.span);
+        json.comma();
+        json.key("trait");
+        json.string(&value.trait_id.as_string());
+        json.comma();
+        json.key("type");
+        render_type(json, &value.ty);
+        json.object_end();
+    }
+    json.array_end();
+}
+
+fn render_resource(json: &mut Json, value: &HirResource) {
+    declaration_start(
+        json,
+        "resource",
+        &value.id.as_string(),
+        &value.annotations,
+        &value.doc,
+        &value.span,
+        value.public,
+        value.source_order,
+        &[],
+    );
+    json.comma();
+    json.key("edges");
+    json.array_start();
+    for (index, edge) in value.edges.iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
+        json.object_start();
+        json.key("from");
+        json.string(&edge.from.as_string());
+        json.comma();
+        json.key("source_order");
+        json.number_usize(edge.source_order);
+        json.comma();
+        json.key("span");
+        render_span(json, &edge.span);
+        json.comma();
+        json.key("to");
+        json.string(&edge.to.as_string());
+        json.object_end();
+    }
+    json.array_end();
+    json.comma();
+    json.key("initial");
+    json.string(&value.initial.as_string());
+    json.comma();
+    json.key("states");
+    json.array_start();
+    for (index, state) in value.states.iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
+        json.object_start();
+        json.key("name");
+        json.string(&state.id.as_string());
+        json.comma();
+        json.key("source_order");
+        json.number_usize(state.source_order);
+        json.comma();
+        json.key("span");
+        render_span(json, &state.span);
+        json.comma();
+        json.key("terminal");
+        json.boolean(state.terminal);
+        json.object_end();
+    }
+    json.array_end();
+    json.comma();
+    json.key("terminals");
+    json.array_start();
+    for (index, terminal) in value.terminals.iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
+        render_resource_terminal(json, terminal);
+    }
+    json.array_end();
+    json.object_end();
+}
+
+fn render_resource_terminal(json: &mut Json, value: &HirResourceTerminal) {
+    json.object_start();
+    json.key("source_order");
+    json.number_usize(value.source_order);
+    json.comma();
+    json.key("span");
+    render_span(json, &value.span);
+    json.comma();
+    json.key("state");
+    json.string(&value.state.as_string());
+    json.object_end();
+}
+
+fn render_resource_transition(json: &mut Json, value: &HirResourceTransition) {
+    json.object_start();
+    json.key("field");
+    json.string(&value.field.as_string());
+    json.comma();
+    json.key("from");
+    json.string(&value.from.as_string());
+    json.comma();
+    json.key("resource");
+    json.string(&value.resource.as_string());
+    json.comma();
+    json.key("span");
+    render_span(json, &value.span);
+    json.comma();
+    json.key("to");
+    json.string(&value.to.as_string());
+    json.object_end();
+}
+
 fn render_method(json: &mut Json, value: &HirMethod) {
     json.object_start();
     json.key("contract");
     render_contract(json, &value.contract);
+    json.comma();
+    json.key("default");
+    match &value.default {
+        Some(default) => render_verified_function(json, default),
+        None => json.null(),
+    }
     json.comma();
     json.key("doc");
     render_doc(json, value.doc.as_ref());
@@ -731,6 +1069,56 @@ fn render_method(json: &mut Json, value: &HirMethod) {
     json.key("span");
     render_span(json, &value.span);
     json.object_end();
+}
+
+fn render_verified_function(json: &mut Json, value: &crate::hir::HirVerifiedFunction) {
+    json.object_start();
+    json.key("module");
+    json.string(&value.module.as_string());
+    json.comma();
+    json.key("symbol");
+    json.string(&value.symbol);
+    json.comma();
+    json.key("verified_facade");
+    json.string(&value.verified_facade);
+    json.object_end();
+}
+
+fn render_selected_methods(json: &mut Json, values: &[crate::hir::HirSelectedMethod]) {
+    json.array_start();
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
+        json.object_start();
+        json.key("receiver_type");
+        render_type(json, &value.receiver_type);
+        json.comma();
+        json.key("selected");
+        json.object_start();
+        match &value.selected {
+            HirSelectedImplementation::Explicit { function } => {
+                json.key("function");
+                render_verified_function(json, function);
+                json.comma();
+                json.key("kind");
+                json.string("explicit");
+            }
+            HirSelectedImplementation::Default { function } => {
+                json.key("function");
+                render_verified_function(json, function);
+                json.comma();
+                json.key("kind");
+                json.string("default");
+            }
+        }
+        json.object_end();
+        json.comma();
+        json.key("trait_method");
+        json.string(&value.trait_method.as_string());
+        json.object_end();
+    }
+    json.array_end();
 }
 
 fn render_impl_initializer(json: &mut Json, value: &HirImplInitializer) {
@@ -775,6 +1163,16 @@ fn render_impl_method(json: &mut Json, value: &HirImplMethod) {
     json.comma();
     json.key("span");
     render_span(json, &value.span);
+    json.comma();
+    json.key("transitions");
+    json.array_start();
+    for (index, transition) in value.transitions.iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
+        render_resource_transition(json, transition);
+    }
+    json.array_end();
     json.object_end();
 }
 
@@ -907,11 +1305,17 @@ fn render_clause(json: &mut Json, clause: &HirClause) {
     json.comma();
     json.key("kind");
     match &clause.kind {
-        HirClauseKind::Requires { expression } => {
+        HirClauseKind::Requires { guard, expression } => {
             json.string("requires");
             json.comma();
             json.key("expression");
             render_expr(json, expression);
+            json.comma();
+            json.key("guard");
+            match guard {
+                Some(guard) => render_match_guard(json, guard),
+                None => json.null(),
+            }
         }
         HirClauseKind::Modifies { fields } => {
             json.string("modifies");
@@ -926,27 +1330,31 @@ fn render_clause(json: &mut Json, clause: &HirClause) {
             }
             json.array_end();
         }
-        HirClauseKind::Ensures {
-            pattern,
-            expression,
-        } => {
+        HirClauseKind::Ensures { guard, expression } => {
             json.string("ensures");
             json.comma();
             json.key("expression");
             render_expr(json, expression);
             json.comma();
-            json.key("pattern");
-            match pattern {
-                Some(value) => render_pattern(json, value),
+            json.key("guard");
+            match guard {
+                Some(guard) => render_match_guard(json, guard),
                 None => json.null(),
             }
         }
         HirClauseKind::Error {
             variant,
             priority,
+            guard,
             when,
         } => {
             json.string("error");
+            json.comma();
+            json.key("guard");
+            match guard {
+                Some(guard) => render_match_guard(json, guard),
+                None => json.null(),
+            }
             json.comma();
             json.key("priority");
             match priority {
@@ -1149,13 +1557,23 @@ fn render_reference(json: &mut Json, reference: &HirReference) {
     }
     json.object_end();
 }
+fn render_match_guard(json: &mut Json, guard: &HirMatchGuard) {
+    json.object_start();
+    json.key("pattern");
+    render_pattern(json, &guard.pattern);
+    json.comma();
+    json.key("scrutinee");
+    render_expr(json, &guard.scrutinee);
+    json.comma();
+    json.key("span");
+    render_span(json, &guard.span);
+    json.object_end();
+}
+
 fn render_pattern(json: &mut Json, pattern: &HirPattern) {
     json.object_start();
-    json.key("kind");
     match &pattern.kind {
         HirPatternKind::Variant { symbol, arguments } => {
-            json.string("variant");
-            json.comma();
             json.key("arguments");
             json.array_start();
             for (i, value) in arguments.iter().enumerate() {
@@ -1166,26 +1584,51 @@ fn render_pattern(json: &mut Json, pattern: &HirPattern) {
             }
             json.array_end();
             json.comma();
+            json.key("kind");
+            json.string(match symbol.name.as_str() {
+                "Result.Ok" => "result_ok",
+                "Result.Err" => "result_err",
+                "Option.Some" => "option_some",
+                "Option.Nothing" => "option_none",
+                _ => "enum",
+            });
+            json.comma();
+            json.key("span");
+            render_span(json, &pattern.span);
+            json.comma();
             json.key("symbol");
             json.string(&symbol.as_string());
+            json.comma();
+            json.key("type");
+            render_type(json, &pattern.ty);
         }
         HirPatternKind::Binding { symbol, name } => {
+            json.key("kind");
             json.string("binding");
             json.comma();
             json.key("name");
             json.string(name);
             json.comma();
+            json.key("span");
+            render_span(json, &pattern.span);
+            json.comma();
             json.key("symbol");
             json.string(&symbol.as_string());
+            json.comma();
+            json.key("type");
+            render_type(json, &pattern.ty);
         }
-        HirPatternKind::Wildcard => json.string("wildcard"),
+        HirPatternKind::Wildcard => {
+            json.key("kind");
+            json.string("wildcard");
+            json.comma();
+            json.key("span");
+            render_span(json, &pattern.span);
+            json.comma();
+            json.key("type");
+            render_type(json, &pattern.ty);
+        }
     }
-    json.comma();
-    json.key("span");
-    render_span(json, &pattern.span);
-    json.comma();
-    json.key("type");
-    render_type(json, &pattern.ty);
     json.object_end();
 }
 
@@ -1294,15 +1737,30 @@ fn render_value(json: &mut Json, value: &HirValue) {
             json.key("kind");
             json.string("map");
         }
-        HirValue::Tuple2(first, second) => {
-            json.key("first");
-            render_value(json, first);
+        HirValue::Tuple(value) => {
+            json.key("items");
+            render_values(json, value);
             json.comma();
             json.key("kind");
-            json.string("tuple2");
+            json.string("tuple");
+        }
+        HirValue::Array(value) => {
+            json.key("items");
+            render_values(json, value);
             json.comma();
-            json.key("second");
-            render_value(json, second);
+            json.key("kind");
+            json.string("array");
+        }
+        HirValue::Buffer(value) => {
+            json.key("hex");
+            let mut hex = String::with_capacity(value.len() * 2);
+            for byte in value {
+                write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
+            }
+            json.string(&hex);
+            json.comma();
+            json.key("kind");
+            json.string("buffer");
         }
         HirValue::Named { symbol, fields } => {
             json.key("fields");
@@ -1382,6 +1840,12 @@ fn primitive_name(value: PrimitiveType) -> &'static str {
         PrimitiveType::Any => "any",
         PrimitiveType::Unknown => "unknown",
         PrimitiveType::Never => "never",
+    }
+}
+fn callable_kind(value: HirCallableKind) -> &'static str {
+    match value {
+        HirCallableKind::Sync => "sync",
+        HirCallableKind::Async => "async",
     }
 }
 fn parameter_kind(value: HirParameterKind) -> &'static str {

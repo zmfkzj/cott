@@ -1,12 +1,12 @@
 use crate::ast::{
-    Annotation, BinaryOp, Clause, ClauseKind, CompareOp, ConstExpr, Declaration, DocBlock, Expr,
-    ExprKind, File, FunctionBody, GenericParam, LiteralKind, Pattern, PatternKind, QualifiedName,
-    RuleClause, RuleClauseAction, Type, TypeArgKind, UnaryOp,
+    Annotation, BinaryOp, CallableKind, Clause, ClauseKind, CompareOp, ConstExpr, Declaration,
+    DocBlock, Expr, ExprKind, File, FunctionBody, GenericArgKind, GenericParam, LiteralKind,
+    MatchGuard, Pattern, PatternKind, QualifiedName, RuleClause, RuleClauseAction, Type, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, Span};
 use crate::syntax::{Cst, TokenKind};
 
-/// Renders the closed v0.1 grammar in one deterministic representation while
+/// Renders the closed v0.3 grammar in one deterministic representation while
 /// retaining literal spelling, decoded doc content, and comment attachment.
 pub fn format(cst: &Cst, ast: &File) -> Result<Vec<u8>, Diagnostic> {
     let source = std::str::from_utf8(&cst.source).map_err(|_| {
@@ -234,18 +234,40 @@ impl<'a> Printer<'a> {
                     format!("trait {}{}:", value.name, self.generics(&value.generics)),
                 );
                 self.inline_line(self.keyword_line(&value.span, "trait "));
+                for associated in &value.associated_types {
+                    self.leading(associated.span.start, 1);
+                    let bounds = if associated.bounds.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            ": {}",
+                            associated
+                                .bounds
+                                .iter()
+                                .map(|bound| self.ty(bound))
+                                .collect::<Vec<_>>()
+                                .join(" + ")
+                        )
+                    };
+                    self.push(1, format!("type {}{}", associated.name, bounds));
+                    self.inline_for(&associated.span);
+                }
                 for method in &value.methods {
                     self.leading(method.span.start, 1);
                     let mut parameters = vec!["self".to_owned()];
                     parameters.extend(method.parameters.iter().map(|parameter| {
                         format!("{}: {}", parameter.name, self.ty(&parameter.ty))
                     }));
-                    self.comma_list(
-                        1,
-                        format!("fn {}(", method.name),
-                        parameters,
-                        format!(") -> {}", self.ty(&method.return_type)),
+                    let suffix = format!(
+                        ") -> {}{}",
+                        self.ty(&method.return_type),
+                        method
+                            .default
+                            .as_ref()
+                            .map(|value| format!(" = {}", qname(value)))
+                            .unwrap_or_default()
                     );
+                    self.comma_list(1, format!("fn {}(", method.name), parameters, suffix);
                     self.inline_for(&method.span);
                 }
             }
@@ -266,6 +288,17 @@ impl<'a> Printer<'a> {
                 );
                 self.inline_line(self.keyword_line(&value.span, "impl "));
                 let mut wrote_section = false;
+                for associated in &value.associated_types {
+                    self.leading(associated.span.start, 1);
+                    self.push(
+                        1,
+                        format!("type {} = {}", associated.name, self.ty(&associated.ty)),
+                    );
+                    self.inline_for(&associated.span);
+                }
+                if !value.associated_types.is_empty() {
+                    wrote_section = true;
+                }
                 if !value.state.is_empty() {
                     self.push(1, "state:".to_owned());
                     self.inline_line(self.keyword_line(&value.span, "state"));
@@ -287,7 +320,12 @@ impl<'a> Printer<'a> {
                     }
                     for invariant in &value.invariants {
                         self.leading(invariant.span.start, 1);
-                        self.expression_line(1, "invariant ", &invariant.condition);
+                        self.guarded_expression_line(
+                            1,
+                            "invariant ",
+                            invariant.guard.as_ref(),
+                            &invariant.condition,
+                        );
                         self.inline_for(&invariant.span);
                     }
                     wrote_section = true;
@@ -323,6 +361,36 @@ impl<'a> Printer<'a> {
                     self.inline_line(self.keyword_line(&method.span, "fn "));
                     self.impl_clauses(&method.clauses);
                     wrote_section = true;
+                }
+            }
+            Declaration::Resource(value) => {
+                self.annotations(&value.annotations);
+                self.doc(value.doc.as_ref(), 0);
+                self.push(0, format!("resource {}:", value.name));
+                self.inline_line(self.keyword_line(&value.span, "resource "));
+                self.leading(value.initial.span.start, 1);
+                self.push(1, format!("initial {}", value.initial.name));
+                self.inline_for(&value.initial.span);
+                for state in &value.states {
+                    self.leading(state.span.start, 1);
+                    self.push(1, format!("state {}", state.name));
+                    self.inline_for(&state.span);
+                }
+                for terminal in &value.terminals {
+                    self.leading(terminal.span.start, 1);
+                    self.push(1, format!("terminal {}", terminal.name));
+                    self.inline_for(&terminal.span);
+                }
+                for transition in &value.transitions {
+                    self.leading(transition.span.start, 1);
+                    self.push(
+                        1,
+                        format!(
+                            "transition {} -> {}",
+                            transition.from.name, transition.to.name
+                        ),
+                    );
+                    self.inline_for(&transition.span);
                 }
             }
             Declaration::Const(value) => {
@@ -387,7 +455,16 @@ impl<'a> Printer<'a> {
                 );
                 self.comma_list(
                     0,
-                    format!("fn {}{}(", value.name, self.generics(&value.generics)),
+                    format!(
+                        "{}fn {}{}(",
+                        if value.callable_kind == CallableKind::Async {
+                            "async "
+                        } else {
+                            ""
+                        },
+                        value.name,
+                        self.generics(&value.generics)
+                    ),
                     parameters,
                     suffix,
                 );
@@ -431,9 +508,25 @@ impl<'a> Printer<'a> {
         match &clause.kind {
             ClauseKind::Documentation(doc) => self.doc(Some(doc), indent),
             ClauseKind::Rule { name } => self.push(indent, format!("rule {}", qname(name))),
-            ClauseKind::Requires { condition } => {
-                self.expression_line(indent, "requires ", condition)
+            ClauseKind::Requires { guard, condition } => {
+                self.guarded_expression_line(indent, "requires ", guard.as_ref(), condition)
             }
+            ClauseKind::Transitions { transitions } => self.push(
+                indent,
+                format!(
+                    "transitions {}",
+                    transitions
+                        .iter()
+                        .map(|transition| format!(
+                            "self.{}: {} -> {}",
+                            transition.field.name,
+                            qname(&transition.from),
+                            qname(&transition.to)
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ),
             ClauseKind::Modifies { fields } => self.push(
                 indent,
                 format!(
@@ -445,22 +538,23 @@ impl<'a> Printer<'a> {
                         .join(", ")
                 ),
             ),
-            ClauseKind::Ensures { pattern, condition } => {
-                let prefix = pattern.as_ref().map_or_else(
-                    || "ensures ".to_owned(),
-                    |pattern| format!("ensures {} => ", self.pattern(pattern)),
-                );
-                self.expression_line(indent, &prefix, condition);
+            ClauseKind::Ensures { guard, condition } => {
+                self.ensures_expression_line(indent, "ensures ", guard.as_ref(), condition);
             }
-            ClauseKind::Error { error, when } => {
+            ClauseKind::Error { error, guard, when } => {
+                let mut prefix = format!("error {}", qname(error));
+                if let Some(guard) = guard {
+                    prefix.push_str(&format!(
+                        " with {} matches {}",
+                        self.expr(&guard.scrutinee, 0),
+                        self.pattern(&guard.pattern),
+                    ));
+                }
                 if let Some(condition) = when {
-                    self.expression_line(
-                        indent,
-                        &format!("error {} when ", qname(error)),
-                        condition,
-                    );
+                    prefix.push_str(" when ");
+                    self.expression_line(indent, &prefix, condition);
                 } else {
-                    self.push(indent, format!("error {}", qname(error)));
+                    self.push(indent, prefix);
                 }
             }
             ClauseKind::Effects { effects } => self.comma_list(
@@ -481,9 +575,30 @@ impl<'a> Printer<'a> {
         match &rule_clause.kind {
             ClauseKind::Documentation(doc) => self.doc(Some(doc), 1),
             ClauseKind::Rule { name } => self.push(1, format!("{prefix}rule {}", qname(name))),
-            ClauseKind::Requires { condition } => {
-                self.expression_line(1, &format!("{prefix}requires "), condition);
+            ClauseKind::Requires { guard, condition } => {
+                self.guarded_expression_line(
+                    1,
+                    &format!("{prefix}requires "),
+                    guard.as_ref(),
+                    condition,
+                );
             }
+            ClauseKind::Transitions { transitions } => self.push(
+                1,
+                format!(
+                    "{prefix}transitions {}",
+                    transitions
+                        .iter()
+                        .map(|transition| format!(
+                            "self.{}: {} -> {}",
+                            transition.field.name,
+                            qname(&transition.from),
+                            qname(&transition.to)
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ),
             ClauseKind::Modifies { fields } => self.push(
                 1,
                 format!(
@@ -495,22 +610,28 @@ impl<'a> Printer<'a> {
                         .join(", ")
                 ),
             ),
-            ClauseKind::Ensures { pattern, condition } => {
-                let p = pattern.as_ref().map_or_else(
-                    || format!("{prefix}ensures "),
-                    |pattern| format!("{prefix}ensures {} => ", self.pattern(pattern)),
+            ClauseKind::Ensures { guard, condition } => {
+                self.ensures_expression_line(
+                    1,
+                    &format!("{prefix}ensures "),
+                    guard.as_ref(),
+                    condition,
                 );
-                self.expression_line(1, &p, condition);
             }
-            ClauseKind::Error { error, when } => {
+            ClauseKind::Error { error, guard, when } => {
+                let mut rendered = format!("{prefix}error {}", qname(error));
+                if let Some(guard) = guard {
+                    rendered.push_str(&format!(
+                        " with {} matches {}",
+                        self.expr(&guard.scrutinee, 0),
+                        self.pattern(&guard.pattern),
+                    ));
+                }
                 if let Some(condition) = when {
-                    self.expression_line(
-                        1,
-                        &format!("{prefix}error {} when ", qname(error)),
-                        condition,
-                    );
+                    rendered.push_str(" when ");
+                    self.expression_line(1, &rendered, condition);
                 } else {
-                    self.push(1, format!("{prefix}error {}", qname(error)));
+                    self.push(1, rendered);
                 }
             }
             ClauseKind::Effects { effects } => self.comma_list(
@@ -552,20 +673,19 @@ impl<'a> Printer<'a> {
             "[{}]",
             generics
                 .iter()
-                .map(|generic| {
-                    if generic.bounds.is_empty() {
-                        generic.name.clone()
-                    } else {
-                        format!(
-                            "{}: {}",
-                            generic.name,
-                            generic
-                                .bounds
-                                .iter()
-                                .map(|bound| self.ty(bound))
-                                .collect::<Vec<_>>()
-                                .join(" + ")
-                        )
+                .map(|generic| match generic {
+                    GenericParam::Type { name, bounds, .. } if bounds.is_empty() => name.clone(),
+                    GenericParam::Type { name, bounds, .. } => format!(
+                        "{}: {}",
+                        name,
+                        bounds
+                            .iter()
+                            .map(|bound| self.ty(bound))
+                            .collect::<Vec<_>>()
+                            .join(" + ")
+                    ),
+                    GenericParam::Const { name, ty, .. } => {
+                        format!("const {name}: {}", ty.name())
                     }
                 })
                 .collect::<Vec<_>>()
@@ -581,11 +701,10 @@ impl<'a> Printer<'a> {
                 &ty.arguments
                     .iter()
                     .map(|argument| match &argument.kind {
-                        TypeArgKind::Type(ty) => self.ty(ty),
-                        TypeArgKind::String(value) => self
-                            .slice(&argument.span)
-                            .map(str::to_owned)
-                            .unwrap_or_else(|| serde_json::to_string(value).unwrap()),
+                        GenericArgKind::Type(ty) => self.ty(ty),
+                        GenericArgKind::Const(value) | GenericArgKind::Ambiguous { value, .. } => {
+                            self.const_expr(value)
+                        }
                     })
                     .collect::<Vec<_>>()
                     .join(", "),
@@ -601,6 +720,26 @@ impl<'a> Printer<'a> {
             ConstExpr::Constructor { path, argument, .. } => {
                 format!("{}({})", qname(path), self.const_expr(argument))
             }
+            ConstExpr::Tuple { values, .. } => format!(
+                "Tuple({})",
+                values
+                    .iter()
+                    .map(|value| self.const_expr(value))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            ConstExpr::Array { values, .. } => format!(
+                "Array({})",
+                values
+                    .iter()
+                    .map(|value| self.const_expr(value))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            ConstExpr::Buffer { hex, .. } => format!(
+                "Buffer({})",
+                serde_json::to_string(hex).expect("string serialization")
+            ),
         }
     }
 
@@ -672,6 +811,50 @@ impl<'a> Printer<'a> {
         } else {
             rendered
         }
+    }
+
+    fn ensures_expression_line(
+        &mut self,
+        indent: usize,
+        prefix: &str,
+        guard: Option<&MatchGuard>,
+        condition: &Expr,
+    ) {
+        if let Some(guard) = guard.filter(|guard| {
+            matches!(
+                &guard.scrutinee.kind,
+                ExprKind::Name(name) if name.segments.len() == 1 && name.segments[0] == "result"
+            )
+        }) {
+            self.expression_line(
+                indent,
+                &format!("{prefix}{} => ", self.pattern(&guard.pattern)),
+                condition,
+            );
+        } else {
+            self.guarded_expression_line(indent, prefix, guard, condition);
+        }
+    }
+
+    fn guarded_expression_line(
+        &mut self,
+        indent: usize,
+        prefix: &str,
+        guard: Option<&MatchGuard>,
+        condition: &Expr,
+    ) {
+        let prefix = guard.map_or_else(
+            || prefix.to_owned(),
+            |guard| {
+                format!(
+                    "{}{} matches {} => ",
+                    prefix,
+                    self.expr(&guard.scrutinee, 0),
+                    self.pattern(&guard.pattern),
+                )
+            },
+        );
+        self.expression_line(indent, &prefix, condition);
     }
 
     fn expression_line(&mut self, indent: usize, prefix: &str, expression: &Expr) {
@@ -802,10 +985,11 @@ fn clause_group(clause: &Clause) -> u8 {
         ClauseKind::Documentation(_) => 0,
         ClauseKind::Rule { .. } => 1,
         ClauseKind::Requires { .. } => 2,
-        ClauseKind::Modifies { .. } => 3,
-        ClauseKind::Ensures { .. } => 4,
-        ClauseKind::Error { .. } => 5,
-        ClauseKind::Effects { .. } => 6,
+        ClauseKind::Transitions { .. } => 3,
+        ClauseKind::Modifies { .. } => 4,
+        ClauseKind::Ensures { .. } => 5,
+        ClauseKind::Error { .. } => 6,
+        ClauseKind::Effects { .. } => 7,
     }
 }
 
@@ -820,10 +1004,11 @@ fn rule_clause_group(clause: &RuleClause) -> u8 {
             ClauseKind::Documentation(_) => 0,
             ClauseKind::Rule { .. } => 1,
             ClauseKind::Requires { .. } => 2,
-            ClauseKind::Modifies { .. } => 3,
-            ClauseKind::Ensures { .. } => 4,
-            ClauseKind::Error { .. } => 5,
-            ClauseKind::Effects { .. } => 6,
+            ClauseKind::Transitions { .. } => 3,
+            ClauseKind::Modifies { .. } => 4,
+            ClauseKind::Ensures { .. } => 5,
+            ClauseKind::Error { .. } => 6,
+            ClauseKind::Effects { .. } => 7,
         }
 }
 

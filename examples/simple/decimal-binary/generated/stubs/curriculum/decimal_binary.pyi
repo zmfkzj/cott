@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.decimal_binary_types import Conversion as Conversion, ConversionError as ConversionError, ConversionError_InvalidBinary as ConversionError_InvalidBinary, ConversionError_NegativeDecimal as ConversionError_NegativeDecimal, ConversionError_Overflow as ConversionError_Overflow, ConversionResult as ConversionResult, ConversionResult_Binary as ConversionResult_Binary, ConversionResult_Decimal as ConversionResult_Decimal, Conversion_BinaryToDecimal as Conversion_BinaryToDecimal, Conversion_DecimalToBinary as Conversion_DecimalToBinary
 """Converts one decimal I64 to canonical binary text.

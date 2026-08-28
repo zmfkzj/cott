@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 def spell_under_thousand(value: I64) -> str:
     """Spell one integer from zero through nine hundred ninety-nine.
@@ -51,7 +51,7 @@ hundred follows a higher group with `and`. All I64 values, including the
 minimum, are accepted without signed-I64 negation."""
     value = _cott_validate_abi(value, I64, path="$.value")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/numbers_to_words/spell_cardinal.py", "7ab5380e3749d49c1dcafd74ad9bcd55f6fbb24ff7b614484c40d33414bba8af", "spell_cardinal", expected_project_name="numbers-to-words", expected_cott_symbol="curriculum.numbers_to_words.spell_cardinal")
+        _implementation = _cott_load("_cott_impl/curriculum/numbers_to_words/spell_cardinal.py", "11150e4d4f1a2257c39cb40b9ba77b830c28e44be8e2010d4f115b3d2752a718", "spell_cardinal", expected_project_name="numbers-to-words", expected_cott_symbol="curriculum.numbers_to_words.spell_cardinal")
         _result = _implementation(value)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

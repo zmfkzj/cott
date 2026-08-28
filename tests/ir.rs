@@ -34,7 +34,7 @@ fn checked_in_canonical_ir_schema_is_parseable() {
     );
     assert_eq!(
         object.get("$id").and_then(serde_json::Value::as_str),
-        Some("https://cott.dev/schema/canonical-ir/v3")
+        Some("https://cott.dev/schema/canonical-ir/v5")
     );
     assert_eq!(
         object
@@ -44,7 +44,7 @@ fn checked_in_canonical_ir_schema_is_parseable() {
             .and_then(serde_json::Value::as_object)
             .and_then(|version| version.get("const"))
             .and_then(serde_json::Value::as_u64),
-        Some(3)
+        Some(5)
     );
 
     let definitions = object
@@ -265,7 +265,7 @@ fn renders_and_closes_advanced_type_nodes() {
     assert_eq!(first.modules[0].bytes, second.modules[0].bytes);
 
     let text = json(&first.modules[0]);
-    assert!(text.contains(r#""schema_version":3"#));
+    assert!(text.contains(r#""schema_version":5"#));
     assert_in_order(
         text,
         &[
@@ -287,7 +287,7 @@ fn renders_and_closes_advanced_type_nodes() {
     ));
 
     let value = load(&first.modules[0].bytes).expect("advanced canonical IR must load");
-    assert_eq!(value["schema_version"], 3);
+    assert_eq!(value["schema_version"], 5);
     assert_eq!(value["declarations"][0]["kind"], "external_type");
     let external = value["declarations"][0]
         .as_object()
@@ -311,7 +311,7 @@ fn renders_and_closes_factory_type_nodes() {
     ));
 
     let value = load(&rendered.modules[0].bytes).expect("Factory canonical IR must load");
-    assert_eq!(value["schema_version"], 3);
+    assert_eq!(value["schema_version"], 5);
     let declarations = value["declarations"].as_array().expect("declarations");
     let alias = declarations
         .iter()
@@ -639,4 +639,225 @@ fn schema_rejects_malformed_impl_nodes() {
     let mut malformed_old = value;
     assert!(remove_old_state_field(&mut malformed_old));
     assert_schema_rejects(malformed_old, "old state field without identity must fail");
+}
+
+#[test]
+fn renders_v5_associated_async_and_resource_identity() {
+    let parsed = parse_project([source(
+        "src/v03.cott",
+        r#"module v03
+
+trait Stream:
+    type Item
+    fn next(self) -> Stream.Item
+
+impl NumberStream for Stream:
+    type Item = I32
+    fn next(self) -> I32:
+        ensures true
+
+resource Door:
+    initial Open
+    state Open
+    state Closed
+    terminal Closed
+    transition Open -> Closed
+
+async fn fetch() -> I32
+"#,
+    )])
+    .expect("v0.3 fixture must parse");
+    let project = cott::hir::lower(Path::new("src"), parsed).expect("v0.3 fixture must lower");
+    let rendered = render(&project).expect("v0.3 HIR must render");
+    let value = load(&rendered.modules[0].bytes).expect("v0.3 IR must load");
+    let declarations = value["declarations"].as_array().expect("declarations");
+    assert_eq!(value["schema_version"], 5);
+    assert_eq!(
+        declarations[0]["associated_types"][0]["name"],
+        "v03.Stream.Item"
+    );
+    assert_eq!(
+        declarations[1]["associated_types"][0]["trait"],
+        "v03.Stream"
+    );
+    assert_eq!(
+        declarations[3]["callable_kind"],
+        serde_json::Value::String("async".into())
+    );
+    assert_eq!(declarations[2]["states"][0]["name"], "v03.Door.Open");
+    assert_eq!(declarations[2]["edges"][0]["to"], "v03.Door.Closed");
+    let mut missing_callable_kind = value.clone();
+    missing_callable_kind["declarations"][3]
+        .as_object_mut()
+        .expect("function object")
+        .remove("callable_kind");
+    assert_schema_rejects(
+        missing_callable_kind,
+        "function without callable identity must fail",
+    );
+    let mut missing_associated_types = value.clone();
+    missing_associated_types["declarations"][0]
+        .as_object_mut()
+        .expect("trait object")
+        .remove("associated_types");
+    assert_schema_rejects(
+        missing_associated_types,
+        "trait without associated declarations must fail",
+    );
+    let mut missing_resource_edges = value;
+    missing_resource_edges["declarations"][2]
+        .as_object_mut()
+        .expect("resource object")
+        .remove("edges");
+    assert_schema_rejects(
+        missing_resource_edges,
+        "resource without graph edges must fail",
+    );
+}
+
+#[test]
+fn renders_resource_initial_state_defaults_as_enum_values() {
+    let parsed = parse_project([source(
+        "src/lifecycle.cott",
+        r#"module lifecycle
+
+trait Controller:
+    fn close(self) -> Unit
+
+resource Door:
+    initial Open
+    state Open
+    state Closed
+    terminal Closed
+    transition Open -> Closed
+
+impl DoorController for Controller:
+    state:
+        door: Door
+    init(door: Door):
+        requires true
+    fn close(self) -> Unit:
+        requires true
+        transitions self.door: Door.Open -> Door.Closed
+        ensures true
+"#,
+    )])
+    .expect("resource default fixture must parse");
+    let project = cott::hir::lower(Path::new("src"), parsed).expect("fixture must lower");
+    let rendered = render(&project).expect("fixture must render");
+    let value = load(&rendered.modules[0].bytes).expect("fixture must load");
+    let implementation = value["declarations"]
+        .as_array()
+        .expect("declarations")
+        .iter()
+        .find(|declaration| declaration["kind"] == "impl")
+        .expect("impl declaration");
+    assert_eq!(
+        implementation["state"][0]["default"],
+        serde_json::json!({"kind":"enum","fields":[],"variant":"lifecycle.Door.Open"})
+    );
+}
+
+#[test]
+fn renders_resource_terminals_in_declaration_order_with_source_spans() {
+    let text = r#"module lifecycle
+
+resource Job:
+    initial new
+    state new
+    state done
+    state failed
+    terminal failed
+    terminal done
+    transition new -> done
+    transition new -> failed
+"#;
+    let parsed = parse_project([source("src/lifecycle.cott", text)])
+        .expect("resource terminal fixture must parse");
+    let project = cott::hir::lower(Path::new("src"), parsed).expect("fixture must lower");
+    let rendered = render(&project).expect("fixture must render");
+    let value = load(&rendered.modules[0].bytes).expect("fixture must load");
+    let resource = value["declarations"]
+        .as_array()
+        .expect("declarations")
+        .iter()
+        .find(|declaration| declaration["kind"] == "resource")
+        .expect("resource declaration");
+    let terminals = resource["terminals"]
+        .as_array()
+        .expect("resource terminals");
+    assert_eq!(
+        terminals
+            .iter()
+            .map(|terminal| terminal["state"].as_str().expect("terminal state"))
+            .collect::<Vec<_>>(),
+        ["lifecycle.Job.failed", "lifecycle.Job.done"]
+    );
+    assert_eq!(
+        terminals
+            .iter()
+            .map(|terminal| terminal["source_order"].as_u64().expect("terminal order"))
+            .collect::<Vec<_>>(),
+        [0, 1]
+    );
+    for (terminal, state) in terminals.iter().zip(["failed", "done"]) {
+        let start = text
+            .find(&format!("terminal {state}"))
+            .expect("terminal declaration")
+            + "terminal ".len();
+        assert_eq!(terminal["span"]["start_byte"], start);
+        assert_eq!(terminal["span"]["end_byte"], start + state.len());
+    }
+}
+
+#[test]
+fn loads_reference_and_binary_const_generic_arguments() {
+    let parsed = parse_project([
+        source(
+            "src/foo/sizes.cott",
+            "module foo.sizes\n\nconst THREE: U32 = 3\n",
+        ),
+        source(
+            "src/foo/consumer.cott",
+            r#"module foo.consumer
+use foo.sizes.{THREE}
+
+const FOUR: U32 = 4
+
+struct Page[T, const N: U32]:
+    items: Array[T, N]
+
+struct Holder:
+    named: Page[U8, FOUR]
+    qualified: Page[U8, foo.sizes.THREE]
+    arithmetic: Page[U8, FOUR + 1]
+"#,
+        ),
+    ])
+    .expect("const generic IR fixture must parse");
+    let project = cott::hir::lower(Path::new("src"), parsed).expect("fixture must lower");
+    let rendered = render(&project).expect("fixture must render");
+    let consumer = rendered
+        .modules
+        .iter()
+        .find(|module| module.module.as_string() == "foo.consumer")
+        .expect("consumer module");
+    let value = load(&consumer.bytes).expect("fixture IR must load");
+    let holder = value["declarations"]
+        .as_array()
+        .expect("declarations")
+        .iter()
+        .find(|declaration| declaration["name"] == "foo.consumer.Holder")
+        .expect("Holder declaration");
+    let named = &holder["fields"][0]["type"]["args"][1]["value"];
+    assert_eq!(named["kind"], "reference");
+    assert_eq!(named["symbol"], "foo.consumer.FOUR");
+    let qualified = &holder["fields"][1]["type"]["args"][1]["value"];
+    assert_eq!(qualified["kind"], "reference");
+    assert_eq!(qualified["symbol"], "foo.sizes.THREE");
+    let arithmetic = &holder["fields"][2]["type"]["args"][1]["value"];
+    assert_eq!(arithmetic["kind"], "binary");
+    assert_eq!(arithmetic["op"], "add");
+    assert_eq!(arithmetic["left"]["symbol"], "foo.consumer.FOUR");
+    assert_eq!(arithmetic["right"]["value"], 1);
 }

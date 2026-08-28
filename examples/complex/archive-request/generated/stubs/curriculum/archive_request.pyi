@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.archive_request_types import ArchivePlan as ArchivePlan, ArchiveRequest as ArchiveRequest, ArchiveRequestError as ArchiveRequestError, ArchiveRequestError_EmptySelection as ArchiveRequestError_EmptySelection, ArchiveRequestError_InvalidUrl as ArchiveRequestError_InvalidUrl, CaptureKind as CaptureKind, CaptureKind_Html as CaptureKind_Html, CaptureKind_Media as CaptureKind_Media
 """Parse an HTTP or HTTPS URL and return its deterministic canonical form.

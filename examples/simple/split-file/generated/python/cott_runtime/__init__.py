@@ -28,8 +28,9 @@ _COTT_PATH_TYPE = type(_Path())
 # The compiler embeds this value in every generated runtime.
 PROJECT_NAME = 'split-file'
 _COTT_PROJECT_NAME = PROJECT_NAME
-_COTT_RUNTIME_ABI = "1"
-_COTT_RUNTIME_VERSION = '0.1.0'
+PROJECT_VERSION = '0.1.0'
+_COTT_RUNTIME_ABI = "2"
+_COTT_RUNTIME_VERSION = '0.3.0'
 
 
 _T = TypeVar("_T")
@@ -38,7 +39,7 @@ _K = TypeVar("_K")
 _V = TypeVar("_V")
 _T1 = TypeVar("_T1")
 _T2 = TypeVar("_T2")
-
+_N = TypeVar("_N", bound=int)
 
 @_final
 @dataclass(frozen=True, slots=True)
@@ -249,49 +250,65 @@ class FrozenMap(Mapping[_K, _V], Generic[_K, _V]):
 
 
 @_final
-class CottTuple2(Sequence[Union[_T1, _T2]], Generic[_T1, _T2]):
+class CottArray(Sequence[_T], Generic[_T, _N]):
     __slots__ = ("_values",)
-    def __hash__(self) -> int:
-        return hash(self._values)
+    __hash__ = None
 
-    def __init__(self, *, first: _T1, second: _T2) -> None:
-        self._values = (first, second)
+    def __init__(self, *, values: Iterable[_T]) -> None:
+        object.__setattr__(
+            self, "_values", values._values if type(values) is CottArray else tuple(values)
+        )
 
-    @property
-    def first(self) -> _T1:
-        return self._values[0]
+    def __setattr__(self, _name: str, _value: object) -> None:
+        raise AttributeError("CottArray is immutable")
 
-    @property
-    def second(self) -> _T2:
-        return self._values[1]
+    def __len__(self) -> int:
+        return len(self._values)
 
-    def __len__(self) -> Literal[2]:
-        return 2
-
-    @overload
-    def __getitem__(self, index: Literal[0]) -> _T1: ...
-
-    @overload
-    def __getitem__(self, index: Literal[1]) -> _T2: ...
-
-    @overload
-    def __getitem__(self, index: int) -> Union[_T1, _T2]: ...
-
-    @overload
-    def __getitem__(self, index: slice) -> tuple[Union[_T1, _T2], ...]: ...
-
-    def __getitem__(self, index: int | slice) -> Union[_T1, _T2, tuple[Union[_T1, _T2], ...]]:
+    def __getitem__(self, index: int | slice) -> _T | tuple[_T, ...]:
         return self._values[index]
 
-    def __iter__(self) -> Iterator[Union[_T1, _T2]]:
+    def __iter__(self) -> Iterator[_T]:
         return iter(self._values)
 
     def __eq__(self, other: object) -> bool:
-        return type(other) is CottTuple2 and self._values == other._values
+        return type(other) is CottArray and self._values == other._values
 
     def __repr__(self) -> str:
-        return f"CottTuple2(first={self.first!r}, second={self.second!r})"
+        return f"CottArray(values={self._values!r})"
 
+
+@_final
+class CottBuffer(Sequence[int], Generic[_N]):
+    __slots__ = ("_data",)
+    __hash__ = None
+
+    def __init__(self, *, data: bytes) -> None:
+        if type(data) is not bytes:
+            raise CottContractViolation("CottBuffer.data must be exact bytes", phase="validation")
+        object.__setattr__(self, "_data", data)
+
+    def __setattr__(self, _name: str, _value: object) -> None:
+        raise AttributeError("CottBuffer is immutable")
+
+    @property
+    def data(self) -> bytes:
+        return self._data
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __getitem__(self, index: int | slice) -> int | bytes:
+        return self._data[index]
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(self._data)
+
+    def __eq__(self, other: object) -> bool:
+        return type(other) is CottBuffer and self._data == other._data
+
+    def __repr__(self) -> str:
+        return f"CottBuffer(data={self._data.hex()!r})"
 
 @_final
 @dataclass(frozen=True, slots=True, kw_only=True, eq=False, repr=False)
@@ -416,6 +433,13 @@ def _cott_validate_json(value: object) -> None:
     raise CottContractViolation("value is not a JsonValue", phase="validation")
 
 
+def _cott_fixed_length(annotation: object, path: str) -> int:
+    values = _get_args(annotation)
+    if len(values) != 1 or type(values[0]) is not int or values[0] < 0:
+        raise CottContractViolation(f"{path} has an invalid fixed length", phase="validation")
+    return values[0]
+
+
 def _cott_substitute_type(annotation: object, substitutions: dict[object, object]) -> object:
     replacement = substitutions.get(annotation)
     if replacement is not None:
@@ -524,12 +548,30 @@ def _cott_validate_abi(value: object, annotation: object, *, path: str = "$") ->
             _cott_validate_abi(key, key_type, path=path): _cott_validate_abi(item, item_type, path=path)
             for key, item in value.items()
         })
-    if origin is CottTuple2 and type(value) is CottTuple2:
-        first_type, second_type = args if len(args) == 2 else (Any, Any)
-        return CottTuple2(
-            first=_cott_validate_abi(value.first, first_type, path=path),
-            second=_cott_validate_abi(value.second, second_type, path=path),
+    if origin is tuple:
+        if type(value) is not tuple or len(value) != len(args):
+            raise CottContractViolation(f"{path} does not match ABI tuple", phase="validation")
+        return tuple(
+            _cott_validate_abi(item, item_type, path=f"{path}[{index}]")
+            for index, (item, item_type) in enumerate(zip(value, args))
         )
+    if origin is CottArray:
+        if type(value) is not CottArray or len(args) != 2:
+            raise CottContractViolation(f"{path} does not match ABI array", phase="validation")
+        length = _cott_fixed_length(args[1], path)
+        if len(value) != length:
+            raise CottContractViolation(f"{path} has the wrong array length", phase="validation")
+        return CottArray(values=(
+            _cott_validate_abi(item, args[0], path=f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ))
+    if origin is CottBuffer:
+        if type(value) is not CottBuffer or len(args) != 1:
+            raise CottContractViolation(f"{path} does not match ABI buffer", phase="validation")
+        length = _cott_fixed_length(args[0], path)
+        if len(value.data) != length:
+            raise CottContractViolation(f"{path} has the wrong buffer length", phase="validation")
+        return value
     nominal = origin if isinstance(origin, type) and _dataclasses.is_dataclass(origin) else annotation
     if isinstance(nominal, type) and type(value) is nominal:
         if nominal is JsonArray or nominal is JsonObject:
@@ -586,11 +628,16 @@ def _cott_normalize_f32_abi(value: object, annotation: object, *, path: str = "$
             _cott_normalize_f32_abi(key, args[0], path=path): _cott_normalize_f32_abi(item, args[1], path=path)
             for key, item in value.items()
         })
-    if origin is CottTuple2 and type(value) is CottTuple2:
-        return CottTuple2(
-            first=_cott_normalize_f32_abi(value.first, args[0], path=path),
-            second=_cott_normalize_f32_abi(value.second, args[1], path=path),
+    if origin is tuple and type(value) is tuple and len(value) == len(args):
+        return tuple(
+            _cott_normalize_f32_abi(item, item_type, path=f"{path}[{index}]")
+            for index, (item, item_type) in enumerate(zip(value, args))
         )
+    if origin is CottArray and type(value) is CottArray and len(args) == 2:
+        return CottArray(values=(
+            _cott_normalize_f32_abi(item, args[0], path=f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ))
     nominal = origin if isinstance(origin, type) and _dataclasses.is_dataclass(origin) else annotation
     if isinstance(nominal, type) and type(value) is nominal and _dataclasses.is_dataclass(nominal):
         substitutions = dict(zip(getattr(nominal, "__parameters__", ()), args))
@@ -687,6 +734,21 @@ def _cott_regular_file_bytes(path: _Path, label: str) -> bytes:
         raise
     except (OSError, ValueError) as error:
         raise _cott_violation(f"unable to read {label}: {error}") from error
+def _cott_dependency_file_bytes(path: _Path, label: str) -> bytes:
+    try:
+        resolved = path.resolve(strict=True)
+        if resolved != path:
+            raise _cott_violation(f"{label} contains a symlink")
+        metadata = path.stat()
+        if not _stat.S_ISREG(metadata.st_mode):
+            raise _cott_violation(f"{label} is not a regular file")
+        return path.read_bytes()
+    except CottContractViolation:
+        raise
+    except (OSError, ValueError) as error:
+        raise _cott_violation(f"unable to read {label}: {error}") from error
+
+
 
 def _cott_file_stamp(path: _Path, label: str) -> tuple[int, int, int, int, int]:
     try:
@@ -832,63 +894,275 @@ def _cott_validate_dependencies(dependencies: object, source: bytes, public_pyth
             if candidate.is_symlink():
                 raise _cott_violation(f"dependency {name!r} origin is a symlink")
             expected = _cott_expected_digest(origin.get("content_hash"), f"dependency {name} file hash")
-            actual = _cott_sha256(_cott_regular_file_bytes(candidate, f"dependency {name} file"))
+            actual = _cott_sha256(_cott_dependency_file_bytes(candidate, f"dependency {name} file"))
             if actual != expected:
                 raise _cott_violation(f"dependency {name!r} file hash mismatch")
-def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symbol: str, project: str | None, cott_symbol: str | None, source: bytes) -> str:
-    artifact_root = root.parent if root.name == "python" else root
-    generation_path = artifact_root / "generation.json"
-    current_record = _json.loads(_cott_regular_file_bytes(generation_path, "generation record"))
-    if type(current_record) is not dict or current_record.get("schema_version") != 1 or type(current_record.get("current")) is not dict:
-        raise _cott_violation("generation record is malformed")
-    current = current_record["current"]
-    generation_id = current.get("generation_id")
-    if type(generation_id) is not str:
-        raise _cott_violation("generation identity is missing")
-    identity = dict(current)
+def _cott_is_digest(value: object) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 71
+        and value.startswith("sha256:")
+        and all(character in "0123456789abcdef" for character in value[7:])
+    )
+
+def _cott_is_project_version(value: object) -> bool:
+    if type(value) is not str:
+        return False
+    parts = value.split(".")
+    return len(parts) == 3 and all(
+        part and all(character in "0123456789" for character in part)
+        and (part == "0" or not part.startswith("0"))
+        for part in parts
+    )
+
+
+def _cott_is_verification(value: object) -> bool:
+    if value is None:
+        return True
+    if type(value) is not dict:
+        return False
+    comparison = value.get("implementation_comparison")
+    if comparison is None:
+        return "implementation_comparison" not in value
+    if type(comparison) is not dict or set(comparison) != {"baseline_generation_id", "status", "entries"}:
+        return False
+    baseline = comparison["baseline_generation_id"]
+    status = comparison["status"]
+    entries = comparison["entries"]
+    if (
+        (baseline is not None and not _cott_is_digest(baseline))
+        or status not in ("no_baseline", "compared")
+        or type(entries) is not list
+        or status == "no_baseline" and (baseline is not None or entries)
+        or status == "compared" and not _cott_is_digest(baseline)
+    ):
+        return False
+    allowed_fields = {"content_hash", "concrete", "kind", "method", "owner", "python_symbol", "runtime_origin", "source_origin"}
+    for entry in entries:
+        if type(entry) is not dict or set(entry) != {"cott_symbol", "status", "changed_fields"}:
+            return False
+        changed_fields = entry["changed_fields"]
+        if (
+            type(entry["cott_symbol"]) is not str
+            or entry["status"] not in ("added", "removed", "unchanged", "changed")
+            or type(changed_fields) is not dict
+            or set(changed_fields) - allowed_fields
+            or entry["status"] == "unchanged" and changed_fields
+            or entry["status"] != "unchanged" and not changed_fields
+        ):
+            return False
+        for change in changed_fields.values():
+            if (
+                type(change) is not dict
+                or set(change) != {"before", "after"}
+                or change["before"] is not None and type(change["before"]) is not str
+                or change["after"] is not None and type(change["after"]) is not str
+            ):
+                return False
+    return True
+
+def _cott_is_agent_run(value: object) -> bool:
+    required = {
+        "symbol", "adapter", "adapter_version", "argv_template", "executable", "executable_hash",
+        "prompt_hash", "implementation_hash", "environment_names", "duration_ms", "status", "stdout", "stderr",
+    }
+    if type(value) is not dict or set(value) != required:
+        return False
+    if (
+        any(type(value[field]) is not str for field in ("symbol", "adapter", "adapter_version", "executable", "executable_hash", "prompt_hash", "implementation_hash"))
+        or type(value["argv_template"]) is not list
+        or any(type(argument) is not str for argument in value["argv_template"])
+        or type(value["environment_names"]) is not list
+        or any(type(name) is not str for name in value["environment_names"])
+        or type(value["duration_ms"]) is not int or not 0 <= value["duration_ms"] < 1 << 64
+    ):
+        return False
+    status = value["status"]
+    if type(status) is not dict or set(status) != {"exit_code", "signal", "timed_out", "cancelled"}:
+        return False
+    if any(
+        code is not None and (type(code) is not int or not -(1 << 31) <= code < 1 << 31)
+        for code in (status["exit_code"], status["signal"])
+    ) or type(status["timed_out"]) is not bool or type(status["cancelled"]) is not bool:
+        return False
+    for stream in (value["stdout"], value["stderr"]):
+        if type(stream) is not dict or set(stream) != {"bytes", "sha256", "truncated"}:
+            return False
+        if (
+            type(stream["bytes"]) is not int or not 0 <= stream["bytes"] < 1 << 64
+            or type(stream["sha256"]) is not str or type(stream["truncated"]) is not bool
+        ):
+            return False
+    return True
+
+
+def _cott_is_unresolved(value: object) -> bool:
+    if type(value) is not dict or set(value) != {"cott_symbol", "kind", "span"}:
+        return False
+    if type(value["cott_symbol"]) is not str or not value["cott_symbol"] or value["kind"] not in ("function", "async_function", "impl_method"):
+        return False
+    span = value["span"]
+    if type(span) is not dict or set(span) != {"start_byte", "end_byte", "start_line", "start_column", "end_line", "end_column"}:
+        return False
+    if any(type(span[key]) is not int for key in span):
+        return False
+    return (
+        span["end_byte"] >= span["start_byte"]
+        and span["end_line"] >= span["start_line"]
+        and span["start_line"] > 0
+        and span["start_column"] > 0
+        and span["end_line"] > 0
+        and span["end_column"] > 0
+    )
+
+def _cott_validate_generation_snapshot(snapshot: object, label: str) -> dict[object, object]:
+    required = {
+        "generation_id", "verified", "project_version", "compatibility", "inputs", "tools", "ir",
+        "contract_surface", "public_python_symbols", "implementations", "dependencies", "managed_files",
+        "unresolved", "verification", "agent_runs",
+    }
+    if type(snapshot) is not dict or set(snapshot) != required:
+        raise _cott_violation(f"{label} generation snapshot is malformed")
+    if not _cott_is_digest(snapshot["generation_id"]) or type(snapshot["verified"]) is not bool or not _cott_is_project_version(snapshot["project_version"]):
+        raise _cott_violation(f"{label} generation snapshot identity is malformed")
+    compatibility = snapshot["compatibility"]
+    if (
+        type(compatibility) is not dict
+        or set(compatibility) != {"generation_schema", "canonical_ir_schema", "runtime_abi"}
+        or any(type(compatibility[key]) is not int for key in compatibility)
+        or compatibility != {"generation_schema": 2, "canonical_ir_schema": 5, "runtime_abi": 2}
+    ):
+        raise _cott_violation(f"{label} generation compatibility is incompatible")
+    for field in ("inputs", "ir", "managed_files"):
+        value = snapshot[field]
+        if type(value) is not dict or any(not _cott_is_digest(digest) for digest in value.values()):
+            raise _cott_violation(f"{label} generation {field} is malformed")
+    if type(snapshot["tools"]) is not dict or type(snapshot["contract_surface"]) is not dict:
+        raise _cott_violation(f"{label} generation metadata is malformed")
+    public_python_symbols = snapshot["public_python_symbols"]
+    if type(public_python_symbols) is not dict or any(
+        type(module) is not str or type(symbols) is not list or any(type(symbol) is not str for symbol in symbols)
+        for module, symbols in public_python_symbols.items()
+    ):
+        raise _cott_violation(f"{label} generation public Python symbols are malformed")
+    implementations = snapshot["implementations"]
+    if type(implementations) is not list:
+        raise _cott_violation(f"{label} generation implementations must be an array")
+    for implementation in implementations:
+        complete = {"cott_symbol", "owner", "python_symbol", "source_origin", "runtime_origin", "content_hash", "kind", "concrete", "method"}
+        if type(implementation) is not dict or set(implementation) != complete:
+            raise _cott_violation("generation implementation is malformed")
+        if (
+            any(type(implementation[field]) is not str for field in ("cott_symbol", "python_symbol", "source_origin", "runtime_origin"))
+            or implementation["owner"] not in ("manifest", "agent")
+            or not _cott_is_digest(implementation["content_hash"])
+        ):
+            raise _cott_violation("generation implementation is malformed")
+        kind = implementation["kind"]
+        concrete = implementation["concrete"]
+        method = implementation["method"]
+        if kind in ("function", "async_function") and concrete is None and method is None:
+            continue
+        if kind == "impl_method" and type(concrete) is str and concrete and type(method) is str and method:
+            continue
+        raise _cott_violation("generation implementation kind is malformed")
+    dependencies = snapshot["dependencies"]
+    if type(dependencies) is not list:
+        raise _cott_violation(f"{label} generation dependencies must be an array")
+    for dependency in dependencies:
+        required_dependency = {"name", "version", "lock_hash", "artifacts"}
+        allowed_dependency = required_dependency | {"installed"}
+        if type(dependency) is not dict or not required_dependency <= set(dependency) or set(dependency) - allowed_dependency:
+            raise _cott_violation("generation dependency is malformed")
+        if (
+            type(dependency["name"]) is not str or not dependency["name"]
+            or type(dependency["version"]) is not str or not dependency["version"]
+            or not _cott_is_digest(dependency["lock_hash"])
+            or type(dependency["artifacts"]) is not list
+            or any(not _cott_is_digest(artifact) for artifact in dependency["artifacts"])
+            or len(set(dependency["artifacts"])) != len(dependency["artifacts"])
+            or ("installed" in dependency and type(dependency["installed"]) is not dict)
+        ):
+            raise _cott_violation("generation dependency is malformed")
+    if (
+        type(snapshot["unresolved"]) is not list
+        or any(not _cott_is_unresolved(record) for record in snapshot["unresolved"])
+        or not _cott_is_verification(snapshot["verification"])
+        or type(snapshot["agent_runs"]) is not list
+        or any(not _cott_is_agent_run(agent_run) for agent_run in snapshot["agent_runs"])
+    ):
+        raise _cott_violation(f"{label} generation metadata is malformed")
+    return snapshot
+
+
+def _cott_validate_generation_identity(snapshot: dict[object, object]) -> str:
+    generation_id = snapshot["generation_id"]
+    current = dict(snapshot)
     for key in ("generation_id", "verified", "verification", "agent_runs"):
-        identity.pop(key, None)
+        current.pop(key)
     expected_id = _cott_sha256(
-        _json.dumps(identity, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        _json.dumps(
+            {"domain": "cott.generation.v2", "schema_version": 2, "current": current},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        + b"\n"
     )
     if generation_id != expected_id:
         raise _cott_violation("generation identity mismatch")
-    _cott_validate_python_tools(current.get("tools"))
-    _cott_validate_dependencies(current.get("dependencies"), source, current.get("public_python_symbols"))
-    implementations = current.get("implementations")
-    if type(implementations) is not list:
-        raise _cott_violation("generation implementations must be an array")
+    return generation_id
+
+
+def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symbol: str, project: str | None, cott_symbol: str | None, source: bytes) -> str:
+    artifact_root = root.parent if root.name == "python" else root
+    generation_path = artifact_root / "generation.json"
+    try:
+        current_record = _json.loads(_cott_regular_file_bytes(generation_path, "generation record"))
+    except (TypeError, ValueError) as error:
+        raise _cott_violation(f"generation record is malformed: {error}") from error
+    if (
+        type(current_record) is not dict
+        or set(current_record) != {"schema_version", "current", "last_verified"}
+        or type(current_record["schema_version"]) is not int
+        or current_record["schema_version"] != 2
+    ):
+        raise _cott_violation("generation record is malformed")
+    current = _cott_validate_generation_snapshot(current_record["current"], "current")
+    last_verified = current_record["last_verified"]
+    if last_verified is not None:
+        last_verified = _cott_validate_generation_snapshot(last_verified, "last verified")
+        if not last_verified["verified"]:
+            raise _cott_violation("last verified generation snapshot is not verified")
+        _cott_validate_generation_identity(last_verified)
+    generation_id = _cott_validate_generation_identity(current)
+    if current["project_version"] != PROJECT_VERSION:
+        raise _cott_violation("generation project version mismatch")
+    _cott_validate_python_tools(current["tools"])
+    _cott_validate_dependencies(current["dependencies"], source, current["public_python_symbols"])
+    implementations = current["implementations"]
     selected_origin = (("python/" if root.name == "python" else "") + relative_path)
     selected_python_symbol = f"{relative_path[:-3].replace('/', '.')}:{symbol}"
     matches = []
     for implementation in implementations:
-        if type(implementation) is not dict:
-            raise _cott_violation("generation implementation must be an object")
         kind = implementation.get("kind")
         concrete = implementation.get("concrete")
         method = implementation.get("method")
         if kind is None:
-            if "concrete" in implementation or "method" in implementation or symbol.startswith("_cott_impl_"):
+            if symbol.startswith("_cott_impl_"):
                 raise _cott_violation("generation implementation kind is malformed")
             kind = "function"
         if kind == "function":
             if concrete is not None or method is not None:
                 raise _cott_violation("free-function provenance must not name an implementation method")
         elif kind == "impl_method":
-            if (
-                type(concrete) is not str
-                or not concrete.isidentifier()
-                or type(method) is not str
-                or not method.isidentifier()
-            ):
+            if not concrete.isidentifier() or not method.isidentifier():
                 raise _cott_violation("implementation-method provenance is malformed")
-        else:
-            raise _cott_violation("generation implementation kind is malformed")
         if (
-            implementation.get("runtime_origin") == selected_origin
-            and implementation.get("python_symbol") == selected_python_symbol
-            and _cott_expected_digest(implementation.get("content_hash"), "implementation content hash") == digest
-            and (cott_symbol is None or implementation.get("cott_symbol") == cott_symbol)
+            implementation["runtime_origin"] == selected_origin
+            and implementation["python_symbol"] == selected_python_symbol
+            and implementation["content_hash"] == digest
+            and (cott_symbol is None or implementation["cott_symbol"] == cott_symbol)
         ):
             matches.append(implementation)
     if len(matches) != 1:
@@ -994,7 +1268,7 @@ def _cott_load(relative_path: str, expected_sha256: str, symbol: str, project_na
 
 
 __all__ = [
-    "CottContractViolation", "CottExternal", "CottFloat", "CottInt", "CottList", "CottSet", "CottTuple2", "Err", "F32", "F64", "FrozenMap",
+    "CottArray", "CottBuffer", "CottContractViolation", "CottExternal", "CottFloat", "CottInt", "CottList", "CottSet", "Err", "F32", "F64", "FrozenMap",
     "I8", "I16", "I32", "I64", "JsonArray", "JsonBoolean", "JsonFloat", "JsonInteger", "JsonNull", "JsonObject", "JsonString", "JsonValue",
-    "Never", "Nothing", "Ok", "Opaque", "Option", "PROJECT_NAME", "Result", "Some", "U8", "U16", "U32", "U64", "UNIT", "Unit",
+    "Never", "Nothing", "Ok", "Opaque", "Option", "PROJECT_NAME", "PROJECT_VERSION", "Result", "Some", "U8", "U16", "U32", "U64", "UNIT", "Unit",
 ]

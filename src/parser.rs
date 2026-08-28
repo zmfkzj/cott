@@ -257,15 +257,23 @@ impl Parser {
                     Keyword::Impl => "impl",
                     Keyword::For => "for",
                     Keyword::State => "state",
+                    Keyword::Resource => "resource",
+                    Keyword::Initial => "initial",
+                    Keyword::Terminal => "terminal",
+                    Keyword::Transition => "transition",
+                    Keyword::Transitions => "transitions",
                     Keyword::Rule => "rule",
                     Keyword::Const => "const",
                     Keyword::Fn => "fn",
+                    Keyword::Async => "async",
                     Keyword::SelfValue => "self",
                     Keyword::Doc => "doc",
                     Keyword::Requires => "requires",
                     Keyword::Invariant => "invariant",
                     Keyword::Init => "init",
                     Keyword::Ensures => "ensures",
+                    Keyword::Matches => "matches",
+                    Keyword::With => "with",
                     Keyword::When => "when",
                     Keyword::Effects => "effects",
                     Keyword::Modifies => "modifies",
@@ -340,11 +348,28 @@ impl Parser {
             TokenKind::Keyword(Keyword::Trait) => {
                 Some(Declaration::Trait(self.parse_trait(annotations, doc)?))
             }
+            TokenKind::Keyword(Keyword::Resource) => Some(Declaration::Resource(
+                self.parse_resource(annotations, doc)?,
+            )),
             TokenKind::Keyword(Keyword::Const) => {
                 Some(Declaration::Const(self.parse_const(annotations, doc)?))
             }
             TokenKind::Keyword(Keyword::Rule) => {
                 Some(Declaration::Rule(self.parse_rule(annotations, doc)?))
+            }
+            TokenKind::Keyword(Keyword::Async) => {
+                if doc.is_some() {
+                    self.error(
+                        "top-level documentation must precede a type or constant declaration",
+                        doc.unwrap().span,
+                    );
+                }
+                let start = self.keyword(Keyword::Async)?.span;
+                Some(Declaration::Function(self.parse_function(
+                    annotations,
+                    CallableKind::Async,
+                    start,
+                )?))
             }
             TokenKind::Keyword(Keyword::Fn) => {
                 if doc.is_some() {
@@ -353,7 +378,12 @@ impl Parser {
                         doc.unwrap().span,
                     );
                 }
-                Some(Declaration::Function(self.parse_function(annotations)?))
+                let start = self.span_here();
+                Some(Declaration::Function(self.parse_function(
+                    annotations,
+                    CallableKind::Sync,
+                    start,
+                )?))
             }
             TokenKind::Keyword(Keyword::Impl) => {
                 if let Some(doc) = doc {
@@ -517,14 +547,38 @@ impl Parser {
         let generics = self.parse_generics()?;
         self.expect(TokenKind::Colon, "expected `:` after trait")?;
         self.newline();
-        self.expect(TokenKind::Indent, "expected indented trait methods")?;
+        self.expect(TokenKind::Indent, "expected indented trait members")?;
+        let mut associated_types = Vec::new();
         let mut methods = Vec::new();
+        let mut saw_method = false;
         self.skip_newlines();
         while !self.at(&TokenKind::Dedent) && !self.eof() {
-            if let Some(m) = self.parse_trait_method() {
-                methods.push(m);
-            } else {
-                self.recover_line();
+            match self.current().kind.clone() {
+                TokenKind::Keyword(Keyword::Type) => {
+                    let associated = self.parse_associated_type_decl()?;
+                    if saw_method {
+                        self.error(
+                            "trait associated types must precede methods",
+                            associated.span.clone(),
+                        );
+                    }
+                    associated_types.push(associated);
+                }
+                TokenKind::Keyword(Keyword::Fn) => {
+                    saw_method = true;
+                    methods.push(self.parse_trait_method()?);
+                }
+                TokenKind::Keyword(Keyword::Async) => {
+                    self.error(
+                        "async is only allowed on top-level functions",
+                        self.span_here(),
+                    );
+                    self.recover_line();
+                }
+                _ => {
+                    self.error("expected trait associated type or method", self.span_here());
+                    self.recover_line();
+                }
             }
             self.skip_newlines();
         }
@@ -535,9 +589,173 @@ impl Parser {
             doc,
             name,
             generics,
+            associated_types,
             methods,
         })
     }
+
+    fn parse_associated_type_decl(&mut self) -> Option<AssociatedTypeDecl> {
+        let st = self.keyword(Keyword::Type)?.span;
+        let (name, name_span) = self.name("associated type name")?;
+        let mut bounds = Vec::new();
+        if self.at(&TokenKind::Colon) {
+            self.bump();
+            bounds.push(self.parse_type()?);
+            while self.at(&TokenKind::Plus) {
+                self.bump();
+                bounds.push(self.parse_type()?);
+            }
+        }
+        let end = bounds
+            .last()
+            .map(|bound| bound.span.clone())
+            .unwrap_or(name_span);
+        self.newline();
+        Some(AssociatedTypeDecl {
+            span: Self::join(st, end),
+            name,
+            bounds,
+        })
+    }
+    fn parse_resource(
+        &mut self,
+        annotations: Vec<Annotation>,
+        doc: Option<DocBlock>,
+    ) -> Option<ResourceDecl> {
+        let st = self.keyword(Keyword::Resource)?.span;
+        let (name, _) = self.name("resource name")?;
+        self.expect(TokenKind::Colon, "expected `:` after resource")?;
+        self.newline();
+        self.expect(TokenKind::Indent, "expected indented resource entries")?;
+        let mut initial = None;
+        let mut states = Vec::new();
+        let mut terminals = Vec::new();
+        let mut transitions = Vec::new();
+        let mut phase = 0u8;
+        self.skip_newlines();
+        while !self.at(&TokenKind::Dedent) && !self.eof() {
+            let rank = match self.current().kind.clone() {
+                TokenKind::Keyword(Keyword::Initial) => 0,
+                TokenKind::Keyword(Keyword::State) => 1,
+                TokenKind::Keyword(Keyword::Terminal) => 2,
+                TokenKind::Keyword(Keyword::Transition) => 3,
+                _ => {
+                    self.error("expected resource entry", self.span_here());
+                    self.recover_line();
+                    self.skip_newlines();
+                    continue;
+                }
+            };
+            if rank < phase {
+                self.error("resource entries are out of order", self.span_here());
+            }
+            phase = phase.max(rank);
+            match rank {
+                0 => {
+                    let entry = self.keyword(Keyword::Initial)?.span;
+                    let (state, state_span) = self.name("initial resource state")?;
+                    self.newline();
+                    if initial.is_some() {
+                        self.error("resource requires exactly one initial state", entry);
+                    }
+                    initial = Some(ResourceStateRef {
+                        span: state_span,
+                        name: state,
+                    });
+                }
+                1 => {
+                    let entry = self.keyword(Keyword::State)?.span;
+                    let (state, state_span) = self.name("resource state name")?;
+                    self.newline();
+                    if states
+                        .iter()
+                        .any(|value: &ResourceState| value.name == state)
+                    {
+                        self.error("duplicate resource state", entry.clone());
+                    }
+                    states.push(ResourceState {
+                        span: Self::join(entry, state_span),
+                        name: state,
+                    });
+                }
+                2 => {
+                    let entry = self.keyword(Keyword::Terminal)?.span;
+                    let (state, state_span) = self.name("terminal resource state")?;
+                    self.newline();
+                    if terminals
+                        .iter()
+                        .any(|value: &ResourceStateRef| value.name == state)
+                    {
+                        self.error("duplicate terminal resource state", entry);
+                    }
+                    terminals.push(ResourceStateRef {
+                        span: state_span,
+                        name: state,
+                    });
+                }
+                _ => {
+                    let entry = self.keyword(Keyword::Transition)?.span;
+                    let (from, from_span) = self.name("resource transition source state")?;
+                    self.expect(TokenKind::Arrow, "expected `->` in resource transition")?;
+                    let (to, to_span) = self.name("resource transition target state")?;
+                    self.newline();
+                    if transitions.iter().any(|value: &ResourceTransition| {
+                        value.from.name == from && value.to.name == to
+                    }) {
+                        self.error("duplicate resource transition", entry.clone());
+                    }
+                    transitions.push(ResourceTransition {
+                        span: Self::join(entry, to_span.clone()),
+                        from: ResourceStateRef {
+                            span: from_span,
+                            name: from,
+                        },
+                        to: ResourceStateRef {
+                            span: to_span,
+                            name: to,
+                        },
+                    });
+                }
+            }
+            self.skip_newlines();
+        }
+        let end = self
+            .expect(TokenKind::Dedent, "expected end of resource entries")?
+            .span;
+        let initial = match initial {
+            Some(value) => value,
+            None => {
+                self.error("resource requires exactly one initial state", end.clone());
+                return None;
+            }
+        };
+        if states.is_empty() {
+            self.error("resource requires at least one state", initial.span.clone());
+        }
+        if terminals.is_empty() {
+            self.error(
+                "resource requires at least one terminal state",
+                initial.span.clone(),
+            );
+        }
+        if transitions.is_empty() {
+            self.error(
+                "resource requires at least one transition",
+                initial.span.clone(),
+            );
+        }
+        Some(ResourceDecl {
+            span: Self::join(st, end),
+            annotations,
+            doc,
+            name,
+            initial,
+            states,
+            terminals,
+            transitions,
+        })
+    }
+
     fn parse_rule(
         &mut self,
         annotations: Vec<Annotation>,
@@ -673,20 +891,36 @@ impl Parser {
             self.bump();
             params = self.parse_parameters(true)?;
         }
-        let rparen = self.expect(TokenKind::RParen, "expected `)`")?;
+        self.expect(TokenKind::RParen, "expected `)`")?;
         self.expect(TokenKind::Arrow, "expected `->`")?;
         let ret = self.parse_type()?;
+        let default = if self.at(&TokenKind::Equal) {
+            self.bump();
+            Some(self.parse_qname()?)
+        } else {
+            None
+        };
+        let end = default
+            .as_ref()
+            .map(|value| value.span.clone())
+            .unwrap_or_else(|| ret.span.clone());
         self.newline();
         Some(TraitMethod {
-            span: Self::join(st, rparen.span),
+            span: Self::join(st, end),
             name,
             self_span: self_tok.span,
             parameters: params,
             return_type: ret,
+            default,
         })
     }
-    fn parse_function(&mut self, annotations: Vec<Annotation>) -> Option<FunctionDecl> {
-        let st = self.keyword(Keyword::Fn)?.span;
+    fn parse_function(
+        &mut self,
+        annotations: Vec<Annotation>,
+        callable_kind: CallableKind,
+        st: Span,
+    ) -> Option<FunctionDecl> {
+        self.keyword(Keyword::Fn)?;
         let (name, _) = self.name("function name")?;
         let generics = self.parse_generics()?;
         self.expect(TokenKind::LParen, "expected `(`")?;
@@ -694,6 +928,17 @@ impl Parser {
         self.expect(TokenKind::RParen, "expected `)`")?;
         self.expect(TokenKind::Arrow, "expected `->`")?;
         let ret = self.parse_type()?;
+        if callable_kind == CallableKind::Async
+            && matches!(
+                ret.path.segments.as_slice(),
+                [name] if matches!(name.as_str(), "Iterator" | "Generator" | "Never")
+            )
+        {
+            self.error(
+                "top-level functions may not return Iterator, Generator, or Never",
+                ret.span.clone(),
+            );
+        }
         let body = if self.at(&TokenKind::Newline) {
             let n = self.bump();
             FunctionBody::Signature { span: n.span }
@@ -715,6 +960,7 @@ impl Parser {
                     ClauseKind::Rule { .. } => 1,
                     ClauseKind::Requires { .. } => 2,
                     ClauseKind::Modifies { .. } => 3,
+                    ClauseKind::Transitions { .. } => 3,
                     ClauseKind::Ensures { .. } => 3,
                     ClauseKind::Error { .. } => 4,
                     ClauseKind::Effects { .. } => 5,
@@ -755,6 +1001,7 @@ impl Parser {
             generics,
             parameters: params,
             return_type: ret,
+            callable_kind,
             body,
         })
     }
@@ -771,6 +1018,11 @@ impl Parser {
         self.newline();
         self.expect(TokenKind::Indent, "expected indented impl body")?;
         self.skip_newlines();
+        let mut associated_types = Vec::new();
+        while self.at(&TokenKind::Keyword(Keyword::Type)) {
+            associated_types.push(self.parse_associated_type_assignment()?);
+            self.skip_newlines();
+        }
 
         let state = if self.at(&TokenKind::Keyword(Keyword::State)) {
             self.parse_state_block()?
@@ -792,8 +1044,27 @@ impl Parser {
             None
         };
         let mut methods = Vec::new();
-        while self.at(&TokenKind::Keyword(Keyword::Fn)) {
-            methods.push(self.parse_impl_method()?);
+        while self.at(&TokenKind::Keyword(Keyword::Fn))
+            || self.at(&TokenKind::Keyword(Keyword::Async))
+        {
+            if self.at(&TokenKind::Keyword(Keyword::Async)) {
+                self.error(
+                    "async is only allowed on top-level functions",
+                    self.span_here(),
+                );
+                self.recover_line();
+            } else {
+                methods.push(self.parse_impl_method()?);
+            }
+            self.skip_newlines();
+        }
+        while self.at(&TokenKind::Keyword(Keyword::Type)) {
+            let associated = self.parse_associated_type_assignment()?;
+            self.error(
+                "impl associated type assignments must precede state",
+                associated.span.clone(),
+            );
+            associated_types.push(associated);
             self.skip_newlines();
         }
         if methods.is_empty() {
@@ -808,11 +1079,29 @@ impl Parser {
             name,
             traits,
             state,
+            associated_types,
             invariants,
             initializer,
             methods,
         })
     }
+
+    fn parse_associated_type_assignment(&mut self) -> Option<AssociatedTypeAssignment> {
+        let st = self.keyword(Keyword::Type)?.span;
+        let (name, _) = self.name("associated type name")?;
+        self.expect(
+            TokenKind::Equal,
+            "expected `=` in associated type assignment",
+        )?;
+        let ty = self.parse_type()?;
+        self.newline();
+        Some(AssociatedTypeAssignment {
+            span: Self::join(st, ty.span.clone()),
+            name,
+            ty,
+        })
+    }
+
     fn parse_state_block(&mut self) -> Option<Vec<Field>> {
         self.keyword(Keyword::State)?;
         self.expect(TokenKind::Colon, "expected `:` after state")?;
@@ -839,11 +1128,12 @@ impl Parser {
     }
     fn parse_impl_invariant(&mut self) -> Option<ImplInvariant> {
         let st = self.keyword(Keyword::Invariant)?.span;
-        let condition = self.parse_expr()?;
+        let (guard, condition) = self.parse_guarded_condition(false)?;
         let end = condition.span.clone();
         self.newline();
         Some(ImplInvariant {
             span: Self::join(st, end),
+            guard,
             condition,
         })
     }
@@ -899,6 +1189,7 @@ impl Parser {
         let mut clauses = Vec::new();
         let mut seen_doc = false;
         let mut seen_modifies = false;
+        let mut seen_transitions = false;
         let mut phase = 0u8;
         self.skip_newlines();
         while !self.at(&TokenKind::Dedent) && !self.eof() {
@@ -910,13 +1201,14 @@ impl Parser {
             let rank = match &clause.kind {
                 ClauseKind::Documentation(_) => 0,
                 ClauseKind::Requires { .. } => 1,
-                ClauseKind::Modifies { .. } => 2,
-                ClauseKind::Ensures { .. } => 3,
-                ClauseKind::Error { .. } => 4,
-                ClauseKind::Effects { .. } => 5,
+                ClauseKind::Transitions { .. } => 2,
+                ClauseKind::Modifies { .. } => 3,
+                ClauseKind::Ensures { .. } => 4,
+                ClauseKind::Error { .. } => 5,
+                ClauseKind::Effects { .. } => 6,
                 ClauseKind::Rule { .. } => unreachable!(),
             };
-            if !method && rank > 3 {
+            if !method && rank > 4 {
                 self.error(
                     "init clauses may contain only doc, requires, and ensures",
                     clause.span.clone(),
@@ -931,19 +1223,28 @@ impl Parser {
                 }
                 seen_doc = true;
             } else {
-                if (!method && rank == 2) || rank < phase {
+                if (!method && rank == 3) || rank < phase {
                     self.error("impl clauses are out of order", clause.span.clone());
                 }
-                if rank == 2 && seen_modifies {
+                if rank == 2 && seen_transitions {
+                    self.error(
+                        "method may have only one transitions clause",
+                        clause.span.clone(),
+                    );
+                }
+                if rank == 2 {
+                    seen_transitions = true;
+                }
+                if rank == 3 && seen_modifies {
                     self.error(
                         "method may have only one modifies clause",
                         clause.span.clone(),
                     );
                 }
-                if rank == 2 {
+                if rank == 3 {
                     seen_modifies = true;
                 }
-                if rank == 5 && phase == 5 {
+                if rank == 6 && phase == 6 {
                     self.error(
                         "impl method may have only one effects clause",
                         clause.span.clone(),
@@ -969,31 +1270,59 @@ impl Parser {
         }
         if self.at(&TokenKind::Keyword(Keyword::Requires)) {
             let st = self.bump().span;
-            let condition = self.parse_expr()?;
+            let (guard, condition) = self.parse_guarded_condition(false)?;
             let end = condition.span.clone();
             self.newline();
             return Some(Clause {
                 span: Self::join(st, end),
-                kind: ClauseKind::Requires { condition },
+                kind: ClauseKind::Requires { guard, condition },
             });
         }
         if self.at(&TokenKind::Keyword(Keyword::Ensures)) {
             let st = self.bump().span;
-            let condition = self.parse_expr()?;
+            let (guard, condition) = self.parse_ensures_condition(false)?;
             let end = condition.span.clone();
             self.newline();
             return Some(Clause {
                 span: Self::join(st, end),
-                kind: ClauseKind::Ensures {
-                    pattern: None,
-                    condition,
-                },
+                kind: ClauseKind::Ensures { guard, condition },
             });
         }
         self.error("expected init clause", self.span_here());
         None
     }
     fn parse_method_clause(&mut self) -> Option<Clause> {
+        if self.at(&TokenKind::Keyword(Keyword::Transitions)) {
+            let st = self.bump().span;
+            let mut transitions = Vec::new();
+            loop {
+                let field = self.parse_modified_field()?;
+                self.expect(TokenKind::Colon, "expected `:` after transition field")?;
+                let from = self.parse_qname()?;
+                self.expect(TokenKind::Arrow, "expected `->` in method transition")?;
+                let to = self.parse_qname()?;
+                transitions.push(MethodTransition {
+                    span: Self::join(field.span.clone(), to.span.clone()),
+                    field,
+                    from,
+                    to,
+                });
+                if self.at(&TokenKind::Comma) {
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+            let end = transitions
+                .last()
+                .map(|transition| transition.span.clone())
+                .unwrap_or(st.clone());
+            self.newline();
+            return Some(Clause {
+                span: Self::join(st, end),
+                kind: ClauseKind::Transitions { transitions },
+            });
+        }
         if self.at(&TokenKind::Keyword(Keyword::Modifies)) {
             let st = self.bump().span;
             let mut fields = vec![self.parse_modified_field()?];
@@ -1013,24 +1342,12 @@ impl Parser {
         }
         if self.at(&TokenKind::Keyword(Keyword::Ensures)) {
             let st = self.bump().span;
-            let save = self.pos;
-            let mut pattern = None;
-            if matches!(self.current().kind, TokenKind::Name(_)) {
-                if let Some(candidate) = self.parse_pattern() {
-                    if self.at(&TokenKind::FatArrow) {
-                        self.bump();
-                        pattern = Some(candidate);
-                    } else {
-                        self.pos = save;
-                    }
-                }
-            }
-            let condition = self.parse_expr_allowing_old()?;
+            let (guard, condition) = self.parse_ensures_condition(true)?;
             let end = condition.span.clone();
             self.newline();
             return Some(Clause {
                 span: Self::join(st, end),
-                kind: ClauseKind::Ensures { pattern, condition },
+                kind: ClauseKind::Ensures { guard, condition },
             });
         }
         if self.at(&TokenKind::Keyword(Keyword::Doc))
@@ -1043,9 +1360,63 @@ impl Parser {
         self.error("expected method clause", self.span_here());
         None
     }
+    fn parse_guarded_condition(&mut self, allow_old: bool) -> Option<(Option<MatchGuard>, Expr)> {
+        let previous = std::mem::replace(&mut self.allow_old, allow_old);
+        let parsed = (|| {
+            let scrutinee = self.parse_expr()?;
+            if !self.at(&TokenKind::Keyword(Keyword::Matches)) {
+                return Some((None, scrutinee));
+            }
+            self.bump();
+            let pattern = self.parse_pattern()?;
+            let end = pattern.span.clone();
+            self.expect(TokenKind::FatArrow, "expected `=>` after match pattern")?;
+            let condition = self.parse_expr()?;
+            Some((
+                Some(MatchGuard {
+                    span: Self::join(scrutinee.span.clone(), end),
+                    scrutinee,
+                    pattern,
+                }),
+                condition,
+            ))
+        })();
+        self.allow_old = previous;
+        parsed
+    }
+
+    fn parse_ensures_condition(&mut self, allow_old: bool) -> Option<(Option<MatchGuard>, Expr)> {
+        let save = self.pos;
+        if matches!(self.current().kind, TokenKind::Name(_)) {
+            if let Some(pattern) = self.parse_pattern() {
+                if self.at(&TokenKind::FatArrow) {
+                    self.bump();
+                    let previous = std::mem::replace(&mut self.allow_old, allow_old);
+                    let condition = self.parse_expr();
+                    self.allow_old = previous;
+                    let condition = condition?;
+                    let result = Expr {
+                        span: pattern.span.clone(),
+                        kind: ExprKind::Name(QualifiedName::single(pattern.span.clone(), "result")),
+                    };
+                    return Some((
+                        Some(MatchGuard {
+                            span: pattern.span.clone(),
+                            scrutinee: result,
+                            pattern,
+                        }),
+                        condition,
+                    ));
+                }
+            }
+            self.pos = save;
+        }
+        self.parse_guarded_condition(allow_old)
+    }
+
     fn parse_modified_field(&mut self) -> Option<ModifiedField> {
         let self_span = self.keyword(Keyword::SelfValue)?.span;
-        self.expect(TokenKind::Dot, "expected `.` after self in modifies")?;
+        self.expect(TokenKind::Dot, "expected `.` after self")?;
         let (name, field_span) = self.name("state field name")?;
         Some(ModifiedField {
             span: Self::join(self_span, field_span),
@@ -1073,39 +1444,40 @@ impl Parser {
         }
         if self.at(&TokenKind::Keyword(Keyword::Requires)) {
             let st = self.bump().span;
-            let condition = self.parse_expr()?;
+            let (guard, condition) = self.parse_guarded_condition(false)?;
             let end = condition.span.clone();
             self.newline();
             return Some(Clause {
                 span: Self::join(st, end),
-                kind: ClauseKind::Requires { condition },
+                kind: ClauseKind::Requires { guard, condition },
             });
         }
         if self.at(&TokenKind::Keyword(Keyword::Ensures)) {
             let st = self.bump().span;
-            let save = self.pos;
-            let mut pattern = None;
-            if matches!(self.current().kind, TokenKind::Name(_)) {
-                if let Some(p) = self.parse_pattern() {
-                    if self.at(&TokenKind::FatArrow) {
-                        self.bump();
-                        pattern = Some(p);
-                    } else {
-                        self.pos = save;
-                    }
-                }
-            }
-            let condition = self.parse_expr()?;
+            let (guard, condition) = self.parse_ensures_condition(false)?;
             let end = condition.span.clone();
             self.newline();
             return Some(Clause {
                 span: Self::join(st, end),
-                kind: ClauseKind::Ensures { pattern, condition },
+                kind: ClauseKind::Ensures { guard, condition },
             });
         }
         if self.at(&TokenKind::Keyword(Keyword::Error)) {
             let st = self.bump().span;
             let error = self.parse_qname()?;
+            let guard = if self.at(&TokenKind::Keyword(Keyword::With)) {
+                self.bump();
+                let scrutinee = self.parse_expr()?;
+                self.keyword(Keyword::Matches)?;
+                let pattern = self.parse_pattern()?;
+                Some(MatchGuard {
+                    span: Self::join(scrutinee.span.clone(), pattern.span.clone()),
+                    scrutinee,
+                    pattern,
+                })
+            } else {
+                None
+            };
             let when = if self.at(&TokenKind::Keyword(Keyword::When)) {
                 self.bump();
                 Some(self.parse_expr()?)
@@ -1114,12 +1486,13 @@ impl Parser {
             };
             let end = when
                 .as_ref()
-                .map(|x| x.span.clone())
+                .map(|value| value.span.clone())
+                .or_else(|| guard.as_ref().map(|value| value.span.clone()))
                 .unwrap_or(error.span.clone());
             self.newline();
             return Some(Clause {
                 span: Self::join(st, end),
-                kind: ClauseKind::Error { error, when },
+                kind: ClauseKind::Error { error, guard, when },
             });
         }
         if self.at(&TokenKind::Keyword(Keyword::Effects)) {
@@ -1206,22 +1579,53 @@ impl Parser {
         let mut out = Vec::new();
         if !self.at(&TokenKind::RBracket) {
             loop {
-                let (name, ns) = self.name("generic parameter")?;
-                let mut bounds = Vec::new();
-                if self.at(&TokenKind::Colon) {
-                    self.bump();
-                    bounds.push(self.parse_type()?);
-                    while self.at(&TokenKind::Plus) {
+                if self.at(&TokenKind::Keyword(Keyword::Const)) {
+                    let start = self.bump().span;
+                    let (name, _) = self.name("const generic parameter")?;
+                    self.expect(
+                        TokenKind::Colon,
+                        "expected `:` after const generic parameter",
+                    )?;
+                    let (kind_name, kind_span) = self.name("const generic parameter kind")?;
+                    let ty = match kind_name.as_str() {
+                        "U8" => ConstKind::U8,
+                        "U16" => ConstKind::U16,
+                        "U32" => ConstKind::U32,
+                        "U64" => ConstKind::U64,
+                        _ => {
+                            self.error(
+                                "const generic parameter kind must be U8, U16, U32, or U64",
+                                kind_span.clone(),
+                            );
+                            ConstKind::U8
+                        }
+                    };
+                    out.push(GenericParam::Const {
+                        span: Self::join(start, kind_span),
+                        name,
+                        ty,
+                    });
+                } else {
+                    let (name, ns) = self.name("generic parameter")?;
+                    let mut bounds = Vec::new();
+                    if self.at(&TokenKind::Colon) {
                         self.bump();
                         bounds.push(self.parse_type()?);
+                        while self.at(&TokenKind::Plus) {
+                            self.bump();
+                            bounds.push(self.parse_type()?);
+                        }
                     }
+                    let end = bounds
+                        .last()
+                        .map(|value| value.span.clone())
+                        .unwrap_or(ns.clone());
+                    out.push(GenericParam::Type {
+                        span: Self::join(ns, end),
+                        name,
+                        bounds,
+                    });
                 }
-                let end = bounds.last().map(|x| x.span.clone()).unwrap_or(ns.clone());
-                out.push(GenericParam {
-                    span: Self::join(ns, end),
-                    name,
-                    bounds,
-                });
                 if self.at(&TokenKind::Comma) {
                     self.bump();
                     if self.at(&TokenKind::RBracket) {
@@ -1235,51 +1639,136 @@ impl Parser {
         self.expect(TokenKind::RBracket, "expected `]` after generic parameters")?;
         Some(out)
     }
+
     fn parse_type(&mut self) -> Option<Type> {
         let path = self.parse_qname()?;
-        let mut args = Vec::new();
+        let mut arguments = Vec::new();
+        let mut end = path.span.clone();
         if self.at(&TokenKind::LBracket) {
             self.bump();
-            if !self.at(&TokenKind::RBracket) {
-                loop {
-                    let arg = if matches!(self.current().kind.clone(), TokenKind::String(_)) {
-                        let t = self.bump();
-                        let value = match t.kind {
-                            TokenKind::String(s) => s,
-                            _ => String::new(),
-                        };
-                        TypeArg {
-                            span: t.span.clone(),
-                            kind: TypeArgKind::String(value),
-                        }
+            let special = (path.segments.len() == 1).then(|| path.segments[0].as_str());
+            match special {
+                Some("Tuple") => {
+                    if self.at(&TokenKind::RBracket) {
+                        self.error("Tuple requires at least one element type", self.span_here());
                     } else {
-                        let ty = self.parse_type()?;
-                        TypeArg {
-                            span: ty.span.clone(),
-                            kind: TypeArgKind::Type(ty),
+                        loop {
+                            let element = self.parse_type()?;
+                            arguments.push(GenericArg {
+                                span: element.span.clone(),
+                                kind: GenericArgKind::Type(element),
+                            });
+                            if self.at(&TokenKind::Comma) {
+                                self.bump();
+                                if self.at(&TokenKind::RBracket) {
+                                    break;
+                                }
+                            } else {
+                                break;
+                            }
                         }
-                    };
-                    args.push(arg);
-                    if self.at(&TokenKind::Comma) {
-                        self.bump();
-                        if self.at(&TokenKind::RBracket) {
-                            break;
+                    }
+                }
+                Some("Array") => {
+                    let element = self.parse_type()?;
+                    arguments.push(GenericArg {
+                        span: element.span.clone(),
+                        kind: GenericArgKind::Type(element),
+                    });
+                    self.expect(TokenKind::Comma, "expected `,` before Array length")?;
+                    let length = self.parse_const_expr()?;
+                    arguments.push(GenericArg {
+                        span: length.span().clone(),
+                        kind: GenericArgKind::Const(length),
+                    });
+                }
+                Some("Buffer") => {
+                    let length = self.parse_const_expr()?;
+                    arguments.push(GenericArg {
+                        span: length.span().clone(),
+                        kind: GenericArgKind::Const(length),
+                    });
+                }
+                _ => {
+                    if !self.at(&TokenKind::RBracket) {
+                        loop {
+                            let argument = self.parse_generic_arg()?;
+                            arguments.push(argument);
+                            if self.at(&TokenKind::Comma) {
+                                self.bump();
+                                if self.at(&TokenKind::RBracket) {
+                                    break;
+                                }
+                            } else {
+                                break;
+                            }
                         }
-                    } else {
-                        break;
                     }
                 }
             }
-            self.expect(TokenKind::RBracket, "expected `]` after type arguments")?;
+            let right = self.expect(TokenKind::RBracket, "expected `]` after type arguments")?;
+            end = right.span;
         }
-        let end = args
-            .last()
-            .map(|x| x.span.clone())
-            .unwrap_or(path.span.clone());
         Some(Type {
             span: Self::join(path.span.clone(), end),
             path,
-            arguments: args,
+            arguments,
+        })
+    }
+
+    fn parse_generic_arg(&mut self) -> Option<GenericArg> {
+        let aggregate = matches!(
+            &self.current().kind,
+            TokenKind::Name(name) if matches!(name.as_str(), "Tuple" | "Array" | "Buffer")
+        ) && matches!(
+            self.tokens.get(self.pos + 1).map(|token| &token.kind),
+            Some(TokenKind::LParen)
+        );
+        if aggregate
+            || matches!(
+                self.current().kind,
+                TokenKind::Integer(_)
+                    | TokenKind::Float(_)
+                    | TokenKind::String(_)
+                    | TokenKind::Keyword(Keyword::True | Keyword::False)
+            )
+        {
+            let value = self.parse_const_expr()?;
+            return Some(GenericArg {
+                span: value.span().clone(),
+                kind: GenericArgKind::Const(value),
+            });
+        }
+        if matches!(self.current().kind, TokenKind::Name(_)) {
+            let save = self.pos;
+            let ty = self.parse_type()?;
+            if self.at(&TokenKind::Comma) || self.at(&TokenKind::RBracket) {
+                if ty.arguments.is_empty() {
+                    let value = ConstExpr::Expression(Expr {
+                        span: ty.span.clone(),
+                        kind: ExprKind::Name(ty.path.clone()),
+                    });
+                    return Some(GenericArg {
+                        span: ty.span.clone(),
+                        kind: GenericArgKind::Ambiguous { ty, value },
+                    });
+                }
+                return Some(GenericArg {
+                    span: ty.span.clone(),
+                    kind: GenericArgKind::Type(ty),
+                });
+            }
+            self.pos = save;
+            let value = self.parse_const_expr()?;
+            return Some(GenericArg {
+                span: value.span().clone(),
+                kind: GenericArgKind::Const(value),
+            });
+        }
+        let ty = self.parse_type()?;
+        Some(GenericArg {
+            span: ty.span.clone(),
+            kind: GenericArgKind::Type(ty),
         })
     }
     fn parse_parameters(&mut self, trailing: bool) -> Option<Vec<Parameter>> {
@@ -1314,18 +1803,97 @@ impl Parser {
             if let Some(path) = self.parse_qname() {
                 if self.at(&TokenKind::LParen) {
                     self.bump();
-                    let arg = self.parse_const_expr()?;
-                    let r = self.expect(TokenKind::RParen, "expected `)` in constructor")?;
+                    if path.segments.len() == 1 && path.segments[0] == "Tuple" {
+                        let (values, end) = self.parse_const_values(true, "Tuple")?;
+                        return Some(ConstExpr::Tuple {
+                            span: Self::join(path.span.clone(), end),
+                            values,
+                        });
+                    }
+                    if path.segments.len() == 1 && path.segments[0] == "Array" {
+                        let (values, end) = self.parse_const_values(false, "Array")?;
+                        return Some(ConstExpr::Array {
+                            span: Self::join(path.span.clone(), end),
+                            values,
+                        });
+                    }
+                    if path.segments.len() == 1 && path.segments[0] == "Buffer" {
+                        let token = match self.current().kind.clone() {
+                            TokenKind::String(_) => self.bump(),
+                            _ => {
+                                self.error(
+                                    "Buffer constant requires a lowercase hexadecimal string",
+                                    self.span_here(),
+                                );
+                                return None;
+                            }
+                        };
+                        let hex = match token.kind {
+                            TokenKind::String(value) => value,
+                            _ => String::new(),
+                        };
+                        if hex.len() % 2 != 0
+                            || !hex
+                                .bytes()
+                                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                        {
+                            self.error(
+                                "Buffer constant must contain lowercase hexadecimal bytes",
+                                token.span.clone(),
+                            );
+                        }
+                        let end = self
+                            .expect(TokenKind::RParen, "expected `)` after Buffer constant")?
+                            .span;
+                        return Some(ConstExpr::Buffer {
+                            span: Self::join(path.span.clone(), end),
+                            hex,
+                        });
+                    }
+                    let argument = self.parse_const_expr()?;
+                    let end = self
+                        .expect(TokenKind::RParen, "expected `)` in constructor")?
+                        .span;
                     return Some(ConstExpr::Constructor {
-                        span: Self::join(path.span.clone(), r.span),
+                        span: Self::join(path.span.clone(), end),
                         path,
-                        argument: Box::new(arg),
+                        argument: Box::new(argument),
                     });
                 }
                 self.pos = save;
             }
         }
         Some(ConstExpr::Expression(self.parse_expr()?))
+    }
+
+    fn parse_const_values(
+        &mut self,
+        require_one: bool,
+        aggregate: &str,
+    ) -> Option<(Vec<ConstExpr>, Span)> {
+        let mut values = Vec::new();
+        if self.at(&TokenKind::RParen) && require_one {
+            self.error(
+                format!("{aggregate} constant requires at least one value"),
+                self.span_here(),
+            );
+        }
+        while !self.at(&TokenKind::RParen) {
+            values.push(self.parse_const_expr()?);
+            if self.at(&TokenKind::Comma) {
+                self.bump();
+                if self.at(&TokenKind::RParen) {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        let end = self.expect(
+            TokenKind::RParen,
+            &format!("expected `)` after {aggregate} constant"),
+        )?;
+        Some((values, end.span))
     }
     fn parse_pattern(&mut self) -> Option<Pattern> {
         if let TokenKind::Name(n) = self.current().kind.clone() {
@@ -1398,12 +1966,6 @@ impl Parser {
     }
     fn parse_expr(&mut self) -> Option<Expr> {
         self.parse_or()
-    }
-    fn parse_expr_allowing_old(&mut self) -> Option<Expr> {
-        let previous = std::mem::replace(&mut self.allow_old, true);
-        let expression = self.parse_expr();
-        self.allow_old = previous;
-        expression
     }
     fn parse_or(&mut self) -> Option<Expr> {
         self.binary(Self::parse_and, &[Keyword::Or], BinaryOp::Or)

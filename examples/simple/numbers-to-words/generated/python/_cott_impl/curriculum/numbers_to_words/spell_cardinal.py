@@ -1,6 +1,25 @@
 from cott_runtime import I64
 
 
+def _render_group(group: int, ones: tuple[str, ...], tens: tuple[str, ...]) -> str:
+    words: list[str] = []
+    hundreds: int = group // 100
+    remainder: int = group % 100
+    if hundreds != 0:
+        words.append(ones[hundreds])
+        words.append("hundred")
+        if remainder != 0:
+            words.append("and")
+    if remainder >= 20:
+        words.append(tens[remainder // 10])
+        unit: int = remainder % 10
+        if unit != 0:
+            words.append(ones[unit])
+    elif remainder != 0 or not words:
+        words.append(ones[remainder])
+    return " ".join(words)
+
+
 def spell_cardinal(value: I64) -> str:
     ones: tuple[str, ...] = (
         "zero",
@@ -46,23 +65,7 @@ def spell_cardinal(value: I64) -> str:
         "quintillion",
     )
 
-    def render_group(group: int) -> str:
-        words: list[str] = []
-        hundreds: int = group // 100
-        remainder: int = group % 100
-        if hundreds != 0:
-            words.append(ones[hundreds])
-            words.append("hundred")
-            if remainder != 0:
-                words.append("and")
-        if remainder >= 20:
-            words.append(tens[remainder // 10])
-            unit: int = remainder % 10
-            if unit != 0:
-                words.append(ones[unit])
-        elif remainder != 0 or not words:
-            words.append(ones[remainder])
-        return " ".join(words)
+
 
     if value == 0:
         return "Zero"
@@ -81,7 +84,7 @@ def spell_cardinal(value: I64) -> str:
             continue
         if scale_index == 0 and group < 100 and fragments:
             fragments.append("and")
-        fragment: str = render_group(group)
+        fragment: str = _render_group(group, ones, tens)
         if scale_index != 0:
             fragment = f"{fragment} {scales[scale_index]}"
         fragments.append(fragment)

@@ -4,7 +4,7 @@ enum JsonTransformError:
     NotAnObject
     MissingField(field_name: Str)
 
-fn wrap_scalar_json(key: Str, value: Str) -> JsonValue:
+async fn wrap_scalar_json(key: Str, value: Str) -> JsonValue:
     doc """
     Wrap a string key-value pair into a structured JsonValue object.
     """

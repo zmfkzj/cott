@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 from curriculum.expense_split_types import Balance, BalanceSheet, Expense, ExpenseSplitError, ExpenseSplitError_BlankPayer, ExpenseSplitError_DuplicateParticipant, ExpenseSplitError_EmptyParticipants, ExpenseSplitError_PayerNotParticipant, ExpenseSplitError_ZeroAmount, Settlement, Transfer
 
@@ -56,10 +56,14 @@ finite Expense."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.expense_split.calculate_balances", phase="error", span={"end_byte":1505,"end_column":1,"end_line":52,"start_byte":490,"start_column":1,"start_line":31}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.expense_split.calculate_balances", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        balances = _result.value
-        if not (((len((balances).debtors) + len((balances).creditors)) <= len((expense).participants))):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.expense_split.calculate_balances", clause="ensures:1", phase="ensures", span={"end_byte":1171,"end_column":111,"end_line":42,"start_byte":1065,"start_column":5,"start_line":42}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            balances = _cott_match_value.value
+            return (((len((balances).debtors) + len((balances).creditors)) <= len((expense).participants)))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.expense_split.calculate_balances", clause="ensures:1", phase="ensures", span={"end_byte":1171,"end_column":111,"end_line":42,"start_byte":1065,"start_column":5,"start_line":42}, expected="true", actual="false")
     return _result
 
 def settle_balances(balances: BalanceSheet) -> Settlement:
@@ -127,10 +131,14 @@ error unchanged, and greedily settle every successful balance sheet."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.expense_split.settle_expense", phase="error", span={"end_byte":2648,"end_column":1,"end_line":79,"start_byte":1979,"start_column":1,"start_line":64}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.expense_split.settle_expense", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        settlement = _result.value
-        if not ((len((settlement).transfers) <= len((expense).participants))):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.expense_split.settle_expense", clause="ensures:1", phase="ensures", span={"end_byte":2315,"end_column":90,"end_line":70,"start_byte":2230,"start_column":5,"start_line":70}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            settlement = _cott_match_value.value
+            return ((len((settlement).transfers) <= len((expense).participants)))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.expense_split.settle_expense", clause="ensures:1", phase="ensures", span={"end_byte":2315,"end_column":90,"end_line":70,"start_byte":2230,"start_column":5,"start_line":70}, expected="true", actual="false")
     return _result
 
 __all__ = ["Balance", "BalanceSheet", "Expense", "ExpenseSplitError", "ExpenseSplitError_BlankPayer", "ExpenseSplitError_DuplicateParticipant", "ExpenseSplitError_EmptyParticipants", "ExpenseSplitError_PayerNotParticipant", "ExpenseSplitError_ZeroAmount", "Settlement", "Transfer", "calculate_balances", "settle_balances", "settle_expense"]

@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 from curriculum.clip_ranges_types import ClipPlan, ClipRangeError, ClipRangeError_EmptyRanges, ClipRangeError_PastDuration, ClipRangeError_StartNotBeforeEnd, ClipRangeError_TotalOverflow, ClipRequest, TimeRange
 
@@ -67,14 +67,22 @@ and their durations are accumulated with checked U64 arithmetic."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.clip_ranges.plan_clip_ranges", phase="error", span={"end_byte":1271,"end_column":1,"end_line":44,"start_byte":572,"start_column":1,"start_line":29}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.clip_ranges.plan_clip_ranges", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        plan = _result.value
-        if not ((len((plan).ranges) == len((request).ranges))):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.clip_ranges.plan_clip_ranges", clause="ensures:1", phase="ensures", span={"end_byte":1032,"end_column":69,"end_line":37,"start_byte":968,"start_column":5,"start_line":37}, expected="true", actual="false")
-    if type(_result) is Ok and True:
-        plan = _result.value
-        if not ((len((plan).ranges) > 0)):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.clip_ranges.plan_clip_ranges", clause="ensures:2", phase="ensures", span={"end_byte":1083,"end_column":51,"end_line":38,"start_byte":1037,"start_column":5,"start_line":38}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            plan = _cott_match_value.value
+            return ((len((plan).ranges) == len((request).ranges)))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.clip_ranges.plan_clip_ranges", clause="ensures:1", phase="ensures", span={"end_byte":1032,"end_column":69,"end_line":37,"start_byte":968,"start_column":5,"start_line":37}, expected="true", actual="false")
+    def _cott_match_ensures_2() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            plan = _cott_match_value.value
+            return ((len((plan).ranges) > 0))
+        return True
+    if not (_cott_match_ensures_2()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.clip_ranges.plan_clip_ranges", clause="ensures:2", phase="ensures", span={"end_byte":1083,"end_column":51,"end_line":38,"start_byte":1037,"start_column":5,"start_line":38}, expected="true", actual="false")
     return _result
 
 __all__ = ["ClipPlan", "ClipRangeError", "ClipRangeError_EmptyRanges", "ClipRangeError_PastDuration", "ClipRangeError_StartNotBeforeEnd", "ClipRangeError_TotalOverflow", "ClipRequest", "TimeRange", "plan_clip_ranges", "range_duration_ms"]

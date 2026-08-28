@@ -1,23 +1,25 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cott.dev/schema/generation/v1",
-  "title": "cott generation record",
+  "$id": "https://cott.dev/schema/generation/v2",
+  "title": "cott generation record v2",
   "type": "object",
   "required": ["schema_version", "current", "last_verified"],
   "additionalProperties": false,
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "current": {"$ref": "#/$defs/snapshot"},
     "last_verified": {"anyOf": [{"$ref": "#/$defs/snapshot"}, {"type": "null"}]}
   },
   "$defs": {
     "snapshot": {
       "type": "object",
-      "required": ["generation_id", "verified", "inputs", "tools", "ir", "contract_surface", "public_python_symbols", "implementations", "dependencies", "managed_files", "unresolved", "verification", "agent_runs"],
+      "required": ["generation_id", "verified", "project_version", "compatibility", "inputs", "tools", "ir", "contract_surface", "public_python_symbols", "implementations", "dependencies", "managed_files", "unresolved", "verification", "agent_runs"],
       "additionalProperties": false,
       "properties": {
         "generation_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "verified": {"type": "boolean"},
+        "project_version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+        "compatibility": {"$ref": "#/$defs/compatibility"},
         "inputs": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}},
         "tools": {"type": "object"},
         "ir": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}},
@@ -26,9 +28,30 @@
         "implementations": {"type": "array", "items": {"$ref": "#/$defs/implementation"}},
         "dependencies": {"type": "array", "items": {"$ref": "#/$defs/dependency"}},
         "managed_files": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}},
-        "unresolved": {"type": "array", "items": {"type": "string"}},
-        "verification": {"anyOf": [{"type": "object"}, {"type": "null"}]},
+        "unresolved": {"type": "array", "items": {"$ref": "#/$defs/unresolved"}},
+        "verification": {
+          "anyOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "properties": {
+                "implementation_comparison": {"$ref": "#/$defs/implementation_comparison"}
+              },
+              "additionalProperties": true
+            }
+          ]
+        },
         "agent_runs": {"type": "array"}
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "required": ["generation_schema", "canonical_ir_schema", "runtime_abi"],
+      "additionalProperties": false,
+      "properties": {
+        "generation_schema": {"const": 2},
+        "canonical_ir_schema": {"const": 5},
+        "runtime_abi": {"const": 2}
       }
     },
     "implementation": {
@@ -37,7 +60,7 @@
       "additionalProperties": false,
       "properties": {
         "cott_symbol": {"type": "string"},
-        "kind": {"enum": ["function", "impl_method"]},
+        "kind": {"enum": ["function", "async_function", "impl_method"]},
         "concrete": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
         "method": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
         "owner": {"enum": ["manifest", "agent"]},
@@ -62,7 +85,7 @@
       ],
       "allOf": [
         {
-          "if": {"properties": {"kind": {"const": "function"}}, "required": ["kind"]},
+          "if": {"properties": {"kind": {"enum": ["function", "async_function"]}}, "required": ["kind"]},
           "then": {"properties": {"concrete": {"type": "null"}, "method": {"type": "null"}}}
         },
         {
@@ -70,6 +93,29 @@
           "then": {"properties": {"concrete": {"type": "string", "minLength": 1}, "method": {"type": "string", "minLength": 1}}}
         }
       ]
+    },
+    "source_span": {
+      "type": "object",
+      "required": ["start_byte", "end_byte", "start_line", "start_column", "end_line", "end_column"],
+      "additionalProperties": false,
+      "properties": {
+        "start_byte": {"type": "integer", "minimum": 0},
+        "end_byte": {"type": "integer", "minimum": 0},
+        "start_line": {"type": "integer", "minimum": 1},
+        "start_column": {"type": "integer", "minimum": 1},
+        "end_line": {"type": "integer", "minimum": 1},
+        "end_column": {"type": "integer", "minimum": 1}
+      }
+    },
+    "unresolved": {
+      "type": "object",
+      "required": ["cott_symbol", "kind", "span"],
+      "additionalProperties": false,
+      "properties": {
+        "cott_symbol": {"type": "string"},
+        "kind": {"enum": ["function", "async_function", "impl_method"]},
+        "span": {"$ref": "#/$defs/source_span"}
+      }
     },
     "dependency": {
       "type": "object",
@@ -85,6 +131,82 @@
           "uniqueItems": true
         },
         "installed": {"type": "object"}
+      }
+    },
+    "implementation_comparison": {
+      "type": "object",
+      "required": ["baseline_generation_id", "status", "entries"],
+      "additionalProperties": false,
+      "properties": {
+        "baseline_generation_id": {
+          "anyOf": [
+            {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            {"type": "null"}
+          ]
+        },
+        "status": {"enum": ["no_baseline", "compared"]},
+        "entries": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/implementation_comparison_entry"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "no_baseline"}}, "required": ["status"]},
+          "then": {
+            "properties": {
+              "baseline_generation_id": {"type": "null"},
+              "entries": {"maxItems": 0}
+            }
+          },
+          "else": {
+            "properties": {
+              "baseline_generation_id": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "implementation_comparison_entry": {
+      "type": "object",
+      "required": ["cott_symbol", "status", "changed_fields"],
+      "additionalProperties": false,
+      "properties": {
+        "cott_symbol": {"type": "string"},
+        "status": {"enum": ["added", "removed", "unchanged", "changed"]},
+        "changed_fields": {
+          "type": "object",
+          "properties": {
+            "content_hash": {"$ref": "#/$defs/implementation_field_change"},
+            "concrete": {"$ref": "#/$defs/implementation_field_change"},
+            "kind": {"$ref": "#/$defs/implementation_field_change"},
+            "method": {"$ref": "#/$defs/implementation_field_change"},
+            "owner": {"$ref": "#/$defs/implementation_field_change"},
+            "python_symbol": {"$ref": "#/$defs/implementation_field_change"},
+            "runtime_origin": {"$ref": "#/$defs/implementation_field_change"},
+            "source_origin": {"$ref": "#/$defs/implementation_field_change"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "unchanged"}}, "required": ["status"]},
+          "then": {"properties": {"changed_fields": {"maxProperties": 0}}},
+          "else": {"properties": {"changed_fields": {"minProperties": 1}}}
+        }
+      ]
+    },
+    "implementation_field_change": {
+      "type": "object",
+      "required": ["before", "after"],
+      "additionalProperties": false,
+      "properties": {
+        "before": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "after": {"anyOf": [{"type": "string"}, {"type": "null"}]}
       }
     }
   }

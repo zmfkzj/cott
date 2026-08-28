@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.page_build_types import BuiltPage as BuiltPage, PageBuildError as PageBuildError, PageBuildError_BlankTitle as PageBuildError_BlankTitle, PageBuildError_InvalidSlug as PageBuildError_InvalidSlug, PageSource as PageSource
 """Escape text for safe inclusion in generated page HTML.

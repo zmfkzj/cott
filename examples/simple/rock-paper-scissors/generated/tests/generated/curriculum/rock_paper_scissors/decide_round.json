@@ -1,1 +1,1 @@
-{"schema_version":1,"symbol":"curriculum.rock_paper_scissors.decide_round","seed":"sha256:44299b04d152aeeb840beb80ba6874cbbbf5e9daa22589345fbbf756a2c2dd29","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":[]}
+{"schema_version":1,"symbol":"curriculum.rock_paper_scissors.decide_round","seed":"sha256:1a3f4de2f3a5ada8cc4d1d6c5bc5accc95be17209c5cc5c52ec2f92b94728ec4","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"callable_kind":"sync","classification":"pure","clause_ids":[]}

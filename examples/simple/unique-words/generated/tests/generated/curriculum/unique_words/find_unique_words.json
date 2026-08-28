@@ -1,1 +1,1 @@
-{"schema_version":1,"symbol":"curriculum.unique_words.find_unique_words","seed":"sha256:3603d1560d8f4db5694e7ef291ff1e83321b29fc3e512cdc9a75a0caad1d8a37","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1"]}
+{"schema_version":1,"symbol":"curriculum.unique_words.find_unique_words","seed":"sha256:01900ab85ecb5c6eb5f10508c49777aa642d59b2fc0dd8da1264e9a38a3b2aeb","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"callable_kind":"sync","classification":"pure","clause_ids":["ensures:1"]}

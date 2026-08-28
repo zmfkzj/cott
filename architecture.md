@@ -1,14 +1,16 @@
 # cott 기본 설계 문서
 
-**문서 상태:** Draft v0.1
+**문서 상태:** Draft v0.3
 **프로젝트명:** cott
 **파일 확장자:** `.cott`
 **CLI 명령:** `cott`
 
 
-## 0.1 v0.1 릴리스 호환성
+## 0.3 릴리스 호환성
 
-이 문서의 v0.1 구현은 CPython `>=3.14.6,<3.15`, BasedPyright `>=1.39.9`, uv `>=0.12.3`, Codex CLI `>=0.147.0`, OMP `>=17.2.12`를 지원한다. 각 tool version은 이 lower bound 이상이어야 하며, full version과 content hash는 provenance에 기록한다.
+이 문서는 구현된 v0.3 언어와 Python backend를 규정한다. CPython `>=3.14.6,<3.15`, BasedPyright `>=1.39.9`, uv `>=0.12.3`, Codex CLI `>=0.147.0`, OMP `>=17.2.12`를 지원한다. 각 tool version은 이 lower bound 이상이어야 하며, full version과 content hash는 provenance에 기록한다.
+
+Canonical IR schema는 **v5**, generation record schema는 **v2**, Python runtime ABI는 **2**다. 이 세 compatibility number는 generation snapshot에 함께 기록하며, 현재 값과 다른 record·runtime은 읽거나 load하지 않는다. `[project].version`의 제한된 `x.y.z` 값은 compiler version이 아니라 공개 API version이며 generation snapshot의 `project_version`과 facade runtime identity가 반드시 일치한다.
 
 `emit python`과 `verify`는 agent를 호출하지 않는다. agent 호출은 `generate`에서만 조건부로 수행한다. 기존 project command의 `--project <dir>`은 subcommand 뒤 어느 위치에서나 한 번만 허용하며 기본은 현재 directory다. `init`은 target path를 받고 `--project`를 거부한다.
 ---
@@ -199,7 +201,7 @@ Python 문법과 완전히 호환되도록 만들면 Python의 다음 문제까�
 
 ## 4. 비목표
 
-MVP에서 다음 기능은 구현하지 않는다.
+v0.3에서도 다음 기능은 구현하지 않는다.
 
 * 범용 코드 실행
 * 반복문
@@ -212,9 +214,11 @@ MVP에서 다음 기능은 구현하지 않는다.
 * Rust ownership
 * borrow checker
 * lifetime
-* 비동기 실행 의미
+* async impl method, async iterator와 async generator
 * 완전한 정리 증명
 * cott 자체의 프로그램 합성 엔진
+
+`async fn`은 top-level free function의 명시적 callable kind로만 구현되어 있다. 기존 `fn`을 event loop·thread로 감싸거나 동기 facade로 중계하지 않으며, impl method·async iterator·async generator의 lifecycle/취소 의미는 아직 정의하지 않았으므로 거부한다.
 
 특히 ownership과 lifetime은 MVP에서 제외한다.
 
@@ -342,11 +346,12 @@ numeric literal은 선언 type이나 typed operand에서 문맥 type을 얻어�
 
 ### 5.4 컨테이너와 표준 type constructor
 
-```cott
 List[T]
 Set[T]
 Map[K, V]
-Tuple[T1, T2]
+Tuple[T1, ..., TN]
+Array[T, N]
+Buffer[N]
 Option[T]
 Result[T, E]
 Iterator[T]
@@ -354,42 +359,41 @@ Generator[Y, S, R]
 Factory[Concrete]
 ```
 
-MVP의 `Tuple`은 정확히 두 원소만 가진다. 다른 arity는 const generic과 함께 이후 버전에서 도입한다. `Iterator[T]`는 `T`를 lazy하게 생산하는 값을, `Generator[Y, S, R]`는 yield `Y`, send `S`, completion `R`을 나타낸다. lazy value의 생성은 소비나 effect 발생을 뜻하지 않으며 iteration, `send`, termination, close의 lifecycle에서만 관찰 가능한 effect를 evidence로 기록한다.
+`Tuple`은 하나 이상의 heterogeneous type argument를 갖는 immutable native tuple이다. empty tuple type은 source type으로 제공하지 않고 `Tuple[T, ...]` 같은 homogeneous variadic shorthand도 없다. `Array[T, N]`은 `N`개의 같은 type 원소인 immutable fixed-length container, `Buffer[N]`은 정확히 `N` byte인 immutable buffer다. `N`은 `U8`·`U16`·`U32`·`U64` const parameter 또는 그 type의 compile-time constant expression이어야 한다. `Iterator[T]`는 `T`를 lazy하게 생산하는 값을, `Generator[Y, S, R]`는 yield `Y`, send `S`, completion `R`을 나타낸다. lazy value의 생성은 소비나 effect 발생을 뜻하지 않으며 iteration, `send`, termination, close의 lifecycle에서만 관찰 가능한 effect를 evidence로 기록한다.
 
 예시:
 
 ```cott
-struct Collection:
-    entries: List[User]
+struct Collection[const N: U32]:
+    entries: Array[User, N]
     by_id: Map[UserId, User]
     description: Option[Str]
 ```
 
-컨테이너는 불변이며 타입 인자도 invariant다.
+컨테이너는 불변이며 type과 const argument 모두 invariant다.
 
-Python MVP는 일반 `list`, `set`, `dict`를 공개 ABI로 사용하지 않는다. `cott_runtime`의 invariant 명목 타입 `CottList[T]`, `CottSet[T]`, `FrozenMap[K, V]`, `CottTuple2[T1, T2]`를 사용한다. 저장소는 각각 private `tuple`, `frozenset`, 복사한 `dict`의 `MappingProxyType`, 길이 2의 `tuple`이며 read-only sequence·set·mapping·pair 연산만 노출한다. 변환 생성자는 입력을 한 번 복사하고 이후 가변 원본을 노출하지 않으며 공개 경계는 일반 Python 컨테이너를 암묵 변환하지 않는다.
+Python 공개 ABI는 `CottList[T]`, `CottSet[T]`, `FrozenMap[K, V]`, native `tuple[...]`, `CottArray[T, Literal[N]]`, `CottBuffer[Literal[N]]`를 각각 사용한다. list/set/map wrapper는 private tuple/frozenset/mapping-proxy backing을, Array는 private tuple을, Buffer는 exact `bytes`를 보관한다. 모든 wrapper는 read-only operation만 노출하고 raw Python container를 공개 경계에서 암묵 변환하지 않는다. `CottArray(values=(...))`와 `CottBuffer(data=bytes.fromhex("..."))`가 generated constant constructor다.
 
 ```text
 List[Dog]는 List[Animal]의 하위 타입이 아니다.
 ```
 
-공변성과 반공변성은 MVP 이후 별도 문법으로 도입한다.
+공변성과 반공변성은 v0.3 범위 밖이다.
 
-`Set[T]`의 `T`와 `Map[K, V]`의 `K`는 compiler의 hash-stable 타입이어야 한다. 허용되는 기반 타입은 `Bool`, 정수, `Str`, `Bytes`, `Path`와 이들로만 구성된 newtype·payload 없는 enum·pair tuple이다. float, struct, container, `JsonValue`, `Opaque`, trait와 type parameter는 MVP key position에서 거부한다.
+`Set[T]`의 `T`와 `Map[K, V]`의 `K`는 compiler의 hash-stable 타입이어야 한다. 허용되는 기반 타입은 `Bool`, 정수, `Str`, `Bytes`, `Path`와 이들로만 구성된 newtype·payload 없는 enum·어떤 arity의 tuple이다. float, struct, Array/Buffer를 포함한 nominal container, `JsonValue`, `Opaque`, trait와 type parameter는 key position에서 거부한다.
 
-`Factory[Concrete]`는 구현 class object를 나타내는 prelude type이다. bracket 안에는 정확히 하나의 type만 쓸 수 있다. alias를 먼저 해소한 결과가 type argument 없는 `HirType::Named { symbol, args: [] }`이고 그 symbol의 declaration kind가 `Impl`일 때만 허용한다. 따라서 trait, external type, struct, enum, newtype, alias가 남은 type, type parameter와 type argument가 있는 named type은 허용하지 않는다.
+`Factory[Concrete]`는 구현 class object를 나타내는 prelude type이다. bracket 안에는 정확히 하나의 type만 쓸 수 있다. alias를 먼저 해소한 결과가 type argument 없는 impl declaration일 때만 허용한다. 따라서 trait, external type, struct, enum, newtype, alias가 남은 type, type parameter와 type argument가 있는 named type은 허용하지 않는다.
 
 `Factory`에는 source value literal이나 constructor syntax가 없다. `Concrete`의 compiler-generated init signature가 Python ABI의 호출 signature를 정하며, Factory 값의 validation은 그 class object를 호출하지 않는다. Factory는 hash-stable이 아니므로 `Set` element나 `Map` key가 될 수 없고, impl `state` field에도 둘 수 없다. 자동 contract test는 Factory candidate를 만들지 않는다.
 
 ### 5.5 어휘와 선언 문법
-
-source는 UTF-8이다. identifier는 ASCII `[A-Za-z_][A-Za-z0-9_]*`로 제한한다. module·function·field·parameter는 `snake_case`, type·trait·enum variant는 `UpperCamelCase`, constant는 `UPPER_SNAKE_CASE`다. `module`, `use`, `alias`, `newtype`, `where`, `struct`, `enum`, `trait`, `impl`, `for`, `state`, `invariant`, `init`, `const`, `external`, `type`, `fn`, `self`, `doc`, `requires`, `modifies`, `ensures`, `when`, `error`, `effects`, `old`, `true`, `false`, `and`, `or`, `not`은 keyword다. `result`는 pattern 없는 `ensures` expression scope에서만 예약되는 contextual keyword이므로 field와 payload에서는 사용할 수 있다. prelude type 이름도 user declaration으로 가릴 수 없다.
+source는 UTF-8이다. identifier는 ASCII `[A-Za-z_][A-Za-z0-9_]*`로 제한한다. module·function·field·parameter·resource state는 `snake_case`, type·trait·enum variant는 `UpperCamelCase`, constant는 `UPPER_SNAKE_CASE`다. `module`, `use`, `alias`, `newtype`, `where`, `struct`, `enum`, `trait`, `impl`, `for`, `state`, `resource`, `initial`, `terminal`, `transition`, `transitions`, `invariant`, `init`, `const`, `external`, `type`, `fn`, `async`, `self`, `doc`, `rule`, `override`, `delete`, `remove`, `requires`, `modifies`, `ensures`, `when`, `with`, `matches`, `error`, `effects`, `old`, `true`, `false`, `and`, `or`, `not`은 keyword다. `result`는 pattern 없는 `ensures` expression scope에서만 예약되는 contextual keyword이므로 field와 payload에서는 사용할 수 있다. prelude type 이름도 user declaration으로 가릴 수 없다.
 
 Python target validation은 CPython 3.14 hard keyword와 단독 `_`를 identifier로 거부하고 `_cott_` prefix 또는 `__`로 시작하거나 끝나는 user name도 예약한다. target projection 뒤 모든 이름에 같은 검사를 적용하므로 emitter가 identifier를 escape하거나 rename하지 않는다.
 
 일반 문자열은 JSON escape를 사용하는 double-quoted literal이고 `doc`만 triple double quote를 사용한다. 정수는 10진수, float는 소수점 또는 exponent가 있는 10진수이며 빈 괄호 `()`는 `Unit` literal이다. 부호는 literal이 아니라 unary operator다. tab과 semicolon은 금지한다. parser는 일관된 space indentation을 받고 formatter는 4칸으로 정규화한다. `#`부터 newline까지는 comment다. blank 또는 comment-only physical line은 `NEWLINE`, `INDENT`, `DEDENT` token을 만들지 않는다.
 
-다음 EBNF가 MVP의 선언 surface다. `INDENT`와 `DEDENT`는 indentation token이고 `{x}`는 0회 이상, `[x]`는 선택이다.
+다음 EBNF가 v0.3의 선언 surface다. `INDENT`와 `DEDENT`는 indentation token이고 `{x}`는 0회 이상, `[x]`는 선택이다.
 
 ```text
 file          = module_decl, { use_decl }, { declaration } ;
@@ -397,7 +401,8 @@ module_decl   = "module", qname, NEWLINE ;
 use_decl      = "use", qname, [ ".{", name_list, "}" ], NEWLINE ;
 
 declaration   = ( [ doc_block ], ( alias_decl | newtype_decl | struct_decl
-                | enum_decl | trait_decl | const_decl | external_type_decl ) ) | fn_decl | impl_decl ;
+                | enum_decl | trait_decl | resource_decl | rule_decl | const_decl
+                | external_type_decl ) ) | fn_decl | impl_decl ;
 external_type_decl = "external", "type", type_name, NEWLINE ;
 alias_decl    = "alias", type_name, "=", type, NEWLINE ;
 newtype_decl  = "newtype", type_name, "(", type, ")", NEWLINE,
@@ -407,61 +412,67 @@ struct_decl   = "struct", type_name, [ generic_params ], ":", NEWLINE,
 enum_decl     = "enum", type_name, [ generic_params ], ":", NEWLINE,
                 INDENT, variant, { variant }, DEDENT ;
 trait_decl    = "trait", type_name, [ generic_params ], ":", NEWLINE,
-                INDENT, trait_method, { trait_method }, DEDENT ;
+                INDENT, { associated_type }, trait_method, { trait_method }, DEDENT ;
+associated_type = "type", type_name, [ ":", trait_ref, { "+", trait_ref } ], NEWLINE ;
+resource_decl  = "resource", type_name, ":", NEWLINE, INDENT,
+                 "initial", state_name, NEWLINE, "state", state_name, NEWLINE,
+                 { "state", state_name, NEWLINE }, "terminal", state_name, NEWLINE,
+                 { "terminal", state_name, NEWLINE }, "transition", state_name, "->",
+                 state_name, NEWLINE, { "transition", state_name, "->", state_name, NEWLINE }, DEDENT ;
+rule_decl      = "rule", type_name, [ generic_params ], [ "(", type, ")" ], ":", NEWLINE,
+                 INDENT, rule_clause, { rule_clause }, DEDENT ;
+rule_clause    = [ "override" | "delete" | "remove" ], function_clause ;
 impl_decl     = "impl", type_name, "for", trait_ref, { "+", trait_ref }, ":", NEWLINE,
-                INDENT, [ state_block ], { invariant_clause }, [ init_decl ],
-                impl_method, { impl_method }, DEDENT ;
+                INDENT, { associated_assignment }, [ state_block ], { invariant_clause },
+                [ init_decl ], impl_method, { impl_method }, DEDENT ;
+associated_assignment = "type", type_name, "=", type, NEWLINE ;
 state_block   = "state", ":", NEWLINE, INDENT, state_field, { state_field }, DEDENT ;
 state_field   = field ;
-invariant_clause = "invariant", expression, NEWLINE ;
+invariant_clause = "invariant", guarded_condition, NEWLINE ;
 init_decl     = "init", "(", [ parameter_list ], ")", ":", NEWLINE,
                 INDENT, init_clause, { init_clause }, DEDENT ;
 impl_method   = "fn", function_name, "(", "self",
                 [ ",", parameter_list ], ")", "->", type, ":", NEWLINE,
                 INDENT, method_clause, { method_clause }, DEDENT ;
 const_decl    = "const", const_name, ":", type, "=", const_expr, NEWLINE ;
-const_expr    = expression | qname, "(", const_expr, ")" ;
+const_expr    = expression | qname, "(", const_expr, ")" | "Tuple", "(", [ const_expr, { ",", const_expr } ], ")"
+              | "Array", "(", [ const_expr, { ",", const_expr } ], ")" | "Buffer", "(", string_literal, ")" ;
 
 field         = field_name, ":", type, [ "=", const_expr ], NEWLINE ;
 variant       = variant_name, [ "(", parameter_list, ")" ], NEWLINE ;
-trait_method  = "fn", function_name, "(", "self",
-                [ ",", parameter_list ], ")", "->", type, NEWLINE ;
-fn_decl       = "fn", function_name, [ generic_params ],
+trait_method  = "fn", function_name, "(", "self", [ ",", parameter_list ], ")", "->", type,
+                [ "=", qname ], NEWLINE ;
+fn_decl       = [ "async" ], "fn", function_name, [ generic_params ],
                 "(", [ parameter_list ], ")", "->", type,
-                ( NEWLINE | ":", NEWLINE, INDENT, function_clause,
-                { function_clause }, DEDENT ) ;
+                ( NEWLINE | ":", NEWLINE, INDENT, function_clause, { function_clause }, DEDENT ) ;
 parameter_list = parameter, { ",", parameter }, [ "," ] ;
 parameter     = parameter_name, ":", type ;
 
-function_clause = doc_block | "requires", expression, NEWLINE
-                | "ensures", [ pattern, "=>" ], expression, NEWLINE
-                | "error", qname, [ "when", expression ], NEWLINE
+function_clause = doc_block | "rule", qname, NEWLINE | "requires", guarded_condition, NEWLINE
+                | "ensures", guarded_condition, NEWLINE
+                | "error", qname, [ "with", expression, "matches", pattern ], [ "when", expression ], NEWLINE
                 | "effects", "[", [ qname, { ",", qname } ], "]", NEWLINE ;
-init_clause   = doc_block | "requires", expression, NEWLINE
-                | "ensures", expression, NEWLINE ;
-method_clause = doc_block | "requires", expression, NEWLINE
-                | "modifies", "self", ".", field_name,
-                  { ",", "self", ".", field_name }, NEWLINE
-                | "ensures", [ pattern, "=>" ], expression, NEWLINE
-                | "error", qname, [ "when", expression ], NEWLINE
-                | "effects", "[", [ qname, { ",", qname } ], "]", NEWLINE ;
+init_clause   = doc_block | "requires", guarded_condition, NEWLINE | "ensures", guarded_condition, NEWLINE ;
+method_clause = function_clause | "transitions", "self", ".", field_name, ":", qname, "->", qname,
+                  { ",", "self", ".", field_name, ":", qname, "->", qname }, NEWLINE
+                | "modifies", "self", ".", field_name, { ",", "self", ".", field_name }, NEWLINE ;
+guarded_condition = expression | expression, "matches", pattern, "=>", expression ;
 doc_block     = "doc", triple_string, NEWLINE ;
 
 generic_params = "[", generic_param, { ",", generic_param }, [ "," ], "]" ;
-generic_param = type_name, [ ":", type, { "+", type } ] ;
+generic_param = type_name, [ ":", trait_ref, { "+", trait_ref } ] | "const", const_name, ":", const_kind ;
+const_kind    = "U8" | "U16" | "U32" | "U64" ;
 trait_ref     = type ;
 type          = qname, [ "[", type_arg, { ",", type_arg }, [ "," ], "]" ] ;
-type_arg      = type | string_literal ;
+type_arg      = type | const_expr ;
 qname         = identifier, { ".", identifier } ;
 name_list     = identifier, { ",", identifier }, [ "," ] ;
-type_name     = identifier ; variant_name = identifier ;
+type_name     = identifier ; state_name = identifier ; variant_name = identifier ;
 function_name = identifier ; field_name = identifier ;
 parameter_name = identifier ; binding_name = identifier ;
 const_name    = identifier ;
-
 ```
-
-여러 줄 parameter·generic 목록의 trailing comma는 허용하고 formatter가 붙인다. function·trait method·impl method parameter default와 overload는 문법에 없다. `self`의 무타입 표기는 trait와 impl method의 첫 parameter에서만 허용한다. string type argument는 `Opaque["tag"]`에만 허용한다. `impl`은 top-level doc을 받을 수 없고 state block은 비어 있을 수 없다.
+여러 줄 parameter·generic 목록의 trailing comma는 허용하고 formatter가 붙인다. function·trait method·impl method parameter default와 overload는 문법에 없다. `self`의 무타입 표기는 trait와 impl method의 첫 parameter에서만 허용한다. `Tuple`은 적어도 하나의 type argument를 요구하고 `Array`는 type argument 하나와 const length 하나, `Buffer`는 const length 하나를 요구한다. `Tuple(...)` constant는 적어도 하나의 value, `Array(...)`는 0개 이상의 value, `Buffer("lowercasehex")`는 짝수 길이 lowercase hexadecimal byte string을 요구한다. `impl`은 top-level doc을 받을 수 없고 state block은 비어 있을 수 없다.
 
 `external type`의 complete surface syntax는 한 줄뿐이다:
 
@@ -469,24 +480,24 @@ const_name    = identifier ;
 external type HttpRequest
 ```
 
-external declaration은 target이나 source path를 갖지 않는 semantic named Cott type이다. AST와 HIR은 common declaration metadata와 name만 보존하며 `target`·`path` field를 두지 않는다. Canonical IR v3의 `external_type` declaration도 `annotations`, `doc`, `kind`, `name`, `public`, `source_order`, `span`만 가지며 target projection은 절대 serialize하지 않는다.
+external declaration은 target이나 source path를 갖지 않는 semantic named Cott type이다. AST와 HIR은 common declaration metadata와 name만 보존하며 `target`·`path` field를 두지 않는다. Canonical IR v5의 `external_type` declaration도 `annotations`, `doc`, `kind`, `name`, `public`, `source_order`, `span`만 가지며 target projection은 절대 serialize하지 않는다.
 
-각 backend는 자신의 manifest projection table로 external declaration을 해석한다. Python MVP에서는 `[target.python.external_types]`의 quoted fully qualified Cott external symbol을 key로, `module:Qualname`을 value로 사용한다. key는 존재하는 external declaration과 정확히 일치하고 value는 안전한 Python module/qualname이어야 한다. mapping의 누락·stale key·non-external key·malformed value는 emit 전에 hard error다. Target-side import or signature inspection은 별도 capability이며 declaration validity나 IR을 바꾸지 않는다. 동일한 semantic join은 향후 `[target.rust.external_types]`와 `[target.typescript.external_types]` table로 도입할 수 있지만 Rust와 TypeScript target/table은 v0.1에 구현되거나 허용되지 않는다.
+각 backend는 자신의 manifest projection table로 external declaration을 해석한다. Python에서는 `[target.python.external_types]`의 quoted fully qualified Cott external symbol을 key로, `module:Qualname`을 value로 사용한다. key는 존재하는 external declaration과 정확히 일치하고 value는 안전한 Python module/qualname이어야 한다. mapping의 누락·stale key·non-external key·malformed value는 emit 전에 hard error다. Target-side import or signature inspection은 별도 capability이며 declaration validity나 IR을 바꾸지 않는다. Rust와 TypeScript target/table은 구현되어 있지 않다.
 
-`()`·`[]`·`{}` 안에서는 newline과 indentation token을 무시한다. clause expression은 한 logical line이어야 하며 여러 줄로 나누려면 괄호 안에 작성한다. `impl` body의 순서는 optional `state`, 0개 이상의 `invariant`, optional `init`, 하나 이상의 method다; `state`와 `init`은 각각 최대 한 번이다. `init`과 method block은 비어 있을 수 없고, `doc`은 최대 하나이며 첫 절이어야 한다. `requires`는 `ensures`보다 앞에 오고, method의 `modifies`는 모든 `requires` 뒤·모든 `ensures` 앞에 최대 하나만 온다. `error`와 `effects`의 순서는 function block 규칙과 같다. `init`에는 `error`, `effects`, pattern `ensures`, `modifies`가 없다.
+`()`·`[]`·`{}` 안에서는 newline과 indentation token을 무시한다. clause expression은 한 logical line이어야 하며 여러 줄로 나누려면 괄호 안에 작성한다. `impl` body의 순서는 associated assignment, optional `state`, 0개 이상의 `invariant`, optional `init`, 하나 이상의 method다; assignment·state·init은 각각 최대 한 번의 해당 member로만 나타난다. `init`과 method block은 비어 있을 수 없고, `doc`은 최대 하나이며 첫 절이어야 한다. `requires` 뒤에는 method `transitions`, `modifies`, `ensures`, `error`, `effects`가 이 순서로 오며 `transitions`·`modifies`·`effects`는 각각 최대 하나다. init에는 `error`, `effects`, `transitions`, `modifies`가 없다.
 
-function block에는 `doc` 최대 하나, `requires`·`ensures`·`error` 각 0개 이상, `effects` 최대 하나가 이 순서로 온다. method block도 이 순서를 따되 `modifies`를 requires와 ensures 사이에 둔다. top-level `doc`은 바로 다음 type 또는 constant declaration에 붙으며 orphan·중복 doc은 오류다.
+function block에는 `doc` 최대 하나, `rule`, `requires`·`ensures`·`error` 각 0개 이상, `effects` 최대 하나가 이 순서로 온다. `rule`은 explicit clauses보다 앞에 오며 rule definition의 add/override/delete action으로 contract clauses를 합성한다. top-level `doc`은 바로 다음 type, resource, rule 또는 constant declaration에 붙으며 orphan·중복 doc은 오류다.
 
 expression precedence는 낮은 순서로 `or`, `and`, unary `not`, comparison, `+ -`, `* / %`, unary `+ -`, field/`.len`, primary다. comparison은 `== != < <= > >=`이며 연쇄 비교를 허용한다. primary는 scalar literal, `Unit` literal `()`, 현재 scope의 name·constant·enum singleton과 괄호식, method `ensures`에서만 쓰는 `old(self.field)`이다. 임의 call, index, collection literal과 attribute method call은 계약 표현식에 없다.
 
-arithmetic operand는 같은 numeric type이어야 한다. `/`는 float에만, `%`는 integer에만 허용하고 unary `-`는 unsigned type에 허용하지 않는다. integer contract 중간값은 declared width를 넘을 수 있는 mathematical integer며 remainder는 `0 <= r < abs(divisor)`인 Euclidean remainder다. emitter는 `%`를 Python operator가 아니라 `cott_runtime._cott_euclidean_mod`로 낮춘다. zero divisor는 compile-time constant에서 semantic error, runtime clause에서 `CottContractViolation`이다. `F32` 중간 결과는 매 연산 후 binary32, `F64`는 binary64로 평가한다. compiler constant evaluator와 runtime clause·refinement evaluator는 같은 규칙을 쓰며, emitter는 `F32`의 `+ - * /` 결과를 매번 `cott_runtime` binary32 rounding helper로 낮춘 뒤 비교한다.
+arithmetic operand는 같은 numeric type이어야 한다. `/`는 float에만, `%`는 integer에만 허용하고 unary `-`는 unsigned type에 허용하지 않는다. integer contract 중간값은 declared width를 넘을 수 있는 mathematical integer며 remainder는 `0 <= r < abs(divisor)`인 Euclidean remainder다. emitter는 `%`를 Python operator가 아니라 `cott_runtime._cott_euclidean_mod`로 낮춘다. zero divisor는 compile-time constant에서 semantic error, runtime clause에서 `CottContractViolation`이다. `F32` 중간 결과는 매 연산 후 binary32, `F64`는 binary64로 평가한다. compiler constant evaluator와 runtime clause·refinement evaluator는 같은 규칙을 쓴다.
 
 ```text
 pattern = "_" | binding_name
         | qname, [ "(", [ pattern, { ",", pattern } ], ")" ] ;
 ```
 
-binding은 `snake_case`, variant의 마지막 segment는 `UpperCamelCase`이므로 모호하지 않다. pattern의 payload arity와 타입은 반환 타입에 대해 검사한다.
+`scrutinee matches pattern => condition`은 `requires`, `ensures`, invariant의 통일된 guard다. guard가 match할 때만 condition을 평가하며 binding은 condition scope에만 들어간다. `ensures Pattern => condition`은 호환 syntax로 `result matches Pattern => condition`이다. `error E with scrutinee matches pattern [when condition]`은 error guard와 optional boolean obligation을 함께 쓴다. pattern의 payload arity와 타입은 scrutinee type에 대해 검사한다.
 
 ---
 
@@ -651,128 +662,106 @@ struct Job:
 
 ## 7. Trait
 
-trait는 Python 객체가 구조적으로 제공해야 하는 method signature 집합이다.
+trait는 Python 객체가 구조적으로 제공해야 하는 method signature와 optional associated type·default facade dispatch를 선언한다.
 
 ```cott
 trait Repository[Entity, Id]:
+    type Item
     fn find(self, id: Id) -> Result[Option[Entity], RepositoryError]
     fn save(self, entity: Entity) -> Result[Unit, RepositoryError]
 ```
 
-MVP trait는 비어 있을 수 없고 method signature만 가진다. method에는 generic parameter, default, body, `doc`, contract와 `effects`를 붙일 수 없다. `self`는 첫 parameter이며 generated Python `Protocol`에서는 instance parameter로 변환한다. trait는 generic bound와 function parameter type에 사용할 수 있다.
+trait는 비어 있을 수 없고 associated type은 method보다 앞에 와야 한다. associated type은 `type Name` 또는 trait-bound `type Name: Bound + OtherBound`이며 type parameter처럼 declaration-scoped identity를 가진다. trait method에는 generic parameter, body, `doc`, inline contract와 `effects`를 붙일 수 없다. 다만 `fn method(...) -> T = module.free_function`은 하나의 declared synchronous free function을 default dispatch로 지정한다. 그 function은 exact substituted receiver-first signature를 갖고 verified public facade로 해석되어야 하며, impl이 method를 명시적으로 선언하지 않으면 compiler wrapper가 그 facade를 호출한다. default를 선택한 method는 default function의 contract/effects를 그대로 사용하고 `modifies`는 빈 set이다. default dispatch는 dynamic trait dispatch가 아니며 impl class의 concrete public wrapper를 위한 정적 선택이다.
 
-`impl Concrete for Trait [+ Trait ...]:`는 `Concrete`라는 새롭고 유일한 nominal Cott type을 선언하고, 나열한 structural trait를 구현하는 Cott-owned stateful class를 만든다. `Concrete`는 generic parameter를 가질 수 없고 같은 module의 다른 declaration 이름과 충돌할 수 없다. 각 `trait_ref`는 해석 후 trait여야 하며 중복될 수 없다. trait reference의 type argument를 치환한 뒤 같은 method 이름이 둘 이상이면 parameter 이름·순서·resolved type과 return type이 정확히 같아야 하고, 다르면 HIR error다. 이 합집합이 impl의 required method signature 집합이다.
+`impl Concrete for Trait [+ Trait ...]:`는 `Concrete`라는 새롭고 유일한 nominal Cott type을 선언하고, 나열한 structural trait를 구현하는 Cott-owned stateful class를 만든다. `Concrete`는 generic parameter를 가질 수 없고 같은 module의 다른 declaration 이름과 충돌할 수 없다. 각 `trait_ref`는 해석 후 trait여야 하며 중복될 수 없다. trait reference의 type argument를 치환한 뒤 같은 method 이름이 둘 이상이면 parameter 이름·순서·resolved type과 return type이 정확히 같아야 하고, 다르면 HIR error다. 이 합집합의 각 slot은 exact explicit method 또는 그 trait의 default 중 하나로 선택된다. default 없는 slot은 explicit implementation이 필수다.
 
-`state` field는 source order의 고정된 instance storage다. type은 alias를 해소한 뒤 concrete이고 닫힌 ABI immutable Cott value type, projected `external type` 또는 `Opaque["tag"]`여야 한다. `Never`, trait, type parameter와 `Factory`는 state type이 될 수 없다. external value는 projection의 Python ABI를 보존하지만 내부 mutation은 Cott state transition으로 관찰하지 않으며 선언된 effect의 책임이다. required field는 default field보다 앞에 오며 default는 field type의 compile-time `const_expr`여야 한다. wrapper는 method 전 state field reference를 복사 없이 snapshot하고 slot identity로 replacement를 판정한다.
+impl은 자신이 구현하는 각 associated type을 정확히 한 번 `type Name = ConcreteType`으로 지정한다. 여러 trait가 같은 associated name을 요구하면 assignment는 모호하여 거부한다. assignment는 cyclic projection일 수 없고 모든 declared bound를 만족해야 한다. trait method signature의 `Trait.Associated` projection은 selected impl class의 assignment로 치환되어 Python ABI·stub·wrapper signature에 나타난다.
 
-`Option` state default는 compile-time absence value `Option.Nothing`을 사용한다.
+`state` field는 source order의 고정된 instance storage다. type은 alias를 해소한 뒤 concrete이고 닫힌 ABI immutable Cott value type, projected `external type`, `Opaque["tag"]` 또는 resource type이어야 한다. `Never`, trait, type parameter와 `Factory`는 state type이 될 수 없다. external value의 in-place mutation은 Cott state transition으로 관찰하지 않으며 선언된 effect의 책임이다. required field는 default field보다 앞에 오며 default는 field type의 compile-time `const_expr`여야 한다. wrapper는 method 전 state field reference를 복사 없이 snapshot하고 slot identity로 replacement를 판정한다.
 
-```cott
-trait Cache:
-    fn clear(self) -> Unit
+`Option` state default는 compile-time absence value `Option.Nothing`을 사용한다. state에 required field가 하나라도 있으면 `init`은 필수다. explicit `init`의 parameter는 state field와 같은 선언 순서의 subsequence이고, extra·중복 parameter는 없으며, 모든 required field는 같은 name과 exact resolved type의 parameter를 가져야 한다. default field parameter는 생략할 수 있고 생략하면 state default를 쓴다. `init`이 없으면 required state field도 없어야 하며 compiler가 모든 default를 채우는 zero-argument init을 합성한다. state가 없으면 `init`은 쓸 수 없고 zero-argument init만 합성한다. init assignment는 compiler-owned이며 agent body가 없다.
 
-impl MemoryCache for Cache:
-    state:
-        value: Option[Any] = Option.Nothing
+invariant expression은 `Bool`이어야 하며 scope는 `self`와 constant뿐이다. 통일된 guard를 쓰면 match binding도 condition scope에 들어간다. invariant는 init assignment와 init `ensures` 뒤, 그리고 method helper가 정상 반환한 뒤 반환값을 공개하기 전에 검사한다; `Result` method의 `Ok`와 `Err` 모두 정상 반환이다. helper exception이나 failed precondition은 정상 반환이 아니므로 invariant를 실행하지 않는다.
 
-    fn clear(self) -> Unit:
-        ensures result == ()
-```
+explicit impl method는 선택된 trait slot의 name·parameter name/order/type·return type과 exact match해야 하며 그 밖의 method를 선언할 수 없다. method `doc`, `requires`, guarded `ensures`, `error`, `effects`는 top-level function과 같은 의미를 가지며 scope에 `self`를 추가한다. `modifies`가 없으면 모든 non-resource state field가 호출 전과 같은 object identity를 유지해야 한다. 있으면 나열한 distinct non-resource state field만 다른 object로 교체할 수 있으며, 이는 permission이지 변경 의무가 아니다. `transitions self.field: Resource.from -> Resource.to`는 resource-typed impl state field에만 쓸 수 있고 해당 resource의 declared edge여야 한다; wrapper는 pre-state가 `from` singleton이고 post-state가 `to` singleton인지 identity로 검사한다. resource field는 `modifies`에 둘 수 없고 transition field도 `modifies`와 겹칠 수 없다. external object mutation을 관찰하지 않는다. `old(self.field)`는 snapshot reference를 읽고 method `ensures`에서만 허용된다.
 
-state에 required field가 하나라도 있으면 `init`은 필수다. explicit `init`의 parameter는 state field와 같은 선언 순서의 subsequence이고, extra·중복 parameter는 없으며, 모든 required field는 같은 name과 exact resolved type의 parameter를 가져야 한다. default field parameter는 생략할 수 있고 생략하면 state default를 쓴다. `init`이 없으면 required state field도 없어야 하며 compiler가 모든 default를 채우는 zero-argument init을 합성한다. state가 없으면 `init`은 쓸 수 없고 zero-argument init만 합성한다. init의 assignment는 compiler-owned이며 agent body가 없다; explicit init은 `doc`, `requires`, bare `ensures`만 선언한다. init `requires` scope는 parameter와 constant, init `ensures` scope는 parameter·constant·완전히 할당된 `self`이며 둘 다 `result`, pattern binding, `old`를 사용할 수 없다.
+Concrete에는 inheritance·subclassing·dynamic attribute·`__del__`가 없으며 identity equality와 identity hash만 제공한다. compiler-owned slotted shell, init, per-instance `RLock`, public wrappers와 ABI/contract/invariant/modifies/transitions checks를 제외한 implementation ownership은 없다. public method call은 같은 instance의 lock으로 직렬화한다. `close`는 magic lifecycle hook이 아니라 trait가 선언하고 impl이 위 규칙으로 구현하는 ordinary resource transition이며 implicit cleanup은 없다.
 
-invariant expression은 `Bool`이어야 하며 scope는 `self`와 constant뿐이다. `self`는 해당 Concrete이고 state field와 허용된 immutable value field·`.len`만 읽을 수 있다. invariant는 init assignment와 init `ensures` 뒤, 그리고 method helper가 정상 반환한 뒤 반환값을 공개하기 전에 검사한다; `Result` method의 `Ok`와 `Err` 모두 정상 반환이다. helper exception이나 failed precondition은 정상 반환이 아니므로 invariant를 실행하지 않는다.
-
-impl method는 trait union의 각 signature를 정확히 한 번만 선언하고 그 밖의 method를 선언할 수 없다. 선언은 matched trait signature와 name·parameter name/order/type·return type이 exact match여야 한다. method `doc`, `requires`, `ensures`, `error`, `effects`는 top-level function과 같은 의미를 가지며 scope에 `self`를 추가한다. `modifies`가 없으면 모든 state field가 호출 전과 같은 object identity를 유지해야 한다. 있으면 나열한 distinct state field만 다른 object로 교체할 수 있으며, 이는 permission이지 변경 의무가 아니다. compiler는 helper 전 field reference를 snapshot으로 잡아 permitted write-set 밖의 replacement를 거부한다. external object의 in-place mutation은 snapshot에 드러나지 않으므로 해당 SDK·resource operation을 `effects`에 선언해야 한다. `old(self.field)`는 snapshot reference를 읽고 method `ensures`에서만 허용된다; field는 해당 impl state field여야 하며 `old`의 argument에 다른 expression을 쓸 수 없다. `old`는 init, invariant, requires, error condition과 다른 clause에서 오류다.
-
-Concrete에는 inheritance·subclassing·dynamic attribute·`__del__`가 없으며 identity equality와 identity hash만 제공한다. compiler-owned slotted shell, init, per-instance `RLock`, public wrappers와 ABI/contract/invariant/modifies checks를 제외한 implementation ownership은 없다. public method call은 같은 instance의 lock으로 직렬화한다. `close`는 magic lifecycle hook이 아니라 trait가 선언하고 impl이 위 규칙으로 구현하는 ordinary method/state transition이며 implicit cleanup은 없다.
-
-각 impl method의 agent implementation은 canonical symbol `<module>.<Concrete>.<method>`, durable path `python/_cott_impl/<module>/<Concrete>/<method>.py`, 그리고 그 symbol과 exact signature를 가진 private top-level canonical function `_cott_impl_<Concrete>_<method>` 하나를 가진다. 이 함수는 파일의 유일한 Cott-observable contract entrypoint이지 implementation inventory가 아니다. 같은 file에는 manifest binding 대상이 아닌, dunder도 reserved `_cott_`도 아닌 single-leading-underscore 이름의 undecorated synchronous fully annotated private helper를 0개 이상 둘 수 있고, 같은 private-name rule의 literal `Final[bool | int | float | str | bytes]` immutable constant도 둘 수 있다. canonical function과 helper의 이름 중복은 오류이며 class·mutable module global·그 밖의 executable top-level assignment는 허용하지 않는다. helper는 facade에 export되지 않으며 helper가 public contract가 되어야 할 때만 별도 Cott declaration과 자체 implementation file로 승격한다. impl method는 agent-only이며 unresolved helper는 verify failure다; trait 자체는 계속 structural·signature-only이며 trait method는 top-level cott function이 아니므로 facade, manifest binding, agent generation과 contract test 대상이 아니다. `struct implements Trait`, nominal trait marker, default method와 runtime dispatch는 제공하지 않는다.
+각 explicit impl method의 agent implementation은 canonical symbol `<module>.<Concrete>.<method>`, durable path `python/_cott_impl/<module>/<Concrete>/<method>.py`, 그리고 그 symbol과 exact signature를 가진 private top-level canonical function `_cott_impl_<Concrete>_<method>` 하나를 가진다. trait default-selected method에는 agent implementation file이 없다. implementation file의 private helper와 permitted literal `Final` constant 규칙, static Protocol checking, target checker suppression 정책은 기존 free-function 규칙과 같다.
 
 Python emitter는 `@runtime_checkable` `typing.Protocol`을 생성한다. BasedPyright와 cott static verifier가 method name, parameter kind·type와 return type을 구조적으로 비교한다. boundary checker는 parameterized Protocol에 `isinstance`를 호출하지 않고 `inspect.getattr_static`으로 origin Protocol의 required member presence만 확인해 descriptor를 실행하지 않는다. annotation과 generic 관계는 정적 보증으로 보고한다.
 
-cott generic parameter는 trait에서도 invariant다. PEP 544 checker가 method position이나 occurrence count만 보고 다른 variance 또는 불필요한 `TypeVar`를 요구할 수 있으므로 compiler-owned BasedPyright invocation은 `reportInvalidTypeVarUse`를 run-wide로 끈다. 동적으로 load되는 private helper와 generated private bound Protocol에는 각각 `reportUnusedFunction`와 `reportPrivateUsage`도 끈다. cott static verifier가 exact file set의 모든 TypeVar declaration·bound·occurrence와 invariance, canonical private helper file/function과 durable binding, generated bound Protocol import·bound·signature를 대신 정확히 검사하며 source의 diagnostic suppression과 다른 checker suppression은 거부한다.
+### 7.1 Resource 상태 타입
+
+`resource`는 named immutable state type과 허용 edge를 선언한다.
+
+```cott
+resource Connection:
+    initial disconnected
+    state disconnected
+    state connected
+    state closed
+    terminal closed
+    transition disconnected -> connected
+    transition connected -> closed
+```
+
+resource에는 정확히 하나의 declared `initial`, 하나 이상의 `state`·`terminal`·`transition`이 필요하다. state·terminal·edge는 source order로 보존되며 terminal과 edge의 양 끝은 declared state여야 한다. resource value는 generated singleton state class identity로 비교되며 impl state field에서만 lifecycle transition을 모델링한다. resource declaration은 enum·struct가 아니며 arbitrary transition, implicit cleanup, state payload는 제공하지 않는다.
 
 ---
 
 ## 8. 제네릭
 
-### 8.1 기본 제네릭
+### 8.1 Type 및 const generic
 
 ```cott
-struct Page[T]:
-    items: List[T]
+struct Page[T, const N: U32]:
+    items: Array[T, N]
     total: U64
 
 fn first[T](items: List[T]) -> Option[T]
 ```
 
-### 8.2 Trait bound
+const generic parameter는 `const NAME: U8|U16|U32|U64`이며 type parameter와 같은 ordered generic list에 섞을 수 있다. type use의 argument는 declaration order와 kind를 exact match해야 한다. const argument는 literal, compatible constant, arithmetic expression 또는 in-scope const parameter이고 compile time에 canonical typed value로 계산된다.
+
+### 8.2 Trait bound와 associated projection
 
 ```cott
-fn save_all[T: Serializable](
-    values: List[T],
-) -> Result[Unit, SaveError]
+trait Stream:
+    type Item
+    fn next(self) -> Option[Stream.Item]
+
+fn save_all[T: Serializable](values: List[T]) -> Result[Unit, SaveError]
 ```
 
-복수 제약:
-
-```cott
-fn compare[T: Comparable + Serializable](
-    left: T,
-    right: T,
-) -> Ordering
-```
-
-Python emitter는 복수 제약을 각 trait `Protocol`을 모두 상속하는 합성 `Protocol`로 만들고 `TypeVar(bound=CompositeProtocol)`로 사용한다. `TypeVar`의 선택형 constraints로 약화하지 않는다. bound trait끼리 같은 method 이름이 있으면 parameter·return signature가 구조적으로 동일해야 하며 다르면 HIR error다.
+복수 bound는 `T: Comparable + Serializable`로 쓴다. Python emitter는 각 trait `Protocol`을 모두 상속하는 합성 `Protocol`과 invariant `TypeVar(bound=...)`를 사용한다. `TypeVar`의 선택형 constraints로 약화하지 않는다. bound trait끼리 같은 method 이름이 있으면 parameter·return signature가 구조적으로 동일해야 하며 다르면 HIR error다. associated projection은 trait declaration identity와 associated name을 보존하고 impl selection 때 exact assignment로 치환한다.
 
 ### 8.3 제네릭 규칙
 
-MVP에서는 다음 규칙을 적용한다.
-
-* 제네릭 타입은 기본적으로 invariant다.
-* 생성된 Python 컨테이너와 사용자 제네릭도 invariant `TypeVar`를 사용한다.
-* generic type reference의 type argument는 exact arity로 명시한다.
-* generic function 호출의 type variable은 target static checker가 argument에서 추론하며 cott MVP에는 call expression이나 explicit call-site type argument 문법이 없다.
+* 모든 generic type과 const parameter는 invariant다.
+* 생성된 Python nominal container와 사용자 generic은 invariant `TypeVar`를 사용하며 fixed length는 `Literal[N]`으로 투영된다.
+* generic type reference의 type/const argument는 exact arity와 kind로 명시한다.
+* generic function 호출의 type variable은 target static checker가 argument에서 추론하며 cott에는 call expression이나 explicit call-site type argument 문법이 없다.
 * bound는 중복 없는 trait type만 허용하고 미해결 type variable과 암묵적인 `Any` 대체는 오류다.
-* 재귀적인 무한 타입은 거부한다.
+* 재귀적인 무한 타입과 cyclic associated assignment는 거부한다.
 
-Python runtime은 지워진 `TypeVar`를 복원하거나 호출별로 통합하지 않는다. `List[InputPayload]`처럼 facade 시그니처에 구체화된 중첩 타입은 런타임 검사할 수 있지만 `first[T]`의 입력과 반환 사이 관계는 BasedPyright와 cott 정적 verifier의 보증이며 런타임 검사로 보고하지 않는다.
+Python runtime은 지워진 `TypeVar`·const parameter 관계를 복원하거나 호출별로 통합하지 않는다. `Array[InputPayload, 3]`처럼 facade 시그니처에 statically concrete한 nested type·length는 런타임 검사할 수 있지만 generic input/return 관계는 BasedPyright와 cott static verifier의 보증이다.
 
 ---
 
 ## 9. 함수 선언
 
-cott의 함수는 실행 본문을 가지지 않는다.
-
-함수 블록에는 다음 요소만 들어갈 수 있다.
-
-* `doc`
-* `requires`
-* `ensures`
-* `error`
-* `effects`
-
-기본 예시:
+cott 함수는 실행 본문을 가지지 않는 sync 또는 explicit async free-function declaration이다. function block에는 `doc`, `rule`, `requires`, `ensures`, `error`, `effects`만 들어간다.
 
 ```cott
-fn repeat(data: Bytes, count: U64) -> Result[Bytes, RepeatError]:
-    doc """
-    입력 데이터를 지정한 횟수만큼 반복한다.
-    """
-
-    requires count > 0
-
-    ensures Result.Ok(output) => output.len == data.len * count
+async fn fetch_payload(id: PayloadId) -> Result[Payload, FetchError]:
+    ensures Result.Ok(payload) => payload.id == id
+    effects [network]
 ```
 
-함수 오버로딩은 MVP에서 금지한다.
+`async fn`은 top-level free function에서만 허용한다. return type은 `Iterator`, `Generator`, `Never`일 수 없고 trait method·impl method·binding default dispatch는 async일 수 없다. Canonical IR, provenance, facade, stub, binding signature와 contract runner는 callable kind `sync`/`async`를 보존한다. async facade는 implementation coroutine을 같은 loader/exception boundary에서 직접 `await`하고, runner는 완료 뒤 남은 background task가 없음을 검사한다. sync/async kind 변경은 breaking이며 `asyncio.run`, thread, sync compatibility wrapper는 제공하지 않는다.
 
-함수 parameter default는 금지한다. 호출 option은 default field가 있는 struct로 묶는다.
-
-MVP cott function parameter는 모두 Python positional-or-keyword parameter로 emit한다. positional-only와 keyword-only function parameter 문법은 이후 버전 범위다.
-
-같은 모듈 안에서는 함수 이름이 유일해야 한다.
+함수 오버로딩과 parameter default는 금지한다. 호출 option은 default field가 있는 struct로 묶는다. 모든 parameter는 Python positional-or-keyword parameter로 emit한다. 같은 module 안에서는 함수 이름이 유일하다.
 
 ---
 
@@ -780,28 +769,12 @@ MVP cott function parameter는 모두 Python positional-or-keyword parameter로 
 
 ### 10.1 계약 표현식
 
-refinement, `requires`, `ensures`, 조건부 `error`, invariant는 하나의 정규화된 순수 표현식 언어를 사용한다.
+refinement, `requires`, `ensures`, `error`, invariant와 rule clause는 하나의 정규화된 순수 표현식 언어와 통일된 match guard를 사용한다.
 
-허용 대상:
+허용 대상은 숫자·문자열·boolean·`Unit` literal, 현재 declaration parameter·constant, `ensures`의 `result`, refinement/impl의 `self`, cott field와 `.len`, method `ensures`의 `old(self.field)`, 산술·연쇄 비교·동등성·`and`·`or`·`not`이다. guard의 scrutinee는 그 clause의 base scope에서 평가되고 pattern binding은 guard condition에만 보인다. `requires`와 invariant guard는 matched 경우에만 obligation을 만든다; `ensures` guard는 normal return 뒤 match한 경우에만 검사한다. legacy `ensures Pattern => condition`은 result scrutinee shorthand다.
 
-* 숫자, 문자열, boolean과 `Unit` literal `()`
-* 현재 declaration의 parameter와 cott 상수
-* pattern 없는 function·impl method `ensures`에서만 사용할 수 있는 반환값 전체인 `result`
-* refinement의 carrier `self`, impl invariant·init `ensures`·method clause의 Concrete `self`
-* cott 값의 필드 접근과 `Str`, `Bytes`, 컨테이너의 `.len`
-* method `ensures`의 direct state snapshot `old(self.field)`
-* 산술, 연쇄 비교, 동등성, `and`, `or`, `not`
+선언되지 않은 ambient 이름, file/network/database/clock/random 접근, object method와 임의 Python function call, state change와 nondeterministic expression은 금지한다. 표현식의 모든 이름과 type은 HIR에서 해석한다. 숫자 literal은 문맥 type을 따르고 연쇄 비교는 short-circuit `and`로 정규화한다. equality operand는 같은 resolved non-trait cott value type이어야 하며 type parameter, trait 또는 `Opaque`를 transitive하게 포함할 수 없다. 모든 refinement, guard condition, `requires`, `ensures`, invariant와 `when`의 최종 type은 `Bool`이어야 한다.
 
-scope는 declaration kind로 닫혀 있다. top-level function `requires`·`error when`은 argument와 constant, function `ensures`는 argument·constant·`result` 또는 pattern binding을 쓴다. impl method는 같은 scope에 `self`를 더하고 `old(self.field)`는 pattern 유무와 무관하게 method `ensures`에서만 쓸 수 있다. init scope와 invariant scope는 §7의 규칙을 따른다. `ensures` 문법은 `ensures [pattern =>] expression`이고 init에는 pattern이 없다. `=>`는 expression operator가 아니다. pattern은 enum variant, 재귀 payload pattern, 이름 binding과 wildcard `_`로 구성한다. variant는 반환 type에 속해야 하고 payload arity가 정확해야 하며 binding은 pattern 안에서 한 번만 선언한다. binding은 function argument나 visible constant를 가릴 수 없고 `result`와 `self`도 사용할 수 없다.
-
-금지 대상:
-
-* 선언되지 않은 ambient 이름
-* 파일, 네트워크, 데이터베이스, 시계와 난수 접근
-* 객체 메서드 호출과 임의 Python 함수 호출
-* 상태 변경과 비결정적 표현식
-
-표현식의 모든 이름과 타입은 HIR에서 해석한다. 숫자 literal은 문맥 type을 따르고 연쇄 비교는 각 operand를 한 번 평가하는 short-circuit `and`로 정규화한다. 계약 표현식에서 arithmetic·ordering·equality operand의 동일성은 alias를 해소하고 newtype을 carrier type으로 정규화한 뒤 판단한다. arithmetic과 ordering operand는 같은 numeric type이어야 한다. equality operand는 같은 resolved non-trait cott value type이어야 하며 type parameter, trait 또는 `Opaque`를 transitive하게 포함할 수 없다. `old(self.field)`의 type은 그 declared state field type이다. boolean operator는 short-circuit하며 모든 refinement, `requires`, `ensures`, invariant와 `when`의 최종 type은 `Bool`이어야 한다. MVP contract language에는 `old` 이외의 function call이 없다.
 
 ### 10.2 사전 조건
 
@@ -860,11 +833,9 @@ fn load_payload(
     effects [file.read]
 ```
 
-`error Variant when condition`은 조건이 참인 생성 사례에서 해당 variant를 반환해야 하는 검사 가능한 의무다. 둘 이상의 조건이 참이면 source order에서 첫 번째 조건부 절만 의무가 되고 뒤 절은 면제된다. 조건 없는 `error Variant`는 허용된 환경 실패를 선언할 뿐 항상 일치하는 조건으로 취급하지 않는다.
+`error Variant with scrutinee matches Pattern when condition`은 match한 반환 context에서 `condition`이 참이면 해당 variant를 반환해야 하는 검사 가능한 의무다. `with` guard가 없으면 `when`은 ordinary argument/constant (`impl`은 `self` 포함) scope에서 평가한다. 둘 이상의 applicable conditional error가 참이면 source order의 첫 번째만 의무가 되고 뒤 절은 면제된다. 조건 없는 `error Variant`는 허용된 환경 실패를 선언할 뿐 항상 일치하는 조건으로 취급하지 않는다.
 
-`Result` 함수에 `error` 절이 하나라도 있으면 그 목록은 허용된 오류 variant의 exhaustive set이다. 런타임 검사가 활성화된 facade는 모든 `Err` 반환이 이 집합에 속하는지 검사한다. `off`에서는 이 항목을 신뢰 선언으로 낮춘다. `error` 절이 전혀 없으면 반환 오류 타입만 보장하고 모든 variant의 발생 조건을 신뢰 선언으로 보고한다.
-
-`error`는 `Result[T, E]` function 또는 impl method에만 올 수 있고 variant는 `E`에 속해야 한다. conditional `when`은 function에서는 argument와 constant, impl method에서는 argument·constant·`self`를 참조하는 `Bool` expression이다. 같은 variant의 여러 conditional clause는 허용하지만 완전히 중복된 clause와 같은 variant의 unconditional clause 중복은 오류다.
+`Result` 함수에 `error` 절이 하나라도 있으면 그 목록은 허용된 오류 variant의 exhaustive set이다. 런타임 검사가 활성화된 facade는 모든 `Err` 반환이 이 집합에 속하는지 검사한다. `off`에서는 이 항목을 신뢰 선언으로 낮춘다. `error`는 `Result[T, E]` function 또는 impl method에만 올 수 있고 variant는 `E`에 속해야 한다.
 
 `error`는 다음에 사용된다.
 
@@ -911,9 +882,8 @@ prelude effect 이름은 위 여덟 개다. CPU 계산 자체는 effect가 아�
 
 manifest effect key는 qname 문법이고 value는 literal `true`여야 한다. false·non-boolean value, empty list, unknown name, prelude 재정의와 한 effects list 안의 duplicate는 오류다. Canonical IR은 effect set을 이름순으로 저장한다.
 
-MVP에서 `effects`는 Canonical IR metadata이자 trust declaration이다. cott function에는 실행 body가 없고 contract language의 expression에도 call이 없다. Python implementation은 16.5.1의 공개 cott facade를 통해 다른 선언 함수를 호출할 수 있지만 compiler는 그 call graph에서 effect를 전파하지 않는다. 따라서 canonical function의 caller는 same-file private helper를 포함한 직접·간접 implementation effect 전체를 자신의 effect set에 선언할 책임이 있으며 MVP는 이를 신뢰한다. implementation-level effect propagation 검사는 v0.3에서 도입한다.
 
----
+`effects`는 Canonical IR metadata이자 implementation-call-graph 검증 대상이다. implementation은 exact generated facade로만 다른 Cott free function을 호출할 수 있고, verifier는 canonical function에서 same-file private helper까지 도달하는 모든 그 call edge의 declared callee effect를 합집합으로 계산한다. caller effect set이 이를 포함하지 않으면 path를 포함한 implementation error다. async callee는 반드시 `await`, sync callee는 절대 `await`하지 않는다. stdlib·external projection·generated value constructor와 exact Factory constructor는 effect leaf이며, Cott 밖 코드의 실제 side effect와 import-time behavior는 여전히 trust declaration이다.
 
 ## 11. 상태를 타입으로 표현하기
 
@@ -1148,9 +1118,8 @@ EnsuresClause
 OldStateFieldExpr
 ```
 
-### 15.3 HIR
+HIR은 이름이 해석되고 type expression·const value·guard가 정규화된 내부 구조다. trait의 associated declaration/default target, impl assignment와 explicit/default selected slot, resource state/edge, method transition 및 function async kind를 type-check한 뒤에만 Canonical IR로 내린다. HIR은 state type/default·init mapping·exact signature union·associated bound·guard scope·`old` field identity·modifies write-set·resource edge를 검증한다.
 
-HIR은 이름이 해석되고 타입 표현이 정규화된 내부 구조다. `ImplDecl`은 Concrete symbol, ordered resolved trait reference, ordered state field, invariant, explicit-or-implicit init, declared method와 trait-union conformance result를 가진다. HIR은 state type/default와 init parameter mapping, exact signature union, expression scope, `old` field identity 및 modifies write-set을 검증한 뒤에만 impl을 Canonical IR로 내린다.
 
 예를 들어 다음 두 타입 표현은 HIR에서 같은 심볼을 가리킨다.
 
@@ -1161,25 +1130,19 @@ system.data.InputPayload
 
 ### 15.4 Canonical IR
 
-Canonical IR v3는 에이전트나 특정 언어 문법에 종속되지 않는 정규 표현이다. normative `schema_version`은 **3**이며 compiler는 emit 직전과 IR load 직후 v3 schema를 검증한다. 다음 JSON은 필드 형태를 보여 주는 비규범 표시 fragment이며 schema-conformant instance가 아니다. `clause_id`, 완전한 span과 resolved type 등 반복 field는 지면상 생략했고, `equal`과 `integer`는 설명용 shorthand다. exact schema tag를 이 예시에서 추정하지 않으며 normative schema와 target은 이 shorthand를 소비하지 않는다.
+Canonical IR v5는 에이전트나 특정 언어 문법에 종속되지 않는 정규 표현이다. normative `schema_version`은 **5**이며 compiler는 emit 직전과 IR load 직후 v5 schema를 검증한다. 다음 JSON은 필드 형태를 보여 주는 비규범 표시 fragment이며 schema-conformant instance가 아니다.
 
-실제 IR file의 top-level object는 `schema_version`, fully qualified `module`, project-relative `source`, sorted `imports`와 `declarations`를 필수로 가진다. declaration은 공통 `kind`·fully qualified `name`·`public`·`doc`·`span`을, function은 generic parameter·parameter·return type·contract·effect를 추가로 가진다. external type은 target projection이 아닌 semantic declaration metadata만 가진다.
+실제 IR file의 top-level object는 `schema_version`, fully qualified `module`, project-relative `source`, sorted `imports`와 `declarations`를 가진다. declaration은 공통 `kind`·fully qualified `name`·`public`·`doc`·`span`을 가진다. function은 `callable_kind` (`sync` 또는 `async`), ordered generic parameter·parameter·return type·contract/effects를, trait는 associated type과 method/default free-function identity를, impl은 associated assignment·selected method slot·resource transition을, resource는 initial state·ordered states/edges를 추가한다. external type은 target projection이 아닌 semantic metadata만 가진다.
 
-type node kind는 `primitive`, `named`, `type_parameter`, `any`, `unknown`, `list`, `set`, `map`, `tuple2`, `option`, `result`, `iterator`, `generator`, `factory`, `opaque`로 닫혀 있다. alias는 IR type에서 제거하고 `named`는 fully qualified declaration과 generic argument를 가진다. `factory` node는 lexical key order인 `instance`, `kind`를 가지며 `instance`는 type argument 없는 impl declaration의 `named` type node다. 이 node는 target-neutral semantic form이고 target projection이나 Python import path를 저장하지 않는다. expression node는 resolved cott `type`을 필수로 가지며 parameter·field·constant·variant reference는 canonical symbol identity를 저장한다. pattern도 resolved variant·payload type과 binding identity를 가진다.
+type node kind는 `primitive`, `named`, `type_parameter`, `associated_projection`, `any`, `unknown`, `list`, `set`, `map`, `tuple`, `array`, `buffer`, `option`, `result`, `iterator`, `generator`, `factory`, `opaque`로 닫혀 있다. generic argument는 type 또는 canonical const value다. alias는 IR type에서 제거하고 `named`는 fully qualified declaration과 ordered argument를 가진다. `factory` node는 type argument 없는 impl declaration의 `named` node다. expression과 match guard/pattern은 resolved cott type·symbol identity와 span을 가진다.
 
-declaration kind와 추가 field는 닫혀 있다: `alias(target)`, `newtype(carrier, refinement)`, `struct(generic_parameters, fields)`, `enum(generic_parameters, variants)`, `trait(generic_parameters, methods)`, `impl(traits, state, invariants, init, methods)`, `const(type, value)`, `function(generic_parameters, parameters, return_type, contracts, effects)`, `external_type()`. external type의 canonical object는 `annotations`, `doc`, `kind`, `name`, `public`, `source_order`, `span`만 가지며 target/path/projection field는 없다. generic parameter는 scoped canonical identity와 ordered bound, field·parameter는 name·resolved type·default 또는 `null`·span, variant는 canonical identity와 ordered payload field, trait method는 body 없는 function signature를 가진다. optional doc·refinement·default도 없으면 생략하지 않고 `null`로 쓴다.
+declaration kind와 추가 field는 닫혀 있다: `alias(target)`, `newtype(carrier, refinement)`, `struct(generics, fields)`, `enum(generics, variants)`, `trait(generics, associated_types, methods)`, `impl(traits, associated_types, state, invariants, init, methods, selected_methods)`, `resource(initial, states, terminals, edges)`, `rule(generics, base, clauses)`, `const(type, value)`, `function(callable_kind, generics, parameters, return_type, contracts, effects)`, `external_type()`. resource `terminals`는 terminal declaration의 state identity·source order·span을 별도로 보존하고 `states[].terminal` membership과 일치해야 한다. `HirClause` stores its kind-specific fields, optional typed match guard, expression, source span, and stable clause ID.
 
-`impl` declaration의 common `name`이 Concrete의 canonical identity다. `traits`는 resolved trait type node의 source-order array, `state`는 state field의 source-order array이며 state가 없으면 `[]`다. `invariants`는 source-order `{clause_id, expression, span}` array다. `init`은 compiler implicit zero-argument init이면 `null`, explicit init이면 `{parameters, contracts, span}`이며 `contracts`는 `doc` (`string` 또는 `null`), source-order `requires`, source-order bare `ensures`만 가진다. `methods`는 source-order array이고 각 item은 `{name, parameters, return_type, contracts, modifies, effects, span}`다; `modifies`는 source-order state-field canonical identity array이고 absent clause는 `[]`. method contracts retain the ordinary `doc`, `requires`, `ensures`, `errors` shape; no impl field has an agent body, binding, helper path, or target-specific class detail.
+integer canonical value는 sign을 포함한 base-10 string, `F32`·`F64`는 width와 IEEE bit-pattern lowercase hex, `Bool`·`Str`은 JSON scalar, `Bytes`와 `Buffer`는 lowercase hex, `Unit`은 typed null로 저장한다. tuple/array child value는 declaration order, set element와 map entry는 typed canonical key JSON bytes order다. `Array` value의 item count와 `Buffer` byte count는 declared canonical length와 같아야 한다.
 
-expression kind는 typed literal, parameter·binding·`self`·constant·enum singleton reference, field, `old_state_field`, len, unary, binary와 comparison chain으로 닫혀 있고 모든 source node는 span을 가진다. `old_state_field`는 resolved impl state-field identity와 declared type을 가지며 method `ensures` 외에서는 schema-valid instance가 아니다. Canonical IR v3와 함께 배포하는 `canonical-ir.schema.json`이 normative하며 compiler는 emit 직전과 IR load 직후 schema를 검증한다. 아래 축약 JSON은 normative schema를 대체하지 않는다.
+declaration, field, parameter와 contract clause array는 source order를 보존한다. 의미가 set인 effect와 import는 fully qualified name으로 정렬한다. source span은 raw UTF-8의 0-based start·exclusive-end byte offset과 1-based line·Unicode-scalar column을 함께 가진다. schema에 없는 field는 거부한다. IR JSON은 sorted key, insignificant whitespace 없음, final newline 하나로 canonicalize하고 schema version을 `generation_id`에 포함한다.
 
-integer canonical value는 sign을 포함한 base-10 string, `F32`·`F64`는 width와 IEEE bit-pattern lowercase hex, `Bool`·`Str`은 JSON scalar, `Bytes`는 lowercase hex, `Unit`은 typed null로 저장한다. platform-dependent `Path`, `Never`와 `Opaque`에는 compile-time value가 없다. enum·newtype·container·`JsonValue`는 type node와 child value로 재귀 표현한다. list·tuple·field는 declaration order, set element와 map entry는 typed canonical key JSON bytes order다. numeric literal도 contextual type과 normalized value를 가지므로 target이 type을 재추론하지 않는다.
-
-declaration, field, parameter와 contract clause array는 source order를 보존한다. impl의 trait reference·state field·invariant·init parameter·method·modifies array도 source order를 보존한다. 의미가 set인 effect와 import는 fully qualified name으로 정렬한다. source span은 raw UTF-8의 0-based start·exclusive-end byte offset과 1-based line·Unicode-scalar column을 함께 가진다. 예시의 span과 resolved type은 지면상 축약했다. schema에 없는 field는 거부한다.
-
-IR JSON은 sorted key, insignificant whitespace 없음, final newline 하나로 canonicalize하고 schema version을 `generation_id`에 포함한다.
-
-v0.1의 normative schema는 repository의 `schemas/canonical-ir.schema.json`, `schemas/generation.schema.json`, `schemas/diagnostics.schema.json`, `schemas/contract-test.schema.json`이다. 모두 JSON Schema Draft 2020-12, version `1`이며 compiler binary가 `include_str!`로 embed한다. IR·generation·diagnostic·contract strategy writer와 reader는 해당 schema를 동시에 검증한다.
+normative schema는 repository의 `schemas/canonical-ir.schema.json` (v5), `schemas/generation.schema.json` (v2), `schemas/diagnostics.schema.json`, `schemas/contract-test.schema.json`이다. 모두 JSON Schema Draft 2020-12이며 compiler binary가 embed하고 IR/generation/diagnostic/contract-strategy writer와 reader가 해당 current schema를 검증한다.
 
 ```json
 {
@@ -1342,20 +1305,13 @@ generated/
 ```
 `tests/generated/<module path>/<callable>.json`은 compiler가 실행하는 deterministic managed contract-test strategy다. callable은 free function의 `<function>` 또는 impl method의 `<Concrete>/<method>`다. 닫힌 object는 `{"schema_version":1,"symbol":<FQN>,"seed":"sha256:<hex>","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure"|"effectful"|"never","clause_ids":[<source-order IDs>]}`이며 generated Python source가 해석하지 않는다. impl method strategy는 여기에 deterministic `init_cases`를 추가하며, 각 case는 required state field의 named ABI value와 defaulted field를 생략할지 여부를 source order로 기록한다.
 
-`cott_runtime`은 numeric alias `I8`…`U64`·`F32`·`F64`, generic alias `Option`·`Result`, `Ok`·`Err`·`Some`·`Nothing`, `Unit`·`UNIT`, `Opaque`, nominal container, numeric metadata, `JsonValue` union·variant와 `CottContractViolation`의 유일한 runtime identity 원본이다. `Any`는 `typing.Any`, `Unknown`은 `object`, `Iterator[T]`는 `typing.Iterator[T]`, `Generator[Y, S, R]`는 `typing.Generator[Y, S, R]`로 Python ABI에 직접 투영된다. 각 `<module>_types.py`는 그 cott module의 user type·constant만 정의한다. standard ABI type은 `cott_runtime`에서 직접 import하며 module별로 re-export하지 않는다. compiler-owned support package는 Canonical IR 밖 관리 file로 허용한다.
+`cott_runtime` ABI **2**는 numeric alias `I8`…`U64`·`F32`·`F64`, `Option`·`Result`, `Ok`·`Err`·`Some`·`Nothing`, `Unit`·`UNIT`, `Opaque`, `CottList`·`CottSet`·`FrozenMap`·`CottArray`·`CottBuffer`, numeric metadata, `JsonValue` union·variant와 `CottContractViolation`의 유일한 runtime identity 원본이다. `Any`는 `typing.Any`, `Unknown`은 `object`, `Iterator[T]`는 `typing.Iterator[T]`, `Generator[Y, S, R]`는 `typing.Generator[Y, S, R]`로 직접 투영된다. runtime ABI value가 expected ABI 2와 다르면 facade load는 실패한다.
 
-MVP는 Python environment 하나에 generated cott project 하나만 설치한다. `cott_runtime`과 각 facade는 normalized `[project].name` identity를 함께 embed하고 서로 다르면 import를 거부한다. 다른 distribution이 이미 `cott_runtime`을 소유한 environment도 verify에서 거부해 package file collision을 조용히 허용하지 않는다.
+Python environment 하나에는 generated cott project 하나만 설치한다. `cott_runtime`과 각 facade는 normalized `[project].name`, `[project].version`, runtime ABI 2를 embed하고 서로 다르면 import를 거부한다. `generated/python`은 public cott module, runtime과 verified local implementation copy를 함께 담는 단일 runtime/package root이며 `<module>_types.py`는 user type·constant만 정의한다.
 
-generated module의 support import와 helper는 reserved `_cott_` prefix를 사용하고 `__all__`에 넣지 않는다. 따라서 class body에서도 name mangling 없이 참조하고 user symbol을 rename하지 않은 채 runtime name 충돌을 피한다.
+`facade_exports(IR, resolved)`는 모든 public non-callable, resolved public free function, every selected slot이 explicit implementation 또는 verified default facade로 resolved된 impl class의 합집합이다. unresolved explicit impl method만 `generation.json.current.unresolved`에 기록한다. default-selected method에는 durable implementation source·record가 없다.
 
-`generated/python`은 public cott module, `cott_runtime`과 verified local implementation copy를 함께 담는 단일 runtime·package root다. 완전히 타입이 지정된 `bar.py` facade가 공개 계약 표면이며 각 public package는 `py.typed`를 포함한다.
-
-`facade_exports(IR, resolved)`는 `public_python_symbols(IR)`의 모든 비-callable symbol, 이번 세대에 구현이 해석된 public free-function symbol과 every method가 resolved된 impl class symbol의 합집합이다. facade의 `__all__`은 이 집합과 정확히 같다. `verified = true`인 세대에서는 unresolved가 없어 `facade_exports`가 전체 `public_python_symbols`와 같아야 한다. 미구현 free function과 impl method는 `generation.json.current.unresolved`에 기록한다. `bar_types.py`는 구현과 adapter가 공유하는 지원 대상 typing boundary지만 공개 free function 또는 impl class의 대체 import 경로는 아니다. `generated/stubs`의 `.pyi`는 도구 산출물이며 runtime import path에 넣지 않는다. `cott_runtime`을 제외한 모든 compiler-owned package `__init__.py`는 비어 있고 re-export하지 않는다.
-
-resolved local binding과 agent implementation module은 source bytes 전체를 canonical Python module path 아래에 그대로 복사한다. canonical function, same-file private helper와 permitted `Final` constant를 포함한 그 단일 file의 raw-byte SHA-256가 provenance `content_hash`이며 generated copy와 durable source가 다르면 verify가 실패한다. compiler가 만든 empty parent `__init__.py` 외에는 같은 package의 다른 source를 복사하지 않는다. external distribution module은 복사하지 않는다.
-`impl Concrete for Trait [+ Trait ...]`는 agent가 class를 작성하는 기능이 아니다. emitter는 trait `Protocol`을 구현 상속하지 않는 ordinary `@final` class `Concrete`를 생성하고, declaration-order state slot과 private `_cott_lock` slot만 둔다. compiler-owned `__init__`은 required state parameter를 exact ABI type으로 받고 defaulted field에는 declaration default를 적용한 뒤 field를 한 번씩 대입하고 `threading.RLock`을 만든다. state가 없으면 public zero-argument init을 생성한다. init의 `requires`·`ensures`와 invariant는 wrapper가 검사하며 agent code는 실행하지 않는다. class는 inheritance·subclassing·dynamic attribute·`__del__`을 허용하지 않고 identity equality와 identity hash를 유지한다. trait는 계속 signature-only structural `Protocol`이며 class는 nominal runtime dispatch나 trait default method를 얻지 않는다.
-
-state field ABI type은 closed immutable Cott value, projected external value 또는 `Opaque`여야 한다. public method wrapper는 호출 전 field reference를 snapshot하고 `modifies`에 없는 slot을 Python `is` identity로 비교한다. 이 검사는 field replacement를 결정적으로 잡지만 external·Opaque payload의 in-place mutation을 관찰하거나 `old(self.field)`의 deep copy를 만들지 않는다. public method wrapper는 instance `_cott_lock`을 전체 validation, helper invocation, state check 및 normal return invariant 검사 동안 획득한다. `RLock`이므로 helper가 자기 instance의 다른 declared public method를 wrapper를 통해 호출할 수 있지만, instance 사이 serializability·reader snapshot isolation은 보장하지 않는다. resource lifecycle은 별도 magic hook이 아니라 ordinary trait method와 declared state transition(예: `close`)로만 모델링한다.
+`impl Concrete for Trait [+ Trait ...]`는 agent가 class를 작성하는 기능이 아니다. emitter는 ordinary `@final` class, declaration-order state slot, `_cott_lock`, compiler-owned init과 selected method wrapper를 생성한다. explicit slot은 canonical helper를 호출하고 default slot은 exact verified free-function facade를 receiver-first로 호출한다. wrapper는 associated projection이 치환된 ABI, init/invariant, non-resource modifies와 resource transition checks를 적용한다.
 
 `generation.json`은 두 snapshot을 가진다.
 
@@ -1366,14 +1322,16 @@ record의 필수 field를 보여 주는 다음 JSON은 객체·배열 entry 일�
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "current": {
     "generation_id": "sha256:...",
     "verified": false,
+    "project_version": "0.3.0",
+    "compatibility": {"generation_schema": 2, "canonical_ir_schema": 5, "runtime_abi": 2},
     "inputs": {"AGENTS.md": "sha256:...", "cott.toml": "sha256:...", "python/pyproject.toml": "sha256:...", "python/uv.lock": "sha256:...", "src/foo/bar.cott": "sha256:..."},
     "tools": {
-      "compiler": {"version": "0.1.0", "executable": "/canonical/cott", "content_hash": "sha256:..."},
-      "runtime": {"version": "0.1.0"},
+      "compiler": {"version": "0.3.0", "executable": "/canonical/cott", "content_hash": "sha256:..."},
+      "runtime": {"abi": "2", "version": "0.3.0"},
       "python": {"implementation": "cpython", "version": "3.14.6", "cache_tag": "cpython-314", "os": "darwin", "machine": "arm64", "platform": "macosx-15.0-arm64", "executable": "/canonical/python", "content_hash": "sha256:..."},
       "basedpyright": {"version": "...", "executable": "/canonical/basedpyright", "content_hash": "sha256:..."}
     },
@@ -1411,7 +1369,7 @@ record의 필수 field를 보여 주는 다음 JSON은 객체·배열 entry 일�
 }
 ```
 
-project-owned path는 project-relative POSIX path이고 dependency import origin만 distribution-relative POSIX path다. hash는 raw file bytes의 SHA-256 lowercase hex다. map key와 set-derived array를 정렬한 UTF-8 JSON으로 쓰며 file 끝 newline 하나만 둔다. `generation.json` 자체는 self-reference를 피하려고 `managed_files`에서 제외한다. `generation_id`는 domain tag, top-level `schema_version`과 current에서 `generation_id`·`verified`·`verification`·`agent_runs`를 뺀 canonical object의 hash다. `last_verified`는 pointer가 아니라 verified current snapshot의 deep copy다.
+project-owned path는 project-relative POSIX path이고 dependency import origin만 distribution-relative POSIX path다. hash는 raw file bytes의 SHA-256 lowercase hex다. map key와 set-derived array를 정렬한 UTF-8 JSON으로 쓰며 file 끝 newline 하나만 둔다. `generation.json` 자체는 self-reference를 피하려고 `managed_files`에서 제외한다. `generation_id`는 canonical object `{"current": <normalized current>, "domain": "cott.generation.v2", "schema_version": 2}`의 hash이며 normalized current에서는 `generation_id`·`verified`·`verification`·`agent_runs`를 뺀다. `last_verified`는 pointer가 아니라 verified current snapshot의 deep copy다.
 
 `agent_runs`는 현재 agent implementation content hash와 일치하는 callable별 마지막 successful run만 담는다. 이후 emit·verify에서도 hash가 같으면 보존하고 agent 재생성 시 교체하며 user edit로 hash가 달라지면 제거한다. 실패·폐기된 run과 무제한 history는 generation record에 누적하지 않는다.
 implementation record의 `cott_symbol`은 free function 또는 `<module>.<Concrete>.<method>`이며 `python_symbol`은 file의 유일한 canonical contract function만 가리킨다. 같은 file의 private helper와 permitted `Final` constant는 별도 symbol·binding·facade export·provenance record를 만들지 않고 file 전체 `content_hash`로 함께 provenance된다. impl method record는 `"kind":"impl_method"`, `"concrete":"<Concrete>"`, `"method":"<method>"`, `"owner":"agent"`, `"python_symbol":"_cott_impl.<module path>.<Concrete>.<method>:_cott_impl_<Concrete>_<method>"`, `"source_origin":"python/_cott_impl/<module path>/<Concrete>/<method>.py"`와 같은 runtime origin·content hash를 반드시 가진다. `current.unresolved`도 free function과 impl method의 canonical symbol·kind·source span을 각각 기록한다. impl method에는 manifest binding record가 없고 owner는 언제나 `agent`다.
@@ -1448,13 +1406,16 @@ canonical executable path와 binary hash를 포함하므로 `generation_id`는 �
 | `List[T]` | invariant `cott_runtime.CottList[T]` |
 | `Set[T]` | invariant `cott_runtime.CottSet[T]` |
 | `Map[K, V]` | invariant `cott_runtime.FrozenMap[K, V]` |
-| `Tuple[T1, T2]` | invariant `cott_runtime.CottTuple2[T1, T2]` |
+| `Tuple[T1, ..., TN]` | native heterogeneous `tuple[T1, ..., TN]` |
+| `Array[T, N]` | invariant `cott_runtime.CottArray[T, Literal[N]]` |
+| `Buffer[N]` | invariant `cott_runtime.CottBuffer[Literal[N]]` |
 | `Option[T]` | `Some[T] \| Nothing`; `Some(value=...)`, `Nothing()` |
 | `Result[T, E]` | `Ok[T] \| Err[E]`; `Ok(value=...)`, `Err(error=...)` |
 | 사용자 `enum E` | 모든 `E_<Variant>` frozen class의 `TypeAlias` union `E` |
 | `struct` | `@dataclass(frozen=True, slots=True, kw_only=True)` |
-| `trait` | signature-only structural `typing.Protocol` |
-| `impl` | compiler-owned `@final` ordinary slotted class; state field slots, private `RLock`, compiler init 및 public method wrappers |
+| `trait` | structural `typing.Protocol`; default는 verified free-function facade dependency |
+| `impl` | compiler-owned `@final` ordinary slotted class; selected explicit/default method wrapper |
+| `resource R` | generated `R_<State>` singleton state classes와 `R` union alias |
 | 복수 trait bound | 모든 bound를 상속한 합성 `Protocol` |
 | `newtype` | 조건을 검사하는 명목 wrapper class |
 | `alias` | type alias |
@@ -1481,11 +1442,9 @@ alias 이름, trait `Protocol`, enum union alias와 underscore-delimited variant
 
 BasedPyright는 `Annotated[int, ...]`의 width 차이만으로 type을 구분하지 못하므로 cott static binding verifier가 implementation signature의 sign·width·precision metadata까지 비교한다. 일반 Python caller의 width 구분은 정적 증명으로 보고하지 않으며 활성 boundary의 value range 검사, `off`의 trust declaration으로 남는다. facade는 statically concrete `F32` path를 모든 mode에서 normalize하고 그 밖의 numeric range와 값은 구성된 validation mode를 따른다. `typing.NewType`은 runtime identity가 없으므로 사용하지 않는다.
 
-`CottList`는 tuple-backed `Sequence`, `CottSet`은 frozenset-backed `Set`, `FrozenMap`은 private `MappingProxyType` 기반 read-only `Mapping`, `CottTuple2`는 길이 2의 heterogeneous `Sequence`다. public keyword-only constructor는 각각 `CottList(*, values: Iterable[T])`, `CottSet(*, values: Iterable[T])`, `FrozenMap(*, values: Mapping[K, V])`, `CottTuple2(*, first: T1, second: T2)`다. 이미 같은 nominal container인 입력은 private immutable backing을 재사용하고 그 밖의 입력은 새 private backing으로 한 번 materialize한다. public boundary는 raw Python container를 암묵 변환하지 않는다.
+`CottList`는 tuple-backed `Sequence`, `CottSet`은 frozenset-backed `Set`, `FrozenMap`은 private `MappingProxyType` 기반 read-only `Mapping`이다. `Tuple`은 wrapper가 아닌 native immutable heterogeneous Python tuple이며 tuple length와 each indexed ABI element를 재귀 검사한다. `CottArray`는 tuple-backed immutable `Sequence`이고 `CottBuffer`는 exact bytes-backed immutable `Sequence[int]`이며 validator는 declared `Literal` length와 원소/byte ABI를 확인한다. public boundary는 raw Python list/set/dict를 nominal wrapper로 암묵 변환하지 않는다.
 
-`CottTuple2`는 read-only `.first`·`.second`와 `Literal[0]`·`Literal[1]` `__getitem__` overload를 제공한다. 모든 nominal container의 equality는 같은 cott runtime class와 contents에 대해서만 성립하며 native Python container와는 같지 않다.
-
-cott key admissibility는 5.4의 static classifier가 결정한다. `CottTuple2.__hash__`는 Python tuple처럼 두 runtime 원소에 위임하므로 unhashable 원소면 `TypeError`가 나지만 compiler는 두 component type이 모두 hash-stable인 instantiation만 key position에 허용한다. payload 없는 enum과 허용된 carrier의 newtype은 hashable하다. `Factory`는 class object projection에도 불구하고 compiler의 hash-stable type이 아니며, `CottList`, `CottSet`, `FrozenMap`, struct, payload enum, 표준 union·`JsonValue` variant, `Unit`과 `Opaque`도 hash-stable type이 아니다.
+nominal container equality는 같은 runtime class와 contents에 대해서만 성립하지만 native tuple은 Python tuple equality/hash semantics를 사용한다. compiler는 hash-key position의 모든 tuple component가 hash-stable일 때만 허용한다. `CottList`, `CottSet`, `FrozenMap`, `CottArray`, `CottBuffer`, struct, payload enum, standard union·`JsonValue` variant, `Unit`, `Opaque`, `Factory`는 hash-stable type이 아니다.
 
 ---
 
@@ -1535,7 +1494,7 @@ runtime_validation = "boundary"
 | lazy `Iterator`·`Generator` protocol과 lifecycle | 신뢰 선언 | 생성 시 protocol만 검사; lifecycle은 관찰된 evidence | test context에서 관찰된 lifecycle만 검사 |
 | 지워진 `TypeVar` 관계 | 정적 검사 | 정적 검사 | 정적 검사 |
 
-free function wrapper order는 고정한다: statically concrete argument `F32` ABI normalization → 활성 mode의 concrete input type·numeric range·refinement, 모든 `requires`와 첫 true conditional `error` 기록 → implementation call → return `F32` ABI normalization → 활성 mode의 concrete return type·numeric range, allowed `Err` set·기록된 conditional error 의무와 모든 applicable `ensures`. impl init은 exact parameter ABI 검사 → `requires` → compiler-owned state assignment → `ensures` → invariant 순서이고, impl method wrapper는 `_cott_lock`을 얻은 뒤 같은 input/contract prelude, immutable pre-state snapshot, helper call, return checks와 `ensures`, declared `modifies self.field` 외 field 불변 검사, normal `Ok`/`Err` invariant 순서다. `old(self.field)`은 그 pre-state snapshot만 참조한다. 실패하면 해당 type 또는 clause span을 가진 `CottContractViolation`이다.
+free-function wrapper order는 고정한다: statically concrete argument `F32` ABI normalization → 활성 mode의 concrete input type·numeric range·refinement, 모든 `requires`와 첫 applicable conditional `error` 기록 → sync implementation call 또는 async implementation coroutine의 direct `await` → return `F32` ABI normalization → 활성 mode의 concrete return type·numeric range, allowed `Err` set·기록된 conditional error obligation과 applicable guarded `ensures`. async wrapper는 await 완료 뒤 새 background task가 남지 않음을 runner에서 검증한다. impl init과 sync impl method wrapper의 state/contract order는 동일하며 async impl method는 존재하지 않는다.
 
 facade의 always-on ABI pass는 expected type에서 statically concrete `F32` path만 recursive traversal한다. 값이 반올림되면 같은 immutable cott carrier를 다시 만들며 raw Python container를 convert하지 않는다. 이 path의 shape mismatch는 `off`에서도 ABI violation이고 erased `TypeVar` 내부는 static-only다. 이와 별도로 newtype 생성자는 6.2의 carrier ABI와 refinement를 항상 재귀 검사한다.
 
@@ -1561,7 +1520,7 @@ Cott accepts a declaration when the capability required for that declaration is 
 
 자동 test input은 모든 refinement와 `requires`를 만족해야 한다. generator는 IR hash와 callable FQN을 seed로 경계값 우선 64개 candidate를 만들고 container 길이 0–3, enum variant와 recursive `JsonValue` 깊이 4로 제한한다. Factory에는 source value literal이 없으므로 자동 contract test가 Factory candidate를 만들거나 Factory init을 호출하지 않는다. impl method는 method candidate 전마다 recorded `init_cases`를 source order로 instantiate한다: required state field에는 exact-name input candidate를 넣고 defaulted field는 deterministic하게 omitted 또는 explicit candidate로 둔다. init `requires`를 만족하지 않는 case는 버리고 모든 required state field를 채울 수 없으면 해당 method clause를 `미관찰`로 기록한다.
 
-자동 계약 테스트는 caller에 선언된 `effects`가 없고 반환 type이 `Never`가 아닌 free function과 impl method만 callable별 별도 CPython process의 deny-by-default OS sandbox에서 실행한다. facade helper의 effect는 MVP에서 caller로 자동 전파하지 않으므로 이 분류도 caller 선언을 신뢰하며, 누락된 effect가 실제 동작을 허용하도록 sandbox를 완화하지 않는다. `Never` callable은 자동 호출하지 않고 clause별 `미관찰` reason을 기록한다. sandbox를 구현 코드 import 전에 적용하고 read는 staging generated root·exact interpreter standard library·locked distribution과 dynamic-loader runtime으로 제한한다. filesystem write는 폐기할 process-private scratch만 허용하고 network, device, subprocess와 environment secret은 차단한다. `PYTHONDONTWRITEBYTECODE=1`, fixed `PYTHONHASHSEED`와 scratch `TMPDIR`을 사용하며 stdout·stderr는 pipe로 수집한다. process tree wall timeout은 30초, stream별 보존 한도는 1 MiB다. timeout·비정상 종료·한도 초과는 verify 실패이며 sandbox를 강제할 수 없는 platform에서도 실패한다.
+자동 계약 테스트는 resolved caller effect set이 비어 있고 반환 type이 `Never`가 아닌 sync/async free function과 impl method만 callable별 별도 CPython process의 deny-by-default OS sandbox에서 실행한다. classifier는 verified Cott call graph를 포함한 declared transitive effect set을 사용하며, 외부 code/import-time effect는 trust declaration으로 남고 sandbox를 완화하지 않는다. `Never` callable은 자동 호출하지 않고 clause별 `미관찰` reason을 기록한다.
 선택 scope에 실행할 pure clause가 없으면 runner는 facade를 import하지 않고 IR strategy만으로 effectful clause를 `신뢰 선언`으로 기록한다. effectful impl method의 constructor dependency로만 포함된 pure initializer도 실행하지 않고 그 clause를 `미관찰`로 기록한다. 따라서 실행하지 않을 SDK module의 import-time device·memory side effect를 계약 테스트가 유발하지 않는다.
 
 
@@ -1596,7 +1555,7 @@ manifest binding key는 현재 IR의 public free function을 정확히 가리켜
 
 `cott check`, `cott emit`, `cott generate`, `cott verify`는 Python source와 stub을 import 없이 정적으로 해석한다. 타입 판정은 이번 transaction에서 staging에 생성한 `*_types.py`를 기준으로 한다.
 
-MVP의 **free-function binding** target은 regular `.py`에 선언된 decorator 없는 top-level synchronous function과 simple function name으로 제한한다. target의 coroutine, overload, variadic parameter와 descriptor, extension·zip·custom loader는 거부한다. Python generator function은 선언된 `Generator[Y, S, R]` ABI와 호환되면 허용한다. implementation file은 Cott의 최소 public/observable contract이지 exhaustive implementation inventory가 아니다: binding target 또는 agent file의 expected canonical function 하나는 Cott symbol의 exact name·signature를 가져야 하지만, 같은 file에는 dunder도 reserved `_cott_`도 아닌 single-leading-underscore 이름의 undecorated synchronous fully annotated private helper를 0개 이상 둘 수 있다. duplicate function name은 거부한다. top-level node는 optional docstring, `from __future__ import annotations`, absolute import, invariant `TypeVar` 선언, same private-name rule의 literal `Final[bool | int | float | str | bytes]` immutable constant, canonical function과 위 private helper만 허용한다. class·type alias·mutable module global과 그 밖의 executable top-level statement는 거부한다. helper는 manifest binding 대상도 facade export도 아니며 public behavior가 필요해질 때만 별도 Cott declaration과 자체 implementation file로 승격한다. 모든 canonical function과 Python-local helper signature는 fully annotated여야 하며 function body의 nested import·`global`·`nonlocal`은 거부한다. 이 same-file rule은 binding과 free-function/impl-method agent implementation에 공통으로 적용한다.
+**free-function binding** target은 regular `.py`에 선언된 decorator 없는 top-level function 또는 `async def`와 simple function name으로 제한한다. callable kind는 Cott declaration과 exact match해야 한다: async binding은 coroutine function이어야 하고 sync binding은 coroutine일 수 없다. overload, variadic parameter와 descriptor, extension·zip·custom loader는 거부한다. Python generator function은 sync `Generator[Y, S, R]` ABI와 호환될 때만 허용한다. implementation file의 canonical callable 하나는 exact name·signature를 가지며 same-file private helper는 synchronous fully annotated function만 허용한다.
 
 target과 Python-local helper에서 optional docstring을 제외한 body가 `pass` 또는 `...`뿐인 placeholder, value placeholder로 대입·반환하는 `...`, `NotImplementedError`를 직접 발생시키는 코드는 정적 해석 단계에서 거부한다. 일반 `.py` type annotation의 `tuple[T, ...]`와 `.pyi` stub의 ellipsis는 placeholder가 아니다.
 
@@ -1673,7 +1632,7 @@ cache miss 또는 stamp drift의 loader preflight는 target 실행 전에 record
 
 유지되는 curriculum module의 source order는 type 선언, 작은 domain leaf function, 더 큰 composition function, domain-named final operation 순서다. 의미 있는 경계만 stage로 공개한다. grammar lesson은 의도적으로 leaf 하나일 수 있고 simple·complex lesson도 domain responsibility가 독립적인 경우에만 stage를 추가한다.
 
-`.cott` declaration은 항상 bodyless다. free-function composition edge는 `from <exact cott module> import <declared public function>` 형태의 alias-free import로 exact generated public facade를 통과해야 하며 implementation file끼리 직접 호출하지 않는다. same-file private helper call은 implementation detail이고 impl canonical function의 only cross-contract method composition edge는 `self.<declared_method>(...)` public wrapper다. caller의 effects는 private helper를 포함한 transitive implementation effect에서 자동 전파된다고 추론하지 않고 caller 계약에 명시한다. helper가 Cott로 승격되어 public function이 되면 모든 ABI-valid input에 선언된 결과를 반환하거나 caller가 호출 전에 확립할 수 있는 Cott `requires`를 선언해야 한다.
+`.cott` declaration은 항상 bodyless다. free-function composition edge는 `from <exact cott module> import <declared public function>` 형태의 alias-free import로 exact generated public facade를 통과해야 하며 implementation file끼리 직접 호출하지 않는다. same-file private helper call은 implementation detail이고 impl canonical function의 only cross-contract method composition edge는 `self.<declared_method>(...)` public wrapper다. effect verifier는 caller와 same-file helper가 도달하는 Cott facade callee의 declared effects를 transitive하게 검사한다; external/stdlib operation은 declaration의 trust boundary로 남는다. helper가 Cott로 승격되어 public function이 되면 모든 ABI-valid input에 선언된 결과를 반환하거나 caller가 호출 전에 확립할 수 있는 Cott `requires`를 선언해야 한다.
 
 `examples/grammar/checked-add`만 manifest binding syntax를 가르치는 lesson이다. 이 project만 `[target.python.implementations]` mapping과 `python/cott_bindings/<cott module>/<function>.py`의 authored source를 checkout에 둔다. 16.5의 manifest binding과 source/runtime provenance 규칙은 일반 product feature로 계속 지원하지만 다른 유지 example의 authoring model은 아니다.
 
@@ -1722,9 +1681,9 @@ cott는 17.1의 입력을 하나의 callable별 구현 지시로 구성하여 �
 
 각 에이전트 adapter는 실행 파일, prompt 전달 방식, 작업 디렉터리, 환경 변수, 종료 상태를 명시한다.
 
-compiler release마다 adapter별 minimum supported CLI version과 exact argv template를 고정한다. v0.1은 Codex CLI `>=0.147.0`, OMP `>=17.2.12`를 허용한다. executable은 `PATH`에서 한 번 resolve하고 version probe부터 아래와 같은 containment에서 실행한다. version output이 해석 불가능하거나 minimum version보다 낮으면 본 실행 전에 실패한다.
+compiler release마다 adapter별 minimum supported CLI version과 exact argv template를 고정한다. v0.3은 Codex CLI `>=0.147.0`, OMP `>=17.2.12`를 허용한다. executable은 `PATH`에서 한 번 resolve하고 version probe부터 아래 containment에서 실행한다. version output이 해석 불가능하거나 minimum version보다 낮으면 본 실행 전에 실패한다.
 
-v0.1의 exact main-process argv template는 다음과 같다. 각 항목은 shell 재해석 없이 별도 argv다. `<workspace>`·`<scratch>/omp.yaml`·`<seconds>`와 `<prompt>`만 run별 값으로 치환한다.
+v0.3의 exact main-process argv template는 다음과 같다. 각 항목은 shell 재해석 없이 별도 argv다. `<workspace>`·`<scratch>/omp.yaml`·`<seconds>`와 `<prompt>`만 run별 값으로 치환한다.
 
 * Codex: `codex exec --strict-config --ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox workspace-write --color never --cd <workspace> -`; prompt bytes는 stdin으로 전달한다.
 * OMP: `omp -p --cwd <workspace> --no-session --no-rules --no-skills --no-extensions --no-lsp --no-pty --no-title --tools read,grep,glob,edit,write --approval-mode yolo --max-time <seconds>s --config <scratch>/omp.yaml <prompt>`; prompt는 마지막 단일 argv다.
@@ -1881,7 +1840,7 @@ cott init <path> --format json
 
 `init`은 아직 project가 없어서 17.4의 project lock/journal을 쓰지 않는 유일한 명령이다. canonical parent directory handle 아래에 mode `0700` private sibling temporary scaffold를 만들고 target root의 mode `0600` `.cott-init` file에 closed `schema_version`·nonce ownership record를 저장한다. 모든 file을 fsync한 뒤 directory를 bottom-up fsync하고, Linux `renameat2(RENAME_NOREPLACE)` 또는 macOS `renameatx_np(RENAME_EXCL)`에 해당하는 같은-parent atomic no-replace rename으로만 publish한 다음 parent를 fsync한다. publish 전 실패는 init-owned temp를 no-follow로 제거하고 parent를 fsync한다. 경합 `EEXIST`는 이 cleanup까지 성공한 경우에만 exit `2`이며, 다른 scaffold·rename·fsync 실패나 cleanup 실패는 exit `6`이다. publish 뒤에는 uv 실행과 모든 probe를 먼저 완료한다. `.cott-init` unlink가 final commit transition이며, unlink 전 실패는 root file identity와 in-memory nonce가 marker record와 모두 일치하는 init-owned target만 no-follow로 제거하고 parent를 fsync한 뒤 원래 exit code를 반환한다. identity가 달라졌거나 cleanup이 실패하면 target을 보존하고 exit `6`을 반환한다. unlink를 시작한 뒤에는 target을 자동 삭제하지 않는다. unlink 또는 이어지는 target-root fsync가 실패하면 exact completed tree나 ownership-marked completed tree를 보존하고 exit `6`과 수동 확인 경로를 진단하며, 둘 다 성공해야 init이 성공한다. process crash로 남은 ownership-marked temp·target도 다음 init이 자동 삭제하거나 overwrite하지 않고 exit `2`와 수동 확인 경로를 진단한다. uv가 한 번이라도 시작된 뒤 실패하면 선택된 human 또는 JSON diagnostic에 global managed-Python·cache 변경이 남고 rollback되지 않을 수 있음을 반드시 포함한다.
 
-scaffold는 `python/.python-version`에 `3.14`를 쓰고 `python/pyproject.toml`의 `requires-python`을 `>=3.14.6,<3.15`로 고정하며 BasedPyright `>=1.39.9`를 dev dependency로 둔다. v0.1은 CPython `>=3.14.6,<3.15`와 uv `0.12.3` 이상을 지원하며, init은 그 범위의 managed CPython patch를 설치·probe한다. `uv.lock`은 Python exact patch를 고정하지 않으며, 실제 설치된 full patch는 이후 generation provenance에 고정한다.
+scaffold는 `python/.python-version`에 `3.14`를 쓰고 `python/pyproject.toml`의 `requires-python`을 `>=3.14.6,<3.15`로 고정하며 BasedPyright `>=1.39.9`를 dev dependency로 둔다. v0.3은 CPython `>=3.14.6,<3.15`와 uv `0.12.3` 이상을 지원하며, init은 그 범위의 managed CPython patch를 설치·probe한다. `uv.lock`은 Python exact patch를 고정하지 않으며, 실제 설치된 full patch는 이후 generation provenance에 고정한다.
 
 uv executable은 shell 없이 PATH에서 한 번만 canonical regular file로 resolve하고 version이 `0.12.3` 이상인지 검사한다. uv subprocess environment는 empty base에서 compiler-fixed sanitized `PATH`와 허용한 `HOME`·temporary-directory·platform TLS/certificate 변수만 복사하고 inherited `UV_*`, `VIRTUAL_ENV`, `CONDA_PREFIX`는 전부 제외한 뒤 `UV_PYTHON`·`UV_PROJECT_ENVIRONMENT`만 해당 단계에 명시하며 canonical uv를 `--no-config`로 실행한다. `<uv> --no-config python dir`의 canonical managed-install root를 기록한 뒤 다음 순서로 실행한다: `<uv> --no-config python install --upgrade 3.14`; `<uv> --no-config python find --managed-python --system 3.14`가 반환한 canonical path가 그 root 아래인지 확인하고 해당 interpreter를 `-I -c <compiler-fixed-identity-probe>`로 실행해 CPython `>=3.14.6,<3.15`를 검증; project cwd `python/`에서 lock, sync 순서를 수행한다.
 
@@ -1985,7 +1944,9 @@ IMPLEMENTATION:
 - dependency lockfile changed
 ```
 
-public declaration 제거·rename, signature·generic·type shape·variant·field·default·constant·refinement·contract clause·effect의 변경은 conservative하게 breaking이다. 새 top-level type·function·constant만 기존 target symbol과 충돌하지 않을 때 non-breaking이다. doc만 바뀌면 `DOCUMENTATION`으로 보고한다. MVP는 logical implication으로 조건 완화 여부를 추측하지 않는다.
+public declaration 제거·rename, sync/async kind, signature·generic·type shape·variant·field·default·constant·refinement·contract clause·effect의 변경은 conservative하게 breaking이다. 새 top-level type·function·constant만 기존 target symbol과 충돌하지 않을 때 additive다. doc만 바뀌면 `DOCUMENTATION`이다. diff는 semantic implication을 추측하지 않는다.
+
+baseline/current `[project].version`은 restricted `x.y.z` API version이며 current가 baseline보다 작으면 diff error다. breaking change는 baseline major가 `0`이면 최소 minor, 그 밖에는 최소 major bump를 요구한다. additive change는 최소 minor bump를 요구하고 implementation/documentation-only change는 bump를 요구하지 않는다. insufficient bump는 `VERSION INCOMPATIBLE` change로 report에 추가되고 `--exit-code`는 7을 반환한다. report는 declaration removal에 “Remove uses …”, addition에 “Adopt …” migration advice를 함께 제공한다.
 
 `cott diff`는 `generation_id` mismatch 자체를 change로 보지 않는다. 같은 target environment에서는 compiler·runtime·Python·type-checker identity와 managed artifact hash까지 비교한다. target identity가 다른 cross-machine 비교에서는 이 machine-local 항목을 변경 판정에서 제외하고 normalized contract·public symbol, durable implementation content와 normalized lock·dependency identity를 비교한다.
 
@@ -2293,54 +2254,26 @@ legal breakpoint가 없는 string·qualified name은 Unicode-scalar column 수�
 
 ## 22. MVP 범위
 
-### 22.1 MVP에 포함
+### 22.1 v0.3에 포함
 
-* `.cott` parsing, injective module mapping, prelude와 `use`
-* 고정 폭 숫자, `Path`, `Unit`, `Never`, `Any`, `Unknown`, `JsonValue`, recursively placed `Opaque["tag"]`, `Iterator[T]`, `Generator[Y, S, R]`, external type
-* `alias`, refinement를 항상 검사하는 `newtype`
-* immutable `struct`, payload enum, signature-only structural `trait`와 Cott-owned stateful `impl`
-* invariant generic, 복수 structural trait bound와 `Tuple[T1, T2]`
-* `Option`, `Result`, `Iterator`, `Generator`, `Any`, `Unknown`과 고정 Python runtime identity
-* 본문·기본 매개변수 없는 free-function declaration 및 compiler-owned impl init/method wrapper
-* 닫힌 순수 계약 표현식, typed pattern, ordered `error`, `effects`, impl state snapshot·`modifies`·invariant
-* 이름·타입·상수 해석과 source span을 가진 Canonical IR v3
-* `cott_runtime`, Python facade, type module, tool-only `.pyi`, docs와 IR 생성
-* `public_python_symbols(IR)` 및 BasedPyright strict 검증
-* deterministic init case를 포함해 refinement·`requires`를 만족하는 pure callable 계약 테스트
-* effectful callable 자동 실행 제외와 정확한 trust 등급
-* `off`, `boundary`, `test-only` mode와 항목별 보증 등급
-* compiler source에서 정적으로 해석하고 generated runtime copy로 고정하는 project-local plain top-level Python **free-function** binding
-* compiler-owned slotted impl class, identity equality/hash, per-instance `RLock`과 embedded callable provenance
-* single-identity verified loader와 embedded implementation provenance
-* user-selected Codex CLI 또는 OMP CLI를 통한 callable별 구현 생성; canonical function 하나와 same-file private helper/`Final` implementation detail
-* exact cott module public free-function import와 declared `self` method wrapper만 허용하는 generated-facade composition 및 depth-one helper contract prompt
-* compiler stale file 자동 삭제와 stale durable implementation 진단
-* `current`·`last_verified` snapshot과 contract/implementation diff
-* formatter, stable CLI exit code와 JSON diagnostics
-* `cott init <path> [--name <name>] [--no-sync]` minimal scaffold와 exact template
-* uv에 위임한 CPython 3.14 최신 patch managed install, lock 생성과 기본 frozen sync
+* v0.3 grammar, const generic, heterogeneous variadic `Tuple`, `Array`, `Buffer`와 aggregate constant
+* immutable type/enum/resource, structural trait, associated type projection/assignment과 static default-facade dispatch
+* explicit sync/async free function, async binding/provenance/facade/runner; async return exclusion
+* unified match guard, rule composition, ordered error, resource transition, transitive Cott effect check
+* Canonical IR v5, generation schema v2, runtime ABI2와 project API version identity
+* Python facade/stub/runtime, static ABI check, boundary evidence, verified loader, deterministic contract test
+* `current`/`last_verified` provenance and project-version-aware contract/implementation diff with migration advice
 
-### 22.2 MVP에서 제외
+### 22.2 v0.3에서 제외
 
-* `.cott` 실행 본문과 parameter default
-* trait default method·runtime dispatch, trait inheritance와 subclassing
-* ownership, borrow checker와 lifetime
-* const generic, variadic tuple과 연관 타입
-* Opaque placement 이외의 recursive user type
-* trait specialization과 subtyping variance
-* 비동기 Python binding과 비동기 type system
-* SMT 기반 정적 계약 증명
-* 일반 Python call graph의 자동 effect 전파 검사
-* cott facade를 통하지 않는 implementation 사이 project-local import
-* Cott-owned mutable container state와 `old(self.field)` 밖의 임의 `old()` expression
-* 자동 refactoring, adapter와 exception conversion 생성
-* 다중 target language와 완전한 IDE plugin
-* 한 Python environment에 여러 generated cott distribution 설치
-* external struct·enum 직접 binding
-* extension·zip·dynamic Python implementation binding
-* `cott init`의 제한된 uv 위임을 제외한 cott 내장 dependency resolver·package manager와 일반 dependency 설치
-* live Python reader의 transaction snapshot isolation
-* 설치된 wheel 전체의 독립적인 origin 검증
+* `.cott` execution body, parameter default, generic overload
+* trait inheritance, specialization, subtyping variance와 dynamic trait dispatch
+* async impl method, async iterator, async generator 및 their cancellation/lifecycle semantics
+* ownership, borrow checker, lifetime, arbitrary recursive user type, SMT proof
+* Cott 밖 Python call graph/effect inference, project-local implementation direct import
+* mutable Cott container state, arbitrary `old()`, automatic refactoring/adapter/exception conversion
+* multi-target backend, full IDE plugin, multi-project Python environment, external struct/enum direct binding
+* dependency resolver/package manager, live reader transaction snapshot isolation, installed wheel whole-origin verification
 
 ---
 
@@ -2357,8 +2290,8 @@ MVP는 다음 조건을 모두 자동 검증할 때 완료다.
 7. facade와 stub을 각각 `public_python_symbols(IR)`과 비교하고 declared `Any`·`Unknown`을 각각 `typing.Any`·`object`로 보존하며 누락 annotation과 혼동하지 않는 compiler-owned BasedPyright strict 검사를 통과한다.
 8. project identity가 일치하는 `cott_runtime` 하나만 표준 union, container, numeric metadata와 contract exception identity를 소유한다.
 9. statically concrete `F32` binary32 normalization을 모든 mode에서, integer range를 검사가 활성화된 ABI boundary에서 보존한다.
-10. `Path`, `Unit`, `Never`, `Any`, `Unknown`, `Iterator`, `Generator`, `JsonValue`, `Opaque`, external type, struct, enum, newtype와 pair tuple ABI를 보존한다.
-11. generic invariance와 복수 structural trait bound를 static verifier와 BasedPyright에서 유지한다.
+10. `Path`, `Unit`, `Never`, `Any`, `Unknown`, `Iterator`, `Generator`, `JsonValue`, `Opaque`, external type, struct, enum, newtype, heterogeneous tuple, Array와 Buffer ABI를 보존한다.
+11. type/const generic invariance, associated projection/assignment, trait default facade selection과 복수 structural trait bound를 static verifier와 BasedPyright에서 유지한다.
 12. newtype constructor는 모든 mode에서 carrier ABI와 refinement를 재귀 검사하고 raw Python container를 받지 않는다.
 13. boundary mode는 public callable concrete nested value, `requires`, allowed error variant와 `ensures`를 검사한다.
 14. compiler-owned impl init은 exact state assignment·init clauses·post-init invariant를, method wrapper는 identity state snapshot·`modifies`·normal `Ok`/`Err` invariant를 모든 mode에서 검사하고 per-instance `RLock`으로 serialize한다.
@@ -2430,39 +2363,21 @@ formatter
 
 ## 25. 향후 확장
 
-### v0.2
+v0.2와 v0.3 항목은 이 문서의 구현 범위이며 roadmap이 아니다. 현재 남은 확장은 다음뿐이다.
 
-* const generic과 variadic tuple
-* 배열 길이와 고정 크기 buffer 타입
-* 일반 pattern matching 계약
-* trait default method와 runtime dispatch
-* Python implementation 자동 비교
+* async impl method의 task-aware reentrant serialization, cancellation state transition과 invariant semantics
+* async iterator/generator의 yield·send·completion·close lifecycle contract
+* trait inheritance/specialization, variance와 dynamic dispatch
+* recursive user type, SMT proof, additional target backend와 installed-wheel whole-origin verification
 
-예시:
+`async fn`의 implemented boundary는 sync facade compatibility layer가 없는 top-level free function이다. future async forms는 이 boundary를 넓히기 전에 cancellation과 lifecycle evidence를 정의해야 한다.
 
-```cott
-struct FixedBuffer[
-    T,
-    const N: U32,
-]
-```
+### v1.0 이후
 
-### v0.3
+* language/IR compatibility policy stabilization
+* official additional backend와 package installation model
+* IDE plugin
 
-* associated type
-* effect 전파 검사
-* 비동기 함수 계약
-* resource 상태 타입
-* 버전 호환성 검사
-* 자동 migration 제안
-
-### v1.0
-
-* 안정된 언어 문법
-* 안정된 IR schema
-* Python 공식 backend
-* 패키지 시스템과 설치된 wheel 전체의 독립적인 origin 검증
-* IDE 플러그인
 
 ---
 
@@ -2478,11 +2393,11 @@ MVP module graph는 비순환이고 source path mapping은 injective며 package 
 
 ### 결정 3
 
-MVP type system은 고정 폭 scalar, 명목 newtype·container, immutable struct, payload enum, invariant generic, signature-only structural trait와 Cott-owned stateful impl을 제공한다.
+MVP type system은 fixed-width scalar, const generic, heterogeneous tuple, Array/Buffer, nominal newtype/container, immutable struct/enum/resource, associated type를 가진 structural trait와 Cott-owned stateful impl을 제공한다.
 
 ### 결정 4
 
-trait default method·runtime dispatch, trait inheritance/subclassing, ownership, async와 정적 정리 증명은 MVP 밖이다.
+trait default facade dispatch, associated type, resource transition, transitive Cott effect check와 explicit async free function은 구현되었다. trait inheritance/subclassing, ownership, async impl method/generator와 static cleanup proof는 범위 밖이다.
 
 ### 결정 5
 

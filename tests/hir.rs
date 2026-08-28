@@ -3,9 +3,9 @@ use std::path::Path;
 use cott::compiler::{SourceFile, parse_project};
 use cott::diagnostics::Span;
 use cott::hir::{
-    HirClause, HirClauseKind, HirContract, HirDeclaration, HirDoc, HirExpr, HirExprKind,
-    HirGenericParam, HirPattern, HirPatternKind, HirTrait, HirType, HirValue, ModuleId,
-    PrimitiveType, SymbolId, lower,
+    HirCallableKind, HirClause, HirClauseKind, HirConstArgument, HirContract, HirDeclaration,
+    HirDoc, HirExpr, HirExprKind, HirGenericArg, HirGenericParam, HirPattern, HirPatternKind,
+    HirTrait, HirType, HirValue, ModuleId, PrimitiveType, SymbolId, lower,
 };
 
 fn span() -> Span {
@@ -24,7 +24,7 @@ fn owned_hir_preserves_trait_bounds_types_contract_order_and_pattern_identity() 
     let value_id = symbol(&module, "value");
     let result_id = symbol(&module, "ResultValue");
 
-    let bounded = HirGenericParam {
+    let bounded = HirGenericParam::Type {
         span: at.clone(),
         name: "T".into(),
         bounds: vec![HirType::Named {
@@ -59,6 +59,7 @@ fn owned_hir_preserves_trait_bounds_types_contract_order_and_pattern_identity() 
                 clause_id: 7,
                 span: at.clone(),
                 kind: HirClauseKind::Requires {
+                    guard: None,
                     expression: expression.clone(),
                 },
             },
@@ -66,7 +67,7 @@ fn owned_hir_preserves_trait_bounds_types_contract_order_and_pattern_identity() 
                 clause_id: 11,
                 span: at.clone(),
                 kind: HirClauseKind::Ensures {
-                    pattern: Some(bound_pattern.clone()),
+                    guard: None,
                     expression,
                 },
             },
@@ -83,6 +84,7 @@ fn owned_hir_preserves_trait_bounds_types_contract_order_and_pattern_identity() 
         }),
         generics: vec![bounded],
         methods: vec![],
+        associated_types: vec![],
         public: true,
         source_order: 0,
     };
@@ -165,7 +167,15 @@ fn inspect(value: I32, other: I32) -> Result[I32, Failure]:
         container
             .generics
             .iter()
-            .map(|generic| (generic.name.as_str(), generic.source_order))
+            .map(|generic| {
+                (
+                    generic.name(),
+                    match generic {
+                        HirGenericParam::Type { source_order, .. }
+                        | HirGenericParam::Const { source_order, .. } => *source_order,
+                    },
+                )
+            })
             .collect::<Vec<_>>(),
         [("T", 0), ("U", 1)]
     );
@@ -233,12 +243,12 @@ fn inspect(value: I32, other: I32) -> Result[I32, Failure]:
     );
     assert!(matches!(
         &function.contract.clauses[0].kind,
-        HirClauseKind::Requires { expression }
+        HirClauseKind::Requires { expression, .. }
             if expression.ty == HirType::Primitive(PrimitiveType::Bool)
     ));
     assert!(matches!(
         &function.contract.clauses[1].kind,
-        HirClauseKind::Ensures { pattern: None, expression }
+        HirClauseKind::Ensures { guard: None, expression }
             if expression.ty == HirType::Primitive(PrimitiveType::Bool)
     ));
     assert!(matches!(
@@ -247,6 +257,7 @@ fn inspect(value: I32, other: I32) -> Result[I32, Failure]:
             variant,
             priority: None,
             when: Some(expression),
+            ..
         } if variant.as_string() == "owned.Failure.Bad"
             && expression.ty == HirType::Primitive(PrimitiveType::Bool)
     ));
@@ -297,7 +308,7 @@ fn check(value: I32, other: I32) -> Unit:
     };
     assert!(matches!(
         &function.contract.clauses[0].kind,
-        HirClauseKind::Requires { expression }
+        HirClauseKind::Requires { expression, .. }
             if expression.ty == HirType::Primitive(PrimitiveType::Bool)
     ));
 }
@@ -547,7 +558,7 @@ fn path_is_primitive_and_len_is_u64() {
         function.parameters[0].ty,
         HirType::Primitive(PrimitiveType::Path)
     );
-    let HirClauseKind::Requires { expression } = &function.contract.clauses[0].kind else {
+    let HirClauseKind::Requires { expression, .. } = &function.contract.clauses[0].kind else {
         panic!("expected requires clause");
     };
     let HirExprKind::ComparisonChain { operands, .. } = &expression.kind else {
@@ -620,6 +631,78 @@ fn acyclic_qualified_constant_reference_lowers_without_import() {
 }
 
 #[test]
+fn const_generic_argument_expressions_lower_as_hir_const_arguments() {
+    let parsed = parse_project([
+        SourceFile::new(
+            "src/foo/sizes.cott",
+            "module foo.sizes\n\nconst THREE: U32 = 3\n",
+        ),
+        SourceFile::new(
+            "src/foo/consumer.cott",
+            r#"module foo.consumer
+use foo.sizes.{THREE}
+
+const FOUR: U32 = 4
+
+struct Page[T, const N: U32]:
+    items: Array[T, N]
+
+struct Batch[const N: U32]:
+    page: Page[U8, N]
+
+struct Holder:
+    literal: Page[U8, 1 + 2]
+    named: Page[U8, FOUR]
+    qualified: Page[U8, foo.sizes.THREE]
+    arithmetic: Page[U8, FOUR + 1]
+"#,
+        ),
+    ])
+    .expect("const argument fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("const arguments should lower");
+    let declarations = &project
+        .modules
+        .iter()
+        .find(|module| module.id.as_string() == "foo.consumer")
+        .expect("consumer module")
+        .declarations;
+    let HirDeclaration::Struct(batch) = declarations
+        .iter()
+        .find(|declaration| declaration.id().as_string() == "foo.consumer.Batch")
+        .expect("Batch declaration")
+    else {
+        panic!("expected Batch struct");
+    };
+    let HirType::Named { args, .. } = &batch.fields[0].ty else {
+        panic!("expected Page instance type");
+    };
+    assert!(matches!(
+        args.get(1),
+        Some(HirGenericArg::Const(HirConstArgument::Parameter { name, .. })) if name == "N"
+    ));
+    let HirDeclaration::Struct(holder) = declarations
+        .iter()
+        .find(|declaration| declaration.id().as_string() == "foo.consumer.Holder")
+        .expect("Holder declaration")
+    else {
+        panic!("expected Holder struct");
+    };
+    for (index, field) in holder.fields.iter().enumerate() {
+        let HirType::Named { args, .. } = &field.ty else {
+            panic!("expected Page instance type");
+        };
+        if matches!(index, 0 | 3) {
+            assert!(matches!(
+                args.get(1),
+                Some(HirGenericArg::Const(HirConstArgument::Binary { .. }))
+            ));
+        } else {
+            assert!(matches!(args.get(1), Some(HirGenericArg::Const(_))));
+        }
+    }
+}
+
+#[test]
 fn qualified_dependency_diagnostics_are_deterministic() {
     let diagnostics = || {
         let parsed = parse_project([
@@ -662,7 +745,7 @@ fn len_is_restricted_to_supported_containers() {
         panic!("expected inspect function");
     };
     for clause in &function.contract.clauses {
-        let HirClauseKind::Requires { expression } = &clause.kind else {
+        let HirClauseKind::Requires { expression, .. } = &clause.kind else {
             continue;
         };
         assert_eq!(expression.ty, HirType::Primitive(PrimitiveType::Bool));
@@ -696,7 +779,7 @@ fn newtype_contract_operands_use_carriers_but_signatures_stay_nominal() {
         args: Vec::new(),
     };
     assert_eq!(function.parameters[0].ty, port_type);
-    let HirClauseKind::Requires { expression } = &function.contract.clauses[0].kind else {
+    let HirClauseKind::Requires { expression, .. } = &function.contract.clauses[0].kind else {
         panic!("expected requires clause");
     };
     let HirExprKind::ComparisonChain { operands, .. } = &expression.kind else {
@@ -1047,7 +1130,7 @@ fn reject[T](trait_value: Factory[Contract], record_value: Factory[Record], remo
                     == "Factory instance type must resolve to an impl declaration without type arguments"
             })
             .count(),
-        5
+        4
     );
     assert!(messages.contains(&"type constructor `invalid.Concrete` expects 0 argument(s), got 1"));
     assert!(messages.contains(&"type constructor `Factory` expects 1 argument(s), got 2"));
@@ -1099,5 +1182,111 @@ fn factory_is_a_reserved_prelude_type() {
             .map(|error| error.diagnostic.message.as_str())
             .collect::<Vec<_>>(),
         ["declaration `Factory` collides with a prelude type"]
+    );
+}
+
+#[test]
+fn lowers_associated_projections_async_identity_and_resource_graph() {
+    let parsed = parse_project([SourceFile::new(
+        "src/v03.cott",
+        r#"module v03
+
+trait Stream:
+    type Item
+    fn next(self) -> Stream.Item
+
+impl NumberStream for Stream:
+    type Item = I32
+    fn next(self) -> I32:
+        ensures true
+
+resource Door:
+    initial Open
+    state Open
+    state Closed
+    terminal Closed
+    transition Open -> Closed
+
+async fn fetch() -> I32
+"#,
+    )])
+    .expect("v0.3 fixture must parse");
+    let project = lower(Path::new("src"), parsed).expect("v0.3 fixture must lower");
+    let declarations = &project.modules[0].declarations;
+    let HirDeclaration::Trait(stream) = &declarations[0] else {
+        panic!("first declaration must be trait");
+    };
+    assert_eq!(stream.associated_types[0].id.as_string(), "v03.Stream.Item");
+    assert!(matches!(
+        stream.methods[0].return_type,
+        HirType::AssociatedProjection { ref trait_id, ref name, .. }
+            if trait_id.as_string() == "v03.Stream" && name == "Item"
+    ));
+    let HirDeclaration::Impl(number_stream) = &declarations[1] else {
+        panic!("second declaration must be impl");
+    };
+    assert_eq!(
+        number_stream.associated_types[0].ty,
+        HirType::Primitive(PrimitiveType::I32)
+    );
+    let HirDeclaration::Resource(door) = &declarations[2] else {
+        panic!("third declaration must be resource");
+    };
+    assert_eq!(door.initial.as_string(), "v03.Door.Open");
+    assert_eq!(door.edges[0].to.as_string(), "v03.Door.Closed");
+    let HirDeclaration::Function(fetch) = &declarations[3] else {
+        panic!("fourth declaration must be function");
+    };
+    assert_eq!(fetch.callable_kind, HirCallableKind::Async);
+}
+
+#[test]
+fn lowers_resource_transitions_in_source_order() {
+    let parsed = parse_project([SourceFile::new(
+        "src/lifecycle_transitions.cott",
+        r#"module lifecycle_transitions
+
+trait Controller:
+    fn close(self) -> Unit
+
+resource Door:
+    initial Open
+    state Open
+    state Closed
+    terminal Closed
+    transition Open -> Closed
+
+impl DoorController for Controller:
+    state:
+        primary: Door
+        backup: Door
+        audit: I32 = 0
+    init(primary: Door, backup: Door):
+        requires true
+    fn close(self) -> Unit:
+        requires true
+        transitions self.primary: Door.Open -> Door.Closed, self.backup: Door.Open -> Door.Closed
+        modifies self.audit
+        ensures true
+"#,
+    )])
+    .expect("transition fixture must parse");
+    let project = lower(Path::new("src"), parsed).expect("transition fixture must lower");
+    let HirDeclaration::Impl(controller) = &project.modules[0].declarations[2] else {
+        panic!("third declaration must be impl");
+    };
+    assert_eq!(controller.methods[0].transitions.len(), 2);
+    assert!(matches!(
+        &controller.state[0].default,
+        Some(HirValue::Enum { variant, fields })
+            if variant.as_string() == "lifecycle_transitions.Door.Open" && fields.is_empty()
+    ));
+    assert_eq!(
+        controller.methods[0].transitions[0].field.as_string(),
+        "lifecycle_transitions.DoorController.primary"
+    );
+    assert_eq!(
+        controller.methods[0].transitions[1].field.as_string(),
+        "lifecycle_transitions.DoorController.backup"
     );
 }

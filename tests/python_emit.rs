@@ -1,3 +1,4 @@
+use serde_json::Value;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -226,6 +227,103 @@ fn emits_single_and_multiple_generic_trait_bounds() {
 }
 
 #[test]
+fn emits_named_const_generic_specializations() {
+    let files = emit_sources(&[(
+        "matrix.cott",
+        r#"module matrix
+
+struct Matrix[T, const N: U32]:
+    values: Array[T, N]
+
+alias ByteMatrix = Matrix[U8, 2]
+"#,
+    )]);
+    let types = String::from_utf8_lossy(bytes(&files, "python/matrix_types.py"));
+    let stub = String::from_utf8_lossy(bytes(&files, "stubs/matrix.pyi"));
+    assert!(
+        types.contains("ByteMatrix: TypeAlias = Matrix[U8, Literal[2]]"),
+        "{types}"
+    );
+    assert!(
+        stub.contains("from matrix_types import ByteMatrix as ByteMatrix, Matrix as Matrix"),
+        "{stub}"
+    );
+    assert!(!stub.contains("CottTuple2"), "{stub}");
+}
+
+#[test]
+fn emits_composite_protocol_for_associated_type_bounds() {
+    let files = emit_sources(&[
+        (
+            "traits.cott",
+            "module traits\n\ntrait Comparable:\n    fn compare(self, other: I32) -> I32\n\ntrait Serializable:\n    fn serialize(self) -> I32\n",
+        ),
+        (
+            "stream.cott",
+            "module stream\nuse traits.{Comparable, Serializable}\n\ntrait Stream:\n    type Item: Comparable + Serializable\n    fn next(self) -> Stream.Item\n",
+        ),
+    ]);
+    let types = String::from_utf8_lossy(bytes(&files, "python/stream_types.py"));
+    assert!(
+        types.contains("from traits_types import Comparable, Serializable"),
+        "{types}"
+    );
+    let composite = "class _cott__cott_stream_Stream_stream_Stream_Item_Bounds(Comparable, Serializable, Protocol):\n    pass";
+    assert!(types.contains(composite), "{types}");
+    assert!(
+        types.contains(
+            "_cott_stream_Stream_stream_Stream_Item = TypeVar(\"_cott_stream_Stream_stream_Stream_Item\", bound=_cott__cott_stream_Stream_stream_Stream_Item_Bounds)"
+        ),
+        "{types}"
+    );
+}
+
+#[test]
+fn emits_resources_with_required_terminal_metadata() {
+    let files = emit_sources(&[(
+        "door.cott",
+        "module door\n\nresource Door:\n    initial Open\n    state Open\n    state Closed\n    terminal Closed\n    transition Open -> Closed\n",
+    )]);
+    let types = String::from_utf8_lossy(bytes(&files, "python/door_types.py"));
+    assert!(
+        types.find("class Door_Open:").expect("open state")
+            < types.find("class Door_Closed:").expect("closed state"),
+        "{types}"
+    );
+}
+
+#[test]
+fn rejects_resource_terminal_metadata_that_is_not_exact() {
+    let temp = TempDir::new();
+    fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    fs::write(
+        temp.path.join("src/door.cott"),
+        "module door\n\nresource Door:\n    initial Open\n    state Open\n    state Closed\n    terminal Closed\n    transition Open -> Closed\n",
+    )
+    .expect("source should be writable");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources should be discovered"))
+            .expect("source should parse");
+    let ir = render(&lower(&paths.source_dir, parsed).expect("source should lower"))
+        .expect("source should render");
+    let mut plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
+    let terminals = plan.modules[0].declarations[0]
+        .get_mut("terminals")
+        .and_then(Value::as_array_mut)
+        .expect("resource terminals should be present");
+    terminals.push(terminals[0].clone());
+    let diagnostics = emit(&config, &plan, &ir, &[]).expect_err("duplicate terminal must reject");
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("resource terminal states must be unique")
+    }));
+}
+
+#[test]
 fn disambiguates_same_generic_name_with_different_bounds() {
     let files = emit_sources(&[
         (
@@ -279,7 +377,7 @@ fn emits_complete_deterministic_python_artifact_tree() {
     let generation: serde_json::Value =
         serde_json::from_slice(bytes(&first.files, "generation.json"))
             .expect("generation record should be JSON");
-    assert_eq!(generation["schema_version"], 1);
+    assert_eq!(generation["schema_version"], 2);
     assert_eq!(generation["current"]["verified"], false);
     assert!(generation["current"].get("project").is_none());
     assert!(generation["current"].get("entry").is_none());
@@ -321,6 +419,27 @@ fn unresolved_functions_are_omitted_from_facade_exports() {
     assert!(!facade.contains("\"run\""));
     assert!(!facade.contains("def run"));
     let stub = String::from_utf8_lossy(bytes(&emitted.files, "stubs/app.pyi"));
+    let generation: serde_json::Value =
+        serde_json::from_slice(bytes(&emitted.files, "generation.json"))
+            .expect("generation record should be JSON");
+    let unresolved = &generation["current"]["unresolved"][0];
+    assert_eq!(unresolved["cott_symbol"], "app.run");
+    assert_eq!(unresolved["kind"], "function");
+    assert_eq!(
+        unresolved["span"]
+            .as_object()
+            .expect("unresolved span should be an object")
+            .keys()
+            .collect::<Vec<_>>(),
+        vec![
+            "end_byte",
+            "end_column",
+            "end_line",
+            "start_byte",
+            "start_column",
+            "start_line",
+        ]
+    );
     assert!(stub.contains("def run"));
 }
 
@@ -425,13 +544,13 @@ trait Counter:
 
 impl CounterState for Counter:
     state:
-        resource: Resource
+        handle: Resource
         title: Str
         urgency: I32
         completed: Bool = false
         count: I32 = 0
     invariant self.count >= 0
-    init(resource: Resource, title: Str, urgency: I32, count: I32):
+    init(handle: Resource, title: Str, urgency: I32, count: I32):
         requires count >= 0
         ensures self.count == count
     fn advance(self, amount: I32) -> I32:
@@ -474,14 +593,14 @@ impl CounterState for Counter:
     let stub = String::from_utf8_lossy(bytes(&emission.files, "stubs/app.pyi"));
     assert!(facade.contains("@final\nclass CounterState:"));
     assert!(facade.contains(
-        "__slots__ = (\"resource\", \"title\", \"urgency\", \"completed\", \"count\", \"_cott_lock\",)"
+        "__slots__ = (\"handle\", \"title\", \"urgency\", \"completed\", \"count\", \"_cott_lock\",)"
     ));
     assert!(facade.contains(
-        "    resource: Resource\n    title: str\n    urgency: I32\n    completed: bool\n    count: I32\n    __slots__"
+        "    handle: Resource\n    title: str\n    urgency: I32\n    completed: bool\n    count: I32\n    __slots__"
     ));
     assert!(facade.contains("with self._cott_lock:"));
     assert!(facade.contains("_cott_old_count = self.count"));
-    assert!(facade.contains("if self.resource is not _cott_old_resource:"));
+    assert!(facade.contains("if self.handle is not _cott_old_handle:"));
     assert!(facade.contains("_cott_impl_CounterState_advance"));
     assert!(facade.contains("def advance(self: CounterState, amount: I32) -> I32:"));
     let init_ensure = "        if not (((self).count == count)):";
@@ -509,7 +628,7 @@ impl CounterState for Counter:
     );
     assert!(stub.contains("@final\nclass CounterState:"));
     assert!(stub.contains(
-        "    resource: Resource\n    title: str\n    urgency: I32\n    completed: bool\n    count: I32\n    def __init__"
+        "    handle: Resource\n    title: str\n    urgency: I32\n    completed: bool\n    count: I32\n    def __init__"
     ));
     assert!(!stub.contains("_cott_lock"));
     assert!(stub.contains("def advance(self: CounterState, amount: I32) -> I32: ..."));
@@ -532,6 +651,222 @@ impl CounterState for Counter:
         !generation["current"]["contract_surface"]["app"]["declarations"]
             .to_string()
             .contains("\"span\"")
+    );
+}
+
+#[test]
+fn rejects_resource_state_import_collision_before_rendering() {
+    let temp = TempDir::new();
+    fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    fs::write(
+        temp.path.join("src/lifecycle.cott"),
+        r#"module lifecycle
+
+resource Door:
+    initial Open
+    state Open
+    state Closed
+    terminal Closed
+    transition Open -> Closed
+"#,
+    )
+    .expect("resource source should be writable");
+    fs::write(
+        temp.path.join("src/other.cott"),
+        r#"module other
+
+enum Door:
+    Open
+"#,
+    )
+    .expect("other source should be writable");
+    fs::write(
+        temp.path.join("src/controller.cott"),
+        r#"module controller
+use lifecycle.{Door}
+
+trait Controller:
+    fn close(self) -> I32
+
+impl DoorController for Controller:
+    state:
+        marker: other.Door
+        door: Door
+        count: I32 = 0
+    init(marker: other.Door, door: Door):
+        requires true
+    fn close(self) -> I32:
+        transitions self.door: Door.Open -> Door.Closed
+        modifies self.count
+        ensures self.marker == other.Door.Open
+"#,
+    )
+    .expect("controller source should be writable");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources")).expect("parse");
+    let ir = render(&lower(&paths.source_dir, parsed).expect("lower")).expect("render");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
+    let helper = b"def _cott_impl_DoorController_close(self: DoorController) -> int:\n    self.count += 1\n    return self.count\n";
+    let binding = ResolvedBinding {
+        module: "controller".to_owned(),
+        function: "close".to_owned(),
+        cott_symbol: "controller.DoorController.close".to_owned(),
+        kind: PythonCallableKind::ImplMethod {
+            concrete: "DoorController".to_owned(),
+        },
+        implementation_module: "_cott_impl.controller.DoorController.close".to_owned(),
+        implementation_function: "_cott_impl_DoorController_close".to_owned(),
+        owner: BindingOwner::Agent,
+        source: temp
+            .path
+            .join("python/_cott_impl/controller/DoorController/close.py"),
+        generated_relative: PathBuf::from("_cott_impl/controller/DoorController/close.py"),
+        bytes: helper.to_vec(),
+        sha256: sha256_hex(helper),
+    };
+    let first = emit(&config, &plan, &ir, &[binding.clone()])
+        .expect_err("resource state import collision must prevent rendering");
+    let second = emit(&config, &plan, &ir, &[binding])
+        .expect_err("resource state import collision must be deterministic");
+    assert_eq!(first, second);
+    assert!(
+        first.iter().any(|diagnostic| diagnostic.message
+            == "ambiguous cross-module Python import `Door_Open` from lifecycle, other"),
+        "resource state collision must be reported: {first:#?}"
+    );
+}
+
+#[test]
+fn emits_cross_module_resource_transition_contracts() {
+    let temp = TempDir::new();
+    fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    fs::write(
+        temp.path.join("src/lifecycle.cott"),
+        r#"module lifecycle
+
+resource Door:
+    initial Open
+    state Open
+    state Closed
+    terminal Closed
+    transition Open -> Closed
+"#,
+    )
+    .expect("resource source should be writable");
+    fs::write(
+        temp.path.join("src/controller.cott"),
+        r#"module controller
+use lifecycle.{Door}
+
+trait Controller:
+    fn close(self) -> I32
+
+impl DoorController for Controller:
+    state:
+        door: Door
+        count: I32 = 0
+    invariant self.count >= 0
+    init(door: Door):
+        requires true
+    fn close(self) -> I32:
+        transitions self.door: Door.Open -> Door.Closed
+        modifies self.count
+        ensures self.count == 1
+"#,
+    )
+    .expect("controller source should be writable");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources")).expect("parse");
+    let ir = render(&lower(&paths.source_dir, parsed).expect("lower")).expect("render");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
+    let helper = b"from lifecycle_types import Door_Closed\n\ndef _cott_impl_DoorController_close(self: DoorController) -> int:\n    self.door = Door_Closed()\n    self.count = 1\n    return 1\n";
+    let binding = ResolvedBinding {
+        module: "controller".to_owned(),
+        function: "close".to_owned(),
+        cott_symbol: "controller.DoorController.close".to_owned(),
+        kind: PythonCallableKind::ImplMethod {
+            concrete: "DoorController".to_owned(),
+        },
+        implementation_module: "_cott_impl.controller.DoorController.close".to_owned(),
+        implementation_function: "_cott_impl_DoorController_close".to_owned(),
+        owner: BindingOwner::Agent,
+        source: temp
+            .path
+            .join("python/_cott_impl/controller/DoorController/close.py"),
+        generated_relative: PathBuf::from("_cott_impl/controller/DoorController/close.py"),
+        bytes: helper.to_vec(),
+        sha256: sha256_hex(helper),
+    };
+    let emission =
+        emit(&config, &plan, &ir, &[binding.clone()]).expect("resource transition should emit");
+    assert_eq!(
+        emission.files,
+        emit(&config, &plan, &ir, &[binding])
+            .expect("repeat emission")
+            .files,
+        "resource transition emission must be byte-deterministic"
+    );
+    let facade = String::from_utf8_lossy(bytes(&emission.files, "python/controller.py"));
+    let stub = String::from_utf8_lossy(bytes(&emission.files, "stubs/controller.pyi"));
+
+    assert!(
+        facade.contains("from lifecycle_types import Door, Door_Closed, Door_Open"),
+        "facade must import the resource type and exact transition states:\n{facade}"
+    );
+    assert!(facade.contains("    door: Door"), "facade:\n{facade}");
+    assert!(
+        stub.contains("from lifecycle_types import Door, Door_Closed, Door_Open"),
+        "stub must expose resource states:\n{stub}"
+    );
+    assert!(stub.contains("    door: Door"), "stub:\n{stub}");
+    assert!(
+        stub.contains("def close(self: DoorController) -> I32: ..."),
+        "stub must expose the resolved method:\n{stub}"
+    );
+
+    let locked = facade
+        .find("        with self._cott_lock:")
+        .expect("method lock");
+    let snapshot = facade
+        .find("            _cott_old_door = self.door")
+        .expect("resource snapshot");
+    let abi = facade
+        .find("            self.door = _cott_validate_abi(self.door, Door, path=\"$.door\")")
+        .expect("resource ABI validation");
+    let source = facade
+        .find("            if _cott_old_door is not Door_Open():")
+        .expect("exact transition source identity check");
+    let target = facade
+        .find("            if self.door is not Door_Closed():")
+        .expect("exact transition target identity check");
+    let ensures = facade
+        .find("            if not (((self).count == 1)):")
+        .expect("method ensures");
+    let invariant = facade
+        .find("            if not (((self).count >= 0)):")
+        .expect("method invariant");
+    assert!(
+        locked < snapshot
+            && snapshot < abi
+            && abi < source
+            && source < target
+            && target < ensures
+            && ensures < invariant,
+        "resource transition checks must run under lock after ABI validation, before ensures and invariants:\n{facade}"
+    );
+    assert!(
+        facade.contains(
+            "raise CottContractViolation(\"resource transition source failed\", symbol=\"controller.DoorController.close\", phase=\"transitions\""
+        ) && facade.contains(
+            "raise CottContractViolation(\"resource transition target failed\", symbol=\"controller.DoorController.close\", phase=\"transitions\""
+        ),
+        "source and target must be mandatory transition checks:\n{facade}"
     );
 }
 
@@ -840,4 +1175,161 @@ fn choose(
     assert!(stub.contains("def __init__(self, value: I32) -> None: ..."));
     assert!(alpha_stub.contains("class AlphaState:"));
     assert!(alpha_stub.contains("def __init__(self, value: I32) -> None: ..."));
+}
+
+#[test]
+fn emits_fixed_tuple_array_and_buffer_abi() {
+    let files = emit_sources(&[(
+        "fixed.cott",
+        r#"module fixed
+
+const PAIR: Tuple[U8,U16] = Tuple(1, 2)
+const VALUES: Array[U8,2] = Array(3, 4)
+const BYTES: Buffer[2] = Buffer("00ff")
+"#,
+    )]);
+    let types = String::from_utf8(bytes(&files, "python/fixed_types.py").to_vec())
+        .expect("types are UTF-8");
+    let stub = String::from_utf8(bytes(&files, "stubs/fixed.pyi").to_vec()).expect("stub is UTF-8");
+    for annotation in [
+        "PAIR: Final[tuple[U8, U16]] = (1, 2)",
+        "VALUES: Final[CottArray[U8, Literal[2]]] = CottArray(values=(3, 4))",
+        "BYTES: Final[CottBuffer[Literal[2]]] = CottBuffer(data=bytes.fromhex(\"00ff\"))",
+    ] {
+        assert!(types.contains(annotation), "{types}");
+    }
+    assert!(!types.contains("CottTuple2"), "{types}");
+    assert!(!stub.contains("CottTuple2"), "{stub}");
+    assert!(
+        stub.contains("from fixed_types import BYTES as BYTES, PAIR as PAIR, VALUES as VALUES"),
+        "{stub}"
+    );
+}
+
+#[test]
+fn concretizes_generic_trait_defaults_for_impl_abi() {
+    let temp = TempDir::new();
+    fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    fs::write(
+        temp.path.join("src/app.cott"),
+        r#"module app
+
+trait Reader[T]:
+    fn read(self, value: T) -> T = app.default_read
+    fn label(self) -> Unit
+
+fn default_read[T](receiver: Reader[T], value: T) -> T
+
+impl ReaderState for Reader[I32]:
+    fn label(self) -> Unit:
+        ensures true
+"#,
+    )
+    .expect("source should be writable");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources should be discovered"))
+            .expect("source should parse");
+    let ir = render(&lower(&paths.source_dir, parsed).expect("source should lower"))
+        .expect("source should render");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
+    let implementation = b"def _cott_impl_default_read(receiver: object, value: object) -> object:\n    return value\n";
+    let binding = ResolvedBinding {
+        module: "app".to_owned(),
+        function: "default_read".to_owned(),
+        cott_symbol: "app.default_read".to_owned(),
+        kind: PythonCallableKind::Function,
+        implementation_module: "_cott_impl.app.default_read".to_owned(),
+        implementation_function: "_cott_impl_default_read".to_owned(),
+        owner: BindingOwner::Agent,
+        source: temp.path.join("python/_cott_impl/app/default_read.py"),
+        generated_relative: PathBuf::from("_cott_impl/app/default_read.py"),
+        bytes: implementation.to_vec(),
+        sha256: sha256_hex(implementation),
+    };
+
+    let emission = emit(&config, &plan, &ir, &[binding]).expect("default should emit");
+    let facade = String::from_utf8_lossy(bytes(&emission.files, "python/app.py"));
+    let stub = String::from_utf8_lossy(bytes(&emission.files, "stubs/app.pyi"));
+    assert!(
+        facade.contains("def read(self: ReaderState, value: I32) -> I32:"),
+        "{facade}"
+    );
+    assert!(
+        stub.contains("def read(self: ReaderState, value: I32) -> I32: ..."),
+        "{stub}"
+    );
+    assert!(
+        !facade.contains("def read(self: ReaderState, value: T)"),
+        "{facade}"
+    );
+    assert!(
+        !stub.contains("def read(self: ReaderState, value: T)"),
+        "{stub}"
+    );
+}
+
+#[test]
+fn emits_async_free_function_facade_stub_and_provenance() {
+    let temp = TempDir::new();
+    fs::write(temp.path.join("cott.toml"), MANIFEST).expect("manifest");
+    fs::create_dir_all(temp.path.join("src")).expect("source");
+    fs::write(
+        temp.path.join("src/app.cott"),
+        "module app\n\nasync fn run(value: I32) -> I32\n",
+    )
+    .expect("source");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("config");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources")).expect("parse");
+    let ir = render(&lower(&paths.source_dir, parsed).expect("lower")).expect("render");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("plan");
+    let implementation = b"async def run(value: int) -> int:\n    return value\n";
+    let binding = ResolvedBinding {
+        module: "app".to_owned(),
+        function: "run".to_owned(),
+        cott_symbol: "app.run".to_owned(),
+        kind: PythonCallableKind::AsyncFunction,
+        implementation_module: "_cott_impl.app.run".to_owned(),
+        implementation_function: "run".to_owned(),
+        owner: BindingOwner::Agent,
+        source: temp.path.join("python/_cott_impl/app/run.py"),
+        generated_relative: PathBuf::from("_cott_impl/app/run.py"),
+        bytes: implementation.to_vec(),
+        sha256: sha256_hex(implementation),
+    };
+    let emission = emit(&config, &plan, &ir, &[binding]).expect("async emission");
+    let facade = String::from_utf8_lossy(bytes(&emission.files, "python/app.py"));
+    let stub = String::from_utf8_lossy(bytes(&emission.files, "stubs/app.pyi"));
+    let generation: serde_json::Value =
+        serde_json::from_slice(bytes(&emission.files, "generation.json")).expect("generation");
+    assert!(facade.contains("async def run(value: I32) -> I32:"));
+    assert!(facade.contains("_result = await _implementation(value)"));
+    assert!(stub.contains("async def run(value: I32) -> I32: ..."));
+    assert_eq!(
+        generation["current"]["implementations"][0]["kind"],
+        "async_function"
+    );
+}
+
+#[test]
+fn qualifies_hidden_associated_typevars_by_canonical_trait_identity() {
+    let files = emit_sources(&[
+        (
+            "alpha.cott",
+            "module alpha\n\ntrait Reader:\n    type Item\n    fn read(self) -> Reader.Item\n",
+        ),
+        (
+            "beta.cott",
+            "module beta\n\ntrait Reader:\n    type Item\n    fn read(self) -> Reader.Item\n",
+        ),
+    ]);
+    let alpha = String::from_utf8_lossy(bytes(&files, "python/alpha_types.py"));
+    let beta = String::from_utf8_lossy(bytes(&files, "python/beta_types.py"));
+    assert!(alpha.contains("_cott_alpha_Reader_alpha_Reader_Item = TypeVar"));
+    assert!(beta.contains("_cott_beta_Reader_beta_Reader_Item = TypeVar"));
+    assert!(!alpha.contains("_cott_beta_Reader_beta_Reader_Item"));
 }

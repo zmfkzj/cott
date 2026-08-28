@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::ast::{
     self, BinaryOp, ClauseKind, CompareOp, ConstExpr, Declaration, Expr, ExprKind, FunctionBody,
-    LiteralKind, PatternKind, TypeArgKind, UnaryOp,
+    GenericArgKind, LiteralKind, PatternKind, UnaryOp,
 };
 use crate::compiler::{ParsedProject, ProjectDiagnostic};
 use crate::diagnostics::{Diagnostic, Span};
@@ -79,14 +79,19 @@ pub enum PrimitiveType {
 }
 
 /// Alias-free HIR type representation.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HirType {
     Primitive(PrimitiveType),
     Named {
         symbol: SymbolId,
-        args: Vec<HirType>,
+        args: Vec<HirGenericArg>,
     },
     TypeParameter {
+        name: String,
+    },
+    AssociatedProjection {
+        base: Box<HirType>,
+        trait_id: SymbolId,
         name: String,
     },
     List {
@@ -99,9 +104,15 @@ pub enum HirType {
         key: Box<HirType>,
         value: Box<HirType>,
     },
-    Tuple2 {
-        first: Box<HirType>,
-        second: Box<HirType>,
+    Tuple {
+        items: Vec<HirType>,
+    },
+    Array {
+        item: Box<HirType>,
+        length: HirConstArgument,
+    },
+    Buffer {
+        length: HirConstArgument,
     },
     Option {
         item: Box<HirType>,
@@ -126,6 +137,86 @@ pub enum HirType {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum HirConstType {
+    U8,
+    U16,
+    U32,
+    U64,
+}
+
+impl HirConstType {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::U8 => "U8",
+            Self::U16 => "U16",
+            Self::U32 => "U32",
+            Self::U64 => "U64",
+        }
+    }
+
+    fn primitive(self) -> PrimitiveType {
+        match self {
+            Self::U8 => PrimitiveType::U8,
+            Self::U16 => PrimitiveType::U16,
+            Self::U32 => PrimitiveType::U32,
+            Self::U64 => PrimitiveType::U64,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HirConstArgument {
+    Value {
+        value: u64,
+        ty: HirConstType,
+    },
+    Parameter {
+        name: String,
+        ty: HirConstType,
+    },
+    Reference {
+        symbol: SymbolId,
+        ty: HirConstType,
+    },
+    Binary {
+        op: HirBinaryOp,
+        left: Box<HirConstArgument>,
+        right: Box<HirConstArgument>,
+        ty: HirConstType,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HirGenericArg {
+    Type(HirType),
+    Const(HirConstArgument),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HirGenericParam {
+    Type {
+        span: Span,
+        name: String,
+        bounds: Vec<HirType>,
+        source_order: usize,
+    },
+    Const {
+        span: Span,
+        name: String,
+        ty: HirConstType,
+        source_order: usize,
+    },
+}
+
+impl HirGenericParam {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Type { name, .. } | Self::Const { name, .. } => name,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HirDoc {
     pub span: Span,
@@ -137,14 +228,6 @@ pub struct HirImport {
     pub span: Span,
     pub symbol: SymbolId,
     pub name: String,
-    pub source_order: usize,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct HirGenericParam {
-    pub span: Span,
-    pub name: String,
-    pub bounds: Vec<HirType>,
     pub source_order: usize,
 }
 
@@ -199,20 +282,29 @@ pub struct HirClause {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirMatchGuard {
+    pub span: Span,
+    pub scrutinee: HirExpr,
+    pub pattern: HirPattern,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HirClauseKind {
     Requires {
+        guard: Option<HirMatchGuard>,
         expression: HirExpr,
     },
     Modifies {
         fields: Vec<SymbolId>,
     },
     Ensures {
-        pattern: Option<HirPattern>,
+        guard: Option<HirMatchGuard>,
         expression: HirExpr,
     },
     Error {
         variant: SymbolId,
         priority: Option<u32>,
+        guard: Option<HirMatchGuard>,
         when: Option<HirExpr>,
     },
 }
@@ -290,6 +382,71 @@ pub struct HirEnum {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirAssociatedType {
+    pub id: SymbolId,
+    pub span: Span,
+    pub name: String,
+    pub bounds: Vec<HirType>,
+    pub source_order: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirAssociatedTypeAssignment {
+    pub id: SymbolId,
+    pub span: Span,
+    pub trait_id: SymbolId,
+    pub name: String,
+    pub ty: HirType,
+    pub source_order: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirResourceState {
+    pub id: SymbolId,
+    pub span: Span,
+    pub name: String,
+    pub terminal: bool,
+    pub source_order: usize,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirResourceTerminal {
+    pub state: SymbolId,
+    pub span: Span,
+    pub source_order: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirResourceEdge {
+    pub span: Span,
+    pub from: SymbolId,
+    pub to: SymbolId,
+    pub source_order: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirResource {
+    pub id: SymbolId,
+    pub span: Span,
+    pub annotations: Vec<HirAnnotation>,
+    pub doc: Option<HirDoc>,
+    pub initial: SymbolId,
+    pub states: Vec<HirResourceState>,
+    pub terminals: Vec<HirResourceTerminal>,
+    pub edges: Vec<HirResourceEdge>,
+    pub public: bool,
+    pub source_order: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirResourceTransition {
+    pub span: Span,
+    pub field: SymbolId,
+    pub resource: SymbolId,
+    pub from: SymbolId,
+    pub to: SymbolId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HirMethod {
     pub id: SymbolId,
     pub span: Span,
@@ -298,8 +455,29 @@ pub struct HirMethod {
     pub parameters: Vec<HirParameter>,
     pub return_type: HirType,
     pub contract: HirContract,
+    pub default: Option<HirVerifiedFunction>,
     pub public: bool,
     pub source_order: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirVerifiedFunction {
+    pub module: ModuleId,
+    pub symbol: String,
+    pub verified_facade: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HirSelectedImplementation {
+    Explicit { function: HirVerifiedFunction },
+    Default { function: HirVerifiedFunction },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirSelectedMethod {
+    pub trait_method: SymbolId,
+    pub receiver_type: HirType,
+    pub selected: HirSelectedImplementation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -310,6 +488,7 @@ pub struct HirTrait {
     pub doc: Option<HirDoc>,
     pub generics: Vec<HirGenericParam>,
     pub methods: Vec<HirMethod>,
+    pub associated_types: Vec<HirAssociatedType>,
     pub public: bool,
     pub source_order: usize,
 }
@@ -318,6 +497,7 @@ pub struct HirTrait {
 pub struct HirImplInvariant {
     pub clause_id: u32,
     pub span: Span,
+    pub guard: Option<HirMatchGuard>,
     pub expression: HirExpr,
 }
 
@@ -340,6 +520,7 @@ pub struct HirImplMethod {
     pub doc: Option<HirDoc>,
     pub contract: HirContract,
     pub modifies: Vec<SymbolId>,
+    pub transitions: Vec<HirResourceTransition>,
     pub source_order: usize,
 }
 
@@ -353,6 +534,8 @@ pub struct HirImpl {
     pub invariants: Vec<HirImplInvariant>,
     pub initializer: Option<HirImplInitializer>,
     pub methods: Vec<HirImplMethod>,
+    pub associated_types: Vec<HirAssociatedTypeAssignment>,
+    pub selected_methods: Vec<HirSelectedMethod>,
     pub public: bool,
     pub source_order: usize,
 }
@@ -399,6 +582,12 @@ pub struct HirConst {
     pub source_order: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HirCallableKind {
+    Sync,
+    Async,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HirFunction {
     pub id: SymbolId,
@@ -408,6 +597,7 @@ pub struct HirFunction {
     pub generics: Vec<HirGenericParam>,
     pub parameters: Vec<HirParameter>,
     pub return_type: HirType,
+    pub callable_kind: HirCallableKind,
     pub contract: HirContract,
     pub body: Option<HirExpr>,
     pub public: bool,
@@ -425,6 +615,7 @@ pub enum HirDeclaration {
     Impl(HirImpl),
     Rule(HirRule),
     Const(HirConst),
+    Resource(HirResource),
     Function(HirFunction),
 }
 
@@ -440,6 +631,7 @@ impl HirDeclaration {
             Self::Impl(value) => &value.id,
             Self::Rule(value) => &value.id,
             Self::Const(value) => &value.id,
+            Self::Resource(value) => &value.id,
             Self::Function(value) => &value.id,
         }
     }
@@ -455,6 +647,7 @@ impl HirDeclaration {
             Self::Impl(value) => &value.span,
             Self::Rule(value) => &value.span,
             Self::Const(value) => &value.span,
+            Self::Resource(value) => &value.span,
             Self::Function(value) => &value.span,
         }
     }
@@ -470,6 +663,7 @@ impl HirDeclaration {
             Self::Impl(value) => value.public,
             Self::Rule(value) => value.public,
             Self::Const(value) => value.public,
+            Self::Resource(value) => value.public,
             Self::Function(value) => value.public,
         }
     }
@@ -617,7 +811,9 @@ pub enum HirValue {
     List(Vec<HirValue>),
     Set(Vec<HirValue>),
     Map(Vec<(HirValue, HirValue)>),
-    Tuple2(Box<HirValue>, Box<HirValue>),
+    Tuple(Vec<HirValue>),
+    Array(Vec<HirValue>),
+    Buffer(Vec<u8>),
     Named {
         symbol: SymbolId,
         fields: Vec<(String, HirValue)>,
@@ -638,6 +834,7 @@ enum OwnedDeclKind {
     Trait { generics: usize },
     Impl,
     Rule { generics: usize },
+    Resource,
 }
 
 struct OwnedLower<'a> {
@@ -650,6 +847,62 @@ struct OwnedLower<'a> {
     constant_values: HashMap<SymbolId, HirValue>,
     resolving_constants: HashSet<SymbolId>,
     lowered_rules: HashMap<SymbolId, HirRule>,
+    default_functions: HashMap<SymbolId, Option<HirVerifiedFunction>>,
+}
+
+#[derive(Default)]
+struct GenericScope {
+    types: HashSet<String>,
+    type_bounds: HashMap<String, Vec<ast::Type>>,
+    consts: HashMap<String, HirConstType>,
+}
+
+impl GenericScope {
+    fn from_params(
+        lower: &mut OwnedLower<'_>,
+        module: usize,
+        values: &[ast::GenericParam],
+    ) -> Self {
+        let mut names = HashSet::new();
+        for value in values {
+            let (span, name) = match value {
+                ast::GenericParam::Type { span, name, .. }
+                | ast::GenericParam::Const { span, name, .. } => (span, name),
+            };
+            if !names.insert(name.clone()) {
+                lower.error(
+                    module,
+                    span.clone(),
+                    format!("duplicate generic parameter `{name}`"),
+                );
+            }
+        }
+        Self::from_declared(values)
+    }
+
+    fn from_declared(values: &[ast::GenericParam]) -> Self {
+        let mut scope = Self::default();
+        for value in values {
+            match value {
+                ast::GenericParam::Type { name, bounds, .. } => {
+                    scope.types.insert(name.clone());
+                    scope.type_bounds.insert(name.clone(), bounds.clone());
+                }
+                ast::GenericParam::Const { name, ty, .. } => {
+                    scope.consts.insert(
+                        name.clone(),
+                        match ty {
+                            ast::ConstKind::U8 => HirConstType::U8,
+                            ast::ConstKind::U16 => HirConstType::U16,
+                            ast::ConstKind::U32 => HirConstType::U32,
+                            ast::ConstKind::U64 => HirConstType::U64,
+                        },
+                    );
+                }
+            }
+        }
+        scope
+    }
 }
 
 impl<'a> OwnedLower<'a> {
@@ -692,6 +945,7 @@ impl<'a> OwnedLower<'a> {
                             generics: v.generics.len(),
                         },
                     ),
+                    Declaration::Resource(v) => (&v.name, OwnedDeclKind::Resource),
                     Declaration::Function(v) => (&v.name, OwnedDeclKind::Function),
                 };
                 declarations.insert(SymbolId::new(modules[index].clone(), name.clone()), kind);
@@ -707,6 +961,7 @@ impl<'a> OwnedLower<'a> {
             resolving_constants: HashSet::new(),
             resolving_aliases: HashSet::new(),
             lowered_rules: HashMap::new(),
+            default_functions: HashMap::new(),
         };
         for index in 0..out.parsed.sources.len() {
             let uses = out.parsed.sources[index].syntax.uses.clone();
@@ -801,7 +1056,7 @@ impl<'a> OwnedLower<'a> {
                 }
                 _ => None,
             })?;
-        Some(self.ty(source_index, &underlying, &HashSet::new()))
+        Some(self.ty(source_index, &underlying, &GenericScope::default()))
     }
 
     fn expression_compat_type(&mut self, ty: &HirType) -> HirType {
@@ -823,12 +1078,28 @@ impl<'a> OwnedLower<'a> {
                     }
                     HirType::Named {
                         symbol: symbol.clone(),
-                        args: args.iter().map(|arg| resolve(lower, arg, seen)).collect(),
+                        args: args
+                            .iter()
+                            .map(|arg| match arg {
+                                HirGenericArg::Type(arg) => {
+                                    HirGenericArg::Type(resolve(lower, arg, seen))
+                                }
+                                HirGenericArg::Const(arg) => HirGenericArg::Const(arg.clone()),
+                            })
+                            .collect(),
                     }
                 }
                 HirType::Named { symbol, args } => HirType::Named {
                     symbol: symbol.clone(),
-                    args: args.iter().map(|arg| resolve(lower, arg, seen)).collect(),
+                    args: args
+                        .iter()
+                        .map(|arg| match arg {
+                            HirGenericArg::Type(arg) => {
+                                HirGenericArg::Type(resolve(lower, arg, seen))
+                            }
+                            HirGenericArg::Const(arg) => HirGenericArg::Const(arg.clone()),
+                        })
+                        .collect(),
                 },
                 HirType::List { item } => HirType::List {
                     item: Box::new(resolve(lower, item, seen)),
@@ -840,9 +1111,18 @@ impl<'a> OwnedLower<'a> {
                     key: Box::new(resolve(lower, key, seen)),
                     value: Box::new(resolve(lower, value, seen)),
                 },
-                HirType::Tuple2 { first, second } => HirType::Tuple2 {
-                    first: Box::new(resolve(lower, first, seen)),
-                    second: Box::new(resolve(lower, second, seen)),
+                HirType::Tuple { items } => HirType::Tuple {
+                    items: items
+                        .iter()
+                        .map(|item| resolve(lower, item, seen))
+                        .collect(),
+                },
+                HirType::Array { item, length } => HirType::Array {
+                    item: Box::new(resolve(lower, item, seen)),
+                    length: length.clone(),
+                },
+                HirType::Buffer { length } => HirType::Buffer {
+                    length: length.clone(),
                 },
                 HirType::Option { item } => HirType::Option {
                     item: Box::new(resolve(lower, item, seen)),
@@ -935,7 +1215,7 @@ impl<'a> OwnedLower<'a> {
                 Declaration::Const(value) if value.name == symbol.name => Some(value.ty.clone()),
                 _ => None,
             })?;
-        Some(self.ty(index, &ty, &HashSet::new()))
+        Some(self.ty(index, &ty, &GenericScope::default()))
     }
 
     fn enum_variant(
@@ -987,10 +1267,495 @@ impl<'a> OwnedLower<'a> {
             )
         })
     }
-    fn ty(&mut self, module: usize, value: &ast::Type, generics: &HashSet<String>) -> HirType {
+    fn declaration_generics(&self, symbol: &SymbolId) -> Vec<ast::GenericParam> {
+        self.modules
+            .iter()
+            .position(|module| module == &symbol.module)
+            .and_then(|module| {
+                self.parsed.sources[module]
+                    .syntax
+                    .declarations
+                    .iter()
+                    .find_map(|declaration| match declaration {
+                        Declaration::Struct(value) if value.name == symbol.name => {
+                            Some(value.generics.clone())
+                        }
+                        Declaration::Enum(value) if value.name == symbol.name => {
+                            Some(value.generics.clone())
+                        }
+                        Declaration::Trait(value) if value.name == symbol.name => {
+                            Some(value.generics.clone())
+                        }
+                        Declaration::Rule(value) if value.name == symbol.name => {
+                            Some(value.generics.clone())
+                        }
+                        _ => None,
+                    })
+            })
+            .unwrap_or_default()
+    }
+
+    fn is_known_type_argument(
+        &self,
+        module: usize,
+        value: &ast::Type,
+        generics: &GenericScope,
+    ) -> bool {
+        if value.path.segments.len() == 1
+            && (generics.types.contains(&value.path.segments[0])
+                || owned_primitive(&value.path.segments[0]).is_some())
+        {
+            return true;
+        }
+        self.lookup(module, &value.path).is_some_and(|symbol| {
+            matches!(
+                self.declarations.get(&symbol),
+                Some(
+                    OwnedDeclKind::Alias
+                        | OwnedDeclKind::Type { .. }
+                        | OwnedDeclKind::Enum { .. }
+                        | OwnedDeclKind::Trait { .. }
+                        | OwnedDeclKind::Rule { .. }
+                        | OwnedDeclKind::Resource
+                )
+            )
+        })
+    }
+
+    fn type_argument(
+        &mut self,
+        module: usize,
+        argument: &ast::GenericArg,
+        generics: &GenericScope,
+    ) -> HirType {
+        match &argument.kind {
+            GenericArgKind::Type(value) | GenericArgKind::Ambiguous { ty: value, .. } => {
+                self.ty(module, value, generics)
+            }
+            _ => {
+                self.error(
+                    module,
+                    argument.span.clone(),
+                    "type argument must be a type",
+                );
+                HirType::Primitive(PrimitiveType::Unknown)
+            }
+        }
+    }
+
+    fn const_argument(
+        &mut self,
+        module: usize,
+        value: &ConstExpr,
+        generics: &GenericScope,
+        expected: Option<HirConstType>,
+    ) -> Option<HirConstArgument> {
+        let ty = expected.unwrap_or(HirConstType::U64);
+        if let ConstExpr::Expression(expression) = value
+            && self.is_symbolic_const_expression(module, expression, generics)
+        {
+            return self.symbolic_const_argument(module, expression, generics, expected);
+        }
+
+        let span = value.span().clone();
+        let evaluated = self.value(module, value, &HirType::Primitive(ty.primitive()))?;
+        let HirValue::Integer(text) = evaluated else {
+            self.error(
+                module,
+                span,
+                "const argument must evaluate to an unsigned integer",
+            );
+            return None;
+        };
+        let Ok(value) = text.parse::<u64>() else {
+            self.error(
+                module,
+                span,
+                "const argument must evaluate to an unsigned integer",
+            );
+            return None;
+        };
+        let in_range = match ty {
+            HirConstType::U8 => u8::try_from(value).is_ok(),
+            HirConstType::U16 => u16::try_from(value).is_ok(),
+            HirConstType::U32 => u32::try_from(value).is_ok(),
+            HirConstType::U64 => true,
+        };
+        if !in_range {
+            self.error(
+                module,
+                span,
+                format!("const argument is out of range for {}", ty.name()),
+            );
+            return None;
+        }
+        Some(HirConstArgument::Value { value, ty })
+    }
+
+    fn is_symbolic_const_expression(
+        &self,
+        module: usize,
+        expression: &Expr,
+        generics: &GenericScope,
+    ) -> bool {
+        match &expression.kind {
+            ExprKind::Name(path) => {
+                (path.segments.len() == 1 && generics.consts.contains_key(&path.segments[0]))
+                    || self.lookup(module, path).is_some_and(|symbol| {
+                        self.declarations.get(&symbol) == Some(&OwnedDeclKind::Const)
+                    })
+            }
+            ExprKind::Parenthesized(value) => {
+                self.is_symbolic_const_expression(module, value, generics)
+            }
+            ExprKind::Binary { .. } => true,
+            _ => false,
+        }
+    }
+    fn const_expression_domain(
+        &mut self,
+        module: usize,
+        expression: &Expr,
+        generics: &GenericScope,
+    ) -> Option<HirConstType> {
+        match &expression.kind {
+            ExprKind::Name(path) if path.segments.len() == 1 => {
+                generics.consts.get(&path.segments[0]).copied().or_else(|| {
+                    self.lookup(module, path).and_then(|symbol| {
+                        (self.declarations.get(&symbol) == Some(&OwnedDeclKind::Const))
+                            .then(|| self.constant_type(&symbol))
+                            .flatten()
+                            .and_then(|ty| match ty {
+                                HirType::Primitive(PrimitiveType::U8) => Some(HirConstType::U8),
+                                HirType::Primitive(PrimitiveType::U16) => Some(HirConstType::U16),
+                                HirType::Primitive(PrimitiveType::U32) => Some(HirConstType::U32),
+                                HirType::Primitive(PrimitiveType::U64) => Some(HirConstType::U64),
+                                _ => None,
+                            })
+                    })
+                })
+            }
+            ExprKind::Name(path) => self.lookup(module, path).and_then(|symbol| {
+                (self.declarations.get(&symbol) == Some(&OwnedDeclKind::Const))
+                    .then(|| self.constant_type(&symbol))
+                    .flatten()
+                    .and_then(|ty| match ty {
+                        HirType::Primitive(PrimitiveType::U8) => Some(HirConstType::U8),
+                        HirType::Primitive(PrimitiveType::U16) => Some(HirConstType::U16),
+                        HirType::Primitive(PrimitiveType::U32) => Some(HirConstType::U32),
+                        HirType::Primitive(PrimitiveType::U64) => Some(HirConstType::U64),
+                        _ => None,
+                    })
+            }),
+            ExprKind::Parenthesized(value) => self.const_expression_domain(module, value, generics),
+            ExprKind::Binary { left, right, .. } => self
+                .const_expression_domain(module, left, generics)
+                .or_else(|| self.const_expression_domain(module, right, generics)),
+            _ => None,
+        }
+    }
+
+    fn symbolic_const_argument(
+        &mut self,
+        module: usize,
+        expression: &Expr,
+        generics: &GenericScope,
+        expected: Option<HirConstType>,
+    ) -> Option<HirConstArgument> {
+        match &expression.kind {
+            ExprKind::Name(path) => {
+                if path.segments.len() == 1
+                    && let Some(ty) = generics.consts.get(&path.segments[0]).copied()
+                {
+                    if expected.is_some_and(|expected| expected != ty) {
+                        self.error(
+                            module,
+                            path.span.clone(),
+                            format!(
+                                "const argument `{}` must have domain {}",
+                                path.segments[0],
+                                expected.unwrap().name()
+                            ),
+                        );
+                        return None;
+                    }
+                    return Some(HirConstArgument::Parameter {
+                        name: path.segments[0].clone(),
+                        ty,
+                    });
+                }
+                let Some(symbol) = self.lookup(module, path) else {
+                    self.error(module, path.span.clone(), "unknown constant reference");
+                    return None;
+                };
+                if self.declarations.get(&symbol) != Some(&OwnedDeclKind::Const) {
+                    self.error(
+                        module,
+                        path.span.clone(),
+                        "const argument must be a constant",
+                    );
+                    return None;
+                }
+                let Some(HirType::Primitive(actual)) = self.constant_type(&symbol) else {
+                    self.error(
+                        module,
+                        path.span.clone(),
+                        "const argument must have an unsigned integer type",
+                    );
+                    return None;
+                };
+                let actual = match actual {
+                    PrimitiveType::U8 => HirConstType::U8,
+                    PrimitiveType::U16 => HirConstType::U16,
+                    PrimitiveType::U32 => HirConstType::U32,
+                    PrimitiveType::U64 => HirConstType::U64,
+                    _ => {
+                        self.error(
+                            module,
+                            path.span.clone(),
+                            "const argument must have an unsigned integer type",
+                        );
+                        return None;
+                    }
+                };
+                if expected.is_some_and(|expected| expected != actual) {
+                    self.error(
+                        module,
+                        path.span.clone(),
+                        format!(
+                            "const argument must have domain {}",
+                            expected.unwrap().name()
+                        ),
+                    );
+                    return None;
+                }
+                Some(HirConstArgument::Reference { symbol, ty: actual })
+            }
+            ExprKind::Parenthesized(value) => {
+                self.symbolic_const_argument(module, value, generics, expected)
+            }
+            ExprKind::Binary { left, op, right } => {
+                let op = match op {
+                    BinaryOp::Add => HirBinaryOp::Add,
+                    BinaryOp::Subtract => HirBinaryOp::Subtract,
+                    BinaryOp::Multiply => HirBinaryOp::Multiply,
+                    BinaryOp::Divide => HirBinaryOp::Divide,
+                    BinaryOp::Remainder => HirBinaryOp::Remainder,
+                    _ => {
+                        self.error(
+                            module,
+                            expression.span.clone(),
+                            "const expressions only support arithmetic",
+                        );
+                        return None;
+                    }
+                };
+                let expected = expected.or_else(|| {
+                    self.const_expression_domain(module, left, generics)
+                        .or_else(|| self.const_expression_domain(module, right, generics))
+                });
+                let left = if self.is_symbolic_const_expression(module, left, generics) {
+                    self.symbolic_const_argument(module, left, generics, expected)
+                } else {
+                    self.const_argument(
+                        module,
+                        &ConstExpr::Expression((**left).clone()),
+                        generics,
+                        expected,
+                    )
+                }?;
+                let right = if self.is_symbolic_const_expression(module, right, generics) {
+                    self.symbolic_const_argument(module, right, generics, expected)
+                } else {
+                    self.const_argument(
+                        module,
+                        &ConstExpr::Expression((**right).clone()),
+                        generics,
+                        expected,
+                    )
+                }?;
+                let ty = expected.unwrap_or_else(|| const_argument_type(&left));
+                if const_argument_type(&right) != ty {
+                    self.error(
+                        module,
+                        expression.span.clone(),
+                        "const arithmetic operands must have the same unsigned domain",
+                    );
+                    return None;
+                }
+                Some(HirConstArgument::Binary {
+                    op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    ty,
+                })
+            }
+            _ => self.const_argument(
+                module,
+                &ConstExpr::Expression(expression.clone()),
+                generics,
+                expected,
+            ),
+        }
+    }
+    fn associated_projection(
+        &mut self,
+        module: usize,
+        value: &ast::Type,
+        generics: &GenericScope,
+    ) -> Option<HirType> {
+        let (name, base_segments) = value.path.segments.split_last()?;
+        if base_segments.is_empty() {
+            return None;
+        }
+        let base_path = ast::QualifiedName::new(value.path.span.clone(), base_segments.to_vec());
+        let base = if base_segments.len() == 1 && generics.types.contains(&base_segments[0]) {
+            HirType::TypeParameter {
+                name: base_segments[0].clone(),
+            }
+        } else if self.lookup(module, &base_path).is_some() {
+            self.ty(
+                module,
+                &ast::Type {
+                    span: value.span.clone(),
+                    path: base_path,
+                    arguments: Vec::new(),
+                },
+                generics,
+            )
+        } else {
+            return None;
+        };
+        let trait_ids = match &base {
+            HirType::TypeParameter { name } => generics
+                .type_bounds
+                .get(name)
+                .into_iter()
+                .flatten()
+                .filter_map(|bound| {
+                    let HirType::Named { symbol, .. } = self.ty(module, bound, generics) else {
+                        return None;
+                    };
+                    (self.declarations.get(&symbol) == Some(&OwnedDeclKind::Trait { generics: 0 })
+                        || matches!(
+                            self.declarations.get(&symbol),
+                            Some(OwnedDeclKind::Trait { .. })
+                        ))
+                    .then_some(symbol)
+                })
+                .collect::<BTreeSet<_>>(),
+            HirType::Named { symbol, .. }
+                if matches!(
+                    self.declarations.get(symbol),
+                    Some(OwnedDeclKind::Trait { .. })
+                ) =>
+            {
+                BTreeSet::from([symbol.clone()])
+            }
+            HirType::Named { symbol, .. }
+                if self.declarations.get(symbol) == Some(&OwnedDeclKind::Impl) =>
+            {
+                self.declaration_traits(symbol)
+                    .into_iter()
+                    .filter_map(|ty| match ty {
+                        HirType::Named { symbol, .. }
+                            if matches!(
+                                self.declarations.get(&symbol),
+                                Some(OwnedDeclKind::Trait { .. })
+                            ) =>
+                        {
+                            Some(symbol)
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            }
+            _ => BTreeSet::new(),
+        };
+        let mut candidates = trait_ids
+            .into_iter()
+            .filter(|trait_id| self.trait_associated_type(trait_id, name))
+            .collect::<Vec<_>>();
+        if candidates.len() != 1 {
+            self.error(
+                module,
+                value.span.clone(),
+                if candidates.is_empty() {
+                    format!(
+                        "associated projection `{}` is not declared by its trait bounds",
+                        value.path.segments.join(".")
+                    )
+                } else {
+                    format!(
+                        "associated projection `{}` is ambiguous",
+                        value.path.segments.join(".")
+                    )
+                },
+            );
+            return Some(HirType::Primitive(PrimitiveType::Unknown));
+        }
+        Some(HirType::AssociatedProjection {
+            base: Box::new(base),
+            trait_id: candidates.pop().unwrap(),
+            name: name.clone(),
+        })
+    }
+
+    fn trait_associated_type(&self, trait_id: &SymbolId, name: &str) -> bool {
+        self.modules
+            .iter()
+            .position(|module| module == &trait_id.module)
+            .is_some_and(|module| {
+                self.parsed.sources[module]
+                    .syntax
+                    .declarations
+                    .iter()
+                    .any(|declaration| {
+                        matches!(
+                            declaration,
+                            Declaration::Trait(value)
+                                if value.name == trait_id.name
+                                    && value.associated_types.iter().any(|item| item.name == name)
+                        )
+                    })
+            })
+    }
+
+    fn declaration_traits(&mut self, symbol: &SymbolId) -> Vec<HirType> {
+        let Some(module) = self
+            .modules
+            .iter()
+            .position(|module| module == &symbol.module)
+        else {
+            return Vec::new();
+        };
+        self.parsed.sources[module]
+            .syntax
+            .declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                Declaration::Impl(value) if value.name == symbol.name => Some(
+                    value
+                        .traits
+                        .iter()
+                        .map(|trait_ref| self.ty(module, trait_ref, &GenericScope::default()))
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    fn ty(&mut self, module: usize, value: &ast::Type, generics: &GenericScope) -> HirType {
+        if value.arguments.is_empty()
+            && let Some(projection) = self.associated_projection(module, value, generics)
+        {
+            return projection;
+        }
         let name = value.path.segments.last().cloned().unwrap_or_default();
         if value.path.segments.len() == 1 {
-            if generics.contains(&name) {
+            if generics.types.contains(&name) {
+                self.arity(module, value, 0, &name);
                 return HirType::TypeParameter { name };
             }
             if let Some(primitive) = owned_primitive(&name) {
@@ -999,11 +1764,25 @@ impl<'a> OwnedLower<'a> {
             }
             if name == "Opaque" {
                 self.arity(module, value, 1, &name);
-                return match value.arguments.first().map(|argument| &argument.kind) {
-                    Some(TypeArgKind::String(tag)) if valid_opaque_tag(tag) => {
-                        HirType::Opaque { tag: tag.clone() }
-                    }
-                    Some(TypeArgKind::String(_)) => {
+                let tag = value
+                    .arguments
+                    .first()
+                    .and_then(|argument| match &argument.kind {
+                        GenericArgKind::Const(ConstExpr::Expression(Expr {
+                            kind:
+                                ExprKind::Literal(ast::Literal {
+                                    kind: LiteralKind::String(tag),
+                                    ..
+                                }),
+                            ..
+                        })) => Some(tag.as_str()),
+                        _ => None,
+                    });
+                return match tag {
+                    Some(tag) if valid_opaque_tag(tag) => HirType::Opaque {
+                        tag: tag.to_owned(),
+                    },
+                    Some(_) => {
                         self.error(
                             module,
                             value.span.clone(),
@@ -1013,7 +1792,7 @@ impl<'a> OwnedLower<'a> {
                             tag: "invalid".into(),
                         }
                     }
-                    _ => {
+                    None => {
                         self.error(
                             module,
                             value.span.clone(),
@@ -1025,122 +1804,157 @@ impl<'a> OwnedLower<'a> {
                     }
                 };
             }
-            if name == "Factory" {
-                self.arity(module, value, 1, &name);
-                let args = value
+
+            let type_at = |lower: &mut Self, index: usize| {
+                value
                     .arguments
-                    .iter()
-                    .map(|argument| match &argument.kind {
-                        TypeArgKind::Type(inner) => self.ty(module, inner, generics),
-                        TypeArgKind::String(_) => {
-                            self.error(
-                                module,
-                                argument.span.clone(),
-                                "string type arguments are unsupported",
-                            );
-                            HirType::Primitive(PrimitiveType::Unknown)
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                let instance = args
-                    .first()
-                    .cloned()
-                    .unwrap_or(HirType::Primitive(PrimitiveType::Unknown));
-                if value.arguments.len() == 1
-                    && !matches!(
-                        &instance,
-                        HirType::Named { symbol, args }
-                            if args.is_empty()
-                                && self.declarations.get(symbol) == Some(&OwnedDeclKind::Impl)
-                    )
-                {
-                    self.error(
-                        module,
-                        value.span.clone(),
-                        "Factory instance type must resolve to an impl declaration without type arguments",
-                    );
-                }
-                return HirType::Factory {
-                    instance: Box::new(instance),
-                };
-            }
-            let expected = match name.as_str() {
-                "List" | "Set" | "Option" | "Iterator" => Some(1),
-                "Map" | "Tuple" | "Result" => Some(2),
-                "Generator" => Some(3),
-                _ => None,
+                    .get(index)
+                    .map(|argument| lower.type_argument(module, argument, generics))
+                    .unwrap_or(HirType::Primitive(PrimitiveType::Unknown))
             };
-            if let Some(expected) = expected {
-                self.arity(module, value, expected, &name);
-                let args = value
-                    .arguments
-                    .iter()
-                    .map(|argument| match &argument.kind {
-                        TypeArgKind::Type(inner) => self.ty(module, inner, generics),
-                        TypeArgKind::String(_) => {
-                            self.error(
-                                module,
-                                argument.span.clone(),
-                                "string type arguments are unsupported",
-                            );
-                            HirType::Primitive(PrimitiveType::Unknown)
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                let argument = |index| {
-                    args.get(index)
-                        .cloned()
-                        .unwrap_or(HirType::Primitive(PrimitiveType::Unknown))
-                };
-                return match name.as_str() {
-                    "List" => HirType::List {
-                        item: Box::new(argument(0)),
-                    },
-                    "Set" => HirType::Set {
-                        item: Box::new(argument(0)),
-                    },
-                    "Option" => HirType::Option {
-                        item: Box::new(argument(0)),
-                    },
-                    "Map" => HirType::Map {
-                        key: Box::new(argument(0)),
-                        value: Box::new(argument(1)),
-                    },
-                    "Tuple" => HirType::Tuple2 {
-                        first: Box::new(argument(0)),
-                        second: Box::new(argument(1)),
-                    },
-                    "Result" => {
-                        let error = argument(1);
-                        if !matches!(&error, HirType::Named { symbol, .. } if matches!(self.declarations.get(symbol), Some(OwnedDeclKind::Enum { .. })))
-                        {
-                            self.error(
-                                module,
-                                value.span.clone(),
-                                "Result error type must resolve to an enum declaration",
-                            );
-                        }
-                        HirType::Result {
-                            ok: Box::new(argument(0)),
-                            error: Box::new(error),
-                        }
+            match name.as_str() {
+                "Factory" => {
+                    self.arity(module, value, 1, &name);
+                    let instance = type_at(self, 0);
+                    if value.arguments.len() == 1
+                        && !matches!(
+                            &instance,
+                            HirType::Named { symbol, args }
+                                if args.is_empty()
+                                    && self.declarations.get(symbol) == Some(&OwnedDeclKind::Impl)
+                        )
+                    {
+                        self.error(
+                            module,
+                            value.span.clone(),
+                            "Factory instance type must resolve to an impl declaration without type arguments",
+                        );
                     }
-                    "Iterator" => HirType::Iterator {
-                        item: Box::new(argument(0)),
-                    },
-                    "Generator" => HirType::Generator {
-                        yield_type: Box::new(argument(0)),
-                        send_type: Box::new(argument(1)),
-                        return_type: Box::new(argument(2)),
-                    },
-                    _ => unreachable!(),
-                };
+                    return HirType::Factory {
+                        instance: Box::new(instance),
+                    };
+                }
+                "List" | "Set" | "Option" | "Iterator" => {
+                    self.arity(module, value, 1, &name);
+                    let item = Box::new(type_at(self, 0));
+                    return match name.as_str() {
+                        "List" => HirType::List { item },
+                        "Set" => HirType::Set { item },
+                        "Option" => HirType::Option { item },
+                        "Iterator" => HirType::Iterator { item },
+                        _ => unreachable!(),
+                    };
+                }
+                "Map" | "Result" => {
+                    self.arity(module, value, 2, &name);
+                    let first = type_at(self, 0);
+                    let second = type_at(self, 1);
+                    if name == "Result"
+                        && !matches!(&second, HirType::Named { symbol, .. } if matches!(self.declarations.get(symbol), Some(OwnedDeclKind::Enum { .. })))
+                    {
+                        self.error(
+                            module,
+                            value.span.clone(),
+                            "Result error type must resolve to an enum declaration",
+                        );
+                    }
+                    return if name == "Map" {
+                        HirType::Map {
+                            key: Box::new(first),
+                            value: Box::new(second),
+                        }
+                    } else {
+                        HirType::Result {
+                            ok: Box::new(first),
+                            error: Box::new(second),
+                        }
+                    };
+                }
+                "Tuple" => {
+                    if value.arguments.is_empty() {
+                        self.error(
+                            module,
+                            value.span.clone(),
+                            "Tuple requires at least one type argument",
+                        );
+                    }
+                    return HirType::Tuple {
+                        items: value
+                            .arguments
+                            .iter()
+                            .map(|argument| self.type_argument(module, argument, generics))
+                            .collect(),
+                    };
+                }
+                "Array" => {
+                    self.arity(module, value, 2, &name);
+                    let item = type_at(self, 0);
+                    let length = value
+                        .arguments
+                        .get(1)
+                        .and_then(|argument| match &argument.kind {
+                            GenericArgKind::Const(value) => {
+                                self.const_argument(module, value, generics, None)
+                            }
+                            _ => {
+                                self.error(
+                                    module,
+                                    argument.span.clone(),
+                                    "Array length must be a const argument",
+                                );
+                                None
+                            }
+                        })
+                        .unwrap_or(HirConstArgument::Value {
+                            value: 0,
+                            ty: HirConstType::U64,
+                        });
+                    return HirType::Array {
+                        item: Box::new(item),
+                        length,
+                    };
+                }
+                "Buffer" => {
+                    self.arity(module, value, 1, &name);
+                    let length = value
+                        .arguments
+                        .first()
+                        .and_then(|argument| match &argument.kind {
+                            GenericArgKind::Const(value) => {
+                                self.const_argument(module, value, generics, None)
+                            }
+                            _ => {
+                                self.error(
+                                    module,
+                                    argument.span.clone(),
+                                    "Buffer length must be a const argument",
+                                );
+                                None
+                            }
+                        })
+                        .unwrap_or(HirConstArgument::Value {
+                            value: 0,
+                            ty: HirConstType::U64,
+                        });
+                    return HirType::Buffer { length };
+                }
+                "Generator" => {
+                    self.arity(module, value, 3, &name);
+                    return HirType::Generator {
+                        yield_type: Box::new(type_at(self, 0)),
+                        send_type: Box::new(type_at(self, 1)),
+                        return_type: Box::new(type_at(self, 2)),
+                    };
+                }
+                _ => {}
             }
         }
+
         let Some(symbol) = self.resolve(module, &value.path, &value.span) else {
             return HirType::Primitive(PrimitiveType::Unknown);
         };
         if self.declarations.get(&symbol) == Some(&OwnedDeclKind::Alias) {
+            self.arity(module, value, 0, &symbol.as_string());
             if !self.resolving_aliases.insert(symbol.clone()) {
                 return HirType::Opaque {
                     tag: "alias-cycle".into(),
@@ -1155,51 +1969,116 @@ impl<'a> OwnedLower<'a> {
             self.resolving_aliases.remove(&symbol);
             return resolved;
         }
-        let expected = match self.declarations.get(&symbol).copied() {
-            Some(
-                OwnedDeclKind::Type { generics }
-                | OwnedDeclKind::Enum { generics }
-                | OwnedDeclKind::Trait { generics },
-            ) => generics,
-            Some(OwnedDeclKind::Impl) | None => 0,
-            _ => 0,
-        };
-        self.arity(module, value, expected, &symbol.as_string());
-        let args = value
-            .arguments
-            .iter()
-            .filter_map(|argument| match &argument.kind {
-                TypeArgKind::Type(inner) => Some(self.ty(module, inner, generics)),
-                TypeArgKind::String(_) => {
+
+        let parameters = self.declaration_generics(&symbol);
+        self.arity(module, value, parameters.len(), &symbol.as_string());
+        let mut args = Vec::new();
+        for (parameter, argument) in parameters.iter().zip(&value.arguments) {
+            match (parameter, &argument.kind) {
+                (ast::GenericParam::Type { .. }, GenericArgKind::Type(value))
+                | (ast::GenericParam::Type { .. }, GenericArgKind::Ambiguous { ty: value, .. }) => {
+                    args.push(HirGenericArg::Type(self.ty(module, value, generics)));
+                }
+                (ast::GenericParam::Const { ty, .. }, GenericArgKind::Const(value)) => {
+                    let ty = match ty {
+                        ast::ConstKind::U8 => HirConstType::U8,
+                        ast::ConstKind::U16 => HirConstType::U16,
+                        ast::ConstKind::U32 => HirConstType::U32,
+                        ast::ConstKind::U64 => HirConstType::U64,
+                    };
+                    let value = self
+                        .const_argument(module, value, generics, Some(ty))
+                        .unwrap_or(HirConstArgument::Value { value: 0, ty });
+                    args.push(HirGenericArg::Const(value));
+                }
+                (
+                    ast::GenericParam::Const { ty, .. },
+                    GenericArgKind::Ambiguous {
+                        ty: candidate,
+                        value,
+                    },
+                ) => {
+                    let ty = match ty {
+                        ast::ConstKind::U8 => HirConstType::U8,
+                        ast::ConstKind::U16 => HirConstType::U16,
+                        ast::ConstKind::U32 => HirConstType::U32,
+                        ast::ConstKind::U64 => HirConstType::U64,
+                    };
+                    if self.is_known_type_argument(module, candidate, generics) {
+                        self.error(
+                            module,
+                            argument.span.clone(),
+                            "generic argument kind must match its const parameter",
+                        );
+                        args.push(HirGenericArg::Const(HirConstArgument::Value {
+                            value: 0,
+                            ty,
+                        }));
+                    } else {
+                        let value = self
+                            .const_argument(module, value, generics, Some(ty))
+                            .unwrap_or(HirConstArgument::Value { value: 0, ty });
+                        args.push(HirGenericArg::Const(value));
+                    }
+                }
+                (ast::GenericParam::Type { .. }, _) => {
                     self.error(
                         module,
                         argument.span.clone(),
-                        "string type arguments are unsupported",
+                        "generic argument kind must match its type parameter",
                     );
-                    None
+                    args.push(HirGenericArg::Type(HirType::Primitive(
+                        PrimitiveType::Unknown,
+                    )));
                 }
-            })
-            .collect();
+                (ast::GenericParam::Const { ty, .. }, _) => {
+                    let ty = match ty {
+                        ast::ConstKind::U8 => HirConstType::U8,
+                        ast::ConstKind::U16 => HirConstType::U16,
+                        ast::ConstKind::U32 => HirConstType::U32,
+                        ast::ConstKind::U64 => HirConstType::U64,
+                    };
+                    self.error(
+                        module,
+                        argument.span.clone(),
+                        "generic argument kind must match its const parameter",
+                    );
+                    args.push(HirGenericArg::Const(HirConstArgument::Value {
+                        value: 0,
+                        ty,
+                    }));
+                }
+            }
+        }
         HirType::Named { symbol, args }
     }
 
     fn generics(&mut self, module: usize, values: &[ast::GenericParam]) -> Vec<HirGenericParam> {
-        let names = values
-            .iter()
-            .map(|value| value.name.clone())
-            .collect::<HashSet<_>>();
+        let scope = GenericScope::from_params(self, module, values);
         values
             .iter()
             .enumerate()
-            .map(|(source_order, value)| HirGenericParam {
-                span: value.span.clone(),
-                name: value.name.clone(),
-                bounds: value
-                    .bounds
-                    .iter()
-                    .map(|bound| self.ty(module, bound, &names))
-                    .collect(),
-                source_order,
+            .map(|(source_order, value)| match value {
+                ast::GenericParam::Type { span, name, bounds } => HirGenericParam::Type {
+                    span: span.clone(),
+                    name: name.clone(),
+                    bounds: bounds
+                        .iter()
+                        .map(|bound| self.ty(module, bound, &scope))
+                        .collect(),
+                    source_order,
+                },
+                ast::GenericParam::Const { span, name, ty } => HirGenericParam::Const {
+                    span: span.clone(),
+                    name: name.clone(),
+                    ty: match ty {
+                        ast::ConstKind::U8 => HirConstType::U8,
+                        ast::ConstKind::U16 => HirConstType::U16,
+                        ast::ConstKind::U32 => HirConstType::U32,
+                        ast::ConstKind::U64 => HirConstType::U64,
+                    },
+                    source_order,
+                },
             })
             .collect()
     }
@@ -1228,10 +2107,34 @@ impl<'a> OwnedLower<'a> {
             );
             return None;
         }
-        let expected = self.ty(module, &declaration.ty, &HashSet::new());
+        let expected = self.ty(module, &declaration.ty, &GenericScope::default());
         let value = self.value(module, &declaration.value, &expected);
         self.resolving_constants.remove(symbol);
         if let Some(value) = &value {
+            let length_mismatch = match (value, &expected) {
+                (
+                    HirValue::Array(values),
+                    HirType::Array {
+                        length: HirConstArgument::Value { value: length, .. },
+                        ..
+                    },
+                ) if values.len() as u64 != *length => {
+                    Some("Array constant length does not match its declared type")
+                }
+                (
+                    HirValue::Buffer(bytes),
+                    HirType::Buffer {
+                        length: HirConstArgument::Value { value: length, .. },
+                    },
+                ) if bytes.len() as u64 != *length => {
+                    Some("Buffer constant length does not match its declared type")
+                }
+                _ => None,
+            };
+            if let Some(message) = length_mismatch {
+                self.error(module, declaration.value.span().clone(), message);
+                return None;
+            }
             if !hir_value_matches_type(value, &expected) {
                 self.error(
                     module,
@@ -1277,7 +2180,7 @@ impl<'a> OwnedLower<'a> {
                         }
                         _ => None,
                     })?;
-                let carrier = self.ty(source_module, &carrier, &HashSet::new());
+                let carrier = self.ty(source_module, &carrier, &GenericScope::default());
                 let argument = self.value(module, argument, &carrier)?;
                 if !hir_value_matches_type(&argument, &carrier) {
                     self.error(
@@ -1320,6 +2223,76 @@ impl<'a> OwnedLower<'a> {
                     symbol,
                     fields: vec![("value".to_owned(), argument)],
                 })
+            }
+            ConstExpr::Tuple { span, values } => {
+                let HirType::Tuple { items } = expected else {
+                    self.error(
+                        module,
+                        span.clone(),
+                        "Tuple constant requires a Tuple[T1, T2, ...] type",
+                    );
+                    return None;
+                };
+                if values.len() != items.len() {
+                    self.error(
+                        module,
+                        span.clone(),
+                        "Tuple constant arity must exactly match its type",
+                    );
+                    return None;
+                }
+                values
+                    .iter()
+                    .zip(items)
+                    .map(|(value, item)| self.value(module, value, item))
+                    .collect::<Option<Vec<_>>>()
+                    .map(HirValue::Tuple)
+            }
+            ConstExpr::Array { span, values } => {
+                let HirType::Array { item, .. } = expected else {
+                    self.error(
+                        module,
+                        span.clone(),
+                        "Array constant requires an Array[T, N] type",
+                    );
+                    return None;
+                };
+                values
+                    .iter()
+                    .map(|value| self.value(module, value, item))
+                    .collect::<Option<Vec<_>>>()
+                    .map(HirValue::Array)
+            }
+            ConstExpr::Buffer { span, hex } => {
+                if !matches!(expected, HirType::Buffer { .. }) {
+                    self.error(
+                        module,
+                        span.clone(),
+                        "Buffer constant requires a Buffer[N] type",
+                    );
+                    return None;
+                }
+                if hex.len() % 2 != 0
+                    || !hex
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (byte as char).is_ascii_lowercase())
+                {
+                    self.error(
+                        module,
+                        span.clone(),
+                        "Buffer hex must contain lowercase hexadecimal byte pairs",
+                    );
+                    return None;
+                }
+                hex.as_bytes()
+                    .chunks_exact(2)
+                    .map(|pair| {
+                        std::str::from_utf8(pair)
+                            .ok()
+                            .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+                    })
+                    .collect::<Option<Vec<_>>>()
+                    .map(HirValue::Buffer)
             }
             ConstExpr::Expression(expression) => {
                 self.constant_expression(module, expression, expected)
@@ -1490,7 +2463,10 @@ impl<'a> OwnedLower<'a> {
                     Some(HirValue::Integer(value.chars().count().to_string()))
                 }
                 HirValue::Bytes(value) => Some(HirValue::Integer(value.len().to_string())),
-                HirValue::List(value) => Some(HirValue::Integer(value.len().to_string())),
+                HirValue::List(value) | HirValue::Tuple(value) | HirValue::Array(value) => {
+                    Some(HirValue::Integer(value.len().to_string()))
+                }
+                HirValue::Buffer(value) => Some(HirValue::Integer(value.len().to_string())),
                 _ => None,
             },
             HirExprKind::Field { base, name } => match self.eval_hir_constant(base, self_value)? {
@@ -1631,6 +2607,22 @@ fn hir_value_matches_type(value: &HirValue, ty: &HirType) -> bool {
                     .strip_prefix(&format!("{}.", symbol.name))
                     .is_some()
         }
+        (HirValue::Tuple(values), HirType::Tuple { items }) => {
+            values.len() == items.len()
+                && values
+                    .iter()
+                    .zip(items)
+                    .all(|(value, item)| hir_value_matches_type(value, item))
+        }
+        (HirValue::Array(values), HirType::Array { item, length }) => {
+            matches!(length, HirConstArgument::Value { value, .. } if *value == values.len() as u64)
+                && values
+                    .iter()
+                    .all(|value| hir_value_matches_type(value, item))
+        }
+        (HirValue::Buffer(bytes), HirType::Buffer { length }) => {
+            matches!(length, HirConstArgument::Value { value, .. } if *value == bytes.len() as u64)
+        }
         (HirValue::Option(None), HirType::Option { .. }) => true,
         (HirValue::Option(Some(value)), HirType::Option { item }) => {
             hir_value_matches_type(value, item)
@@ -1726,23 +2718,49 @@ fn owned_len_allowed(ty: &HirType) -> bool {
             | HirType::List { .. }
             | HirType::Set { .. }
             | HirType::Map { .. }
+            | HirType::Tuple { .. }
+            | HirType::Array { .. }
+            | HirType::Buffer { .. }
     )
+}
+fn hir_const_argument_has_parameter(value: &HirConstArgument) -> bool {
+    match value {
+        HirConstArgument::Parameter { .. } => true,
+        HirConstArgument::Binary { left, right, .. } => {
+            hir_const_argument_has_parameter(left) || hir_const_argument_has_parameter(right)
+        }
+        HirConstArgument::Value { .. } | HirConstArgument::Reference { .. } => false,
+    }
+}
+fn const_argument_type(value: &HirConstArgument) -> HirConstType {
+    match value {
+        HirConstArgument::Value { ty, .. }
+        | HirConstArgument::Parameter { ty, .. }
+        | HirConstArgument::Reference { ty, .. }
+        | HirConstArgument::Binary { ty, .. } => *ty,
+    }
 }
 
 fn owned_has_unresolved_type(ty: &HirType) -> bool {
     match ty {
         HirType::TypeParameter { .. } | HirType::Opaque { .. } => true,
-        HirType::Named { args, .. } => args.iter().any(owned_has_unresolved_type),
+        HirType::AssociatedProjection { base, .. } => owned_has_unresolved_type(base),
+        HirType::Named { args, .. } => args.iter().any(|arg| match arg {
+            HirGenericArg::Type(arg) => owned_has_unresolved_type(arg),
+            HirGenericArg::Const(arg) => hir_const_argument_has_parameter(arg),
+        }),
         HirType::Factory { instance } => owned_has_unresolved_type(instance),
         HirType::List { item }
         | HirType::Set { item }
         | HirType::Option { item }
         | HirType::Iterator { item } => owned_has_unresolved_type(item),
+        HirType::Tuple { items } => items.iter().any(owned_has_unresolved_type),
+        HirType::Array { item, length } => {
+            owned_has_unresolved_type(item) || hir_const_argument_has_parameter(length)
+        }
+        HirType::Buffer { length } => hir_const_argument_has_parameter(length),
         HirType::Map { key, value } => {
             owned_has_unresolved_type(key) || owned_has_unresolved_type(value)
-        }
-        HirType::Tuple2 { first, second } => {
-            owned_has_unresolved_type(first) || owned_has_unresolved_type(second)
         }
         HirType::Result { ok, error } => {
             owned_has_unresolved_type(ok) || owned_has_unresolved_type(error)
@@ -2338,16 +3356,7 @@ impl<'a> OwnedLower<'a> {
                         .fields
                         .iter()
                         .find(|field| field.name == field_name)
-                        .map(|field| {
-                            (
-                                field.ty.clone(),
-                                value
-                                    .generics
-                                    .iter()
-                                    .map(|generic| generic.name.clone())
-                                    .collect::<Vec<_>>(),
-                            )
-                        }),
+                        .map(|field| (field.ty.clone(), value.generics.clone())),
                     Declaration::Newtype(value)
                         if value.name == symbol.name && field_name == "value" =>
                     {
@@ -2361,10 +3370,18 @@ impl<'a> OwnedLower<'a> {
                     _ => None,
                 })?
         };
-        let generic_set = generics.iter().cloned().collect::<HashSet<_>>();
-        let lowered = self.ty(source_index, &field_type, &generic_set);
+        let lowered = self.ty(
+            source_index,
+            &field_type,
+            &GenericScope::from_declared(&generics),
+        );
         let substitutions = generics
             .into_iter()
+            .map(|generic| match generic {
+                ast::GenericParam::Type { name, .. } | ast::GenericParam::Const { name, .. } => {
+                    name
+                }
+            })
             .zip(args.iter().cloned())
             .collect::<HashMap<_, _>>();
         Some(substitute_hir_type(lowered, &substitutions))
@@ -2374,14 +3391,54 @@ impl<'a> OwnedLower<'a> {
         &mut self,
         module: usize,
         field: &ast::Field,
-        generics: &HashSet<String>,
+        generics: &GenericScope,
         order: usize,
     ) -> HirField {
         let ty = self.ty(module, &field.ty, generics);
-        let default = field
-            .default
-            .as_ref()
-            .and_then(|value| self.value(module, value, &ty));
+        let default = match (&ty, &field.default) {
+            (HirType::Named { symbol, args }, value)
+                if args.is_empty()
+                    && self.declarations.get(symbol) == Some(&OwnedDeclKind::Resource) =>
+            {
+                let initial = self.resource_initial_state(symbol);
+                if let Some(value) = value {
+                    let ConstExpr::Expression(Expr {
+                        kind: ExprKind::Name(path),
+                        ..
+                    }) = value
+                    else {
+                        self.error(
+                            module,
+                            value.span().clone(),
+                            "resource default must be its initial state",
+                        );
+                        return HirField {
+                            span: field.span.clone(),
+                            name: field.name.clone(),
+                            ty,
+                            default: None,
+                            source_order: order,
+                        };
+                    };
+                    let state = self
+                        .resource_state_ref(module, path)
+                        .map(|(_, state)| state);
+                    if state.as_ref() != initial.as_ref() {
+                        self.error(
+                            module,
+                            value.span().clone(),
+                            "resource default must be its initial state",
+                        );
+                    }
+                }
+                initial.map(|variant| HirValue::Enum {
+                    variant,
+                    fields: Vec::new(),
+                })
+            }
+            (_, Some(value)) => self.value(module, value, &ty),
+            (_, None) => None,
+        };
         if default
             .as_ref()
             .is_some_and(|value| !hir_value_matches_type(value, &ty))
@@ -2405,7 +3462,7 @@ impl<'a> OwnedLower<'a> {
         &mut self,
         module: usize,
         parameter: &ast::Parameter,
-        generics: &HashSet<String>,
+        generics: &GenericScope,
         order: usize,
     ) -> HirParameter {
         HirParameter {
@@ -2486,6 +3543,25 @@ impl<'a> OwnedLower<'a> {
         ))
     }
 
+    fn match_guard(
+        &mut self,
+        module: usize,
+        guard: &ast::MatchGuard,
+        env: &HashMap<String, (SymbolId, HirType, bool)>,
+    ) -> (HirMatchGuard, HashMap<String, (SymbolId, HirType, bool)>) {
+        let scrutinee = self.expr(module, &guard.scrutinee, env);
+        let mut clause_env = env.clone();
+        let pattern = self.pattern(module, &guard.pattern, &scrutinee.ty, &mut clause_env);
+        (
+            HirMatchGuard {
+                span: guard.span.clone(),
+                scrutinee,
+                pattern,
+            },
+            clause_env,
+        )
+    }
+
     fn contract(
         &mut self,
         module: usize,
@@ -2530,40 +3606,13 @@ impl<'a> OwnedLower<'a> {
                         }
                     }
                 }
-                ClauseKind::Requires { condition } => {
-                    let expression = self.expr(module, condition, env);
-                    if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
-                        self.error(
-                            module,
-                            condition.span.clone(),
-                            "contract condition must be boolean",
-                        );
-                    }
-                    contract.clauses.push(HirClause {
-                        clause_id: clause_id as u32,
-                        span: clause.span.clone(),
-                        kind: HirClauseKind::Requires { expression },
-                    });
-                }
-                ClauseKind::Ensures { pattern, condition } => {
-                    let mut clause_env = env.clone();
-                    if let Some(old_fields) = old_fields {
-                        clause_env.extend(old_fields.clone());
-                    }
-                    let pattern = if let Some(pattern) = pattern {
-                        Some(self.pattern(module, pattern, return_type, &mut clause_env))
-                    } else if allow_result {
-                        clause_env.insert(
-                            "result".to_owned(),
-                            (
-                                SymbolId::new(self.modules[module].clone(), "result"),
-                                return_type.clone(),
-                                false,
-                            ),
-                        );
-                        None
-                    } else {
-                        None
+                ClauseKind::Requires { guard, condition } => {
+                    let (guard, clause_env) = match guard {
+                        Some(guard) => {
+                            let (guard, clause_env) = self.match_guard(module, guard, env);
+                            (Some(guard), clause_env)
+                        }
+                        None => (None, env.clone()),
                     };
                     let expression = self.expr(module, condition, &clause_env);
                     if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
@@ -2576,13 +3625,49 @@ impl<'a> OwnedLower<'a> {
                     contract.clauses.push(HirClause {
                         clause_id: clause_id as u32,
                         span: clause.span.clone(),
-                        kind: HirClauseKind::Ensures {
-                            pattern,
-                            expression,
-                        },
+                        kind: HirClauseKind::Requires { guard, expression },
                     });
                 }
-                ClauseKind::Error { error, when } => {
+                ClauseKind::Ensures { guard, condition } => {
+                    let mut clause_env = env.clone();
+                    if let Some(old_fields) = old_fields {
+                        clause_env.extend(old_fields.clone());
+                    }
+                    if allow_result {
+                        clause_env.insert(
+                            "result".to_owned(),
+                            (
+                                SymbolId::new(self.modules[module].clone(), "result"),
+                                return_type.clone(),
+                                false,
+                            ),
+                        );
+                    }
+                    let (guard, mut clause_env) = match guard {
+                        Some(guard) => {
+                            let (guard, clause_env) = self.match_guard(module, guard, &clause_env);
+                            (Some(guard), clause_env)
+                        }
+                        None => (None, clause_env),
+                    };
+                    if guard.is_some() {
+                        clause_env.remove("result");
+                    }
+                    let expression = self.expr(module, condition, &clause_env);
+                    if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
+                        self.error(
+                            module,
+                            condition.span.clone(),
+                            "contract condition must be boolean",
+                        );
+                    }
+                    contract.clauses.push(HirClause {
+                        clause_id: clause_id as u32,
+                        span: clause.span.clone(),
+                        kind: HirClauseKind::Ensures { guard, expression },
+                    });
+                }
+                ClauseKind::Error { error, guard, when } => {
                     let resolved = self.error_variant(module, error);
                     let valid_return = matches!(
                         return_type,
@@ -2604,8 +3689,15 @@ impl<'a> OwnedLower<'a> {
                             "error clause variant does not belong to the Result error type",
                         );
                     }
+                    let (guard, clause_env) = match guard {
+                        Some(guard) => {
+                            let (guard, clause_env) = self.match_guard(module, guard, env);
+                            (Some(guard), clause_env)
+                        }
+                        None => (None, env.clone()),
+                    };
                     let when = when.as_ref().map(|value| {
-                        let expression = self.expr(module, value, env);
+                        let expression = self.expr(module, value, &clause_env);
                         if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
                             self.error(
                                 module,
@@ -2622,12 +3714,13 @@ impl<'a> OwnedLower<'a> {
                             kind: HirClauseKind::Error {
                                 variant,
                                 priority: None,
+                                guard,
                                 when,
                             },
                         });
                     }
                 }
-                ClauseKind::Modifies { .. } => {}
+                ClauseKind::Modifies { .. } | ClauseKind::Transitions { .. } => {}
                 ClauseKind::Effects { effects } => {
                     for (source_order, effect) in effects.iter().enumerate() {
                         contract.effects.push(HirEffect {
@@ -2754,7 +3847,7 @@ impl<'a> OwnedLower<'a> {
             return None;
         };
         let variant_name = name;
-        let Some((field_types, generic_names)) = self.parsed.sources[source_index]
+        let Some((field_types, generic_parameters)) = self.parsed.sources[source_index]
             .syntax
             .declarations
             .iter()
@@ -2770,11 +3863,7 @@ impl<'a> OwnedLower<'a> {
                                 .iter()
                                 .map(|field| field.ty.clone())
                                 .collect::<Vec<_>>(),
-                            value
-                                .generics
-                                .iter()
-                                .map(|generic| generic.name.clone())
-                                .collect::<Vec<_>>(),
+                            value.generics.clone(),
                         )
                     }),
                 _ => None,
@@ -2800,15 +3889,20 @@ impl<'a> OwnedLower<'a> {
             );
             return None;
         }
-        let generic_set = generic_names.iter().cloned().collect::<HashSet<_>>();
-        let substitutions = generic_names
+        let scope = GenericScope::from_declared(&generic_parameters);
+        let substitutions = generic_parameters
             .into_iter()
+            .map(|generic| match generic {
+                ast::GenericParam::Type { name, .. } | ast::GenericParam::Const { name, .. } => {
+                    name
+                }
+            })
             .zip(args.iter().cloned())
             .collect::<HashMap<_, _>>();
         let fields = field_types
             .iter()
             .map(|field| {
-                let ty = self.ty(source_index, field, &generic_set);
+                let ty = self.ty(source_index, field, &scope);
                 substitute_hir_type(ty, &substitutions)
             })
             .collect();
@@ -2836,7 +3930,15 @@ impl<'a> OwnedLower<'a> {
             },
             PatternKind::Binding(name) => {
                 let symbol = SymbolId::new(self.modules[module].clone(), name.clone());
-                env.insert(name.clone(), (symbol.clone(), expected.clone(), true));
+                if env.contains_key(name) {
+                    self.error(
+                        module,
+                        pattern.span.clone(),
+                        format!("duplicate pattern binding `{name}`"),
+                    );
+                } else {
+                    env.insert(name.clone(), (symbol.clone(), expected.clone(), true));
+                }
                 HirPattern {
                     span: pattern.span.clone(),
                     ty: expected.clone(),
@@ -2878,110 +3980,125 @@ impl<'a> OwnedLower<'a> {
         generics: &HashSet<String>,
     ) -> HirType {
         match &pattern.kind {
-            PatternKind::Variant { path, arguments } => {
-                if path.segments.as_slice() == ["Result", "Ok"] {
-                    let ok_type = if let Some(arg) = arguments.first() {
-                        Box::new(self.infer_rule_pattern_type(module, arg, generics))
-                    } else {
-                        Box::new(HirType::Primitive(PrimitiveType::Unit))
-                    };
-                    HirType::Result {
-                        ok: ok_type,
-                        error: Box::new(HirType::Primitive(PrimitiveType::Never)),
-                    }
-                } else if path.segments.as_slice() == ["Result", "Err"] {
-                    let err_type = if let Some(arg) = arguments.first() {
-                        Box::new(self.infer_rule_pattern_type(module, arg, generics))
-                    } else {
-                        Box::new(HirType::Primitive(PrimitiveType::Unit))
-                    };
-                    HirType::Result {
-                        ok: Box::new(HirType::Primitive(PrimitiveType::Never)),
-                        error: err_type,
-                    }
-                } else if path.segments.as_slice() == ["Option", "Some"] {
-                    let item_type = if let Some(arg) = arguments.first() {
-                        Box::new(self.infer_rule_pattern_type(module, arg, generics))
-                    } else {
-                        Box::new(HirType::Primitive(PrimitiveType::Unit))
-                    };
-                    HirType::Option { item: item_type }
-                } else if path.segments.as_slice() == ["Option", "Nothing"] {
-                    HirType::Option {
-                        item: Box::new(HirType::Primitive(PrimitiveType::Never)),
-                    }
-                } else {
-                    let prefix = if path.segments.len() >= 2 {
-                        ast::QualifiedName::new(
-                            path.span.clone(),
-                            path.segments[..path.segments.len() - 1].to_vec(),
-                        )
-                    } else {
-                        path.clone()
-                    };
-                    if let Some(owner) = self.resolve(module, &prefix, &path.span) {
-                        HirType::Named {
-                            symbol: owner,
-                            args: Vec::new(),
-                        }
-                    } else {
-                        HirType::Primitive(PrimitiveType::Unit)
-                    }
+            PatternKind::Variant { path, arguments }
+                if path.segments.as_slice() == ["Result", "Ok"] =>
+            {
+                HirType::Result {
+                    ok: Box::new(
+                        arguments
+                            .first()
+                            .map(|argument| {
+                                self.infer_rule_pattern_type(module, argument, generics)
+                            })
+                            .unwrap_or(HirType::Primitive(PrimitiveType::Unit)),
+                    ),
+                    error: Box::new(HirType::Primitive(PrimitiveType::Never)),
                 }
             }
-            PatternKind::Binding(name) => {
-                let capitalized = {
-                    let mut c = name.chars();
-                    match c.next() {
-                        None => String::new(),
-                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                    }
-                };
-                let qname =
-                    ast::QualifiedName::new(pattern.span.clone(), vec![capitalized.clone()]);
-                if let Some(sym) = self.resolve(module, &qname, &pattern.span) {
-                    HirType::Named {
-                        symbol: sym,
+            PatternKind::Variant { path, arguments }
+                if path.segments.as_slice() == ["Result", "Err"] =>
+            {
+                HirType::Result {
+                    ok: Box::new(HirType::Primitive(PrimitiveType::Never)),
+                    error: Box::new(
+                        arguments
+                            .first()
+                            .map(|argument| {
+                                self.infer_rule_pattern_type(module, argument, generics)
+                            })
+                            .unwrap_or(HirType::Primitive(PrimitiveType::Unit)),
+                    ),
+                }
+            }
+            PatternKind::Variant { path, arguments }
+                if path.segments.as_slice() == ["Option", "Some"] =>
+            {
+                HirType::Option {
+                    item: Box::new(
+                        arguments
+                            .first()
+                            .map(|argument| {
+                                self.infer_rule_pattern_type(module, argument, generics)
+                            })
+                            .unwrap_or(HirType::Primitive(PrimitiveType::Unit)),
+                    ),
+                }
+            }
+            PatternKind::Variant { path, .. }
+                if path.segments.as_slice() == ["Option", "Nothing"] =>
+            {
+                HirType::Option {
+                    item: Box::new(HirType::Primitive(PrimitiveType::Never)),
+                }
+            }
+            PatternKind::Variant { path, .. } => {
+                let prefix = ast::QualifiedName::new(
+                    path.span.clone(),
+                    path.segments[..path.segments.len().saturating_sub(1)].to_vec(),
+                );
+                self.resolve(module, &prefix, &path.span)
+                    .map(|symbol| HirType::Named {
+                        symbol,
                         args: Vec::new(),
-                    }
-                } else {
-                    let exact_qname =
-                        ast::QualifiedName::new(pattern.span.clone(), vec![name.clone()]);
-                    if let Some(sym) = self.resolve(module, &exact_qname, &pattern.span) {
-                        HirType::Named {
-                            symbol: sym,
+                    })
+                    .unwrap_or(HirType::Primitive(PrimitiveType::Unit))
+            }
+            PatternKind::Binding(name) => {
+                let mut chars = name.chars();
+                let capitalized = chars
+                    .next()
+                    .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+                    .unwrap_or_default();
+                for candidate in [capitalized, name.clone()] {
+                    let path = ast::QualifiedName::new(pattern.span.clone(), vec![candidate]);
+                    if let Some(symbol) = self.lookup(module, &path) {
+                        return HirType::Named {
+                            symbol,
                             args: Vec::new(),
-                        }
-                    } else if generics.contains(name) {
-                        HirType::TypeParameter { name: name.clone() }
-                    } else {
-                        HirType::Primitive(PrimitiveType::Str)
+                        };
                     }
+                }
+                if generics.contains(name) {
+                    HirType::TypeParameter { name: name.clone() }
+                } else {
+                    HirType::Primitive(PrimitiveType::Str)
                 }
             }
             PatternKind::Wildcard => HirType::Primitive(PrimitiveType::Unit),
         }
     }
+
     fn state_type_allowed(&self, ty: &HirType) -> bool {
         match ty {
-            HirType::Primitive(PrimitiveType::Never) | HirType::TypeParameter { .. } => false,
+            HirType::Primitive(PrimitiveType::Never)
+            | HirType::TypeParameter { .. }
+            | HirType::AssociatedProjection { .. } => false,
             HirType::Primitive(_) | HirType::Opaque { .. } => true,
             HirType::Factory { .. } => false,
             HirType::Named { symbol, args } => {
                 matches!(
                     self.declarations.get(symbol),
-                    Some(OwnedDeclKind::Type { .. } | OwnedDeclKind::Enum { .. })
-                ) && args.iter().all(|arg| self.state_type_allowed(arg))
+                    Some(
+                        OwnedDeclKind::Type { .. }
+                            | OwnedDeclKind::Enum { .. }
+                            | OwnedDeclKind::Resource
+                    )
+                ) && args.iter().all(|arg| match arg {
+                    HirGenericArg::Type(arg) => self.state_type_allowed(arg),
+                    HirGenericArg::Const(arg) => !hir_const_argument_has_parameter(arg),
+                })
             }
             HirType::List { item }
             | HirType::Set { item }
             | HirType::Option { item }
             | HirType::Iterator { item } => self.state_type_allowed(item),
+            HirType::Tuple { items } => items.iter().all(|item| self.state_type_allowed(item)),
+            HirType::Array { item, length } => {
+                self.state_type_allowed(item) && !hir_const_argument_has_parameter(length)
+            }
+            HirType::Buffer { length } => !hir_const_argument_has_parameter(length),
             HirType::Map { key, value } => {
                 self.state_type_allowed(key) && self.state_type_allowed(value)
-            }
-            HirType::Tuple2 { first, second } => {
-                self.state_type_allowed(first) && self.state_type_allowed(second)
             }
             HirType::Result { ok, error } => {
                 self.state_type_allowed(ok) && self.state_type_allowed(error)
@@ -2998,13 +4115,167 @@ impl<'a> OwnedLower<'a> {
         }
     }
 
+    fn default_function(
+        &mut self,
+        module: usize,
+        trait_id: &SymbolId,
+        method: &ast::TraitMethod,
+        trait_generics: &[ast::GenericParam],
+        trait_scope: &GenericScope,
+    ) -> Option<HirVerifiedFunction> {
+        let method_id = SymbolId::new(
+            trait_id.module.clone(),
+            format!("{}.{}", trait_id.name, method.name),
+        );
+        if let Some(default) = self.default_functions.get(&method_id) {
+            return default.clone();
+        }
+        let resolved = (|| {
+            let path = method.default.as_ref()?;
+            let symbol = self.resolve(module, path, &path.span)?;
+            if self.declarations.get(&symbol) != Some(&OwnedDeclKind::Function) {
+                self.error(
+                    module,
+                    path.span.clone(),
+                    "trait default must reference a free function",
+                );
+                return None;
+            }
+            let Some(function_module) = self
+                .modules
+                .iter()
+                .position(|candidate| candidate == &symbol.module)
+            else {
+                return None;
+            };
+            let Some(function) = self.parsed.sources[function_module]
+                .syntax
+                .declarations
+                .iter()
+                .find_map(|declaration| match declaration {
+                    Declaration::Function(value) if value.name == symbol.name => {
+                        Some(value.clone())
+                    }
+                    _ => None,
+                })
+            else {
+                return None;
+            };
+            if function.callable_kind != ast::CallableKind::Sync {
+                self.error(
+                    module,
+                    path.span.clone(),
+                    "trait default must reference a sync free function",
+                );
+                return None;
+            }
+            let same_generics = trait_generics.len() == function.generics.len()
+                && trait_generics
+                    .iter()
+                    .zip(&function.generics)
+                    .all(|(left, right)| match (left, right) {
+                        (
+                            ast::GenericParam::Type { name: left, .. },
+                            ast::GenericParam::Type { name: right, .. },
+                        ) => left == right,
+                        (
+                            ast::GenericParam::Const {
+                                name: left,
+                                ty: left_ty,
+                                ..
+                            },
+                            ast::GenericParam::Const {
+                                name: right,
+                                ty: right_ty,
+                                ..
+                            },
+                        ) => left == right && left_ty == right_ty,
+                        _ => false,
+                    });
+            if !same_generics {
+                self.error(
+                    module,
+                    path.span.clone(),
+                    "trait default generic parameters must exactly match the trait",
+                );
+                return None;
+            }
+            let function_scope = GenericScope::from_declared(&function.generics);
+            let receiver = HirType::Named {
+                symbol: trait_id.clone(),
+                args: trait_generics
+                    .iter()
+                    .map(|generic| match generic {
+                        ast::GenericParam::Type { name, .. } => {
+                            HirGenericArg::Type(HirType::TypeParameter { name: name.clone() })
+                        }
+                        ast::GenericParam::Const { name, ty, .. } => {
+                            let ty = match ty {
+                                ast::ConstKind::U8 => HirConstType::U8,
+                                ast::ConstKind::U16 => HirConstType::U16,
+                                ast::ConstKind::U32 => HirConstType::U32,
+                                ast::ConstKind::U64 => HirConstType::U64,
+                            };
+                            HirGenericArg::Const(HirConstArgument::Parameter {
+                                name: name.clone(),
+                                ty,
+                            })
+                        }
+                    })
+                    .collect(),
+            };
+            let signature_matches = function.parameters.len() == method.parameters.len() + 1
+                && function.parameters.first().is_some_and(|parameter| {
+                    self.ty(function_module, &parameter.ty, &function_scope) == receiver
+                })
+                && function
+                    .parameters
+                    .iter()
+                    .skip(1)
+                    .zip(&method.parameters)
+                    .all(|(function, trait_method)| {
+                        function.name == trait_method.name
+                            && self.ty(function_module, &function.ty, &function_scope)
+                                == self.ty(module, &trait_method.ty, trait_scope)
+                    })
+                && self.ty(function_module, &function.return_type, &function_scope)
+                    == self.ty(module, &method.return_type, trait_scope);
+            if !signature_matches {
+                self.error(
+                    module,
+                    path.span.clone(),
+                    "trait default must take the trait receiver first and exactly match the method signature",
+                );
+                return None;
+            }
+            Some(HirVerifiedFunction {
+                module: symbol.module.clone(),
+                symbol: symbol.name.clone(),
+                verified_facade: symbol.as_string(),
+            })
+        })();
+        self.default_functions.insert(method_id, resolved.clone());
+        resolved
+    }
+
     fn validate_impl_methods(
         &mut self,
         module: usize,
+        impl_id: &SymbolId,
+        impl_span: &Span,
         traits: &[HirType],
+        associated_types: &[HirAssociatedTypeAssignment],
         methods: &[HirImplMethod],
-    ) {
-        let mut required = BTreeMap::<String, (Vec<(String, HirType)>, HirType)>::new();
+    ) -> Vec<HirSelectedMethod> {
+        struct RequiredMethod {
+            name: String,
+            parameters: Vec<(String, HirType)>,
+            return_type: HirType,
+            trait_methods: Vec<SymbolId>,
+            defaults: Vec<HirVerifiedFunction>,
+        }
+
+        let mut required = Vec::<RequiredMethod>::new();
         for trait_ref in traits {
             let HirType::Named { symbol, args } = trait_ref else {
                 continue;
@@ -3022,7 +4293,195 @@ impl<'a> OwnedLower<'a> {
                 .iter()
                 .find_map(|declaration| match declaration {
                     Declaration::Trait(value) if value.name == symbol.name => {
-                        Some((&value.generics, &value.methods))
+                        Some((value.generics.clone(), value.methods.clone()))
+                    }
+                    _ => None,
+                })
+            else {
+                continue;
+            };
+            let scope = GenericScope::from_declared(&generics);
+            let substitutions = generics
+                .iter()
+                .map(|generic| match generic {
+                    ast::GenericParam::Type { name, .. }
+                    | ast::GenericParam::Const { name, .. } => name.clone(),
+                })
+                .zip(args.iter().cloned())
+                .collect::<HashMap<_, _>>();
+            for trait_method in &trait_methods {
+                let parameters = trait_method
+                    .parameters
+                    .iter()
+                    .map(|parameter| {
+                        (
+                            parameter.name.clone(),
+                            substitute_associated_type(
+                                substitute_hir_type(
+                                    self.ty(source_module, &parameter.ty, &scope),
+                                    &substitutions,
+                                ),
+                                associated_types,
+                            ),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let return_type = substitute_associated_type(
+                    substitute_hir_type(
+                        self.ty(source_module, &trait_method.return_type, &scope),
+                        &substitutions,
+                    ),
+                    associated_types,
+                );
+                let trait_method_id = SymbolId::new(
+                    symbol.module.clone(),
+                    format!("{}.{}", symbol.name, trait_method.name),
+                );
+                let default =
+                    self.default_function(source_module, symbol, trait_method, &generics, &scope);
+                if let Some(existing) = required
+                    .iter_mut()
+                    .find(|existing| existing.name == trait_method.name)
+                {
+                    if existing.parameters != parameters || existing.return_type != return_type {
+                        self.error(
+                            module,
+                            trait_method.span.clone(),
+                            "impl traits have incompatible methods with the same name",
+                        );
+                    } else {
+                        existing.trait_methods.push(trait_method_id);
+                        if let Some(default) = default
+                            && !existing.defaults.contains(&default)
+                        {
+                            existing.defaults.push(default);
+                        }
+                    }
+                } else {
+                    required.push(RequiredMethod {
+                        name: trait_method.name.clone(),
+                        parameters,
+                        return_type,
+                        trait_methods: vec![trait_method_id],
+                        defaults: default.into_iter().collect(),
+                    });
+                }
+            }
+        }
+
+        let mut explicit = BTreeMap::<String, usize>::new();
+        for (index, method) in methods.iter().enumerate() {
+            if explicit.insert(method.name.clone(), index).is_some() {
+                self.error(
+                    module,
+                    method.span.clone(),
+                    format!("duplicate impl method `{}`", method.name),
+                );
+                continue;
+            }
+            let Some(required) = required
+                .iter()
+                .find(|required| required.name == method.name)
+            else {
+                self.error(
+                    module,
+                    method.span.clone(),
+                    "impl method is not declared by its traits",
+                );
+                continue;
+            };
+            if method.return_type != required.return_type
+                || method
+                    .parameters
+                    .iter()
+                    .map(|parameter| (parameter.name.clone(), parameter.ty.clone()))
+                    .collect::<Vec<_>>()
+                    != required.parameters
+            {
+                self.error(
+                    module,
+                    method.span.clone(),
+                    "impl method signature must exactly match its trait method",
+                );
+            }
+        }
+
+        let receiver_type = HirType::Named {
+            symbol: impl_id.clone(),
+            args: Vec::new(),
+        };
+        let mut selected = Vec::new();
+        for required in required {
+            let selected_implementation = if let Some(index) = explicit.get(&required.name) {
+                let method = &methods[*index];
+                HirSelectedImplementation::Explicit {
+                    function: HirVerifiedFunction {
+                        module: impl_id.module.clone(),
+                        symbol: format!("{}.{}", impl_id.name, method.name),
+                        verified_facade: format!(
+                            "{}.{}.{}",
+                            impl_id.module.as_string(),
+                            impl_id.name,
+                            method.name
+                        ),
+                    },
+                }
+            } else if required.defaults.len() == 1 {
+                HirSelectedImplementation::Default {
+                    function: required.defaults.into_iter().next().unwrap(),
+                }
+            } else {
+                if required.defaults.is_empty() {
+                    self.error(
+                        module,
+                        impl_span.clone(),
+                        format!("impl is missing trait method `{}`", required.name),
+                    );
+                } else {
+                    self.error(
+                        module,
+                        impl_span.clone(),
+                        format!(
+                            "ambiguous trait defaults for method `{}`; declare an explicit impl method",
+                            required.name
+                        ),
+                    );
+                }
+                continue;
+            };
+            for trait_method in required.trait_methods {
+                selected.push(HirSelectedMethod {
+                    trait_method,
+                    receiver_type: receiver_type.clone(),
+                    selected: selected_implementation.clone(),
+                });
+            }
+        }
+        selected
+    }
+    fn associated_requirements(
+        &mut self,
+        traits: &[HirType],
+    ) -> Vec<(SymbolId, String, Vec<HirType>)> {
+        let mut requirements = Vec::new();
+        for trait_ref in traits {
+            let HirType::Named { symbol, args } = trait_ref else {
+                continue;
+            };
+            let Some(module) = self
+                .modules
+                .iter()
+                .position(|module| module == &symbol.module)
+            else {
+                continue;
+            };
+            let Some((generics, associated_types)) = self.parsed.sources[module]
+                .syntax
+                .declarations
+                .iter()
+                .find_map(|declaration| match declaration {
+                    Declaration::Trait(value) if value.name == symbol.name => {
+                        Some((value.generics.clone(), value.associated_types.clone()))
                     }
                     _ => None,
                 })
@@ -3031,83 +4490,131 @@ impl<'a> OwnedLower<'a> {
             };
             let substitutions = generics
                 .iter()
-                .map(|generic| generic.name.clone())
+                .map(|generic| match generic {
+                    ast::GenericParam::Type { name, .. }
+                    | ast::GenericParam::Const { name, .. } => name.clone(),
+                })
                 .zip(args.iter().cloned())
                 .collect::<HashMap<_, _>>();
-            let names = generics
-                .iter()
-                .map(|generic| generic.name.clone())
-                .collect::<HashSet<_>>();
-            for trait_method in trait_methods {
-                let parameters = trait_method
-                    .parameters
-                    .iter()
-                    .map(|parameter| {
-                        (
-                            parameter.name.clone(),
-                            substitute_hir_type(
-                                self.ty(source_module, &parameter.ty, &names),
-                                &substitutions,
-                            ),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let return_type = substitute_hir_type(
-                    self.ty(source_module, &trait_method.return_type, &names),
-                    &substitutions,
-                );
-                if let Some((old_parameters, old_return)) = required.get(&trait_method.name) {
-                    if old_parameters != &parameters || old_return != &return_type {
-                        self.error(
-                            module,
-                            trait_method.span.clone(),
-                            "impl traits have incompatible methods with the same name",
-                        );
-                    }
-                } else {
-                    required.insert(trait_method.name.clone(), (parameters, return_type));
-                }
+            let scope = GenericScope::from_declared(&generics);
+            for associated in associated_types {
+                requirements.push((
+                    symbol.clone(),
+                    associated.name,
+                    associated
+                        .bounds
+                        .iter()
+                        .map(|bound| {
+                            substitute_hir_type(self.ty(module, bound, &scope), &substitutions)
+                        })
+                        .collect(),
+                ));
             }
         }
-        let mut declared = BTreeSet::new();
-        for method in methods {
-            if !declared.insert(method.name.clone()) {
-                self.error(
-                    module,
-                    method.span.clone(),
-                    format!("duplicate impl method `{}`", method.name),
-                );
-            }
-            match required.get(&method.name) {
-                Some((parameters, return_type))
-                    if method.return_type == *return_type
-                        && method
-                            .parameters
-                            .iter()
-                            .map(|parameter| (parameter.name.clone(), parameter.ty.clone()))
-                            .collect::<Vec<_>>()
-                            == *parameters => {}
-                Some(_) => self.error(
-                    module,
-                    method.span.clone(),
-                    "impl method signature must exactly match its trait method",
-                ),
-                None => self.error(
-                    module,
-                    method.span.clone(),
-                    "impl method is not declared by its traits",
-                ),
-            }
+        requirements
+    }
+
+    fn associated_assignment_satisfies(&mut self, value: &HirType, bound: &HirType) -> bool {
+        value == bound
+            || matches!(
+                value,
+                HirType::Named { symbol, .. }
+
+                    if self.declarations.get(symbol) == Some(&OwnedDeclKind::Impl)
+                        && self.declaration_traits(symbol).iter().any(|trait_ref| trait_ref == bound)
+            )
+    }
+    fn resource_state_ref(
+        &mut self,
+        module: usize,
+        path: &ast::QualifiedName,
+    ) -> Option<(SymbolId, SymbolId)> {
+        let (state, resource_path) = path.segments.split_last()?;
+        if resource_path.is_empty() {
+            self.error(
+                module,
+                path.span.clone(),
+                "resource state must be qualified",
+            );
+            return None;
         }
-        for name in required.keys() {
-            if !declared.contains(name) {
-                self.error(
-                    module,
-                    Span::new(0, 0),
-                    format!("impl is missing trait method `{name}`"),
-                );
-            }
+
+        let resource_path = ast::QualifiedName::new(path.span.clone(), resource_path.to_vec());
+        let resource = self.resolve(module, &resource_path, &path.span)?;
+        if self.declarations.get(&resource) != Some(&OwnedDeclKind::Resource) {
+            self.error(
+                module,
+                path.span.clone(),
+                "transition state owner must be a resource",
+            );
+            return None;
         }
+        let source = self
+            .modules
+            .iter()
+            .position(|candidate| candidate == &resource.module)?;
+        let declared = self.parsed.sources[source]
+            .syntax
+            .declarations
+            .iter()
+            .any(|declaration| {
+                matches!(
+                    declaration,
+                    Declaration::Resource(value)
+                        if value.name == resource.name
+                            && value.states.iter().any(|candidate| candidate.name == *state)
+                )
+            });
+        if !declared {
+            self.error(
+                module,
+                path.span.clone(),
+                "transition state must be declared by its resource",
+            );
+            return None;
+        }
+        Some((
+            resource.clone(),
+            SymbolId::new(
+                resource.module.clone(),
+                format!("{}.{}", resource.name, state),
+            ),
+        ))
+    }
+    fn resource_initial_state(&self, resource: &SymbolId) -> Option<SymbolId> {
+        let module = self
+            .modules
+            .iter()
+            .position(|module| module == &resource.module)?;
+        self.parsed.sources[module]
+            .syntax
+            .declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                Declaration::Resource(value) if value.name == resource.name => Some(SymbolId::new(
+                    resource.module.clone(),
+                    format!("{}.{}", resource.name, value.initial.name),
+                )),
+                _ => None,
+            })
+    }
+    fn resource_edge_exists(&self, resource: &SymbolId, from: &SymbolId, to: &SymbolId) -> bool {
+        self.modules
+            .iter()
+            .position(|module| module == &resource.module)
+            .is_some_and(|module| {
+                self.parsed.sources[module].syntax.declarations.iter().any(|declaration| {
+                    matches!(
+                        declaration,
+                        Declaration::Resource(value)
+                            if value.name == resource.name
+                                && value.transitions.iter().any(|edge| {
+                                    from.name == format!("{}.{}", resource.name, edge.from.name)
+                                        && to.name == format!("{}.{}", resource.name, edge.to.name)
+                                })
+                    )
+                })
+            })
     }
 
     fn declaration(
@@ -3127,6 +4634,7 @@ impl<'a> OwnedLower<'a> {
                 })
                 .collect::<Vec<_>>()
         };
+
         match declaration {
             Declaration::ExternalType(value) => HirDeclaration::ExternalType(HirExternalType {
                 id: id_for(&value.name),
@@ -3148,12 +4656,12 @@ impl<'a> OwnedLower<'a> {
                     text: v.text.clone(),
                 }),
                 generics: Vec::new(),
-                target: self.ty(module, &value.target, &HashSet::new()),
+                target: self.ty(module, &value.target, &GenericScope::default()),
                 public: true,
                 source_order: order,
             }),
             Declaration::Newtype(value) => {
-                let carrier = self.ty(module, &value.underlying, &HashSet::new());
+                let carrier = self.ty(module, &value.underlying, &GenericScope::default());
                 let mut env = HashMap::new();
                 env.insert(
                     "self".to_owned(),
@@ -3182,11 +4690,7 @@ impl<'a> OwnedLower<'a> {
                 })
             }
             Declaration::Struct(value) => {
-                let names = value
-                    .generics
-                    .iter()
-                    .map(|v| v.name.clone())
-                    .collect::<HashSet<_>>();
+                let scope = GenericScope::from_declared(&value.generics);
                 HirDeclaration::Struct(HirStruct {
                     id: id_for(&value.name),
                     span: value.span.clone(),
@@ -3200,18 +4704,14 @@ impl<'a> OwnedLower<'a> {
                         .fields
                         .iter()
                         .enumerate()
-                        .map(|(i, v)| self.field(module, v, &names, i))
+                        .map(|(i, v)| self.field(module, v, &scope, i))
                         .collect(),
                     public: true,
                     source_order: order,
                 })
             }
             Declaration::Enum(value) => {
-                let names = value
-                    .generics
-                    .iter()
-                    .map(|v| v.name.clone())
-                    .collect::<HashSet<_>>();
+                let scope = GenericScope::from_declared(&value.generics);
                 let enum_id = id_for(&value.name);
                 HirDeclaration::Enum(HirEnum {
                     id: enum_id.clone(),
@@ -3240,7 +4740,7 @@ impl<'a> OwnedLower<'a> {
                                 .map(|(j, p)| HirField {
                                     span: p.span.clone(),
                                     name: p.name.clone(),
-                                    ty: self.ty(module, &p.ty, &names),
+                                    ty: self.ty(module, &p.ty, &scope),
                                     default: None,
                                     source_order: j,
                                 })
@@ -3253,12 +4753,54 @@ impl<'a> OwnedLower<'a> {
                 })
             }
             Declaration::Trait(value) => {
-                let names = value
-                    .generics
-                    .iter()
-                    .map(|v| v.name.clone())
-                    .collect::<HashSet<_>>();
+                let scope = GenericScope::from_declared(&value.generics);
                 let trait_id = id_for(&value.name);
+                let mut associated_names = BTreeSet::new();
+                let associated_types = value
+                    .associated_types
+                    .iter()
+                    .enumerate()
+                    .map(|(source_order, associated)| {
+                        if !associated_names.insert(associated.name.clone()) {
+                            self.error(
+                                module,
+                                associated.span.clone(),
+                                format!("duplicate associated type `{}`", associated.name),
+                            );
+                        }
+                        let bounds = associated
+                            .bounds
+                            .iter()
+                            .map(|bound| self.ty(module, bound, &scope))
+                            .collect::<Vec<_>>();
+                        for bound in &bounds {
+                            if !matches!(
+                                bound,
+                                HirType::Named { symbol, .. }
+                                    if matches!(
+                                        self.declarations.get(symbol),
+                                        Some(OwnedDeclKind::Trait { .. })
+                                    )
+                            ) {
+                                self.error(
+                                    module,
+                                    associated.span.clone(),
+                                    "associated type bound must be a trait",
+                                );
+                            }
+                        }
+                        HirAssociatedType {
+                            id: SymbolId::new(
+                                trait_id.module.clone(),
+                                format!("{}.{}", trait_id.name, associated.name),
+                            ),
+                            span: associated.span.clone(),
+                            name: associated.name.clone(),
+                            bounds,
+                            source_order,
+                        }
+                    })
+                    .collect::<Vec<_>>();
                 HirDeclaration::Trait(HirTrait {
                     id: trait_id.clone(),
                     span: value.span.clone(),
@@ -3284,14 +4826,22 @@ impl<'a> OwnedLower<'a> {
                                 .parameters
                                 .iter()
                                 .enumerate()
-                                .map(|(j, p)| self.parameter(module, p, &names, j))
+                                .map(|(j, p)| self.parameter(module, p, &scope, j))
                                 .collect(),
-                            return_type: self.ty(module, &method.return_type, &names),
+                            return_type: self.ty(module, &method.return_type, &scope),
                             contract: HirContract::default(),
+                            default: self.default_function(
+                                module,
+                                &trait_id,
+                                method,
+                                &value.generics,
+                                &scope,
+                            ),
                             public: true,
                             source_order: i,
                         })
                         .collect(),
+                    associated_types,
                     public: true,
                     source_order: order,
                 })
@@ -3301,7 +4851,7 @@ impl<'a> OwnedLower<'a> {
                 let traits = value
                     .traits
                     .iter()
-                    .map(|trait_ref| self.ty(module, trait_ref, &HashSet::new()))
+                    .map(|trait_ref| self.ty(module, trait_ref, &GenericScope::default()))
                     .collect::<Vec<_>>();
                 let mut trait_symbols = BTreeSet::new();
                 for (source, trait_ref) in value.traits.iter().zip(&traits) {
@@ -3319,11 +4869,90 @@ impl<'a> OwnedLower<'a> {
                         _ => self.error(module, source.span.clone(), "impl target must be a trait"),
                     }
                 }
+                let requirements = self.associated_requirements(&traits);
+                let mut assigned_names = BTreeSet::new();
+                let associated_types = value
+                    .associated_types
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(source_order, assignment)| {
+                        if !assigned_names.insert(assignment.name.clone()) {
+                            self.error(
+                                module,
+                                assignment.span.clone(),
+                                format!(
+                                    "duplicate associated type assignment `{}`",
+                                    assignment.name
+                                ),
+                            );
+                            return None;
+                        }
+                        let candidates = requirements
+                            .iter()
+                            .filter(|(_, name, _)| name == &assignment.name)
+                            .collect::<Vec<_>>();
+                        if candidates.len() != 1 {
+                            self.error(
+                                module,
+                                assignment.span.clone(),
+                                if candidates.is_empty() {
+                                    format!("unknown associated type `{}`", assignment.name)
+                                } else {
+                                    format!(
+                                        "associated type assignment `{}` is ambiguous",
+                                        assignment.name
+                                    )
+                                },
+                            );
+                            return None;
+                        }
+                        let (trait_id, name, bounds) = candidates[0];
+                        let ty = self.ty(module, &assignment.ty, &GenericScope::default());
+                        if associated_type_contains(&ty, trait_id, name) {
+                            self.error(
+                                module,
+                                assignment.span.clone(),
+                                "associated type assignment must not be cyclic",
+                            );
+                        }
+                        for bound in bounds {
+                            if !self.associated_assignment_satisfies(&ty, bound) {
+                                self.error(
+                                    module,
+                                    assignment.span.clone(),
+                                    "associated type assignment does not satisfy its bound",
+                                );
+                            }
+                        }
+                        Some(HirAssociatedTypeAssignment {
+                            id: SymbolId::new(
+                                id.module.clone(),
+                                format!("{}.{}.{}", id.name, trait_id.name, name),
+                            ),
+                            span: assignment.span.clone(),
+                            trait_id: trait_id.clone(),
+                            name: name.clone(),
+                            ty,
+                            source_order,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                for (trait_id, name, _) in &requirements {
+                    if !associated_types.iter().any(|assignment| {
+                        assignment.trait_id == *trait_id && assignment.name == *name
+                    }) {
+                        self.error(
+                            module,
+                            value.span.clone(),
+                            format!("impl is missing associated type assignment `{}`", name),
+                        );
+                    }
+                }
                 let state = value
                     .state
                     .iter()
                     .enumerate()
-                    .map(|(i, field)| self.field(module, field, &HashSet::new(), i))
+                    .map(|(i, field)| self.field(module, field, &GenericScope::default(), i))
                     .collect::<Vec<_>>();
                 let mut state_names = BTreeSet::new();
                 let mut optional = false;
@@ -3369,7 +4998,15 @@ impl<'a> OwnedLower<'a> {
                     .iter()
                     .enumerate()
                     .map(|(clause_id, invariant)| {
-                        let expression = self.expr(module, &invariant.condition, &self_env);
+                        let (guard, clause_env) = match &invariant.guard {
+                            Some(guard) => {
+                                let (guard, clause_env) =
+                                    self.match_guard(module, guard, &self_env);
+                                (Some(guard), clause_env)
+                            }
+                            None => (None, self_env.clone()),
+                        };
+                        let expression = self.expr(module, &invariant.condition, &clause_env);
                         if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
                             self.error(
                                 module,
@@ -3380,6 +5017,7 @@ impl<'a> OwnedLower<'a> {
                         HirImplInvariant {
                             clause_id: clause_id as u32,
                             span: invariant.span.clone(),
+                            guard,
                             expression,
                         }
                     })
@@ -3391,7 +5029,8 @@ impl<'a> OwnedLower<'a> {
                         .iter()
                         .enumerate()
                         .map(|(i, parameter)| {
-                            let parameter = self.parameter(module, parameter, &HashSet::new(), i);
+                            let parameter =
+                                self.parameter(module, parameter, &GenericScope::default(), i);
                             env.insert(
                                 parameter.name.clone(),
                                 (
@@ -3480,7 +5119,7 @@ impl<'a> OwnedLower<'a> {
                             .enumerate()
                             .map(|(i, parameter)| {
                                 let parameter =
-                                    self.parameter(module, parameter, &HashSet::new(), i);
+                                    self.parameter(module, parameter, &GenericScope::default(), i);
                                 env.insert(
                                     parameter.name.clone(),
                                     (
@@ -3492,7 +5131,106 @@ impl<'a> OwnedLower<'a> {
                                 parameter
                             })
                             .collect::<Vec<_>>();
-                        let return_type = self.ty(module, &method.return_type, &HashSet::new());
+                        let mut resource_transitions = Vec::new();
+                        for (index, clause) in method.clauses.iter().enumerate() {
+                            let ClauseKind::Transitions {
+                                transitions: declared_transitions,
+                            } = &clause.kind
+                            else {
+                                continue;
+                            };
+                            if method.clauses[..index].iter().any(|clause| {
+                                !matches!(
+                                    &clause.kind,
+                                    ClauseKind::Documentation(_) | ClauseKind::Requires { .. }
+                                )
+                            }) {
+                                self.error(
+                                    module,
+                                    clause.span.clone(),
+                                    "transitions clause must follow requires clauses",
+                                );
+                            }
+                            for transition in declared_transitions {
+                                let field = &transition.field;
+                                if let Some(state) =
+                                    state.iter().find(|state| state.name == field.name)
+                                {
+                                    let HirType::Named {
+                                        symbol: resource,
+                                        args,
+                                    } = &state.ty
+                                    else {
+                                        self.error(
+                                            module,
+                                            field.span.clone(),
+                                            "transitions field must be a resource state field",
+                                        );
+                                        continue;
+                                    };
+                                    if !args.is_empty()
+                                        || self.declarations.get(resource)
+                                            != Some(&OwnedDeclKind::Resource)
+                                    {
+                                        self.error(
+                                            module,
+                                            field.span.clone(),
+                                            "transitions field must be a resource state field",
+                                        );
+                                        continue;
+                                    }
+                                    let (from_resource, from_state) = self
+                                        .resource_state_ref(module, &transition.from)
+                                        .unwrap_or_else(|| {
+                                            (
+                                                resource.clone(),
+                                                SymbolId::new(resource.module.clone(), "invalid"),
+                                            )
+                                        });
+                                    let (to_resource, to_state) = self
+                                        .resource_state_ref(module, &transition.to)
+                                        .unwrap_or_else(|| {
+                                            (
+                                                resource.clone(),
+                                                SymbolId::new(resource.module.clone(), "invalid"),
+                                            )
+                                        });
+                                    if &from_resource != resource || &to_resource != resource {
+                                        self.error(
+                                            module,
+                                            transition.span.clone(),
+                                            "transition states must belong to the field resource",
+                                        );
+                                    }
+                                    if !self.resource_edge_exists(resource, &from_state, &to_state)
+                                    {
+                                        self.error(
+                                            module,
+                                            transition.span.clone(),
+                                            "transition must match a declared resource edge",
+                                        );
+                                    }
+                                    resource_transitions.push(HirResourceTransition {
+                                        span: transition.span.clone(),
+                                        field: SymbolId::new(
+                                            id.module.clone(),
+                                            format!("{}.{}", id.name, field.name),
+                                        ),
+                                        resource: resource.clone(),
+                                        from: from_state,
+                                        to: to_state,
+                                    });
+                                } else {
+                                    self.error(
+                                        module,
+                                        field.span.clone(),
+                                        "transitions field must be impl state",
+                                    );
+                                }
+                            }
+                        }
+                        let return_type =
+                            self.ty(module, &method.return_type, &GenericScope::default());
                         let old_fields = state
                             .iter()
                             .map(|field| {
@@ -3552,6 +5290,35 @@ impl<'a> OwnedLower<'a> {
                                 }
                             }
                         }
+                        for field in &modifies {
+                            if state
+                                .iter()
+                                .find(|state| field.name == format!("{}.{}", id.name, state.name))
+                                .is_some_and(|state| {
+                                    matches!(
+                                        &state.ty,
+                                        HirType::Named { symbol, .. }
+                                            if self.declarations.get(symbol)
+                                                == Some(&OwnedDeclKind::Resource)
+                                    )
+                                })
+                            {
+                                self.error(
+                                    module,
+                                    method.span.clone(),
+                                    "resource state fields must use transitions, not modifies",
+                                );
+                            }
+                        }
+                        for transition in &resource_transitions {
+                            if modifies.contains(&transition.field) {
+                                self.error(
+                                    module,
+                                    transition.span.clone(),
+                                    "transitions field cannot overlap modifies",
+                                );
+                            }
+                        }
                         HirImplMethod {
                             id: SymbolId::new(
                                 id.module.clone(),
@@ -3566,10 +5333,18 @@ impl<'a> OwnedLower<'a> {
                             contract,
                             modifies,
                             source_order,
+                            transitions: resource_transitions,
                         }
                     })
                     .collect::<Vec<_>>();
-                self.validate_impl_methods(module, &traits, &methods);
+                let selected_methods = self.validate_impl_methods(
+                    module,
+                    &id,
+                    &value.span,
+                    &traits,
+                    &associated_types,
+                    &methods,
+                );
                 HirDeclaration::Impl(HirImpl {
                     id,
                     span: value.span.clone(),
@@ -3579,13 +5354,155 @@ impl<'a> OwnedLower<'a> {
                     invariants,
                     initializer,
                     methods,
+                    associated_types,
+                    selected_methods,
+                    public: true,
+                    source_order: order,
+                })
+            }
+            Declaration::Resource(value) => {
+                let id = id_for(&value.name);
+                let mut names = BTreeMap::new();
+                let terminal_names = value
+                    .terminals
+                    .iter()
+                    .map(|terminal| terminal.name.clone())
+                    .collect::<BTreeSet<_>>();
+                let states = value
+                    .states
+                    .iter()
+                    .enumerate()
+                    .map(|(source_order, state)| {
+                        let state_id =
+                            SymbolId::new(id.module.clone(), format!("{}.{}", id.name, state.name));
+                        if names.insert(state.name.clone(), state_id.clone()).is_some() {
+                            self.error(
+                                module,
+                                state.span.clone(),
+                                format!("duplicate resource state `{}`", state.name),
+                            );
+                        }
+                        HirResourceState {
+                            id: state_id,
+                            span: state.span.clone(),
+                            name: state.name.clone(),
+                            terminal: terminal_names.contains(&state.name),
+                            source_order,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let initial = names.get(&value.initial.name).cloned().unwrap_or_else(|| {
+                    self.error(
+                        module,
+                        value.initial.span.clone(),
+                        "resource initial state must be declared",
+                    );
+                    SymbolId::new(id.module.clone(), format!("{}.invalid", id.name))
+                });
+                let mut terminal_states = BTreeSet::new();
+                let mut terminals = Vec::new();
+                for (source_order, terminal) in value.terminals.iter().enumerate() {
+                    if !terminal_states.insert(terminal.name.clone()) {
+                        self.error(
+                            module,
+                            terminal.span.clone(),
+                            "duplicate resource terminal state",
+                        );
+                    }
+                    let Some(state) = names.get(&terminal.name).cloned() else {
+                        self.error(
+                            module,
+                            terminal.span.clone(),
+                            "resource terminal state must be declared",
+                        );
+                        continue;
+                    };
+                    terminals.push(HirResourceTerminal {
+                        state,
+                        span: terminal.span.clone(),
+                        source_order,
+                    });
+                }
+                if terminal_states.is_empty() {
+                    self.error(
+                        module,
+                        value.span.clone(),
+                        "resource must declare at least one terminal state",
+                    );
+                }
+                let mut edge_names = BTreeSet::new();
+                let mut edges = Vec::new();
+                for (source_order, edge) in value.transitions.iter().enumerate() {
+                    let Some(from) = names.get(&edge.from.name).cloned() else {
+                        self.error(
+                            module,
+                            edge.from.span.clone(),
+                            "resource edge state must be declared",
+                        );
+                        continue;
+                    };
+                    let Some(to) = names.get(&edge.to.name).cloned() else {
+                        self.error(
+                            module,
+                            edge.to.span.clone(),
+                            "resource edge state must be declared",
+                        );
+                        continue;
+                    };
+                    if !edge_names.insert((from.clone(), to.clone())) {
+                        self.error(module, edge.span.clone(), "duplicate resource edge");
+                        continue;
+                    }
+                    edges.push(HirResourceEdge {
+                        span: edge.span.clone(),
+                        from,
+                        to,
+                        source_order,
+                    });
+                }
+                let reachable = resource_reachable(&initial, &edges);
+                for state in &states {
+                    if !reachable.contains(&state.id) {
+                        self.error(
+                            module,
+                            state.span.clone(),
+                            "resource state must be reachable from its initial state",
+                        );
+                    }
+                    let has_outgoing = edges.iter().any(|edge| edge.from == state.id);
+                    if state.terminal && has_outgoing {
+                        self.error(
+                            module,
+                            state.span.clone(),
+                            "resource terminal state cannot have outgoing edges",
+                        );
+                    } else if !state.terminal && !has_outgoing {
+                        self.error(
+                            module,
+                            state.span.clone(),
+                            "resource non-terminal state must have an outgoing edge",
+                        );
+                    }
+                }
+                HirDeclaration::Resource(HirResource {
+                    id,
+                    span: value.span.clone(),
+                    annotations: lower_annotations(&value.annotations),
+                    doc: value.doc.as_ref().map(|doc| HirDoc {
+                        span: doc.span.clone(),
+                        text: doc.text.clone(),
+                    }),
+                    initial,
+                    states,
+                    terminals,
+                    edges,
                     public: true,
                     source_order: order,
                 })
             }
             Declaration::Const(value) => {
                 let id = id_for(&value.name);
-                let ty = self.ty(module, &value.ty, &HashSet::new());
+                let ty = self.ty(module, &value.ty, &GenericScope::default());
                 let constant_value = self.constant_value(&id).unwrap_or(HirValue::Unit);
                 HirDeclaration::Const(HirConst {
                     id,
@@ -3603,13 +5520,9 @@ impl<'a> OwnedLower<'a> {
             }
             Declaration::Rule(value) => {
                 let id = id_for(&value.name);
-                let generic_names = value
-                    .generics
-                    .iter()
-                    .map(|v| v.name.clone())
-                    .collect::<HashSet<_>>();
+                let generic_scope = GenericScope::from_declared(&value.generics);
                 let (base_symbol, base_type) = if let Some(base_ty) = &value.base {
-                    let hir_base_type = self.ty(module, base_ty, &generic_names);
+                    let hir_base_type = self.ty(module, base_ty, &generic_scope);
                     let base_sym = self.resolve(module, &base_ty.path, &base_ty.span);
                     if let Some(ref sym) = base_sym {
                         if !matches!(self.declarations.get(sym), Some(OwnedDeclKind::Rule { .. })) {
@@ -3671,39 +5584,14 @@ impl<'a> OwnedLower<'a> {
                                 }
                             }
                         }
-                        ClauseKind::Requires { condition } => {
+                        ClauseKind::Requires { guard, condition } => {
                             let env = HashMap::new();
-                            let expression = self.expr(module, condition, &env);
-                            if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
-                                self.error(
-                                    module,
-                                    condition.span.clone(),
-                                    "contract condition must be boolean",
-                                );
-                            }
-                            declared_clauses.push(HirRuleClause {
-                                clause_id: clause_id as u32,
-                                span: clause.span.clone(),
-                                action,
-                                kind: HirClauseKind::Requires { expression },
-                            });
-                        }
-                        ClauseKind::Ensures { pattern, condition } => {
-                            let mut env = HashMap::new();
-                            let pattern = if let Some(pattern) = pattern {
-                                let expected =
-                                    self.infer_rule_pattern_type(module, pattern, &generic_names);
-                                Some(self.pattern(module, pattern, &expected, &mut env))
-                            } else {
-                                env.insert(
-                                    "result".to_owned(),
-                                    (
-                                        SymbolId::new(self.modules[module].clone(), "result"),
-                                        HirType::Primitive(PrimitiveType::Unit),
-                                        false,
-                                    ),
-                                );
-                                None
+                            let (guard, env) = match guard {
+                                Some(guard) => {
+                                    let (guard, env) = self.match_guard(module, guard, &env);
+                                    (Some(guard), env)
+                                }
+                                None => (None, env),
                             };
                             let expression = self.expr(module, condition, &env);
                             if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
@@ -3717,15 +5605,67 @@ impl<'a> OwnedLower<'a> {
                                 clause_id: clause_id as u32,
                                 span: clause.span.clone(),
                                 action,
-                                kind: HirClauseKind::Ensures {
-                                    pattern,
-                                    expression,
-                                },
+                                kind: HirClauseKind::Requires { guard, expression },
                             });
                         }
-                        ClauseKind::Error { error, when } => {
+                        ClauseKind::Ensures { guard, condition } => {
+                            let mut env = HashMap::new();
+                            let result_type = guard
+                                .as_ref()
+                                .filter(|guard| {
+                                    matches!(
+                                        &guard.scrutinee.kind,
+                                        ExprKind::Name(path) if path.segments.as_slice() == ["result"]
+                                    )
+                                })
+                                .map(|guard| {
+                                    self.infer_rule_pattern_type(
+                                        module,
+                                        &guard.pattern,
+                                        &generic_scope.types,
+                                    )
+                                })
+                                .unwrap_or(HirType::Primitive(PrimitiveType::Unit));
+                            env.insert(
+                                "result".to_owned(),
+                                (
+                                    SymbolId::new(self.modules[module].clone(), "result"),
+                                    result_type,
+                                    false,
+                                ),
+                            );
+                            let (guard, env) = match guard {
+                                Some(guard) => {
+                                    let (guard, env) = self.match_guard(module, guard, &env);
+                                    (Some(guard), env)
+                                }
+                                None => (None, env),
+                            };
+                            let expression = self.expr(module, condition, &env);
+                            if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
+                                self.error(
+                                    module,
+                                    condition.span.clone(),
+                                    "contract condition must be boolean",
+                                );
+                            }
+                            declared_clauses.push(HirRuleClause {
+                                clause_id: clause_id as u32,
+                                span: clause.span.clone(),
+                                action,
+                                kind: HirClauseKind::Ensures { guard, expression },
+                            });
+                        }
+                        ClauseKind::Error { error, guard, when } => {
                             let resolved = self.error_variant(module, error);
                             let env = HashMap::new();
+                            let (guard, env) = match guard {
+                                Some(guard) => {
+                                    let (guard, env) = self.match_guard(module, guard, &env);
+                                    (Some(guard), env)
+                                }
+                                None => (None, env),
+                            };
                             let when = when.as_ref().map(|value| {
                                 let expression = self.expr(module, value, &env);
                                 if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
@@ -3752,11 +5692,12 @@ impl<'a> OwnedLower<'a> {
                                 kind: HirClauseKind::Error {
                                     variant,
                                     priority: None,
+                                    guard,
                                     when,
                                 },
                             });
                         }
-                        ClauseKind::Modifies { .. } => {}
+                        ClauseKind::Modifies { .. } | ClauseKind::Transitions { .. } => {}
                         ClauseKind::Effects { .. } => {}
                     }
                 }
@@ -3827,11 +5768,7 @@ impl<'a> OwnedLower<'a> {
                 HirDeclaration::Rule(hir_rule)
             }
             Declaration::Function(value) => {
-                let names = value
-                    .generics
-                    .iter()
-                    .map(|v| v.name.clone())
-                    .collect::<HashSet<_>>();
+                let scope = GenericScope::from_declared(&value.generics);
                 let id = id_for(&value.name);
                 let mut env = HashMap::new();
                 let parameters = value
@@ -3839,7 +5776,7 @@ impl<'a> OwnedLower<'a> {
                     .iter()
                     .enumerate()
                     .map(|(i, p)| {
-                        let parameter = self.parameter(module, p, &names, i);
+                        let parameter = self.parameter(module, p, &scope, i);
                         env.insert(
                             p.name.clone(),
                             (
@@ -3851,7 +5788,25 @@ impl<'a> OwnedLower<'a> {
                         parameter
                     })
                     .collect::<Vec<_>>();
-                let return_type = self.ty(module, &value.return_type, &names);
+                let return_type = self.ty(module, &value.return_type, &scope);
+                let callable_kind = match value.callable_kind {
+                    ast::CallableKind::Sync => HirCallableKind::Sync,
+                    ast::CallableKind::Async => HirCallableKind::Async,
+                };
+                if callable_kind == HirCallableKind::Async
+                    && matches!(
+                        &return_type,
+                        HirType::Iterator { .. }
+                            | HirType::Generator { .. }
+                            | HirType::Primitive(PrimitiveType::Never)
+                    )
+                {
+                    self.error(
+                        module,
+                        value.return_type.span.clone(),
+                        "async function cannot return Iterator, Generator, or Never",
+                    );
+                }
                 let clauses: &[ast::Clause] = match &value.body {
                     FunctionBody::Clauses { clauses, .. } => clauses,
                     FunctionBody::Signature { .. } => &[],
@@ -3866,6 +5821,7 @@ impl<'a> OwnedLower<'a> {
                     generics: self.generics(module, &value.generics),
                     parameters,
                     return_type,
+                    callable_kind,
                     contract,
                     body: None,
                     public: true,
@@ -3909,22 +5865,168 @@ impl<'a> OwnedLower<'a> {
         }
     }
 }
+fn substitute_associated_type(ty: HirType, assignments: &[HirAssociatedTypeAssignment]) -> HirType {
+    match ty {
+        HirType::AssociatedProjection {
+            base,
+            trait_id,
+            name,
+        } => assignments
+            .iter()
+            .find(|assignment| assignment.trait_id == trait_id && assignment.name == name)
+            .map(|assignment| assignment.ty.clone())
+            .unwrap_or(HirType::AssociatedProjection {
+                base: Box::new(substitute_associated_type(*base, assignments)),
+                trait_id,
+                name,
+            }),
+        HirType::Named { symbol, args } => HirType::Named {
+            symbol,
+            args: args
+                .into_iter()
+                .map(|arg| match arg {
+                    HirGenericArg::Type(value) => {
+                        HirGenericArg::Type(substitute_associated_type(value, assignments))
+                    }
+                    value => value,
+                })
+                .collect(),
+        },
+        HirType::List { item } => HirType::List {
+            item: Box::new(substitute_associated_type(*item, assignments)),
+        },
+        HirType::Set { item } => HirType::Set {
+            item: Box::new(substitute_associated_type(*item, assignments)),
+        },
+        HirType::Map { key, value } => HirType::Map {
+            key: Box::new(substitute_associated_type(*key, assignments)),
+            value: Box::new(substitute_associated_type(*value, assignments)),
+        },
+        HirType::Tuple { items } => HirType::Tuple {
+            items: items
+                .into_iter()
+                .map(|item| substitute_associated_type(item, assignments))
+                .collect(),
+        },
+        HirType::Array { item, length } => HirType::Array {
+            item: Box::new(substitute_associated_type(*item, assignments)),
+            length,
+        },
+        HirType::Option { item } => HirType::Option {
+            item: Box::new(substitute_associated_type(*item, assignments)),
+        },
+        HirType::Iterator { item } => HirType::Iterator {
+            item: Box::new(substitute_associated_type(*item, assignments)),
+        },
+        HirType::Generator {
+            yield_type,
+            send_type,
+            return_type,
+        } => HirType::Generator {
+            yield_type: Box::new(substitute_associated_type(*yield_type, assignments)),
+            send_type: Box::new(substitute_associated_type(*send_type, assignments)),
+            return_type: Box::new(substitute_associated_type(*return_type, assignments)),
+        },
+        HirType::Factory { instance } => HirType::Factory {
+            instance: Box::new(substitute_associated_type(*instance, assignments)),
+        },
+        HirType::Result { ok, error } => HirType::Result {
+            ok: Box::new(substitute_associated_type(*ok, assignments)),
+            error: Box::new(substitute_associated_type(*error, assignments)),
+        },
+        value => value,
+    }
+}
+
+fn associated_type_contains(ty: &HirType, trait_id: &SymbolId, name: &str) -> bool {
+    match ty {
+        HirType::AssociatedProjection {
+            base,
+            trait_id: candidate,
+            name: candidate_name,
+        } => {
+            (candidate == trait_id && candidate_name == name)
+                || associated_type_contains(base, trait_id, name)
+        }
+        HirType::Named { args, .. } => args.iter().any(|argument| {
+            matches!(argument, HirGenericArg::Type(ty) if associated_type_contains(ty, trait_id, name))
+        }),
+        HirType::List { item }
+        | HirType::Set { item }
+        | HirType::Option { item }
+        | HirType::Iterator { item }
+        | HirType::Factory { instance: item } => associated_type_contains(item, trait_id, name),
+        HirType::Map { key, value } => {
+            associated_type_contains(key, trait_id, name)
+                || associated_type_contains(value, trait_id, name)
+        }
+        HirType::Tuple { items } => items
+            .iter()
+            .any(|item| associated_type_contains(item, trait_id, name)),
+        HirType::Array { item, .. } => associated_type_contains(item, trait_id, name),
+        HirType::Result { ok, error } => {
+            associated_type_contains(ok, trait_id, name)
+                || associated_type_contains(error, trait_id, name)
+        }
+        HirType::Generator {
+            yield_type,
+            send_type,
+            return_type,
+        } => {
+            associated_type_contains(yield_type, trait_id, name)
+                || associated_type_contains(send_type, trait_id, name)
+                || associated_type_contains(return_type, trait_id, name)
+        }
+        HirType::Primitive(_) | HirType::TypeParameter { .. } | HirType::Buffer { .. } | HirType::Opaque { .. } => false,
+    }
+}
+
+fn resource_reachable(initial: &SymbolId, edges: &[HirResourceEdge]) -> BTreeSet<SymbolId> {
+    let mut reachable = BTreeSet::from([initial.clone()]);
+    let mut pending = vec![initial.clone()];
+    while let Some(state) = pending.pop() {
+        for edge in edges.iter().filter(|edge| edge.from == state) {
+            if reachable.insert(edge.to.clone()) {
+                pending.push(edge.to.clone());
+            }
+        }
+    }
+    reachable
+}
 
 fn clauses_match(a: &HirClauseKind, b: &HirClauseKind) -> bool {
     match (a, b) {
-        (HirClauseKind::Requires { .. }, HirClauseKind::Requires { .. }) => true,
         (
-            HirClauseKind::Ensures { pattern: pat_a, .. },
-            HirClauseKind::Ensures { pattern: pat_b, .. },
-        ) => match (pat_a, pat_b) {
-            (Some(pa), Some(pb)) => patterns_match(pa, pb),
-            (None, None) => true,
-            _ => true,
-        },
+            HirClauseKind::Requires { guard: guard_a, .. },
+            HirClauseKind::Requires { guard: guard_b, .. },
+        )
+        | (
+            HirClauseKind::Ensures { guard: guard_a, .. },
+            HirClauseKind::Ensures { guard: guard_b, .. },
+        ) => guards_match(guard_a.as_ref(), guard_b.as_ref()),
         (
-            HirClauseKind::Error { variant: var_a, .. },
-            HirClauseKind::Error { variant: var_b, .. },
-        ) => var_a == var_b || var_a.name == var_b.name,
+            HirClauseKind::Error {
+                variant: var_a,
+                guard: guard_a,
+                ..
+            },
+            HirClauseKind::Error {
+                variant: var_b,
+                guard: guard_b,
+                ..
+            },
+        ) => {
+            (var_a == var_b || var_a.name == var_b.name)
+                && guards_match(guard_a.as_ref(), guard_b.as_ref())
+        }
+        _ => false,
+    }
+}
+
+fn guards_match(a: Option<&HirMatchGuard>, b: Option<&HirMatchGuard>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => patterns_match(&a.pattern, &b.pattern),
+        (None, None) => true,
         _ => false,
     }
 }
@@ -3957,17 +6059,33 @@ fn patterns_match(a: &HirPattern, b: &HirPattern) -> bool {
     }
 }
 
-fn substitute_hir_type(ty: HirType, substitutions: &HashMap<String, HirType>) -> HirType {
+fn substitute_hir_type(ty: HirType, substitutions: &HashMap<String, HirGenericArg>) -> HirType {
     match ty {
-        HirType::TypeParameter { name } => substitutions
-            .get(&name)
-            .cloned()
-            .unwrap_or(HirType::TypeParameter { name }),
+        HirType::TypeParameter { name } => match substitutions.get(&name) {
+            Some(HirGenericArg::Type(value)) => value.clone(),
+            _ => HirType::TypeParameter { name },
+        },
+        HirType::AssociatedProjection {
+            base,
+            trait_id,
+            name,
+        } => HirType::AssociatedProjection {
+            base: Box::new(substitute_hir_type(*base, substitutions)),
+            trait_id,
+            name,
+        },
         HirType::Named { symbol, args } => HirType::Named {
             symbol,
             args: args
                 .into_iter()
-                .map(|arg| substitute_hir_type(arg, substitutions))
+                .map(|arg| match arg {
+                    HirGenericArg::Type(value) => {
+                        HirGenericArg::Type(substitute_hir_type(value, substitutions))
+                    }
+                    HirGenericArg::Const(value) => {
+                        HirGenericArg::Const(substitute_const_argument(value, substitutions))
+                    }
+                })
                 .collect(),
         },
         HirType::List { item } => HirType::List {
@@ -3980,9 +6098,18 @@ fn substitute_hir_type(ty: HirType, substitutions: &HashMap<String, HirType>) ->
             key: Box::new(substitute_hir_type(*key, substitutions)),
             value: Box::new(substitute_hir_type(*value, substitutions)),
         },
-        HirType::Tuple2 { first, second } => HirType::Tuple2 {
-            first: Box::new(substitute_hir_type(*first, substitutions)),
-            second: Box::new(substitute_hir_type(*second, substitutions)),
+        HirType::Tuple { items } => HirType::Tuple {
+            items: items
+                .into_iter()
+                .map(|item| substitute_hir_type(item, substitutions))
+                .collect(),
+        },
+        HirType::Array { item, length } => HirType::Array {
+            item: Box::new(substitute_hir_type(*item, substitutions)),
+            length: substitute_const_argument(length, substitutions),
+        },
+        HirType::Buffer { length } => HirType::Buffer {
+            length: substitute_const_argument(length, substitutions),
         },
         HirType::Option { item } => HirType::Option {
             item: Box::new(substitute_hir_type(*item, substitutions)),
@@ -4007,6 +6134,33 @@ fn substitute_hir_type(ty: HirType, substitutions: &HashMap<String, HirType>) ->
             error: Box::new(substitute_hir_type(*error, substitutions)),
         },
         other => other,
+    }
+}
+
+fn substitute_const_argument(
+    value: HirConstArgument,
+    substitutions: &HashMap<String, HirGenericArg>,
+) -> HirConstArgument {
+    match value {
+        HirConstArgument::Parameter { name, ty } => substitutions
+            .get(&name)
+            .and_then(|value| match value {
+                HirGenericArg::Const(value) => Some(value.clone()),
+                HirGenericArg::Type(_) => None,
+            })
+            .unwrap_or(HirConstArgument::Parameter { name, ty }),
+        HirConstArgument::Binary {
+            op,
+            left,
+            right,
+            ty,
+        } => HirConstArgument::Binary {
+            op,
+            left: Box::new(substitute_const_argument(*left, substitutions)),
+            right: Box::new(substitute_const_argument(*right, substitutions)),
+            ty,
+        },
+        value => value,
     }
 }
 
@@ -4056,16 +6210,28 @@ fn owned_module_path(root: &Path, source: &Path) -> Result<Vec<String>, String> 
 fn owned_type_paths(value: &ast::Type, out: &mut Vec<ast::QualifiedName>) {
     out.push(value.path.clone());
     for argument in &value.arguments {
-        if let TypeArgKind::Type(inner) = &argument.kind {
-            owned_type_paths(inner, out);
+        match &argument.kind {
+            GenericArgKind::Type(inner) => owned_type_paths(inner, out),
+            GenericArgKind::Const(value) => {
+                owned_visit_const_expr(value, &mut |path| out.push(path.clone()))
+            }
+            GenericArgKind::Ambiguous { ty, value } => {
+                owned_type_paths(ty, out);
+                owned_visit_const_expr(value, &mut |path| out.push(path.clone()));
+            }
         }
     }
 }
 fn owned_visit_type<F: FnMut(&ast::QualifiedName)>(value: &ast::Type, visit: &mut F) {
     visit(&value.path);
     for argument in &value.arguments {
-        if let TypeArgKind::Type(inner) = &argument.kind {
-            owned_visit_type(inner, visit);
+        match &argument.kind {
+            GenericArgKind::Type(inner) => owned_visit_type(inner, visit),
+            GenericArgKind::Const(value) => owned_visit_const_expr(value, visit),
+            GenericArgKind::Ambiguous { ty, value } => {
+                owned_visit_type(ty, visit);
+                owned_visit_const_expr(value, visit);
+            }
         }
     }
 }
@@ -4105,25 +6271,39 @@ fn owned_visit_const_expr<F: FnMut(&ast::QualifiedName)>(value: &ast::ConstExpr,
             visit(path);
             owned_visit_const_expr(argument, visit);
         }
+        ast::ConstExpr::Tuple { values, .. } | ast::ConstExpr::Array { values, .. } => {
+            for value in values {
+                owned_visit_const_expr(value, visit);
+            }
+        }
+        ast::ConstExpr::Buffer { .. } => {}
     }
+}
+fn owned_visit_match_guard<F: FnMut(&ast::QualifiedName)>(value: &ast::MatchGuard, visit: &mut F) {
+    owned_visit_expr(&value.scrutinee, visit);
+    owned_visit_pattern(&value.pattern, visit);
 }
 fn owned_visit_clause_kind<F: FnMut(&ast::QualifiedName)>(kind: &ast::ClauseKind, visit: &mut F) {
     match kind {
-        ast::ClauseKind::Requires { condition } => owned_visit_expr(condition, visit),
-        ast::ClauseKind::Ensures { pattern, condition } => {
-            if let Some(pattern) = pattern {
-                owned_visit_pattern(pattern, visit);
+        ast::ClauseKind::Requires { guard, condition }
+        | ast::ClauseKind::Ensures { guard, condition } => {
+            if let Some(guard) = guard {
+                owned_visit_match_guard(guard, visit);
             }
             owned_visit_expr(condition, visit);
         }
-        ast::ClauseKind::Error { error, when } => {
+        ast::ClauseKind::Error { error, guard, when } => {
             visit(error);
+            if let Some(guard) = guard {
+                owned_visit_match_guard(guard, visit);
+            }
             if let Some(when) = when {
                 owned_visit_expr(when, visit);
             }
         }
         ast::ClauseKind::Rule { name } => visit(name),
         ast::ClauseKind::Modifies { .. }
+        | ast::ClauseKind::Transitions { .. }
         | ast::ClauseKind::Effects { .. }
         | ast::ClauseKind::Documentation(_) => {}
     }
@@ -4163,16 +6343,27 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
             }
         }
         Declaration::Trait(value) => {
+            for associated in &value.associated_types {
+                for bound in &associated.bounds {
+                    owned_visit_type(bound, &mut visit);
+                }
+            }
             for method in &value.methods {
                 for parameter in &method.parameters {
                     owned_visit_parameter(parameter, &mut visit);
                 }
                 owned_visit_type(&method.return_type, &mut visit);
+                if let Some(default) = &method.default {
+                    visit(default);
+                }
             }
         }
         Declaration::Impl(value) => {
             for trait_ref in &value.traits {
                 owned_visit_type(trait_ref, &mut visit);
+            }
+            for associated in &value.associated_types {
+                owned_visit_type(&associated.ty, &mut visit);
             }
             for field in &value.state {
                 owned_visit_type(&field.ty, &mut visit);
@@ -4181,6 +6372,9 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
                 }
             }
             for invariant in &value.invariants {
+                if let Some(guard) = &invariant.guard {
+                    owned_visit_match_guard(guard, &mut visit);
+                }
                 owned_visit_expr(&invariant.condition, &mut visit);
             }
             if let Some(init) = &value.initializer {
@@ -4201,6 +6395,7 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
                 }
             }
         }
+        Declaration::Resource(_) => {}
         Declaration::Const(value) => {
             owned_visit_type(&value.ty, &mut visit);
             owned_visit_const_expr(&value.value, &mut visit);
@@ -4298,6 +6493,7 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
                 Declaration::Trait(value) => (&value.name, true),
                 Declaration::Impl(value) => (&value.name, true),
                 Declaration::Rule(value) => (&value.name, true),
+                Declaration::Resource(value) => (&value.name, true),
                 Declaration::Const(value) => (&value.name, false),
                 Declaration::Function(value) => (&value.name, false),
             };
@@ -4322,6 +6518,8 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
                         | "Set"
                         | "Map"
                         | "Tuple"
+                        | "Array"
+                        | "Buffer"
                         | "Option"
                         | "Result"
                         | "Factory"
@@ -4346,10 +6544,14 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
             if let Some(generics) = generics {
                 let mut names = BTreeSet::new();
                 for generic in generics {
-                    if !names.insert(&generic.name) {
+                    let (span, name) = match generic {
+                        ast::GenericParam::Type { span, name, .. }
+                        | ast::GenericParam::Const { span, name, .. } => (span, name),
+                    };
+                    if !names.insert(name) {
                         report(
-                            generic.span.clone(),
-                            format!("duplicate generic parameter `{}`", generic.name),
+                            span.clone(),
+                            format!("duplicate generic parameter `{name}`"),
                         );
                     }
                 }
@@ -4563,6 +6765,7 @@ fn owned_preflight(
                 Declaration::Trait(v) => &v.name,
                 Declaration::Impl(v) => &v.name,
                 Declaration::Rule(v) => &v.name,
+                Declaration::Resource(v) => &v.name,
                 Declaration::Const(v) => &v.name,
                 Declaration::Function(v) => &v.name,
             };
@@ -4613,6 +6816,7 @@ fn owned_preflight(
                             }))
                             .collect(),
                     ),
+                    Declaration::Resource(v) => (&v.name, Vec::new()),
                     Declaration::Rule(v) => (&v.name, v.base.as_ref().into_iter().collect()),
                     _ => continue,
                 };
@@ -4836,16 +7040,16 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
                 | PrimitiveType::Bytes
                 | PrimitiveType::Path,
             ) => true,
-            HirType::Tuple2 { first, second } => {
-                stable(first, modules, visiting) && stable(second, modules, visiting)
-            }
+            HirType::Tuple { items } => items.iter().all(|item| stable(item, modules, visiting)),
+            HirType::Array { item, .. } => stable(item, modules, visiting),
+            HirType::Buffer { .. } => true,
             HirType::Named { symbol, args } if visiting.insert(symbol.clone()) => {
                 let result = match declaration(modules, symbol) {
                     Some(HirDeclaration::Newtype(value)) => {
                         let substitutions = value
                             .generics
                             .iter()
-                            .map(|generic| generic.name.clone())
+                            .map(|generic| generic.name().to_owned())
                             .zip(args.iter().cloned())
                             .collect::<HashMap<_, _>>();
                         stable(
@@ -4905,10 +7109,13 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
             HirType::List { item } | HirType::Option { item } | HirType::Iterator { item } => {
                 visit(item, modules, path, span, errors);
             }
-            HirType::Tuple2 { first, second } => {
-                visit(first, modules, path, span, errors);
-                visit(second, modules, path, span, errors);
+            HirType::Tuple { items } => {
+                for item in items {
+                    visit(item, modules, path, span, errors);
+                }
             }
+            HirType::Array { item, .. } => visit(item, modules, path, span, errors),
+            HirType::Buffer { .. } => {}
             HirType::Generator {
                 yield_type,
                 send_type,
@@ -4922,9 +7129,14 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
                 visit(ok, modules, path, span, errors);
                 visit(error, modules, path, span, errors);
             }
+            HirType::AssociatedProjection { base, .. } => {
+                visit(base, modules, path, span, errors);
+            }
             HirType::Named { args, .. } => {
                 for argument in args {
-                    visit(argument, modules, path, span, errors);
+                    if let HirGenericArg::Type(argument) = argument {
+                        visit(argument, modules, path, span, errors);
+                    }
                 }
             }
             _ => {}
@@ -4956,6 +7168,9 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
                         types.extend(method.parameters.iter().map(|parameter| &parameter.ty));
                         types.push(&method.return_type);
                     }
+                    for associated in &value.associated_types {
+                        types.extend(&associated.bounds);
+                    }
                 }
                 HirDeclaration::Impl(value) => {
                     types.extend(value.traits.iter());
@@ -4967,6 +7182,12 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
                         types.extend(method.parameters.iter().map(|parameter| &parameter.ty));
                         types.push(&method.return_type);
                     }
+                    types.extend(
+                        value
+                            .associated_types
+                            .iter()
+                            .map(|associated| &associated.ty),
+                    );
                 }
                 HirDeclaration::Const(value) => types.push(&value.ty),
                 HirDeclaration::Function(value) => {
@@ -4978,6 +7199,7 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
                         types.push(base_type);
                     }
                 }
+                HirDeclaration::Resource(_) => {}
             }
             for ty in types {
                 visit(ty, modules, &module.source, span, errors);

@@ -239,6 +239,7 @@ fn verify_in_scratch(
         })?;
         let (kind, concrete, method) = match &callable.kind {
             PythonCallableKind::Function => ("function", Value::Null, Value::Null),
+            PythonCallableKind::AsyncFunction => ("async_function", Value::Null, Value::Null),
             PythonCallableKind::ImplMethod { concrete } => (
                 "impl_method",
                 Value::String(concrete.clone()),
@@ -261,6 +262,11 @@ fn verify_in_scratch(
     let signature_requests = selected_callables
         .iter()
         .map(|callable| {
+            let callable_kind = match &callable.kind {
+                PythonCallableKind::Function => "function",
+                PythonCallableKind::AsyncFunction => "async_function",
+                PythonCallableKind::ImplMethod { .. } => "impl_method",
+            };
             let implementation = implementation_symbols
                 .get(&callable.cott_symbol)
                 .ok_or_else(|| {
@@ -312,7 +318,9 @@ fn verify_in_scratch(
                 )
             })?;
             let (facade, method) = match &callable.kind {
-                PythonCallableKind::Function => (callable.name.as_str(), None),
+                PythonCallableKind::Function | PythonCallableKind::AsyncFunction => {
+                    (callable.name.as_str(), None)
+                }
                 PythonCallableKind::ImplMethod { concrete } => {
                     let expected_path = Path::new("_cott_impl")
                         .join(callable.module.replace('.', "/"))
@@ -357,6 +365,7 @@ fn verify_in_scratch(
                 }
             };
             Ok(json!({
+                "callable_kind": callable_kind,
                 "content_hash": implementation.get("content_hash").ok_or_else(|| format!("generation record implementation `{}` is missing content_hash", callable.cott_symbol))?,
                 "facade": facade,
                 "implementation_function": implementation_function,
@@ -421,7 +430,7 @@ fn verify_in_scratch(
             "platform": python["platform"],
             "version": python_version,
         },
-        "runtime": {"abi": "1", "version": env!("CARGO_PKG_VERSION")},
+        "runtime": {"abi": "2", "version": env!("CARGO_PKG_VERSION")},
     });
     let mut candidate_tools = tools.clone();
     candidate_tools["python"] = json!({
@@ -443,7 +452,49 @@ fn verify_in_scratch(
         interpreter,
         vec![
             "-c".to_owned(),
-            "import collections.abc,importlib,inspect,json,sys,typing\nfrom cott_runtime import _cott_load\n\ndef shape(signature):\n return [(name,parameter.kind.name,parameter.default is inspect.Parameter.empty,repr(parameter.default)) for name,parameter in signature.parameters.items()]\n\ndef hint(value):\n if isinstance(value,typing.TypeVar):\n  return ('TypeVar',hint(value.__bound__),tuple(hint(item) for item in value.__constraints__),value.__covariant__,value.__contravariant__)\n origin=typing.get_origin(value)\n if origin is not None:\n  return (origin,tuple(hint(item) for item in typing.get_args(value)))\n return value\n\ndef runtime_validation(value):\n if value is typing.Any or value is object:\n  return 'dynamic'\n origin=typing.get_origin(value)\n args=typing.get_args(value)\n if origin is typing.Annotated and any(type(item).__name__=='CottExternal' for item in args[1:]):\n  return 'static-only'\n if origin in (collections.abc.Iterator,collections.abc.Generator):\n  return 'outer-only'\n nested={runtime_validation(item) for item in args}\n return next((item for item in ('static-only','dynamic','outer-only') if item in nested),'deep')\n\nout={}\nfor item in json.loads(sys.argv[1]):\n facade=getattr(importlib.import_module(item['module']),item['facade'])\n if item['method'] is not None:\n  facade=getattr(facade,item['method'])\n implementation=_cott_load(item['runtime_path'],item['content_hash'].removeprefix('sha256:'),item['implementation_function'],expected_project_name=item['project'])\n expected_signature=inspect.signature(facade)\n actual_signature=inspect.signature(implementation)\n expected_hints={name:hint(value) for name,value in typing.get_type_hints(facade,include_extras=True).items()}\n actual_hints={name:hint(value) for name,value in typing.get_type_hints(implementation,include_extras=True).items()}\n if shape(actual_signature) != shape(expected_signature) or actual_hints != expected_hints:\n  raise TypeError(f\"{item['symbol']} implementation signature {actual_signature} {actual_hints!r} != {expected_signature} {expected_hints!r}\")\n out[item['symbol']]={'implementation_module':implementation.__module__,'implementation_name':implementation.__name__,'module':facade.__module__,'name':facade.__qualname__,'runtime_validation':{name:runtime_validation(value) for name,value in typing.get_type_hints(facade,include_extras=True).items()},'signature':str(expected_signature)}\nprint(json.dumps(out,sort_keys=True,separators=(',',':')))".to_owned(),
+            r#"import collections.abc,importlib,inspect,json,sys,typing
+from cott_runtime import _cott_load
+
+def shape(signature):
+ return [(name,parameter.kind.name,parameter.default is inspect.Parameter.empty,repr(parameter.default)) for name,parameter in signature.parameters.items()]
+
+def hint(value):
+ if isinstance(value,typing.TypeVar):
+  return ('TypeVar',hint(value.__bound__),tuple(hint(item) for item in value.__constraints__),value.__covariant__,value.__contravariant__)
+ origin=typing.get_origin(value)
+ if origin is not None:
+  return (origin,tuple(hint(item) for item in typing.get_args(value)))
+ return value
+
+def runtime_validation(value):
+ if value is typing.Any or value is object:
+  return 'dynamic'
+ origin=typing.get_origin(value)
+ args=typing.get_args(value)
+ if origin is typing.Annotated and any(type(item).__name__=='CottExternal' for item in args[1:]):
+  return 'static-only'
+ if origin in (collections.abc.Iterator,collections.abc.Generator):
+  return 'outer-only'
+ nested={runtime_validation(item) for item in args}
+ return next((item for item in ('static-only','dynamic','outer-only') if item in nested),'deep')
+
+out={}
+for item in json.loads(sys.argv[1]):
+ facade=getattr(importlib.import_module(item['module']),item['facade'])
+ if item['method'] is not None:
+  facade=getattr(facade,item['method'])
+ implementation=_cott_load(item['runtime_path'],item['content_hash'].removeprefix('sha256:'),item['implementation_function'],expected_project_name=item['project'])
+ expected_signature=inspect.signature(facade)
+ actual_signature=inspect.signature(implementation)
+ expected_hints={name:hint(value) for name,value in typing.get_type_hints(facade,include_extras=True).items()}
+ actual_hints={name:hint(value) for name,value in typing.get_type_hints(implementation,include_extras=True).items()}
+ expected_async=item['callable_kind']=='async_function'
+ if shape(actual_signature) != shape(expected_signature) or actual_hints != expected_hints or inspect.iscoroutinefunction(facade) != expected_async or inspect.iscoroutinefunction(implementation) != expected_async:
+  raise TypeError(f"{item['symbol']} implementation callable kind/signature {actual_signature} {actual_hints!r} != {expected_signature} {expected_hints!r}")
+ out[item['symbol']]={'callable_kind':item['callable_kind'],'implementation_module':implementation.__module__,'implementation_name':implementation.__name__,'module':facade.__module__,'name':facade.__qualname__,'runtime_validation':{name:runtime_validation(value) for name,value in typing.get_type_hints(facade,include_extras=True).items()},'signature':str(expected_signature)}
+print(json.dumps(out,sort_keys=True,separators=(',',':')))
+"#
+            .to_owned(),
             serde_json::to_string(&signature_requests).map_err(|error| error.to_string())?,
         ],
         &generated_root,

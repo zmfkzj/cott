@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 from curriculum.billing_system_types import BillTotals, BillingError, BillingError_DuplicateItem, BillingError_NegativeQuantity, BillingError_WrongCategory, BillingItem, BillingItem_Coke, BillingItem_Daal, BillingItem_Dettol, BillingItem_Fanta, BillingItem_Flour, BillingItem_FoodOil, BillingItem_HandGloves, BillingItem_Limka, BillingItem_Maggi, BillingItem_Mask, BillingItem_Mazza, BillingItem_MountainDuo, BillingItem_Newsprin, BillingItem_Rice, BillingItem_Sanitizer, BillingItem_Sprite, BillingItem_ThermalGun, BillingItem_Wheat, Quantity
 
@@ -53,7 +53,7 @@ A validation error is returned unchanged. On success, the total is the sum of al
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/billing_system/calculate_bill.py", "155a56bde33ead4cc257f221c6a043558e7d27ff2e1bfcc3829fcb120b844a69", "calculate_bill", expected_project_name="billing-system", expected_cott_symbol="curriculum.billing_system.calculate_bill")
+        _implementation = _cott_load("_cott_impl/curriculum/billing_system/calculate_bill.py", "bcbb697dbd98168266fba4692c3158fc46cecb35e8a7bea2597a7802a5dfcd11", "calculate_bill", expected_project_name="billing-system", expected_cott_symbol="curriculum.billing_system.calculate_bill")
         _result = _implementation(medical, grocery, drinks)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -74,10 +74,14 @@ A validation error is returned unchanged. On success, the total is the sum of al
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.billing_system.calculate_bill", phase="error", span={"end_byte":2366,"end_column":1,"end_line":70,"start_byte":1265,"start_column":1,"start_line":54}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.billing_system.calculate_bill", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        totals = _result.value
-        if not (((totals).total >= 0)):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.billing_system.calculate_bill", clause="ensures:1", phase="ensures", span={"end_byte":2250,"end_column":53,"end_line":65,"start_byte":2202,"start_column":5,"start_line":65}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            totals = _cott_match_value.value
+            return (((totals).total >= 0))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.billing_system.calculate_bill", clause="ensures:1", phase="ensures", span={"end_byte":2250,"end_column":53,"end_line":65,"start_byte":2202,"start_column":5,"start_line":65}, expected="true", actual="false")
     return _result
 
 __all__ = ["BillTotals", "BillingError", "BillingError_DuplicateItem", "BillingError_NegativeQuantity", "BillingError_WrongCategory", "BillingItem", "BillingItem_Coke", "BillingItem_Daal", "BillingItem_Dettol", "BillingItem_Fanta", "BillingItem_Flour", "BillingItem_FoodOil", "BillingItem_HandGloves", "BillingItem_Limka", "BillingItem_Maggi", "BillingItem_Mask", "BillingItem_Mazza", "BillingItem_MountainDuo", "BillingItem_Newsprin", "BillingItem_Rice", "BillingItem_Sanitizer", "BillingItem_Sprite", "BillingItem_ThermalGun", "BillingItem_Wheat", "Quantity", "calculate_bill", "validate_bill_lines"]

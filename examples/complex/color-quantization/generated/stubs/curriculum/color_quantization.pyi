@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.color_quantization_types import ColorQuantizationError as ColorQuantizationError, ColorQuantizationError_EmptyPixels as ColorQuantizationError_EmptyPixels, ColorQuantizationError_ZeroMaxColors as ColorQuantizationError_ZeroMaxColors, Palette as Palette, QuantizeRequest as QuantizeRequest, Rgb as Rgb
 """Count exact RGB values and return at most max_colors distinct colors,

@@ -139,3 +139,119 @@ impl Counter for Reader + Writer:  # impl
     assert!(output.contains("# snapshot"));
     assert_eq!(formatted(&output), output);
 }
+
+#[test]
+fn formats_v02_const_generics_match_guards_and_trait_defaults() {
+    let source = r#"module v02.surface
+
+struct Matrix[T,const N:U32]:
+  values:Array[T,N]
+  bytes:Buffer[N]
+
+fn fallback(receiver:Reader,value:I32)->I32
+
+trait Reader:
+  fn read(self,value:I32)->I32=fallback
+
+fn guarded(value:Option[I32])->Result[I32,Failure]:
+  requires value matches Option.Some(input)=>input>0
+  ensures result matches Result.Ok(output)=>output>0
+  error Failure.Bad with value matches Option.Some(error_value) when error_value==0
+"#;
+    let expected = r#"module v02.surface
+
+struct Matrix[T, const N: U32]:
+    values: Array[T, N]
+    bytes: Buffer[N]
+
+fn fallback(receiver: Reader, value: I32) -> I32
+
+trait Reader:
+    fn read(self, value: I32) -> I32 = fallback
+
+fn guarded(value: Option[I32]) -> Result[I32, Failure]:
+    requires value matches Option.Some(input) => input > 0
+
+    ensures Result.Ok(output) => output > 0
+
+    error Failure.Bad with value matches Option.Some(error_value) when error_value == 0
+"#;
+    let output = formatted(source);
+    assert_eq!(output, expected);
+    assert_eq!(formatted(&output), output);
+}
+
+#[test]
+fn formats_v03_async_associated_types_and_resource_transitions() {
+    let source = r#"module v03.surface
+
+trait Stream[T]:
+  type Item:Display+Clone
+  fn next(self)->T.Item
+
+resource Door:
+  initial Open
+  state Open
+  state Closed
+  terminal Closed
+  transition Open->Closed
+
+trait Controller:
+  type State
+  fn close(self)->Controller.State
+
+impl DoorController for Controller:
+  type State=I32
+  state:
+    primary:Door
+    backup:Door
+    audit:I32
+  fn close(self)->I32:
+    requires true
+    transitions self.primary:Door.Open->Door.Closed,self.backup:Door.Open->Door.Closed
+    modifies self.audit
+    ensures true
+
+async fn fetch()->I32:
+  effects [IO]
+"#;
+    let expected = r#"module v03.surface
+
+trait Stream[T]:
+    type Item: Display + Clone
+    fn next(self) -> T.Item
+
+resource Door:
+    initial Open
+    state Open
+    state Closed
+    terminal Closed
+    transition Open -> Closed
+
+trait Controller:
+    type State
+    fn close(self) -> Controller.State
+
+impl DoorController for Controller:
+    type State = I32
+    state:
+        primary: Door
+        backup: Door
+        audit: I32
+
+    fn close(self) -> I32:
+        requires true
+
+        transitions self.primary: Door.Open -> Door.Closed, self.backup: Door.Open -> Door.Closed
+
+        modifies self.audit
+
+        ensures true
+
+async fn fetch() -> I32:
+    effects [IO]
+"#;
+    let output = formatted(source);
+    assert_eq!(output, expected);
+    assert_eq!(formatted(&output), expected);
+}

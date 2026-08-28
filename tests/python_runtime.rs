@@ -36,7 +36,7 @@ impl Drop for TempDir {
 }
 
 fn write_runtime(root: &Path) {
-    for (relative, bytes) in render_runtime("demo") {
+    for (relative, bytes) in render_runtime("demo", "0.3.0") {
         let path = root.join(relative);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("runtime parent should be writable");
@@ -104,6 +104,7 @@ import cott_runtime as _runtime
 from cott_runtime import *
 from cott_runtime import _cott_load, _cott_normalize_f32_abi, _cott_normalize_scalar, _cott_validate_abi
 assert "CottExternal" in _runtime.__all__
+assert _runtime.PROJECT_VERSION == "0.3.0"
 
 
 _T = TypeVar("_T")
@@ -117,15 +118,41 @@ _good = dict(cott_symbol="demo.run", kind="function", concrete=None, method=None
 _bad = dict(cott_symbol="demo.bad", kind="function", concrete=None, method=None, owner="manifest", python_symbol="_cott_impl.demo.bad:bad", source_origin="python/cott_bindings/demo/bad.py", runtime_origin="_cott_impl/demo/bad.py", content_hash="sha256:{bad_hash}")
 _external = dict(cott_symbol="demo.external", kind="function", concrete=None, method=None, owner="manifest", python_symbol="_cott_impl.demo.external:external", source_origin="python/cott_bindings/demo/external.py", runtime_origin="_cott_impl/demo/external.py", content_hash="sha256:{external_hash}")
 _method = dict(cott_symbol="demo.CounterState.advance", kind="impl_method", concrete="CounterState", method="advance", owner="agent", python_symbol="_cott_impl.demo.CounterState.advance:_cott_impl_CounterState_advance", source_origin="python/_cott_impl/demo/CounterState/advance.py", runtime_origin="_cott_impl/demo/CounterState/advance.py", content_hash="sha256:{method_hash}")
-_current = dict(generation_id="", verified=True, inputs={{}}, tools=dict(
+_async = dict(cott_symbol="demo.async_run", kind="async_function", concrete=None, method=None, owner="agent", python_symbol="_cott_impl.demo.async_run:async_run", source_origin="python/cott_bindings/demo/async_run.py", runtime_origin="_cott_impl/demo/async_run.py", content_hash="sha256:{good_hash}")
+_unresolved = dict(cott_symbol="demo.missing", kind="async_function", span=dict(start_byte=1, end_byte=2, start_line=1, start_column=1, end_line=1, end_column=2))
+def _generation_id(current: dict) -> str:
+    identity = dict(current)
+    for key in ("generation_id", "verified", "verification", "agent_runs"):
+        identity.pop(key)
+    payload = dict(domain="cott.generation.v2", schema_version=2, current=identity)
+    return "sha256:" + hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n").hexdigest()
+
+_current = dict(generation_id="", verified=True, project_version="0.3.0", compatibility=dict(
+    generation_schema=2, canonical_ir_schema=5, runtime_abi=2,
+), inputs={{}}, tools=dict(
     python=dict(implementation=sys.implementation.name, version=platform.python_version(), cache_tag=sys.implementation.cache_tag, os=sys.platform, machine=platform.machine(), platform=sysconfig.get_platform(), executable=str(Path(sys.executable).resolve()), content_hash="sha256:"+hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest()),
     runtime=dict(abi=_runtime._COTT_RUNTIME_ABI, version=_runtime._COTT_RUNTIME_VERSION),
-), ir={{}}, contract_surface={{}}, public_python_symbols={{"demo":["CounterState","bad","external","run"],"support":["helper"]}}, implementations=[_good, _bad, _external, _method], dependencies=[], managed_files={{}}, unresolved=[], verification=None, agent_runs=[])
-_identity = dict(_current)
-for _key in ("generation_id", "verified", "verification", "agent_runs"):
-    _identity.pop(_key)
-_current["generation_id"] = "sha256:" + hashlib.sha256(json.dumps(_identity, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n").hexdigest()
-Path("generation.json").write_text(json.dumps(dict(schema_version=1, current=_current, last_verified=None), sort_keys=True, separators=(",", ":")) + "\n")
+), ir={{}}, contract_surface={{}}, public_python_symbols={{"demo":["CounterState","bad","external","run"],"support":["helper"]}}, implementations=[_good, _bad, _external, _method, _async], dependencies=[], managed_files={{}}, unresolved=[_unresolved], verification=None, agent_runs=[])
+_current["generation_id"] = _generation_id(_current)
+Path("generation.json").write_text(json.dumps(dict(schema_version=2, current=_current, last_verified=None), sort_keys=True, separators=(",", ":")) + "\n")
+assert _runtime._cott_validate_generation_snapshot(_current, "current") is _current
+_invalid_unresolved = dict(_current)
+_invalid_unresolved["unresolved"] = [dict(_unresolved, span=dict(_unresolved["span"], end_line=0))]
+try:
+    _runtime._cott_validate_generation_snapshot(_invalid_unresolved, "invalid unresolved")
+except CottContractViolation:
+    pass
+else:
+    raise AssertionError("invalid unresolved record was accepted")
+_legacy = dict(_current)
+_legacy["implementations"] = [dict(_good)]
+del _legacy["implementations"][0]["kind"]
+try:
+    _runtime._cott_validate_generation_snapshot(_legacy, "legacy")
+except CottContractViolation:
+    pass
+else:
+    raise AssertionError("legacy implementation record was accepted")
 
 assert I8.__metadata__[0] == CottInt("signed", 8)
 assert U64.__metadata__[0] == CottInt("unsigned", 64)
@@ -133,8 +160,9 @@ assert _cott_normalize_scalar(1.25, F32) == 1.25
 assert CottList(values=[1, 2]) != [1, 2]
 assert CottSet(values=[1, 2]) != {{1, 2}}
 assert FrozenMap(values={{"a": 1}}) != {{"a": 1}}
-assert CottTuple2(first=1, second="x")[0] == 1
-assert hash(CottTuple2(first=1, second="x"))
+_tuple = (1, "x")
+assert _cott_validate_abi(_tuple, tuple[I32, str]) == _tuple
+assert hash(_tuple)
 assert Unit() is UNIT
 assert Nothing() == Nothing()
 assert _cott_validate_abi(Path("/tmp"), Path) == Path("/tmp")
@@ -286,13 +314,38 @@ except CottContractViolation as error:
     assert error.phase == "facade-import"
 else:
     raise AssertionError("project mismatch was accepted")
+def _reject_generation(record: object, label: str) -> None:
+    Path("generation.json").write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+    try:
+        _cott_load("_cott_impl/demo/bad.py", "{bad_hash}", "bad", "demo")
+    except CottContractViolation as error:
+        assert error.phase == "provenance", (label, error.phase)
+    else:
+        raise AssertionError(f"{{label}} generation record was accepted")
+    finally:
+        Path("generation.json").write_text(_original_generation)
+_original_generation = Path("generation.json").read_text()
+_v1 = json.loads(_original_generation)
+_v1["schema_version"] = 1
+_reject_generation(_v1, "v1")
+_missing = json.loads(_original_generation)
+del _missing["current"]["project_version"]
+_reject_generation(_missing, "missing")
+_extra = json.loads(_original_generation)
+_extra["current"]["unexpected"] = None
+_reject_generation(_extra, "extra")
+_incompatible = json.loads(_original_generation)
+_incompatible["current"]["compatibility"]["runtime_abi"] = 1
+_incompatible["current"]["generation_id"] = _generation_id(_incompatible["current"])
+_reject_generation(_incompatible, "compatibility")
+_version_mismatch = json.loads(_original_generation)
+_version_mismatch["current"]["project_version"] = "0.3.1"
+_version_mismatch["current"]["generation_id"] = _generation_id(_version_mismatch["current"])
+_reject_generation(_version_mismatch, "project version")
 _original_generation = Path("generation.json").read_text()
 _mutated = json.loads(_original_generation)
 _mutated["current"]["tools"]["python"]["version"] = "0.0.0"
-_mutated_identity = dict(_mutated["current"])
-for _key in ("generation_id", "verified", "verification", "agent_runs"):
-    _mutated_identity.pop(_key)
-_mutated["current"]["generation_id"] = "sha256:" + hashlib.sha256(json.dumps(_mutated_identity, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n").hexdigest()
+_mutated["current"]["generation_id"] = _generation_id(_mutated["current"])
 Path("generation.json").write_text(json.dumps(_mutated, sort_keys=True, separators=(",", ":")) + "\n")
 try:
     _cott_load("_cott_impl/demo/bad.py", "{bad_hash}", "bad", "demo")
@@ -321,6 +374,68 @@ else:
         external_hash = external_hash,
         method_hash = method_hash,
     );
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(script)
+        .current_dir(&temp.path)
+        .output()
+        .expect("python3 should execute generated runtime");
+    assert!(
+        output.status.success(),
+        "generated runtime failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn generated_runtime_strictly_validates_variadic_tuples_arrays_and_buffers() {
+    if Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+
+    let temp = TempDir::new();
+    write_runtime(&temp.path);
+    let script = r#"
+from typing import Literal
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, I32, _cott_validate_abi
+
+array = CottArray(values=(1, 2))
+assert tuple(array) == (1, 2)
+assert _cott_validate_abi(array, CottArray[I32, Literal[2]]) == array
+for value in ((1, 2), CottArray(values=(1, 2, 3)), CottArray(values=(1, "two"))):
+    try:
+        _cott_validate_abi(value, CottArray[I32, Literal[2]])
+    except CottContractViolation:
+        pass
+    else:
+        raise AssertionError("array ABI accepted an invalid value")
+
+assert _cott_validate_abi((1, "two"), tuple[I32, str]) == (1, "two")
+for value in ((), (1, 2), (1, "two", 3)):
+    try:
+        _cott_validate_abi(value, tuple[I32, str])
+    except CottContractViolation:
+        pass
+    else:
+        raise AssertionError("positional tuple ABI accepted an invalid value")
+
+buffer = CottBuffer(data=b"\x00\xff")
+assert _cott_validate_abi(buffer, CottBuffer[Literal[2]]) == buffer
+for value in (b"\x00\xff", CottBuffer(data=b"\x00")):
+    try:
+        _cott_validate_abi(value, CottBuffer[Literal[2]])
+    except CottContractViolation:
+        pass
+    else:
+        raise AssertionError("buffer ABI accepted an invalid value")
+try:
+    CottBuffer(data="not-bytes")
+except CottContractViolation:
+    pass
+else:
+    raise AssertionError("buffer constructor accepted non-bytes")
+"#;
     let output = Command::new("python3")
         .arg("-c")
         .arg(script)

@@ -1,7 +1,8 @@
 module curriculum.trait_protocol
 
 trait Summarizable:
-    fn summary(self) -> Str
+    type Summary
+    fn summary(self) -> Summarizable.Summary
 
 trait Prioritizable:
     fn priority_level(self) -> I32
@@ -27,11 +28,19 @@ fn inspect_task[T: Summarizable + Prioritizable](item: T) -> Str:
 
     effects []
 
+resource TaskLifecycle:
+    initial Pending
+    state Pending
+    state Completed
+    terminal Completed
+    transition Pending -> Completed
+
 impl SimpleTask for Summarizable + Prioritizable + Completable:
+    type Summary = Str
     state:
         title: Str
         urgency: I32
-        completed: Bool = false
+        lifecycle: TaskLifecycle
 
     invariant self.title.len > 0
     invariant self.urgency >= 0
@@ -42,7 +51,6 @@ impl SimpleTask for Summarizable + Prioritizable + Completable:
 
         ensures self.title == title
         ensures self.urgency == urgency
-        ensures self.completed == false
 
     fn summary(self) -> Str:
         ensures result.len > 0
@@ -55,12 +63,6 @@ impl SimpleTask for Summarizable + Prioritizable + Completable:
         effects []
 
     fn complete(self) -> Bool:
-        requires self.completed == false
+        transitions self.lifecycle: TaskLifecycle.Pending -> TaskLifecycle.Completed
 
-        modifies self.completed
-
-        ensures old(self.completed) == false
-        ensures self.completed == true
-        ensures result == self.completed
-
-        effects []
+        ensures result == true

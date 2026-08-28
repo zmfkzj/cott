@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 from curriculum.website_connectivity_types import ConnectivityStatus, ConnectivityStatus_NotWorking, ConnectivityStatus_Working, WebsiteClassification, WebsiteObservation, WebsiteObservationError, WebsiteObservationError_EmptyUrl, WebsiteObservationError_InvalidStatusCode
 
@@ -53,10 +53,14 @@ Status 200 maps to Working; every other accepted status maps to NotWorking."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.website_connectivity.classify_observation", phase="error", span={"end_byte":1162,"end_column":1,"end_line":40,"start_byte":296,"start_column":1,"start_line":19}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.website_connectivity.classify_observation", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        classification = _result.value
-        if not (((classification).url == (observation).url)):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.website_connectivity.classify_observation", clause="ensures:1", phase="ensures", span={"end_byte":948,"end_column":79,"end_line":33,"start_byte":874,"start_column":5,"start_line":33}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            classification = _cott_match_value.value
+            return (((classification).url == (observation).url))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.website_connectivity.classify_observation", clause="ensures:1", phase="ensures", span={"end_byte":948,"end_column":79,"end_line":33,"start_byte":874,"start_column":5,"start_line":33}, expected="true", actual="false")
     return _result
 
 def classify_websites(observations: CottList[WebsiteObservation]) -> Result[CottList[WebsiteClassification], WebsiteObservationError]:
@@ -92,10 +96,14 @@ classification per observation in the same order; empty input succeeds."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.website_connectivity.classify_websites", phase="error", span={"end_byte":1850,"end_column":1,"end_line":58,"start_byte":1162,"start_column":1,"start_line":40}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.website_connectivity.classify_websites", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        classifications = _result.value
-        if not ((len(classifications) == len(observations))):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.website_connectivity.classify_websites", clause="ensures:1", phase="ensures", span={"end_byte":1737,"end_column":82,"end_line":52,"start_byte":1660,"start_column":5,"start_line":52}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            classifications = _cott_match_value.value
+            return ((len(classifications) == len(observations)))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.website_connectivity.classify_websites", clause="ensures:1", phase="ensures", span={"end_byte":1737,"end_column":82,"end_line":52,"start_byte":1660,"start_column":5,"start_line":52}, expected="true", actual="false")
     return _result
 
 __all__ = ["ConnectivityStatus", "ConnectivityStatus_NotWorking", "ConnectivityStatus_Working", "WebsiteClassification", "WebsiteObservation", "WebsiteObservationError", "WebsiteObservationError_EmptyUrl", "WebsiteObservationError_InvalidStatusCode", "classify_observation", "classify_websites"]

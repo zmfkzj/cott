@@ -1,6 +1,6 @@
 [package]
 name = "cott"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
 
 [lib]
@@ -15,3 +15,4 @@ sha2 = "0.10"
 toml = "0.8"
 tokio = { version = "1", default-features = false, features = ["io-std", "rt-multi-thread", "sync"] }
 tower-lsp = "0.20"
+rustpython-parser = "0.4"

@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.website_connectivity_types import ConnectivityStatus as ConnectivityStatus, ConnectivityStatus_NotWorking as ConnectivityStatus_NotWorking, ConnectivityStatus_Working as ConnectivityStatus_Working, WebsiteClassification as WebsiteClassification, WebsiteObservation as WebsiteObservation, WebsiteObservationError as WebsiteObservationError, WebsiteObservationError_EmptyUrl as WebsiteObservationError_EmptyUrl, WebsiteObservationError_InvalidStatusCode as WebsiteObservationError_InvalidStatusCode
 """Validates and classifies one caller-supplied HTTP status observation.

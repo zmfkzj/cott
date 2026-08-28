@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.move_2048_types import Board4 as Board4, Direction as Direction, Direction_Down as Direction_Down, Direction_Left as Direction_Left, Direction_Right as Direction_Right, Direction_Up as Direction_Up, LineMove as LineMove, Move2048Error as Move2048Error, Move2048Error_InvalidBoardSize as Move2048Error_InvalidBoardSize, Move2048Error_InvalidTile as Move2048Error_InvalidTile, Move2048Error_ScoreOverflow as Move2048Error_ScoreOverflow, MoveRequest as MoveRequest, MoveResult as MoveResult
 """Validate a row-major four-by-four board. InvalidBoardSize takes priority

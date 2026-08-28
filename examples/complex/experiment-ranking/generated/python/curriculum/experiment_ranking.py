@@ -6,7 +6,7 @@ import threading as _threading
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
+from cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi
 
 from curriculum.experiment_ranking_types import ExperimentRankingError, ExperimentRankingError_BlankRunId, ExperimentRankingError_DuplicateRunId, ExperimentRankingError_EmptyRuns, ExperimentRankingError_NonFiniteScore, Ranking, RankingRequest, RunMetric
 
@@ -52,14 +52,22 @@ contains every input run_id exactly once."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.experiment_ranking.order_run_ids", phase="error", span={"end_byte":1331,"end_column":1,"end_line":48,"start_byte":331,"start_column":1,"start_line":21}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.experiment_ranking.order_run_ids", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        ordered_ids = _result.value
-        if not ((len(ordered_ids) == len(runs))):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.experiment_ranking.order_run_ids", clause="ensures:1", phase="ensures", span={"end_byte":1052,"end_column":66,"end_line":38,"start_byte":991,"start_column":5,"start_line":38}, expected="true", actual="false")
-    if type(_result) is Ok and True:
-        ordered_ids = _result.value
-        if not ((len(ordered_ids) > 0)):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.experiment_ranking.order_run_ids", clause="ensures:2", phase="ensures", span={"end_byte":1110,"end_column":58,"end_line":39,"start_byte":1057,"start_column":5,"start_line":39}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            ordered_ids = _cott_match_value.value
+            return ((len(ordered_ids) == len(runs)))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.experiment_ranking.order_run_ids", clause="ensures:1", phase="ensures", span={"end_byte":1052,"end_column":66,"end_line":38,"start_byte":991,"start_column":5,"start_line":38}, expected="true", actual="false")
+    def _cott_match_ensures_2() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            ordered_ids = _cott_match_value.value
+            return ((len(ordered_ids) > 0))
+        return True
+    if not (_cott_match_ensures_2()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.experiment_ranking.order_run_ids", clause="ensures:2", phase="ensures", span={"end_byte":1110,"end_column":58,"end_line":39,"start_byte":1057,"start_column":5,"start_line":39}, expected="true", actual="false")
     return _result
 
 def rank_experiments(request: RankingRequest) -> Result[Ranking, ExperimentRankingError]:
@@ -96,14 +104,22 @@ identifier in the successful order."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.experiment_ranking.rank_experiments", phase="error", span={"end_byte":2008,"end_column":1,"end_line":64,"start_byte":1331,"start_column":1,"start_line":48}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.experiment_ranking.rank_experiments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    if type(_result) is Ok and True:
-        ranking = _result.value
-        if not ((len((ranking).ordered_run_ids) == len((request).runs))):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.experiment_ranking.rank_experiments", clause="ensures:1", phase="ensures", span={"end_byte":1714,"end_column":82,"end_line":55,"start_byte":1637,"start_column":5,"start_line":55}, expected="true", actual="false")
-    if type(_result) is Ok and True:
-        ranking = _result.value
-        if not ((len((ranking).ordered_run_ids) > 0)):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.experiment_ranking.rank_experiments", clause="ensures:2", phase="ensures", span={"end_byte":1780,"end_column":66,"end_line":56,"start_byte":1719,"start_column":5,"start_line":56}, expected="true", actual="false")
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            ranking = _cott_match_value.value
+            return ((len((ranking).ordered_run_ids) == len((request).runs)))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.experiment_ranking.rank_experiments", clause="ensures:1", phase="ensures", span={"end_byte":1714,"end_column":82,"end_line":55,"start_byte":1637,"start_column":5,"start_line":55}, expected="true", actual="false")
+    def _cott_match_ensures_2() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            ranking = _cott_match_value.value
+            return ((len((ranking).ordered_run_ids) > 0))
+        return True
+    if not (_cott_match_ensures_2()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.experiment_ranking.rank_experiments", clause="ensures:2", phase="ensures", span={"end_byte":1780,"end_column":66,"end_line":56,"start_byte":1719,"start_column":5,"start_line":56}, expected="true", actual="false")
     return _result
 
 __all__ = ["ExperimentRankingError", "ExperimentRankingError_BlankRunId", "ExperimentRankingError_DuplicateRunId", "ExperimentRankingError_EmptyRuns", "ExperimentRankingError_NonFiniteScore", "Ranking", "RankingRequest", "RunMetric", "order_run_ids", "rank_experiments"]

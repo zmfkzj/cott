@@ -19,6 +19,37 @@ pub struct ProjectMetadata {
     pub source: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ApiVersion {
+    pub major: u64,
+    pub minor: u64,
+    pub patch: u64,
+}
+
+pub fn parse_api_version(value: &str) -> Option<ApiVersion> {
+    let mut parts = value.split('.');
+    let parse = |part: Option<&str>| {
+        let part = part?;
+        (!part.is_empty()
+            && (part == "0" || !part.starts_with('0'))
+            && part.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| part.parse().ok())
+        .flatten()
+    };
+    let version = ApiVersion {
+        major: parse(parts.next())?,
+        minor: parse(parts.next())?,
+        patch: parse(parts.next())?,
+    };
+    parts.next().is_none().then_some(version)
+}
+
+impl std::fmt::Display for ApiVersion {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawManifest {
@@ -100,10 +131,13 @@ impl ProjectConfig {
     }
 
     fn validate(&self, path: &Path) -> Result<(), ManifestError> {
-        if self.project.name.trim().is_empty() || self.project.version.trim().is_empty() {
+        if self.project.name.trim().is_empty() {
+            return Err(ManifestError::new(path, "project.name must be nonempty"));
+        }
+        if parse_api_version(&self.project.version).is_none() {
             return Err(ManifestError::new(
                 path,
-                "project.name and project.version must be nonempty",
+                "project.version must be a restricted x.y.z version",
             ));
         }
         for (field, value) in [

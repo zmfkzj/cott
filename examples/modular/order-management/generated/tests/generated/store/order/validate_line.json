@@ -1,1 +1,1 @@
-{"schema_version":1,"symbol":"store.order.validate_line","seed":"sha256:2af139a5cd85a95165479f7c571331329af515137d597c71579089f075392756","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"classification":"pure","clause_ids":["ensures:1","error:2"]}
+{"schema_version":1,"symbol":"store.order.validate_line","seed":"sha256:9ef50a52e01b8e79f0aa86f7f2f649e8452714eccf13ebf03fa791bcd79e03f5","candidate_limit":64,"container_length_limit":3,"json_depth_limit":4,"callable_kind":"sync","classification":"pure","clause_ids":["ensures:1","error:2"]}

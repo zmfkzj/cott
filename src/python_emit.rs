@@ -9,7 +9,10 @@ use crate::contract_test::derive_strategies;
 use crate::hash::sha256_hex;
 use crate::ir::CanonicalIr;
 use crate::manifest::{ProjectConfig, RuntimeValidation};
-use crate::provenance::{GenerationRecord, GenerationSnapshot};
+use crate::provenance::{
+    GENERATION_SCHEMA_VERSION, GenerationCompatibility, GenerationRecord, GenerationSnapshot,
+    RUNTIME_ABI_VERSION, SourceSpan, UnresolvedKind, UnresolvedRecord,
+};
 use crate::python::artifact_plan::{PythonArtifactPlan, PythonCallableKind};
 use crate::python_runtime::render_runtime;
 
@@ -99,6 +102,17 @@ pub fn emit(
             validate_declaration(&module.module, object, &mut diagnostics);
         }
     }
+    let generic_parameters = modules
+        .values()
+        .flat_map(|module| &module.declarations)
+        .filter_map(Value::as_object)
+        .filter_map(|declaration| {
+            Some((
+                declaration.get("name")?.as_str()?.to_owned(),
+                declaration.get("generics")?.as_array()?.clone(),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
     validate_external_types(
         &modules,
         &declarations,
@@ -188,11 +202,52 @@ pub fn emit(
             }
         }
     }
+    validate_impl_selections(&modules, &mut diagnostics);
     let callables = plan
         .callables()
         .into_iter()
         .map(|callable| (callable.cott_symbol.clone(), callable))
         .collect::<BTreeMap<_, _>>();
+    for module in modules.values() {
+        for implementation in module
+            .declarations
+            .iter()
+            .filter_map(Value::as_object)
+            .filter(|declaration| declaration.get("kind").and_then(Value::as_str) == Some("impl"))
+        {
+            for method in implementation
+                .get("selected_methods")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let Some(function) = method
+                    .get("selected")
+                    .and_then(Value::as_object)
+                    .filter(|selected| {
+                        selected.get("kind").and_then(Value::as_str) == Some("default")
+                    })
+                    .and_then(|selected| selected.get("function"))
+                    .and_then(Value::as_object)
+                else {
+                    continue;
+                };
+                let verified_facade = function
+                    .get("verified_facade")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if !callables
+                    .get(verified_facade)
+                    .is_some_and(|callable| matches!(&callable.kind, PythonCallableKind::Function))
+                {
+                    diagnostics.push(diag(
+                        module_path(&module.module),
+                        "trait default dispatch must depend on a verified free-function facade",
+                    ));
+                }
+            }
+        }
+    }
     let mut seen_bindings = BTreeSet::new();
     let mut seen_paths = HashSet::new();
     for binding in bindings {
@@ -271,13 +326,25 @@ pub fn emit(
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             for ty in declaration_types(object, kind) {
-                validate_named(ty, &module.module, &declarations, &mut diagnostics);
+                validate_named(
+                    ty,
+                    &module.module,
+                    &declarations,
+                    &generic_parameters,
+                    &mut diagnostics,
+                );
             }
             if kind == "struct" {
                 if let Some(fields) = object.get("fields").and_then(Value::as_array) {
                     for field in fields {
                         if let Some(ty) = field.get("type") {
-                            validate_named(ty, &module.module, &declarations, &mut diagnostics);
+                            validate_named(
+                                ty,
+                                &module.module,
+                                &declarations,
+                                &generic_parameters,
+                                &mut diagnostics,
+                            );
                         }
                     }
                 }
@@ -316,6 +383,7 @@ pub fn emit(
         for imports in [
             referenced_imports(module, &declarations),
             factory_concrete_imports(module, &declarations),
+            resolved_method_imports(module, &modules, &declarations),
         ] {
             for (source, names) in imports {
                 for name in names {
@@ -339,7 +407,7 @@ pub fn emit(
         return Err(diagnostics);
     }
     let mut files = BTreeMap::new();
-    for (path, bytes) in render_runtime(&config.project.name) {
+    for (path, bytes) in render_runtime(&config.project.name, &config.project.version) {
         add_file(
             &mut files,
             &mut diagnostics,
@@ -364,13 +432,19 @@ pub fn emit(
             &mut files,
             &mut diagnostics,
             facade_path(&module.module),
-            finish(render_facade(module, bindings, &declarations, config)),
+            finish(render_facade(
+                module,
+                bindings,
+                &declarations,
+                config,
+                &modules,
+            )),
         );
         add_file(
             &mut files,
             &mut diagnostics,
             stub_path(&module.module),
-            finish(render_stub(module, &declarations)),
+            finish(render_stub(module, &declarations, bindings, &modules)),
         );
     }
     for ir_module in &ir.modules {
@@ -461,6 +535,7 @@ pub fn emit(
                 .replace('/', ".");
             let (kind, concrete, method) = match &binding.kind {
                 PythonCallableKind::Function => ("function", Value::Null, Value::Null),
+                PythonCallableKind::AsyncFunction => ("async_function", Value::Null, Value::Null),
                 PythonCallableKind::ImplMethod { concrete } => (
                     "impl_method",
                     Value::String(concrete.clone()),
@@ -496,9 +571,36 @@ pub fn emit(
         })
         .collect::<Vec<_>>();
     let unresolved = callables
-        .keys()
-        .filter(|symbol| !seen_bindings.contains(*symbol))
-        .cloned()
+        .values()
+        .filter(|callable| !seen_bindings.contains(&callable.cott_symbol))
+        .map(|callable| {
+            let span = callable
+                .declaration
+                .get("span")
+                .and_then(Value::as_object)
+                .expect("validated canonical callable span");
+            let coordinate = |field| {
+                span.get(field)
+                    .and_then(Value::as_u64)
+                    .expect("validated canonical callable span coordinate")
+            };
+            UnresolvedRecord {
+                cott_symbol: callable.cott_symbol.clone(),
+                kind: match &callable.kind {
+                    PythonCallableKind::Function => UnresolvedKind::Function,
+                    PythonCallableKind::AsyncFunction => UnresolvedKind::AsyncFunction,
+                    PythonCallableKind::ImplMethod { .. } => UnresolvedKind::ImplMethod,
+                },
+                span: SourceSpan {
+                    start_byte: coordinate("start_byte"),
+                    end_byte: coordinate("end_byte"),
+                    start_line: coordinate("start_line"),
+                    start_column: coordinate("start_column"),
+                    end_line: coordinate("end_line"),
+                    end_column: coordinate("end_column"),
+                },
+            }
+        })
         .collect::<Vec<_>>();
     let artifact_prefix = Path::new(&config.python.generated)
         .parent()
@@ -515,6 +617,8 @@ pub fn emit(
     let mut snapshot = GenerationSnapshot {
         generation_id: String::new(),
         verified: false,
+        project_version: config.project.version.clone(),
+        compatibility: GenerationCompatibility::current(),
         inputs: json!({}),
         tools: json!({
             "compiler": {"version": env!("CARGO_PKG_VERSION")},
@@ -526,7 +630,7 @@ pub fn emit(
                 "platform": target_platform,
                 "version": "3.14.6",
             },
-            "runtime": {"abi": "1", "version": env!("CARGO_PKG_VERSION")},
+            "runtime": {"abi": RUNTIME_ABI_VERSION.to_string(), "version": env!("CARGO_PKG_VERSION")},
         }),
         ir: Value::Object(ir_hashes),
         contract_surface,
@@ -545,7 +649,7 @@ pub fn emit(
         ));
     } else {
         let record = GenerationRecord {
-            schema_version: 1,
+            schema_version: GENERATION_SCHEMA_VERSION,
             current: snapshot,
             last_verified: None,
         };
@@ -576,6 +680,9 @@ fn validate_declaration(
     let Some(kind) = object.get("kind").and_then(Value::as_str) else {
         return;
     };
+    if kind != "external_type" {
+        validate_generic_parameters(object, module, diagnostics);
+    }
     match kind {
         "external_type" => {}
         "alias" => {
@@ -603,7 +710,158 @@ fn validate_declaration(
                 }
             }
         }
+        "resource" => {
+            required_string(object, "initial", module, diagnostics);
+            let mut states = BTreeMap::new();
+            if let Some(values) = required_array(object, "states", module, diagnostics) {
+                for state in values {
+                    let Some(state) = state.as_object() else {
+                        unsupported(module, "resource state must be an object", diagnostics);
+                        continue;
+                    };
+                    let Some(name) = required_string(state, "name", module, diagnostics) else {
+                        continue;
+                    };
+                    if state.get("source_order").and_then(Value::as_u64).is_none() {
+                        unsupported(
+                            module,
+                            "resource state source_order must be an integer",
+                            diagnostics,
+                        );
+                        continue;
+                    }
+                    if !state.get("terminal").is_some_and(Value::is_boolean) {
+                        unsupported(
+                            module,
+                            "resource state terminal must be a bool",
+                            diagnostics,
+                        );
+                        continue;
+                    }
+                    if states
+                        .insert(
+                            name,
+                            state.get("terminal").and_then(Value::as_bool) == Some(true),
+                        )
+                        .is_some()
+                    {
+                        unsupported(module, "resource state names must be unique", diagnostics);
+                    }
+                }
+            }
+            let mut terminals = BTreeSet::new();
+            let mut previous_order = None;
+            if let Some(values) = required_array(object, "terminals", module, diagnostics) {
+                for terminal in values {
+                    let Some(terminal) = terminal.as_object() else {
+                        unsupported(module, "resource terminal must be an object", diagnostics);
+                        continue;
+                    };
+                    if terminal.len() != 3
+                        || !["state", "source_order", "span"]
+                            .into_iter()
+                            .all(|field| terminal.contains_key(field))
+                    {
+                        unsupported(
+                            module,
+                            "resource terminal must contain exactly state, source_order, and span",
+                            diagnostics,
+                        );
+                        continue;
+                    }
+                    let Some(state) = required_string(terminal, "state", module, diagnostics)
+                    else {
+                        continue;
+                    };
+                    let Some(source_order) = terminal.get("source_order").and_then(Value::as_u64)
+                    else {
+                        unsupported(
+                            module,
+                            "resource terminal source_order must be an integer",
+                            diagnostics,
+                        );
+                        continue;
+                    };
+                    let Some(span) = terminal.get("span") else {
+                        unsupported(module, "resource terminal span is missing", diagnostics);
+                        continue;
+                    };
+                    if !valid_source_span(span) {
+                        unsupported(module, "resource terminal span is malformed", diagnostics);
+                        continue;
+                    }
+                    let Some(is_terminal) = states.get(&state) else {
+                        unsupported(
+                            module,
+                            "resource terminal state must belong to its resource",
+                            diagnostics,
+                        );
+                        continue;
+                    };
+                    if !terminals.insert(state.clone()) {
+                        unsupported(
+                            module,
+                            "resource terminal states must be unique",
+                            diagnostics,
+                        );
+                    }
+                    if previous_order.is_some_and(|previous| source_order <= previous) {
+                        unsupported(
+                            module,
+                            "resource terminals must preserve terminal declaration order",
+                            diagnostics,
+                        );
+                    }
+                    previous_order = Some(source_order);
+                    if !*is_terminal {
+                        unsupported(
+                            module,
+                            "resource terminal must correspond to a terminal state",
+                            diagnostics,
+                        );
+                    }
+                }
+            }
+            let terminal_states = states
+                .into_iter()
+                .filter_map(|(name, terminal)| terminal.then_some(name))
+                .collect::<BTreeSet<_>>();
+            if terminals != terminal_states {
+                unsupported(
+                    module,
+                    "resource terminals must exactly match terminal states",
+                    diagnostics,
+                );
+            }
+            if let Some(edges) = required_array(object, "edges", module, diagnostics) {
+                for edge in edges {
+                    let Some(edge) = edge.as_object() else {
+                        unsupported(module, "resource edge must be an object", diagnostics);
+                        continue;
+                    };
+                    required_string(edge, "from", module, diagnostics);
+                    required_string(edge, "to", module, diagnostics);
+                }
+            }
+        }
         "trait" => {
+            if let Some(associated_types) =
+                required_array(object, "associated_types", module, diagnostics)
+            {
+                for associated in associated_types {
+                    let Some(associated) = associated.as_object() else {
+                        unsupported(module, "associated type must be an object", diagnostics);
+                        continue;
+                    };
+                    required_string(associated, "name", module, diagnostics);
+                    if let Some(bounds) = required_array(associated, "bounds", module, diagnostics)
+                    {
+                        for bound in bounds {
+                            validate_type(bound, module, diagnostics);
+                        }
+                    }
+                }
+            }
             if let Some(methods) = required_array(object, "methods", module, diagnostics) {
                 for method in methods {
                     let Some(method) = method.as_object() else {
@@ -631,6 +889,25 @@ fn validate_declaration(
         }
         "impl" => {
             validate_fields(object, "state", module, diagnostics);
+            if let Some(associated_types) =
+                required_array(object, "associated_types", module, diagnostics)
+            {
+                for associated in associated_types {
+                    let Some(associated) = associated.as_object() else {
+                        unsupported(
+                            module,
+                            "associated type assignment must be an object",
+                            diagnostics,
+                        );
+                        continue;
+                    };
+                    required_string(associated, "name", module, diagnostics);
+                    required_string(associated, "trait", module, diagnostics);
+                    if let Some(ty) = required_value(associated, "type", module, diagnostics) {
+                        validate_type(ty, module, diagnostics);
+                    }
+                }
+            }
             for callable in object
                 .get("init")
                 .into_iter()
@@ -655,6 +932,95 @@ fn validate_declaration(
                 if let Some(ty) = callable.get("return_type") {
                     validate_type(ty, module, diagnostics);
                 }
+                validate_contract_guards(callable.get("contracts"), module, diagnostics);
+            }
+            let Some(selected_methods) =
+                required_array(object, "selected_methods", module, diagnostics)
+            else {
+                return;
+            };
+            let mut selected_explicit = BTreeSet::new();
+            for method in selected_methods {
+                let Some(method) = method.as_object() else {
+                    unsupported(
+                        module,
+                        "selected implementation method must be an object",
+                        diagnostics,
+                    );
+                    continue;
+                };
+                validate_dispatch_slot(method, module, diagnostics);
+                if method
+                    .get("selected")
+                    .and_then(Value::as_object)
+                    .and_then(|selected| selected.get("kind"))
+                    .and_then(Value::as_str)
+                    == Some("explicit")
+                    && let Some(name) = method
+                        .get("trait_method")
+                        .and_then(Value::as_str)
+                        .map(local_name)
+                {
+                    selected_explicit.insert(name.to_owned());
+                }
+            }
+            for method in object
+                .get("methods")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let Some(name) = method.get("name").and_then(Value::as_str).map(local_name) else {
+                    continue;
+                };
+                if !selected_explicit.contains(name) {
+                    unsupported(
+                        module,
+                        format!("implementation method `{name}` is absent from `selected_methods`"),
+                        diagnostics,
+                    );
+                }
+            }
+            for method in object
+                .get("methods")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let Some(method) = method.as_object() else {
+                    unsupported(
+                        module,
+                        "implementation method must be an object",
+                        diagnostics,
+                    );
+                    continue;
+                };
+                if let Some(transitions) =
+                    required_array(method, "transitions", module, diagnostics)
+                {
+                    for transition in transitions {
+                        let Some(transition) = transition.as_object() else {
+                            unsupported(
+                                module,
+                                "implementation transition must be an object",
+                                diagnostics,
+                            );
+                            continue;
+                        };
+                        required_string(transition, "field", module, diagnostics);
+                        required_string(transition, "from", module, diagnostics);
+                        required_string(transition, "resource", module, diagnostics);
+                        required_string(transition, "to", module, diagnostics);
+                    }
+                }
+            }
+            for invariant in object
+                .get("invariants")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                validate_clause_guard(invariant, module, diagnostics);
             }
         }
         "const" => {
@@ -667,6 +1033,15 @@ fn validate_declaration(
         }
         "rule" => {}
         "function" => {
+            match required_string(object, "callable_kind", module, diagnostics).as_deref() {
+                Some("sync" | "async") => {}
+                Some(other) => unsupported(
+                    module,
+                    format!("function callable_kind `{other}` is unsupported"),
+                    diagnostics,
+                ),
+                None => {}
+            }
             let Some(parameters) = required_array(object, "parameters", module, diagnostics) else {
                 return;
             };
@@ -687,6 +1062,7 @@ fn validate_declaration(
             if let Some(ty) = required_value(object, "return_type", module, diagnostics) {
                 validate_type(ty, module, diagnostics);
             }
+            validate_contract_guards(object.get("contract"), module, diagnostics);
         }
         other => unsupported(
             module,
@@ -695,6 +1071,168 @@ fn validate_declaration(
         ),
     }
 }
+
+fn valid_source_span(value: &Value) -> bool {
+    let Some(span) = value.as_object() else {
+        return false;
+    };
+    if span.len() != 6
+        || ![
+            "start_byte",
+            "end_byte",
+            "start_line",
+            "start_column",
+            "end_line",
+            "end_column",
+        ]
+        .into_iter()
+        .all(|field| span.get(field).and_then(Value::as_u64).is_some())
+    {
+        return false;
+    }
+    let start_byte = span["start_byte"].as_u64().expect("validated source span");
+    let end_byte = span["end_byte"].as_u64().expect("validated source span");
+    let start_line = span["start_line"].as_u64().expect("validated source span");
+    let start_column = span["start_column"]
+        .as_u64()
+        .expect("validated source span");
+    let end_line = span["end_line"].as_u64().expect("validated source span");
+    let end_column = span["end_column"].as_u64().expect("validated source span");
+    end_byte >= start_byte
+        && end_line >= start_line
+        && start_line > 0
+        && start_column > 0
+        && end_line > 0
+        && end_column > 0
+}
+fn validate_generic_parameters(
+    object: &serde_json::Map<String, Value>,
+    module: &str,
+    diagnostics: &mut Vec<EmitDiagnostic>,
+) {
+    let Some(parameters) = required_array(object, "generics", module, diagnostics) else {
+        return;
+    };
+    let mut names = BTreeSet::new();
+    for parameter in parameters {
+        let Some(parameter) = parameter.as_object() else {
+            unsupported(module, "generic parameter must be an object", diagnostics);
+            continue;
+        };
+        let Some(name) = required_string(parameter, "name", module, diagnostics) else {
+            continue;
+        };
+        if !valid_python_name(&name) || !names.insert(name) {
+            unsupported(
+                module,
+                "generic parameter names must be unique Python identifiers",
+                diagnostics,
+            );
+        }
+        match required_string(parameter, "kind", module, diagnostics).as_deref() {
+            Some("type") => {
+                if let Some(bounds) = parameter.get("bounds") {
+                    let Some(bounds) = bounds.as_array() else {
+                        unsupported(module, "type generic bounds must be an array", diagnostics);
+                        continue;
+                    };
+                    for bound in bounds {
+                        validate_type(bound, module, diagnostics);
+                    }
+                }
+            }
+            Some("const") => match parameter.get("type").and_then(Value::as_str) {
+                Some("U8" | "U16" | "U32" | "U64") => {}
+                _ => unsupported(
+                    module,
+                    "const generic type must be U8, U16, U32, or U64",
+                    diagnostics,
+                ),
+            },
+            Some(other) => unsupported(
+                module,
+                format!("generic parameter kind `{other}` is unsupported"),
+                diagnostics,
+            ),
+            None => {}
+        }
+    }
+}
+fn validate_dispatch_slot(
+    method: &serde_json::Map<String, Value>,
+    module: &str,
+    diagnostics: &mut Vec<EmitDiagnostic>,
+) {
+    required_string(method, "trait_method", module, diagnostics);
+    if let Some(receiver) = required_value(method, "receiver_type", module, diagnostics) {
+        validate_type(receiver, module, diagnostics);
+    }
+    let Some(selected) =
+        required_value(method, "selected", module, diagnostics).and_then(Value::as_object)
+    else {
+        unsupported(
+            module,
+            "dispatch slot selected value must be an object",
+            diagnostics,
+        );
+        return;
+    };
+    if !matches!(
+        selected.get("kind").and_then(Value::as_str),
+        Some("explicit" | "default")
+    ) {
+        unsupported(
+            module,
+            "dispatch slot kind must be explicit or default",
+            diagnostics,
+        );
+    }
+    let Some(function) = selected.get("function").and_then(Value::as_object) else {
+        unsupported(
+            module,
+            "dispatch slot function must be an object",
+            diagnostics,
+        );
+        return;
+    };
+    let Some(function_module) = function.get("module").and_then(Value::as_str) else {
+        unsupported(
+            module,
+            "dispatch function module must be a dotted identifier",
+            diagnostics,
+        );
+        return;
+    };
+    let Some(symbol) = function.get("symbol").and_then(Value::as_str) else {
+        unsupported(
+            module,
+            "dispatch function symbol must be a dotted identifier",
+            diagnostics,
+        );
+        return;
+    };
+    let Some(verified_facade) = function.get("verified_facade").and_then(Value::as_str) else {
+        unsupported(
+            module,
+            "dispatch function verified_facade must be a string",
+            diagnostics,
+        );
+        return;
+    };
+    if function_module
+        .split('.')
+        .chain(symbol.split('.'))
+        .any(|part| !valid_python_name(part))
+        || verified_facade != format!("{function_module}.{symbol}")
+    {
+        unsupported(
+            module,
+            "dispatch function provenance must identify its exact verified facade",
+            diagnostics,
+        );
+    }
+}
+
 fn validate_external_types(
     modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
     declarations: &BTreeMap<String, String>,
@@ -711,6 +1249,7 @@ fn validate_external_types(
                     })
                 })
                 .map_or("python", |module| module.module.as_str());
+
             diagnostics.push(diag(
                 module_path(module),
                 format!("external type `{name}` has no Python projection"),
@@ -738,6 +1277,98 @@ fn validate_external_types(
                 format!("Python external type projection `{name}` is stale"),
             )),
         }
+    }
+}
+fn validate_contract_guards(
+    contract: Option<&Value>,
+    module: &str,
+    diagnostics: &mut Vec<EmitDiagnostic>,
+) {
+    let Some(contract) = contract.and_then(Value::as_object) else {
+        return;
+    };
+    if let Some(clauses) = contract.get("clauses").and_then(Value::as_array) {
+        for clause in clauses {
+            validate_clause_guard(clause, module, diagnostics);
+        }
+    }
+    for name in ["requires", "errors", "ensures"] {
+        for clause in contract
+            .get(name)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            validate_clause_guard(clause, module, diagnostics);
+        }
+    }
+}
+
+fn validate_clause_guard(clause: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnostic>) {
+    let Some(guard) = clause.get("guard").filter(|guard| !guard.is_null()) else {
+        return;
+    };
+    let Some(guard) = guard.as_object() else {
+        unsupported(module, "contract guard must be an object", diagnostics);
+        return;
+    };
+    if !guard.get("scrutinee").is_some_and(Value::is_object) {
+        unsupported(
+            module,
+            "contract guard scrutinee must be an expression",
+            diagnostics,
+        );
+    }
+    if let Some(pattern) = guard.get("pattern") {
+        validate_contract_pattern(pattern, module, diagnostics);
+    } else {
+        unsupported(module, "contract guard pattern is missing", diagnostics);
+    }
+}
+
+fn validate_contract_pattern(pattern: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnostic>) {
+    let Some(pattern) = pattern.as_object() else {
+        unsupported(module, "contract pattern must be an object", diagnostics);
+        return;
+    };
+    let Some(kind) = pattern.get("kind").and_then(Value::as_str) else {
+        unsupported(module, "contract pattern kind is missing", diagnostics);
+        return;
+    };
+    if let Some(ty) = pattern.get("type") {
+        validate_type(ty, module, diagnostics);
+    } else {
+        unsupported(module, "contract pattern type is missing", diagnostics);
+    }
+    match kind {
+        "wildcard" => {}
+        "binding" => {
+            if !pattern
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(valid_python_name)
+            {
+                unsupported(
+                    module,
+                    "contract binding pattern name is invalid",
+                    diagnostics,
+                );
+            }
+        }
+        "variant" | "result_ok" | "result_err" | "option_some" | "option_none" | "enum" => {
+            required_string(pattern, "symbol", module, diagnostics);
+            let Some(arguments) = required_array(pattern, "arguments", module, diagnostics) else {
+                return;
+            };
+            for argument in arguments {
+                validate_contract_pattern(argument, module, diagnostics);
+            }
+        }
+        _ => unsupported(
+            module,
+            format!("contract pattern kind `{kind}` is unsupported"),
+            diagnostics,
+        ),
     }
 }
 
@@ -808,14 +1439,43 @@ fn validate_type(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnost
         }
         "named" => {
             required_string(object, "name", module, diagnostics);
-            if let Some(args) = object.get("args").and_then(Value::as_array) {
-                for arg in args {
-                    validate_type(arg, module, diagnostics);
+            let Some(args) = required_array(object, "args", module, diagnostics) else {
+                return;
+            };
+            for arg in args {
+                let Some(arg) = arg.as_object() else {
+                    unsupported(module, "generic argument must be an object", diagnostics);
+                    continue;
+                };
+                match required_string(arg, "kind", module, diagnostics).as_deref() {
+                    Some("type") => {
+                        if let Some(ty) = required_value(arg, "type", module, diagnostics) {
+                            validate_type(ty, module, diagnostics);
+                        }
+                    }
+                    Some("const") => {
+                        if let Some(value) = required_value(arg, "value", module, diagnostics) {
+                            validate_const_argument(value, None, "generic", module, diagnostics);
+                        }
+                    }
+                    Some(other) => unsupported(
+                        module,
+                        format!("generic argument kind `{other}` is unsupported"),
+                        diagnostics,
+                    ),
+                    None => {}
                 }
             }
         }
         "type_parameter" => {
             required_string(object, "name", module, diagnostics);
+        }
+        "associated_projection" => {
+            required_string(object, "name", module, diagnostics);
+            required_string(object, "trait", module, diagnostics);
+            if let Some(base) = required_value(object, "base", module, diagnostics) {
+                validate_type(base, module, diagnostics);
+            }
         }
         "list" | "set" | "option" | "iterator" => {
             if let Some(item) = required_value(object, "item", module, diagnostics) {
@@ -834,13 +1494,20 @@ fn validate_type(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnost
                 }
             }
         }
-        "tuple2" => {
-            for field in ["first", "second"] {
-                if let Some(item) = required_value(object, field, module, diagnostics) {
+        "tuple" => {
+            if let Some(items) = required_array(object, "items", module, diagnostics) {
+                for item in items {
                     validate_type(item, module, diagnostics);
                 }
             }
         }
+        "array" => {
+            if let Some(item) = required_value(object, "item", module, diagnostics) {
+                validate_type(item, module, diagnostics);
+            }
+            validate_fixed_length(object, "length", module, diagnostics);
+        }
+        "buffer" => validate_fixed_length(object, "length", module, diagnostics),
         "result" => {
             for field in ["ok", "error"] {
                 if let Some(item) = required_value(object, field, module, diagnostics) {
@@ -865,6 +1532,120 @@ fn validate_type(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnost
         ),
     }
 }
+fn validate_fixed_length(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    module: &str,
+    diagnostics: &mut Vec<EmitDiagnostic>,
+) {
+    let Some(length) = object.get(field) else {
+        unsupported(
+            module,
+            format!("{field} must be a const argument object"),
+            diagnostics,
+        );
+        return;
+    };
+    validate_const_argument(length, None, field, module, diagnostics);
+}
+
+fn validate_const_argument(
+    value: &Value,
+    expected_type: Option<&str>,
+    label: &str,
+    module: &str,
+    diagnostics: &mut Vec<EmitDiagnostic>,
+) {
+    let Some(argument) = value.as_object() else {
+        unsupported(
+            module,
+            format!("{label} const argument must be an object"),
+            diagnostics,
+        );
+        return;
+    };
+    let Some(ty) = argument.get("type").and_then(Value::as_str) else {
+        unsupported(
+            module,
+            format!("{label} const argument type is missing"),
+            diagnostics,
+        );
+        return;
+    };
+    if expected_type.is_some_and(|expected| expected != ty) {
+        unsupported(
+            module,
+            format!("{label} const argument type does not match its parameter"),
+            diagnostics,
+        );
+        return;
+    }
+    let maximum = match ty {
+        "U8" => u8::MAX as u64,
+        "U16" => u16::MAX as u64,
+        "U32" => u32::MAX as u64,
+        "U64" => u64::MAX,
+        _ => {
+            unsupported(
+                module,
+                format!("{label} const argument type is unsupported"),
+                diagnostics,
+            );
+            return;
+        }
+    };
+    match argument.get("kind").and_then(Value::as_str) {
+        Some("value") => match argument.get("value").and_then(Value::as_u64) {
+            Some(value) if value <= maximum => {}
+            _ => unsupported(
+                module,
+                format!("{label} const value is outside its type range"),
+                diagnostics,
+            ),
+        },
+        Some("parameter") => {
+            if !argument
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(valid_python_name)
+            {
+                unsupported(
+                    module,
+                    format!("{label} const parameter name is invalid"),
+                    diagnostics,
+                );
+            }
+        }
+        _ => unsupported(
+            module,
+            format!("{label} const argument kind is unsupported"),
+            diagnostics,
+        ),
+    }
+}
+
+fn render_fixed_length(value: &Value, typevar_names: &BTreeMap<String, String>) -> String {
+    let object = value.as_object().expect("validated fixed length");
+    match object.get("kind").and_then(Value::as_str) {
+        Some("value") => object
+            .get("value")
+            .and_then(Value::as_u64)
+            .expect("validated fixed length value")
+            .to_string(),
+        Some("parameter") => {
+            let name = object
+                .get("name")
+                .and_then(Value::as_str)
+                .expect("validated fixed length parameter");
+            typevar_names
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| name.to_owned())
+        }
+        _ => unreachable!("validated fixed length kind"),
+    }
+}
+
 fn validate_value(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnostic>) {
     let Some(object) = value.as_object() else {
         unsupported(module, "value must be an object", diagnostics);
@@ -917,11 +1698,27 @@ fn validate_value(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnos
                 }
             }
         }
-        "tuple2" => {
-            for field in ["first", "second"] {
-                if let Some(item) = required_value(object, field, module, diagnostics) {
+        "tuple" | "array" => {
+            if let Some(items) = required_array(object, "items", module, diagnostics) {
+                for item in items {
                     validate_value(item, module, diagnostics);
                 }
+            }
+        }
+        "buffer" => {
+            let Some(hex) = required_string(object, "hex", module, diagnostics) else {
+                return;
+            };
+            if hex.len() % 2 != 0
+                || hex
+                    .bytes()
+                    .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+            {
+                unsupported(
+                    module,
+                    "buffer hex must be lowercase hexadecimal with an even length",
+                    diagnostics,
+                );
             }
         }
         "named" => {
@@ -960,7 +1757,7 @@ fn render_types(
     external_types: &BTreeMap<String, String>,
 ) -> Vec<u8> {
     let mut out = String::from(
-        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport dataclasses as _dataclasses\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import Annotated, Any, Final, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable\n\nfrom cott_runtime import CottContractViolation, CottExternal, CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_normalize_f32, _cott_validate_abi\n",
+        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport dataclasses as _dataclasses\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import Annotated, Any, Final, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable\n\nfrom cott_runtime import CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_normalize_f32, _cott_validate_abi\n",
     );
     for (source, name, alias) in external_imports(module, external_types) {
         writeln!(out, "from {source} import {name} as {alias}").unwrap();
@@ -991,9 +1788,10 @@ fn render_types(
         declaration
             .get("generics")
             .and_then(Value::as_array)
-            .is_some_and(|generics| !generics.is_empty())
+            .is_some_and(|parameters| !parameters.is_empty())
     });
     render_generic_typevars(&mut out, module, declarations, false, true);
+    render_associated_typevars(&mut out, module, declarations);
     if has_generics {
         out.push('\n');
     }
@@ -1164,6 +1962,44 @@ fn render_type_declaration(
                 &typevar_names,
             );
         }
+        "resource" => {
+            let states = object.get("states").and_then(Value::as_array).unwrap();
+            for state in states {
+                let state_name = format!(
+                    "{name}_{}",
+                    local_name(
+                        state
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                    )
+                );
+                writeln!(
+                    out,
+                    "@final\nclass {state_name}:\n    __slots__ = ()\n    _instance: {state_name} | None = None\n\n    def __new__(cls) -> {state_name}:\n        if cls._instance is None:\n            cls._instance = object.__new__(cls)\n        return cls._instance\n\n    def __repr__(self) -> str:\n        return {}",
+                    json_string(&format!("{name}.{}", local_name(state.get("name").and_then(Value::as_str).unwrap_or_default())))
+                )
+                .unwrap();
+            }
+            writeln!(
+                out,
+                "{name}: TypeAlias = Union[{}]\n",
+                states
+                    .iter()
+                    .map(|state| format!(
+                        "{name}_{}",
+                        local_name(
+                            state
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                        )
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+            .unwrap();
+        }
         "enum" => {
             let variants = object.get("variants").and_then(Value::as_array).unwrap();
             for variant in variants {
@@ -1306,6 +2142,16 @@ fn generic_parameters_with_names(
         .collect::<Vec<_>>()
         .join(", ")
 }
+fn render_const_generic_type(name: &str) -> &'static str {
+    match name {
+        "U8" => "U8",
+        "U16" => "U16",
+        "U32" => "U32",
+        "U64" => "U64",
+        _ => "int",
+    }
+}
+
 fn generic_specs<'a>(
     module: &'a crate::python::artifact_plan::PythonArtifactModule,
     functions_only: bool,
@@ -1323,6 +2169,7 @@ fn generic_specs<'a>(
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
+            .filter(|generic| generic.get("kind").and_then(Value::as_str) == Some("type"))
         {
             let Some(name) = generic.get("name").and_then(Value::as_str) else {
                 continue;
@@ -1362,10 +2209,8 @@ fn generic_typevar_name(
             .flatten()
             .filter(|generic| generic.get("name").and_then(Value::as_str) == Some(name))
         {
-            signatures.insert(
-                serde_json::to_string(generic.get("bounds").unwrap_or(&Value::Null))
-                    .expect("generic bounds serialize"),
-            );
+            signatures
+                .insert(serde_json::to_string(generic).expect("generic parameter serializes"));
         }
     }
     if signatures.len() <= 1 {
@@ -1381,6 +2226,100 @@ fn generic_typevar_name(
         ),
         name
     )
+}
+fn associated_typevar_name(trait_name: &str, associated_name: &str) -> String {
+    format!(
+        "_cott_{}_{}",
+        trait_name.replace('.', "_"),
+        associated_name.replace('.', "_")
+    )
+}
+
+fn render_associated_typevars(
+    out: &mut String,
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    declarations: &BTreeMap<String, String>,
+) {
+    for trait_declaration in module
+        .declarations
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|declaration| declaration.get("kind").and_then(Value::as_str) == Some("trait"))
+    {
+        let trait_name = trait_declaration
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        for associated in trait_declaration
+            .get("associated_types")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_object)
+        {
+            let name = associated
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let bounds = associated
+                .get("bounds")
+                .and_then(Value::as_array)
+                .map(|bounds| bounds.iter().collect::<Vec<_>>())
+                .unwrap_or_default();
+            let typevar = associated_typevar_name(trait_name, name);
+            match bounds.as_slice() {
+                [] => writeln!(out, "{typevar} = TypeVar({})", json_string(&typevar)).unwrap(),
+                [bound] => writeln!(
+                    out,
+                    "{typevar} = TypeVar({}, bound={})",
+                    json_string(&typevar),
+                    render_type(bound, &module.module, declarations)
+                )
+                .unwrap(),
+                _ => {
+                    render_bound_protocol(out, module, declarations, &typevar, &bounds);
+                    writeln!(
+                        out,
+                        "{typevar} = TypeVar({}, bound=_cott_{typevar}_Bounds)",
+                        json_string(&typevar)
+                    )
+                    .unwrap();
+                }
+            }
+        }
+    }
+    if module.declarations.iter().any(|declaration| {
+        declaration.get("kind").and_then(Value::as_str) == Some("trait")
+            && declaration
+                .get("associated_types")
+                .and_then(Value::as_array)
+                .is_some_and(|types| !types.is_empty())
+    }) {
+        out.push('\n');
+    }
+}
+fn associated_typevar_names(
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+) -> Vec<String> {
+    module
+        .declarations
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|declaration| declaration.get("kind").and_then(Value::as_str) == Some("trait"))
+        .flat_map(|trait_declaration| {
+            let trait_name = trait_declaration
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            trait_declaration
+                .get("associated_types")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|associated| associated.get("name").and_then(Value::as_str))
+                .map(move |associated| associated_typevar_name(trait_name, associated))
+        })
+        .collect()
 }
 
 fn generic_typevar_names(
@@ -1438,16 +2377,26 @@ fn render_generic_typevars(
             if !rendered.insert(typevar.clone()) {
                 continue;
             }
-            if bounds.len() > 1 && render_composites {
-                render_bound_protocol(out, module, declarations, &typevar, &bounds);
-            }
-            let declaration = match bounds.as_slice() {
-                [bound] => format!(
+            let declaration = match generic.get("kind").and_then(Value::as_str) {
+                Some("const") => format!(
                     ", bound={}",
-                    render_type(bound, &module.module, declarations)
+                    generic
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .map(render_const_generic_type)
+                        .unwrap_or("int")
                 ),
-                [_first, ..] => format!(", bound=_cott_{typevar}_Bounds"),
-                [] => String::new(),
+                Some("type") => match bounds.as_slice() {
+                    [bound] => format!(
+                        ", bound={}",
+                        render_type(bound, &module.module, declarations)
+                    ),
+                    [_first, ..] if render_composites => {
+                        format!(", bound=_cott_{typevar}_Bounds")
+                    }
+                    _ => String::new(),
+                },
+                _ => String::new(),
             };
             writeln!(
                 out,
@@ -1490,6 +2439,7 @@ fn render_function_bound_protocols(
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
+            .filter(|generic| generic.get("kind").and_then(Value::as_str) == Some("type"))
         {
             let bounds = generic
                 .get("bounds")
@@ -1521,6 +2471,7 @@ fn function_bound_protocol_names(
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
+            .filter(|generic| generic.get("kind").and_then(Value::as_str) == Some("type"))
         {
             if generic
                 .get("bounds")
@@ -1652,19 +2603,482 @@ fn render_function_typevars(
     out.push('\n');
     render_generic_typevars(out, module, declarations, true, render_composites);
 }
+fn validate_impl_selections(
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+    diagnostics: &mut Vec<EmitDiagnostic>,
+) {
+    for module in modules.values() {
+        for implementation in module
+            .declarations
+            .iter()
+            .filter_map(Value::as_object)
+            .filter(|declaration| declaration.get("kind").and_then(Value::as_str) == Some("impl"))
+        {
+            let mut selected = BTreeMap::new();
+            for slot in implementation
+                .get("selected_methods")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let Some(name) = slot
+                    .get("trait_method")
+                    .and_then(Value::as_str)
+                    .map(local_name)
+                else {
+                    continue;
+                };
+                let Some(method) = resolve_impl_slot(implementation, slot, modules) else {
+                    unsupported(
+                        &module.module,
+                        format!("selected implementation method `{name}` cannot be resolved"),
+                        diagnostics,
+                    );
+                    continue;
+                };
+                if let Some(previous) = selected.insert(name.to_owned(), method.clone())
+                    && !same_selected_method(&previous, &method)
+                {
+                    unsupported(
+                        &module.module,
+                        format!("selected implementation method `{name}` has conflicting slots"),
+                        diagnostics,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn same_selected_method(left: &Value, right: &Value) -> bool {
+    [
+        "selected",
+        "parameters",
+        "return_type",
+        "contract",
+        "contracts",
+        "effects",
+        "modifies",
+    ]
+    .iter()
+    .all(|field| left.get(*field) == right.get(*field))
+}
+
+fn resolved_impl_methods(
+    implementation: &serde_json::Map<String, Value>,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+) -> Vec<Value> {
+    let mut names = BTreeSet::new();
+    implementation
+        .get("selected_methods")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|slot| {
+            let name = slot
+                .get("trait_method")
+                .and_then(Value::as_str)
+                .map(local_name)?;
+            names
+                .insert(name.to_owned())
+                .then(|| resolve_impl_slot(implementation, slot, modules))
+                .flatten()
+        })
+        .collect()
+}
+
+fn resolve_impl_slot(
+    implementation: &serde_json::Map<String, Value>,
+    slot: &Value,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+) -> Option<Value> {
+    let trait_method = slot.get("trait_method")?.as_str()?;
+    let method_name = local_name(trait_method);
+    let selected = slot.get("selected")?.as_object()?;
+    let mut method = match selected.get("kind")?.as_str()? {
+        "explicit" => implementation
+            .get("methods")?
+            .as_array()?
+            .iter()
+            .find(|method| {
+                method.get("name").and_then(Value::as_str).map(local_name) == Some(method_name)
+            })?
+            .clone(),
+        "default" => resolve_trait_default(implementation, trait_method, selected, modules)?,
+        _ => return None,
+    };
+    let method = method.as_object_mut()?;
+    method.insert("name".to_owned(), Value::String(method_name.to_owned()));
+    method.insert("selected".to_owned(), Value::Object(selected.clone()));
+    method.insert(
+        "receiver_type".to_owned(),
+        slot.get("receiver_type").cloned().unwrap_or(Value::Null),
+    );
+    method.insert(
+        "trait_method".to_owned(),
+        Value::String(trait_method.to_owned()),
+    );
+    if selected.get("kind").and_then(Value::as_str) == Some("default") {
+        let (contracts, effects) = default_method_contract(method);
+        method.insert("contracts".to_owned(), contracts);
+        method.insert("effects".to_owned(), effects);
+        method.insert("modifies".to_owned(), json!([]));
+    }
+    let mut resolved = Value::Object(method.clone());
+    substitute_associated_types(&mut resolved, implementation);
+    Some(resolved)
+}
+
+fn default_method_contract(method: &serde_json::Map<String, Value>) -> (Value, Value) {
+    let clauses = method
+        .get("contract")
+        .and_then(Value::as_object)
+        .and_then(|contract| contract.get("clauses"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let clauses_for = |kind| {
+        clauses
+            .iter()
+            .filter(|clause| clause.get("kind").and_then(Value::as_str) == Some(kind))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    (
+        json!({
+            "doc": method
+                .get("doc")
+                .and_then(Value::as_object)
+                .and_then(|doc| doc.get("text"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            "requires": clauses_for("requires"),
+            "errors": clauses_for("error"),
+            "ensures": clauses_for("ensures"),
+        }),
+        method
+            .get("contract")
+            .and_then(Value::as_object)
+            .and_then(|contract| contract.get("effects"))
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    )
+}
+
+fn resolve_trait_default(
+    implementation: &serde_json::Map<String, Value>,
+    trait_method: &str,
+    selected: &serde_json::Map<String, Value>,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+) -> Option<Value> {
+    let (trait_name, method_name) = trait_method.rsplit_once('.')?;
+    let trait_declaration = modules
+        .values()
+        .flat_map(|module| &module.declarations)
+        .filter_map(Value::as_object)
+        .find(|declaration| {
+            declaration.get("kind").and_then(Value::as_str) == Some("trait")
+                && declaration.get("name").and_then(Value::as_str) == Some(trait_name)
+        })?;
+    let trait_ref = implementation
+        .get("traits")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_object)
+        .find(|trait_ref| {
+            trait_ref.get("kind").and_then(Value::as_str) == Some("named")
+                && trait_ref.get("name").and_then(Value::as_str) == Some(trait_name)
+        })?;
+    let mut method = trait_declaration
+        .get("methods")?
+        .as_array()?
+        .iter()
+        .find(|method| {
+            method.get("name").and_then(Value::as_str).map(local_name) == Some(method_name)
+        })?
+        .clone();
+    (method.get("default")? == selected.get("function")?).then_some(())?;
+    substitute_trait_arguments(&mut method, trait_declaration, trait_ref);
+    Some(method)
+}
+
+fn substitute_trait_arguments(
+    value: &mut Value,
+    trait_declaration: &serde_json::Map<String, Value>,
+    trait_ref: &serde_json::Map<String, Value>,
+) {
+    let mut types = BTreeMap::new();
+    let mut constants = BTreeMap::new();
+    for (parameter, argument) in trait_declaration
+        .get("generics")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+        .zip(
+            trait_ref
+                .get("args")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten(),
+        )
+    {
+        let Some(name) = parameter.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        match parameter.get("kind").and_then(Value::as_str) {
+            Some("type") => {
+                if let Some(argument) = argument.get("type") {
+                    types.insert(name.to_owned(), argument.clone());
+                }
+            }
+            Some("const") => {
+                if let Some(argument) = argument.get("value") {
+                    constants.insert(name.to_owned(), argument.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    substitute_generic_arguments(value, &types, &constants);
+}
+
+fn substitute_generic_arguments(
+    value: &mut Value,
+    types: &BTreeMap<String, Value>,
+    constants: &BTreeMap<String, Value>,
+) {
+    let replacement = value.as_object().and_then(|object| {
+        match (
+            object.get("kind").and_then(Value::as_str),
+            object.get("name").and_then(Value::as_str),
+        ) {
+            (Some("type_parameter"), Some(name)) => types.get(name).cloned(),
+            (Some("parameter"), Some(name)) => constants.get(name).cloned(),
+            _ => None,
+        }
+    });
+    if let Some(replacement) = replacement {
+        *value = replacement;
+        return;
+    }
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                substitute_generic_arguments(value, types, constants);
+            }
+        }
+        Value::Object(object) => {
+            for value in object.values_mut() {
+                substitute_generic_arguments(value, types, constants);
+            }
+        }
+        _ => {}
+    }
+}
+fn substitute_associated_types(value: &mut Value, implementation: &serde_json::Map<String, Value>) {
+    let replacement = value.as_object().and_then(|projection| {
+        (projection.get("kind").and_then(Value::as_str) == Some("associated_projection")).then(
+            || {
+                let trait_name = projection.get("trait").and_then(Value::as_str)?;
+                let name = projection.get("name").and_then(Value::as_str)?;
+                implementation
+                    .get("associated_types")?
+                    .as_array()?
+                    .iter()
+                    .filter_map(Value::as_object)
+                    .find(|assignment| {
+                        assignment.get("trait").and_then(Value::as_str) == Some(trait_name)
+                            && assignment
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .map(local_name)
+                                == Some(local_name(name))
+                    })?
+                    .get("type")
+                    .cloned()
+            },
+        )?
+    });
+    if let Some(replacement) = replacement {
+        *value = replacement;
+        return;
+    }
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                substitute_associated_types(value, implementation);
+            }
+        }
+        Value::Object(object) => {
+            for value in object.values_mut() {
+                substitute_associated_types(value, implementation);
+            }
+        }
+        _ => {}
+    }
+}
+fn default_dispatch<'a>(
+    method: &'a serde_json::Map<String, Value>,
+) -> Option<&'a serde_json::Map<String, Value>> {
+    method
+        .get("selected")
+        .and_then(Value::as_object)
+        .filter(|selected| selected.get("kind").and_then(Value::as_str) == Some("default"))
+        .and_then(|selected| selected.get("function"))
+        .and_then(Value::as_object)
+}
+
+fn default_alias(implementation: &str, method: &str) -> String {
+    format!("_cott_default_{implementation}_{method}")
+}
+
+fn default_dispatch_resolved(
+    function: &serde_json::Map<String, Value>,
+    bindings: &[ResolvedBinding],
+) -> bool {
+    let Some(module) = function.get("module").and_then(Value::as_str) else {
+        return false;
+    };
+
+    let Some(symbol) = function.get("symbol").and_then(Value::as_str) else {
+        return false;
+    };
+    bindings.iter().any(|binding| {
+        binding.module == module
+            && binding.function == symbol
+            && matches!(&binding.kind, PythonCallableKind::Function)
+    })
+}
+fn resolved_method_imports(
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+    declarations: &BTreeMap<String, String>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut imports = BTreeMap::new();
+    for implementation in module
+        .declarations
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|declaration| declaration.get("kind").and_then(Value::as_str) == Some("impl"))
+    {
+        for method in resolved_impl_methods(implementation, modules) {
+            for parameter in method
+                .get("parameters")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(ty) = parameter.get("type") {
+                    collect_named(ty, &module.module, declarations, &mut imports);
+                }
+            }
+            if let Some(ty) = method.get("return_type") {
+                collect_named(ty, &module.module, declarations, &mut imports);
+            }
+            for transition in method
+                .get("transitions")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                for state in ["from", "to"] {
+                    if let Some(symbol) = transition.get(state).and_then(Value::as_str) {
+                        collect_symbol(symbol, &module.module, declarations, &mut imports, true);
+                    }
+                }
+            }
+        }
+    }
+    imports
+}
+fn resolved_factory_imports(
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+    declarations: &BTreeMap<String, String>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut imports = BTreeMap::new();
+    for implementation in module
+        .declarations
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|declaration| declaration.get("kind").and_then(Value::as_str) == Some("impl"))
+    {
+        for method in resolved_impl_methods(implementation, modules) {
+            collect_factory_concrete_imports(&method, &module.module, declarations, &mut imports);
+        }
+    }
+    imports
+}
+
+fn render_default_aliases(
+    out: &mut String,
+    module: &crate::python::artifact_plan::PythonArtifactModule,
+    bindings: &[ResolvedBinding],
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
+) {
+    for implementation in module
+        .declarations
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|declaration| declaration.get("kind").and_then(Value::as_str) == Some("impl"))
+    {
+        let implementation_name = local_name(
+            implementation
+                .get("name")
+                .and_then(Value::as_str)
+                .expect("validated implementation name"),
+        );
+        for method in resolved_impl_methods(implementation, modules)
+            .iter()
+            .filter_map(Value::as_object)
+        {
+            let Some(function) = default_dispatch(method) else {
+                continue;
+            };
+            if !default_dispatch_resolved(function, bindings) {
+                continue;
+            }
+            let target_module = function
+                .get("module")
+                .and_then(Value::as_str)
+                .expect("validated default module");
+            let target_symbol = function
+                .get("symbol")
+                .and_then(Value::as_str)
+                .expect("validated default symbol");
+            let method_name = method
+                .get("name")
+                .and_then(Value::as_str)
+                .expect("validated implementation method name");
+            let alias = default_alias(implementation_name, method_name);
+            if target_module == module.module {
+                writeln!(out, "\n{alias} = {target_symbol}").unwrap();
+            } else {
+                writeln!(
+                    out,
+                    "\nfrom {target_module} import {target_symbol} as {alias}"
+                )
+                .unwrap();
+            }
+        }
+    }
+}
+
 fn render_facade(
     module: &crate::python::artifact_plan::PythonArtifactModule,
-
     bindings: &[ResolvedBinding],
     declarations: &BTreeMap<String, String>,
     config: &ProjectConfig,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
 ) -> Vec<u8> {
     let mut out = String::from(
-        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport dataclasses as _dataclasses\nimport threading as _threading\nfrom pathlib import Path\nfrom typing import Any, Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import CottContractViolation, CottList, CottSet, CottTuple2, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi\n",
+        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport dataclasses as _dataclasses\nimport threading as _threading\nfrom pathlib import Path\nfrom typing import Any, Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi\n",
     );
     let names = exported_names(module);
     let mut local_imports = type_exported_names(module);
     local_imports.extend(function_bound_protocol_names(module));
+    local_imports.extend(associated_typevar_names(module));
     if !local_imports.is_empty() {
         writeln!(
             out,
@@ -1674,7 +3088,11 @@ fn render_facade(
         )
         .unwrap();
     }
-    for (source, names) in referenced_imports(module, declarations) {
+    let mut imports = referenced_imports(module, declarations);
+    for (source, names) in resolved_method_imports(module, modules, declarations) {
+        imports.entry(source).or_default().extend(names);
+    }
+    for (source, names) in imports {
         writeln!(
             out,
             "from {} import {}",
@@ -1683,7 +3101,11 @@ fn render_facade(
         )
         .unwrap();
     }
-    for (source, names) in factory_concrete_imports(module, declarations) {
+    let mut factory_imports = factory_concrete_imports(module, declarations);
+    for (source, names) in resolved_factory_imports(module, modules, declarations) {
+        factory_imports.entry(source).or_default().extend(names);
+    }
+    for (source, names) in factory_imports {
         writeln!(
             out,
             "from {source} import {}",
@@ -1691,7 +3113,7 @@ fn render_facade(
         )
         .unwrap();
     }
-    render_function_typevars(&mut out, module, declarations, false);
+    render_function_typevars(&mut out, module, declarations, true);
     let boundary = config.python.runtime_validation == RuntimeValidation::Boundary;
     let test_only = config.python.runtime_validation == RuntimeValidation::TestOnly;
     if test_only {
@@ -1735,7 +3157,13 @@ fn render_facade(
             declarations,
             &typevar_names,
         );
-        writeln!(out, "\ndef {function}({signature}) -> {return_type}:").unwrap();
+        let asynchronous = object.get("callable_kind").and_then(Value::as_str) == Some("async");
+        writeln!(
+            out,
+            "\n{}def {function}({signature}) -> {return_type}:",
+            if asynchronous { "async " } else { "" }
+        )
+        .unwrap();
         render_indented_doc(&mut out, object.get("doc"));
         for (name, ty) in &parameters {
             let path = json_string(&format!("$.{name}"));
@@ -1787,7 +3215,12 @@ fn render_facade(
             json_string(&format!("{}.{}", module.module, function)),
         )
         .unwrap();
-        writeln!(out, "        _result = _implementation({call})").unwrap();
+        writeln!(
+            out,
+            "        _result = {}_implementation({call})",
+            if asynchronous { "await " } else { "" }
+        )
+        .unwrap();
         writeln!(
             out,
             "    except CottContractViolation as _error:\n        if _error.symbol is None or _error.symbol == \"_cott_load\":\n            _error.symbol = {}\n        if _error.span is None:\n            _error.span = {function_span}\n        raise",
@@ -1849,12 +3282,14 @@ fn render_facade(
             exported.push(function.to_owned());
         }
     }
+    render_default_aliases(&mut out, module, bindings, modules);
     render_impl_classes(
         &mut out,
         module,
         bindings,
         declarations,
         config,
+        modules,
         boundary,
         test_only,
     );
@@ -1878,6 +3313,7 @@ fn render_impl_classes(
     bindings: &[ResolvedBinding],
     declarations: &BTreeMap<String, String>,
     config: &ProjectConfig,
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
     boundary: bool,
     test_only: bool,
 ) {
@@ -1998,11 +3434,8 @@ fn render_impl_classes(
             8,
         );
 
-        for method in implementation
-            .get("methods")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
+        for method in resolved_impl_methods(implementation, modules)
+            .iter()
             .filter_map(Value::as_object)
         {
             let method_name = method
@@ -2010,12 +3443,15 @@ fn render_impl_classes(
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             let cott_symbol = format!("{}.{}.{}", module.module, name, method_name);
-            let Some(binding) = bindings
+            let default = default_dispatch(method);
+            let binding = bindings
                 .iter()
-                .find(|binding| binding.cott_symbol == cott_symbol)
-            else {
+                .find(|binding| binding.cott_symbol == cott_symbol);
+            if (default.is_none() && binding.is_none())
+                || default.is_some_and(|function| !default_dispatch_resolved(function, bindings))
+            {
                 continue;
-            };
+            }
             let (signature, call, parameters) = render_impl_parameters(
                 method
                     .get("parameters")
@@ -2072,23 +3508,35 @@ fn render_impl_classes(
             render_contract_block(out, &contract, true, boundary, test_only, 8);
             let span = serde_json::to_string(method.get("span").unwrap()).expect("span serializes");
             out.push_str("            try:\n");
-            writeln!(
-                out,
-                "                _implementation = _cott_load({}, {}, {}, expected_project_name={}, expected_cott_symbol={})",
-                json_string(&path_string(&binding.generated_relative)),
-                json_string(&binding.sha256),
-                json_string(&binding.implementation_function),
-                json_string(&config.project.name),
-                json_string(&cott_symbol),
-            )
-            .unwrap();
-            writeln!(
-                out,
-                "                _result = _implementation(self{}{})",
-                if call.is_empty() { "" } else { ", " },
-                call
-            )
-            .unwrap();
+            if default.is_some() {
+                let alias = default_alias(name, method_name);
+                writeln!(
+                    out,
+                    "                _result = {alias}(self{}{})",
+                    if call.is_empty() { "" } else { ", " },
+                    call
+                )
+                .unwrap();
+            } else {
+                let binding = binding.expect("explicit implementation has a verified binding");
+                writeln!(
+                    out,
+                    "                _implementation = _cott_load({}, {}, {}, expected_project_name={}, expected_cott_symbol={})",
+                    json_string(&path_string(&binding.generated_relative)),
+                    json_string(&binding.sha256),
+                    json_string(&binding.implementation_function),
+                    json_string(&config.project.name),
+                    json_string(&cott_symbol),
+                )
+                .unwrap();
+                writeln!(
+                    out,
+                    "                _result = _implementation(self{}{})",
+                    if call.is_empty() { "" } else { ", " },
+                    call
+                )
+                .unwrap();
+            }
             writeln!(
                 out,
                 "            except CottContractViolation as _error:\n                if _error.symbol is None or _error.symbol == \"_cott_load\":\n                    _error.symbol = {}\n                if _error.span is None:\n                    _error.span = {span}\n                raise",
@@ -2124,6 +3572,40 @@ fn render_impl_classes(
                 )
                 .unwrap();
             }
+            let transitions = method
+                .get("transitions")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            for transition in transitions {
+                let field_name = local_name(
+                    transition
+                        .get("field")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                );
+                let from = enum_variant_name(
+                    transition
+                        .get("from")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                );
+                let to = enum_variant_name(
+                    transition
+                        .get("to")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                );
+                writeln!(
+                    out,
+                    "            if _cott_old_{field_name} is not {from}():\n                raise CottContractViolation(\"resource transition source failed\", symbol={}, phase=\"transitions\", span={span}, expected={}, actual=repr(_cott_old_{field_name}))\n            if self.{field_name} is not {to}():\n                raise CottContractViolation(\"resource transition target failed\", symbol={}, phase=\"transitions\", span={span}, expected={}, actual=repr(self.{field_name}))",
+                    json_string(&cott_symbol),
+                    json_string(&format!("self.{field_name} is {from}")),
+                    json_string(&cott_symbol),
+                    json_string(&format!("self.{field_name} is {to}")),
+                )
+                .unwrap();
+            }
             let modifies = method
                 .get("modifies")
                 .and_then(Value::as_array)
@@ -2136,6 +3618,11 @@ fn render_impl_classes(
                     .unwrap_or_default();
                 if modifies
                     .iter()
+                    .chain(
+                        transitions
+                            .iter()
+                            .map(|transition| transition.get("field").unwrap()),
+                    )
                     .any(|value| local_name(value.as_str().unwrap_or_default()) == field_name)
                 {
                     continue;
@@ -2367,6 +3854,8 @@ fn render_invariants(
         let mut expression = invariant.get("expression").cloned().unwrap_or(Value::Null);
         rewrite_impl_contract_references(&mut expression);
         let expression = render_contract_expression(&expression);
+        let mut guard = invariant.get("guard").cloned().unwrap_or(Value::Null);
+        rewrite_impl_contract_references(&mut guard);
         let span = serde_json::to_string(invariant.get("span").unwrap()).expect("span serializes");
         let label = format!(
             "invariant:{}",
@@ -2375,9 +3864,19 @@ fn render_invariants(
                 .and_then(Value::as_u64)
                 .unwrap_or_default()
         );
+        let condition = render_match_function(
+            out,
+            (!guard.is_null()).then_some(&guard),
+            &expression,
+            &format!("_cott_match_{}", label.replace(':', "_")),
+            indent,
+            true,
+        )
+        .map(|name| format!("{name}()"))
+        .unwrap_or(expression);
         writeln!(
             out,
-            "{prefix}if not ({expression}):\n{prefix}    raise CottContractViolation(\"invariant failed\", symbol={}, clause={}, phase=\"invariant\", span={span}, expected=\"true\", actual=\"false\")",
+            "{prefix}if not ({condition}):\n{prefix}    raise CottContractViolation(\"invariant failed\", symbol={}, clause={}, phase=\"invariant\", span={span}, expected=\"true\", actual=\"false\")",
             json_string(symbol),
             json_string(&label),
         )
@@ -2472,6 +3971,35 @@ fn render_test_only_contract(
         out.push_str(line);
     }
 }
+fn render_match_function(
+    out: &mut String,
+    guard: Option<&Value>,
+    predicate: &str,
+    name: &str,
+    indent: usize,
+    non_match: bool,
+) -> Option<String> {
+    let guard = guard?.as_object()?;
+    let scrutinee = render_contract_expression(guard.get("scrutinee")?);
+    let (pattern, bindings) = render_pattern(guard.get("pattern")?, "_cott_match_value");
+    let prefix = " ".repeat(indent);
+    let nested = " ".repeat(indent + 4);
+    let bound = " ".repeat(indent + 8);
+    writeln!(out, "{prefix}def {name}() -> bool:").unwrap();
+    writeln!(out, "{nested}_cott_match_value = {scrutinee}").unwrap();
+    writeln!(out, "{nested}if {pattern}:").unwrap();
+    for binding in bindings {
+        writeln!(out, "{bound}{binding}").unwrap();
+    }
+    writeln!(out, "{bound}return ({predicate})").unwrap();
+    writeln!(
+        out,
+        "{nested}return {}",
+        if non_match { "True" } else { "False" }
+    )
+    .unwrap();
+    Some(name.to_owned())
+}
 
 fn render_preconditions(
     out: &mut String,
@@ -2491,6 +4019,16 @@ fn render_preconditions(
         }
         let expression = render_contract_expression(clause.get("expression").unwrap());
         let label = clause_label(clause);
+        let condition = render_match_function(
+            out,
+            clause.get("guard").filter(|guard| !guard.is_null()),
+            &expression,
+            &format!("_cott_match_{}", label.replace(':', "_")),
+            4,
+            true,
+        )
+        .map(|name| format!("{name}()"))
+        .unwrap_or(expression);
         let span = serde_json::to_string(clause.get("span").unwrap()).expect("span serializes");
         let symbol = function
             .get("name")
@@ -2498,7 +4036,7 @@ fn render_preconditions(
             .unwrap_or_default();
         writeln!(
             out,
-            "    if not ({expression}):\n        raise CottContractViolation(\"requires clause failed\", symbol={}, clause={}, phase=\"requires\", span={span}, expected=\"true\", actual=\"false\")",
+            "    if not ({condition}):\n        raise CottContractViolation(\"requires clause failed\", symbol={}, clause={}, phase=\"requires\", span={span}, expected=\"true\", actual=\"false\")",
             json_string(symbol),
             json_string(&label),
         )
@@ -2513,7 +4051,28 @@ fn render_preconditions(
             if clause.get("kind").and_then(Value::as_str) != Some("error") {
                 continue;
             }
-            let Some(condition) = clause.get("when").filter(|value| !value.is_null()) else {
+            let label = clause_label(clause);
+            let predicate = clause
+                .get("when")
+                .filter(|value| !value.is_null())
+                .map(render_contract_expression)
+                .unwrap_or_else(|| "True".to_owned());
+            let condition = render_match_function(
+                out,
+                clause.get("guard").filter(|guard| !guard.is_null()),
+                &predicate,
+                &format!("_cott_match_{}", label.replace(':', "_")),
+                4,
+                false,
+            )
+            .map(|name| format!("{name}()"))
+            .or_else(|| {
+                clause
+                    .get("when")
+                    .filter(|value| !value.is_null())
+                    .map(render_contract_expression)
+            });
+            let Some(condition) = condition else {
                 continue;
             };
             let variant = enum_variant_name(
@@ -2523,11 +4082,9 @@ fn render_preconditions(
                     .unwrap_or_default(),
             );
             let span = serde_json::to_string(clause.get("span").unwrap()).expect("span serializes");
-            let label = clause_label(clause);
             writeln!(
                 out,
-                "    if _expected_error is None and ({}):\n        _expected_error = {variant}\n        _expected_error_span = {span}\n        _expected_error_clause = {}",
-                render_contract_expression(condition),
+                "    if _expected_error is None and ({condition}):\n        _expected_error = {variant}\n        _expected_error_span = {span}\n        _expected_error_clause = {}",
                 json_string(&label),
             )
             .unwrap();
@@ -2560,6 +4117,7 @@ fn render_postconditions(
     if !errors.is_empty() {
         let unconditional = errors
             .iter()
+            .filter(|clause| clause.get("guard").is_none_or(Value::is_null))
             .filter(|clause| clause.get("when").is_none_or(Value::is_null))
             .filter_map(|clause| clause.get("variant").and_then(Value::as_str))
             .map(enum_variant_name)
@@ -2585,29 +4143,24 @@ fn render_postconditions(
         let label = clause_label(clause);
         let span = serde_json::to_string(clause.get("span").unwrap()).expect("span serializes");
         let expression = render_contract_expression(clause.get("expression").unwrap());
-        let pattern = clause.get("pattern").filter(|value| !value.is_null());
-        if let Some(pattern) = pattern {
-            let (guard, bindings) = render_pattern(pattern, "_result");
-            writeln!(out, "    if {guard}:").unwrap();
-            for binding in bindings {
-                writeln!(out, "        {binding}").unwrap();
-            }
-            writeln!(
-                out,
-                "        if not ({expression}):\n            raise CottContractViolation(\"ensures clause failed\", symbol={}, clause={}, phase=\"ensures\", span={span}, expected=\"true\", actual=\"false\")",
-                json_string(symbol),
-                json_string(&label),
-            )
-            .unwrap();
-        } else {
-            writeln!(
-                out,
-                "    if not ({expression}):\n        raise CottContractViolation(\"ensures clause failed\", symbol={}, clause={}, phase=\"ensures\", span={span}, expected=\"true\", actual=\"false\")",
-                json_string(symbol),
-                json_string(&label),
-            )
-            .unwrap();
-        }
+        let guard = clause.get("guard").filter(|guard| !guard.is_null());
+        let condition = render_match_function(
+            out,
+            guard,
+            &expression,
+            &format!("_cott_match_{}", label.replace(':', "_")),
+            4,
+            true,
+        )
+        .map(|name| format!("{name}()"))
+        .unwrap_or(expression);
+        writeln!(
+            out,
+            "    if not ({condition}):\n        raise CottContractViolation(\"ensures clause failed\", symbol={}, clause={}, phase=\"ensures\", span={span}, expected=\"true\", actual=\"false\")",
+            json_string(symbol),
+            json_string(&label),
+        )
+        .unwrap();
     }
 }
 
@@ -2639,18 +4192,25 @@ fn render_pattern(pattern: &Value, value: &str) -> (String, Vec<String>) {
                 pattern
                     .get("name")
                     .and_then(Value::as_str)
+                    .or_else(|| pattern
+                        .get("symbol")
+                        .and_then(Value::as_str)
+                        .map(local_name))
                     .unwrap_or("_binding")
             )],
         ),
-        "variant" => {
+        "variant" | "result_ok" | "result_err" | "option_some" | "option_none" | "enum" => {
             let symbol = pattern
                 .get("symbol")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let variant = if symbol.split('.').count() >= 3 {
-                enum_variant_name(symbol)
-            } else {
-                local_name(symbol).to_owned()
+            let variant = match kind {
+                "result_ok" => "Ok".to_owned(),
+                "result_err" => "Err".to_owned(),
+                "option_some" => "Some".to_owned(),
+                "option_none" => "Nothing".to_owned(),
+                _ if symbol.split('.').count() >= 3 => enum_variant_name(symbol),
+                _ => local_name(symbol).to_owned(),
             };
             let mut guards = vec![format!("type({value}) is {variant}")];
             let mut bindings = Vec::new();
@@ -2798,12 +4358,15 @@ fn normalize_contract_f32(expression: &Value, rendered: String) -> String {
 fn render_stub(
     module: &crate::python::artifact_plan::PythonArtifactModule,
     declarations: &BTreeMap<String, String>,
+    bindings: &[ResolvedBinding],
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
 ) -> Vec<u8> {
     let mut out = String::from(
-        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nfrom pathlib import Path\nfrom typing import Any, Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit\n",
+        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nfrom pathlib import Path\nfrom typing import Any, Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit\n",
     );
     let names = exported_names(module);
-    let type_names = type_exported_names(module);
+    let mut type_names = type_exported_names(module);
+    type_names.extend(associated_typevar_names(module));
     if !type_names.is_empty() {
         writeln!(
             out,
@@ -2817,7 +4380,11 @@ fn render_stub(
         )
         .unwrap();
     }
-    for (source, names) in referenced_imports(module, declarations) {
+    let mut imports = referenced_imports(module, declarations);
+    for (source, names) in resolved_method_imports(module, modules, declarations) {
+        imports.entry(source).or_default().extend(names);
+    }
+    for (source, names) in imports {
         writeln!(
             out,
             "from {} import {}",
@@ -2826,7 +4393,11 @@ fn render_stub(
         )
         .unwrap();
     }
-    for (source, names) in factory_concrete_imports(module, declarations) {
+    let mut factory_imports = factory_concrete_imports(module, declarations);
+    for (source, names) in resolved_factory_imports(module, modules, declarations) {
+        factory_imports.entry(source).or_default().extend(names);
+    }
+    for (source, names) in factory_imports {
         writeln!(
             out,
             "from {source} import {}",
@@ -2834,6 +4405,7 @@ fn render_stub(
         )
         .unwrap();
     }
+    render_function_bound_protocols(&mut out, module, declarations);
     render_function_typevars(&mut out, module, declarations, true);
     let mut exported = names;
     for declaration in &module.declarations {
@@ -2866,10 +4438,19 @@ fn render_stub(
             declarations,
             &typevar_names,
         );
-        writeln!(out, "def {name}({signature}) -> {return_type}: ...\n").unwrap();
+        writeln!(
+            out,
+            "{}def {name}({signature}) -> {return_type}: ...\n",
+            if object.get("callable_kind").and_then(Value::as_str) == Some("async") {
+                "async "
+            } else {
+                ""
+            }
+        )
+        .unwrap();
         exported.push(name.to_owned());
     }
-    render_impl_stubs(&mut out, module, declarations);
+    render_impl_stubs(&mut out, module, declarations, bindings, modules);
     exported.sort();
     writeln!(
         out,
@@ -2888,6 +4469,8 @@ fn render_impl_stubs(
     out: &mut String,
     module: &crate::python::artifact_plan::PythonArtifactModule,
     declarations: &BTreeMap<String, String>,
+    bindings: &[ResolvedBinding],
+    modules: &BTreeMap<String, &crate::python::artifact_plan::PythonArtifactModule>,
 ) {
     for declaration in &module.declarations {
         let Some(implementation) = declaration
@@ -2931,17 +4514,24 @@ fn render_impl_stubs(
             format!("self, {signature}")
         };
         writeln!(out, "    def __init__({signature}) -> None: ...").unwrap();
-        for method in implementation
-            .get("methods")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
+        for method in resolved_impl_methods(implementation, modules)
+            .iter()
             .filter_map(Value::as_object)
         {
             let method_name = method
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+            let cott_symbol = format!("{}.{}.{}", module.module, name, method_name);
+            if default_dispatch(method)
+                .is_some_and(|function| !default_dispatch_resolved(function, bindings))
+                || (default_dispatch(method).is_none()
+                    && !bindings
+                        .iter()
+                        .any(|binding| binding.cott_symbol == cott_symbol))
+            {
+                continue;
+            }
             let parameters = method
                 .get("parameters")
                 .and_then(Value::as_array)
@@ -3014,9 +4604,28 @@ fn render_type_with_names(
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .map(|argument| {
-                    render_type_with_names(argument, module, declarations, typevar_names)
-                })
+                .map(
+                    |argument| match argument.get("kind").and_then(Value::as_str) {
+                        Some("type") => render_type_with_names(
+                            argument
+                                .get("type")
+                                .expect("validated generic type argument"),
+                            module,
+                            declarations,
+                            typevar_names,
+                        ),
+                        Some("const") => format!(
+                            "Literal[{}]",
+                            render_fixed_length(
+                                argument
+                                    .get("value")
+                                    .expect("validated generic const argument"),
+                                typevar_names,
+                            )
+                        ),
+                        _ => unreachable!("validated generic argument kind"),
+                    },
+                )
                 .collect::<Vec<_>>();
             if args.is_empty() {
                 name.to_owned()
@@ -3043,6 +4652,16 @@ fn render_type_with_names(
                 .cloned()
                 .unwrap_or_else(|| name.to_owned())
         }
+        "associated_projection" => associated_typevar_name(
+            object
+                .get("trait")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            object
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        ),
         "list" => format!(
             "CottList[{}]",
             render_type_with_names(
@@ -3076,18 +4695,46 @@ fn render_type_with_names(
                 typevar_names
             )
         ),
-        "tuple2" => format!(
-            "CottTuple2[{}, {}]",
+        "tuple" => {
+            let items = object
+                .get("items")
+                .and_then(Value::as_array)
+                .expect("validated tuple items");
+            if items.is_empty() {
+                "tuple[()]".to_owned()
+            } else {
+                format!(
+                    "tuple[{}]",
+                    items
+                        .iter()
+                        .map(|item| render_type_with_names(
+                            item,
+                            module,
+                            declarations,
+                            typevar_names
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+        }
+        "array" => format!(
+            "CottArray[{}, Literal[{}]]",
             render_type_with_names(
-                object.get("first").unwrap(),
+                object.get("item").unwrap(),
                 module,
                 declarations,
                 typevar_names
             ),
-            render_type_with_names(
-                object.get("second").unwrap(),
-                module,
-                declarations,
+            render_fixed_length(
+                object.get("length").expect("validated fixed length"),
+                typevar_names
+            )
+        ),
+        "buffer" => format!(
+            "CottBuffer[Literal[{}]]",
+            render_fixed_length(
+                object.get("length").expect("validated fixed length"),
                 typevar_names
             )
         ),
@@ -3244,10 +4891,19 @@ fn render_value(value: &Value) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        "tuple2" => format!(
-            "CottTuple2(first={}, second={})",
-            render_value(object.get("first").unwrap()),
-            render_value(object.get("second").unwrap())
+        "tuple" => format!("({})", render_tuple_value_items(object.get("items"))),
+        "array" => format!(
+            "CottArray(values=({}))",
+            render_tuple_value_items(object.get("items"))
+        ),
+        "buffer" => format!(
+            "CottBuffer(data=bytes.fromhex({}))",
+            json_string(
+                object
+                    .get("hex")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            )
         ),
         "named" => format!(
             "{}({})",
@@ -3303,6 +4959,22 @@ fn render_value_items(value: Option<&Value>) -> String {
         .map(render_value)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn render_tuple_value_items(value: Option<&Value>) -> String {
+    let items = value
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    match items {
+        [] => String::new(),
+        [item] => format!("{},", render_value(item)),
+        items => items
+            .iter()
+            .map(render_value)
+            .collect::<Vec<_>>()
+            .join(", "),
+    }
 }
 
 fn render_json_value(value: &Value) -> String {
@@ -3436,6 +5108,7 @@ fn referenced_imports(
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
+            .filter(|generic| generic.get("kind").and_then(Value::as_str) == Some("type"))
         {
             if let Some(bounds) = generic.get("bounds") {
                 collect_references(bounds, &module.module, declarations, &mut imports);
@@ -3460,6 +5133,21 @@ fn referenced_imports(
             }
         }
         if kind == "trait" {
+            for associated in object
+                .get("associated_types")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                for bound in associated
+                    .get("bounds")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    collect_named(bound, &module.module, declarations, &mut imports);
+                }
+            }
             for method in object
                 .get("methods")
                 .and_then(Value::as_array)
@@ -3616,6 +5304,26 @@ fn collect_references(
                 collect_symbol(symbol, module, declarations, imports, true);
             }
         }
+        "associated_projection" => {
+            if let Some(base) = object.get("base") {
+                collect_named(base, module, declarations, imports);
+            }
+            if let Some(trait_name) = object.get("trait").and_then(Value::as_str)
+                && let Some((source, _)) = trait_name.rsplit_once('.')
+                && source != module
+            {
+                imports
+                    .entry(source.to_owned())
+                    .or_default()
+                    .insert(associated_typevar_name(
+                        trait_name,
+                        object
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                    ));
+            }
+        }
         _ => {}
     }
     for child in object.values() {
@@ -3634,7 +5342,10 @@ fn collect_symbol(
         let Some((owner, _)) = symbol.rsplit_once('.') else {
             return;
         };
-        if declarations.get(owner).map(String::as_str) != Some("enum") {
+        if !matches!(
+            declarations.get(owner).map(String::as_str),
+            Some("enum" | "resource")
+        ) {
             return;
         }
         let Some((source, _)) = owner.rsplit_once('.') else {
@@ -3650,7 +5361,16 @@ fn collect_symbol(
         if source != module
             && matches!(
                 declarations.get(symbol).map(String::as_str),
-                Some("alias" | "external_type" | "newtype" | "struct" | "enum" | "trait" | "const")
+                Some(
+                    "alias"
+                        | "external_type"
+                        | "newtype"
+                        | "struct"
+                        | "enum"
+                        | "resource"
+                        | "trait"
+                        | "const"
+                )
             )
         {
             imports
@@ -3685,7 +5405,31 @@ fn collect_named(
                 .into_iter()
                 .flatten()
             {
-                collect_named(argument, module, declarations, imports);
+                if argument.get("kind").and_then(Value::as_str) == Some("type")
+                    && let Some(ty) = argument.get("type")
+                {
+                    collect_named(ty, module, declarations, imports);
+                }
+            }
+        }
+        "associated_projection" => {
+            if let Some(base) = object.get("base") {
+                collect_named(base, module, declarations, imports);
+            }
+            if let Some(trait_name) = object.get("trait").and_then(Value::as_str)
+                && let Some((source, _)) = trait_name.rsplit_once('.')
+                && source != module
+            {
+                imports
+                    .entry(source.to_owned())
+                    .or_default()
+                    .insert(associated_typevar_name(
+                        trait_name,
+                        object
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                    ));
             }
         }
         "list" | "set" | "option" | "iterator" => {
@@ -3700,11 +5444,19 @@ fn collect_named(
                 }
             }
         }
-        "tuple2" => {
-            for key in ["first", "second"] {
-                if let Some(value) = object.get(key) {
-                    collect_named(value, module, declarations, imports);
-                }
+        "tuple" => {
+            for item in object
+                .get("items")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                collect_named(item, module, declarations, imports);
+            }
+        }
+        "array" => {
+            if let Some(item) = object.get("item") {
+                collect_named(item, module, declarations, imports);
             }
         }
         "generator" => {
@@ -3728,6 +5480,7 @@ fn validate_named(
     value: &Value,
     module: &str,
     declarations: &BTreeMap<String, String>,
+    generic_parameters: &BTreeMap<String, Vec<Value>>,
     diagnostics: &mut Vec<EmitDiagnostic>,
 ) {
     let Some(object) = value.as_object() else {
@@ -3739,25 +5492,60 @@ fn validate_named(
         .unwrap_or_default()
     {
         "named" => {
-            if let Some(name) = object.get("name").and_then(Value::as_str) {
-                if !matches!(
-                    declarations.get(name).map(String::as_str),
-                    Some("alias" | "external_type" | "newtype" | "struct" | "enum" | "trait")
-                ) {
-                    unsupported(
-                        module,
-                        format!("unknown or non-type named declaration `{name}`"),
-                        diagnostics,
-                    );
-                }
+            let Some(name) = object.get("name").and_then(Value::as_str) else {
+                return;
+            };
+            if !matches!(
+                declarations.get(name).map(String::as_str),
+                Some(
+                    "alias"
+                        | "external_type"
+                        | "newtype"
+                        | "struct"
+                        | "enum"
+                        | "resource"
+                        | "trait"
+                )
+            ) {
+                unsupported(
+                    module,
+                    format!("unknown or non-type named declaration `{name}`"),
+                    diagnostics,
+                );
+                return;
             }
-            for argument in object
+            let expected = generic_parameters
+                .get(name)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let actual = object
                 .get("args")
                 .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                validate_named(argument, module, declarations, diagnostics);
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            if expected.len() != actual.len() {
+                unsupported(
+                    module,
+                    format!("generic argument arity for `{name}` is not exact"),
+                    diagnostics,
+                );
+            }
+            for (expected, actual) in expected.iter().zip(actual) {
+                let expected_kind = expected.get("kind").and_then(Value::as_str);
+                let actual_kind = actual.get("kind").and_then(Value::as_str);
+                if expected_kind != actual_kind {
+                    unsupported(
+                        module,
+                        format!("generic argument kind for `{name}` is not exact"),
+                        diagnostics,
+                    );
+                    continue;
+                }
+                if expected_kind == Some("const") {
+                    validate_const_generic_argument(actual, expected, module, diagnostics);
+                } else if let Some(ty) = actual.get("type") {
+                    validate_named(ty, module, declarations, generic_parameters, diagnostics);
+                }
             }
         }
         "factory" => {
@@ -3783,42 +5571,74 @@ fn validate_named(
                 );
             }
         }
+        "associated_projection" => {
+            if let Some(base) = object.get("base") {
+                validate_named(base, module, declarations, generic_parameters, diagnostics);
+            }
+        }
         "list" | "set" | "option" | "iterator" => {
             if let Some(item) = object.get("item") {
-                validate_named(item, module, declarations, diagnostics);
+                validate_named(item, module, declarations, generic_parameters, diagnostics);
             }
         }
         "map" => {
             for key in ["key", "value"] {
                 if let Some(item) = object.get(key) {
-                    validate_named(item, module, declarations, diagnostics);
+                    validate_named(item, module, declarations, generic_parameters, diagnostics);
                 }
             }
         }
-        "tuple2" => {
-            for key in ["first", "second"] {
-                if let Some(item) = object.get(key) {
-                    validate_named(item, module, declarations, diagnostics);
-                }
+        "tuple" => {
+            for item in object
+                .get("items")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                validate_named(item, module, declarations, generic_parameters, diagnostics);
+            }
+        }
+        "array" => {
+            if let Some(item) = object.get("item") {
+                validate_named(item, module, declarations, generic_parameters, diagnostics);
             }
         }
         "result" => {
             for key in ["ok", "error"] {
                 if let Some(item) = object.get(key) {
-                    validate_named(item, module, declarations, diagnostics);
+                    validate_named(item, module, declarations, generic_parameters, diagnostics);
                 }
             }
         }
         "generator" => {
             for key in ["yield", "send", "return"] {
                 if let Some(item) = object.get(key) {
-                    validate_named(item, module, declarations, diagnostics);
+                    validate_named(item, module, declarations, generic_parameters, diagnostics);
                 }
             }
         }
         _ => {}
     }
 }
+fn validate_const_generic_argument(
+    argument: &Value,
+    parameter: &Value,
+    module: &str,
+    diagnostics: &mut Vec<EmitDiagnostic>,
+) {
+    let Some(value) = argument.get("value") else {
+        unsupported(module, "const generic argument is missing", diagnostics);
+        return;
+    };
+    validate_const_argument(
+        value,
+        parameter.get("type").and_then(Value::as_str),
+        "generic",
+        module,
+        diagnostics,
+    );
+}
+
 fn target_python_identity() -> (&'static str, &'static str) {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => ("x86_64", "linux-x86_64"),
@@ -3868,6 +5688,28 @@ fn exported_names(module: &crate::python::artifact_plan::PythonArtifactModule) -
                                     .and_then(Value::as_str)
                                     .unwrap_or_default()
                             )
+                        )
+                    }),
+            );
+        }
+        if object.get("kind").and_then(Value::as_str) == Some("resource") {
+            names.extend(
+                object
+                    .get("states")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|state| state.get("name").and_then(Value::as_str))
+                    .map(|state| {
+                        format!(
+                            "{}_{}",
+                            local_name(
+                                object
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                            ),
+                            local_name(state)
                         )
                     }),
             );
@@ -3938,10 +5780,14 @@ fn hash_stable_type(
             )
         ),
         Some("type_parameter") => false,
-        Some("tuple2") => {
-            hash_stable_type(object.get("first").unwrap(), modules, visiting)
-                && hash_stable_type(object.get("second").unwrap(), modules, visiting)
-        }
+        Some("tuple") => object
+            .get("items")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .all(|item| hash_stable_type(item, modules, visiting))
+            }),
         Some("named") => {
             let Some(symbol) = object.get("name").and_then(Value::as_str) else {
                 return false;
@@ -3992,7 +5838,14 @@ fn python_default_hashable_type(
             object.get("name").and_then(Value::as_str),
             Some("never" | "unit" | "json_value")
         ),
-        Some("tuple2") => true,
+        Some("tuple") => object
+            .get("items")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .all(|item| hash_stable_type(item, modules, visiting))
+            }),
         Some("named") => hash_stable_type(value, modules, visiting),
         _ => false,
     }
@@ -4050,7 +5903,9 @@ fn add_package_markers<'a>(
 fn binding_defines_symbol(bytes: &[u8], symbol: &str) -> bool {
     String::from_utf8_lossy(bytes).lines().any(|line| {
         line.trim_start()
-            .strip_prefix("def ")
+            .strip_prefix("async ")
+            .or_else(|| Some(line.trim_start()))
+            .and_then(|line| line.strip_prefix("def "))
             .and_then(|rest| rest.split_once('('))
             .map(|(name, _)| name == symbol)
             .unwrap_or(false)
@@ -4173,11 +6028,12 @@ fn python_support_names() -> &'static [&'static str] {
     &[
         "Annotated",
         "Any",
+        "CottArray",
+        "CottBuffer",
         "CottContractViolation",
         "CottExternal",
         "CottList",
         "CottSet",
-        "CottTuple2",
         "Err",
         "F32",
         "F64",

@@ -4,7 +4,7 @@ from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
-from cott_runtime import CottList, CottSet, CottTuple2, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+from cott_runtime import CottArray, CottBuffer, CottList, CottSet, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
 from curriculum.artifact_pipeline_types import ArtifactPipelineError as ArtifactPipelineError, ArtifactPipelineError_BlankStepName as ArtifactPipelineError_BlankStepName, ArtifactPipelineError_Cycle as ArtifactPipelineError_Cycle, ArtifactPipelineError_DuplicateStep as ArtifactPipelineError_DuplicateStep, ArtifactPipelineError_SelfDependency as ArtifactPipelineError_SelfDependency, ArtifactPipelineError_UnknownDependency as ArtifactPipelineError_UnknownDependency, ArtifactPlan as ArtifactPlan, BuildStep as BuildStep, Pipeline as Pipeline
 """Validate build-step names and dependencies, then return their deterministic
