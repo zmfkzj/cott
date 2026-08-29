@@ -1,0 +1,16 @@
+Implement the declared functions directly and deterministically in Python.
+Do not inspect, copy, paraphrase, or reuse upstream Posting source, tests, docs, or prose.
+Imports are closed: use only stdlib `json`, `os`, `pathlib`, `shlex`, `urllib.error`, and `urllib.request`, plus generated `real.posting` facade/type modules and their required `cott_runtime` modules. Do not import PyYAML, any third-party package, unrelated modules, `subprocess`, `importlib`, `__import__`, or any dynamic-loading/process/external-executable facility.
+Treat only recursively discovered *.posting.yaml files as collection documents, sorted by path, without loading them.
+Load and save only name, method, url, headers, body, and json with a small deterministic stdlib-only parser/emitter for this closed request-document YAML subset. Accept a root mapping with exactly those fields; string scalars for name, method, url, and body; a json boolean; and headers as an ordered list of mappings with exactly string name and value fields. Accept exact `headers: []` as the sole flow-style exception, load it as an empty CottList, and emit it when headers is empty. Accept a body literal block only as a body value. Preserve URL query text as part of its scalar. Use a stable emitted field order and scalar escaping. Reject duplicate or unknown keys, malformed indentation, non-string scalars, implicit coercions, every other flow collection, anchors, aliases, merge keys, tags, directives, and every other YAML feature with the declared InvalidYaml or InvalidRequest error; never execute YAML content.
+Parse :name URL placeholders left to right; :: is one literal colon.
+Host environment values override newline-delimited NAME=VALUE values; unresolved names return the declared error.
+For json_body, parse body as JSON, emit compact UTF-8 JSON, and add Content-Type only when absent case-insensitively.
+Export cURL with shlex.quote and canonical YAML with stable key order.
+Send requests with urllib.request and the declared millisecond timeout; capture HTTP errors as responses.
+Map filesystem, YAML, JSON, parsing, timeout, and network failures to declared errors; never raise them.
+Use CottList exclusively through its public ABI: iterate directly, use `len(items)`, indexing, and membership, and convert with `list(items)` or `tuple(items)`. NEVER access `.values`; this applies in save_request and every later consumer as well.
+Construct CottList only as `CottList(values=tuple(...))`, including empty lists as `CottList(values=())`.
+Give every empty CottList with a known element type a concrete annotation, such as `headers: CottList[Header] = CottList(values=())`; do not rely on empty-literal inference or casts.
+Annotate every mutable local list with its exact element type at initialization, including branch-local and helper-local lists, and preserve concrete element types in loop variables and derived collections rather than allowing Unknown propagation.
+In save_request, use `headers: list[Header] = list(request.headers)` before processing headers, or iterate `request.headers` directly with a concretely typed header variable; NEVER use private CottList state.

@@ -1,0 +1,17 @@
+[project]
+name = "real-posting"
+version = "0.1.0"
+source = "src"
+
+[target.python]
+source = "python"
+generated = "generated/python"
+stubs = "generated/stubs"
+lockfile = "python/uv.lock"
+interpreter = ".venv/bin/python"
+type_checker = ".venv/bin/basedpyright"
+runtime_validation = "boundary"
+
+[generator]
+rules = "generator.rules"
+timeout_seconds = 900

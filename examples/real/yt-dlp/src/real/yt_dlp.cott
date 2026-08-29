@@ -1,0 +1,119 @@
+module real.yt_dlp
+
+struct MediaItem:
+    url: Str
+    id: Str
+    title: Str
+    ext: Str
+    playlist_index: U64
+
+struct PlaylistRange:
+    first: U64
+    last: U64
+
+struct DownloadPlan:
+    items: List[MediaItem]
+    stopped_on_archive: Bool
+
+struct TransferRequest:
+    url: Str
+    destination: Path
+    simulate: Bool
+    max_bytes: U64
+
+struct TransferReceipt:
+    url: Str
+    destination: Path
+    bytes_written: U64
+    simulated: Bool
+
+enum JsonMode:
+    Lines
+    Single
+
+enum MediaError:
+    InvalidInput(message: Str)
+    InvalidRange
+    InvalidTemplate
+    UnsupportedUrl
+    HttpStatus(status: U16)
+    NetworkFailure(message: Str)
+    OutputFailure(message: Str)
+    SizeLimit
+
+fn parse_batch_urls(batch: Str, comment_prefixes: List[Str]) -> Result[List[Str], MediaError]:
+    doc """
+    Parse trimmed batch URLs while ignoring configured comment prefixes.
+    """
+
+    ensures Result.Ok(urls) => urls.len <= batch.len
+
+    error MediaError.InvalidInput
+
+    effects []
+
+fn expand_playlist_ranges(
+    items: List[MediaItem],
+    ranges: List[PlaylistRange],
+) -> Result[List[MediaItem], MediaError]:
+    doc """
+    Expand one-based inclusive playlist ranges deterministically.
+    """
+
+    ensures Result.Ok(selected) => ((ranges.len == 0 and selected.len == items.len) or (ranges.len > 0 and selected.len <= items.len * ranges.len))
+
+    error MediaError.InvalidRange
+
+    effects []
+
+fn plan_downloads(
+    items: List[MediaItem],
+    archive: List[Str],
+    break_on_existing: Bool,
+) -> DownloadPlan:
+    doc """
+    Preserve item order while applying archive and break-on-existing policy.
+    """
+
+    effects []
+
+fn render_output_path(
+    item: MediaItem,
+    template: Str,
+    missing_placeholder: Str,
+) -> Result[Str, MediaError]:
+    doc """
+    Substitute a bounded output template with a configurable missing value.
+    """
+
+    ensures Result.Ok(path) => (path.len <= template.len * (item.id.len + item.title.len + item.ext.len + missing_placeholder.len + 20))
+
+    error MediaError.InvalidTemplate
+
+    effects []
+
+fn render_items(items: List[MediaItem], mode: JsonMode) -> Str:
+    doc """
+    Render items as compact JSON Lines or one compact JSON array.
+    """
+
+    effects []
+
+fn transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaError]:
+    doc """
+    Simulate or atomically transfer one bounded direct HTTP(S) resource.
+    """
+
+    ensures Result.Ok(receipt) => receipt.url == request.url
+    ensures Result.Ok(receipt) => receipt.destination == request.destination
+    ensures Result.Ok(receipt) => receipt.bytes_written <= request.max_bytes
+    ensures Result.Ok(receipt) => receipt.simulated == request.simulate
+
+    error MediaError.InvalidInput when request.max_bytes == 0
+    error MediaError.UnsupportedUrl
+    error MediaError.HttpStatus
+    error MediaError.NetworkFailure
+    error MediaError.OutputFailure
+    error MediaError.SizeLimit
+
+    effects [network, file.write]

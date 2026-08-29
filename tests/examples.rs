@@ -20,6 +20,65 @@ struct Example {
     public_functions: &'static [&'static str],
     final_symbol: &'static str,
 }
+struct RealExample {
+    path: &'static str,
+    upstream_url: &'static str,
+    source_files: &'static [&'static str],
+    adapter_files: &'static [&'static str],
+}
+
+const REAL_EXAMPLES: &[RealExample] = &[
+    RealExample {
+        path: "real/yt-dlp",
+        upstream_url: "https://github.com/yt-dlp/yt-dlp",
+        source_files: &["src/real/yt_dlp.cott"],
+        adapter_files: &["python/app.py"],
+    },
+    RealExample {
+        path: "real/harlequin",
+        upstream_url: "https://github.com/tconbeer/harlequin",
+        source_files: &[
+            "src/real/harlequin/catalog.cott",
+            "src/real/harlequin/core.cott",
+            "src/real/harlequin/render.cott",
+        ],
+        adapter_files: &["python/harlequin_cli.py"],
+    },
+    RealExample {
+        path: "real/pgcli",
+        upstream_url: "https://github.com/dbcli/pgcli",
+        source_files: &["src/real/pgcli.cott"],
+        adapter_files: &["python/pgcli_cli.py"],
+    },
+    RealExample {
+        path: "real/posting",
+        upstream_url: "https://github.com/darrenburns/posting",
+        source_files: &["src/real/posting/client.cott"],
+        adapter_files: &["python/posting_cli.py"],
+    },
+    RealExample {
+        path: "real/toolong",
+        upstream_url: "https://github.com/Textualize/toolong",
+        source_files: &["src/real/toolong.cott"],
+        adapter_files: &["python/toolong.py"],
+    },
+    RealExample {
+        path: "real/frogmouth",
+        upstream_url: "https://github.com/Textualize/frogmouth",
+        source_files: &[
+            "src/real/frogmouth/application.cott",
+            "src/real/frogmouth/document.cott",
+            "src/real/frogmouth/model.cott",
+            "src/real/frogmouth/navigation.cott",
+            "src/real/frogmouth/persistence.cott",
+        ],
+        adapter_files: &[
+            "python/frogmouth_ui/__init__.py",
+            "python/frogmouth_ui/create_browser_app.py",
+            "python/frogmouth_ui/run_browser.py",
+        ],
+    },
+];
 
 const EXAMPLES: &[Example] = &[
     Example {
@@ -224,6 +283,38 @@ fn authored_files_below(root: &Path) -> Vec<PathBuf> {
     files
 }
 
+fn implementation_mappings(manifest: &str) -> Vec<&str> {
+    let mut in_implementations = false;
+    let mut mappings = Vec::new();
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_implementations = line == "[target.python.implementations]";
+        } else if in_implementations && line.starts_with('"') && line.contains('=') {
+            mappings.push(line);
+        }
+    }
+    mappings
+}
+
+fn binding_source_file(mapping: &str) -> PathBuf {
+    let (_, target) = mapping
+        .split_once('=')
+        .expect("implementation mapping should have a target");
+    let (module, _) = target
+        .trim()
+        .trim_matches('"')
+        .split_once(':')
+        .expect("implementation target should name a callable");
+    PathBuf::from("python/cott_bindings").join(format!(
+        "{}.py",
+        module
+            .strip_prefix("cott_bindings.")
+            .expect("implementation target should be a cott_bindings module")
+            .replace('.', "/")
+    ))
+}
+
 fn cott(root: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_cott"))
         .args(arguments)
@@ -353,7 +444,7 @@ fn assert_public_projection(root: &Path, example: &Example, implementations_gene
     );
 }
 
-fn assert_v08_generation_metadata(generation: &serde_json::Value) {
+fn assert_generation_identity(generation: &serde_json::Value) {
     assert_eq!(generation["schema_version"], 7);
     assert_eq!(
         generation["current"]["compatibility"],
@@ -364,6 +455,10 @@ fn assert_v08_generation_metadata(generation: &serde_json::Value) {
             "contract_strategy_schema": 5,
         })
     );
+}
+
+fn assert_generation_metadata(generation: &serde_json::Value) {
+    assert_generation_identity(generation);
     assert_eq!(
         generation["current"]["semantic_coverage"],
         serde_json::json!({
@@ -523,6 +618,181 @@ fn curriculum_inventory_and_final_symbols_are_exact() {
 }
 
 #[test]
+fn real_inventory_has_canonical_origins_and_verified_generated_shape() {
+    assert_eq!(REAL_EXAMPLES.len(), 6);
+    let expected_paths = REAL_EXAMPLES
+        .iter()
+        .map(|example| example.path.to_owned())
+        .collect::<BTreeSet<String>>();
+    let examples_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let on_disk = fs::read_dir(examples_root.join("real"))
+        .expect("real example directory should be readable")
+        .map(|entry| entry.expect("real example entry should be readable"))
+        .filter(|entry| {
+            entry
+                .file_type()
+                .expect("real example type should be readable")
+                .is_dir()
+        })
+        .map(|entry| format!("real/{}", entry.file_name().to_string_lossy()))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(expected_paths, on_disk, "real example inventory changed");
+
+    for example in REAL_EXAMPLES {
+        let project = examples_root.join(example.path);
+        let readme =
+            fs::read_to_string(project.join("README.md")).expect("real README is readable");
+        let mut readme_lines = readme.lines();
+        assert_eq!(
+            readme_lines.next(),
+            Some(format!("# {}", example.upstream_url).as_str()),
+            "{} README must lead with its canonical upstream URL",
+            example.path
+        );
+        assert!(
+            readme_lines
+                .find(|line| !line.trim().is_empty())
+                .is_some_and(|line| line.contains("Cott reimplementation")),
+            "{} README must immediately identify the Cott reimplementation",
+            example.path
+        );
+
+        let manifest = fs::read_to_string(project.join("cott.toml"))
+            .expect("real project manifest is readable");
+        assert!(
+            manifest.contains("version = \"0.1.0\""),
+            "{} must retain project API version 0.1.0",
+            example.path
+        );
+        let mappings = implementation_mappings(&manifest);
+        let binding_root = project.join("python/cott_bindings");
+        if example.path == "real/frogmouth" {
+            assert!(
+                mappings.len() <= 2,
+                "Frogmouth may have at most two bindings: {mappings:?}"
+            );
+        } else {
+            assert!(
+                mappings.is_empty(),
+                "{} must not use manifest bindings: {mappings:?}",
+                example.path
+            );
+            assert!(
+                !binding_root.exists(),
+                "{} must not have a cott_bindings source tree",
+                example.path
+            );
+        }
+
+        let source_files = authored_files_below(&project.join("src"))
+            .iter()
+            .map(|path| {
+                path.strip_prefix(&project)
+                    .expect("source file should remain within its project")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            source_files,
+            example
+                .source_files
+                .iter()
+                .map(|path| (*path).to_owned())
+                .collect(),
+            "{} source shape changed",
+            example.path
+        );
+
+        let adapter_files = authored_files_below(&project.join("python"))
+            .into_iter()
+            .filter(|path| path.extension().is_some_and(|extension| extension == "py"))
+            .filter(|path| {
+                !path.starts_with(project.join("python/cott_bindings"))
+                    && !path.starts_with(project.join("python/_cott_impl"))
+            })
+            .map(|path| {
+                path.strip_prefix(&project)
+                    .expect("adapter should remain within its project")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            adapter_files,
+            example
+                .adapter_files
+                .iter()
+                .map(|path| (*path).to_owned())
+                .collect(),
+            "{} adapter shape changed",
+            example.path
+        );
+        for adapter in example.adapter_files {
+            let adapter = fs::read_to_string(project.join(adapter)).expect("adapter is readable");
+            assert!(
+                !adapter.contains("_cott_impl") && !adapter.contains("cott_bindings"),
+                "{} adapter must import only public generated facades",
+                example.path
+            );
+        }
+
+        if example.path == "real/frogmouth" {
+            let mapped_binding_sources = mappings
+                .iter()
+                .map(|mapping| binding_source_file(mapping))
+                .collect::<BTreeSet<_>>();
+            let binding_sources = authored_files_below(&binding_root)
+                .into_iter()
+                .filter(|path| path.file_name().is_some_and(|name| name != "__init__.py"))
+                .map(|path| {
+                    path.strip_prefix(&project)
+                        .expect("binding source should remain within its project")
+                        .to_path_buf()
+                })
+                .collect::<BTreeSet<_>>();
+            assert!(
+                binding_sources.len() <= 2,
+                "Frogmouth may have at most two binding sources: {binding_sources:?}"
+            );
+            assert_eq!(
+                binding_sources, mapped_binding_sources,
+                "Frogmouth binding sources must match its manifest mappings"
+            );
+            for source in mapped_binding_sources {
+                assert!(
+                    project.join(&source).is_file(),
+                    "Frogmouth mapped binding source must exist: {}",
+                    source.display()
+                );
+            }
+        }
+
+        let generation_path = project.join("generated/generation.json");
+        let bytes = fs::read(&generation_path).expect("real projects need generation metadata");
+        let generation: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("generation metadata should be JSON");
+        GenerationRecord::parse(&bytes).expect("generation metadata must use the current schema");
+        assert_generation_identity(&generation);
+        assert_eq!(generation["current"]["verified"], true);
+        assert_eq!(
+            generation["last_verified"]["generation_id"], generation["current"]["generation_id"],
+            "{} generated output is stale",
+            example.path
+        );
+        assert_eq!(generation["current"]["project_version"], "0.1.0");
+        for tool in ["compiler", "runtime"] {
+            assert_eq!(
+                generation["current"]["tools"][tool]["version"],
+                env!("CARGO_PKG_VERSION"),
+                "{} {tool} package version drifted",
+                example.path
+            );
+        }
+    }
+}
+
+#[test]
 fn every_curriculum_example_is_formatted_checked_emitted_and_verified() {
     for example in EXAMPLES {
         let project = copied_project(example.path);
@@ -592,7 +862,7 @@ fn every_curriculum_example_is_formatted_checked_emitted_and_verified() {
                 .expect("generation record should be readable"),
         )
         .expect("generation record should be JSON");
-        assert_v08_generation_metadata(&generation);
+        assert_generation_metadata(&generation);
         let implementations = generation["current"]["implementations"]
             .as_array()
             .expect("implementations should be an array");
@@ -818,7 +1088,7 @@ fn feature_examples_are_formatted_checked_emitted_verified_and_run() {
                 .expect("generation record should be readable"),
         )
         .expect("generation record should be JSON");
-        assert_v08_generation_metadata(&generation);
+        assert_generation_metadata(&generation);
 
         if feature == "features/workflow-scenario" {
             let workflow = Example {
@@ -958,11 +1228,19 @@ fn feature_examples_are_formatted_checked_emitted_verified_and_run() {
 #[test]
 fn fastapi_hello_projects_external_request_through_testclient_when_available() {
     let project = copied_project("integrations/fastapi-hello");
-    for arguments in [
-        ["fmt", "--check"].as_slice(),
-        ["check"].as_slice(),
-        ["emit", "python"].as_slice(),
-    ] {
+    let verified_generation_bytes = fs::read(project.path.join("generated/generation.json"))
+        .expect("copied generation record should be readable");
+    let verified_generation: serde_json::Value = serde_json::from_slice(&verified_generation_bytes)
+        .expect("copied generation record should be JSON");
+    let verified_starlette_installed = verified_generation["current"]["dependencies"]
+        .as_array()
+        .expect("committed dependencies should be an array")
+        .iter()
+        .find(|dependency| dependency["name"] == "starlette")
+        .expect("committed generation should record Starlette")["installed"]
+        .clone();
+
+    for arguments in [["fmt", "--check"].as_slice(), ["check"].as_slice()] {
         let output = cott(&project.path, arguments);
         assert!(
             output.status.success(),
@@ -971,13 +1249,29 @@ fn fastapi_hello_projects_external_request_through_testclient_when_available() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let generation: serde_json::Value = serde_json::from_slice(
-        &fs::read(project.path.join("generated/generation.json"))
-            .expect("generation record should be readable"),
-    )
-    .expect("generation record should be JSON");
-    assert_v08_generation_metadata(&generation);
 
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "integrations/fastapi-hello failed cott emit python: {}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let emitted_generation: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json"))
+            .expect("emitted generation record should be readable"),
+    )
+    .expect("emitted generation record should be JSON");
+    assert_generation_identity(&emitted_generation);
+    let starlette = emitted_generation["current"]["dependencies"]
+        .as_array()
+        .expect("verified dependencies should be an array")
+        .iter()
+        .find(|dependency| dependency["name"] == "starlette")
+        .expect("verified generation should record Starlette");
+    assert_eq!(
+        starlette["installed"], verified_starlette_installed,
+        "emitting Python must preserve Starlette's installed evidence"
+    );
     let interpreter = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples/integrations/fastapi-hello/.venv/bin/python");
     let usable_testclient = Command::new(&interpreter)
@@ -987,29 +1281,80 @@ fn fastapi_hello_projects_external_request_through_testclient_when_available() {
         ])
         .status()
         .is_ok_and(|status| status.success());
-    if usable_testclient {
-        let generation = retarget_generation_to_python(&project.path, &interpreter);
-        let output = Command::new(&interpreter)
-            .args([
-                "-c",
-                concat!(
-                    "from fastapi.testclient import TestClient\n",
-                    "from app import app\n",
-                    "response = TestClient(app).get('/')\n",
-                    "assert response.status_code == 200\n",
-                    "assert response.json() == {'message': 'Hello World', 'method': 'GET'}\n",
-                ),
-            ])
-            .current_dir(project.path.join("python"))
-            .env("PYTHONPATH", project.path.join("generated/python"))
-            .output()
-            .expect("FastAPI TestClient should run");
-        fs::write(project.path.join("generated/generation.json"), generation)
-            .expect("restore verified generation record");
-        assert!(
-            output.status.success(),
-            "FastAPI external request projection failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+
+    if !usable_testclient {
+        return;
     }
+
+    fs::write(
+        project.path.join("generated/generation.json"),
+        &verified_generation_bytes,
+    )
+    .expect("restore copied verified generation record");
+    let pre_retarget_generation = retarget_generation_to_python(&project.path, &interpreter);
+    let retargeted_generation: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json"))
+            .expect("retargeted generation record should be readable"),
+    )
+    .expect("retargeted generation record should be JSON");
+    assert_generation_identity(&retargeted_generation);
+    let starlette = retargeted_generation["current"]["dependencies"]
+        .as_array()
+        .expect("verified dependencies should be an array")
+        .iter()
+        .find(|dependency| dependency["name"] == "starlette")
+        .expect("verified generation should record Starlette");
+    let installed = &starlette["installed"];
+    assert_eq!(installed["version"], "1.6.0");
+    let metadata_hash = Command::new(&interpreter)
+        .args([
+            "-c",
+            "import hashlib, importlib.metadata as md; print('sha256:' + hashlib.sha256(md.distribution('starlette').read_text('METADATA').encode()).hexdigest())",
+        ])
+        .output()
+        .expect("prepared Python should inspect Starlette metadata");
+    assert!(metadata_hash.status.success());
+    let metadata_hash = String::from_utf8_lossy(&metadata_hash.stdout);
+    assert!(metadata_hash.starts_with("sha256:"));
+    assert_eq!(installed["metadata_hash"], metadata_hash.trim());
+    assert_eq!(installed["imports"], serde_json::json!(["starlette"]));
+    assert!(
+        installed["origins"]
+            .as_array()
+            .is_some_and(|origins| !origins.is_empty()),
+        "verified Starlette provenance should include regular-file origins"
+    );
+
+    let output = Command::new(&interpreter)
+        .args([
+            "-c",
+            concat!(
+                "import json\n",
+                "from fastapi.testclient import TestClient\n",
+                "from app import app\n",
+                "response = TestClient(app).get('/')\n",
+                "print(json.dumps({'status': response.status_code, 'body': response.json()}))\n",
+            ),
+        ])
+        .current_dir(project.path.join("python"))
+        .env("PYTHONPATH", project.path.join("generated/python"))
+        .output()
+        .expect("FastAPI TestClient should run");
+    fs::write(
+        project.path.join("generated/generation.json"),
+        pre_retarget_generation,
+    )
+    .expect("restore copied verified generation record");
+    assert!(
+        output.status.success(),
+        "FastAPI external request projection failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("FastAPI TestClient response should be JSON");
+    assert_eq!(response["status"], 200);
+    assert_eq!(
+        response["body"],
+        serde_json::json!({"message": "Hello World", "method": "GET"})
+    );
 }

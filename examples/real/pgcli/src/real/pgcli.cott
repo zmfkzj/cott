@@ -1,0 +1,117 @@
+module real.pgcli
+
+enum ConnectionError:
+    MissingDatabase
+    InvalidPort(value: Str)
+    PromptDisabled
+
+struct ConnectionInputs:
+    host: Str
+    port: Str
+    user: Str
+    password: Str
+    database: Str
+
+struct EnvironmentInputs:
+    host: Str
+    port: Str
+    user: Str
+    password: Str
+    database: Str
+
+struct ConnectionSettings:
+    host: Str
+    port: Str
+    user: Str
+    password: Str
+    database: Str
+
+enum PromptAction:
+    UsePassword
+    PromptPassword
+
+struct ColumnCatalog:
+    name: Str
+
+struct TableCatalog:
+    schema: Str
+    name: Str
+    columns: List[ColumnCatalog]
+
+struct CompletionRequest:
+    source: Str
+    cursor: U64
+    catalog: List[TableCatalog]
+
+struct CompletionResult:
+    candidates: List[Str]
+    replace_start: U64
+
+enum RenderLayout:
+    Horizontal
+    Vertical
+
+struct RenderRequest:
+    columns: List[Str]
+    rows: List[List[Str]]
+    terminal_width: U16
+    vertical: Bool
+
+struct RenderedQuery:
+    text: Str
+    layout: RenderLayout
+    width: U16
+
+enum BackslashCommand:
+    Quit
+    Help
+    Tables
+    Describe
+    Unknown
+
+struct QueryResult:
+    columns: List[Str]
+    rows: List[List[Str]]
+
+enum DatabaseError:
+    ConnectionFailed(message: Str)
+    QueryFailed(message: Str)
+
+fn resolve_connection(
+    inputs: ConnectionInputs,
+    environment: EnvironmentInputs,
+) -> Result[ConnectionSettings, ConnectionError]:
+    ensures Result.Ok(settings) => ((inputs.host != "" and settings.host == inputs.host) or (inputs.host == "" and settings.host == environment.host))
+    ensures Result.Ok(settings) => ((inputs.port != "" and settings.port == inputs.port) or (inputs.port == "" and settings.port == environment.port))
+    ensures Result.Ok(settings) => ((inputs.user != "" and settings.user == inputs.user) or (inputs.user == "" and settings.user == environment.user))
+    ensures Result.Ok(settings) => ((inputs.password != "" and settings.password == inputs.password) or (inputs.password == "" and settings.password == environment.password))
+    ensures Result.Ok(settings) => ((inputs.database != "" and settings.database == inputs.database) or (inputs.database == "" and settings.database == environment.database))
+
+    error ConnectionError.MissingDatabase when inputs.database == "" and environment.database == ""
+    error ConnectionError.InvalidPort
+
+    effects []
+
+fn prompt_policy(no_prompt: Bool, password: Str) -> Result[PromptAction, ConnectionError]:
+    ensures Result.Ok(action) => ((password != "" and action == PromptAction.UsePassword) or (password == "" and action == PromptAction.PromptPassword))
+
+    error ConnectionError.PromptDisabled when no_prompt and password == ""
+
+    effects []
+
+fn complete_sql(request: CompletionRequest) -> CompletionResult:
+    effects []
+
+fn render_query(request: RenderRequest) -> RenderedQuery:
+    effects []
+
+fn recognize_backslash(source: Str) -> BackslashCommand:
+    effects []
+
+fn execute_query(connection: ConnectionSettings, sql: Str) -> Result[QueryResult, DatabaseError]:
+    ensures Result.Ok(query_result) => query_result.rows.len == 0 or query_result.columns.len > 0
+
+    error DatabaseError.ConnectionFailed
+    error DatabaseError.QueryFailed
+
+    effects [database.read, database.write]

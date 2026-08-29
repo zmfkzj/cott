@@ -1,0 +1,52 @@
+Do not reuse, quote, inspect, or imitate upstream source or prose. Implement direct, clean-room,
+stdlib-only code.
+
+Imports are closed: use only urllib.request, urllib.error, urllib.parse, pathlib, json, os, and
+tempfile when needed, plus generated real.yt_dlp facade/type modules and cott_runtime. Do not use
+multiprocessing, multiprocessing.pool, threading, asyncio, executors, pools, workers, queues,
+callbacks, dynamic imports, subprocesses, external distributions, or any concurrency abstraction.
+All work is sequential.
+
+Every result is deterministic for identical inputs. Do not add extractors, plugins, ffmpeg,
+site-specific logic, retries, configuration files, or dependencies.
+
+parse_batch_urls trims each line, ignores blank lines and lines whose left-trimmed form begins
+with any nonempty configured prefix, and otherwise returns trimmed URLs in input order. Reject an
+empty comment prefix as InvalidInput.
+
+expand_playlist_ranges treats indexes as one-based, inclusive ranges. An empty range list selects
+all items once in input order. Nonempty ranges are expanded in supplied range order, retaining a
+selected item once per matching range. Reject first == 0, last == 0, first > last, or endpoints
+outside the item list as InvalidRange.
+
+plan_downloads preserves input order. A URL in archive is omitted. If break_on_existing is true,
+stop before the first archived URL and set stopped_on_archive; otherwise continue through later
+items. Archive matching is exact URL equality.
+
+render_output_path recognizes only %(id)s, %(title)s, %(ext)s, and %(playlist_index)s. Substitute
+missing_placeholder for every other field name. Reject malformed placeholder syntax as
+InvalidTemplate. Do not sanitize, create, or inspect paths.
+
+render_items uses compact UTF-8 JSON. Lines emits one item object per line with a final newline;
+Single emits one JSON array and no final newline. Object keys are id, title, ext, playlist_index,
+and url in that order.
+
+Use CottList only through its public ABI: iterate directly (`for item in items`), test membership
+with `item in items`, use `len(items)` and `items[index]`, and convert with `list(items)` or
+`tuple(items)`. NEVER access `.values`; every BasedPyright missing-attribute error for `.values`
+is forbidden.
+Construct CottList only as `CottList(values=tuple(...))`, including empty collections as
+`CottList(values=())`. For an empty CottList with a known element type, bind a concrete annotation
+first (for example, `rows: CottList[Row] = CottList(values=())`); do not rely on empty-literal
+inference or casts. Preserve concrete element types through loops: annotate empty CottList
+accumulators and keep loop variables and derived collections typed rather than allowing Unknown
+propagation.
+
+transfer_media accepts only http:// and https:// URLs. In simulation, do no network or filesystem
+work and return a receipt with zero bytes and simulated true. Otherwise make exactly one direct
+urllib.request HTTP(S) request and synchronously stream it in bounded chunks to a sibling temporary
+file. Before each write, reject a chunk whose accumulated size would exceed max_bytes. Create
+destination parents, close the completed temporary file, then atomically os.replace it onto the
+destination. Use direct temporary-path cleanup on every non-success path; never leave a temporary
+file or partial destination. For strict typing, declare cleanup state exactly `temporary_path: Path | None = None` before assignment and guard cleanup with `if temporary_path is not None` after both exceptions and success; never compare a non-optional `Path` to `None`. Map malformed URLs to UnsupportedUrl, HTTP responses outside 200..299
+to HttpStatus, transport failures to NetworkFailure, and filesystem failures to OutputFailure.

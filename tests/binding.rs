@@ -1790,6 +1790,14 @@ fn effect_verification_leaves_factories_and_stdlib_constructors_unexecuted() {
         &stdlib.paths,
         &stdlib.plan,
         "api.service.run",
+        b"import bz2\n\ndef run() -> object:\n    return bz2.compress(b\"value\")\n",
+    )
+    .expect("an imported bz2 stdlib call is an effect leaf");
+    validate_candidate(
+        &stdlib.config,
+        &stdlib.paths,
+        &stdlib.plan,
+        "api.service.run",
         b"def run() -> object:\n    SystemExit(0)\n    return isinstance(1, int)\n",
     )
     .expect("permitted Python builtins are non-Cott effect leaves");
@@ -2065,6 +2073,10 @@ fn rejects_reserved_and_non_authored_manifest_module_roots() {
         (
             "pathlib.binding:run",
             "root `pathlib` is reserved for the Python standard library",
+        ),
+        (
+            "bz2.binding:run",
+            "root `bz2` is reserved for the Python standard library",
         ),
         (
             "locked_package.binding:run",

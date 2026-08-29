@@ -1,0 +1,50 @@
+module real.harlequin.core
+
+enum DatabaseTarget:
+    Memory
+    File(path: Path)
+
+enum Cell:
+    Null
+    Integer(value: I64)
+    Real(value: F64)
+    Text(value: Str)
+    Blob(value: Bytes)
+
+struct TypedRow:
+    values: List[Cell]
+
+struct QueryResult:
+    columns: List[Str]
+    rows: List[TypedRow]
+    affected_rows: I64
+
+enum SqlClientError:
+    EmptySql
+    UnterminatedSql(delimiter: Str)
+    ReadOnlyViolation(statement: Str)
+    SqliteFailure(message: Str)
+    UnsupportedValue(type_name: Str)
+
+fn split_statements(sql: Str) -> Result[List[Str], SqlClientError]:
+    ensures Result.Ok(statements) => statements.len > 0
+
+    error SqlClientError.EmptySql
+    error SqlClientError.UnterminatedSql
+
+    effects []
+
+fn execute_sql(
+    database: DatabaseTarget,
+    sql: Str,
+    read_only: Bool,
+) -> Result[List[QueryResult], SqlClientError]:
+    ensures Result.Ok(results) => results.len > 0
+
+    error SqlClientError.EmptySql
+    error SqlClientError.UnterminatedSql
+    error SqlClientError.ReadOnlyViolation
+    error SqlClientError.SqliteFailure
+    error SqlClientError.UnsupportedValue
+
+    effects [database.read, database.write]

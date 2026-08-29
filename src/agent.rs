@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -16,6 +17,7 @@ const MAX_RULE_BYTES: usize = 1024 * 1024;
 pub enum AgentKind {
     Codex,
     Omp,
+    Claude,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -71,15 +73,40 @@ pub const OMP: AdapterSpec = AdapterSpec {
         "<seconds>s",
         "--config",
         "<overlay>",
-        "<prompt>",
+        "@<prompt-file>",
     ],
     prompt_on_stdin: false,
+};
+
+pub const CLAUDE: AdapterSpec = AdapterSpec {
+    executable_name: "claude",
+    minimum_version: "2.1.89",
+    version_argv: &["--version"],
+    argv_template: &[
+        "--bare",
+        "--print",
+        "--input-format",
+        "text",
+        "--output-format",
+        "json",
+        "--permission-mode",
+        "dontAsk",
+        "--tools",
+        "Read,Write",
+        "--allowedTools",
+        "Read,Write",
+        "--disallowedTools",
+        "Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__*",
+        "--no-session-persistence",
+    ],
+    prompt_on_stdin: true,
 };
 
 pub fn adapter(kind: AgentKind) -> &'static AdapterSpec {
     match kind {
         AgentKind::Codex => &CODEX,
         AgentKind::Omp => &OMP,
+        AgentKind::Claude => &CLAUDE,
     }
 }
 
@@ -537,6 +564,8 @@ pub fn run_agent(
     prompt: Vec<u8>,
     timeout_seconds: u16,
 ) -> Result<AgentRunCandidate, String> {
+    let scratch = fs::canonicalize(scratch)
+        .map_err(|error| format!("resolve agent scratch {}: {error}", scratch.display()))?;
     let spec = adapter(kind);
     let executable = fs::canonicalize(&executable)
         .map_err(|error| format!("resolve {} executable: {error}", spec.executable_name))?;
@@ -550,20 +579,28 @@ pub fn run_agent(
     }
     let executable_bytes = fs::read(&executable)
         .map_err(|error| format!("read {} executable: {error}", spec.executable_name))?;
-    OpenOptions::new()
+    if kind == AgentKind::Claude && !native_claude_entrypoint(&executable, &executable_bytes) {
+        return Err("claude executable must use the official native entrypoint".to_owned());
+    }
+    let target_relative = target
+        .strip_prefix(workspace)
+        .map_err(|_| "agent target escaped workspace")?
+        .to_path_buf();
+    let mut target_file = OpenOptions::new()
+        .read(true)
         .write(true)
         .create_new(true)
         .open(target)
         .map_err(|error| format!("create isolated agent target {}: {error}", target.display()))?;
-    let workspace_before = workspace_snapshot(workspace)?;
+    let workspace_before = workspace_snapshot(workspace, Some(&target_relative))?;
     let version = run_process(
         &executable,
         spec.version_argv.iter().map(ToString::to_string).collect(),
         workspace,
-        scratch,
+        &scratch,
         Vec::new(),
         false,
-        Some(kind),
+        (kind != AgentKind::Claude).then_some(kind),
         None,
         timeout_seconds,
     )?;
@@ -573,10 +610,17 @@ pub fn run_agent(
     let adapter_version = match kind {
         AgentKind::Codex => version_text
             .strip_prefix("codex-cli ")
-            .or_else(|| version_text.strip_prefix("codex ")),
-        AgentKind::Omp => version_text.strip_prefix("omp/"),
-    }
-    .filter(|version| is_at_least(version, minimum_version));
+            .or_else(|| version_text.strip_prefix("codex "))
+            .filter(|version| is_at_least(version, minimum_version)),
+        AgentKind::Omp => version_text
+            .strip_prefix("omp/")
+            .filter(|version| is_at_least(version, minimum_version)),
+        AgentKind::Claude if !version.timed_out && version.status == Some(0) => {
+            closed_claude_version(&version.stdout)
+                .filter(|version| is_at_least(version, minimum_version))
+        }
+        AgentKind::Claude => None,
+    };
     let Some(adapter_version) = adapter_version else {
         return Err(format!(
             "unsupported {} version `{version_text}` (exit {:?}): {}",
@@ -608,6 +652,25 @@ pub fn run_agent(
             let overlay = scratch.join("omp.yaml");
             fs::write(&overlay, "startup:\n  checkUpdate: false\n")
                 .map_err(|error| format!("write OMP overlay: {error}"))?;
+            let mut attempt = 0u64;
+            let prompt_file = loop {
+                let prompt_file = scratch.join(format!("omp-prompt-{attempt}"));
+                match OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&prompt_file)
+                {
+                    Ok(mut file) => {
+                        file.write_all(&prompt)
+                            .map_err(|error| format!("write OMP prompt: {error}"))?;
+                        break prompt_file;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        attempt += 1;
+                    }
+                    Err(error) => return Err(format!("create OMP prompt: {error}")),
+                }
+            };
             vec![
                 "-p".to_owned(),
                 "--cwd".to_owned(),
@@ -627,9 +690,17 @@ pub fn run_agent(
                 format!("{timeout_seconds}s"),
                 "--config".to_owned(),
                 overlay.display().to_string(),
-                String::from_utf8(prompt.clone()).map_err(|_| "OMP prompt is not UTF-8")?,
+                format!(
+                    "@{}",
+                    prompt_file.to_str().ok_or("OMP prompt path is not UTF-8")?
+                ),
             ]
         }
+        AgentKind::Claude => CLAUDE
+            .argv_template
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
     };
     let stdin = if spec.prompt_on_stdin {
         prompt.clone()
@@ -641,7 +712,7 @@ pub fn run_agent(
         &executable,
         arguments,
         workspace,
-        scratch,
+        &scratch,
         stdin,
         true,
         Some(kind),
@@ -658,14 +729,8 @@ pub fn run_agent(
             spec.executable_name
         ));
     }
-    let target_relative = target
-        .strip_prefix(workspace)
-        .map_err(|_| "agent target escaped workspace")?;
-    let mut before = workspace_before;
-    let mut after = workspace_snapshot(workspace)?;
-    before.remove(target_relative);
-    after.remove(target_relative);
-    if before != after {
+    let after = workspace_snapshot(workspace, Some(&target_relative))?;
+    if workspace_before != after {
         return Err("agent modified an unauthorized workspace path".to_owned());
     }
     if completed.timed_out || completed.status != Some(0) {
@@ -676,16 +741,25 @@ pub fn run_agent(
             String::from_utf8_lossy(&completed.stderr).trim()
         ));
     }
-    let metadata = fs::symlink_metadata(target)
-        .map_err(|error| format!("agent did not write target {}: {error}", target.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.nlink() != 1 {
+    if kind == AgentKind::Claude && !claude_success(&completed.stdout) {
+        return Err("claude returned an invalid result".to_owned());
+    }
+    let metadata = target_file
+        .metadata()
+        .map_err(|error| format!("stat agent target: {error}"))?;
+    if !metadata.is_file() || metadata.nlink() != 1 {
         return Err("agent candidate must be a regular single-link file".to_owned());
     }
     if metadata.len() > 1024 * 1024 {
         return Err("agent implementation exceeds 1 MiB".to_owned());
     }
-    let mut implementation = fs::read(target)
-        .map_err(|error| format!("read agent target {}: {error}", target.display()))?;
+    target_file
+        .seek(SeekFrom::Start(0))
+        .map_err(|error| format!("seek agent target: {error}"))?;
+    let mut implementation = Vec::with_capacity(metadata.len() as usize);
+    target_file
+        .read_to_end(&mut implementation)
+        .map_err(|error| format!("read agent target: {error}"))?;
     if implementation.is_empty() {
         return Err(format!("agent did not write target {}", target.display()));
     }
@@ -708,7 +782,58 @@ pub fn run_agent(
     })
 }
 
-fn workspace_snapshot(root: &Path) -> Result<BTreeMap<PathBuf, (u8, u32, u64, String)>, String> {
+fn native_claude_entrypoint(executable: &Path, bytes: &[u8]) -> bool {
+    if executable.file_name().and_then(|name| name.to_str()) == Some("cli.js") {
+        return false;
+    }
+    let shebang = bytes
+        .split(|byte| *byte == b'\n')
+        .next()
+        .unwrap_or_default();
+    !shebang.starts_with(b"#!")
+        || !shebang
+            .split(|byte| byte.is_ascii_whitespace())
+            .any(|word| word == b"node" || word.ends_with(b"/node"))
+}
+
+fn closed_claude_version(stdout: &[u8]) -> Option<&str> {
+    let stdout = std::str::from_utf8(stdout).ok()?;
+    let mut tokens = stdout.split_ascii_whitespace();
+    let version = tokens.next()?;
+    (tokens.next().is_none() && closed_semver(version)).then_some(version)
+}
+
+fn closed_semver(version: &str) -> bool {
+    let mut parts = version.split('.');
+    let valid_part = |part: Option<&str>| {
+        part.is_some_and(|part| {
+            !part.is_empty()
+                && part.bytes().all(|byte| byte.is_ascii_digit())
+                && (part.len() == 1 || !part.starts_with('0'))
+        })
+    };
+    valid_part(parts.next())
+        && valid_part(parts.next())
+        && valid_part(parts.next())
+        && parts.next().is_none()
+}
+
+fn claude_success(stdout: &[u8]) -> bool {
+    let Ok(serde_json::Value::Object(result)) = serde_json::from_slice(stdout) else {
+        return false;
+    };
+    result.get("type").and_then(serde_json::Value::as_str) == Some("result")
+        && result.get("subtype").and_then(serde_json::Value::as_str) == Some("success")
+        && result.get("is_error").and_then(serde_json::Value::as_bool) == Some(false)
+        && result
+            .get("result")
+            .is_some_and(serde_json::Value::is_string)
+}
+
+fn workspace_snapshot(
+    root: &Path,
+    excluded: Option<&Path>,
+) -> Result<BTreeMap<PathBuf, (u8, u32, u64, String)>, String> {
     let mut snapshot = BTreeMap::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
@@ -723,6 +848,9 @@ fn workspace_snapshot(root: &Path) -> Result<BTreeMap<PathBuf, (u8, u32, u64, St
                 .strip_prefix(root)
                 .map_err(|_| "agent workspace path escaped root")?
                 .to_path_buf();
+            if excluded == Some(relative.as_path()) {
+                continue;
+            }
             let metadata = fs::symlink_metadata(&path)
                 .map_err(|error| format!("stat agent workspace {}: {error}", path.display()))?;
             if metadata.file_type().is_symlink() {
@@ -794,6 +922,14 @@ fn agent_environment_names(kind: AgentKind) -> Vec<String> {
             {
                 names.push("PI_CODING_AGENT_DIR".to_owned());
             }
+        }
+        AgentKind::Claude => {
+            if std::env::var_os("ANTHROPIC_API_KEY").is_some() {
+                names.push("ANTHROPIC_API_KEY".to_owned());
+            }
+            names.push("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_owned());
+            names.push("DISABLE_ERROR_REPORTING".to_owned());
+            names.push("DISABLE_TELEMETRY".to_owned());
         }
     }
     names.sort();
@@ -896,6 +1032,22 @@ fn run_process(
                     }
                 }
             }
+            AgentKind::Claude => {
+                if let Some(value) = std::env::var_os("ANTHROPIC_API_KEY") {
+                    environment.insert(
+                        "ANTHROPIC_API_KEY".to_owned(),
+                        value
+                            .into_string()
+                            .map_err(|_| "ANTHROPIC_API_KEY is not valid UTF-8")?,
+                    );
+                }
+                environment.insert(
+                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_owned(),
+                    "1".to_owned(),
+                );
+                environment.insert("DISABLE_TELEMETRY".to_owned(), "1".to_owned());
+                environment.insert("DISABLE_ERROR_REPORTING".to_owned(), "1".to_owned());
+            }
         }
     }
     if network {
@@ -907,17 +1059,6 @@ fn run_process(
     let mut writable = vec![scratch.to_path_buf()];
     if let Some(target) = writable_target {
         writable.push(target.to_path_buf());
-    }
-    if credential_kind == Some(AgentKind::Omp) {
-        let argument_bytes = arguments.iter().map(|value| value.len() + 1).sum::<usize>()
-            + environment
-                .iter()
-                .map(|(name, value)| name.len() + value.len() + 2)
-                .sum::<usize>();
-        let argument_max = unsafe { libc::sysconf(libc::_SC_ARG_MAX) };
-        if argument_max <= 0 || argument_bytes.saturating_add(64 * 1024) > argument_max as usize {
-            return Err("OMP prompt exceeds the host argument-size limit".to_owned());
-        }
     }
     let address_space_bytes = if credential_kind == Some(AgentKind::Omp) {
         128 * 1024 * 1024 * 1024

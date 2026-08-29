@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -549,12 +549,21 @@ fn verify_in_scratch(
     if signature_requests.len() != selected_callables.len() {
         return Err("generation record omitted a selected public implementation".to_owned());
     }
-    let project_modules = ir
+    let module_names = ir
         .modules
         .iter()
         .map(|module| module.module.as_string())
+        .collect::<BTreeSet<_>>();
+    let project_modules = module_names
+        .iter()
         .flat_map(|module| [module.clone(), format!("{module}_types")])
         .collect::<BTreeSet<_>>();
+    let type_projection_paths = module_names
+        .iter()
+        .map(|module| type_projection_path(module))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
     let dependencies = dependency_evidence(
         &config.project.name,
         paths,
@@ -563,6 +572,7 @@ fn verify_in_scratch(
         artifact_root,
         scratch,
         &project_modules,
+        &type_projection_paths,
         &target_site_packages,
     )?;
     let runtime_probe = process(
@@ -948,6 +958,31 @@ fn scratch_directory() -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn type_projection_path(module: &str) -> PathBuf {
+    let mut segments = module.split('.').collect::<Vec<_>>();
+    let name = segments.pop().expect("canonical module has a name");
+    let mut path = PathBuf::new();
+    for segment in segments {
+        path.push(segment);
+    }
+    path.push(format!("{name}_types.py"));
+    path
+}
+
+fn valid_type_projection_path(path: &Path) -> bool {
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                name.strip_suffix("_types.py")
+                    .is_some_and(|module| !module.is_empty())
+            })
+}
+
 fn dependency_evidence(
     project_name: &str,
     paths: &ProjectPaths,
@@ -956,9 +991,37 @@ fn dependency_evidence(
     artifact_root: &Path,
     scratch: &Path,
     project_modules: &BTreeSet<String>,
+    type_projection_paths: &[PathBuf],
     site_packages: &[PathBuf],
 ) -> Result<Value, String> {
     let metadata_path = paths.python_source_dir.join("pyproject.toml");
+    if type_projection_paths
+        .windows(2)
+        .any(|paths| paths[0] >= paths[1])
+    {
+        return Err(
+            "type projection paths are not deterministically ordered and unique".to_owned(),
+        );
+    }
+    for relative in type_projection_paths {
+        if !valid_type_projection_path(relative) {
+            return Err(format!(
+                "invalid compiler-owned type projection path {}",
+                relative.display()
+            ));
+        }
+        let path = generated_root.join(relative);
+        if !fs::symlink_metadata(&path)
+            .map_err(|error| format!("read type projection {}: {error}", path.display()))?
+            .file_type()
+            .is_file()
+        {
+            return Err(format!(
+                "compiler-owned type projection {} is not a regular file",
+                path.display()
+            ));
+        }
+    }
     let metadata: toml::Value =
         toml::from_str(&fs::read_to_string(&metadata_path).map_err(|error| {
             format!("read target metadata {}: {error}", metadata_path.display())
@@ -1146,26 +1209,32 @@ fn dependency_evidence(
 root=pathlib.Path(sys.argv[1])
 locked=json.loads(sys.argv[2])
 project_modules=set(json.loads(sys.argv[3]))
+type_projections=[root/pathlib.Path(path) for path in json.loads(sys.argv[4])]
 imports=set()
-for path in sorted((root/"_cott_impl").rglob("*.py")):
+for path in sorted(set((root/"_cott_impl").rglob("*.py"))|set(type_projections)):
  tree=ast.parse(path.read_bytes(),filename=str(path))
  for node in ast.walk(tree):
   if isinstance(node,ast.Import):
    imports.update(alias.name for alias in node.names)
   elif isinstance(node,ast.ImportFrom) and node.level==0 and node.module:
    imports.add(node.module)
-imports={name.split(".",1)[0] for name in imports if name not in project_modules}
-imports-=set(sys.stdlib_module_names)|{"cott_runtime","_cott_impl"}
+imports={name for name in imports if name not in project_modules}
+imported_modules={}
+for module in sorted(imports):
+ root=module.split(".",1)[0]
+ if root in sys.stdlib_module_names or root in {"cott_runtime","_cott_impl"}:
+  continue
+ imported_modules.setdefault(root,[]).append(module)
 owners=md.packages_distributions()
 imported_by={}
-for package in sorted(imports):
- distributions=owners.get(package,[])
+for root,modules in sorted(imported_modules.items()):
+ distributions=owners.get(root,[])
  if len(distributions)!=1:
-  raise RuntimeError(f"external import {package!r} belongs to {len(distributions)} installed distributions")
+  raise RuntimeError(f"external import {root!r} belongs to {len(distributions)} installed distributions")
  name=distributions[0].lower().replace("_","-")
  if name not in locked:
-  raise RuntimeError(f"external import {package!r} resolves to unlocked distribution {name!r}")
- imported_by.setdefault(name,[]).append(package)
+  raise RuntimeError(f"external import {root!r} resolves to unlocked distribution {name!r}")
+ imported_by.setdefault(name,{})[root]=modules
 result={}
 for locked_name,locked_version in sorted(locked.items()):
  if locked_name not in imported_by:
@@ -1179,24 +1248,30 @@ for locked_name,locked_version in sorted(locked.items()):
  if metadata is None:
   raise RuntimeError(f"installed distribution {name!r} has no METADATA")
  files=[]
- roots=sorted(set(imported_by.get(name,[])))
- for relative in distribution.files or ():
-  rel=relative.as_posix()
-  if not any(rel==root+".py" or rel==root+"/__init__.py" or ("/" not in rel and rel.startswith(root+".") and (rel.endswith(".so") or rel.endswith(".pyd"))) for root in roots):
-   continue
-  path=pathlib.Path(distribution.locate_file(relative))
-  if path.is_symlink():
-   raise RuntimeError(f"installed distribution {name!r} contains symlink {path}")
-  if path.is_file():
-   files.append({"content_hash":"sha256:"+hashlib.sha256(path.read_bytes()).hexdigest(),"path":rel})
- if not files:
-  raise RuntimeError(f"installed distribution {name!r} has no regular files")
- result[name]={"imports":sorted(imported_by.get(name,[])),"metadata_hash":"sha256:"+hashlib.sha256(metadata.encode()).hexdigest(),"origins":sorted(files,key=lambda item:(item["path"],item["content_hash"])),"version":version}
+ roots=imported_by.get(name,{})
+ modules=sorted({module for imports in roots.values() for module in imports})
+ for module in modules:
+  relative_module=module.replace(".","/")
+  origins=[]
+  for relative in distribution.files or ():
+   rel=relative.as_posix()
+   if not (rel==relative_module+".py" or rel==relative_module+"/__init__.py" or (rel.startswith(relative_module+".") and (rel.endswith(".so") or rel.endswith(".pyd")))):
+    continue
+   path=pathlib.Path(distribution.locate_file(relative))
+   if path.is_symlink():
+    raise RuntimeError(f"installed distribution {name!r} contains symlink {path}")
+   if path.is_file():
+    origins.append({"content_hash":"sha256:"+hashlib.sha256(path.read_bytes()).hexdigest(),"path":rel})
+  if not origins:
+   raise RuntimeError(f"external import {module!r} has no regular origin in installed distribution {name!r}")
+  files.extend(origins)
+ result[name]={"imports":sorted(roots),"metadata_hash":"sha256:"+hashlib.sha256(metadata.encode()).hexdigest(),"origins":sorted(files,key=lambda item:(item["path"],item["content_hash"])),"version":version}
 print(json.dumps(result,sort_keys=True,separators=(",",":")))"#
                 .to_owned(),
             generated_root.display().to_string(),
             serde_json::to_string(&lock_index).map_err(|error| error.to_string())?,
             serde_json::to_string(project_modules).map_err(|error| error.to_string())?,
+            serde_json::to_string(type_projection_paths).map_err(|error| error.to_string())?,
         ],
         generated_root,
         scratch,
@@ -1368,5 +1443,145 @@ mod tests {
         assert_eq!(callable_kind, "async");
         assert_eq!(concrete, Value::String("ReaderState".to_owned()));
         assert_eq!(method, Value::String("read".to_owned()));
+    }
+    #[test]
+    fn dependency_evidence_includes_external_type_projection_imports() {
+        let root = scratch_directory().expect("fixture root");
+        let outcome = (|| {
+            let python_source = root.join("python");
+            let artifact_root = root.join("artifacts");
+            let generated_root = artifact_root.join("python");
+            let site_packages = root.join("site-packages");
+            let scratch = root.join("scratch");
+            let package = site_packages.join("external_fixture");
+            let dist_info = site_packages.join("external_fixture-1.2.3.dist-info");
+            let metadata = "Metadata-Version: 2.1\nName: external-fixture\nVersion: 1.2.3\n";
+            let module_source = b"class Payload:\n    pass\n";
+            let artifact_hash = format!("sha256:{}", "0".repeat(64));
+            let lock = format!(
+                r#"version = 1
+revision = 1
+requires-python = ">=3.14"
+
+[[package]]
+name = "demo"
+version = "0.1.0"
+source = {{ virtual = "." }}
+dependencies = [{{ name = "external-fixture" }}]
+
+[[package]]
+name = "external-fixture"
+version = "1.2.3"
+source = {{ registry = "https://example.test/simple" }}
+wheels = [{{ url = "https://example.test/external_fixture-1.2.3.whl", hash = "{artifact_hash}" }}]
+"#
+            );
+            fs::create_dir_all(&python_source)?;
+            fs::create_dir_all(generated_root.join("_cott_impl/api"))?;
+            fs::create_dir_all(generated_root.join("api"))?;
+            fs::create_dir_all(&package)?;
+            fs::create_dir_all(&dist_info)?;
+            fs::create_dir(&scratch)?;
+            fs::write(
+                python_source.join("pyproject.toml"),
+                "[project]\nname = \"demo\"\nversion = \"0.1.0\"\ndependencies = [\"external-fixture\"]\n",
+            )?;
+            fs::write(root.join("uv.lock"), &lock)?;
+            fs::write(
+                generated_root.join("api/item_types.py"),
+                "from external_fixture.requests import Payload\n",
+            )?;
+            fs::write(
+                generated_root.join("api/item0_types.py"),
+                "from external_fixture.requests import Payload\n",
+            )?;
+            fs::write(
+                generated_root.join("_cott_impl/api/run.py"),
+                "def run(value):\n    return value\n",
+            )?;
+            fs::write(package.join("__init__.py"), b"")?;
+            fs::write(package.join("requests.py"), module_source)?;
+            fs::write(dist_info.join("METADATA"), metadata)?;
+            fs::write(dist_info.join("top_level.txt"), "external_fixture\n")?;
+            fs::write(
+                dist_info.join("RECORD"),
+                "external_fixture/__init__.py,,\nexternal_fixture/requests.py,,\nexternal_fixture-1.2.3.dist-info/METADATA,,\nexternal_fixture-1.2.3.dist-info/top_level.txt,,\nexternal_fixture-1.2.3.dist-info/RECORD,,\n",
+            )?;
+            let paths = ProjectPaths {
+                root: root.clone(),
+                manifest: root.join("cott.toml"),
+                source_dir: root.join("src"),
+                python_source_dir: python_source,
+                generated_dir: generated_root.clone(),
+                stubs_dir: root.join("stubs"),
+                lockfile: Some(root.join("uv.lock")),
+            };
+            fs::write(
+                generated_root.join("stale_types.py"),
+                "from stale_fixture import Payload\n",
+            )?;
+            let module_names = ["api.item", "api.item0"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>();
+            let project_modules = module_names
+                .iter()
+                .flat_map(|module| [module.clone(), format!("{module}_types")])
+                .collect::<BTreeSet<_>>();
+            let type_projection_paths = module_names
+                .iter()
+                .map(|module| type_projection_path(module))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            assert_eq!(
+                type_projection_paths,
+                vec![
+                    PathBuf::from("api/item0_types.py"),
+                    PathBuf::from("api/item_types.py"),
+                ]
+            );
+            let dependencies = dependency_evidence(
+                "demo",
+                &paths,
+                &fs::canonicalize("/usr/bin/python3")?,
+                &generated_root,
+                &artifact_root,
+                &scratch,
+                &project_modules,
+                &type_projection_paths,
+                &[site_packages],
+            )
+            .map_err(std::io::Error::other)?;
+            Ok::<_, std::io::Error>((
+                dependencies,
+                artifact_hash,
+                format!("sha256:{}", sha256_hex(metadata.as_bytes())),
+                format!("sha256:{}", sha256_hex(module_source)),
+                format!("sha256:{}", sha256_hex(lock.as_bytes())),
+            ))
+        })();
+        let cleanup = fs::remove_dir_all(&root);
+        let (dependencies, artifact_hash, metadata_hash, origin_hash, lock_hash) =
+            outcome.expect("dependency evidence");
+        cleanup.expect("remove fixture root");
+        assert_eq!(
+            dependencies,
+            json!([{
+                "artifacts": [artifact_hash],
+                "installed": {
+                    "imports": ["external_fixture"],
+                    "metadata_hash": metadata_hash,
+                    "origins": [{
+                        "content_hash": origin_hash,
+                        "path": "external_fixture/requests.py",
+                    }],
+                    "version": "1.2.3",
+                },
+                "lock_hash": lock_hash,
+                "name": "external-fixture",
+                "version": "1.2.3",
+            }])
+        );
     }
 }

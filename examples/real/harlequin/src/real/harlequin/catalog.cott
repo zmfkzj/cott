@@ -1,0 +1,58 @@
+module real.harlequin.catalog
+
+use real.harlequin.core.{DatabaseTarget, SqlClientError}
+
+enum RelationKind:
+    Table
+    View
+
+enum CatalogMatchKind:
+    Relation
+    Column
+
+struct CatalogRelation:
+    name: Str
+    kind: RelationKind
+    sql: Option[Str]
+
+struct CatalogColumn:
+    relation: Str
+    ordinal: U32
+    name: Str
+    declared_type: Str
+    not_null: Bool
+    default_sql: Option[Str]
+    primary_key_position: U32
+
+struct CatalogMatch:
+    kind: CatalogMatchKind
+    relation: Str
+    name: Str
+    ordinal: U32
+
+fn catalog_relations(database: DatabaseTarget) -> Result[List[CatalogRelation], SqlClientError]:
+    ensures Result.Ok(relations) => relations.len <= 100000
+
+    error SqlClientError.SqliteFailure
+
+    effects [database.read]
+
+fn catalog_columns(
+    database: DatabaseTarget,
+    relation: Str,
+) -> Result[List[CatalogColumn], SqlClientError]:
+    ensures Result.Ok(columns) => columns.len <= 65535
+
+    error SqlClientError.SqliteFailure
+
+    effects [database.read]
+
+fn search_catalog(
+    database: DatabaseTarget,
+    term: Str,
+) -> Result[List[CatalogMatch], SqlClientError]:
+    ensures Result.Ok(catalog_matches) => catalog_matches.len <= 1000
+
+    error SqlClientError.SqliteFailure
+
+    effects [database.read]

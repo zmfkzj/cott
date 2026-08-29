@@ -4,10 +4,15 @@
 module declares public types, functions, contracts, effects, scenarios, and errors; Python is a
 verified projection of that declaration, not a second contract source.
 
-`architecture.md` is the normative implemented v0.8 contract. The closed compatibility identity is
-package `0.8.0`, Canonical IR schema `8`, generation schema/domain
-`7` (`cott.generation.v7`), Python runtime ABI `7`, and contract-test strategy schema `5`.
-Readers and loaders reject incompatible generation records, strategies, and runtime identities.
+`architecture.md` is the normative implemented v1.0 language contract. The closed compatibility identity is
+package `1.0.0`, Canonical IR schema `8`, generation schema/domain
+`7` (`cott.generation.v7`), Python runtime ABI `7`, contract-test strategy schema `5`, and
+diagnostics schema `1`. Readers and loaders reject incompatible generation records, strategies, and
+runtime identities.
+
+Implemented v0.8 `.cott` source remains source-compatible with unchanged semantics. Serialized and
+generated artifacts are exact-identity: regenerate them after a package mismatch; Cott provides no
+legacy reader.
 
 ## Contract and evidence
 
@@ -38,13 +43,15 @@ changing artifact certification.
 Every example is an independent project. Use this one sequence from the repository root; replace
 `<project>` with an index path below.
 
+Discover the installed package and commands with `cott --version` (or `cott -V`) and `cott --help`.
+
 ```bash
 project=examples/<project>
 UV_PROJECT_ENVIRONMENT="$project/.venv" uv sync --project "$project/python"
 cott check --project "$project"
 cott fmt --check --project "$project"
 cott emit python --project "$project"
-cott generate --agent omp --target python --project "$project"
+cott generate --agent claude --target python --project "$project"
 cott verify --project "$project"
 ```
 
@@ -53,6 +60,17 @@ callables. `generate` invokes the selected agent only for eligible unresolved ca
 bindings and accepted durable implementations are reused. `verify` rebuilds the managed target and
 certifies evidence and provenance without editing source contracts.
 
+`generate --agent` accepts three direct adapters: `codex`, `claude`, and `omp`. `claude` directly
+invokes official native Claude Code `>=2.1.89`; an OMP run that selects a Claude model remains
+`omp`, not `claude`. Before generation, direct Claude's native-entrypoint check rejects npm
+`cli.js` entrypoints and Node shebangs, then runs the exact credential-free, network-disabled probe
+`claude --version`. The probe must finish without timeout at status `0`; its stdout must be exactly
+one strict SemVer token `>=2.1.89`. Generation is separate: it receives the exact UTF-8 prompt on
+stdin, is limited to `Read` and `Write`, and accepts only a successful JSON result. Only generation
+may receive an existing `ANTHROPIC_API_KEY` and retain provider network egress; no network-capable
+Claude tools are exposed. The normative argv, environment, native-entrypoint, and result contract
+is in architecture §17.2.1.
+
 `generated/` and any agent-owned `python/_cott_impl/` files committed in an example are actual
 compiler results. They are not an authoring shortcut. `.venv/`, `.cott/`, and `__pycache__/` are
 transient. Public code imports generated Cott facades only; neither `_cott_impl` nor
@@ -60,9 +78,9 @@ transient. Public code imports generated Cott facades only; neither `_cott_impl`
 
 ## Reduced example index
 
-The maintained inventory has 20 projects: six grammar lessons, three simple lessons, one complex
+The maintained inventory has 26 projects: six grammar lessons, three simple lessons, one complex
 curriculum project, the separate `process-bar` full-generation fixture, seven focused features, one
-modular project, and one FastAPI integration.
+modular project, one FastAPI integration, and six real-world generation-first projects.
 
 ### Grammar — 6
 
@@ -99,6 +117,17 @@ selects an implementation and never defines the Cott contract.
 fixture for `foo.bar`: `process_bar` composes `validate_payload`, `process_payload_bytes`, and
 `build_output` through public facades. Its committed generation record and `_cott_impl` tree are the
 actual accepted compiler output.
+
+### Real — 6
+
+| Project | Distinct contract |
+| --- | --- |
+| `real/yt-dlp` | Playlist selection, archive-aware download planning, output templates, JSON rendering, and bounded media transfer. |
+| `real/harlequin` | SQLite statement execution, schema catalog search, and deterministic query and catalog rendering. |
+| `real/pgcli` | Connection precedence, SQL completion, query rendering, backslash commands, and database execution. |
+| `real/posting` | YAML HTTP-request collections, variable resolution, curl export, persistence, and bounded network requests. |
+| `real/toolong` | Bounded log paging, JSONL rendering, merging, searching, and appended-file reads. |
+| `real/frogmouth` | Markdown document navigation, loading, state persistence, and sidebar application behavior. |
 
 ### Focused features — 7
 

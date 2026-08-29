@@ -6,11 +6,11 @@
 `.cott` module is the public contract source. Python bindings or accepted agent implementations are
 checked projections; generated Python facades are the only public import path.
 
-`architecture.md` is the authoritative implemented v0.8 contract: package `0.8.0`, Canonical IR
-schema `8`, generation schema/domain `7` (`cott.generation.v7`), runtime ABI `7`, and
-contract-test strategy schema `5`. Keep this closed compatibility contract: incompatible records,
-runtimes, and strategies fail closed. Do not add a legacy reader, partial profile, unsandboxed
-fixture fallback, or second source of truth.
+`architecture.md` is the authoritative implemented v1.0 contract: package `1.0.0`, Canonical IR
+schema `8`, generation schema/domain `7` (`cott.generation.v7`), runtime ABI `7`, contract-test
+strategy schema `5`, and diagnostics schema `1`. Keep this closed compatibility contract:
+incompatible records, runtimes, and strategies fail closed. Do not add a legacy reader, partial
+profile, unsandboxed fixture fallback, or second source of truth.
 
 ## Architecture & Data Flow
 
@@ -44,19 +44,21 @@ cott check / fmt / emit / generate / verify / diff
 | `examples/simple/` | Three compact composition lessons |
 | `examples/complex/artifact-pipeline/` | The one pure complex curriculum project |
 | `examples/complex/process-bar/` | Focused full-agent-generation fixture, outside curriculum counts |
-| `examples/features/` | Seven focused v0.8 feature projects |
+| `examples/features/` | Seven focused v1.0 feature projects |
 | `examples/modular/order-management/` | Multi-module facade composition |
 | `examples/integrations/fastapi-hello/` | FastAPI external-type projection |
+| `examples/real/` | Six independent real-world generation-first projects |
 | `examples/**/src/**/*.cott` | Authoritative example contracts |
 | `examples/**/python/cott_bindings/**/*.py` | Selected project-local binding sources where a manifest maps them |
 | `examples/**/python/_cott_impl/**/*.py` | Durable accepted agent implementation sources where present |
-| `architecture.md` | Normative implemented v0.8 contract |
+| `architecture.md` | Normative implemented v1.0 contract |
 
-The maintained inventory is 20 independent projects: grammar 6, simple 3, complex curriculum 1,
-`process-bar` fixture 1, features 7, modular 1, and FastAPI integration 1. Every project has
-`cott.toml` and `src/`; its managed/output and implementation layout follows its own manifest and
-generation record. Committed `generated/` and agent-owned `_cott_impl` content are compiler results.
-Never treat `.venv/`, `.cott/`, or `__pycache__/` as managed project content.
+The maintained inventory is 26 independent projects: grammar 6, simple 3, complex curriculum 1,
+`process-bar` fixture 1, features 7, modular 1, FastAPI integration 1, and real-world 6
+(`yt-dlp`, `harlequin`, `pgcli`, `posting`, `toolong`, `frogmouth`). Every project has `cott.toml`
+and `src/`; its managed/output and implementation layout follows its own manifest and generation
+record. Committed `generated/` and agent-owned `_cott_impl` content are compiler results. Never
+treat `.venv/`, `.cott/`, or `__pycache__/` as managed project content.
 
 ## Development Commands
 
@@ -75,7 +77,7 @@ cott init <path> [--name <name>] [--no-sync] [--format json]
 cott check [<source.cott>] [--project <dir>] [--format json]
 cott fmt [--check] [--project <dir>] [--format json]
 cott emit ir|python [--project <dir>] [--format json]
-cott generate [<fully.qualified.function>] --agent codex|omp --target python [--project <dir>] [--format json]
+cott generate [<fully.qualified.function>] --agent codex|claude|omp --target python [--project <dir>] [--format json]
 cott verify [--project <dir>] [--format json]
 cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]
 cott lsp
@@ -85,6 +87,13 @@ cott lsp
 `emit python` never invokes an agent. `generate` invokes the selected agent only for eligible
 unresolved callables. `verify` rebuilds and checks the complete target without a cache, then updates
 provenance and applies any selected semantic-coverage gate.
+
+`generate` has three direct adapters: `codex`, direct `claude`, and `omp`; selecting a Claude
+model inside OMP is still `omp`, never the direct Claude adapter. Before generation, direct Claude's
+native-entrypoint check rejects npm `cli.js` entrypoints and Node shebangs, then runs exactly
+`claude --version` with no credentials (including `ANTHROPIC_API_KEY`) and network disabled. The
+probe must finish without a timeout at status `0`; stdout must be exactly one strict SemVer token
+`>=2.1.89`. Generation is separate: official native Claude Code runs exactly `claude --bare --print --input-format text --output-format json --permission-mode dontAsk --tools Read,Write --allowedTools Read,Write --disallowedTools Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__* --no-session-persistence`. Send the exact UTF-8 prompt through stdin in the isolated workspace; use common Cott runtime variables plus an existing `ANTHROPIC_API_KEY` only, always set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_TELEMETRY=1`, and `DISABLE_ERROR_REPORTING=1`, and never forward OAuth/auth-token/base-url/cloud/provider/customization variables. Accept stdout only as JSON `{type:"result", subtype:"success", is_error:false, result:<string>}`; otherwise fail closed. Generation provider egress may remain available, but no network-capable Claude tools are exposed; the normative environment and result contract is architecture §17.2.1.
 
 ## Code Conventions & Common Patterns
 
@@ -98,7 +107,7 @@ provenance and applies any selected semantic-coverage gate.
   and partial publication. Keep output staging/publishing in `src/cli.rs`.
 - Keep public data types simple (`Clone`, `Debug`, `Eq`, `PartialEq`) when tests need observable values.
 
-### Cott v0.8
+### Cott v1.0
 
 - A source file has one module whose name injectively matches its source-relative path.
 - Supported types include fixed-width numeric types, `Path`, `Unit`, `Never`, `Any`, `Unknown`,
@@ -130,6 +139,11 @@ provenance and applies any selected semantic-coverage gate.
   `cott_runtime`. User enum variants are imported as `<Enum>_<Variant>`; `<Enum>` is the union alias.
 - Public callers import generated facades only. Direct or dynamic `_cott_impl`/`cott_bindings` imports
   and public re-exports are rejected.
+
+- Each `examples/real/` project is generation-first with project API `0.1.0`: adapters use public
+  facades only, and its README H1 is the canonical upstream URL. After the generation phase,
+  commit its verified generated artifacts. Only `real/frogmouth` may have bindings (at most two);
+  the other real projects have none.
 
 ## Important Files
 

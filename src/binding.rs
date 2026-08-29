@@ -4138,6 +4138,7 @@ fn stdlib_modules() -> HashSet<&'static str> {
         "base64",
         "binascii",
         "bisect",
+        "bz2",
         "builtins",
         "calendar",
         "cmath",

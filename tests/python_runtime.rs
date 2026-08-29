@@ -104,7 +104,11 @@ from typing import Annotated, Any, Generic, Literal, Protocol, TypeVar, Union
 import cott_runtime as _runtime
 from cott_runtime import *
 from cott_runtime import _cott_load, _cott_normalize_f32_abi, _cott_normalize_scalar, _cott_validate_abi, _cott_wrap_async_protocol
-assert "CottExternal" in _runtime.__all__
+assert set(_runtime.__all__) == {{
+    "AsyncGenerator", "AsyncIterator", "CottArray", "CottBuffer", "CottContractViolation", "CottExternal", "CottFloat", "CottInt", "CottList", "CottSet", "Dyn", "Err", "F32", "F64", "FrozenMap",
+    "I8", "I16", "I32", "I64", "JsonArray", "JsonBoolean", "JsonFloat", "JsonInteger", "JsonNull", "JsonObject", "JsonString", "JsonValue",
+    "Never", "Nothing", "Ok", "Opaque", "Option", "PROJECT_NAME", "PROJECT_VERSION", "Result", "Some", "U8", "U16", "U32", "U64", "UNIT", "Unit",
+}}
 assert "_cott_fixture_activate" not in _runtime.__all__
 assert _runtime.PROJECT_VERSION == "0.3.0"
 try:
@@ -675,6 +679,10 @@ _incompatible = json.loads(_original_generation)
 _incompatible["current"]["compatibility"]["runtime_abi"] = 1
 _incompatible["current"]["generation_id"] = _generation_id(_incompatible["current"])
 _reject_generation(_incompatible, "compatibility")
+_runtime_version_mismatch = json.loads(_original_generation)
+_runtime_version_mismatch["current"]["tools"]["runtime"]["version"] = "0.0.0"
+_runtime_version_mismatch["current"]["generation_id"] = _generation_id(_runtime_version_mismatch["current"])
+_reject_generation(_runtime_version_mismatch, "runtime package version")
 _version_mismatch = json.loads(_original_generation)
 _version_mismatch["current"]["project_version"] = "0.3.1"
 _version_mismatch["current"]["generation_id"] = _generation_id(_version_mismatch["current"])

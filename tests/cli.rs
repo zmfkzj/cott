@@ -186,6 +186,39 @@ fn cott(root: &Path, arguments: &[&str]) -> Output {
         .expect("cott should run")
 }
 
+#[test]
+fn global_cli_flags_have_a_stable_process_contract() {
+    let expected_version = format!("cott {}\n", env!("CARGO_PKG_VERSION"));
+    for argument in ["--version", "-V"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_cott"))
+            .arg(argument)
+            .output()
+            .expect("cott should run");
+        assert_eq!(output.status.code(), Some(0), "{argument} should succeed");
+        assert_eq!(output.stdout, expected_version.as_bytes());
+        assert!(
+            output.stderr.is_empty(),
+            "{argument} should not write stderr"
+        );
+    }
+
+    let help = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .arg("--help")
+        .output()
+        .expect("cott should run");
+    assert_eq!(help.status.code(), Some(0));
+    let help = String::from_utf8(help.stdout).expect("help should be UTF-8");
+    assert!(help.contains("Cott"));
+    assert!(help.contains("cott --version"));
+
+    let invalid = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .args(["--version", "extra"])
+        .output()
+        .expect("cott should run");
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("Usage:"));
+}
+
 fn recompute_generation_id(snapshot: &mut serde_json::Value) {
     let mut current = snapshot.clone();
     let current = current
@@ -1119,7 +1152,9 @@ fn generate_requires_an_agent_only_for_unresolved_callables() {
     let output = cott(&project.path, &["generate", "--target", "python"]);
 
     assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("requires `--agent codex|omp`"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("requires `--agent codex|claude|omp`")
+    );
 }
 
 #[test]
@@ -1146,8 +1181,12 @@ fn generate_promotes_a_sandboxed_omp_function_candidate_with_artifacts() {
         &omp,
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
-prompt=
-for prompt; do :; done
+message=
+for message; do :; done
+case "$message" in
+  @*) prompt=$(cat "${message#@}") || exit 64 ;;
+  *) printf '%s\n' 'missing @prompt-file argument' >&2; exit 64 ;;
+esac
 case "$prompt" in
   *'Symbol: app.run'*) ;;
   *) printf '%s\n' 'missing prompt fragment: Symbol: app.run' "$*" >&2; exit 64 ;;
@@ -1249,6 +1288,133 @@ esac
 }
 
 #[test]
+fn generate_promotes_a_direct_claude_function_candidate_with_provenance() {
+    let project = project();
+    make_unresolved(&project);
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    let claude = tools.join("claude");
+    fs::write(
+        &claude,
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  [ "$#" -eq 1 ] || { printf '%s\n' 'unexpected Claude version argv' >&2; exit 64; }
+  [ "${ANTHROPIC_API_KEY+x}" != x ] || { printf '%s\n' 'forwarded API key during version probe' >&2; exit 64; }
+  printf '%s\n' '2.1.89'
+  exit 0
+fi
+expected='--bare --print --input-format text --output-format json --permission-mode dontAsk --tools Read,Write --allowedTools Read,Write --disallowedTools Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__* --no-session-persistence'
+[ "$*" = "$expected" ] || { printf '%s\n' "unexpected Claude argv: $*" >&2; exit 64; }
+[ "${ANTHROPIC_API_KEY-}" = 'test-api-key' ] || { printf '%s\n' 'missing API key' >&2; exit 64; }
+[ "${ANTHROPIC_AUTH_TOKEN+x}" = x ] && { printf '%s\n' 'forwarded auth token' >&2; exit 64; }
+[ "${ANTHROPIC_BASE_URL+x}" = x ] && { printf '%s\n' 'forwarded base URL' >&2; exit 64; }
+[ "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC-}" = 1 ] || exit 64
+[ "${DISABLE_TELEMETRY-}" = 1 ] || exit 64
+[ "${DISABLE_ERROR_REPORTING-}" = 1 ] || exit 64
+prompt=$(cat) || exit 64
+case "$prompt" in
+  *'Symbol: app.run'*) ;;
+  *) printf '%s\n' 'missing stdin prompt' >&2; exit 64 ;;
+esac
+printf '%s' 'from cott_runtime import I32
+
+
+def run() -> I32:
+    return 7
+' > implementation.py
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done"}'
+"#,
+    )
+    .expect("write fake Claude");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&claude, fs::Permissions::from_mode(0o755))
+            .expect("make fake Claude executable");
+    }
+    let path = std::env::join_paths([tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("PATH");
+    let output = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .env_clear()
+        .args([
+            "generate",
+            "--agent",
+            "claude",
+            "--target",
+            "python",
+            "--project",
+        ])
+        .arg(&project.path)
+        .env("PATH", path)
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_AUTH_TOKEN", "must-not-forward")
+        .env("ANTHROPIC_BASE_URL", "https://must-not-forward.example")
+        .output()
+        .expect("cott should run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(project.path.join("python/_cott_impl/app/run.py"))
+            .expect("durable candidate"),
+        "from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n"
+    );
+    let record: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json")).expect("generation record"),
+    )
+    .expect("generation record is JSON");
+    let run = &record["current"]["agent_runs"][0];
+    assert_eq!(run["symbol"], "app.run");
+    assert_eq!(run["adapter"], "claude");
+    assert_eq!(run["adapter_version"], "2.1.89");
+    assert_eq!(
+        run["argv_template"],
+        serde_json::json!([
+            "--bare",
+            "--print",
+            "--input-format",
+            "text",
+            "--output-format",
+            "json",
+            "--permission-mode",
+            "dontAsk",
+            "--tools",
+            "Read,Write",
+            "--allowedTools",
+            "Read,Write",
+            "--disallowedTools",
+            "Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__*",
+            "--no-session-persistence"
+        ])
+    );
+    assert_eq!(
+        run["environment_names"],
+        serde_json::json!([
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+            "DISABLE_ERROR_REPORTING",
+            "DISABLE_TELEMETRY",
+            "HOME",
+            "PATH",
+            "PYTHONDONTWRITEBYTECODE",
+            "TMPDIR"
+        ])
+    );
+    for field in ["executable_hash", "prompt_hash", "implementation_hash"] {
+        assert!(
+            run[field]
+                .as_str()
+                .is_some_and(|hash| hash.starts_with("sha256:")),
+            "missing {field}"
+        );
+    }
+    assert_eq!(run["status"]["exit_code"], 0);
+    assert_eq!(run["status"]["timed_out"], false);
+}
+
+#[test]
 fn generate_agent_prompt_grants_exact_factory_facade_imports() {
     let project = method_project();
     fs::write(
@@ -1263,7 +1429,13 @@ fn generate_agent_prompt_grants_exact_factory_facade_imports() {
         &omp,
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
-case "$*" in
+message=
+for message; do :; done
+case "$message" in
+  @*) prompt=$(cat "${message#@}") || exit 64 ;;
+  *) printf '%s\n' 'missing @prompt-file argument' >&2; exit 64 ;;
+esac
+case "$prompt" in
   *'Symbol: app.run'*'Exact generated Cott facade modules MAY be imported directly or from their parent package, with an optional alias, for module-qualified access. Import generated value types for annotations through `from module_types import Type`, and do not import any other project-local module.'*'Factory annotations require these exact concrete public-facade imports; do not substitute them or import from `*_types`:'*'from api.service import ReaderState'*'Use each listed `from module import Concrete` line for annotations. The same exact generated facade may also be imported under the general module-import rule when its class object is needed.'*'`Factory[Concrete]` maps to `type[Concrete]`'*'Constructor calls MUST match `Concrete`'\''s inferred Cott init signature.'*'Validation MUST NOT construct or invoke a Factory value.'*)
     printf '%s\n' 'from api.service import ReaderState' 'from cott_runtime import I32' '' '' 'def run(factory: type[ReaderState]) -> I32:' '    return 7' > implementation.py
     ;;
@@ -1311,7 +1483,13 @@ fn generate_promotes_an_impl_method_helper_without_agent_class_shell() {
         &omp,
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
-case "$*" in
+message=
+for message; do :; done
+case "$message" in
+  @*) prompt=$(cat "${message#@}") || exit 64 ;;
+  *) printf '%s\n' 'missing @prompt-file argument' >&2; exit 64 ;;
+esac
+case "$prompt" in
   *'Symbol: api.service.ReaderState.read'*'Define exactly one canonical private top-level function `_cott_impl_ReaderState_read`.'*'You MAY additionally define private implementation helpers, private immutable constants, and invariant TypeVars.'*'The compiler owns the public class `ReaderState` and binds this helper as its method;'*'Import `ReaderState` from `api.service` only for the required `self: ReaderState` annotation.'*)
     printf '%s\n' 'from api.service import ReaderState' 'from cott_runtime import I32' '' '' 'def _cott_impl_ReaderState_read(self: ReaderState, amount: I32) -> I32:' '    return amount' > implementation.py
     ;;
@@ -1395,7 +1573,13 @@ fn generate_impl_agent_prompt_grants_exact_factory_facade_imports() {
         &omp,
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
-case "$*" in
+message=
+for message; do :; done
+case "$message" in
+  @*) prompt=$(cat "${message#@}") || exit 64 ;;
+  *) printf '%s\n' 'missing @prompt-file argument' >&2; exit 64 ;;
+esac
+case "$prompt" in
   *'Symbol: api.service.ReaderState.read'*'Factory annotations require these exact concrete public-facade imports; do not substitute them or import from `*_types`:'*'from models import FactoryConcrete'*'`Factory[Concrete]` maps to `type[Concrete]`'*)
     printf '%s\n' 'from api.service import ReaderState' 'from models import FactoryConcrete' 'from cott_runtime import I32' '' '' 'def _cott_impl_ReaderState_read(self: ReaderState, factory: type[FactoryConcrete]) -> I32:' '    return self.count' > implementation.py
     ;;
@@ -1448,7 +1632,13 @@ fn generate_scoped_free_function_does_not_run_unrelated_initializers() {
         &omp,
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
-case "$*" in
+message=
+for message; do :; done
+case "$message" in
+  @*) prompt=$(cat "${message#@}") || exit 64 ;;
+  *) printf '%s\n' 'missing @prompt-file argument' >&2; exit 64 ;;
+esac
+case "$prompt" in
   *"Symbol: api.service.run"*)
     printf '%s\n' 'from cott_runtime import I32' '' '' 'def run() -> I32:' '    return 7' > implementation.py
     ;;
@@ -1629,7 +1819,13 @@ if [ "$1" = "--version" ]; then
   echo omp/17.2.12
   exit 0
 fi
-case "$*" in
+message=
+for message; do :; done
+case "$message" in
+  @*) prompt=$(cat "${message#@}") || exit 64 ;;
+  *) printf '%s\n' 'missing @prompt-file argument' >&2; exit 64 ;;
+esac
+case "$prompt" in
   *"Symbol: foo.bar.build_output"*)
     printf '%s\n' 'from foo.bar_types import OutputPayload, PayloadFormat, PayloadSize' '' '' 'def build_output(data: bytes, source_size: PayloadSize, format: PayloadFormat) -> OutputPayload:' '    return OutputPayload(data=data, source_size=source_size, format=format)' > implementation.py
     printf '%s\n' 'agent-run=build_output'

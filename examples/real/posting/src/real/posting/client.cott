@@ -1,0 +1,145 @@
+module real.posting.client
+
+enum HttpMethod:
+    Get
+    Post
+    Put
+    Patch
+    Delete
+    Head
+    Options
+
+struct Header:
+    name: Str
+    value: Str
+
+struct RequestDocument:
+    name: Str
+    method: HttpMethod
+    url: Str
+    headers: List[Header]
+    body: Str
+    json_body: Bool
+
+struct CollectionEntry:
+    path: Path
+    name: Str
+
+struct HttpResponse:
+    status: U16
+    headers: List[Header]
+    body: Bytes
+
+enum PostingError:
+    CollectionRootMissing(path: Path)
+    RequestMissing(path: Path)
+    InvalidYaml(path: Path, message: Str)
+    InvalidRequest(path: Path, message: Str)
+    InvalidHeader(message: Str)
+    InvalidJson(message: Str)
+    UnresolvedVariable(name: Str)
+    NetworkFailed(message: Str)
+    TimedOut(timeout_ms: U32)
+    SaveFailed(path: Path, message: Str)
+    ReadFailed(path: Path, message: Str)
+
+fn discover_collections(root: Path) -> Result[List[CollectionEntry], PostingError]:
+    ensures Result.Ok(entries) => entries.len <= 100000
+
+    error PostingError.CollectionRootMissing
+    error PostingError.ReadFailed
+
+    effects [file.read]
+
+fn load_request(path: Path) -> Result[RequestDocument, PostingError]:
+    ensures Result.Ok(request) => request.name.len > 0
+    ensures Result.Ok(request) => request.url.len > 0
+
+    error PostingError.RequestMissing
+    error PostingError.InvalidYaml
+    error PostingError.InvalidRequest
+    error PostingError.ReadFailed
+
+    effects [file.read]
+
+fn save_request(path: Path, request: RequestDocument) -> Result[Unit, PostingError]:
+    ensures Result.Ok(saved) => saved == ()
+
+    error PostingError.SaveFailed
+
+    effects [file.write]
+
+fn parse_method(value: Str) -> Result[HttpMethod, PostingError]:
+    ensures Result.Ok(method) => ((value == "GET" and method == HttpMethod.Get) or (value == "POST" and method == HttpMethod.Post) or (value == "PUT" and method == HttpMethod.Put) or (value == "PATCH" and method == HttpMethod.Patch) or (value == "DELETE" and method == HttpMethod.Delete) or (value == "HEAD" and method == HttpMethod.Head) or (value == "OPTIONS" and method == HttpMethod.Options))
+
+    error PostingError.InvalidRequest
+
+    effects []
+
+fn make_request(
+    name: Str,
+    method: HttpMethod,
+    url: Str,
+    header_lines: Str,
+    body: Str,
+    json_body: Bool,
+) -> Result[RequestDocument, PostingError]:
+    ensures Result.Ok(request) => request.name == name
+    ensures Result.Ok(request) => request.method == method
+    ensures Result.Ok(request) => request.url == url
+    ensures Result.Ok(request) => request.body == body
+    ensures Result.Ok(request) => request.json_body == json_body
+
+    error PostingError.InvalidRequest
+    error PostingError.InvalidHeader
+
+    effects []
+
+fn extract_url_variables(url: Str) -> List[Str]:
+    effects []
+
+fn resolve_request(
+    request: RequestDocument,
+    variables: Str,
+) -> Result[RequestDocument, PostingError]:
+    ensures Result.Ok(resolved) => resolved.name == request.name
+    ensures Result.Ok(resolved) => resolved.method == request.method
+    ensures Result.Ok(resolved) => resolved.json_body == request.json_body
+
+    error PostingError.InvalidHeader
+    error PostingError.UnresolvedVariable
+
+    effects []
+
+fn normalize_json_content(request: RequestDocument) -> Result[RequestDocument, PostingError]:
+    ensures Result.Ok(normalized) => normalized.name == request.name
+    ensures Result.Ok(normalized) => normalized.method == request.method
+    ensures Result.Ok(normalized) => normalized.url == request.url
+    ensures Result.Ok(normalized) => normalized.json_body == request.json_body
+
+    error PostingError.InvalidJson
+
+    effects []
+
+fn export_curl(request: RequestDocument, variables: Str) -> Result[Str, PostingError]:
+    ensures Result.Ok(curl) => curl.len > 0
+
+    error PostingError.InvalidHeader
+    error PostingError.InvalidJson
+    error PostingError.UnresolvedVariable
+
+    effects []
+
+fn export_yaml(request: RequestDocument) -> Str:
+    effects []
+
+fn send_request(request: RequestDocument, timeout_ms: U32) -> Result[HttpResponse, PostingError]:
+    ensures Result.Ok(response) => response.status > 0
+
+    error PostingError.InvalidHeader
+    error PostingError.InvalidJson
+    error PostingError.InvalidRequest
+    error PostingError.NetworkFailed
+    error PostingError.TimedOut
+
+    effects [network]

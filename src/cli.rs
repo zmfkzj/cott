@@ -45,7 +45,7 @@ use crate::python_verify::verify_python;
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession};
 use crate::version::{is_at_least, parse_version};
 
-const USAGE: &str = "Usage:\n  cott init <path> [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|omp --target python [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n";
+const USAGE: &str = "Cott compiles contracts into verifiable Python.\n\nUsage:\n  cott init <path> [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
 
 #[cfg(test)]
 thread_local! {
@@ -88,7 +88,12 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
     let mut arguments = arguments.into_iter();
     let _program = arguments.next();
     let arguments: Vec<OsString> = arguments.collect();
-    if arguments.first().is_some_and(|command| command == "diff")
+    let version_requested = matches!(
+        arguments.first().and_then(|argument| argument.to_str()),
+        Some("--version" | "-V")
+    );
+    if !version_requested
+        && arguments.first().is_some_and(|command| command == "diff")
         && arguments
             .windows(2)
             .filter(|pair| pair[0] == "--format" && pair[1] == "json")
@@ -107,7 +112,10 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
         .windows(2)
         .filter(|pair| pair[0] == "--format" && pair[1] == "json")
         .count();
-    if json_formats > 1 && !matches!(arguments.first(), Some(command) if command == "lsp") {
+    if !version_requested
+        && json_formats > 1
+        && !matches!(arguments.first(), Some(command) if command == "lsp")
+    {
         let report = DiagnosticReport {
             diagnostics: vec![Diagnostic::error(
                 code::CLI_USAGE,
@@ -121,7 +129,10 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
         let _ = std::io::stdout().write_all(&bytes);
         return 2;
     }
-    if json_formats == 1 && !matches!(arguments.first(), Some(command) if command == "lsp") {
+    if !version_requested
+        && json_formats == 1
+        && !matches!(arguments.first(), Some(command) if command == "lsp")
+    {
         return run_json(arguments);
     }
 
@@ -129,6 +140,10 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
         Ok(Command::Lsp) => crate::lsp::run(),
         Ok(Command::Help) => {
             print!("{USAGE}");
+            0
+        }
+        Ok(Command::Version) => {
+            println!("cott {}", env!("CARGO_PKG_VERSION"));
             0
         }
         Ok(Command::Init {
@@ -391,11 +406,15 @@ pub enum Command {
     },
     Lsp,
     Help,
+    Version,
 }
 
 pub fn parse_command(arguments: &[OsString]) -> Result<Command, &'static str> {
     if arguments.len() == 1 && matches!(arguments[0].to_str(), Some("--help" | "-h")) {
         return Ok(Command::Help);
+    }
+    if arguments.len() == 1 && matches!(arguments[0].to_str(), Some("--version" | "-V")) {
+        return Ok(Command::Version);
     }
     let Some(command) = arguments.first().and_then(|value| value.to_str()) else {
         return Err("expected a command");
@@ -587,9 +606,10 @@ fn parse_generate(values: &[OsString]) -> Result<Command, &'static str> {
             Some("--agent") if agent.is_none() => {
                 index += 1;
                 agent = match values.get(index).and_then(|value| value.to_str()) {
+                    Some("claude") => Some(AgentKind::Claude),
                     Some("codex") => Some(AgentKind::Codex),
                     Some("omp") => Some(AgentKind::Omp),
-                    _ => return Err("`--agent` requires `codex` or `omp`"),
+                    _ => return Err("`--agent` requires `codex`, `claude`, or `omp`"),
                 };
             }
             Some("--target") if target.is_none() => {
@@ -1306,6 +1326,7 @@ fn add_agent_runs(
         record.current.agent_runs.push(AgentRun {
             symbol,
             adapter: match kind {
+                AgentKind::Claude => "claude",
                 AgentKind::Codex => "codex",
                 AgentKind::Omp => "omp",
             }
@@ -1699,7 +1720,7 @@ fn generate_project(
     let mut generated_runs = Vec::new();
     if !unresolved.is_empty() {
         let Some(agent) = agent else {
-            eprintln!("error: unresolved selected callable requires `--agent codex|omp`");
+            eprintln!("error: unresolved selected callable requires `--agent codex|claude|omp`");
             return 2;
         };
         if let Err(error) = verified_baseline_guard(&paths, &input_hashes) {
@@ -3074,7 +3095,10 @@ fn init_project(path: PathBuf, name: Option<String>, no_sync: bool, format: Outp
         }
     };
     if !supports_uv_version(&version) {
-        eprintln!("error: cott 0.1 requires uv >=0.12.3, found `{version}`");
+        eprintln!(
+            "error: cott {} requires uv >=0.12.3, found `{version}`",
+            env!("CARGO_PKG_VERSION")
+        );
         return 2;
     }
 

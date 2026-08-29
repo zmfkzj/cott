@@ -1,0 +1,36 @@
+module frogmouth.model
+
+struct Location:
+    kind: LocationKind
+    target: Str
+    fragment: Option[Str]
+
+    invariant self.target.len > 0
+    invariant (self.kind != LocationKind.Remote or (starts_with(self.target, "http://") or starts_with(self.target, "https://")))
+    invariant self.kind != LocationKind.Remote or not contains(self.target, "#")
+    invariant self.kind != LocationKind.GitHub or contains(self.target, "/")
+    invariant self.kind != LocationKind.Codeberg or contains(self.target, "/")
+    invariant self.fragment matches Option.Some(fragment) => (fragment.len > 0 and not starts_with(fragment, "#"))
+
+struct Document:
+    location: Location
+    markdown: Str
+    title: Str
+
+    invariant self.title.len > 0
+
+struct BrowserState:
+    history: List[Str]
+    bookmarks: List[Str]
+
+enum LocationKind:
+    Local
+    Remote
+    GitHub
+    Codeberg
+
+enum StateAction:
+    AddHistory(location: Str)
+    ToggleBookmark(location: Str)
+    RemoveHistory(location: Str)
+    ClearHistory

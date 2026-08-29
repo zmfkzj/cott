@@ -1,16 +1,18 @@
 # cott 기본 설계 문서
 
-**문서 상태:** Implemented v0.8
+**문서 상태:** Implemented v1.0
 **프로젝트명:** cott
 **파일 확장자:** `.cott`
 **CLI 명령:** `cott`
 
 
-## 0.8 릴리스 호환성
+## 1.0 릴리스 호환성
 
-이 문서는 구현된 v0.8 언어와 Python backend를 규정한다. package version은 `0.8.0`이다. CPython `>=3.14.6,<3.15`, BasedPyright `>=1.39.9`, uv `>=0.12.3`, Codex CLI `>=0.147.0`, OMP `>=17.2.12`를 지원한다. 각 tool version은 이 lower bound 이상이어야 하며, full version과 content hash는 provenance에 기록한다.
+이 문서는 구현된 v1.0 언어와 Python backend를 규정한다. package version은 `1.0.0`이다. CPython `>=3.14.6,<3.15`, BasedPyright `>=1.39.9`, uv `>=0.12.3`, Codex CLI `>=0.147.0`, Claude Code CLI `>=2.1.89`, OMP `>=17.2.12`를 지원한다. 각 tool version은 이 lower bound 이상이어야 하며, full version과 content hash는 provenance에 기록한다.
 
-Canonical IR schema는 **v8**, generation record schema와 generation domain은 **v7**/`cott.generation.v7`, Python runtime ABI는 **7**, contract-test strategy schema는 **v5**다. 이 compatibility number와 compiler package `0.8.0`은 generation snapshot·facade·runtime identity에 함께 기록하며, 현재 값과 다른 generation record·runtime·strategy는 읽거나 load하지 않는다. diagnostics schema는 **v1**을 유지한다. `[project].version`은 compiler version이 아니라 공개 API version이며 generation snapshot의 `project_version`과 facade runtime identity에만 쓰인다. 예제 project의 공개 version은 계속 `0.1.0`이다.
+Canonical IR schema는 **v8**, generation record schema와 generation domain은 **v7**/`cott.generation.v7`, Python runtime ABI는 **7**, contract-test strategy schema는 **v5**다. 이 compatibility number와 compiler package `1.0.0`은 generation snapshot·facade·runtime identity에 함께 기록하며, 현재 값과 다른 generation record·runtime·strategy는 읽거나 load하지 않는다. diagnostics schema는 **v1**을 유지한다. `[project].version`은 compiler version이 아니라 공개 API version이며 generation snapshot의 `project_version`과 facade runtime identity에만 쓰인다. 예제 project의 공개 version은 계속 `0.1.0`이다.
+
+구현된 v0.8 `.cott` source는 v1.0에서도 의미를 바꾸지 않고 유효하다. source compatibility는 serialized artifact compatibility를 뜻하지 않는다. 생성된 Python public ABI는 runtime `__all__`, facade/stub signature, canonical constructor와 read-only nominal wrapper, validation behavior의 합이다. incompatible ABI change는 ABI bump를 요구한다. package version이 정확히 다르면 ABI가 7이어도 artifact는 stale이며 `emit` 또는 `generate`로 재생성해야 한다; `verify`와 runtime은 이를 거부한다. 호환되지 않는 wire record를 재생성하거나 읽는 경로는 없다.
 
 `emit python`과 `verify`는 agent를 호출하지 않는다. agent 호출은 `generate`에서만 조건부로 수행한다. 기존 project command의 `--project <dir>`은 subcommand 뒤 어느 위치에서나 한 번만 허용하며 기본은 현재 directory다. `init`은 target path를 받고 `--project`를 거부한다.
 ---
@@ -201,7 +203,7 @@ Python 문법과 완전히 호환되도록 만들면 Python의 다음 문제까�
 
 ## 4. 비목표
 
-v0.8에서도 다음 기능은 구현하지 않는다.
+v1.0에서도 다음 기능은 구현하지 않는다.
 
 * 범용 코드 실행, 반복문, 일반적인 조건문
 * 클래스 상속, 메타프로그래밍, 매크로, 런타임 리플렉션, 임의 Python 코드 삽입
@@ -213,7 +215,7 @@ v0.8에서도 다음 기능은 구현하지 않는다.
 * dependency resolver/package manager, live reader transaction snapshot isolation, installed wheel whole-origin verification
 * SMT 또는 무제한 정리 증명
 
-async impl method, async protocol lifecycle, trait inheritance·specialization·variance·`Dyn`, guarded recursive nominal type, struct cross-field invariant, finite scenario와 compiler-owned fixture는 v0.8의 구현 범위다. `AsyncIterator`·`AsyncGenerator`는 native async-generator implementation 함수가 아니라 반환 protocol이다. `boundary`와 contract-test context의 wrapper는 각 async protocol operation을 runtime에서 강제하고, contract test는 configured lifecycle limit 안의 실제 관찰만 evidence로 남긴다.
+async impl method, async protocol lifecycle, trait inheritance·specialization·variance·`Dyn`, guarded recursive nominal type, struct cross-field invariant, finite scenario와 compiler-owned fixture는 v1.0의 구현 범위다. `AsyncIterator`·`AsyncGenerator`는 native async-generator implementation 함수가 아니라 반환 protocol이다. `boundary`와 contract-test context의 wrapper는 각 async protocol operation을 runtime에서 강제하고, contract test는 configured lifecycle limit 안의 실제 관찰만 evidence로 남긴다.
 ## 5. 기본 문법
 
 ### 5.1 모듈
@@ -362,7 +364,7 @@ Python target validation은 CPython 3.14 hard keyword와 단독 `_`를 identifie
 
 일반 문자열은 JSON escape를 사용하는 double-quoted literal이고 `doc`만 triple double quote를 사용한다. 정수는 10진수, float는 소수점 또는 exponent가 있는 10진수이며 빈 괄호 `()`는 `Unit` literal이다. 부호는 literal이 아니라 unary operator다. tab과 semicolon은 금지한다. parser는 일관된 space indentation을 받고 formatter는 4칸으로 정규화한다. `#`부터 newline까지는 comment다. blank 또는 comment-only physical line은 `NEWLINE`, `INDENT`, `DEDENT` token을 만들지 않는다.
 
-다음 EBNF가 v0.8의 선언 surface다. `INDENT`와 `DEDENT`는 indentation token이고 `{x}`는 0회 이상, `[x]`는 선택이다.
+다음 EBNF가 v1.0의 선언 surface다. `INDENT`와 `DEDENT`는 indentation token이고 `{x}`는 0회 이상, `[x]`는 선택이다.
 
 ```text
 file          = module_decl, { use_decl }, { declaration } ;
@@ -1323,8 +1325,8 @@ record의 필수 field를 보여 주는 다음 JSON은 객체·배열 entry 일�
     "compatibility": {"generation_schema": 7, "canonical_ir_schema": 8, "runtime_abi": 7, "contract_strategy_schema": 5},
     "inputs": {"AGENTS.md": "sha256:...", "cott.toml": "sha256:...", "python/pyproject.toml": "sha256:...", "python/uv.lock": "sha256:...", "src/foo/bar.cott": "sha256:..."},
     "tools": {
-      "compiler": {"version": "0.8.0", "executable": "/canonical/cott", "content_hash": "sha256:..."},
-      "runtime": {"abi": "7", "version": "0.8.0"},
+      "compiler": {"version": "1.0.0", "executable": "/canonical/cott", "content_hash": "sha256:..."},
+      "runtime": {"abi": "7", "version": "1.0.0"},
       "python": {"implementation": "cpython", "version": "3.14.6", "cache_tag": "cpython-314", "os": "darwin", "machine": "arm64", "platform": "macosx-15.0-arm64", "executable": "/canonical/python", "content_hash": "sha256:..."},
       "basedpyright": {"version": "...", "executable": "/canonical/basedpyright", "content_hash": "sha256:..."}
     },
@@ -1511,7 +1513,7 @@ Declaration syntax/name/type validity는 항상 checked다. target projection, i
 
 bounded proof engine은 `bounded-dnf-difference-constraints` v2만 사용한다. refinement satisfiability와 unguarded `requires` conjunction consistency를 sound DNF difference-constraint theory로 증명한다. immutable field path와 `.len` path를 변수로 취급하고, `U64`를 포함한 모든 fixed-width integer domain을 checked wide-integer arithmetic으로 계산한다. 지원 atom은 boolean symbol 및 normalized `x - y <= c`의 equality·ordering뿐이며, nonlinear multiplication·division·modulo, floating-point, quantifier, SMT는 지원하지 않는다. configured proof node/branch budget과 fixed depth `128`, symbols `128`, atoms `1024`를 넘거나 지원하지 않는 formula는 `unknown`이며 proof가 아니다. `proved`는 sound proof, `disproved`는 counterexample과 함께 contract error, `unknown`은 unsupported formula 또는 budget exhaustion이다. An explicit impl method proves its own concrete method `requires`; a default- or specialization-selected slot proves the selected free function obligation instead and never duplicates it for the slot. 이 classification은 `verification.contract_proofs`에 static checker, runtime capability, contract-test entries와 분리해 기록한다.
 
-| 등급 | 의미 | v0.8 예시 |
+| 등급 | 의미 | v1.0 예시 |
 | --- | --- | --- |
 | 정적 증명 | 실행 없이 결정적으로 검사 또는 bounded proof | public symbol, signature, variance/trait closure, guarded recursion, exact helper path; supported refinement/`requires`와 branch reachability의 `proved` |
 | 런타임 검사 | 실제 production mode의 실행 경계에서 검사 | eager ABI, canonical struct invariant, `requires`, refinement, allowed error, `ensures`, init/invariant/modifies/cancellation, async protocol operation |
@@ -1621,7 +1623,7 @@ cache miss 또는 stamp drift의 loader preflight는 target 실행 전에 record
 
 `runtime_validation`은 16.4 표의 optional free-function/method ABI와 contract checks만 제어하며 provenance loader, impl init/state snapshot/invariant/modifies checks를 끄거나 직접 implementation re-export로 바꾸지 않는다. 구현 위치와 mode가 달라도 facade callable의 signature와 module identity는 같다.
 
-`target.python.source`는 compiler input과 durable implementation root일 뿐 runtime import path가 아니다. 이 root에는 cott public module, compiler-owned `*_types` 또는 `cott_runtime`을 정의할 수 없다. runtime·BasedPyright는 generated root 뒤에 standard library와 locked distribution만 사용하고 stub root는 runtime path에서 제외한다. Python build는 모든 local runtime file을 generated root에서만 포함한다. 설치된 wheel 전체의 독립 검증은 v1.0 범위지만 embedded provenance check는 MVP package에서도 필수다.
+`target.python.source`는 compiler input과 durable implementation root일 뿐 runtime import path가 아니다. 이 root에는 cott public module, compiler-owned `*_types` 또는 `cott_runtime`을 정의할 수 없다. runtime·BasedPyright는 generated root 뒤에 standard library와 locked distribution만 사용하고 stub root는 runtime path에서 제외한다. Python build는 모든 local runtime file을 generated root에서만 포함한다. independent installed-wheel whole-origin verification과 package installation은 v1.0 범위에서 제외하고 post-v1.0 roadmap으로 남긴다. v1.0에서는 embedded provenance check, 즉 exact metadata와 실제 imported regular-file origin·content hash의 preflight를 필수로 한다.
 
 해석된 public free function과 every emitted impl class만 facade와 `__all__`에 포함한다. 미구현 free function 또는 impl method에는 placeholder를 만들지 않고 `current.unresolved`에 기록하며, unresolved method가 있는 impl class 자체도 emit하지 않는다. `cott verify`는 unresolved가 하나라도 있거나 verified facade projection이 전체 IR과 다르면 실패한다.
 
@@ -1660,9 +1662,11 @@ verify는 모든 evidence를 먼저 finalize하고 `current.verified=true`, clos
 
 ### 16.10 유지 example generation-first policy
 
-유지 inventory는 grammar 6개(`checked-add`, `assignment-rule`, `cta-row`, `fractional-range-values`, `portfolio-cost`, `stock-record`), simple 3개(`alphabetical-file-groups`, `calculator`, `decimal-binary`), 순수 complex curriculum 1개(`artifact-pipeline`), 별도 full-generation fixture `process-bar`, focused feature 7개(`declarations-generics`, `contracts-evidence`, `boundary-protocols`, `trait-protocol`, `json-transform`, `effects-selection`, `workflow-scenario`), multi-module `order-management`, FastAPI external projection `fastapi-hello`로 총 20 project다. `process-bar`는 curriculum count에 넣지 않는다.
+유지 inventory는 grammar 6개(`checked-add`, `assignment-rule`, `cta-row`, `fractional-range-values`, `portfolio-cost`, `stock-record`), simple 3개(`alphabetical-file-groups`, `calculator`, `decimal-binary`), 순수 complex curriculum 1개(`artifact-pipeline`), 별도 full-generation fixture `process-bar`, focused feature 7개(`declarations-generics`, `contracts-evidence`, `boundary-protocols`, `trait-protocol`, `json-transform`, `effects-selection`, `workflow-scenario`), multi-module `order-management`, FastAPI external projection `fastapi-hello`, real-world generation-first 6개(`real/yt-dlp`, `real/harlequin`, `real/pgcli`, `real/posting`, `real/toolong`, `real/frogmouth`)로 총 26 project다. `process-bar`는 curriculum count에 넣지 않는다.
 
 유지되는 curriculum module의 source order는 type 선언, 작은 domain leaf function, 더 큰 composition function, domain-named final operation 순서다. 의미 있는 경계만 stage로 공개한다. grammar lesson은 의도적으로 leaf 하나일 수 있고 simple·complex lesson도 domain responsibility가 독립적인 경우에만 stage를 추가한다. `artifact-pipeline`은 순수 topological artifact-plan composition이고, `process-bar`는 `foo.bar` 전체의 unresolved-to-agent-generation 전환을 집중적으로 보이는 fixture다.
+
+real project는 각자 독립 generation-first example이며 project API version은 `0.1.0`이다. adapter는 exact generated public facade만 사용하고 implementation·binding을 직접 import하거나 public re-export하지 않는다. 각 real project README의 H1은 canonical upstream URL이고, 다음 generation phase 뒤 verified generated artifact를 commit한다. binding은 `real/frogmouth`에만 최대 2개 허용되며 나머지 real project의 binding은 0개다.
 
 `.cott` declaration은 항상 bodyless다. free-function composition edge는 `from <exact cott module> import <declared public function>` 형태의 alias-free import로 exact generated public facade를 통과해야 하며 implementation file끼리 직접 호출하지 않는다. same-file private helper call은 implementation detail이고 impl canonical function의 only cross-contract method composition edge는 `self.<declared_method>(...)` public wrapper다. effect verifier는 caller와 same-file helper가 도달하는 Cott facade callee의 declared effects를 transitive하게 검사한다; external/stdlib operation은 declaration의 trust boundary로 남는다. helper가 Cott로 승격되어 public function이 되면 모든 ABI-valid input에 선언된 결과를 반환하거나 caller가 호출 전에 확립할 수 있는 Cott `requires`를 선언해야 한다.
 
@@ -1694,16 +1698,17 @@ callable별 prompt는 대상 callable과 allowed direct helper contract surface,
 
 `cott generate`는 미구현 callable을 생성할 때 사용자가 `--agent`로 지정한 에이전트를 사용한다. cott는 모델 제공자 API를 직접 호출하거나 에이전트를 자동 선택하지 않는다.
 
-MVP는 다음 두 가지 에이전트와 각 에이전트가 제공하는 CLI 인터페이스만 지원한다.
+MVP는 다음 세 가지 direct agent adapter와 각 adapter가 제공하는 CLI 인터페이스만 지원한다. `claude`는 Claude Code를 직접 호출하는 adapter다. OMP 안에서 Claude model을 선택해도 그 실행은 여전히 `omp`이며 `claude` adapter가 아니다.
 
 | `--agent` 값 | 호출 인터페이스 |
 | ------------- | --------------- |
 | `codex`       | `codex exec`    |
+| `claude`      | direct `claude` (Claude Code) |
 | `omp`         | `omp -p`        |
 
 cott는 17.1의 입력을 하나의 callable별 구현 지시로 구성하여 선택된 인터페이스에 전달한다. implementation kind가 free function이면 바인딩된 symbol을 다시 구현하지 말고 project-local call에는 exact cott facade function import만 사용하라고 명시한다. kind가 impl method이면 supplied exact canonical function을 작성하고 class·init·wrapper·state declaration을 작성하지 말며 project-local method coordination에는 `self.<declared_method>(...)`만 사용하라고 명시한다. 어느 경우든 prompt는 same-file private helper와 literal `Final` constant가 canonical function의 private implementation detail이며 public behavior가 되면 Cott로 승격해야 함을 명시한다.
 
-지원하지 않는 `--agent` 값은 에이전트를 호출하기 전에 오류로 거부한다.
+`codex`, `claude`, `omp` 밖의 `--agent` 값은 에이전트를 호출하기 전에 오류로 거부한다.
 
 #### 17.2.1 에이전트 실행 계약
 
@@ -1711,20 +1716,21 @@ cott는 17.1의 입력을 하나의 callable별 구현 지시로 구성하여 �
 
 각 에이전트 adapter는 실행 파일, prompt 전달 방식, 작업 디렉터리, 환경 변수, 종료 상태를 명시한다.
 
-compiler release마다 adapter별 minimum supported CLI version과 exact argv template를 고정한다. v0.8은 Codex CLI `>=0.147.0`, OMP `>=17.2.12`를 허용한다. executable은 `PATH`에서 한 번 resolve하고 version probe부터 아래 containment에서 실행한다. version output이 해석 불가능하거나 minimum version보다 낮으면 본 실행 전에 실패한다.
+compiler release마다 adapter별 minimum supported CLI version과 exact argv template를 고정한다. v1.0은 Codex CLI `>=0.147.0`, Claude Code CLI `>=2.1.89`, OMP `>=17.2.12`를 허용한다. executable은 `PATH`에서 한 번 resolve한다. version preflight는 main generation과 별개다. Claude는 probe를 실행하기 전에 canonical regular-file executable이 `cli.js`이거나 Node shebang을 가지면 거부한다. npm `cli.js` entrypoint는 허용하지 않으며 official native Claude Code installation이 필요하다. Claude probe의 exact argv는 `claude --version`이고 shell 없이 별도 argv로 실행한다. 이 probe는 credential(기존 `ANTHROPIC_API_KEY`를 포함)을 전혀 받지 않고 network가 disabled된 containment에서 실행하며 timeout 없이 status `0`으로 끝나야 한다. stdout 전체는 valid UTF-8의 정확히 하나인 strict SemVer token이어야 하고 그 값은 `>=2.1.89`여야 한다. version output이 해석 불가능하거나 minimum version보다 낮으면 본 실행 전에 실패한다.
 
-v0.8의 exact main-process argv template는 다음과 같다. 각 항목은 shell 재해석 없이 별도 argv다. `<workspace>`·`<scratch>/omp.yaml`·`<seconds>`와 `<prompt>`만 run별 값으로 치환한다.
+v1.0의 exact main-process argv template는 다음과 같다. 각 항목은 shell 재해석 없이 별도 argv다. `<workspace>`·`<scratch>/omp.yaml`·`<seconds>`·`<absolute-prompt-file>`만 run별 값으로 치환한다.
 
 * Codex: `codex exec --strict-config --ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox workspace-write --color never --cd <workspace> -`; prompt bytes는 stdin으로 전달한다.
-* OMP: `omp -p --cwd <workspace> --no-session --no-rules --no-skills --no-extensions --no-lsp --no-pty --no-title --tools read,grep,glob,edit,write --approval-mode yolo --max-time <seconds>s --config <scratch>/omp.yaml <prompt>`; prompt는 마지막 단일 argv다.
+* Claude: `claude --bare --print --input-format text --output-format json --permission-mode dontAsk --tools Read,Write --allowedTools Read,Write --disallowedTools Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__* --no-session-persistence`; exact UTF-8 prompt bytes는 stdin으로 전달하고 child cwd는 isolated workspace다.
+* OMP: `omp -p --cwd <workspace> --no-session --no-rules --no-skills --no-extensions --no-lsp --no-pty --no-title --tools read,grep,glob,edit,write --approval-mode yolo --max-time <seconds>s --config <scratch>/omp.yaml @<absolute-prompt-file>`; compiler는 OMP 본 실행 전에 exact prompt bytes를 workspace 밖 scratch의 create-new regular file에 쓰고, 그 absolute path 앞에 `@`를 붙인 마지막 단일 argv로 전달한다.
 
-공통 environment name은 `HOME`, `PATH`, `PYTHONDONTWRITEBYTECODE`, `TMPDIR`이며 host에 존재할 때만 `SSL_CERT_FILE`, `SSL_CERT_DIR`, `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`를 추가한다. Codex는 존재하는 `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `CODEX_HOME`만, OMP는 존재하는 `PI_CODING_AGENT_DIR`만 추가한다. 그 밖의 host environment는 전달하지 않는다.
+다음 environment allowlist는 main generation process에만 적용하며 version preflight에는 적용하지 않는다. 공통 environment name은 `HOME`, `PATH`, `PYTHONDONTWRITEBYTECODE`, `TMPDIR`이며 host에 존재할 때만 `SSL_CERT_FILE`, `SSL_CERT_DIR`, `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`를 추가한다. Codex는 존재하는 `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `CODEX_HOME`만, Claude는 존재하는 `ANTHROPIC_API_KEY`만, OMP는 존재하는 `PI_CODING_AGENT_DIR`만 추가한다. Claude에는 항상 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`도 설정한다. Claude에는 OAuth, auth-token, base-url, cloud, provider, customization 관련 environment name을 전달하지 않는다. 그 밖의 host environment는 전달하지 않는다.
 
 * shell을 사용하지 않고 executable과 각 인자를 분리하여 실행한다.
-* 실행 전에 executable의 canonical regular-file path, version과 content hash를 기록한다.
+* main process 실행 전에 executable의 canonical regular-file path, version과 content hash를 기록한다. Claude native-entrypoint rejection은 위와 같이 `claude --version` probe 전에 수행한다.
 * 작업 디렉터리는 17.4의 격리된 staging workspace다.
 * 실제 project root는 agent sandbox namespace에서 보이지 않는다. 대상 계약, 직접 참조 helper 계약, 필요한 binding·rule·기존 구현과 compiler-owned facade는 staging의 read-only copy로만 제공하고 현재 implementation file과 별도 scratch directory만 쓸 수 있다. Codex credential path와 OMP native-addon cache만 project 밖에서 read-only로 열며, OMP의 `config.yml`과 `agent.db`는 매 실행 scratch로 복사하고 원본 credential directory는 열지 않는다. 이 sandbox를 강제할 수 없는 platform에서는 agent generate를 거부한다.
-* prompt는 adapter가 지원하는 stdin 또는 단일 argv 값으로 전달하며 shell 문자열로 조합하지 않는다. 운영체제 인자 크기 한도를 넘으면 실행 전에 오류로 거부한다.
+* prompt는 shell 문자열로 조합하지 않는다. Codex와 Claude만 stdin을 사용하며, OMP의 prompt file은 workspace mutation audit 범위 밖의 scratch에만 둔다.
 * 환경 변수는 compiler version에 고정된 adapter별 name allowlist만 전달한다. secret value는 기록하지 않고 전달한 name만 기록한다.
 * `PYTHONDONTWRITEBYTECODE=1`을 설정하고 `TMPDIR`, type checker·test cache와 agent 임시 상태를 scratch directory로 보낸다.
 * `[generator].timeout_seconds`는 1–3600이며 default는 900이다. 모든 agent child는 compiler-owned process containment에 넣는다. parent가 정상 종료해도 남은 descendant를 전부 종료·reap하고 containment가 비었음을 확인한 뒤에만 candidate path를 staging workspace handle 기준 `O_NOFOLLOW`로 열어 regular file·`st_nlink == 1`인지 `fstat`으로 확인하고 읽는다. 그 밖의 file kind, 사용자 취소·timeout·비정상 종료나 descendant 정리 실패는 transaction을 폐기한다.
@@ -1732,6 +1738,7 @@ v0.8의 exact main-process argv template는 다음과 같다. 각 항목은 shel
 * stdout·stderr는 끝까지 drain하며 전체 byte count·SHA-256와 truncation 여부를 계산하고 사용자에게 stream별 최대 1 MiB만 보여 준다. generation record에는 raw output을 넣지 않고 이 metadata, exit code, 실행 시간, adapter·executable path·version·content hash·prompt hash만 남긴다.
 
 에이전트가 0이 아닌 상태로 종료되거나 timeout되면 staging과 scratch 변경을 폐기한다. stdout의 code block은 구현으로 채택하지 않으며 허용된 implementation file의 최종 bytes만 후보 입력이다. compiler는 그 후보의 끝 LF를 정확히 하나로 정규화한 뒤 검증·hash·publication하며 그 밖의 bytes는 바꾸지 않는다. 0으로 종료해도 target callable이 없거나 file이 바뀌지 않아 unresolved면 실패한다.
+Claude adapter는 stdout이 JSON object이고 `type`이 `result`, `subtype`이 `success`, `is_error`가 `false`, `result`가 string인 경우에만 성공으로 받아들인다. JSON parse 또는 어느 field 검증이든 실패하면 fail closed한다. Claude provider process의 network egress는 기존 agent와 같이 enabled 상태로 남지만, 위 argv는 network-capable Claude tool을 하나도 노출하지 않는다.
 agent가 file을 썼지만 candidate static validation에 실패하면 compiler는 기존 candidate bytes와 누적된 exact validation diagnostic을 같은 callable prompt에 넣어 최대 두 번 추가 실행한다. 각 retry 전 isolated target만 지우고 workspace·scratch containment, write allowlist와 전체 timeout을 새 agent run에 동일하게 적용한다. agent 실행 자체의 실패·timeout에는 retry하지 않으며 세 번째 candidate도 invalid이면 transaction 전체를 폐기한다. `agent_runs`에는 최종 검증 성공 run만 기록한다.
 
 
@@ -1857,6 +1864,8 @@ def process_bar(data, options):
 ---
 
 ## 18. CLI 설계
+전역 version form은 `cott (--version|-V)`다. 두 form은 token 하나만 허용하는 closed parse이며 뒤에 operand 또는 option이 있으면 CLI usage error (exit `2`)다. 성공하면 stdout에 정확히 `cott <package-version>` 한 줄을 쓰고 exit `0`을 반환한다. `<package-version>`은 Cargo `[package].version`에서만 derive하는 compiler/package identity이며 v1.0에서는 `1.0.0`이다.
+
 
 ### 18.1 프로젝트 초기화
 
@@ -1870,7 +1879,7 @@ cott init <path> --format json
 
 `init`은 아직 project가 없어서 17.4의 project lock/journal을 쓰지 않는 유일한 명령이다. canonical parent directory handle 아래에 mode `0700` private sibling temporary scaffold를 만들고 target root의 mode `0600` `.cott-init` file에 closed `schema_version`·nonce ownership record를 저장한다. 모든 file을 fsync한 뒤 directory를 bottom-up fsync하고, Linux `renameat2(RENAME_NOREPLACE)` 또는 macOS `renameatx_np(RENAME_EXCL)`에 해당하는 같은-parent atomic no-replace rename으로만 publish한 다음 parent를 fsync한다. publish 전 실패는 init-owned temp를 no-follow로 제거하고 parent를 fsync한다. 경합 `EEXIST`는 이 cleanup까지 성공한 경우에만 exit `2`이며, 다른 scaffold·rename·fsync 실패나 cleanup 실패는 exit `6`이다. publish 뒤에는 uv 실행과 모든 probe를 먼저 완료한다. `.cott-init` unlink가 final commit transition이며, unlink 전 실패는 root file identity와 in-memory nonce가 marker record와 모두 일치하는 init-owned target만 no-follow로 제거하고 parent를 fsync한 뒤 원래 exit code를 반환한다. identity가 달라졌거나 cleanup이 실패하면 target을 보존하고 exit `6`을 반환한다. unlink를 시작한 뒤에는 target을 자동 삭제하지 않는다. unlink 또는 이어지는 target-root fsync가 실패하면 exact completed tree나 ownership-marked completed tree를 보존하고 exit `6`과 수동 확인 경로를 진단하며, 둘 다 성공해야 init이 성공한다. process crash로 남은 ownership-marked temp·target도 다음 init이 자동 삭제하거나 overwrite하지 않고 exit `2`와 수동 확인 경로를 진단한다. uv가 한 번이라도 시작된 뒤 실패하면 선택된 human 또는 JSON diagnostic에 global managed-Python·cache 변경이 남고 rollback되지 않을 수 있음을 반드시 포함한다.
 
-scaffold는 `python/.python-version`에 `3.14`를 쓰고 `python/pyproject.toml`의 `requires-python`을 `>=3.14.6,<3.15`로 고정하며 BasedPyright `>=1.39.9`를 dev dependency로 둔다. v0.8은 CPython `>=3.14.6,<3.15`와 uv `0.12.3` 이상을 지원하며, init은 그 범위의 managed CPython patch를 설치·probe한다. `uv.lock`은 Python exact patch를 고정하지 않으며, 실제 설치된 full patch는 이후 generation provenance에 고정한다.
+scaffold는 `python/.python-version`에 `3.14`를 쓰고 `python/pyproject.toml`의 `requires-python`을 `>=3.14.6,<3.15`로 고정하며 BasedPyright `>=1.39.9`를 dev dependency로 둔다. v1.0은 CPython `>=3.14.6,<3.15`와 uv `0.12.3` 이상을 지원하며, init은 그 범위의 managed CPython patch를 설치·probe한다. `uv.lock`은 Python exact patch를 고정하지 않으며, 실제 설치된 full patch는 이후 generation provenance에 고정한다.
 
 uv executable은 shell 없이 PATH에서 한 번만 canonical regular file로 resolve하고 version이 `0.12.3` 이상인지 검사한다. uv subprocess environment는 empty base에서 compiler-fixed sanitized `PATH`와 허용한 `HOME`·temporary-directory·platform TLS/certificate 변수만 복사하고 inherited `UV_*`, `VIRTUAL_ENV`, `CONDA_PREFIX`는 전부 제외한 뒤 `UV_PYTHON`·`UV_PROJECT_ENVIRONMENT`만 해당 단계에 명시하며 canonical uv를 `--no-config`로 실행한다. `<uv> --no-config python dir`의 canonical managed-install root를 기록한 뒤 다음 순서로 실행한다: `<uv> --no-config python install --upgrade 3.14`; `<uv> --no-config python find --managed-python --system 3.14`가 반환한 canonical path가 그 root 아래인지 확인하고 해당 interpreter를 `-I -c <compiler-fixed-identity-probe>`로 실행해 CPython `>=3.14.6,<3.15`를 검증; project cwd `python/`에서 lock, sync 순서를 수행한다.
 
@@ -1913,12 +1922,12 @@ cott emit python
 ### 18.6 구현 생성
 
 ```bash
-cott generate --agent codex --target python
+cott generate --agent claude --target python
 cott generate foo.bar.process_bar --agent omp --target python
 cott generate foo.bar.Counter.increment --agent codex --target python
 ```
 
-selection은 exact canonical free-function FQN 또는 impl-method FQN `<module>.<Concrete>.<method>`만 받으며 class FQN alone, trait FQN, glob과 alias는 거부한다. 선택 범위에 미구현 callable이 있으면 `--agent`가 필수다. 허용 값은 `codex`, `omp`다. 선택된 free function이 모두 binding되어 있으면 agent를 호출하지 않지만 impl method는 binding될 수 없어 unresolved이면 항상 agent candidate다. 특정 callable generate에서 agent write 대상은 그 callable의 durable source file뿐이며 apply는 선택 implementation과 전체 compiler-owned 관리 집합을 함께 갱신한다. verified baseline guard는 17.5의 정확한 규칙을 사용한다. 최초 검증 전에는 선택 범위 성공만으로 진행할 수 있다. 결과는 `current.verified = false`며 project 전체 미구현 상태를 별도 진단한다. 배포 gate는 항상 full `cott verify`다.
+selection은 exact canonical free-function FQN 또는 impl-method FQN `<module>.<Concrete>.<method>`만 받으며 class FQN alone, trait FQN, glob과 alias는 거부한다. 선택 범위에 미구현 callable이 있으면 `--agent`가 필수다. 허용 값은 `codex`, `claude`, `omp`다. `claude`는 direct Claude Code adapter이고 OMP가 Claude model을 선택하는 경우와 별개다. 선택된 free function이 모두 binding되어 있으면 agent를 호출하지 않지만 impl method는 binding될 수 없어 unresolved이면 항상 agent candidate다. 특정 callable generate에서 agent write 대상은 그 callable의 durable source file뿐이며 apply는 선택 implementation과 전체 compiler-owned 관리 집합을 함께 갱신한다. verified baseline guard는 17.5의 정확한 규칙을 사용한다. 최초 검증 전에는 선택 범위 성공만으로 진행할 수 있다. 결과는 `current.verified = false`며 project 전체 미구현 상태를 별도 진단한다. 배포 gate는 항상 full `cott verify`다.
 
 ### 18.7 구현 검증
 
@@ -2308,9 +2317,9 @@ parse error가 있으면 file을 쓰지 않으며 `cott fmt --check`는 formatte
 
 ---
 
-## 22. v0.8 구현 범위
+## 22. v1.0 구현 범위
 
-### 22.1 v0.8에 포함
+### 22.1 v1.0에 포함
 
 * v0.8 grammar, const generic, heterogeneous `Tuple`, `Array`, `Buffer`, aggregate constant, guarded recursion, `struct field* invariant*`와 five closed invariant intrinsic
 * canonical frozen struct constructor와 active-boundary reconstruction, Result Ok success obligation, complete conditional-error overlap/reachability evidence
@@ -2320,7 +2329,7 @@ parse error가 있으면 file을 쓰지 않으며 `cott fmt --check`는 formatte
 * Canonical IR v8, generation schema/domain v7/`cott.generation.v7`, runtime ABI7, contract strategy v5, diagnostics schema v1와 project API version identity
 * Python facade/stub/runtime, static ABI check, bounded proof v2, verified loader, deterministic pure/scenario contract test, `current`/`last_verified` provenance and diff/migration advice
 
-### 22.2 v0.8에서 제외
+### 22.2 v1.0에서 제외
 
 * `.cott` execution body, parameter default, generic overload, arbitrary call/lambda/quantifier와 user-defined fixture/plugin
 * ownership, borrow checker, lifetime, arbitrary/unbounded theorem proof·candidate expansion·lifecycle observation
@@ -2331,9 +2340,9 @@ parse error가 있으면 file을 쓰지 않으며 `cott fmt --check`는 formatte
 
 ---
 
-## 23. 완료 기준
+## 23. v1.0 완료 기준
 
-v0.8은 다음을 모두 자동 검증할 때 완료다.
+v1.0은 다음을 모두 자동 검증할 때 완료다.
 
 1. clean checkout의 declared project가 parse, format, IR emit, Python emit, generate, verify를 수행하고 public projection·stub·facade·runtime이 동일 IR을 소비한다.
 2. 모든 declaration/type/clause/scenario/fixture가 v8 typed IR와 closed v7/v5 generation/strategy schema를 통과하고 legacy identity를 fail closed한다.
@@ -2361,15 +2370,13 @@ cott 컴파일러는 Rust 단일 crate이며 `cli`, `manifest`, `syntax`, `parse
 
 ## 25. 향후 확장
 
-v0.8의 struct invariant, success/conditional-error coverage, fixture/workflow scenario, shadow warning, semantic coverage gate와 facade audit은 모두 구현 계약이다. 이 문서에는 이 기능의 partial profile, legacy reader, unsandboxed fallback 또는 second source of truth가 없다.
+v1.0의 struct invariant, success/conditional-error coverage, fixture/workflow scenario, shadow warning, semantic coverage gate와 facade audit은 모두 구현 계약이다. 이 문서에는 이 기능의 partial profile, legacy reader, unsandboxed fallback 또는 second source of truth가 없다.
 
 ### v1.0 이후
 
-* language/IR compatibility policy stabilization
-* official additional backend와 complete target parity
-* package installation model, selected lock artifact-to-installed-wheel/tree whole-origin verification
-* dependency resolver 또는 installer receipt format
+* package installation
 * IDE plugin
+* official additional backend와 complete target parity
 
 ---
 
@@ -2429,7 +2436,7 @@ binding은 import 없이 staged type module에 대해 정적으로 해석한다.
 
 ### 결정 14
 
-`cott generate`는 user-selected Codex CLI 또는 OMP CLI를 callable별 process로, shell 없이 single-file write sandbox staging에서 호출한다.
+`cott generate`는 user-selected Codex CLI, direct Claude Code CLI 또는 OMP CLI를 callable별 process로, shell 없이 single-file write sandbox staging에서 호출한다. OMP가 Claude model을 선택해도 direct Claude adapter가 되지 않는다.
 
 agent는 실제 project를 쓰지 않고 선택 free-function 또는 impl-method file만 변경한다. scratch와 cache는 workspace 밖으로 격리한다.
 

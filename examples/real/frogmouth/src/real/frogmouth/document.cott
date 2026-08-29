@@ -1,0 +1,110 @@
+module frogmouth.document
+
+use frogmouth.model.{Document, Location}
+
+enum LoadError:
+    NotFound(source: Str)
+    PermissionDenied(source: Str)
+    InvalidEncoding(source: Str)
+    TooLarge(source: Str)
+    HttpFailure(url: Str, status: U16)
+    NetworkUnavailable(url: Str)
+    InvalidLocation(message: Str)
+    ReadFailure(source: Str, message: Str)
+
+fn strip_front_matter(markdown: Str) -> Str:
+    doc """
+    Remove YAML front matter from Markdown.
+    """
+
+fn load_local_markdown(path: Str) -> Result[Str, LoadError]:
+    ensures Result.Ok(markdown) => markdown.len <= 5242880
+
+    error LoadError.NotFound
+    error LoadError.PermissionDenied
+    error LoadError.InvalidEncoding
+    error LoadError.TooLarge
+    error LoadError.InvalidLocation
+    error LoadError.ReadFailure
+
+    effects [file.read]
+
+fn load_http_markdown(url: Str) -> Result[Str, LoadError]:
+    ensures Result.Ok(markdown) => markdown.len <= 5242880
+
+    error LoadError.InvalidLocation when url.len == 0
+    error LoadError.NotFound
+    error LoadError.PermissionDenied
+    error LoadError.InvalidEncoding
+    error LoadError.TooLarge
+    error LoadError.HttpFailure
+    error LoadError.NetworkUnavailable
+    error LoadError.InvalidLocation
+    error LoadError.ReadFailure
+
+    effects [network]
+
+fn markdown_result_is_ok(value: Result[Str, LoadError]) -> Bool:
+    doc """
+    Report whether Markdown loading succeeded.
+    """
+
+scenario load_http_fixture for load_http_markdown:
+    fixtures:
+        http service:
+            route "/document.md" -> response(status: 200, body: text("# Fixture"), encoding: "utf-8")
+    call loaded = load_http_markdown(service.url("/document.md"))
+    call succeeded = markdown_result_is_ok(loaded)
+    assert succeeded
+
+fn load_github_markdown(repository: Str) -> Result[Str, LoadError]:
+    ensures Result.Ok(markdown) => markdown.len <= 5242880
+
+    error LoadError.NotFound
+    error LoadError.PermissionDenied
+    error LoadError.InvalidEncoding
+    error LoadError.TooLarge
+    error LoadError.HttpFailure
+    error LoadError.NetworkUnavailable
+    error LoadError.InvalidLocation
+    error LoadError.ReadFailure
+
+    effects [network]
+
+fn load_codeberg_markdown(repository: Str) -> Result[Str, LoadError]:
+    ensures Result.Ok(markdown) => markdown.len <= 5242880
+
+    error LoadError.NotFound
+    error LoadError.PermissionDenied
+    error LoadError.InvalidEncoding
+    error LoadError.TooLarge
+    error LoadError.HttpFailure
+    error LoadError.NetworkUnavailable
+    error LoadError.InvalidLocation
+    error LoadError.ReadFailure
+
+    effects [network]
+
+fn location_title_fallback(location: Location) -> Str:
+    ensures result.len > 0
+
+fn derive_document_title(markdown: Str, fallback: Str) -> Str:
+    requires fallback.len > 0
+
+    ensures result.len > 0
+
+fn load_document(location: Location) -> Result[Document, LoadError]:
+    ensures Result.Ok(document) => document.location == location
+    ensures Result.Ok(document) => document.markdown.len <= 5242880
+    ensures Result.Ok(document) => document.title.len > 0
+
+    error LoadError.NotFound
+    error LoadError.PermissionDenied
+    error LoadError.InvalidEncoding
+    error LoadError.TooLarge
+    error LoadError.HttpFailure
+    error LoadError.NetworkUnavailable
+    error LoadError.InvalidLocation
+    error LoadError.ReadFailure
+
+    effects [file.read, network]

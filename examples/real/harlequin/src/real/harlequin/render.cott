@@ -1,0 +1,32 @@
+module real.harlequin.render
+
+use real.harlequin.catalog.{CatalogColumn, CatalogMatch, CatalogRelation}
+use real.harlequin.core.{QueryResult}
+
+fn render_table(result: QueryResult) -> Str:
+    doc """
+    Render a query result deterministically in horizontal or vertical table form.
+    """
+
+    effects []
+
+fn render_catalog_relations(relations: List[CatalogRelation]) -> Str:
+    doc """
+    Render catalog relations in deterministic table order.
+    """
+
+    effects []
+
+fn render_catalog_columns(columns: List[CatalogColumn]) -> Str:
+    doc """
+    Render catalog columns in deterministic table order.
+    """
+
+    effects []
+
+fn render_catalog_matches(catalog_matches: List[CatalogMatch]) -> Str:
+    doc """
+    Render catalog matches in deterministic table order.
+    """
+
+    effects []

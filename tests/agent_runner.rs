@@ -2,10 +2,11 @@ use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use cott::agent::{AgentKind, AgentRunCandidate, run_agent};
+use cott::hash::sha256_hex;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -52,6 +53,13 @@ impl EnvRestore {
             ("CODEX_ACCESS_TOKEN", "codex-secret-access-token".to_owned()),
             ("CODEX_HOME", codex_home.display().to_string()),
             ("PI_CODING_AGENT_DIR", omp_home.display().to_string()),
+            ("ANTHROPIC_API_KEY", "anthropic-secret-api-key".to_owned()),
+            (
+                "ANTHROPIC_AUTH_TOKEN",
+                "anthropic-secret-auth-token".to_owned(),
+            ),
+            ("ANTHROPIC_BASE_URL", "https://anthropic.invalid".to_owned()),
+            ("CLAUDE_CODE_OAUTH_TOKEN", "claude-oauth-token".to_owned()),
         ];
         let mut saved = Vec::with_capacity(values.len());
         for (name, value) in values {
@@ -89,11 +97,10 @@ fn fixture() -> (Temp, PathBuf, PathBuf, PathBuf) {
     )
 }
 
-fn fake_adapter(workspace: &Path, version: &str, body: &str) -> PathBuf {
+fn fake_adapter_with_version_probe(workspace: &Path, version_probe: &str, body: &str) -> PathBuf {
     let executable = workspace.join("fake-agent");
-    let script = format!(
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '%s\\n' '{version}'; exit 0; fi\n{body}\n"
-    );
+    let script =
+        format!("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n{version_probe}\nfi\n{body}\n");
     fs::write(&executable, script).expect("write fake agent");
     #[cfg(unix)]
     {
@@ -102,6 +109,26 @@ fn fake_adapter(workspace: &Path, version: &str, body: &str) -> PathBuf {
             .expect("make fake agent executable");
     }
     executable
+}
+
+fn fake_adapter(workspace: &Path, version: &str, body: &str) -> PathBuf {
+    fake_adapter_with_version_probe(
+        workspace,
+        &format!("printf '%s\\n' '{version}'\nexit 0"),
+        body,
+    )
+}
+
+fn fake_claude_adapter(workspace: &Path, version: &str, body: &str) -> PathBuf {
+    fake_adapter_with_version_probe(
+        workspace,
+        &format!(
+            r#"[ -z "${{ANTHROPIC_API_KEY+x}}" ] || exit 2
+printf '%s\n' '{version}'
+exit 0"#
+        ),
+        body,
+    )
 }
 
 fn capture_body(exit: Option<i32>) -> String {
@@ -118,6 +145,21 @@ printf '\nenv\n'
 }} > implementation.py
 printf blocked > sibling.py 2>/dev/null || true
 {status}"#
+    )
+}
+
+fn claude_capture_body() -> String {
+    format!(
+        r#"[ "${{ANTHROPIC_API_KEY-}}" = anthropic-secret-api-key ] &&
+[ "$CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" = 1 ] &&
+[ "$DISABLE_TELEMETRY" = 1 ] &&
+[ "$DISABLE_ERROR_REPORTING" = 1 ] &&
+[ -z "${{ANTHROPIC_AUTH_TOKEN+x}}" ] &&
+[ -z "${{ANTHROPIC_BASE_URL+x}}" ] &&
+[ -z "${{CLAUDE_CODE_OAUTH_TOKEN+x}}" ] || exit 2
+{}
+printf '%s' '{{"type":"result","subtype":"success","is_error":false,"result":"done"}}'"#,
+        capture_body(None)
     )
 }
 
@@ -146,6 +188,18 @@ fn run_or_skip(
     target: &Path,
     prompt: &[u8],
 ) -> Option<Result<AgentRunCandidate, String>> {
+    run_or_skip_with_timeout(kind, executable, workspace, scratch, target, prompt, 10)
+}
+
+fn run_or_skip_with_timeout(
+    kind: AgentKind,
+    executable: PathBuf,
+    workspace: &Path,
+    scratch: &Path,
+    target: &Path,
+    prompt: &[u8],
+    timeout_seconds: u16,
+) -> Option<Result<AgentRunCandidate, String>> {
     let result = run_agent(
         kind,
         executable,
@@ -153,7 +207,7 @@ fn run_or_skip(
         scratch,
         target,
         prompt.to_vec(),
-        10,
+        timeout_seconds,
     );
     if matches!(
         &result,
@@ -248,6 +302,104 @@ fn codex_golden_argv_stdin_environment_and_target_write() {
 }
 
 #[test]
+fn claude_golden_argv_stdin_environment_json_and_provenance() {
+    let (_temp, workspace, scratch, target) = fixture();
+    let executable = fake_claude_adapter(&workspace, "2.1.89", &claude_capture_body());
+    let _lock = _hold_env_lock();
+    let _environment = EnvRestore::controlled(&scratch, &executable);
+    let prompt = b"claude prompt $(touch sibling.py); ' \" ` \xe2\x98\x83\n";
+    let Some(result) = run_or_skip(
+        AgentKind::Claude,
+        executable.clone(),
+        &workspace,
+        &scratch,
+        &target,
+        prompt,
+    ) else {
+        return;
+    };
+    let candidate = result.expect("Claude run");
+    let expected_args = vec![
+        "--bare".to_owned(),
+        "--print".to_owned(),
+        "--input-format".to_owned(),
+        "text".to_owned(),
+        "--output-format".to_owned(),
+        "json".to_owned(),
+        "--permission-mode".to_owned(),
+        "dontAsk".to_owned(),
+        "--tools".to_owned(),
+        "Read,Write".to_owned(),
+        "--allowedTools".to_owned(),
+        "Read,Write".to_owned(),
+        "--disallowedTools".to_owned(),
+        "Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__*".to_owned(),
+        "--no-session-persistence".to_owned(),
+    ];
+    let expected_names = [
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+        "DISABLE_ERROR_REPORTING",
+        "DISABLE_TELEMETRY",
+        "HOME",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "NO_PROXY",
+        "PATH",
+        "PYTHONDONTWRITEBYTECODE",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TMPDIR",
+    ];
+    assert_eq!(
+        candidate.implementation,
+        expected_capture(&expected_args, prompt, &expected_names)
+    );
+    assert_eq!(
+        candidate.environment_names,
+        expected_names
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        candidate.executable,
+        fs::canonicalize(&executable).expect("executable path")
+    );
+    assert_eq!(
+        candidate.executable_hash,
+        format!(
+            "sha256:{}",
+            sha256_hex(&fs::read(&executable).expect("executable bytes"))
+        )
+    );
+    assert_eq!(candidate.adapter_version, "2.1.89");
+    assert_eq!(
+        candidate.prompt_hash,
+        format!("sha256:{}", sha256_hex(prompt))
+    );
+    assert_eq!(
+        candidate.stdout,
+        br#"{"type":"result","subtype":"success","is_error":false,"result":"done"}"#
+    );
+    assert_eq!(candidate.exit_code, Some(0));
+    assert!(!candidate.timed_out);
+    assert!(!workspace.join("sibling.py").exists());
+    assert!(
+        !candidate
+            .implementation
+            .windows(b"ANTHROPIC_AUTH_TOKEN".len())
+            .any(|window| window == b"ANTHROPIC_AUTH_TOKEN")
+    );
+    assert!(
+        !candidate
+            .implementation
+            .windows(b"anthropic-secret-api-key".len())
+            .any(|window| window == b"anthropic-secret-api-key")
+    );
+}
+
+#[test]
 fn omp_golden_argv_prompt_environment_and_target_write() {
     let (_temp, workspace, scratch, target) = fixture();
     let body = format!(
@@ -272,6 +424,9 @@ fn omp_golden_argv_prompt_environment_and_target_write() {
         return;
     };
     let candidate = result.expect("OMP run");
+    let prompt_file = fs::canonicalize(&scratch)
+        .expect("canonical scratch")
+        .join("omp-prompt-0");
     assert_eq!(candidate.adapter_version, "17.2.13");
     let expected_args = vec![
         "-p".to_owned(),
@@ -292,7 +447,7 @@ fn omp_golden_argv_prompt_environment_and_target_write() {
         "10s".to_owned(),
         "--config".to_owned(),
         scratch.join("omp.yaml").display().to_string(),
-        String::from_utf8(prompt.to_vec()).expect("prompt UTF-8"),
+        format!("@{}", prompt_file.display()),
     ];
     let expected_names = [
         "HOME",
@@ -309,6 +464,23 @@ fn omp_golden_argv_prompt_environment_and_target_write() {
     assert_eq!(
         candidate.implementation,
         expected_capture(&expected_args, &[], &expected_names)
+    );
+    assert_eq!(fs::read(&prompt_file).expect("OMP prompt"), prompt);
+    let prompt_metadata = fs::symlink_metadata(&prompt_file).expect("OMP prompt metadata");
+    assert!(
+        prompt_metadata.is_file()
+            && !prompt_metadata.file_type().is_symlink()
+            && prompt_metadata.nlink() == 1
+    );
+    assert_eq!(
+        candidate.prompt_hash,
+        format!("sha256:{}", sha256_hex(prompt))
+    );
+    assert!(
+        !candidate
+            .implementation
+            .windows(prompt.len())
+            .any(|window| window == prompt)
     );
     assert_eq!(
         candidate.environment_names,
@@ -337,6 +509,46 @@ fn omp_golden_argv_prompt_environment_and_target_write() {
         "isolated"
     );
     assert!(!omp_home.join("write-test").exists());
+}
+
+#[test]
+fn omp_large_prompt_uses_file_argv_without_e2big() {
+    let (_temp, workspace, scratch, target) = fixture();
+    let executable = fake_adapter(&workspace, "omp/17.2.13", &capture_body(None));
+    let _lock = _hold_env_lock();
+    let _environment = EnvRestore::controlled(&scratch, &executable);
+    let prompt = vec![b'x'; 1024 * 1024];
+    let Some(result) = run_or_skip(
+        AgentKind::Omp,
+        executable,
+        &workspace,
+        &scratch,
+        &target,
+        &prompt,
+    ) else {
+        return;
+    };
+    let candidate = result.expect("OMP large-prompt run");
+    let prompt_file = fs::canonicalize(&scratch)
+        .expect("canonical scratch")
+        .join("omp-prompt-0");
+    assert_eq!(fs::read(&prompt_file).expect("OMP prompt"), prompt);
+    assert_eq!(
+        candidate.prompt_hash,
+        format!("sha256:{}", sha256_hex(&prompt))
+    );
+    assert!(
+        candidate
+            .implementation
+            .windows(prompt.len())
+            .all(|window| window != prompt)
+    );
+    assert!(
+        candidate
+            .implementation
+            .windows(format!("@{}", prompt_file.display()).len())
+            .any(|window| window == format!("@{}", prompt_file.display()).as_bytes())
+    );
 }
 
 #[test]
@@ -434,30 +646,6 @@ fn zero_exit_without_target_write_is_a_failure() {
     );
 }
 
-#[test]
-fn omp_prompt_over_argument_limit_is_rejected_before_execution() {
-    let (_temp, workspace, scratch, target) = fixture();
-    let executable = fake_adapter(&workspace, "omp/17.2.12", "exit 0");
-    let _lock = _hold_env_lock();
-    let _environment = EnvRestore::controlled(&scratch, &executable);
-    let prompt = vec![b'x'; 16 * 1024 * 1024];
-    let Some(result) = run_or_skip(
-        AgentKind::Omp,
-        executable,
-        &workspace,
-        &scratch,
-        &target,
-        &prompt,
-    ) else {
-        return;
-    };
-    assert!(
-        result
-            .expect_err("oversized OMP prompt must fail")
-            .contains("argument-size limit")
-    );
-}
-
 #[cfg(unix)]
 #[test]
 fn preexisting_hardlink_target_is_rejected() {
@@ -505,5 +693,209 @@ fn preexisting_symlink_target_is_rejected() {
         result
             .expect_err("symlink target must fail")
             .contains("create isolated agent target")
+    );
+}
+
+#[test]
+fn claude_rejects_error_json_result() {
+    let (_temp, workspace, scratch, target) = fixture();
+    let executable = fake_adapter(
+        &workspace,
+        "2.1.89",
+        "printf implementation > implementation.py\nprintf '%s' '{\"type\":\"result\",\"subtype\":\"error\",\"is_error\":true,\"result\":\"no\"}'",
+    );
+    let Some(result) = run_or_skip(
+        AgentKind::Claude,
+        executable,
+        &workspace,
+        &scratch,
+        &target,
+        b"prompt",
+    ) else {
+        return;
+    };
+    assert!(
+        result
+            .expect_err("Claude error result must fail")
+            .contains("claude returned an invalid result")
+    );
+}
+
+#[test]
+fn claude_rejects_malformed_and_multiple_version_tokens() {
+    for version in ["2.1", "2.1.89 extra"] {
+        let (_temp, workspace, scratch, target) = fixture();
+        let executable = fake_adapter(&workspace, version, "exit 0");
+        let Some(result) = run_or_skip(
+            AgentKind::Claude,
+            executable,
+            &workspace,
+            &scratch,
+            &target,
+            b"prompt",
+        ) else {
+            return;
+        };
+        assert!(
+            result
+                .expect_err("invalid Claude version must fail")
+                .contains("unsupported claude version")
+        );
+    }
+}
+
+#[test]
+fn claude_rejects_valid_version_with_nonzero_probe_status() {
+    let (_temp, workspace, scratch, target) = fixture();
+    let executable = fake_adapter_with_version_probe(
+        &workspace,
+        r#"[ -z "${ANTHROPIC_API_KEY+x}" ] || exit 2
+printf '%s\n' '2.1.89'
+exit 17"#,
+        "exit 0",
+    );
+    let _lock = _hold_env_lock();
+    let _environment = EnvRestore::controlled(&scratch, &executable);
+    let Some(result) = run_or_skip(
+        AgentKind::Claude,
+        executable,
+        &workspace,
+        &scratch,
+        &target,
+        b"prompt",
+    ) else {
+        return;
+    };
+    assert!(
+        result
+            .expect_err("nonzero Claude version probe must fail")
+            .contains("unsupported claude version")
+    );
+}
+
+#[test]
+fn claude_rejects_timed_out_version_probe() {
+    let (_temp, workspace, scratch, target) = fixture();
+    let executable = fake_adapter_with_version_probe(
+        &workspace,
+        r#"[ -z "${ANTHROPIC_API_KEY+x}" ] || exit 2
+sleep 2"#,
+        "exit 0",
+    );
+    let _lock = _hold_env_lock();
+    let _environment = EnvRestore::controlled(&scratch, &executable);
+    let Some(result) = run_or_skip_with_timeout(
+        AgentKind::Claude,
+        executable,
+        &workspace,
+        &scratch,
+        &target,
+        b"prompt",
+        1,
+    ) else {
+        return;
+    };
+    assert!(
+        result
+            .expect_err("timed out Claude version probe must fail")
+            .contains("sandbox process timed out")
+    );
+}
+
+#[test]
+fn claude_rejects_target_replacement_from_retained_descriptor() {
+    for (name, initial_contents) in [("empty", ""), ("old", "printf old > implementation.py\n")] {
+        let (_temp, workspace, scratch, target) = fixture();
+        let body = format!(
+            r#"{initial_contents}: > "$TMPDIR/replace-target"
+sleep 1
+printf '%s' '{{"type":"result","subtype":"success","is_error":false,"result":"done"}}'"#
+        );
+        let executable = fake_claude_adapter(&workspace, "2.1.89", &body);
+        let _lock = _hold_env_lock();
+        let _environment = EnvRestore::controlled(&scratch, &executable);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let replacement = {
+            let cancelled = Arc::clone(&cancelled);
+            let trigger = scratch.join("replace-target");
+            let target = target.clone();
+            std::thread::spawn(move || {
+                while !trigger.exists() {
+                    if cancelled.load(Ordering::Acquire) {
+                        return false;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                let replacement = target.with_extension("replacement");
+                fs::write(&replacement, b"replacement")
+                    .and_then(|_| fs::rename(replacement, target))
+                    .is_ok()
+            })
+        };
+        let result = run_or_skip(
+            AgentKind::Claude,
+            executable,
+            &workspace,
+            &scratch,
+            &target,
+            b"prompt",
+        );
+        cancelled.store(true, Ordering::Release);
+        let replaced = replacement.join().expect("replacement thread");
+        let Some(result) = result else {
+            return;
+        };
+        assert!(replaced, "{name} target was not replaced");
+        assert!(
+            result
+                .expect_err("replaced target must fail")
+                .contains("agent candidate must be a regular single-link file")
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_rejects_npm_node_entrypoints() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_temp, workspace, scratch, target) = fixture();
+    let cli_js = workspace.join("cli.js");
+    fs::write(&cli_js, "#!/bin/sh\nexit 0\n").expect("write cli.js");
+    fs::set_permissions(&cli_js, fs::Permissions::from_mode(0o755))
+        .expect("make cli.js executable");
+    let result = run_agent(
+        AgentKind::Claude,
+        cli_js,
+        &workspace,
+        &scratch,
+        &target,
+        b"prompt".to_vec(),
+        10,
+    );
+    assert!(
+        result
+            .expect_err("npm cli.js must fail")
+            .contains("official native entrypoint")
+    );
+
+    let (_temp, workspace, scratch, target) = fixture();
+    let node_script = workspace.join("claude");
+    fs::write(&node_script, "#!/usr/bin/env node\n").expect("write node script");
+    fs::set_permissions(&node_script, fs::Permissions::from_mode(0o755))
+        .expect("make node script executable");
+    let result = run_agent(
+        AgentKind::Claude,
+        node_script,
+        &workspace,
+        &scratch,
+        &target,
+        b"prompt".to_vec(),
+        10,
+    );
+    assert!(
+        result
+            .expect_err("Node script must fail")
+            .contains("official native entrypoint")
     );
 }

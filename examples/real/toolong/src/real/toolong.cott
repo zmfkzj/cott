@@ -1,0 +1,80 @@
+module real.toolong
+
+struct LogSource:
+    path: Path
+
+struct LogEntry:
+    source: Path
+    record: U64
+    byte_offset: U64
+    timestamp: Option[Str]
+    kind: EntryKind
+    text: Str
+
+struct LogPage:
+    source: LogSource
+    entries: List[LogEntry]
+    next_byte: U64
+    complete: Bool
+
+enum EntryKind:
+    Access
+    Error
+    Json
+    Plain
+
+enum ToolongError:
+    InvalidLimit
+    InvalidIndent
+    InvalidOffset(path: Path, offset: U64)
+    OpenFailed(path: Path, message: Str)
+    DecodeFailed(path: Path)
+    CompressedAppendUnsupported(path: Path)
+
+fn load_log(source: LogSource, limit: U64) -> Result[LogPage, ToolongError]:
+    ensures Result.Ok(page) => page.source == source
+    ensures Result.Ok(page) => page.entries.len <= limit
+
+    error ToolongError.InvalidLimit when limit == 0
+    error ToolongError.OpenFailed
+    error ToolongError.DecodeFailed
+
+    effects [file.read]
+
+fn render_jsonl(entries: List[LogEntry], indent: U8) -> Result[List[Str], ToolongError]:
+    ensures Result.Ok(rendered) => rendered.len == entries.len
+
+    error ToolongError.InvalidIndent when indent == 0
+
+    effects []
+
+fn merge_pages(pages: List[LogPage], limit: U64) -> Result[List[LogEntry], ToolongError]:
+    ensures Result.Ok(merged) => merged.len <= limit
+
+    error ToolongError.InvalidLimit when limit == 0
+
+    effects []
+
+fn search_entries(
+    entries: List[LogEntry],
+    needle: Str,
+    limit: U64,
+) -> Result[List[LogEntry], ToolongError]:
+    ensures Result.Ok(found) => found.len <= limit
+
+    error ToolongError.InvalidLimit when limit == 0
+
+    effects []
+
+fn read_appended(source: LogSource, from_byte: U64, limit: U64) -> Result[LogPage, ToolongError]:
+    ensures Result.Ok(page) => page.source == source
+    ensures Result.Ok(page) => page.entries.len <= limit
+    ensures Result.Ok(page) => page.next_byte >= from_byte
+
+    error ToolongError.InvalidLimit when limit == 0
+    error ToolongError.InvalidOffset
+    error ToolongError.OpenFailed
+    error ToolongError.DecodeFailed
+    error ToolongError.CompressedAppendUnsupported
+
+    effects [file.read]

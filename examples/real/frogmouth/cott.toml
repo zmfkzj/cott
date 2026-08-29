@@ -1,0 +1,91 @@
+[project]
+name = "frogmouth"
+version = "0.1.0"
+source = "src/real"
+
+[target.python]
+source = "python"
+generated = "generated/python"
+stubs = "generated/stubs"
+interpreter = ".venv/bin/python"
+type_checker = ".venv/bin/basedpyright"
+lockfile = "python/uv.lock"
+runtime_validation = "boundary"
+
+[target.python.implementations]
+"frogmouth.application.parse_initial_location" = "cott_bindings.frogmouth.application.parse_initial_location:parse_initial_location"
+"frogmouth.application.resolve_state_path" = "cott_bindings.frogmouth.application.resolve_state_path:resolve_state_path"
+
+[generator]
+rules = "generator.rules"
+timeout_seconds = 1800
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.application.toggle_sidebar"
+clauses = ["ensures:1", "ensures:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.application.toggle_sidebar_dock"
+clauses = ["ensures:0"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.document.load_http_markdown"
+clauses = ["ensures:0", "error:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.navigation.normalize_location_input"
+clauses = ["ensures:0", "error:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.navigation.resolve_absolute_location"
+clauses = ["ensures:0"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.navigation.resolve_forge_location"
+clauses = ["ensures:0"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.navigation.resolve_location"
+clauses = ["ensures:0"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.persistence.add_history"
+clauses = ["ensures:1", "ensures:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.persistence.decode_state"
+clauses = ["ensures:0", "error:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.persistence.update_state"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false

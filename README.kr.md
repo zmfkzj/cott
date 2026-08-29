@@ -4,10 +4,14 @@
 공개 type, function, contract, effect, scenario, error를 선언한다. Python은 그 선언의 검증된
 projection이며 두 번째 계약 원본이 아니다.
 
-`architecture.md`는 구현된 v0.8의 규범 문서다. 닫힌 호환성 identity는 package `0.8.0`,
+`architecture.md`는 구현된 v1.0 언어 계약의 규범 문서다. 닫힌 호환성 identity는 package `1.0.0`,
 Canonical IR schema `8`, generation schema/domain `7` (`cott.generation.v7`), Python runtime ABI
-`7`, contract-test strategy schema `5`다. reader와 loader는 호환되지 않는 generation record,
-strategy, runtime identity를 거부한다.
+`7`, contract-test strategy schema `5`, diagnostics schema `1`이다. reader와 loader는 호환되지 않는
+generation record, strategy, runtime identity를 거부한다.
+
+구현된 v0.8 `.cott` source는 의미를 바꾸지 않고 source-compatible 상태로 유지된다. Serialized 및
+generated artifact는 exact-identity다. package mismatch 뒤에는 다시 생성해야 하며, Cott는 legacy
+reader를 제공하지 않는다.
 
 ## 계약과 evidence
 
@@ -38,13 +42,15 @@ certification을 바꾸지 않고 선택한 clause만 gate할 수 있다.
 모든 예제는 독립 project다. 저장소 root에서 아래 한 순서를 사용하고, `<project>`를 아래 index의
 경로로 바꾼다.
 
+설치된 package와 command는 `cott --version`(또는 `cott -V`) 및 `cott --help`로 확인한다.
+
 ```bash
 project=examples/<project>
 UV_PROJECT_ENVIRONMENT="$project/.venv" uv sync --project "$project/python"
 cott check --project "$project"
 cott fmt --check --project "$project"
 cott emit python --project "$project"
-cott generate --agent omp --target python --project "$project"
+cott generate --agent claude --target python --project "$project"
 cott verify --project "$project"
 ```
 
@@ -53,6 +59,17 @@ cott verify --project "$project"
 binding과 accepted durable implementation은 재사용한다. `verify`는 source contract를 편집하지
 않고 managed target을 다시 만들고 evidence와 provenance를 certify한다.
 
+`generate --agent`는 `codex`, `claude`, `omp` 세 direct adapter를 받는다. `claude`는 official
+native Claude Code `>=2.1.89`를 직접 호출하며, OMP가 Claude model을 선택한 실행은 여전히
+`omp`이고 `claude`가 아니다. generation 전에 direct Claude의 native-entrypoint check는 npm
+`cli.js` entrypoint와 Node shebang을 거부하고 exact credential-free, network-disabled probe
+`claude --version`을 실행한다. probe는 timeout 없이 status `0`으로 끝나야 하며 stdout 전체는
+정확히 하나인 strict SemVer token `>=2.1.89`여야 한다. generation은 별개로 exact UTF-8 prompt를
+stdin으로 받고 `Read`와 `Write`만 사용하며 successful JSON result만 수락한다. existing
+`ANTHROPIC_API_KEY`와 provider network egress를 가질 수 있는 것은 generation뿐이며
+network-capable Claude tool은 노출하지 않는다. normative argv, environment, native-entrypoint,
+result contract는 architecture §17.2.1에 있다.
+
 각 예제에 commit된 `generated/`와 agent-owned `python/_cott_impl/` 파일은 실제 compiler
 result다. authoring shortcut이 아니다. `.venv/`, `.cott/`, `__pycache__/`는 transient다. Public
 code는 generated Cott facade만 import한다. `_cott_impl`과 `cott_bindings`는 public import path가
@@ -60,9 +77,9 @@ code는 generated Cott facade만 import한다. `_cott_impl`과 `cott_bindings`�
 
 ## 축소된 예제 index
 
-유지되는 inventory는 20개 project다. grammar lesson 6개, simple lesson 3개, complex curriculum
+유지되는 inventory는 26개 project다. grammar lesson 6개, simple lesson 3개, complex curriculum
 project 1개, 별도 `process-bar` full-generation fixture, focused feature 7개, modular project 1개,
-FastAPI integration 1개로 구성된다.
+FastAPI integration 1개, real-world generation-first project 6개로 구성된다.
 
 ### Grammar — 6
 
@@ -99,6 +116,17 @@ Mapping은 implementation을 선택할 뿐 Cott contract를 정의하지 않는�
 full-agent-generation fixture다. `process_bar`는 public facade를 통해 `validate_payload`,
 `process_payload_bytes`, `build_output`을 합성한다. Commit된 generation record와 `_cott_impl` tree는
 실제 accepted compiler output이다.
+
+### Real — 6
+
+| Project | 고유 계약 |
+| --- | --- |
+| `real/yt-dlp` | Playlist selection, archive-aware download planning, output template, JSON rendering, bounded media transfer. |
+| `real/harlequin` | SQLite statement execution, schema catalog search, 결정적인 query 및 catalog rendering. |
+| `real/pgcli` | Connection precedence, SQL completion, query rendering, backslash command, database execution. |
+| `real/posting` | YAML HTTP-request collection, variable resolution, curl export, persistence, bounded network request. |
+| `real/toolong` | Bounded log paging, JSONL rendering, merging, searching, appended-file read. |
+| `real/frogmouth` | Markdown document navigation, loading, state persistence, sidebar application behavior. |
 
 ### Focused features — 7
 

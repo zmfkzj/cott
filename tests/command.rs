@@ -51,6 +51,22 @@ fn parses_global_options_in_any_position() {
             format: OutputFormat::Human
         },
     );
+    assert_eq!(
+        parse(&[
+            "generate",
+            "--target",
+            "python",
+            "foo.bar.Writer.write",
+            "--agent",
+            "claude"
+        ]),
+        Command::Generate {
+            symbol: Some("foo.bar.Writer.write".to_owned()),
+            agent: Some(AgentKind::Claude),
+            project: None,
+            format: OutputFormat::Human
+        },
+    );
 }
 
 #[test]
@@ -105,4 +121,8 @@ fn rejects_duplicate_or_invalid_options() {
     );
     assert!(parse_command(&["init", "demo", "--project", "demo"].map(OsString::from)).is_err());
     assert!(parse_command(&["generate", "--target", "rust"].map(OsString::from)).is_err());
+    assert_eq!(
+        parse_command(&["generate", "--agent", "unknown"].map(OsString::from)),
+        Err("`--agent` requires `codex`, `claude`, or `omp`")
+    );
 }
