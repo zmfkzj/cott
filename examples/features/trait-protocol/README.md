@@ -1,14 +1,14 @@
 # trait-protocol
 
 ## Purpose
-This end-to-end Cott v0.6 example shows a Cott-owned ordinary `SimpleTask` class whose agent-implemented methods satisfy an inherited `TaskView` trait.
+This Cott v0.7 lesson puts trait inheritance, selection, exact runtime views, and async state ownership in one `SimpleTask` implementation.
 
-## Protocols and the concrete implementation
-- `Summarizable` has the associated `Summary` type and requires `summary() -> Summarizable.Summary`; `SimpleTask` assigns `Summary = Str`. `Prioritizable` requires `priority_level() -> I32`, and `Completable` requires `complete()`. `TaskView` inherits `Summarizable + Prioritizable`; `inspect_task[T: TaskView]` therefore requires that named read view, while `format_summary[T: Summarizable]` accepts only the summary protocol.
-- `SimpleTask` implements `TaskView + Completable`. `TaskLifecycle` is a resource with initial `Pending`, terminal `Completed`, and its declared `Pending -> Completed` edge. Its implementation declares `title: Str`, `urgency: I32`, and `lifecycle: TaskLifecycle`, rather than asking the Python application to handwrite a class.
-- The compiler owns the generated class shell, resource-state initialization, lock, and contract wrappers. The agent owns only the generated method helper implementations, so application code imports `SimpleTask` from the generated module.
+## Trait selection and exact types
+- `Summarizable` preserves the associated `Summary` type through `summary() -> Summarizable.Summary`; covariant `TaskView[+T]` inherits it together with `Prioritizable` and uses `T` for `display`. `SimpleTask` selects `TaskView[Str]`, assigns `Summary = Str`, and therefore gives `Dyn[TaskView[Str]]` an exact generic trait identity rather than a structural substitute.
+- Every effective slot is async because a single impl cannot mix sync and async trait slots. `summary` and `priority_level` are explicit agent helpers. `display` is selected by `specialize SimpleTask for TaskView[Str]` and dispatches through `specialized_display`; `category` has no helper and dispatches through the verified `default_category` facade. The three paths produce separately labelled application output.
+- `task_factory() -> Factory[SimpleTask]` returns the exact generated `SimpleTask` class object without constructing it. The app prints that identity check before calling the factory.
 
-## Contracts and observable behavior
-- The class invariant requires a nonempty title and nonnegative urgency. `init(title, urgency)` repeats those preconditions and ensures the initialized title and urgency match its arguments; the omitted `lifecycle` parameter receives the resource initial state, `TaskLifecycle.Pending`.
-- `summary` and `priority_level` are pure, contracted read methods. `complete`'s mandatory `Pending -> Completed` transition requires `TaskLifecycle.Pending` and ensures it returns `true`; its helper assigns the generated `TaskLifecycle_Completed` singleton.
-- The Python app constructs generated `SimpleTask("Write Documentation", 2)`, passes it through the generic consumers, then wraps it nominally as `Dyn(value=task, trait=TaskView)`. `inspect_dyn(Dyn[TaskView]) -> Str` accepts that exact declared trait view and prints `Dyn: Write Documentation (urgency: 2)` alongside the summary, priority, and resource-backed completion output.
+## State and observable behavior
+- The compiler owns `title`, `urgency`, `lifecycle`, `completion_count`, initialization, locks, and wrappers. Its invariants require a nonempty title, nonnegative urgency, and nonnegative completion count; `init(title, urgency)` preserves the two caller-supplied fields.
+- `await task.complete()` is the one explicit async state transition. It changes `lifecycle` only through `Pending -> Completed`, increments the non-resource `completion_count` under `modifies`, and proves that increment with `old(self.completion_count)`. `modifies` deliberately does not name the resource field because its transition owns that update.
+- The app awaits the explicit, specialized, default, Dyn, priority, and completion calls. A second `await task.complete()` has no declared `Completed -> Completed` edge and the generated boundary raises its transition violation; the example does not catch or hide that error.

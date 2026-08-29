@@ -1,46 +1,30 @@
 module curriculum.assignment_rule
 
-@entity
-struct Assignment:
-    name: Str
-    value: Str
+enum AccessCodeError:
+    LegacyFormat
+    EmptyCode
+    TooShort
 
-@error_domain
-enum ParseAssignmentError:
-    MissingEquals
-    EmptyName
+doc """
+Base error clauses for an access code.
+"""
+rule BaseAccessCodeRule:
+    error AccessCodeError.LegacyFormat
+    error AccessCodeError.EmptyCode
 
-@rule
-@memo("Base validation rules for {Assignment}")
-rule BaseAssignmentRule:
+doc """
+Current access-code clauses composed from the base rule.
+"""
+rule StrictAccessCodeRule(BaseAccessCodeRule):
+    override error AccessCodeError.EmptyCode when false
+
+    delete error AccessCodeError.LegacyFormat
+
+    error AccessCodeError.TooShort
+
+fn validate_access_code(code: Str) -> Result[Str, AccessCodeError]:
     doc """
-    Base rule for {Assignment} requiring non-empty name.
+    Trim an access code and require at least four characters.
     """
 
-    ensures Result.Ok(assignment) => assignment.name.len > 0
-
-    error ParseAssignmentError.MissingEquals
-
-@rule
-@memo("Strict validation rules for {Assignment}")
-rule StrictAssignmentRule(BaseAssignmentRule):
-    doc """
-    Strict rule inheriting from {BaseAssignmentRule} with overridden name constraint, deleted error, and added non-empty value constraint.
-    """
-
-    override ensures Result.Ok(assignment) => assignment.name.len > 1
-
-    delete error ParseAssignmentError.MissingEquals
-
-    ensures Result.Ok(assignment) => assignment.value.len > 0
-
-    error ParseAssignmentError.EmptyName
-
-@pure
-@tag("parser")
-fn parse_assignment(line: Str) -> Result[Assignment, ParseAssignmentError]:
-    doc """
-    Parses one {Assignment} without I/O or mutation following {StrictAssignmentRule}.
-    """
-
-    rule StrictAssignmentRule
+    rule StrictAccessCodeRule

@@ -1,0 +1,1 @@
+CottList implements Sequence: iterate it directly (`for holding in holdings`) and use `len(holdings)`. Do not access `.values`; it is constructor syntax only. Preserve exact numeric and Result types, and import generated constructors used to construct results.

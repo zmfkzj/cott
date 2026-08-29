@@ -2,7 +2,7 @@ module curriculum.artifact_pipeline
 
 struct BuildStep:
     name: Str
-    needs: List[Str]
+    needs: Set[Str]
 
 struct Pipeline:
     steps: List[BuildStep]

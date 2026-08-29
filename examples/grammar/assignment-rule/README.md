@@ -1,9 +1,9 @@
 # assignment-rule
 
 ## Purpose
-Applies `@rule` inheritance, contract refinement, and error deletion to a single parsing function.
+Compose, override, and delete rule clauses for an access-code validator.
 
 ## Key points
-- `BaseAssignmentRule` guarantees that a successful `Assignment` has a non-empty name and declares the `MissingEquals` error.
-- `StrictAssignmentRule` `override`s the name condition to require length 2 or greater, `delete`s the inherited `MissingEquals` error, then adds the non-empty value condition and the `EmptyName` error.
-- `parse_assignment` uses `rule StrictAssignmentRule`; the Python implementation splits on the first `=`, trims both sides, then returns `EmptyName` when the name is one character or shorter or the value is empty.
+- `BaseAccessCodeRule` declares the legacy-format and empty-code errors.
+- `StrictAccessCodeRule` overrides the empty-code clause with a false condition, deletes the legacy-format clause, and adds `TooShort`.
+- `validate_access_code` applies the composed rule and trims codes before rejecting values shorter than four characters.

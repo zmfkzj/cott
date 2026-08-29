@@ -343,3 +343,81 @@ alias DynamicReader = Dyn[NumberReader]
     assert_eq!(output, expected);
     assert_eq!(formatted(&output), output);
 }
+
+#[test]
+fn formats_struct_invariants_and_complete_scenario_fixtures_idempotently() {
+    let source = r##"module acceptance.surface
+
+struct Location:
+  kind:LocationKind
+  target:Str
+  fragment:Option[Str]=Option.Nothing
+  invariant self.kind!=LocationKind.Web or starts_with(self.target,"https://")
+  invariant self.fragment matches Option.Some(value)=>not starts_with(value,"#")
+
+scenario workflow for app.run:
+  fixtures:
+    fs files:
+      file "input.txt" text("input")
+      file "payload.bin" hex("00ff")
+    http service:
+      route "/ok"->response(status:200,body:bytes("ok"),encoding:"utf-8")
+      route "/next"->redirect(status:302,location:"/ok")
+      route "/slow"->delay(ms:25)
+      route "/broken"->disconnect()
+    clock clock:
+      start_ms:10
+      tick_ms:2
+    failure denied:
+      point:file.write
+      occurrence:1
+      error:permission_denied
+  call model=app.open(files.path("input.txt"))
+  spawn request=app.fetch(service.url("/ok"))
+  tick
+  await request as reply
+  assert reply=="ok"
+  spawn stale=app.fetch(service.url("/slow"))
+  cancel stale
+  await stale cancelled
+"##;
+    let expected = r##"module acceptance.surface
+
+struct Location:
+    kind: LocationKind
+    target: Str
+    fragment: Option[Str] = Option.Nothing
+
+    invariant self.kind != LocationKind.Web or starts_with(self.target, "https://")
+    invariant self.fragment matches Option.Some(value) => not starts_with(value, "#")
+
+scenario workflow for app.run:
+    fixtures:
+        fs files:
+            file "input.txt" text("input")
+            file "payload.bin" hex("00ff")
+        http service:
+            route "/ok" -> response(status: 200, body: bytes("ok"), encoding: "utf-8")
+            route "/next" -> redirect(status: 302, location: "/ok")
+            route "/slow" -> delay(ms: 25)
+            route "/broken" -> disconnect()
+        clock clock:
+            start_ms: 10
+            tick_ms: 2
+        failure denied:
+            point: file.write
+            occurrence: 1
+            error: permission_denied
+    call model = app.open(files.path("input.txt"))
+    spawn request = app.fetch(service.url("/ok"))
+    tick
+    await request as reply
+    assert reply == "ok"
+    spawn stale = app.fetch(service.url("/slow"))
+    cancel stale
+    await stale cancelled
+"##;
+    let output = formatted(source);
+    assert_eq!(output, expected);
+    assert_eq!(formatted(&output), expected);
+}

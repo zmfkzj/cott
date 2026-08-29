@@ -9,6 +9,7 @@ pub mod code {
     pub const NAME: &str = "COTT-N001";
     pub const INCOMPATIBLE_NOMINAL_TYPES: &str = "COTT-T102";
     pub const CONTRACT: &str = "COTT-K001";
+    pub const SHADOW_SPECIFICATION: &str = "COTT-K101";
     pub const PYTHON: &str = "COTT-P001";
     pub const AGENT: &str = "COTT-A001";
     pub const FILESYSTEM: &str = "COTT-F001";
@@ -158,6 +159,12 @@ impl Diagnostic {
             related: Vec::new(),
             source_order: 0,
         }
+    }
+
+    pub fn warning(code: impl Into<String>, message: impl Into<String>, span: Span) -> Self {
+        let mut diagnostic = Self::error(code, message, span);
+        diagnostic.severity = Severity::Warning;
+        diagnostic
     }
 }
 

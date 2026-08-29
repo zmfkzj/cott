@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Final, ForwardRef, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable
 
-from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_normalize_f32, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_descending_by, _cott_ends_with, _cott_euclidean_mod, _cott_normalize_f32, _cott_starts_with, _cott_unique_by, _cott_validate_abi, _cott_validated_construction
 MAX_PAYLOAD_SIZE: Final[U32] = 8192
 
 @final
@@ -55,6 +55,14 @@ class InputPayload:
     declared_size: PayloadSize
     format: PayloadFormat
 
+    def __post_init__(self) -> None:
+        if not _cott_validated_construction():
+            object.__setattr__(self, "data", _cott_validate_abi(self.data, bytes, path="$.data"))
+        if not _cott_validated_construction():
+            object.__setattr__(self, "declared_size", _cott_validate_abi(self.declared_size, PayloadSize, path="$.declared_size"))
+        if not _cott_validated_construction():
+            object.__setattr__(self, "format", _cott_validate_abi(self.format, PayloadFormat, path="$.format"))
+
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class OutputPayload:
@@ -62,6 +70,14 @@ class OutputPayload:
     data: bytes
     source_size: PayloadSize
     format: PayloadFormat
+
+    def __post_init__(self) -> None:
+        if not _cott_validated_construction():
+            object.__setattr__(self, "data", _cott_validate_abi(self.data, bytes, path="$.data"))
+        if not _cott_validated_construction():
+            object.__setattr__(self, "source_size", _cott_validate_abi(self.source_size, PayloadSize, path="$.source_size"))
+        if not _cott_validated_construction():
+            object.__setattr__(self, "format", _cott_validate_abi(self.format, PayloadFormat, path="$.format"))
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -90,8 +106,15 @@ class BarOptions:
     threshold: Probability = _dataclasses.field(default_factory=lambda: _cott_default_BarOptions_threshold)
     use_cache: bool = False
 
-"""Reject empty payload bytes before any effectful processing."""
-"""Perform the effectful byte-processing step without changing payload bytes."""
+    def __post_init__(self) -> None:
+        if not _cott_validated_construction():
+            object.__setattr__(self, "threshold", _cott_validate_abi(self.threshold, Probability, path="$.threshold"))
+        if not _cott_validated_construction():
+            object.__setattr__(self, "use_cache", _cott_validate_abi(self.use_cache, bool, path="$.use_cache"))
+
+"""Reject empty payload bytes before pure processing."""
+"""Perform the pure byte-processing step without changing payload bytes."""
 """Construct output from processed bytes and the original payload metadata."""
-"""Validate, process, and construct output through the three direct helpers."""
+"""Compose validate_payload, process_payload_bytes, and build_output in that
+order, propagating validation and processing errors unchanged."""
 __all__ = ["BarError", "BarError_InvalidPayload", "BarError_ProcessingFailed", "BarError_ServiceUnavailable", "BarOptions", "InputPayload", "MAX_PAYLOAD_SIZE", "OutputPayload", "PayloadFormat", "PayloadFormat_Raw", "PayloadFormat_Structured", "PayloadFormat_Text", "PayloadSize", "Probability"]

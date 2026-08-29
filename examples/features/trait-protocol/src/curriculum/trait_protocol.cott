@@ -2,35 +2,28 @@ module curriculum.trait_protocol
 
 trait Summarizable:
     type Summary
-    fn summary(self) -> Summarizable.Summary
+    async fn summary(self) -> Summarizable.Summary
 
 trait Prioritizable:
-    fn priority_level(self) -> I32
+    async fn priority_level(self) -> I32
 
-trait TaskView for Summarizable + Prioritizable:
+trait TaskView[+T] for Summarizable + Prioritizable:
+    async fn display(self) -> T
+    async fn category(self) -> Str = curriculum.trait_protocol.default_category
 
 trait Completable:
-    fn complete(self) -> Bool
+    async fn complete(self) -> Bool
 
-fn format_summary[T: Summarizable](item: T) -> Str:
-    doc """
-    Format the summary string from any item implementing {Summarizable}.
-    """
-
-    ensures result.len >= 0
-
+async fn default_category[T](receiver: TaskView[T]) -> Str:
     effects []
 
-fn inspect_task[T: TaskView](item: T) -> Str:
-    doc """
-    Inspect an item implementing {TaskView}.
-    """
-
-    ensures result.len > 0
-
+async fn specialized_display(receiver: SimpleTask) -> Str:
     effects []
 
-fn inspect_dyn(item: Dyn[TaskView]) -> Str:
+fn task_factory() -> Factory[SimpleTask]:
+    effects []
+
+async fn inspect_dyn(item: Dyn[TaskView[Str]]) -> Str:
     effects []
 
 resource TaskLifecycle:
@@ -40,15 +33,20 @@ resource TaskLifecycle:
     terminal Completed
     transition Pending -> Completed
 
-impl SimpleTask for TaskView + Completable:
+specialize SimpleTask for TaskView[Str]:
+    display = curriculum.trait_protocol.specialized_display
+
+impl SimpleTask for TaskView[Str] + Completable:
     type Summary = Str
     state:
         title: Str
         urgency: I32
         lifecycle: TaskLifecycle
+        completion_count: I32 = 0
 
     invariant self.title.len > 0
     invariant self.urgency >= 0
+    invariant self.completion_count >= 0
 
     init(title: Str, urgency: I32):
         requires title.len > 0
@@ -57,17 +55,22 @@ impl SimpleTask for TaskView + Completable:
         ensures self.title == title
         ensures self.urgency == urgency
 
-    fn summary(self) -> Str:
+    async fn summary(self) -> Str:
         ensures result.len > 0
 
         effects []
 
-    fn priority_level(self) -> I32:
+    async fn priority_level(self) -> I32:
         ensures result == self.urgency
 
         effects []
 
-    fn complete(self) -> Bool:
+    async fn complete(self) -> Bool:
         transitions self.lifecycle: TaskLifecycle.Pending -> TaskLifecycle.Completed
 
+        modifies self.completion_count
+
         ensures result == true
+        ensures old(self.completion_count) + 1 == self.completion_count
+
+        effects []

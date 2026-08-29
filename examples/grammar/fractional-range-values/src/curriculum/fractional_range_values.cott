@@ -32,6 +32,8 @@ fn build_bounded_range(
     OutputLimitExceeded takes precedence.
     """
 
+    ensures Result.Ok(values) => values.len <= 10000
+
     error FractionalRangeError.NonFiniteInput
     error FractionalRangeError.StepDoesNotAdvance
     error FractionalRangeError.OutputLimitExceeded

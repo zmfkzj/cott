@@ -1,0 +1,15 @@
+module declarations.core
+
+alias Label = Str
+
+const LABEL_BYTES: U64 = 4
+
+newtype NonEmptyLabel(Label)
+    where self.len > 0
+
+struct LabelFrame[+T]:
+    label: NonEmptyLabel
+    value: T
+
+struct ByteBlock[const N: U64]:
+    raw: Buffer[N]

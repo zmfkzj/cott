@@ -81,6 +81,33 @@ impl Parser {
             }
         }
     }
+    fn string(&mut self, what: &str) -> Option<(String, Span)> {
+        match self.current().kind.clone() {
+            TokenKind::String(value) => {
+                let token = self.bump();
+                Some((value, token.span))
+            }
+            _ => {
+                self.error(format!("expected {what}"), self.span_here());
+                None
+            }
+        }
+    }
+    fn integer(&mut self, what: &str) -> Option<ScenarioInteger> {
+        match self.current().kind.clone() {
+            TokenKind::Integer(value) => {
+                let token = self.bump();
+                Some(ScenarioInteger {
+                    span: token.span,
+                    value,
+                })
+            }
+            _ => {
+                self.error(format!("expected {what}"), self.span_here());
+                None
+            }
+        }
+    }
     fn newline(&mut self) -> bool {
         if self.at(&TokenKind::Newline) {
             self.bump();
@@ -284,6 +311,15 @@ impl Parser {
                     Keyword::Override => "override",
                     Keyword::Delete => "delete",
                     Keyword::Remove => "remove",
+                    Keyword::Scenario => "scenario",
+                    Keyword::Call => "call",
+                    Keyword::Spawn => "spawn",
+                    Keyword::Await => "await",
+                    Keyword::Cancel => "cancel",
+                    Keyword::Tick => "tick",
+                    Keyword::Assert => "assert",
+                    Keyword::As => "as",
+                    Keyword::Cancelled => "cancelled",
                     Keyword::True => "true",
                     Keyword::False => "false",
                     Keyword::And => "and",
@@ -358,6 +394,9 @@ impl Parser {
             TokenKind::Keyword(Keyword::Rule) => {
                 Some(Declaration::Rule(self.parse_rule(annotations, doc)?))
             }
+            TokenKind::Keyword(Keyword::Scenario) => Some(Declaration::Scenario(
+                self.parse_scenario(annotations, doc)?,
+            )),
             TokenKind::Keyword(Keyword::Async) => {
                 if doc.is_some() {
                     self.error(
@@ -497,10 +536,22 @@ impl Parser {
         self.newline();
         self.expect(TokenKind::Indent, "expected indented struct fields")?;
         let mut fields = Vec::new();
+        let mut invariants = Vec::new();
+        let mut seen_invariant = false;
         self.skip_newlines();
         while !self.at(&TokenKind::Dedent) && !self.eof() {
-            if let Some(f) = self.parse_field() {
-                fields.push(f);
+            if self.at(&TokenKind::Keyword(Keyword::Invariant)) {
+                seen_invariant = true;
+                if let Some(invariant) = self.parse_struct_invariant() {
+                    invariants.push(invariant);
+                } else {
+                    self.recover_line();
+                }
+            } else if seen_invariant {
+                self.error("struct fields must precede invariants", self.span_here());
+                self.recover_line();
+            } else if let Some(field) = self.parse_field() {
+                fields.push(field);
             } else {
                 self.recover_line();
             }
@@ -514,7 +565,567 @@ impl Parser {
             name,
             generics,
             fields,
+            invariants,
         })
+    }
+    fn parse_struct_invariant(&mut self) -> Option<StructInvariant> {
+        let st = self.keyword(Keyword::Invariant)?.span;
+        let (guard, condition) = self.parse_guarded_condition(false)?;
+        let end = condition.span.clone();
+        self.newline();
+        Some(StructInvariant {
+            span: Self::join(st, end),
+            guard,
+            condition,
+        })
+    }
+
+    fn parse_scenario(
+        &mut self,
+        annotations: Vec<Annotation>,
+        doc: Option<DocBlock>,
+    ) -> Option<Scenario> {
+        let st = self.keyword(Keyword::Scenario)?.span;
+        let (name, _) = self.name("scenario name")?;
+        let target = if self.at(&TokenKind::Keyword(Keyword::For)) {
+            self.bump();
+            Some(self.parse_qname()?)
+        } else {
+            None
+        };
+        self.expect(TokenKind::Colon, "expected `:` after scenario")?;
+        self.newline();
+        self.expect(TokenKind::Indent, "expected indented scenario body")?;
+        self.skip_newlines();
+        let fixtures = if matches!(&self.current().kind, TokenKind::Name(value) if value == "fixtures")
+        {
+            self.parse_scenario_fixtures()?
+        } else {
+            Vec::new()
+        };
+        self.skip_newlines();
+        let mut steps = Vec::new();
+        while !self.at(&TokenKind::Dedent) && !self.eof() {
+            if let Some(step) = self.parse_scenario_step() {
+                steps.push(step);
+            } else {
+                self.recover_line();
+            }
+            self.skip_newlines();
+        }
+        if steps.is_empty() {
+            self.error("scenario requires at least one step", self.span_here());
+        }
+        let end = self
+            .expect(TokenKind::Dedent, "expected end of scenario body")?
+            .span;
+        Some(Scenario {
+            span: Self::join(st, end),
+            annotations,
+            doc,
+            name,
+            target,
+            fixtures,
+            steps,
+        })
+    }
+
+    fn parse_scenario_fixtures(&mut self) -> Option<Vec<ScenarioFixture>> {
+        self.name("`fixtures`")?;
+        self.expect(TokenKind::Colon, "expected `:` after fixtures")?;
+        self.newline();
+        self.expect(TokenKind::Indent, "expected indented fixtures")?;
+        self.skip_newlines();
+        let mut fixtures = Vec::new();
+        while !self.at(&TokenKind::Dedent) && !self.eof() {
+            if let Some(fixture) = self.parse_scenario_fixture() {
+                fixtures.push(fixture);
+            } else {
+                self.recover_line();
+            }
+            self.skip_newlines();
+        }
+        self.expect(TokenKind::Dedent, "expected end of fixtures")?;
+        Some(fixtures)
+    }
+
+    fn parse_scenario_fixture(&mut self) -> Option<ScenarioFixture> {
+        let (kind, start) = self.name("fixture kind")?;
+        let (name, _) = self.name("fixture name")?;
+        self.expect(TokenKind::Colon, "expected `:` after fixture name")?;
+        self.newline();
+        self.expect(TokenKind::Indent, "expected indented fixture configuration")?;
+        self.skip_newlines();
+        let config = match kind.as_str() {
+            "fs" => self.parse_scenario_filesystem(start.clone())?,
+            "http" => self.parse_scenario_http(start.clone())?,
+            "clock" => self.parse_scenario_clock(start.clone())?,
+            "failure" => self.parse_scenario_failure(start.clone())?,
+            _ => {
+                self.error("unknown scenario fixture kind", start);
+                self.recover_line();
+                return None;
+            }
+        };
+        let end = self
+            .expect(TokenKind::Dedent, "expected end of fixture configuration")?
+            .span;
+        Some(ScenarioFixture {
+            span: Self::join(start, end),
+            name,
+            config,
+        })
+    }
+
+    fn parse_scenario_filesystem(&mut self, span: Span) -> Option<ScenarioFixtureConfig> {
+        let mut files = Vec::new();
+        while !self.at(&TokenKind::Dedent) && !self.eof() {
+            let st = self.span_here();
+            let (keyword, _) = self.name("`file`")?;
+            if keyword != "file" {
+                self.error("expected `file` in filesystem fixture", st);
+                return None;
+            }
+            let (path, path_span) = self.string("filesystem path")?;
+            if !normalized_relative_path(&path) {
+                self.error(
+                    "fixture path must be normalized relative UTF-8 without symlinks",
+                    path_span,
+                );
+            }
+            let contents = self.parse_scenario_data()?;
+            let end = contents.span.clone();
+            self.newline();
+            files.push(ScenarioFile {
+                span: Self::join(st, end),
+                path,
+                contents,
+            });
+            self.skip_newlines();
+        }
+        Some(ScenarioFixtureConfig::Filesystem { span, files })
+    }
+
+    fn parse_scenario_http(&mut self, span: Span) -> Option<ScenarioFixtureConfig> {
+        let mut routes = Vec::new();
+        while !self.at(&TokenKind::Dedent) && !self.eof() {
+            let st = self.span_here();
+            let (keyword, _) = self.name("`route`")?;
+            if keyword != "route" {
+                self.error("expected `route` in http fixture", st);
+                return None;
+            }
+            let (path, path_span) = self.string("route path")?;
+            if !normalized_route_path(&path) {
+                self.error("http route must be a normalized relative path", path_span);
+            }
+            self.expect(TokenKind::Arrow, "expected `->` after route path")?;
+            let outcome = self.parse_scenario_http_outcome()?;
+            let end = outcome_span(&outcome);
+            self.newline();
+            routes.push(ScenarioHttpRoute {
+                span: Self::join(st, end),
+                path,
+                outcome,
+            });
+            self.skip_newlines();
+        }
+        Some(ScenarioFixtureConfig::Http { span, routes })
+    }
+
+    fn parse_scenario_clock(&mut self, span: Span) -> Option<ScenarioFixtureConfig> {
+        let start_ms = self.parse_scenario_integer_field("start_ms")?;
+        let tick_ms = self.parse_scenario_integer_field("tick_ms")?;
+        Some(ScenarioFixtureConfig::Clock {
+            span,
+            start_ms,
+            tick_ms,
+        })
+    }
+
+    fn parse_scenario_failure(&mut self, span: Span) -> Option<ScenarioFixtureConfig> {
+        let (point_name, point_span) = self.parse_scenario_qname_field("point")?;
+        let point_kind = match point_name.segments.as_slice() {
+            [file, operation] if file == "file" => match operation.as_str() {
+                "open" => ScenarioFailurePointKind::FileOpen,
+                "read" => ScenarioFailurePointKind::FileRead,
+                "write" => ScenarioFailurePointKind::FileWrite,
+                "flush" => ScenarioFailurePointKind::FileFlush,
+                "replace" => ScenarioFailurePointKind::FileReplace,
+                _ => {
+                    self.error("unknown failure point", point_span);
+                    return None;
+                }
+            },
+            [http, operation] if http == "http" => match operation.as_str() {
+                "connect" => ScenarioFailurePointKind::HttpConnect,
+                "read" => ScenarioFailurePointKind::HttpRead,
+                _ => {
+                    self.error("unknown failure point", point_span);
+                    return None;
+                }
+            },
+            [clock, operation] if clock == "clock" && operation == "read" => {
+                ScenarioFailurePointKind::ClockRead
+            }
+            _ => {
+                self.error("unknown failure point", point_span);
+                return None;
+            }
+        };
+        let point = ScenarioFailurePoint {
+            span: point_span,
+            kind: point_kind,
+        };
+        let occurrence = self.parse_scenario_integer_field("occurrence")?;
+        let (error_name, error_span) = self.parse_scenario_name_field("error")?;
+        let error_kind = match error_name.as_str() {
+            "permission_denied" => ScenarioFailureErrorKind::PermissionDenied,
+            "not_found" => ScenarioFailureErrorKind::NotFound,
+            "disk_full" => ScenarioFailureErrorKind::DiskFull,
+            "timeout" => ScenarioFailureErrorKind::Timeout,
+            "connection_reset" => ScenarioFailureErrorKind::ConnectionReset,
+            _ => {
+                self.error("unknown failure error", error_span);
+                return None;
+            }
+        };
+        let error = ScenarioFailureError {
+            span: error_span,
+            kind: error_kind,
+        };
+        Some(ScenarioFixtureConfig::Failure {
+            span,
+            point,
+            occurrence,
+            error,
+        })
+    }
+
+    fn parse_scenario_http_outcome(&mut self) -> Option<ScenarioHttpOutcome> {
+        let (kind, st) = self.name("http outcome")?;
+        self.expect(TokenKind::LParen, "expected `(` after http outcome")?;
+        let outcome = match kind.as_str() {
+            "response" => {
+                let status = self.parse_scenario_integer_argument("status")?;
+                self.expect(TokenKind::Comma, "expected `,` after response status")?;
+                let body = self.parse_scenario_data_argument("body")?;
+                self.expect(TokenKind::Comma, "expected `,` after response body")?;
+                let encoding = self.parse_scenario_string_argument("encoding")?;
+                let end = self
+                    .expect(TokenKind::RParen, "expected `)` after response")?
+                    .span;
+                ScenarioHttpOutcome::Response {
+                    span: Self::join(st, end),
+                    status,
+                    body,
+                    encoding,
+                }
+            }
+            "redirect" => {
+                let status = self.parse_scenario_integer_argument("status")?;
+                self.expect(TokenKind::Comma, "expected `,` after redirect status")?;
+                let (location, location_span) =
+                    self.parse_scenario_string_argument_span("location")?;
+                if !normalized_route_path(&location) {
+                    self.error(
+                        "redirect location must be relative to compiler-owned endpoint",
+                        location_span,
+                    );
+                }
+                let end = self
+                    .expect(TokenKind::RParen, "expected `)` after redirect")?
+                    .span;
+                ScenarioHttpOutcome::Redirect {
+                    span: Self::join(st, end),
+                    status,
+                    location,
+                }
+            }
+            "delay" => {
+                let milliseconds = self.parse_scenario_integer_argument("ms")?;
+                let end = self
+                    .expect(TokenKind::RParen, "expected `)` after delay")?
+                    .span;
+                ScenarioHttpOutcome::Delay {
+                    span: Self::join(st, end),
+                    milliseconds,
+                }
+            }
+            "disconnect" => {
+                let end = self
+                    .expect(TokenKind::RParen, "expected `)` after disconnect")?
+                    .span;
+                ScenarioHttpOutcome::Disconnect {
+                    span: Self::join(st, end),
+                }
+            }
+            _ => {
+                self.error("unknown http route outcome", st);
+                return None;
+            }
+        };
+        Some(outcome)
+    }
+
+    fn parse_scenario_step(&mut self) -> Option<ScenarioStep> {
+        match self.current().kind.clone() {
+            TokenKind::Keyword(Keyword::Call) => {
+                let st = self.bump().span;
+                let (name, span) = self.name("call result binding")?;
+                self.expect(TokenKind::Equal, "expected `=` after call result binding")?;
+                let (target, arguments, end) = self.parse_scenario_invocation()?;
+                self.newline();
+                Some(ScenarioStep::Call {
+                    span: Self::join(st, end),
+                    binding: ScenarioBinding { span, name },
+                    target,
+                    arguments,
+                })
+            }
+            TokenKind::Keyword(Keyword::Spawn) => {
+                let st = self.bump().span;
+                let (name, span) = self.name("worker binding")?;
+                self.expect(TokenKind::Equal, "expected `=` after worker binding")?;
+                let (target, arguments, end) = self.parse_scenario_invocation()?;
+                self.newline();
+                Some(ScenarioStep::Spawn {
+                    span: Self::join(st, end),
+                    worker: ScenarioWorker { span, name },
+                    target,
+                    arguments,
+                })
+            }
+            TokenKind::Keyword(Keyword::Await) => {
+                let st = self.bump().span;
+                let (name, span) = self.name("worker name")?;
+                let worker = ScenarioWorkerRef { span, name };
+                let outcome = if self.at(&TokenKind::Keyword(Keyword::As)) {
+                    self.bump();
+                    let (name, span) = self.name("await result binding")?;
+                    ScenarioAwaitOutcome::Value(ScenarioBinding { span, name })
+                } else if self.at(&TokenKind::Keyword(Keyword::Cancelled)) {
+                    ScenarioAwaitOutcome::Cancelled {
+                        span: self.bump().span,
+                    }
+                } else {
+                    self.error(
+                        "expected `as` or `cancelled` after worker",
+                        self.span_here(),
+                    );
+                    return None;
+                };
+                let end = match &outcome {
+                    ScenarioAwaitOutcome::Value(binding) => binding.span.clone(),
+                    ScenarioAwaitOutcome::Cancelled { span } => span.clone(),
+                };
+                self.newline();
+                Some(ScenarioStep::Await {
+                    span: Self::join(st, end),
+                    worker,
+                    outcome,
+                })
+            }
+            TokenKind::Keyword(Keyword::Cancel) => {
+                let st = self.bump().span;
+                let (name, span) = self.name("worker name")?;
+                self.newline();
+                Some(ScenarioStep::Cancel {
+                    span: Self::join(st, span.clone()),
+                    worker: ScenarioWorkerRef { span, name },
+                })
+            }
+            TokenKind::Keyword(Keyword::Tick) => {
+                let span = self.bump().span;
+                self.newline();
+                Some(ScenarioStep::Tick { span })
+            }
+            TokenKind::Keyword(Keyword::Assert) => {
+                let st = self.bump().span;
+                let expression = self.parse_expr()?;
+                let end = expression.span.clone();
+                self.newline();
+                Some(ScenarioStep::Assert {
+                    span: Self::join(st, end),
+                    expression,
+                })
+            }
+            _ => {
+                self.error("expected scenario step", self.span_here());
+                None
+            }
+        }
+    }
+
+    fn parse_scenario_invocation(&mut self) -> Option<(QualifiedName, Vec<Expr>, Span)> {
+        let target = self.parse_qname()?;
+        self.expect(
+            TokenKind::LParen,
+            "expected `(` after scenario facade target",
+        )?;
+        let mut arguments = Vec::new();
+        if !self.at(&TokenKind::RParen) {
+            loop {
+                arguments.push(self.parse_scenario_value()?);
+                if self.at(&TokenKind::Comma) {
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+        }
+        let end = self
+            .expect(
+                TokenKind::RParen,
+                "expected `)` after scenario call arguments",
+            )?
+            .span;
+        Some((target, arguments, end))
+    }
+
+    fn parse_scenario_value(&mut self) -> Option<Expr> {
+        let save = self.pos;
+        if let TokenKind::Name(fixture) = self.current().kind.clone() {
+            let fixture_span = self.bump().span;
+            if self.at(&TokenKind::Dot) {
+                self.bump();
+                if let Some((accessor, _)) = self.name("fixture accessor") {
+                    if (accessor == "path" || accessor == "url") && self.at(&TokenKind::LParen) {
+                        self.bump();
+                        let (path, path_span) = self.string("fixture path")?;
+                        let end = self
+                            .expect(TokenKind::RParen, "expected `)` after fixture reference")?
+                            .span;
+                        let span = Self::join(fixture_span, end);
+                        if accessor == "path" {
+                            if !normalized_relative_path(&path) {
+                                self.error(
+                                    "fixture path must be normalized relative UTF-8 without symlinks",
+                                    path_span,
+                                );
+                            }
+                            return Some(Expr {
+                                span,
+                                kind: ExprKind::FixturePath { fixture, path },
+                            });
+                        }
+                        if !normalized_route_path(&path) {
+                            self.error(
+                                "fixture url must be relative to compiler-owned endpoint",
+                                path_span,
+                            );
+                        }
+                        return Some(Expr {
+                            span,
+                            kind: ExprKind::FixtureUrl { fixture, path },
+                        });
+                    }
+                }
+            }
+        }
+        self.pos = save;
+        self.parse_expr()
+    }
+
+    fn parse_scenario_data(&mut self) -> Option<ScenarioData> {
+        let (kind, st) = self.name("fixture data literal")?;
+        self.expect(TokenKind::LParen, "expected `(` after fixture data kind")?;
+        let (value, _) = self.string("fixture data")?;
+        let end = self
+            .expect(TokenKind::RParen, "expected `)` after fixture data")?
+            .span;
+        let kind = match kind.as_str() {
+            "text" => ScenarioDataKind::Text(value),
+            "bytes" => ScenarioDataKind::Bytes(value),
+            "hex" => ScenarioDataKind::Hex(value),
+            _ => {
+                self.error(
+                    "fixture data must be text(...), bytes(...), or hex(...)",
+                    st,
+                );
+                return None;
+            }
+        };
+        if let ScenarioDataKind::Hex(value) = &kind {
+            if value.len() % 2 != 0 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                self.error(
+                    "fixture hex data must contain an even number of hex digits",
+                    st.clone(),
+                );
+            }
+        }
+        Some(ScenarioData {
+            span: Self::join(st, end),
+            kind,
+        })
+    }
+
+    fn parse_scenario_integer_field(&mut self, expected: &str) -> Option<ScenarioInteger> {
+        self.parse_scenario_field_name(expected)?;
+        let integer = self.integer("fixture integer")?;
+        self.newline();
+        Some(integer)
+    }
+
+    fn parse_scenario_qname_field(&mut self, expected: &str) -> Option<(QualifiedName, Span)> {
+        self.parse_scenario_field_name(expected)?;
+        let value = self.parse_qname()?;
+        let span = value.span.clone();
+        self.newline();
+        Some((value, span))
+    }
+
+    fn parse_scenario_name_field(&mut self, expected: &str) -> Option<(String, Span)> {
+        self.parse_scenario_field_name(expected)?;
+        let value = self.name(expected)?;
+        self.newline();
+        Some(value)
+    }
+
+    fn parse_scenario_field_name(&mut self, expected: &str) -> Option<()> {
+        let (name, span) = match self.current().kind.clone() {
+            TokenKind::Name(name) => {
+                let token = self.bump();
+                (name, token.span)
+            }
+            TokenKind::Keyword(Keyword::Error) if expected == "error" => {
+                let token = self.bump();
+                ("error".to_owned(), token.span)
+            }
+            _ => {
+                self.error(
+                    format!("expected `{expected}` fixture field"),
+                    self.span_here(),
+                );
+                return None;
+            }
+        };
+        if name != expected {
+            self.error(format!("expected `{expected}` fixture field"), span);
+            return None;
+        }
+        self.expect(TokenKind::Colon, "expected `:` after fixture field")?;
+        Some(())
+    }
+
+    fn parse_scenario_integer_argument(&mut self, expected: &str) -> Option<ScenarioInteger> {
+        self.parse_scenario_field_name(expected)?;
+        self.integer("fixture integer")
+    }
+
+    fn parse_scenario_data_argument(&mut self, expected: &str) -> Option<ScenarioData> {
+        self.parse_scenario_field_name(expected)?;
+        self.parse_scenario_data()
+    }
+
+    fn parse_scenario_string_argument(&mut self, expected: &str) -> Option<String> {
+        self.parse_scenario_string_argument_span(expected)
+            .map(|(value, _)| value)
+    }
+
+    fn parse_scenario_string_argument_span(&mut self, expected: &str) -> Option<(String, Span)> {
+        self.parse_scenario_field_name(expected)?;
+        self.string(expected)
     }
     fn parse_enum(
         &mut self,
@@ -2327,7 +2938,42 @@ impl Parser {
             TokenKind::Name(n) => {
                 let t = self.bump();
                 let q = self.parse_qname_after(n, t.span.clone());
-                if q.segments.last().map(|s| s == "len").unwrap_or(false) && q.segments.len() > 1 {
+                if self.at(&TokenKind::LParen) {
+                    let Some(kind) = intrinsic(&q) else {
+                        self.error(
+                            "function calls are limited to closed invariant intrinsics",
+                            q.span.clone(),
+                        );
+                        return None;
+                    };
+                    self.bump();
+                    let mut arguments = Vec::new();
+                    if !self.at(&TokenKind::RParen) {
+                        loop {
+                            arguments.push(self.parse_expr()?);
+                            if self.at(&TokenKind::Comma) {
+                                self.bump();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    let end = self
+                        .expect(TokenKind::RParen, "expected `)` after intrinsic arguments")?
+                        .span;
+                    if arguments.len() != 2 {
+                        self.error(
+                            "closed invariant intrinsics require exactly two arguments",
+                            q.span.clone(),
+                        );
+                    }
+                    Expr {
+                        span: Self::join(q.span, end),
+                        kind: ExprKind::Intrinsic { kind, arguments },
+                    }
+                } else if q.segments.last().map(|s| s == "len").unwrap_or(false)
+                    && q.segments.len() > 1
+                {
                     let base_q = QualifiedName::new(
                         Span {
                             start: q.span.start,
@@ -2396,4 +3042,45 @@ fn normalize_doc(raw: &str) -> String {
         .map(|s| s.get(indent.min(s.len())..).unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn normalized_relative_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+fn normalized_route_path(path: &str) -> bool {
+    path.starts_with('/')
+        && !path.starts_with("//")
+        && !path.contains('\\')
+        && path[1..]
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+fn outcome_span(outcome: &ScenarioHttpOutcome) -> Span {
+    match outcome {
+        ScenarioHttpOutcome::Response { span, .. }
+        | ScenarioHttpOutcome::Redirect { span, .. }
+        | ScenarioHttpOutcome::Delay { span, .. }
+        | ScenarioHttpOutcome::Disconnect { span } => span.clone(),
+    }
+}
+
+fn intrinsic(name: &QualifiedName) -> Option<Intrinsic> {
+    match name.segments.as_slice() {
+        [name] => Some(match name.as_str() {
+            "starts_with" => Intrinsic::StartsWith,
+            "ends_with" => Intrinsic::EndsWith,
+            "contains" => Intrinsic::Contains,
+            "unique_by" => Intrinsic::UniqueBy,
+            "descending_by" => Intrinsic::DescendingBy,
+            _ => return None,
+        }),
+        _ => None,
+    }
 }

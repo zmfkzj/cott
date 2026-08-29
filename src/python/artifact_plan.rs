@@ -359,6 +359,7 @@ impl PythonArtifactPlan {
                                 })
                                 .collect()
                         }
+                        "scenario" => Vec::new(),
                         _ => Vec::new(),
                     })
                     .collect::<Vec<_>>()
@@ -366,7 +367,8 @@ impl PythonArtifactPlan {
             .collect()
     }
 
-    /// Return a plan containing only public declarations.
+    /// Return public declarations plus scenarios, which affect contract identity
+    /// without becoming a Python ABI symbol.
     pub fn public_projection(&self) -> Self {
         Self {
             modules: self
@@ -377,7 +379,7 @@ impl PythonArtifactPlan {
                         .declarations
                         .iter()
                         .zip(&module.declaration_info)
-                        .filter(|(_, info)| info.public)
+                        .filter(|(_, info)| info.public || info.kind == "scenario")
                         .map(|(declaration, info)| (declaration.clone(), info.clone()))
                         .collect::<Vec<_>>();
                     PythonArtifactModule {

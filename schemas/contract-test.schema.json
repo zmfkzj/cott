@@ -1,22 +1,175 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cott.dev/schema/contract-test/v3",
-  "title": "cott contract test strategy",
+  "$id": "https://cott.dev/schema/contract-test/v5",
+  "title": "cott contract test strategy v5",
   "type": "object",
-  "required": ["schema_version", "symbol", "seed", "candidate_limit", "node_limit", "container_length_limit", "json_depth_limit", "lifecycle_limit", "callable_kind", "return_kind", "classification", "clause_ids"],
+  "required": ["schema_version", "symbol", "seed", "proof_node_limit", "proof_branch_limit", "candidate_limit", "node_limit", "container_length_limit", "json_depth_limit", "lifecycle_limit", "callable_kind", "return_kind", "classification", "clause_ids", "obligations", "scenario"],
   "additionalProperties": false,
   "properties": {
-    "schema_version": {"const": 3},
+    "schema_version": {"const": 5},
     "symbol": {"type": "string"},
     "seed": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-    "candidate_limit": {"const": 64},
+    "proof_node_limit": {"type": "integer", "minimum": 1, "maximum": 16384},
+    "proof_branch_limit": {"type": "integer", "minimum": 1, "maximum": 4096},
+    "candidate_limit": {"type": "integer", "minimum": 1, "maximum": 1024},
     "node_limit": {"const": 64},
     "container_length_limit": {"const": 3},
     "json_depth_limit": {"const": 4},
-    "lifecycle_limit": {"const": 3},
+    "lifecycle_limit": {"type": "integer", "minimum": 1, "maximum": 64},
     "callable_kind": {"enum": ["sync", "async"]},
     "return_kind": {"enum": ["value", "async_iterator", "async_generator"]},
     "classification": {"enum": ["pure", "effectful", "never"]},
-    "clause_ids": {"type": "array", "items": {"type": "string"}}
+    "clause_ids": {"type": "array", "items": {"type": "string"}},
+    "obligations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["clause_id", "role"],
+        "additionalProperties": false,
+        "properties": {
+          "clause_id": {"type": "string", "pattern": "^(ensures|error):[0-9]+$"},
+          "role": {"enum": ["success", "conditional_error"]}
+        }
+      }
+    },
+    "scenario": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/scenario"}]}
+  },
+  "$defs": {
+    "span": {
+      "type": "object",
+      "required": ["start_byte", "end_byte", "start_line", "start_column", "end_line", "end_column"],
+      "additionalProperties": false,
+      "properties": {
+        "start_byte": {"type": "integer", "minimum": 0},
+        "end_byte": {"type": "integer", "minimum": 0},
+        "start_line": {"type": "integer", "minimum": 1},
+        "start_column": {"type": "integer", "minimum": 1},
+        "end_line": {"type": "integer", "minimum": 1},
+        "end_column": {"type": "integer", "minimum": 1}
+      }
+    },
+    "data": {
+      "type": "object",
+      "required": ["kind", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["text", "bytes"]},
+        "value": {"type": "string"}
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["response", "redirect", "delay", "disconnect"]},
+        "body": {"$ref": "#/$defs/data"},
+        "encoding": {"enum": ["utf-8", "utf8", "ascii", "latin-1"]},
+        "status": {"type": "integer", "minimum": 100, "maximum": 599},
+        "location": {"type": "string", "pattern": "^/[A-Za-z0-9._/-]*$"},
+        "milliseconds": {"type": "integer", "minimum": 0}
+      }
+    },
+    "file": {
+      "type": "object",
+      "required": ["data", "path", "source_order", "span"],
+      "additionalProperties": false,
+      "properties": {
+        "data": {"$ref": "#/$defs/data"},
+        "path": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"},
+        "source_order": {"type": "integer", "minimum": 0},
+        "span": {"$ref": "#/$defs/span"}
+      }
+    },
+    "route": {
+      "type": "object",
+      "required": ["outcome", "path", "source_order", "span"],
+      "additionalProperties": false,
+      "properties": {
+        "outcome": {"$ref": "#/$defs/outcome"},
+        "path": {"type": "string", "pattern": "^/[A-Za-z0-9._/-]*$"},
+        "source_order": {"type": "integer", "minimum": 0},
+        "span": {"$ref": "#/$defs/span"}
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "required": ["id", "kind", "source_order", "span"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"enum": ["fs", "http", "clock", "failure"]},
+        "source_order": {"type": "integer", "minimum": 0},
+        "span": {"$ref": "#/$defs/span"},
+        "files": {"type": "array", "items": {"$ref": "#/$defs/file"}},
+        "routes": {"type": "array", "items": {"$ref": "#/$defs/route"}},
+        "start_ms": {"type": "integer", "minimum": 0},
+        "tick_ms": {"type": "integer", "minimum": 0},
+        "point": {"enum": ["file.open", "file.read", "file.write", "file.flush", "file.replace", "http.connect", "http.read", "clock.read"]},
+        "occurrence": {"type": "integer", "minimum": 1},
+        "error": {"enum": ["permission_denied", "not_found", "disk_full", "timeout", "connection_reset"]}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "fs"}}, "required": ["kind"]}, "then": {"required": ["files"]}},
+        {"if": {"properties": {"kind": {"const": "http"}}, "required": ["kind"]}, "then": {"required": ["routes"]}},
+        {"if": {"properties": {"kind": {"const": "clock"}}, "required": ["kind"]}, "then": {"required": ["start_ms", "tick_ms"]}},
+        {"if": {"properties": {"kind": {"const": "failure"}}, "required": ["kind"]}, "then": {"required": ["point", "occurrence", "error"]}}
+      ]
+    },
+    "expression": {"type": "object", "required": ["kind", "reference", "span", "type"]},
+    "step": {
+      "type": "object",
+      "required": ["kind", "step_id", "span"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["call", "spawn", "await", "cancel", "tick", "assert"]},
+        "step_id": {"type": "integer", "minimum": 0, "maximum": 63},
+        "span": {"$ref": "#/$defs/span"},
+        "arguments": {"type": "array", "items": {"$ref": "#/$defs/expression"}},
+        "binding": {"type": "string"},
+        "callable_kind": {"enum": ["sync", "async"]},
+        "parameters": {"type": "array", "items": {"type": "object"}},
+        "return_type": {"type": "object"},
+        "target": {"type": "string"},
+        "worker": {"type": "string"},
+        "result": {"oneOf": [{"type": "null"}, {"type": "string"}]},
+        "cancelled": {"type": "boolean"},
+        "expression": {"$ref": "#/$defs/expression"}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "call"}}, "required": ["kind"]}, "then": {"required": ["arguments", "binding", "callable_kind", "parameters", "return_type", "target"]}},
+        {"if": {"properties": {"kind": {"const": "spawn"}}, "required": ["kind"]}, "then": {"required": ["arguments", "parameters", "return_type", "target", "worker"]}},
+        {"if": {"properties": {"kind": {"const": "await"}}, "required": ["kind"]}, "then": {"required": ["cancelled", "result", "return_type", "worker"]}},
+        {"if": {"properties": {"kind": {"const": "cancel"}}, "required": ["kind"]}, "then": {"required": ["worker"]}},
+        {"if": {"properties": {"kind": {"const": "assert"}}, "required": ["kind"]}, "then": {"required": ["expression"]}}
+      ]
+    },
+    "limits": {
+      "type": "object",
+      "required": ["scenario_timeout_ms", "filesystem_bytes", "filesystem_files", "http_body_bytes", "http_requests", "http_redirects", "transcript_events"],
+      "additionalProperties": false,
+      "properties": {
+        "scenario_timeout_ms": {"type": "integer", "minimum": 1, "maximum": 60000},
+        "filesystem_bytes": {"type": "integer", "minimum": 1, "maximum": 268435456},
+        "filesystem_files": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "http_body_bytes": {"type": "integer", "minimum": 1, "maximum": 16777216},
+        "http_requests": {"type": "integer", "minimum": 1, "maximum": 1024},
+        "http_redirects": {"type": "integer", "minimum": 1, "maximum": 64},
+        "transcript_events": {"type": "integer", "minimum": 1, "maximum": 16384}
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "required": ["id", "required_effects", "fixtures", "steps", "lifecycle_limit", "limits"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "required_effects": {"type": "array", "items": {"type": "string"}},
+        "fixtures": {"type": "array", "items": {"$ref": "#/$defs/fixture"}},
+        "steps": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/step"}},
+        "lifecycle_limit": {"type": "integer", "minimum": 1, "maximum": 64},
+        "limits": {"$ref": "#/$defs/limits"}
+      }
+    }
   }
 }

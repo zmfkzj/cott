@@ -292,6 +292,18 @@ pub struct HirEffect {
     pub source_order: usize,
 }
 
+/// A compact, stable view of the formal facts exposed by a callable.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirFormalFacet {
+    pub symbol: SymbolId,
+    pub return_type: HirType,
+    pub limits: Vec<u32>,
+    pub errors: Vec<u32>,
+    pub atomic: bool,
+    pub cleanup: bool,
+    pub doc_spans: Vec<Span>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HirClause {
     pub clause_id: u32,
@@ -376,6 +388,14 @@ pub struct HirNewtype {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirStructInvariant {
+    pub clause_id: u32,
+    pub span: Span,
+    pub guard: Option<HirMatchGuard>,
+    pub expression: HirExpr,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HirStruct {
     pub id: SymbolId,
     pub span: Span,
@@ -383,6 +403,7 @@ pub struct HirStruct {
     pub doc: Option<HirDoc>,
     pub generics: Vec<HirGenericParam>,
     pub fields: Vec<HirField>,
+    pub invariants: Vec<HirStructInvariant>,
     pub public: bool,
     pub source_order: usize,
 }
@@ -667,6 +688,151 @@ pub struct HirFunction {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirScenarioFixture {
+    pub id: SymbolId,
+    pub span: Span,
+    pub source_order: usize,
+    pub kind: HirScenarioFixtureKind,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HirScenarioFixtureKind {
+    Filesystem {
+        files: Vec<HirScenarioFile>,
+    },
+    Http {
+        routes: Vec<HirScenarioHttpRoute>,
+    },
+    Clock {
+        start_ms: u64,
+        tick_ms: u64,
+    },
+    Failure {
+        point: HirScenarioFailurePoint,
+        occurrence: u64,
+        error: HirScenarioFailureError,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirScenarioFile {
+    pub span: Span,
+    pub path: String,
+    pub data: HirScenarioData,
+    pub source_order: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirScenarioHttpRoute {
+    pub span: Span,
+    pub path: String,
+    pub outcome: HirScenarioHttpOutcome,
+    pub source_order: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HirScenarioHttpOutcome {
+    Response {
+        status: u16,
+        body: HirScenarioData,
+        encoding: String,
+    },
+    Redirect {
+        status: u16,
+        location: String,
+    },
+    Delay {
+        milliseconds: u64,
+    },
+    Disconnect,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HirScenarioData {
+    Text(String),
+    Bytes(Vec<u8>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HirScenarioFailurePoint {
+    FileOpen,
+    FileRead,
+    FileWrite,
+    FileFlush,
+    FileReplace,
+    HttpConnect,
+    HttpRead,
+    ClockRead,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HirScenarioFailureError {
+    PermissionDenied,
+    NotFound,
+    DiskFull,
+    Timeout,
+    ConnectionReset,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirScenario {
+    pub id: SymbolId,
+    pub span: Span,
+    pub doc: Option<HirDoc>,
+    pub target: Option<SymbolId>,
+    pub fixtures: Vec<HirScenarioFixture>,
+    pub steps: Vec<HirScenarioStep>,
+    pub required_effects: Vec<HirEffect>,
+    pub lifecycle_limit: u32,
+    pub source_order: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HirScenarioStep {
+    Call {
+        step_id: u32,
+        span: Span,
+        binding: SymbolId,
+        target: SymbolId,
+        callable_kind: HirCallableKind,
+        parameters: Vec<HirType>,
+        return_type: HirType,
+        arguments: Vec<HirExpr>,
+    },
+    Spawn {
+        step_id: u32,
+        span: Span,
+        worker: SymbolId,
+        target: SymbolId,
+        parameters: Vec<HirType>,
+        return_type: HirType,
+        arguments: Vec<HirExpr>,
+    },
+    Await {
+        step_id: u32,
+        span: Span,
+        worker: SymbolId,
+        result: Option<SymbolId>,
+        return_type: HirType,
+        cancelled: bool,
+    },
+    Cancel {
+        step_id: u32,
+        span: Span,
+        worker: SymbolId,
+    },
+    Tick {
+        step_id: u32,
+        span: Span,
+    },
+    Assert {
+        step_id: u32,
+        span: Span,
+        expression: HirExpr,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HirDeclaration {
     ExternalType(HirExternalType),
     Alias(HirAlias),
@@ -680,6 +846,7 @@ pub enum HirDeclaration {
     Const(HirConst),
     Resource(HirResource),
     Function(HirFunction),
+    Scenario(HirScenario),
 }
 
 impl HirDeclaration {
@@ -697,6 +864,7 @@ impl HirDeclaration {
             Self::Const(value) => &value.id,
             Self::Resource(value) => &value.id,
             Self::Function(value) => &value.id,
+            Self::Scenario(value) => &value.id,
         }
     }
 
@@ -714,6 +882,7 @@ impl HirDeclaration {
             Self::Const(value) => &value.span,
             Self::Resource(value) => &value.span,
             Self::Function(value) => &value.span,
+            Self::Scenario(value) => &value.span,
         }
     }
 
@@ -731,6 +900,7 @@ impl HirDeclaration {
             Self::Const(value) => value.public,
             Self::Resource(value) => value.public,
             Self::Function(value) => value.public,
+            Self::Scenario(_) => false,
         }
     }
 }
@@ -909,6 +1079,21 @@ pub enum HirCompareOp {
     GreaterEqual,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HirIntrinsic {
+    StartsWith,
+    EndsWith,
+    Contains,
+    UniqueBy,
+    DescendingBy,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HirFieldSelector {
+    pub owner: SymbolId,
+    pub field: SymbolId,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HirExpr {
     pub span: Span,
@@ -935,6 +1120,19 @@ pub enum HirExprKind {
     },
     Len {
         value: Box<HirExpr>,
+    },
+    Intrinsic {
+        intrinsic: HirIntrinsic,
+        arguments: Vec<HirExpr>,
+        selector: Option<HirFieldSelector>,
+    },
+    FixturePath {
+        fixture: SymbolId,
+        path: String,
+    },
+    FixtureUrl {
+        fixture: SymbolId,
+        path: String,
     },
     Unary {
         op: HirUnaryOp,
@@ -1128,7 +1326,7 @@ impl<'a> OwnedLower<'a> {
                     ),
                     Declaration::Resource(v) => (&v.name, OwnedDeclKind::Resource),
                     Declaration::Function(v) => (&v.name, OwnedDeclKind::Function),
-                    Declaration::Specialize(_) => continue,
+                    Declaration::Specialize(_) | Declaration::Scenario(_) => continue,
                 };
                 declarations.insert(SymbolId::new(modules[index].clone(), name.clone()), kind);
             }
@@ -2653,7 +2851,11 @@ impl<'a> OwnedLower<'a> {
                 }
                 Some(HirValue::Bool(true))
             }
-            ExprKind::Field { .. } | ExprKind::OldStateField { .. } => {
+            ExprKind::Field { .. }
+            | ExprKind::Intrinsic { .. }
+            | ExprKind::FixturePath { .. }
+            | ExprKind::FixtureUrl { .. }
+            | ExprKind::OldStateField { .. } => {
                 self.error(
                     module,
                     expression.span.clone(),
@@ -2741,7 +2943,10 @@ impl<'a> OwnedLower<'a> {
             | HirExprKind::BindingRef(_)
             | HirExprKind::ResultRef
             | HirExprKind::OldStateField { .. }
-            | HirExprKind::EnumSingletonRef(_) => None,
+            | HirExprKind::EnumSingletonRef(_)
+            | HirExprKind::Intrinsic { .. }
+            | HirExprKind::FixturePath { .. }
+            | HirExprKind::FixtureUrl { .. } => None,
         }
     }
 }
@@ -3330,6 +3535,213 @@ impl<'a> OwnedLower<'a> {
                         None,
                     )
                 }
+            }
+            ExprKind::Intrinsic {
+                kind,
+                arguments: source_arguments,
+            } => {
+                let arguments = source_arguments
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, argument)| {
+                        (index == 0
+                            || !matches!(
+                                kind,
+                                ast::Intrinsic::UniqueBy | ast::Intrinsic::DescendingBy
+                            ))
+                        .then(|| self.expr(module, argument, env))
+                    })
+                    .collect::<Vec<_>>();
+                let intrinsic = match kind {
+                    ast::Intrinsic::StartsWith => HirIntrinsic::StartsWith,
+                    ast::Intrinsic::EndsWith => HirIntrinsic::EndsWith,
+                    ast::Intrinsic::Contains => HirIntrinsic::Contains,
+                    ast::Intrinsic::UniqueBy => HirIntrinsic::UniqueBy,
+                    ast::Intrinsic::DescendingBy => HirIntrinsic::DescendingBy,
+                };
+                let selector = if matches!(
+                    intrinsic,
+                    HirIntrinsic::UniqueBy | HirIntrinsic::DescendingBy
+                ) {
+                    let Some(HirExpr {
+                        ty: HirType::List { item },
+                        ..
+                    }) = arguments.first()
+                    else {
+                        self.error(
+                            module,
+                            value.span.clone(),
+                            "list selector intrinsic requires a list argument",
+                        );
+                        return HirExpr {
+                            span: value.span.clone(),
+                            ty: owned_invalid_expr_type("invalid-intrinsic"),
+                            reference: None,
+                            kind: HirExprKind::Literal(HirValue::Unit),
+                        };
+                    };
+                    let HirType::Named { symbol: owner, .. } = item.as_ref() else {
+                        self.error(
+                            module,
+                            value.span.clone(),
+                            "list selector intrinsic requires a nominal list element type",
+                        );
+                        return HirExpr {
+                            span: value.span.clone(),
+                            ty: owned_invalid_expr_type("invalid-intrinsic"),
+                            reference: None,
+                            kind: HirExprKind::Literal(HirValue::Unit),
+                        };
+                    };
+                    let Some(Expr {
+                        kind: ExprKind::Name(path),
+                        ..
+                    }) = source_arguments.get(1)
+                    else {
+                        self.error(
+                            module,
+                            value.span.clone(),
+                            "list selector must be a nominal field reference",
+                        );
+                        return HirExpr {
+                            span: value.span.clone(),
+                            ty: owned_invalid_expr_type("invalid-intrinsic"),
+                            reference: None,
+                            kind: HirExprKind::Literal(HirValue::Unit),
+                        };
+                    };
+                    if path.segments.len() != 2 || path.segments[0] != owner.name {
+                        self.error(
+                            module,
+                            path.span.clone(),
+                            "list selector must name a field of the exact list element type",
+                        );
+                        return HirExpr {
+                            span: value.span.clone(),
+                            ty: owned_invalid_expr_type("invalid-intrinsic"),
+                            reference: None,
+                            kind: HirExprKind::Literal(HirValue::Unit),
+                        };
+                    }
+                    let Some(field_type) = self.named_field_type(item, &path.segments[1]) else {
+                        self.error(
+                            module,
+                            path.span.clone(),
+                            "unknown list element selector field",
+                        );
+                        return HirExpr {
+                            span: value.span.clone(),
+                            ty: owned_invalid_expr_type("invalid-intrinsic"),
+                            reference: None,
+                            kind: HirExprKind::Literal(HirValue::Unit),
+                        };
+                    };
+                    let orderable = matches!(
+                        self.expression_compat_type(&field_type),
+                        HirType::Primitive(
+                            PrimitiveType::I8
+                                | PrimitiveType::I16
+                                | PrimitiveType::I32
+                                | PrimitiveType::I64
+                                | PrimitiveType::U8
+                                | PrimitiveType::U16
+                                | PrimitiveType::U32
+                                | PrimitiveType::U64
+                                | PrimitiveType::F32
+                                | PrimitiveType::F64
+                                | PrimitiveType::Str
+                                | PrimitiveType::Path
+                        )
+                    );
+                    if matches!(intrinsic, HirIntrinsic::DescendingBy) && !orderable {
+                        self.error(
+                            module,
+                            path.span.clone(),
+                            "list selector field must have an orderable type",
+                        );
+                        return HirExpr {
+                            span: value.span.clone(),
+                            ty: owned_invalid_expr_type("invalid-intrinsic"),
+                            reference: None,
+                            kind: HirExprKind::Literal(HirValue::Unit),
+                        };
+                    }
+                    Some(HirFieldSelector {
+                        owner: owner.clone(),
+                        field: SymbolId::new(
+                            owner.module.clone(),
+                            format!("{}.{}", owner.name, path.segments[1]),
+                        ),
+                    })
+                } else {
+                    None
+                };
+                let valid = match intrinsic {
+                    HirIntrinsic::StartsWith | HirIntrinsic::EndsWith | HirIntrinsic::Contains => {
+                        arguments.len() == 2
+                            && arguments.iter().all(|argument| {
+                                argument.ty == HirType::Primitive(PrimitiveType::Str)
+                            })
+                    }
+                    HirIntrinsic::UniqueBy | HirIntrinsic::DescendingBy => {
+                        source_arguments.len() == 2 && arguments.len() == 1 && selector.is_some()
+                    }
+                };
+                if !valid {
+                    self.error(
+                        module,
+                        value.span.clone(),
+                        "intrinsic arguments are incompatible with its closed signature",
+                    );
+                }
+                (
+                    HirExprKind::Intrinsic {
+                        intrinsic,
+                        arguments,
+                        selector,
+                    },
+                    if valid {
+                        HirType::Primitive(PrimitiveType::Bool)
+                    } else {
+                        owned_invalid_expr_type("invalid-intrinsic")
+                    },
+                    None,
+                )
+            }
+            ExprKind::FixturePath { fixture, path } | ExprKind::FixtureUrl { fixture, path } => {
+                let Some((symbol, _, _)) = env.get(fixture) else {
+                    self.error(
+                        module,
+                        value.span.clone(),
+                        "unknown scenario fixture reference",
+                    );
+                    return HirExpr {
+                        span: value.span.clone(),
+                        ty: owned_invalid_expr_type("unknown-fixture"),
+                        reference: None,
+                        kind: HirExprKind::Literal(HirValue::Unit),
+                    };
+                };
+                let path_fixture = matches!(&value.kind, ExprKind::FixturePath { .. });
+                (
+                    if path_fixture {
+                        HirExprKind::FixturePath {
+                            fixture: symbol.clone(),
+                            path: path.clone(),
+                        }
+                    } else {
+                        HirExprKind::FixtureUrl {
+                            fixture: symbol.clone(),
+                            path: path.clone(),
+                        }
+                    },
+                    if path_fixture {
+                        HirType::Primitive(PrimitiveType::Path)
+                    } else {
+                        HirType::Primitive(PrimitiveType::Str)
+                    },
+                    None,
+                )
             }
             ExprKind::Parenthesized(inner) => {
                 let expression = self.expr(module, inner, env);
@@ -4720,8 +5132,75 @@ impl<'a> OwnedLower<'a> {
             }
             Declaration::Struct(value) => {
                 let scope = GenericScope::from_declared(&value.generics);
+                let id = id_for(&value.name);
+                let fields = value
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .map(|(i, field)| self.field(module, field, &scope, i))
+                    .collect::<Vec<_>>();
+                let args = value
+                    .generics
+                    .iter()
+                    .map(|generic| match generic {
+                        ast::GenericParam::Type { name, .. } => {
+                            HirGenericArg::Type(HirType::TypeParameter { name: name.clone() })
+                        }
+                        ast::GenericParam::Const { name, ty, .. } => {
+                            HirGenericArg::Const(HirConstArgument::Parameter {
+                                name: name.clone(),
+                                ty: match ty {
+                                    ast::ConstKind::U8 => HirConstType::U8,
+                                    ast::ConstKind::U16 => HirConstType::U16,
+                                    ast::ConstKind::U32 => HirConstType::U32,
+                                    ast::ConstKind::U64 => HirConstType::U64,
+                                },
+                            })
+                        }
+                    })
+                    .collect();
+                let mut env = HashMap::new();
+                env.insert(
+                    "self".to_owned(),
+                    (
+                        SymbolId::new(id.module.clone(), "self"),
+                        HirType::Named {
+                            symbol: id.clone(),
+                            args,
+                        },
+                        false,
+                    ),
+                );
+                let invariants = value
+                    .invariants
+                    .iter()
+                    .enumerate()
+                    .map(|(clause_id, invariant)| {
+                        let (guard, clause_env) = match &invariant.guard {
+                            Some(guard) => {
+                                let (guard, clause_env) = self.match_guard(module, guard, &env);
+                                (Some(guard), clause_env)
+                            }
+                            None => (None, env.clone()),
+                        };
+                        let expression = self.expr(module, &invariant.condition, &clause_env);
+                        if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
+                            self.error(
+                                module,
+                                invariant.condition.span.clone(),
+                                "struct invariant condition must be boolean",
+                            );
+                        }
+                        HirStructInvariant {
+                            clause_id: clause_id as u32,
+                            span: invariant.span.clone(),
+                            guard,
+                            expression,
+                        }
+                    })
+                    .collect();
                 HirDeclaration::Struct(HirStruct {
-                    id: id_for(&value.name),
+                    id,
                     span: value.span.clone(),
                     annotations: lower_annotations(&value.annotations),
                     doc: value.doc.as_ref().map(|v| HirDoc {
@@ -4729,12 +5208,8 @@ impl<'a> OwnedLower<'a> {
                         text: v.text.clone(),
                     }),
                     generics: self.generics(module, &value.generics),
-                    fields: value
-                        .fields
-                        .iter()
-                        .enumerate()
-                        .map(|(i, v)| self.field(module, v, &scope, i))
-                        .collect(),
+                    fields,
+                    invariants,
                     public: true,
                     source_order: order,
                 })
@@ -5946,8 +6421,540 @@ impl<'a> OwnedLower<'a> {
                     source_order: order,
                 })
             }
+            Declaration::Scenario(value) => {
+                const LIMIT: u32 = 64;
+                let id = SymbolId::new(module_id.clone(), format!("scenario.{}", value.name));
+                let mut fixture_env = HashMap::new();
+                let mut fixture_names = BTreeSet::new();
+                let mut fixture_kinds = BTreeMap::new();
+                for fixture in &value.fixtures {
+                    if !fixture_names.insert(fixture.name.clone()) {
+                        self.error(
+                            module,
+                            fixture.span.clone(),
+                            "duplicate scenario fixture name",
+                        );
+                    }
+                    let kind = match &fixture.config {
+                        ast::ScenarioFixtureConfig::Filesystem { .. } => "fs",
+                        ast::ScenarioFixtureConfig::Http { .. } => "http",
+                        ast::ScenarioFixtureConfig::Clock { .. } => "clock",
+                        ast::ScenarioFixtureConfig::Failure { .. } => "failure",
+                    };
+                    fixture_kinds.insert(fixture.name.clone(), kind);
+                    match &fixture.config {
+                        ast::ScenarioFixtureConfig::Filesystem { files, .. } => {
+                            let mut paths = BTreeSet::new();
+                            for file in files {
+                                if !paths.insert(&file.path) {
+                                    self.error(
+                                        module,
+                                        file.span.clone(),
+                                        "duplicate filesystem fixture path",
+                                    );
+                                }
+                            }
+                        }
+                        ast::ScenarioFixtureConfig::Http { routes, .. } => {
+                            let mut paths = BTreeSet::new();
+                            for route in routes {
+                                if !paths.insert(&route.path) {
+                                    self.error(
+                                        module,
+                                        route.span.clone(),
+                                        "duplicate HTTP fixture route",
+                                    );
+                                }
+                            }
+                        }
+                        ast::ScenarioFixtureConfig::Clock { .. }
+                        | ast::ScenarioFixtureConfig::Failure { .. } => {}
+                    }
+                }
+                let fixtures = value
+                    .fixtures
+                    .iter()
+                    .enumerate()
+                    .map(|(source_order, fixture)| {
+                        let fixture_id = SymbolId::new(
+                            id.module.clone(),
+                            format!("{}.fixture.{}", id.name, fixture.name),
+                        );
+                        fixture_env.insert(
+                            fixture.name.clone(),
+                            (
+                                fixture_id.clone(),
+                                HirType::Primitive(PrimitiveType::Unit),
+                                false,
+                            ),
+                        );
+                        let kind = match &fixture.config {
+                            ast::ScenarioFixtureConfig::Filesystem { files, .. } => {
+                                HirScenarioFixtureKind::Filesystem {
+                                    files: files
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(source_order, file)| HirScenarioFile {
+                                            span: file.span.clone(),
+                                            path: file.path.clone(),
+                                            data: scenario_data(&file.contents),
+                                            source_order,
+                                        })
+                                        .collect(),
+                                }
+                            }
+                            ast::ScenarioFixtureConfig::Http { routes, .. } => {
+                                HirScenarioFixtureKind::Http {
+                                    routes: routes
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(source_order, route)| HirScenarioHttpRoute {
+                                            span: route.span.clone(),
+                                            path: route.path.clone(),
+                                            outcome: scenario_http_outcome(&route.outcome),
+                                            source_order,
+                                        })
+                                        .collect(),
+                                }
+                            }
+                            ast::ScenarioFixtureConfig::Clock {
+                                start_ms, tick_ms, ..
+                            } => HirScenarioFixtureKind::Clock {
+                                start_ms: scenario_integer(start_ms),
+                                tick_ms: scenario_integer(tick_ms),
+                            },
+                            ast::ScenarioFixtureConfig::Failure {
+                                point,
+                                occurrence,
+                                error,
+                                ..
+                            } => HirScenarioFixtureKind::Failure {
+                                point: match point.kind {
+                                    ast::ScenarioFailurePointKind::FileOpen => {
+                                        HirScenarioFailurePoint::FileOpen
+                                    }
+                                    ast::ScenarioFailurePointKind::FileRead => {
+                                        HirScenarioFailurePoint::FileRead
+                                    }
+                                    ast::ScenarioFailurePointKind::FileWrite => {
+                                        HirScenarioFailurePoint::FileWrite
+                                    }
+                                    ast::ScenarioFailurePointKind::FileFlush => {
+                                        HirScenarioFailurePoint::FileFlush
+                                    }
+                                    ast::ScenarioFailurePointKind::FileReplace => {
+                                        HirScenarioFailurePoint::FileReplace
+                                    }
+                                    ast::ScenarioFailurePointKind::HttpConnect => {
+                                        HirScenarioFailurePoint::HttpConnect
+                                    }
+                                    ast::ScenarioFailurePointKind::HttpRead => {
+                                        HirScenarioFailurePoint::HttpRead
+                                    }
+                                    ast::ScenarioFailurePointKind::ClockRead => {
+                                        HirScenarioFailurePoint::ClockRead
+                                    }
+                                },
+                                occurrence: scenario_integer(occurrence),
+                                error: match error.kind {
+                                    ast::ScenarioFailureErrorKind::PermissionDenied => {
+                                        HirScenarioFailureError::PermissionDenied
+                                    }
+                                    ast::ScenarioFailureErrorKind::NotFound => {
+                                        HirScenarioFailureError::NotFound
+                                    }
+                                    ast::ScenarioFailureErrorKind::DiskFull => {
+                                        HirScenarioFailureError::DiskFull
+                                    }
+                                    ast::ScenarioFailureErrorKind::Timeout => {
+                                        HirScenarioFailureError::Timeout
+                                    }
+                                    ast::ScenarioFailureErrorKind::ConnectionReset => {
+                                        HirScenarioFailureError::ConnectionReset
+                                    }
+                                },
+                            },
+                        };
+                        HirScenarioFixture {
+                            id: fixture_id,
+                            span: fixture.span.clone(),
+                            source_order,
+                            kind,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let scenario_target = value
+                    .target
+                    .as_ref()
+                    .and_then(|target| self.resolve(module, target, &target.span));
+                if scenario_target.as_ref().is_some_and(|target| {
+                    self.declarations.get(target) != Some(&OwnedDeclKind::Function)
+                }) {
+                    self.error(
+                        module,
+                        value.target.as_ref().unwrap().span.clone(),
+                        "scenario target must be a public callable",
+                    );
+                }
+                let mut env = fixture_env;
+                let mut workers = HashMap::<String, (SymbolId, HirType, bool)>::new();
+                let mut required_effects = BTreeMap::<String, HirEffect>::new();
+                let mut ticks = 0u32;
+                let mut max_workers = 0usize;
+                let mut steps = Vec::new();
+                for (step_id, step) in value.steps.iter().enumerate() {
+                    let step_id = step_id as u32;
+                    match step {
+                        step @ (ast::ScenarioStep::Call { .. }
+                        | ast::ScenarioStep::Spawn { .. }) => {
+                            let (span, binding_name, binding_span, target, arguments, is_call) =
+                                match step {
+                                    ast::ScenarioStep::Call {
+                                        span,
+                                        binding,
+                                        target,
+                                        arguments,
+                                    } => (
+                                        span,
+                                        &binding.name,
+                                        &binding.span,
+                                        target,
+                                        arguments,
+                                        true,
+                                    ),
+                                    ast::ScenarioStep::Spawn {
+                                        span,
+                                        worker,
+                                        target,
+                                        arguments,
+                                    } => {
+                                        (span, &worker.name, &worker.span, target, arguments, false)
+                                    }
+                                    _ => unreachable!(),
+                                };
+                            let Some(symbol) = self.resolve(module, target, &target.span) else {
+                                continue;
+                            };
+                            let Some(function) = scenario_function(self, &symbol) else {
+                                self.error(
+                                    module,
+                                    target.span.clone(),
+                                    "scenario target must be a public callable",
+                                );
+                                continue;
+                            };
+                            let scope = GenericScope::from_declared(&function.generics);
+                            let parameters = function
+                                .parameters
+                                .iter()
+                                .enumerate()
+                                .map(|(index, parameter)| {
+                                    self.parameter(module, parameter, &scope, index)
+                                })
+                                .collect::<Vec<_>>();
+                            let return_type = self.ty(module, &function.return_type, &scope);
+                            let callable_kind = match function.callable_kind {
+                                ast::CallableKind::Sync => HirCallableKind::Sync,
+                                ast::CallableKind::Async => HirCallableKind::Async,
+                            };
+                            if arguments.len() != parameters.len() {
+                                self.error(module, span.clone(), "scenario call argument count does not match callable signature");
+                            }
+                            let arguments = arguments.iter().enumerate().map(|(index, argument)| {
+                                if let Some(message) = scenario_fixture_reference_compatible(argument, &fixture_kinds) {
+                                    self.error(module, argument.span.clone(), message);
+                                }
+                                let expression = self.expr(module, argument, &env);
+                                if parameters.get(index).is_some_and(|parameter| expression.ty != parameter.ty) {
+                                    self.error(module, argument.span.clone(), "scenario argument does not match callable parameter type");
+                                }
+                                expression
+                            }).collect::<Vec<_>>();
+                            let clauses: &[ast::Clause] = match &function.body {
+                                FunctionBody::Clauses { clauses, .. } => clauses.as_slice(),
+                                FunctionBody::Signature { .. } => &[],
+                            };
+                            for clause in clauses {
+                                if let ClauseKind::Effects { effects } = &clause.kind {
+                                    for (source_order, effect) in effects.iter().enumerate() {
+                                        required_effects
+                                            .entry(effect.segments.join("."))
+                                            .or_insert(HirEffect {
+                                                span: effect.span.clone(),
+                                                key: effect.segments.join("."),
+                                                source_order,
+                                            });
+                                    }
+                                }
+                            }
+                            if !is_call && callable_kind != HirCallableKind::Async {
+                                self.error(
+                                    module,
+                                    span.clone(),
+                                    "scenario spawn requires an async callable",
+                                );
+                            }
+                            let local = SymbolId::new(
+                                id.module.clone(),
+                                format!("{}.{}", id.name, binding_name),
+                            );
+                            if env.contains_key(binding_name) || workers.contains_key(binding_name)
+                            {
+                                self.error(
+                                    module,
+                                    binding_span.clone(),
+                                    "duplicate scenario value or worker binding",
+                                );
+                            }
+                            if is_call {
+                                env.insert(
+                                    binding_name.clone(),
+                                    (local.clone(), return_type.clone(), true),
+                                );
+                                steps.push(HirScenarioStep::Call {
+                                    step_id,
+                                    span: span.clone(),
+                                    binding: local,
+                                    target: symbol,
+                                    callable_kind,
+                                    parameters: parameters
+                                        .into_iter()
+                                        .map(|parameter| parameter.ty)
+                                        .collect(),
+                                    return_type,
+                                    arguments,
+                                });
+                            } else {
+                                workers.insert(
+                                    binding_name.clone(),
+                                    (local.clone(), return_type.clone(), false),
+                                );
+                                steps.push(HirScenarioStep::Spawn {
+                                    step_id,
+                                    span: span.clone(),
+                                    worker: local,
+                                    target: symbol,
+                                    parameters: parameters
+                                        .into_iter()
+                                        .map(|parameter| parameter.ty)
+                                        .collect(),
+                                    return_type,
+                                    arguments,
+                                });
+                                max_workers = max_workers.max(workers.len());
+                            }
+                        }
+                        ast::ScenarioStep::Await {
+                            span,
+                            worker,
+                            outcome,
+                        } => {
+                            let Some((worker_id, return_type, cancelled)) =
+                                workers.get(&worker.name).cloned()
+                            else {
+                                self.error(module, worker.span.clone(), "unknown scenario worker");
+                                continue;
+                            };
+                            let (result, cancelled_outcome) = match outcome {
+                                ast::ScenarioAwaitOutcome::Value(binding) => {
+                                    if cancelled {
+                                        self.error(
+                                            module,
+                                            binding.span.clone(),
+                                            "cancelled worker must be awaited as cancelled",
+                                        );
+                                    }
+                                    let result = SymbolId::new(
+                                        id.module.clone(),
+                                        format!("{}.{}", id.name, binding.name),
+                                    );
+                                    if env
+                                        .insert(
+                                            binding.name.clone(),
+                                            (result.clone(), return_type.clone(), true),
+                                        )
+                                        .is_some()
+                                    {
+                                        self.error(
+                                            module,
+                                            binding.span.clone(),
+                                            "duplicate scenario value binding",
+                                        );
+                                    }
+                                    (Some(result), false)
+                                }
+                                ast::ScenarioAwaitOutcome::Cancelled { span: outcome_span } => {
+                                    if !cancelled {
+                                        self.error(
+                                            module,
+                                            outcome_span.clone(),
+                                            "live worker must be awaited with a result binding",
+                                        );
+                                    }
+                                    (None, true)
+                                }
+                            };
+                            workers.remove(&worker.name);
+                            steps.push(HirScenarioStep::Await {
+                                step_id,
+                                span: span.clone(),
+                                worker: worker_id,
+                                result,
+                                return_type,
+                                cancelled: cancelled_outcome,
+                            });
+                        }
+                        ast::ScenarioStep::Cancel { span, worker } => {
+                            let Some((worker_id, _, cancelled)) = workers.get_mut(&worker.name)
+                            else {
+                                self.error(module, worker.span.clone(), "unknown scenario worker");
+                                continue;
+                            };
+                            if *cancelled {
+                                self.error(
+                                    module,
+                                    worker.span.clone(),
+                                    "scenario worker is already cancelled",
+                                );
+                            }
+                            *cancelled = true;
+                            steps.push(HirScenarioStep::Cancel {
+                                step_id,
+                                span: span.clone(),
+                                worker: worker_id.clone(),
+                            });
+                        }
+                        ast::ScenarioStep::Tick { span } => {
+                            ticks += 1;
+                            steps.push(HirScenarioStep::Tick {
+                                step_id,
+                                span: span.clone(),
+                            });
+                        }
+                        ast::ScenarioStep::Assert { span, expression } => {
+                            let expression = self.expr(module, expression, &env);
+                            if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
+                                self.error(
+                                    module,
+                                    span.clone(),
+                                    "scenario assertion must be boolean",
+                                );
+                            }
+                            steps.push(HirScenarioStep::Assert {
+                                step_id,
+                                span: span.clone(),
+                                expression,
+                            });
+                        }
+                    }
+                }
+                let mut fixture_references = BTreeSet::new();
+                for step in &value.steps {
+                    match step {
+                        ast::ScenarioStep::Call { arguments, .. }
+                        | ast::ScenarioStep::Spawn { arguments, .. } => {
+                            for argument in arguments {
+                                scenario_fixture_references(argument, &mut fixture_references);
+                            }
+                        }
+                        ast::ScenarioStep::Assert { expression, .. } => {
+                            scenario_fixture_references(expression, &mut fixture_references)
+                        }
+                        ast::ScenarioStep::Await { .. }
+                        | ast::ScenarioStep::Cancel { .. }
+                        | ast::ScenarioStep::Tick { .. } => {}
+                    }
+                }
+                for effect in required_effects.values() {
+                    let backend = match effect.key.as_str() {
+                        "file.read" | "file.write" => Some("fs"),
+                        "network" => Some("http"),
+                        "clock" => Some("clock"),
+                        _ => None,
+                    };
+                    let Some(backend) = backend else {
+                        self.error(
+                            module,
+                            effect.span.clone(),
+                            "scenario effect has no supported fixture backend",
+                        );
+                        continue;
+                    };
+                    if !fixture_kinds.values().any(|kind| *kind == backend) {
+                        self.error(
+                            module,
+                            effect.span.clone(),
+                            "scenario required effect is missing a compatible fixture",
+                        );
+                    }
+                }
+                let effect_names = required_effects
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>();
+                for fixture in &value.fixtures {
+                    let kind = fixture_kinds
+                        .get(&fixture.name)
+                        .copied()
+                        .unwrap_or_default();
+                    let supports_effect =
+                        required_effects.values().any(|effect| {
+                            matches!(
+                                (effect.key.as_str(), kind),
+                                ("file.read" | "file.write", "fs")
+                                    | ("network", "http")
+                                    | ("clock", "clock")
+                            )
+                        }) || scenario_failure_fixture_matches(&fixture.config, &effect_names);
+                    if kind == "failure" && !supports_effect {
+                        self.error(
+                            module,
+                            fixture.span.clone(),
+                            "scenario failure fixture point is incompatible with required effects",
+                        );
+                    } else if !fixture_references.contains(&fixture.name) && !supports_effect {
+                        self.error(
+                            module,
+                            fixture.span.clone(),
+                            "scenario fixture grants unused authority",
+                        );
+                    }
+                }
+                if value.steps.len() > LIMIT as usize
+                    || ticks > LIMIT
+                    || max_workers > LIMIT as usize
+                {
+                    self.error(
+                        module,
+                        value.span.clone(),
+                        "scenario exceeds lifecycle limit",
+                    );
+                }
+                if !workers.is_empty() {
+                    self.error(
+                        module,
+                        value.span.clone(),
+                        "scenario ends with live workers",
+                    );
+                }
+                HirDeclaration::Scenario(HirScenario {
+                    id,
+                    span: value.span.clone(),
+                    doc: value.doc.as_ref().map(|doc| HirDoc {
+                        span: doc.span.clone(),
+                        text: doc.text.clone(),
+                    }),
+                    target: scenario_target,
+                    fixtures,
+                    steps,
+                    required_effects: required_effects.into_values().collect(),
+                    lifecycle_limit: LIMIT,
+                    source_order: order,
+                })
+            }
         }
     }
+
     fn module(&mut self, index: usize) -> HirModule {
         let source = self.parsed.sources[index].clone();
         let mut imports = Vec::new();
@@ -5983,6 +6990,131 @@ impl<'a> OwnedLower<'a> {
         }
     }
 }
+fn scenario_integer(value: &ast::ScenarioInteger) -> u64 {
+    value.value.parse().unwrap_or(0)
+}
+fn scenario_fixture_references(value: &Expr, references: &mut BTreeSet<String>) {
+    match &value.kind {
+        ExprKind::FixturePath { fixture, .. } | ExprKind::FixtureUrl { fixture, .. } => {
+            references.insert(fixture.clone());
+        }
+        ExprKind::Parenthesized(value)
+        | ExprKind::Unary { operand: value, .. }
+        | ExprKind::Field { base: value, .. } => scenario_fixture_references(value, references),
+        ExprKind::Binary { left, right, .. } => {
+            scenario_fixture_references(left, references);
+            scenario_fixture_references(right, references);
+        }
+        ExprKind::Comparison { first, rest } => {
+            scenario_fixture_references(first, references);
+            for (_, value) in rest {
+                scenario_fixture_references(value, references);
+            }
+        }
+        ExprKind::Intrinsic { arguments, .. } => {
+            for value in arguments {
+                scenario_fixture_references(value, references);
+            }
+        }
+        ExprKind::Literal(_)
+        | ExprKind::Name(_)
+        | ExprKind::Unit
+        | ExprKind::OldStateField { .. } => {}
+    }
+}
+
+fn scenario_failure_fixture_matches(
+    fixture: &ast::ScenarioFixtureConfig,
+    effects: &BTreeSet<&str>,
+) -> bool {
+    let ast::ScenarioFixtureConfig::Failure { point, .. } = fixture else {
+        return false;
+    };
+    match point.kind {
+        ast::ScenarioFailurePointKind::FileOpen
+        | ast::ScenarioFailurePointKind::FileRead
+        | ast::ScenarioFailurePointKind::FileWrite
+        | ast::ScenarioFailurePointKind::FileFlush
+        | ast::ScenarioFailurePointKind::FileReplace => {
+            effects.contains("file.read") || effects.contains("file.write")
+        }
+        ast::ScenarioFailurePointKind::HttpConnect | ast::ScenarioFailurePointKind::HttpRead => {
+            effects.contains("network")
+        }
+        ast::ScenarioFailurePointKind::ClockRead => effects.contains("clock"),
+    }
+}
+
+fn scenario_fixture_reference_compatible(
+    value: &Expr,
+    kinds: &BTreeMap<String, &'static str>,
+) -> Option<&'static str> {
+    match &value.kind {
+        ExprKind::FixturePath { fixture, .. } if kinds.get(fixture).copied() != Some("fs") => {
+            Some("fixture .path() requires a filesystem fixture")
+        }
+        ExprKind::FixtureUrl { fixture, .. } if kinds.get(fixture).copied() != Some("http") => {
+            Some("fixture .url() requires an HTTP fixture")
+        }
+        _ => None,
+    }
+}
+
+fn scenario_data(value: &ast::ScenarioData) -> HirScenarioData {
+    match &value.kind {
+        ast::ScenarioDataKind::Text(value) => HirScenarioData::Text(value.clone()),
+        ast::ScenarioDataKind::Bytes(value) => HirScenarioData::Bytes(value.as_bytes().to_vec()),
+        ast::ScenarioDataKind::Hex(value) => HirScenarioData::Bytes(
+            (0..value.len())
+                .step_by(2)
+                .filter_map(|index| u8::from_str_radix(&value[index..index + 2], 16).ok())
+                .collect(),
+        ),
+    }
+}
+
+fn scenario_http_outcome(value: &ast::ScenarioHttpOutcome) -> HirScenarioHttpOutcome {
+    match value {
+        ast::ScenarioHttpOutcome::Response {
+            status,
+            body,
+            encoding,
+            ..
+        } => HirScenarioHttpOutcome::Response {
+            status: scenario_integer(status) as u16,
+            body: scenario_data(body),
+            encoding: encoding.clone(),
+        },
+        ast::ScenarioHttpOutcome::Redirect {
+            status, location, ..
+        } => HirScenarioHttpOutcome::Redirect {
+            status: scenario_integer(status) as u16,
+            location: location.clone(),
+        },
+        ast::ScenarioHttpOutcome::Delay { milliseconds, .. } => HirScenarioHttpOutcome::Delay {
+            milliseconds: scenario_integer(milliseconds),
+        },
+        ast::ScenarioHttpOutcome::Disconnect { .. } => HirScenarioHttpOutcome::Disconnect,
+    }
+}
+
+fn scenario_function(lower: &OwnedLower<'_>, symbol: &SymbolId) -> Option<ast::FunctionDecl> {
+    let module = lower
+        .modules
+        .iter()
+        .position(|module| module == &symbol.module)?;
+    lower.parsed.sources[module]
+        .syntax
+        .declarations
+        .iter()
+        .find_map(|declaration| match declaration {
+            Declaration::Function(function) if function.name == symbol.name => {
+                Some(function.clone())
+            }
+            _ => None,
+        })
+}
+
 fn substitute_associated_type(ty: HirType, assignments: &[HirAssociatedTypeAssignment]) -> HirType {
     match ty {
         HirType::AssociatedProjection {
@@ -7669,7 +8801,10 @@ fn owned_integer_expression(
                 BinaryOp::Or | BinaryOp::And => None,
             }
         }
-        ExprKind::Unit
+        ExprKind::Intrinsic { .. }
+        | ExprKind::FixturePath { .. }
+        | ExprKind::FixtureUrl { .. }
+        | ExprKind::Unit
         | ExprKind::Comparison { .. }
         | ExprKind::Field { .. }
         | ExprKind::OldStateField { .. }
@@ -8306,7 +9441,16 @@ fn owned_visit_expr<F: FnMut(&ast::QualifiedName)>(value: &ast::Expr, visit: &mu
             }
         }
         ExprKind::Field { base, .. } => owned_visit_expr(base, visit),
-        ExprKind::OldStateField { .. } | ExprKind::Literal(_) | ExprKind::Unit => {}
+        ExprKind::Intrinsic { arguments, .. } => {
+            for argument in arguments {
+                owned_visit_expr(argument, visit);
+            }
+        }
+        ExprKind::FixturePath { .. }
+        | ExprKind::FixtureUrl { .. }
+        | ExprKind::OldStateField { .. }
+        | ExprKind::Literal(_)
+        | ExprKind::Unit => {}
     }
 }
 fn owned_visit_pattern<F: FnMut(&ast::QualifiedName)>(value: &ast::Pattern, visit: &mut F) {
@@ -8386,6 +9530,12 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
                 if let Some(default) = &field.default {
                     owned_visit_const_expr(default, &mut visit);
                 }
+            }
+            for invariant in &value.invariants {
+                if let Some(guard) = &invariant.guard {
+                    owned_visit_match_guard(guard, &mut visit);
+                }
+                owned_visit_expr(&invariant.condition, &mut visit);
             }
         }
         Declaration::Enum(value) => {
@@ -8481,6 +9631,32 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
                 }
             }
         }
+        Declaration::Scenario(value) => {
+            if let Some(target) = &value.target {
+                visit(target);
+            }
+            for step in &value.steps {
+                match step {
+                    ast::ScenarioStep::Call {
+                        target, arguments, ..
+                    }
+                    | ast::ScenarioStep::Spawn {
+                        target, arguments, ..
+                    } => {
+                        visit(target);
+                        for argument in arguments {
+                            owned_visit_expr(argument, &mut visit);
+                        }
+                    }
+                    ast::ScenarioStep::Assert { expression, .. } => {
+                        owned_visit_expr(expression, &mut visit)
+                    }
+                    ast::ScenarioStep::Await { .. }
+                    | ast::ScenarioStep::Cancel { .. }
+                    | ast::ScenarioStep::Tick { .. } => {}
+                }
+            }
+        }
     }
 }
 fn owned_qualified_owner(
@@ -8554,6 +9730,7 @@ fn owned_shape_checks(parsed: &ParsedProject, errors: &mut Vec<ProjectDiagnostic
                 Declaration::Trait(value) => (&value.name, true),
                 Declaration::Impl(value) => (&value.name, true),
                 Declaration::Specialize(value) => (&value.name, true),
+                Declaration::Scenario(_) => continue,
                 Declaration::Rule(value) => (&value.name, true),
                 Declaration::Resource(value) => (&value.name, true),
                 Declaration::Const(value) => (&value.name, false),
@@ -8859,7 +10036,7 @@ fn owned_preflight(
                 Declaration::Enum(v) => &v.name,
                 Declaration::Trait(v) => &v.name,
                 Declaration::Impl(v) => &v.name,
-                Declaration::Specialize(_) => continue,
+                Declaration::Specialize(_) | Declaration::Scenario(_) => continue,
                 Declaration::Rule(v) => &v.name,
                 Declaration::Resource(v) => &v.name,
                 Declaration::Const(v) => &v.name,
@@ -9212,7 +10389,7 @@ fn validate_hash_stable_keys(modules: &[HirModule], errors: &mut Vec<ProjectDiag
                         types.push(base_type);
                     }
                 }
-                HirDeclaration::Resource(_) => {}
+                HirDeclaration::Resource(_) | HirDeclaration::Scenario(_) => {}
             }
             for ty in types {
                 visit(ty, modules, &module.source, span, errors);
@@ -9282,6 +10459,80 @@ fn validate_effects(
     }
 }
 
+/// Returns the closed formal facts consumable by documentation/shadow analysis.
+pub fn formal_facets(project: &HirProject) -> Vec<HirFormalFacet> {
+    project
+        .modules
+        .iter()
+        .flat_map(|module| module.declarations.iter())
+        .filter_map(|declaration| {
+            let HirDeclaration::Function(function) = declaration else {
+                return None;
+            };
+            Some(HirFormalFacet {
+                symbol: function.id.clone(),
+                return_type: function.return_type.clone(),
+                limits: Vec::new(),
+                errors: function
+                    .contract
+                    .clauses
+                    .iter()
+                    .filter_map(|clause| {
+                        matches!(clause.kind, HirClauseKind::Error { .. })
+                            .then_some(clause.clause_id)
+                    })
+                    .collect(),
+                atomic: function
+                    .contract
+                    .effects
+                    .iter()
+                    .any(|effect| effect.key == "atomic"),
+                cleanup: function
+                    .contract
+                    .effects
+                    .iter()
+                    .any(|effect| effect.key == "cleanup"),
+                doc_spans: function.doc.iter().map(|doc| doc.span.clone()).collect(),
+            })
+        })
+        .collect()
+}
+
+fn validate_success_obligations(modules: &[HirModule], errors: &mut Vec<ProjectDiagnostic>) {
+    for module in modules {
+        for declaration in &module.declarations {
+            let HirDeclaration::Function(function) = declaration else {
+                continue;
+            };
+            if !matches!(function.return_type, HirType::Result { .. })
+                || !function
+                    .contract
+                    .clauses
+                    .iter()
+                    .any(|clause| matches!(clause.kind, HirClauseKind::Error { .. }))
+            {
+                continue;
+            }
+            let success = function.contract.clauses.iter().any(|clause| matches!(
+                &clause.kind,
+                HirClauseKind::Ensures {
+                    guard: Some(HirMatchGuard { pattern: HirPattern { kind: HirPatternKind::Variant { symbol, .. }, .. }, .. }),
+                    ..
+                } if symbol.name == "Result.Ok"
+            ));
+            if !success {
+                errors.push(ProjectDiagnostic {
+                    path: module.source.clone(),
+                    diagnostic: Diagnostic::new(
+                        "Result contract with errors requires a guarded Result.Ok ensures success obligation",
+                        function.span.clone(),
+                    ),
+                });
+            }
+        }
+    }
+}
+
 pub fn lower(
     source_root: &Path,
     parsed: ParsedProject,
@@ -9306,6 +10557,9 @@ pub fn lower_with_effects(
     errors.extend(lowerer.errors);
     if errors.is_empty() {
         validate_hash_stable_keys(&modules, &mut errors);
+    }
+    if errors.is_empty() {
+        validate_success_obligations(&modules, &mut errors);
     }
     if errors.is_empty() {
         validate_effects(&modules, custom_effects, &mut errors);

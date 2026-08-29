@@ -521,6 +521,7 @@ fn declaration_name_and_doc(declaration: &Declaration) -> Option<(&str, Option<&
         Declaration::Specialize(_) => None,
         Declaration::Resource(value) => Some((&value.name, value.doc.as_ref())),
         Declaration::Rule(value) => Some((&value.name, value.doc.as_ref())),
+        Declaration::Scenario(value) => Some((&value.name, value.doc.as_ref())),
     }
 }
 

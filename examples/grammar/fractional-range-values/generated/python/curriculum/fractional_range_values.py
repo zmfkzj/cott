@@ -32,27 +32,35 @@ OutputLimitExceeded takes precedence."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/fractional_range_values/build_bounded_range.py", "cdd37f028fe0a6c75565ab747ea28ec880bbf2c41e2faf54aa040a73e31e09c7", "build_bounded_range", expected_project_name="fractional-range-values", expected_cott_symbol="curriculum.fractional_range_values.build_bounded_range")
+        _implementation = _cott_load("_cott_impl/curriculum/fractional_range_values/build_bounded_range.py", "ea06e3bc1ed7abf7c04fff66e55b60af95dc256258b7927e3b296df07f634662", "build_bounded_range", expected_project_name="fractional-range-values", expected_cott_symbol="curriculum.fractional_range_values.build_bounded_range")
         _result = _implementation(start, stop, step, limit)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.fractional_range_values.build_bounded_range"
         if _error.span is None:
-            _error.span = {"end_byte":1330,"end_column":1,"end_line":38,"start_byte":240,"start_column":1,"start_line":14}
+            _error.span = {"end_byte":1384,"end_column":1,"end_line":40,"start_byte":240,"start_column":1,"start_line":14}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.fractional_range_values.build_bounded_range", phase="implementation-call", span={"end_byte":1330,"end_column":1,"end_line":38,"start_byte":240,"start_column":1,"start_line":14}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.fractional_range_values.build_bounded_range", phase="implementation-call", span={"end_byte":1384,"end_column":1,"end_line":40,"start_byte":240,"start_column":1,"start_line":14}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.fractional_range_values.build_bounded_range", phase="implementation-call", span={"end_byte":1330,"end_column":1,"end_line":38,"start_byte":240,"start_column":1,"start_line":14}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.fractional_range_values.build_bounded_range", phase="implementation-call", span={"end_byte":1384,"end_column":1,"end_line":40,"start_byte":240,"start_column":1,"start_line":14}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[F64], FractionalRangeError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="curriculum.fractional_range_values.build_bounded_range", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (FractionalRangeError_NonFiniteInput, FractionalRangeError_StepDoesNotAdvance, FractionalRangeError_OutputLimitExceeded,):
-            raise CottContractViolation("returned error is not allowed", symbol="curriculum.fractional_range_values.build_bounded_range", phase="error", span={"end_byte":1330,"end_column":1,"end_line":38,"start_byte":240,"start_column":1,"start_line":14}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="curriculum.fractional_range_values.build_bounded_range", phase="error", span={"end_byte":1384,"end_column":1,"end_line":40,"start_byte":240,"start_column":1,"start_line":14}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.fractional_range_values.build_bounded_range", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            values = _cott_match_value.value
+            return ((len(values) <= 10000))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.fractional_range_values.build_bounded_range", clause="ensures:1", phase="ensures", span={"end_byte":1235,"end_column":53,"end_line":35,"start_byte":1187,"start_column":5,"start_line":35}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[F64], FractionalRangeError], path="$.return", validator=_cott_validate_abi)
     return _result
 

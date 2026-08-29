@@ -11,3 +11,6 @@ lockfile = "python/uv.lock"
 interpreter = ".venv/bin/python"
 type_checker = ".venv/bin/basedpyright"
 runtime_validation = "boundary"
+
+[target.python.external_types]
+"integrations.fastapi_hello.HttpRequest" = "starlette.requests:Request"

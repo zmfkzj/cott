@@ -11,7 +11,7 @@ use crate::ir::CanonicalIr;
 use crate::manifest::{ProjectConfig, RuntimeValidation};
 use crate::provenance::{
     GENERATION_SCHEMA_VERSION, GenerationCompatibility, GenerationRecord, GenerationSnapshot,
-    RUNTIME_ABI_VERSION, SourceSpan, UnresolvedKind, UnresolvedRecord,
+    RUNTIME_ABI_VERSION, SemanticCoverage, SourceSpan, UnresolvedKind, UnresolvedRecord,
 };
 use crate::python::artifact_plan::{PythonArtifactPlan, PythonCallableKind};
 use crate::python_runtime::render_runtime;
@@ -461,7 +461,7 @@ pub fn emit(
             finish(ir_module.bytes.clone()),
         );
     }
-    match derive_strategies(ir) {
+    match derive_strategies(ir, &config.verification) {
         Ok(strategies) => {
             for strategy in strategies {
                 let (module, function) = strategy
@@ -701,6 +701,7 @@ pub fn emit(
         managed_files,
         unresolved,
         verification: Value::Null,
+        semantic_coverage: SemanticCoverage::default(),
         agent_runs: Vec::new(),
     };
     if let Err(error) = snapshot.compute_generation_id() {
@@ -741,7 +742,7 @@ fn validate_declaration(
     let Some(kind) = object.get("kind").and_then(Value::as_str) else {
         return;
     };
-    if kind != "external_type" {
+    if !matches!(kind, "external_type" | "scenario") {
         validate_generic_parameters(object, module, diagnostics);
     }
     match kind {
@@ -756,7 +757,14 @@ fn validate_declaration(
                 validate_type(ty, module, diagnostics);
             }
         }
-        "struct" => validate_fields(object, "fields", module, diagnostics),
+        "struct" => {
+            validate_fields(object, "fields", module, diagnostics);
+            if let Some(invariants) = required_array(object, "invariants", module, diagnostics) {
+                for invariant in invariants {
+                    validate_clause_guard(invariant, module, diagnostics);
+                }
+            }
+        }
         "enum" => {
             let Some(variants) = required_array(object, "variants", module, diagnostics) else {
                 return;
@@ -1155,7 +1163,7 @@ fn validate_declaration(
                 validate_value(value, module, diagnostics);
             }
         }
-        "rule" => {}
+        "rule" | "scenario" => {}
         "function" => {
             match required_string(object, "callable_kind", module, diagnostics).as_deref() {
                 Some("sync" | "async") => {}
@@ -1996,7 +2004,7 @@ fn render_types(
     external_types: &BTreeMap<String, String>,
 ) -> Vec<u8> {
     let mut out = String::from(
-        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport dataclasses as _dataclasses\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import Annotated, Any, Final, ForwardRef, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable\n\nfrom cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_normalize_f32, _cott_validate_abi\n",
+        "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport dataclasses as _dataclasses\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import Annotated, Any, Final, ForwardRef, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable\n\nfrom cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_descending_by, _cott_ends_with, _cott_euclidean_mod, _cott_normalize_f32, _cott_starts_with, _cott_unique_by, _cott_validate_abi, _cott_validated_construction\n",
     );
     for (source, name, alias) in external_imports(module, external_types) {
         writeln!(out, "from {source} import {name} as {alias}").unwrap();
@@ -2054,7 +2062,7 @@ fn render_types(
         };
         if matches!(
             object.get("kind").and_then(Value::as_str),
-            Some("trait" | "function")
+            Some("trait" | "function" | "scenario")
         ) {
             continue;
         }
@@ -2073,7 +2081,10 @@ fn render_types(
         out.push('\n');
     }
     for declaration in &module.declarations {
-        if declaration.get("kind").and_then(Value::as_str) == Some("trait") {
+        if matches!(
+            declaration.get("kind").and_then(Value::as_str),
+            Some("trait" | "scenario")
+        ) {
             continue;
         }
         render_type_declaration(
@@ -2241,6 +2252,7 @@ fn render_type_declaration(
                 declarations,
                 &typevar_names,
             );
+            render_struct_post_init(out, object, &module.module, declarations, &typevar_names);
         }
         "resource" => {
             let states = object.get("states").and_then(Value::as_array).unwrap();
@@ -3084,6 +3096,92 @@ fn render_fields(
         }
         out.push('\n');
     }
+    out.push('\n');
+}
+fn type_uses_generic_const(value: &Value, generic_names: &BTreeSet<String>) -> bool {
+    match value {
+        Value::Array(values) => values
+            .iter()
+            .any(|value| type_uses_generic_const(value, generic_names)),
+        Value::Object(object) => {
+            (object.get("kind").and_then(Value::as_str) == Some("parameter")
+                && object
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| generic_names.contains(name)))
+                || object
+                    .values()
+                    .any(|value| type_uses_generic_const(value, generic_names))
+        }
+        _ => false,
+    }
+}
+fn render_struct_post_init(
+    out: &mut String,
+    object: &serde_json::Map<String, Value>,
+    module: &str,
+    declarations: &BTreeMap<String, String>,
+    typevar_names: &BTreeMap<String, String>,
+) {
+    let fields = object.get("fields").and_then(Value::as_array).unwrap();
+    let generic_names = object
+        .get("generics")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|generic| generic.get("name").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let has_invariants = object
+        .get("invariants")
+        .and_then(Value::as_array)
+        .is_some_and(|invariants| !invariants.is_empty());
+    let has_normalized_fields = fields.iter().any(|field| {
+        field
+            .get("type")
+            .is_some_and(|ty| !type_uses_generic_const(ty, &generic_names))
+    });
+    if !has_normalized_fields && !has_invariants {
+        return;
+    }
+    out.push_str("    def __post_init__(self) -> None:\n");
+    for field in fields {
+        let field = field.as_object().expect("validated struct field");
+        let name = local_name(
+            field
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        );
+        if type_uses_generic_const(
+            field.get("type").expect("validated struct field type"),
+            &generic_names,
+        ) {
+            continue;
+        }
+        let ty = render_type_with_names(
+            field.get("type").expect("validated struct field type"),
+            module,
+            declarations,
+            typevar_names,
+        );
+        writeln!(
+            out,
+            "        if not _cott_validated_construction():\n            object.__setattr__(self, {}, _cott_validate_abi(self.{name}, {ty}, path={}))",
+            json_string(name),
+            json_string(&format!("$.{name}")),
+        )
+        .unwrap();
+    }
+    render_invariants(
+        out,
+        object,
+        object
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        8,
+    );
     out.push('\n');
 }
 fn render_function_typevars(
@@ -5079,6 +5177,48 @@ fn render_contract_expression(expression: &Value) -> String {
             "len({})",
             render_contract_expression(expression.get("value").unwrap())
         ),
+        "intrinsic" => {
+            let arguments = expression
+                .get("arguments")
+                .and_then(Value::as_array)
+                .map(|arguments| {
+                    arguments
+                        .iter()
+                        .map(render_contract_expression)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let first = arguments.first().cloned().unwrap_or_default();
+            let second = arguments.get(1).cloned().unwrap_or_default();
+            match expression.get("name").and_then(Value::as_str) {
+                Some("starts_with") => format!("_cott_starts_with({first}, {second})"),
+                Some("ends_with") => format!("_cott_ends_with({first}, {second})"),
+                Some("contains") => format!("({second} in {first})"),
+                Some("unique_by") => format!(
+                    "_cott_unique_by({first}, {})",
+                    json_string(local_name(
+                        expression
+                            .get("selector")
+                            .and_then(Value::as_object)
+                            .and_then(|selector| selector.get("field"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                    ))
+                ),
+                Some("descending_by") => format!(
+                    "_cott_descending_by({first}, {})",
+                    json_string(local_name(
+                        expression
+                            .get("selector")
+                            .and_then(Value::as_object)
+                            .and_then(|selector| selector.get("field"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                    ))
+                ),
+                _ => "False".to_owned(),
+            }
+        }
         "unary" => {
             let op = match expression.get("op").and_then(Value::as_str) {
                 Some("not") => "not ",
@@ -6478,11 +6618,12 @@ fn exported_names(module: &crate::python::artifact_plan::PythonArtifactModule) -
         let Some(object) = declaration.as_object() else {
             continue;
         };
+        let kind = object.get("kind").and_then(Value::as_str);
         if !object
             .get("public")
             .and_then(Value::as_bool)
             .unwrap_or(false)
-            || object.get("kind").and_then(Value::as_str) == Some("function")
+            || matches!(kind, Some("function" | "scenario"))
         {
             continue;
         }
@@ -6710,7 +6851,6 @@ fn add_package_markers<'a>(
             dirs.insert(parts[..n].join("/"));
         }
     }
-    dirs.insert("_cott_impl".into());
     for binding in bindings {
         let path = path_string(&binding.generated_relative);
         let parts: Vec<_> = path.split('/').collect();
@@ -6718,7 +6858,10 @@ fn add_package_markers<'a>(
             dirs.insert(parts[..=n].join("/"));
         }
     }
-    for dir in dirs {
+    for dir in dirs
+        .into_iter()
+        .filter(|dir| *dir != "_cott_impl" && !dir.starts_with("_cott_impl/"))
+    {
         let base = PathBuf::from("python").join(dir);
         add_file(files, diagnostics, base.join("__init__.py"), b"\n".to_vec());
         add_file(files, diagnostics, base.join("py.typed"), b"\n".to_vec());

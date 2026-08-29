@@ -1,1 +1,0 @@
-{"schema_version":3,"symbol":"curriculum.system_effects.inspect_file_path","seed":"sha256:885c6a0b3d1dc6807429831781fadd35fd88bee32964a9a95a2138ce199d6617","candidate_limit":64,"node_limit":64,"container_length_limit":3,"json_depth_limit":4,"lifecycle_limit":3,"callable_kind":"sync","return_kind":"value","classification":"effectful","clause_ids":[]}

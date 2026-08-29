@@ -1,3 +1,5 @@
+use serde_json::{Value, json};
+
 const TRACEABILITY: &[(u8, &[&str])] = &[
     (
         1,
@@ -22,6 +24,7 @@ const TRACEABILITY: &[(u8, &[&str])] = &[
         &[
             "ir::checked_in_canonical_ir_schema_is_parseable",
             "hir::direct_lowering_preserves_parsed_owned_structure_and_contracts",
+            "architecture_acceptance::wire_identities_are_closed_and_cross_shape_records_are_rejected",
         ],
     ),
     (
@@ -278,14 +281,188 @@ const TRACEABILITY: &[(u8, &[&str])] = &[
             "cli::verify_records_unsupported_static_requires_as_nonfatal_unknown",
         ],
     ),
+    (
+        42,
+        &[
+            "python_runtime::generated_runtime_imports_async_protocol_support",
+            "contract_test::contract_runner_observes_and_closes_pure_async_protocols",
+        ],
+    ),
+    (
+        43,
+        &[
+            "manifest::defaults_verification_budgets",
+            "manifest::parses_verification_budget_overrides_through_hard_maxima",
+            "manifest::rejects_invalid_verification_budgets",
+            "contract_test::derived_strategy_serializes_verification_limits",
+        ],
+    ),
+    (
+        44,
+        &[
+            "proof::tests::supports_u64_lower_middle_and_upper_bounds",
+            "proof::tests::names_recursive_fields_and_lengths",
+            "proof::tests::honors_exact_configured_node_and_branch_limits",
+        ],
+    ),
+    (
+        45,
+        &[
+            "cli::verify_records_no_baseline_implementation_comparison",
+            "cli::emit_rejects_stale_generation_compatibility_without_mutating_managed_tree",
+            "python_runtime::generated_runtime_exercises_abi_and_provenance_loader",
+            "architecture_acceptance::wire_identities_are_closed_and_cross_shape_records_are_rejected",
+        ],
+    ),
 ];
 
 #[test]
-fn all_41_architecture_acceptance_criteria_map_to_named_assertions() {
-    assert_eq!(TRACEABILITY.len(), 41);
+fn all_45_architecture_acceptance_criteria_map_to_named_assertions() {
+    assert_eq!(TRACEABILITY.len(), 45);
     for (index, (criterion, assertions)) in TRACEABILITY.iter().enumerate() {
         assert_eq!(*criterion as usize, index + 1);
         assert!(!assertions.is_empty());
         assert!(assertions.iter().all(|name| name.contains("::")));
     }
+}
+
+#[test]
+fn wire_identities_are_closed_and_cross_shape_records_are_rejected() {
+    let generation_schema: Value =
+        serde_json::from_str(include_str!("../schemas/generation.schema.json"))
+            .expect("generation schema");
+    let strategy_schema: Value =
+        serde_json::from_str(include_str!("../schemas/contract-test.schema.json"))
+            .expect("strategy schema");
+    assert_eq!(
+        generation_schema["$id"],
+        "https://cott.dev/schema/generation/v7"
+    );
+    assert_eq!(generation_schema["title"], "cott generation record v7");
+    assert_eq!(
+        generation_schema["properties"]["schema_version"]["const"],
+        7
+    );
+    assert_eq!(
+        generation_schema["$defs"]["compatibility"]["required"],
+        json!([
+            "generation_schema",
+            "canonical_ir_schema",
+            "runtime_abi",
+            "contract_strategy_schema"
+        ])
+    );
+    assert_eq!(
+        strategy_schema["$id"],
+        "https://cott.dev/schema/contract-test/v5"
+    );
+    assert_eq!(strategy_schema["title"], "cott contract test strategy v5");
+    assert_eq!(strategy_schema["properties"]["schema_version"]["const"], 5);
+
+    let generation = json!({
+        "schema_version": 7,
+        "current": generation_snapshot(),
+        "last_verified": null,
+    });
+    let generation_validator =
+        jsonschema::validator_for(&generation_schema).expect("generation validator");
+    assert!(generation_validator.is_valid(&generation));
+    let mut legacy_generation = generation.clone();
+    legacy_generation["current"]["compatibility"] = json!({
+        "generation_schema": 6,
+        "canonical_ir_schema": 7,
+        "runtime_abi": 6,
+    });
+    assert!(!generation_validator.is_valid(&legacy_generation));
+
+    let strategy = json!({
+        "schema_version": 5,
+        "symbol": "app.check",
+        "seed": format!("sha256:{}", "0".repeat(64)),
+        "proof_node_limit": 1,
+        "proof_branch_limit": 1,
+        "candidate_limit": 1,
+        "node_limit": 64,
+        "container_length_limit": 3,
+        "json_depth_limit": 4,
+        "lifecycle_limit": 1,
+        "callable_kind": "sync",
+        "return_kind": "value",
+        "classification": "pure",
+        "clause_ids": [],
+        "obligations": [],
+        "scenario": {
+            "id": "scenario",
+            "required_effects": [],
+            "fixtures": [],
+            "steps": [],
+            "lifecycle_limit": 1,
+            "limits": {
+                "scenario_timeout_ms": 1,
+                "filesystem_bytes": 1,
+                "filesystem_files": 1,
+                "http_body_bytes": 1,
+                "http_requests": 1,
+                "http_redirects": 1,
+                "transcript_events": 1,
+            },
+        },
+    });
+    let strategy_validator =
+        jsonschema::validator_for(&strategy_schema).expect("strategy validator");
+    assert!(strategy_validator.is_valid(&strategy));
+    let mut legacy_strategy = strategy.clone();
+    legacy_strategy["schema_version"] = json!(4);
+    assert!(!strategy_validator.is_valid(&legacy_strategy));
+    let mut incomplete_strategy = strategy.clone();
+    incomplete_strategy
+        .as_object_mut()
+        .expect("strategy object")
+        .remove("obligations");
+    assert!(!strategy_validator.is_valid(&incomplete_strategy));
+    let mut fixtureless_strategy = strategy;
+    fixtureless_strategy["scenario"]
+        .as_object_mut()
+        .expect("scenario object")
+        .remove("fixtures");
+    assert!(!strategy_validator.is_valid(&fixtureless_strategy));
+}
+
+fn generation_snapshot() -> Value {
+    json!({
+        "generation_id": format!("sha256:{}", "0".repeat(64)),
+        "verified": false,
+        "project_version": "0.1.0",
+        "compatibility": {
+            "generation_schema": 7,
+            "canonical_ir_schema": 8,
+            "runtime_abi": 7,
+            "contract_strategy_schema": 5,
+        },
+        "inputs": {},
+        "tools": {},
+        "ir": {},
+        "contract_surface": {},
+        "public_python_symbols": {},
+        "implementations": [],
+        "dependencies": [],
+        "managed_files": {},
+        "unresolved": [],
+        "verification": null,
+        "semantic_coverage": {
+            "clauses": [],
+            "summary": {
+                "observed": 0,
+                "unobserved": 0,
+                "trust_declaration": 0,
+                "unknown": 0,
+            },
+            "policy": {
+                "selected": 0,
+                "passed": true,
+                "violations": [],
+            },
+        },
+        "agent_runs": [],
+    })
 }

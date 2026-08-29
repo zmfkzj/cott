@@ -200,9 +200,23 @@ impl ProjectSession {
                 source,
             })?,
         )?;
-        let result = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if result != 0 {
-            return Err(TransactionError::ActiveTransaction(lock_path));
+        loop {
+            let result = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if result == 0 {
+                break;
+            }
+            let source = io::Error::last_os_error();
+            if source.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            if source.raw_os_error() == Some(libc::EWOULDBLOCK) {
+                return Err(TransactionError::ActiveTransaction(lock_path));
+            }
+            return Err(TransactionError::Io {
+                operation: "lock project",
+                path: lock_path,
+                source,
+            });
         }
         recover(&root, &transactions)?;
         Ok(Self {
@@ -319,6 +333,14 @@ impl ProjectSession {
         sync_directory(&self.transactions)?;
         fault("cleanup.dir_fsync")?;
         Ok(())
+    }
+}
+
+impl Drop for ProjectSession {
+    fn drop(&mut self) {
+        unsafe {
+            libc::flock(self._lock.as_raw_fd(), libc::LOCK_UN);
+        }
     }
 }
 

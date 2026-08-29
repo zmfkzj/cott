@@ -25,7 +25,7 @@ ValuationOverflow is returned when the binary64 product is not finite."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/stock_record/value_record.py", "a7303aec861ffaef53fa9e0890c22ee28594674858eb18bc43516ead655c2403", "value_record", expected_project_name="stock-record", expected_cott_symbol="curriculum.stock_record.value_record")
+        _implementation = _cott_load("_cott_impl/curriculum/stock_record/value_record.py", "6087d030bf9b7439badd5518e4d4f8c8d00280b314d9a9dc9beda444cb55e5d7", "value_record", expected_project_name="stock-record", expected_cott_symbol="curriculum.stock_record.value_record")
         _result = _implementation(record)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -79,7 +79,7 @@ NegativePrice in source order. A valid record is valued by value_record."""
         _expected_error_span = {"end_byte":1244,"end_column":65,"end_line":43,"start_byte":1184,"start_column":5,"start_line":43}
         _expected_error_clause = "error:5"
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/stock_record/value_stock_record.py", "4c175897b8d2d60ee282f7a056583ef886e882b429f36d1ae7e0bfb4b03f3bae", "value_stock_record", expected_project_name="stock-record", expected_cott_symbol="curriculum.stock_record.value_stock_record")
+        _implementation = _cott_load("_cott_impl/curriculum/stock_record/value_stock_record.py", "a62ead3d6f70cd51dbf43f138588c5309391c6967d29aefd37354f8345a9dfa6", "value_stock_record", expected_project_name="stock-record", expected_cott_symbol="curriculum.stock_record.value_stock_record")
         _result = _implementation(record)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

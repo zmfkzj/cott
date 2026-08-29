@@ -18,6 +18,14 @@ pub struct ProjectPaths {
     pub lockfile: Option<PathBuf>,
 }
 
+/// A UTF-8 Python source safely discovered beneath a project-owned tree.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PythonSourceFile {
+    /// Lexical path relative to the scanned tree.
+    pub path: PathBuf,
+    pub disk_path: PathBuf,
+    pub source: String,
+}
 /// An error loading a project manifest or discovering its source files.
 #[derive(Debug)]
 pub enum ProjectError {
@@ -294,6 +302,123 @@ fn discover_sources_at(
             Ok(crate::compiler::SourceFile::new(path, text))
         })
         .collect()
+}
+/// Reads every Python source in a project-owned tree after rejecting unsafe
+/// links and package metadata. Returned paths are lexical and stable.
+pub fn discover_python_sources(root: &Path) -> Result<Vec<PythonSourceFile>, ProjectError> {
+    ensure_no_symlinks(root)?;
+    let metadata = fs::symlink_metadata(root).map_err(|source| ProjectError::Io {
+        operation: "stat Python source directory",
+        path: root.to_path_buf(),
+        source,
+    })?;
+    if !metadata.is_dir() {
+        return Err(ProjectError::InvalidProject {
+            message: "Python source path is not a directory",
+        });
+    }
+
+    let mut files = Vec::new();
+    collect_python_sources(root, root, &mut files)?;
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
+}
+
+fn collect_python_sources(
+    root: &Path,
+    directory: &Path,
+    files: &mut Vec<PythonSourceFile>,
+) -> Result<(), ProjectError> {
+    let mut entries = fs::read_dir(directory)
+        .map_err(|source| ProjectError::Io {
+            operation: "read Python source directory",
+            path: directory.to_path_buf(),
+            source,
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| ProjectError::Io {
+            operation: "read Python source directory entry",
+            path: directory.to_path_buf(),
+            source,
+        })?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        let path = entry.path();
+        if matches!(entry.file_name().to_str(), Some(".venv" | "__pycache__"))
+            || path.extension() == Some(OsStr::new("pyc"))
+        {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&path).map_err(|source| ProjectError::Io {
+            operation: "stat Python source entry",
+            path: path.clone(),
+            source,
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(ProjectError::Symlink { path });
+        }
+        if metadata.is_dir() {
+            collect_python_sources(root, &path, files)?;
+            continue;
+        }
+
+        let package_metadata = matches!(
+            path.file_name().and_then(OsStr::to_str),
+            Some("pyproject.toml" | "py.typed")
+        );
+        let python = path.extension() == Some(OsStr::new("py"));
+        if !python && !package_metadata {
+            continue;
+        }
+        #[cfg(unix)]
+        let single_link = metadata.nlink() == 1;
+        #[cfg(not(unix))]
+        let single_link = true;
+        if !metadata.is_file() || !single_link {
+            return Err(ProjectError::InvalidProject {
+                message: "Python tree files must be regular single-link files",
+            });
+        }
+        if !python {
+            continue;
+        }
+        let bytes = fs::read(&path).map_err(|source| ProjectError::Io {
+            operation: "read Python source",
+            path: path.clone(),
+            source,
+        })?;
+        let source = String::from_utf8(bytes).map_err(|_| ProjectError::InvalidProject {
+            message: "Python source is not UTF-8",
+        })?;
+        let rechecked = fs::symlink_metadata(&path).map_err(|source| ProjectError::Io {
+            operation: "re-stat Python source",
+            path: path.clone(),
+            source,
+        })?;
+        #[cfg(unix)]
+        let stable =
+            rechecked.is_file() && !rechecked.file_type().is_symlink() && rechecked.nlink() == 1;
+        #[cfg(not(unix))]
+        let stable = rechecked.is_file() && !rechecked.file_type().is_symlink();
+        if !stable {
+            return Err(ProjectError::InvalidProject {
+                message: "Python source changed while being read",
+            });
+        }
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| ProjectError::InvalidProject {
+                message: "Python source path is outside scanned tree",
+            })?
+            .to_path_buf();
+        files.push(PythonSourceFile {
+            path: relative,
+            disk_path: path,
+            source,
+        });
+    }
+    Ok(())
 }
 
 fn collect_sources(

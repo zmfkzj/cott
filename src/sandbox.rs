@@ -3,6 +3,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -10,7 +11,18 @@ use crate::version::is_at_least;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NetworkAccess {
     Disabled,
+    IsolatedLoopback,
     Enabled,
+}
+
+impl NetworkAccess {
+    pub const fn bwrap_arguments(self) -> &'static [&'static str] {
+        match self {
+            Self::Disabled => &["--unshare-net"],
+            Self::IsolatedLoopback => &["--unshare-net", "--cap-add", "CAP_NET_ADMIN"],
+            Self::Enabled => &[],
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -66,6 +78,26 @@ pub struct CompletedProcess {
     pub stderr: Vec<u8>,
 }
 
+impl CompletedProcess {
+    pub const fn outcome(&self) -> SandboxOutcome {
+        SandboxOutcome::Exited
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SandboxOutcome {
+    Exited,
+    TimedOut,
+    StreamLimitExceeded {
+        stream: OutputStream,
+        limit_bytes: u64,
+    },
+    WritableLimitExceeded {
+        limit_bytes: u64,
+    },
+    UnsupportedLoopback,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OutputStream {
     Stdout,
@@ -75,6 +107,7 @@ pub enum OutputStream {
 #[derive(Debug)]
 pub enum SandboxError {
     Unavailable(String),
+    UnsupportedLoopback,
     Io(io::Error),
     Timeout,
     StreamLimitExceeded {
@@ -85,10 +118,33 @@ pub enum SandboxError {
         limit_bytes: u64,
     },
 }
+
+impl SandboxError {
+    pub const fn outcome(&self) -> Option<SandboxOutcome> {
+        match self {
+            Self::UnsupportedLoopback => Some(SandboxOutcome::UnsupportedLoopback),
+            Self::Timeout => Some(SandboxOutcome::TimedOut),
+            Self::StreamLimitExceeded {
+                stream,
+                limit_bytes,
+            } => Some(SandboxOutcome::StreamLimitExceeded {
+                stream: *stream,
+                limit_bytes: *limit_bytes,
+            }),
+            Self::WritableLimitExceeded { limit_bytes } => {
+                Some(SandboxOutcome::WritableLimitExceeded {
+                    limit_bytes: *limit_bytes,
+                })
+            }
+            Self::Unavailable(_) | Self::Io(_) => None,
+        }
+    }
+}
 impl std::fmt::Display for SandboxError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unavailable(message) => f.write_str(message),
+            Self::UnsupportedLoopback => f.write_str("isolated loopback is unavailable"),
             Self::Io(error) => error.fmt(f),
             Self::Timeout => f.write_str("sandbox process timed out"),
             Self::StreamLimitExceeded {
@@ -106,9 +162,14 @@ impl std::fmt::Display for SandboxError {
 }
 impl std::error::Error for SandboxError {}
 
+const LOOPBACK_SETUP_FAILURE: &str = "cott-sandbox: isolated loopback unavailable";
+
 pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
     let bwrap = PathBuf::from("/usr/bin/bwrap");
     require_bwrap(&bwrap)?;
+    if spec.network == NetworkAccess::IsolatedLoopback {
+        require_loopback_setup()?;
+    }
     let mut command = Command::new(bwrap);
     command.args([
         "--unshare-user",
@@ -116,7 +177,6 @@ pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
         "--unshare-ipc",
         "--unshare-uts",
         "--die-with-parent",
-        "--new-session",
         "--tmpfs",
         "/",
         "--dir",
@@ -135,13 +195,11 @@ pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
         "--dev",
         "/dev",
     ]);
+    command.args(spec.network.bwrap_arguments());
     for system_path in ["/bin", "/lib", "/lib64", "/etc"] {
         if PathBuf::from(system_path).exists() {
             command.args(["--dir", system_path, "--ro-bind", system_path, system_path]);
         }
-    }
-    if spec.network == NetworkAccess::Disabled {
-        command.arg("--unshare-net");
     }
     let mut directories = BTreeSet::new();
     for path in spec
@@ -186,6 +244,14 @@ pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
         ]);
     }
     command.args(["--chdir", spec.cwd.to_string_lossy().as_ref(), "--"]);
+    if spec.network == NetworkAccess::IsolatedLoopback {
+        command.args([
+            "/bin/sh",
+            "-c",
+            "if ! /usr/sbin/ip link set lo up; then printf '%s\\n' 'cott-sandbox: isolated loopback unavailable' >&2; exit 125; fi; exec \"$@\"",
+            "cott-loopback",
+        ]);
+    }
     command
         .arg(&spec.program)
         .args(&spec.arguments)
@@ -218,47 +284,112 @@ pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
             set(libc::RLIMIT_NPROC, process_limit)?;
             set(libc::RLIMIT_NOFILE, limits.open_files)?;
             set(libc::RLIMIT_FSIZE, limits.file_size_bytes)?;
-            if libc::setpgid(0, 0) != 0 {
+            if libc::setsid() == -1 {
                 return Err(io::Error::last_os_error());
             }
             Ok(())
         });
     }
     let mut child = command.spawn().map_err(SandboxError::Io)?;
-    child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(&spec.stdin)
-        .map_err(SandboxError::Io)?;
+    let stdin = child.stdin.take().expect("piped stdin");
+    let input = spec.stdin.clone();
+    let stdin = thread::spawn(move || {
+        let mut stdin = stdin;
+        stdin.write_all(&input)
+    });
+    let (stream_tx, stream_rx) = mpsc::channel();
     let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
     let stdout_limit = spec.limits.stream_limit_bytes;
+    let stdout_tx = stream_tx.clone();
+    let stdout = thread::spawn(move || {
+        let result = drain(stdout, stdout_limit);
+        let _ = stdout_tx.send((OutputStream::Stdout, matches!(&result, Ok((_, true)))));
+        result
+    });
+    let stderr = child.stderr.take().expect("piped stderr");
     let stderr_limit = spec.limits.stream_limit_bytes;
-    let stdout = thread::spawn(move || drain(stdout, stdout_limit));
-    let stderr = thread::spawn(move || drain(stderr, stderr_limit));
+    let stderr = thread::spawn(move || {
+        let result = drain(stderr, stderr_limit);
+        let _ = stream_tx.send((OutputStream::Stderr, matches!(&result, Ok((_, true)))));
+        result
+    });
     let started = Instant::now();
-    let mut timed_out = false;
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(SandboxError::Io)? {
-            break status.code();
+    let mut termination = None;
+    let mut child_error = None;
+    let status = 'wait: loop {
+        while let Ok((stream, exceeded)) = stream_rx.try_recv() {
+            if exceeded {
+                termination = Some(SandboxOutcome::StreamLimitExceeded {
+                    stream,
+                    limit_bytes: spec.limits.stream_limit_bytes,
+                });
+                if let Err(error) = terminate_process_session(&mut child) {
+                    child_error = Some(error);
+                }
+                break 'wait None;
+            }
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if let Err(error) = kill_process_session(child.id()) {
+                    child_error = Some(error);
+                }
+                break status.code();
+            }
+            Ok(None) => {}
+            Err(error) => {
+                child_error = Some(error);
+                if let Err(error) = terminate_process_session(&mut child) {
+                    child_error.get_or_insert(error);
+                }
+                break None;
+            }
         }
         if started.elapsed() >= spec.limits.wall_time {
-            timed_out = true;
-            child.kill().map_err(SandboxError::Io)?;
-            child.wait().map_err(SandboxError::Io)?;
+            termination = Some(SandboxOutcome::TimedOut);
+            if let Err(error) = terminate_process_session(&mut child) {
+                child_error = Some(error);
+            }
             break None;
         }
         thread::sleep(Duration::from_millis(10));
     };
+    let stdin = stdin
+        .join()
+        .map_err(|_| SandboxError::Io(io::Error::other("stdin writer thread panicked")))?;
     let stdout = stdout
         .join()
-        .map_err(|_| SandboxError::Io(io::Error::other("stdout reader thread panicked")))?
-        .map_err(SandboxError::Io)?;
+        .map_err(|_| SandboxError::Io(io::Error::other("stdout reader thread panicked")))?;
     let stderr = stderr
         .join()
-        .map_err(|_| SandboxError::Io(io::Error::other("stderr reader thread panicked")))?
-        .map_err(SandboxError::Io)?;
+        .map_err(|_| SandboxError::Io(io::Error::other("stderr reader thread panicked")))?;
+    let stdout = stdout.map_err(SandboxError::Io)?;
+    let stderr = stderr.map_err(SandboxError::Io)?;
+    if let Some(outcome) = termination {
+        return Err(match outcome {
+            SandboxOutcome::TimedOut => SandboxError::Timeout,
+            SandboxOutcome::StreamLimitExceeded {
+                stream,
+                limit_bytes,
+            } => SandboxError::StreamLimitExceeded {
+                stream,
+                limit_bytes,
+            },
+            _ => unreachable!("only terminating outcomes are recorded"),
+        });
+    }
+    if is_loopback_setup_failure(status, &stderr.0) {
+        return Err(SandboxError::UnsupportedLoopback);
+    }
+    if is_bwrap_bootstrap_failure(status, &stderr.0) {
+        return Err(SandboxError::Unavailable(
+            String::from_utf8_lossy(&stderr.0).trim().to_owned(),
+        ));
+    }
+    if let Some(error) = child_error {
+        return Err(SandboxError::Io(error));
+    }
+    stdin.map_err(SandboxError::Io)?;
     if stdout.1 {
         return Err(SandboxError::StreamLimitExceeded {
             stream: OutputStream::Stdout,
@@ -277,17 +408,77 @@ pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
             limit_bytes: spec.limits.writable_bytes,
         });
     }
-    if is_bwrap_bootstrap_failure(status, &stderr.0) {
-        return Err(SandboxError::Unavailable(
-            String::from_utf8_lossy(&stderr.0).trim().to_owned(),
-        ));
-    }
     Ok(CompletedProcess {
         status,
-        timed_out,
+        timed_out: false,
         stdout: stdout.0,
         stderr: stderr.0,
     })
+}
+
+fn require_loopback_setup() -> Result<(), SandboxError> {
+    if Path::new("/bin/sh").is_file() && Path::new("/usr/sbin/ip").is_file() {
+        Ok(())
+    } else {
+        Err(SandboxError::UnsupportedLoopback)
+    }
+}
+
+fn kill_process_group(process_id: u32) -> io::Result<()> {
+    if unsafe { libc::kill(-(process_id as libc::pid_t), libc::SIGKILL) } != 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+fn terminate_process_session(child: &mut std::process::Child) -> io::Result<()> {
+    kill_process_session(child.id())?;
+    child.wait().map(|_| ())
+}
+
+fn kill_process_session(session_id: u32) -> io::Result<()> {
+    kill_process_group(session_id)?;
+    let mut failure = None;
+    for entry in std::fs::read_dir("/proc")? {
+        let Ok(entry) = entry else { continue };
+        let name = entry.file_name();
+        if !name.as_encoded_bytes().iter().all(u8::is_ascii_digit) {
+            continue;
+        }
+        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+            continue;
+        };
+        let Some(session) = stat
+            .rsplit_once(") ")
+            .and_then(|(_, fields)| fields.split_whitespace().nth(3))
+            .and_then(|session| session.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if session == session_id {
+            let Ok(process_id) = name.to_string_lossy().parse::<libc::pid_t>() else {
+                continue;
+            };
+            if unsafe { libc::kill(process_id, libc::SIGKILL) } != 0 {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    failure.get_or_insert(error);
+                }
+            }
+        }
+    }
+    failure.map_or(Ok(()), Err)
+}
+
+fn is_loopback_setup_failure(status: Option<i32>, stderr: &[u8]) -> bool {
+    status == Some(125)
+        && String::from_utf8_lossy(stderr)
+            .lines()
+            .last()
+            .is_some_and(|line| line.trim() == LOOPBACK_SETUP_FAILURE)
 }
 
 fn supports_bubblewrap_version(version: &str) -> bool {

@@ -1,6 +1,6 @@
 module store.order
 
-use store.catalog.{Catalog, CatalogError, Item}
+use store.catalog.{Catalog, CatalogError}
 
 struct OrderLine:
     sku: Str

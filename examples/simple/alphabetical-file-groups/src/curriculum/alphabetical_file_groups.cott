@@ -16,6 +16,8 @@ fn classify_filename(filename: Str) -> Result[FileMove, FileGroupError]:
     folder. Select "misc" when the leading code point is not a letter.
     """
 
+    ensures Result.Ok(move) => move.filename == filename
+
     error FileGroupError.EmptyFilename
 
 fn group_filenames(filenames: List[Str]) -> Result[List[FileMove], FileGroupError]:

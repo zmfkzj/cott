@@ -1,7 +1,30 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
+
+pub const DEFAULT_PROOF_NODE_LIMIT: u32 = 1024;
+pub const DEFAULT_PROOF_BRANCH_LIMIT: u32 = 256;
+pub const DEFAULT_CANDIDATE_LIMIT: u32 = 64;
+pub const DEFAULT_LIFECYCLE_LIMIT: u32 = 3;
+pub const DEFAULT_SCENARIO_TIMEOUT_MS: u32 = 1000;
+pub const DEFAULT_FILESYSTEM_BYTES: u64 = 16_777_216;
+pub const DEFAULT_FILESYSTEM_FILES: u32 = 256;
+pub const DEFAULT_HTTP_BODY_BYTES: u64 = 1_048_576;
+pub const DEFAULT_HTTP_REQUESTS: u32 = 64;
+pub const DEFAULT_HTTP_REDIRECTS: u32 = 8;
+pub const DEFAULT_TRANSCRIPT_EVENTS: u32 = 1024;
+pub const MAX_PROOF_NODE_LIMIT: u32 = 16384;
+pub const MAX_PROOF_BRANCH_LIMIT: u32 = 4096;
+pub const MAX_CANDIDATE_LIMIT: u32 = 1024;
+pub const MAX_LIFECYCLE_LIMIT: u32 = 64;
+pub const MAX_SCENARIO_TIMEOUT_MS: u32 = 60_000;
+pub const MAX_FILESYSTEM_BYTES: u64 = 268_435_456;
+pub const MAX_FILESYSTEM_FILES: u32 = 4096;
+pub const MAX_HTTP_BODY_BYTES: u64 = 16_777_216;
+pub const MAX_HTTP_REQUESTS: u32 = 1024;
+pub const MAX_HTTP_REDIRECTS: u32 = 64;
+pub const MAX_TRANSCRIPT_EVENTS: u32 = 16_384;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectConfig {
@@ -9,6 +32,134 @@ pub struct ProjectConfig {
     pub python: PythonTarget,
     pub effects: BTreeMap<String, bool>,
     pub generator: GeneratorConfig,
+    pub verification: VerificationConfig,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationConfig {
+    #[serde(default = "default_proof_node_limit")]
+    pub proof_node_limit: u32,
+    #[serde(default = "default_proof_branch_limit")]
+    pub proof_branch_limit: u32,
+    #[serde(default = "default_candidate_limit")]
+    pub candidate_limit: u32,
+    #[serde(default = "default_lifecycle_limit")]
+    pub lifecycle_limit: u32,
+    #[serde(default)]
+    pub fixtures: FixtureLimits,
+    #[serde(default)]
+    pub coverage: CoveragePolicy,
+}
+
+impl Default for VerificationConfig {
+    fn default() -> Self {
+        Self {
+            proof_node_limit: default_proof_node_limit(),
+            proof_branch_limit: default_proof_branch_limit(),
+            candidate_limit: default_candidate_limit(),
+            lifecycle_limit: default_lifecycle_limit(),
+            fixtures: FixtureLimits::default(),
+            coverage: CoveragePolicy::default(),
+        }
+    }
+}
+
+const fn default_proof_node_limit() -> u32 {
+    DEFAULT_PROOF_NODE_LIMIT
+}
+
+const fn default_proof_branch_limit() -> u32 {
+    DEFAULT_PROOF_BRANCH_LIMIT
+}
+
+const fn default_candidate_limit() -> u32 {
+    DEFAULT_CANDIDATE_LIMIT
+}
+
+const fn default_lifecycle_limit() -> u32 {
+    DEFAULT_LIFECYCLE_LIMIT
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FixtureLimits {
+    #[serde(default = "default_scenario_timeout_ms")]
+    pub scenario_timeout_ms: u32,
+    #[serde(default = "default_filesystem_bytes")]
+    pub filesystem_bytes: u64,
+    #[serde(default = "default_filesystem_files")]
+    pub filesystem_files: u32,
+    #[serde(default = "default_http_body_bytes")]
+    pub http_body_bytes: u64,
+    #[serde(default = "default_http_requests")]
+    pub http_requests: u32,
+    #[serde(default = "default_http_redirects")]
+    pub http_redirects: u32,
+    #[serde(default = "default_transcript_events")]
+    pub transcript_events: u32,
+}
+
+impl Default for FixtureLimits {
+    fn default() -> Self {
+        Self {
+            scenario_timeout_ms: default_scenario_timeout_ms(),
+            filesystem_bytes: default_filesystem_bytes(),
+            filesystem_files: default_filesystem_files(),
+            http_body_bytes: default_http_body_bytes(),
+            http_requests: default_http_requests(),
+            http_redirects: default_http_redirects(),
+            transcript_events: default_transcript_events(),
+        }
+    }
+}
+
+const fn default_scenario_timeout_ms() -> u32 {
+    DEFAULT_SCENARIO_TIMEOUT_MS
+}
+
+const fn default_filesystem_bytes() -> u64 {
+    DEFAULT_FILESYSTEM_BYTES
+}
+
+const fn default_filesystem_files() -> u32 {
+    DEFAULT_FILESYSTEM_FILES
+}
+
+const fn default_http_body_bytes() -> u64 {
+    DEFAULT_HTTP_BODY_BYTES
+}
+
+const fn default_http_requests() -> u32 {
+    DEFAULT_HTTP_REQUESTS
+}
+
+const fn default_http_redirects() -> u32 {
+    DEFAULT_HTTP_REDIRECTS
+}
+
+const fn default_transcript_events() -> u32 {
+    DEFAULT_TRANSCRIPT_EVENTS
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CoveragePolicy {
+    #[serde(default)]
+    pub rules: Vec<CoverageRule>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CoverageRule {
+    pub symbol: String,
+    pub clauses: Vec<String>,
+    #[serde(default)]
+    pub allow_unobserved: bool,
+    #[serde(default)]
+    pub allow_trust_declaration: bool,
+    #[serde(default)]
+    pub allow_unknown: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -59,6 +210,8 @@ struct RawManifest {
     effects: BTreeMap<String, bool>,
     #[serde(default)]
     generator: GeneratorConfig,
+    #[serde(default)]
+    verification: VerificationConfig,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -125,6 +278,7 @@ impl ProjectConfig {
             python: raw.target.python,
             effects: raw.effects,
             generator: raw.generator,
+            verification: raw.verification,
         };
         config.validate(path)?;
         Ok(config)
@@ -167,6 +321,37 @@ impl ProjectConfig {
                 "generator.timeout_seconds must be 1..=3600",
             ));
         }
+        for (field, value, maximum) in [
+            (
+                "verification.proof_node_limit",
+                self.verification.proof_node_limit,
+                MAX_PROOF_NODE_LIMIT,
+            ),
+            (
+                "verification.proof_branch_limit",
+                self.verification.proof_branch_limit,
+                MAX_PROOF_BRANCH_LIMIT,
+            ),
+            (
+                "verification.candidate_limit",
+                self.verification.candidate_limit,
+                MAX_CANDIDATE_LIMIT,
+            ),
+            (
+                "verification.lifecycle_limit",
+                self.verification.lifecycle_limit,
+                MAX_LIFECYCLE_LIMIT,
+            ),
+        ] {
+            if value == 0 || value > maximum {
+                return Err(ManifestError::new(
+                    path,
+                    format!("{field} must be 1..={maximum}"),
+                ));
+            }
+        }
+        validate_fixture_limits(path, &self.verification.fixtures)?;
+        validate_coverage_policy(path, &self.verification.coverage)?;
         let generated = Path::new(&self.python.generated);
         let Some(artifact_root) = generated
             .parent()
@@ -245,6 +430,131 @@ impl ProjectConfig {
             }
         }
         Ok(())
+    }
+}
+
+fn validate_fixture_limits(path: &Path, fixtures: &FixtureLimits) -> Result<(), ManifestError> {
+    for (field, value, maximum) in [
+        (
+            "scenario_timeout_ms",
+            fixtures.scenario_timeout_ms as u64,
+            MAX_SCENARIO_TIMEOUT_MS as u64,
+        ),
+        (
+            "filesystem_bytes",
+            fixtures.filesystem_bytes,
+            MAX_FILESYSTEM_BYTES,
+        ),
+        (
+            "filesystem_files",
+            fixtures.filesystem_files as u64,
+            MAX_FILESYSTEM_FILES as u64,
+        ),
+        (
+            "http_body_bytes",
+            fixtures.http_body_bytes,
+            MAX_HTTP_BODY_BYTES,
+        ),
+        (
+            "http_requests",
+            fixtures.http_requests as u64,
+            MAX_HTTP_REQUESTS as u64,
+        ),
+        (
+            "http_redirects",
+            fixtures.http_redirects as u64,
+            MAX_HTTP_REDIRECTS as u64,
+        ),
+        (
+            "transcript_events",
+            fixtures.transcript_events as u64,
+            MAX_TRANSCRIPT_EVENTS as u64,
+        ),
+    ] {
+        if value == 0 || value > maximum {
+            return Err(ManifestError::new(
+                path,
+                format!("verification.fixtures.{field} must be 1..={maximum}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_coverage_policy(path: &Path, policy: &CoveragePolicy) -> Result<(), ManifestError> {
+    let mut selected = BTreeSet::new();
+    for rule in &policy.rules {
+        if !valid_qname(&rule.symbol) {
+            return Err(ManifestError::new(
+                path,
+                format!(
+                    "verification.coverage.rules symbol `{}` must be an exact qname",
+                    rule.symbol
+                ),
+            ));
+        }
+        if rule.clauses.is_empty() {
+            return Err(ManifestError::new(
+                path,
+                format!(
+                    "verification.coverage.rules `{}` must select at least one clause",
+                    rule.symbol
+                ),
+            ));
+        }
+        let mut previous = None;
+        for clause in &rule.clauses {
+            let key = normalized_clause_selector(clause).ok_or_else(|| {
+                ManifestError::new(
+                    path,
+                    format!(
+                        "verification.coverage.rules `{}` has invalid clause selector `{clause}`",
+                        rule.symbol
+                    ),
+                )
+            })?;
+            if previous.as_ref().is_some_and(|previous| previous >= &key) {
+                return Err(ManifestError::new(
+                    path,
+                    format!(
+                        "verification.coverage.rules `{}` clauses must be sorted and unique",
+                        rule.symbol
+                    ),
+                ));
+            }
+            previous = Some(key);
+            if !selected.insert((rule.symbol.as_str(), clause.as_str())) {
+                return Err(ManifestError::new(
+                    path,
+                    format!(
+                        "verification.coverage.rules contains duplicate selector `{}:{clause}`",
+                        rule.symbol
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn normalized_clause_selector(value: &str) -> Option<(u8, u64, String)> {
+    let (kind, id) = value.split_once(':')?;
+    if id.is_empty() || id.contains(':') {
+        return None;
+    }
+    let kind_order = match kind {
+        "requires" => 0,
+        "ensures" => 1,
+        "error" => 2,
+        "modifies" => 3,
+        "invariant" => 4,
+        _ => return None,
+    };
+    if kind == "modifies" {
+        valid_qname(id).then(|| (kind_order, 0, id.to_owned()))
+    } else {
+        let numeric_id = id.parse::<u64>().ok()?;
+        (numeric_id.to_string() == id).then(|| (kind_order, numeric_id, String::new()))
     }
 }
 

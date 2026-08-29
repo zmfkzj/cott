@@ -1,1 +1,0 @@
-{"schema_version":3,"symbol":"curriculum.roast_analysis.validate_roast_profile","seed":"sha256:b53d71d613fe72d2d9828c1c98d8f019821711768348f7922498be32450593ad","candidate_limit":64,"node_limit":64,"container_length_limit":3,"json_depth_limit":4,"lifecycle_limit":3,"callable_kind":"sync","return_kind":"value","classification":"pure","clause_ids":["error:1","error:2"]}

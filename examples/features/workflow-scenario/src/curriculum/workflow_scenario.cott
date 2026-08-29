@@ -1,0 +1,136 @@
+module curriculum.workflow_scenario
+
+enum SearchStatus:
+    Loading
+    Ready
+
+struct SearchSnapshot:
+    request_id: U64
+    applied_request_id: U64
+    query: Str
+    result: Str
+    status: SearchStatus
+
+    invariant self.request_id > 0
+    invariant self.applied_request_id <= self.request_id
+
+struct SearchResult:
+    request_id: U64
+    query: Str
+    result: Str
+
+    invariant self.request_id > 0
+
+enum SaveStatus:
+    Queued
+    Flushed
+
+struct SaveSnapshot:
+    revision: U64
+    text: Str
+    status: SaveStatus
+
+    invariant self.revision > 0
+
+struct SaveReceipt:
+    revision: U64
+    text: Str
+    status: SaveStatus
+
+    invariant self.revision > 0
+
+fn begin_search(request_id: U64, query: Str) -> SearchSnapshot:
+    doc """
+    Start an immutable public search snapshot for the supplied request.
+    """
+
+    requires request_id > 0
+
+    effects []
+
+async fn resolve_search(request_id: U64, query: Str) -> SearchResult:
+    doc """
+    Resolve one immutable search result without observing host state.
+    """
+
+    requires request_id > 0
+
+    effects []
+
+fn apply_search(snapshot: SearchSnapshot, candidate: SearchResult) -> SearchSnapshot:
+    doc """
+    Apply a result only when it still belongs to the snapshot's newest request.
+    """
+
+    effects []
+
+fn begin_save(revision: U64, text: Str) -> SaveSnapshot:
+    doc """
+    Queue the first immutable save request.
+    """
+
+    requires revision > 0
+
+    effects []
+
+fn request_save(snapshot: SaveSnapshot, revision: U64, text: Str) -> SaveSnapshot:
+    doc """
+    Coalesce a newer save request into the public queued snapshot.
+    """
+
+    requires revision > 0
+
+    effects []
+
+fn flush_save(snapshot: SaveSnapshot) -> SaveReceipt:
+    doc """
+    Return the public receipt for the currently coalesced save request.
+    """
+
+    effects []
+
+const OLD_REQUEST_ID: U64 = 1
+
+const NEW_REQUEST_ID: U64 = 2
+
+const CANCELLED_REQUEST_ID: U64 = 3
+
+const FIRST_SAVE_REVISION: U64 = 1
+
+const LATEST_SAVE_REVISION: U64 = 2
+
+const OLD_QUERY: Str = "old"
+
+const NEW_QUERY: Str = "new"
+
+const CANCELLED_QUERY: Str = "cancelled"
+
+const DRAFT_TEXT: Str = "draft"
+
+const PUBLISHED_TEXT: Str = "published"
+
+const NEW_RESULT: Str = "new result"
+
+scenario latest_result_and_coalesced_save:
+    call old_state = begin_search(OLD_REQUEST_ID, OLD_QUERY)
+    spawn old_worker = resolve_search(OLD_REQUEST_ID, OLD_QUERY)
+    tick
+    await old_worker as old_result
+    call newest_state = begin_search(NEW_REQUEST_ID, NEW_QUERY)
+    spawn cancelled_worker = resolve_search(CANCELLED_REQUEST_ID, CANCELLED_QUERY)
+    spawn new_worker = resolve_search(NEW_REQUEST_ID, NEW_QUERY)
+    cancel cancelled_worker
+    tick
+    await cancelled_worker cancelled
+    await new_worker as new_result
+    call applied = apply_search(newest_state, new_result)
+    call protected = apply_search(applied, old_result)
+    assert protected.request_id == NEW_REQUEST_ID
+    assert protected.applied_request_id == NEW_REQUEST_ID
+    assert protected.query == NEW_QUERY
+    assert protected.result == NEW_RESULT
+    call first_save = begin_save(FIRST_SAVE_REVISION, DRAFT_TEXT)
+    call coalesced_save = request_save(first_save, LATEST_SAVE_REVISION, PUBLISHED_TEXT)
+    call flushed = flush_save(coalesced_save)
+    assert flushed.revision == LATEST_SAVE_REVISION
+    assert flushed.text == PUBLISHED_TEXT

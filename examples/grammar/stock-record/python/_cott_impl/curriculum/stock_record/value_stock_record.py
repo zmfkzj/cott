@@ -1,6 +1,6 @@
 from math import isfinite
 
-from cott_runtime import F64, Err, Result
+from cott_runtime import Err, F64, Result
 from curriculum.stock_record import value_record
 from curriculum.stock_record_types import (
     StockRecord,

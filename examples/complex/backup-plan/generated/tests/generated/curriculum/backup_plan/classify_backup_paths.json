@@ -1,1 +1,0 @@
-{"schema_version":3,"symbol":"curriculum.backup_plan.classify_backup_paths","seed":"sha256:4cd6ecc3e2108a429d08e52bff12225e3324158e4a39f148881516e107e96c2f","candidate_limit":64,"node_limit":64,"container_length_limit":3,"json_depth_limit":4,"lifecycle_limit":3,"callable_kind":"sync","return_kind":"value","classification":"pure","clause_ids":["ensures:1"]}

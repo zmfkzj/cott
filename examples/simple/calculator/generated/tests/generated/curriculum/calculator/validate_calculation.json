@@ -1,1 +1,0 @@
-{"schema_version":3,"symbol":"curriculum.calculator.validate_calculation","seed":"sha256:267d3a844ea6fd10e6100e6010e3f2d176ac86bd737e5e971ad928f53257b523","candidate_limit":64,"node_limit":64,"container_length_limit":3,"json_depth_limit":4,"lifecycle_limit":3,"callable_kind":"sync","return_kind":"value","classification":"pure","clause_ids":["error:1","error:2","error:3"]}

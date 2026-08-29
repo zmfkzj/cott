@@ -98,17 +98,28 @@ import json
 import platform
 import sys
 import sysconfig
-from collections.abc import Generator, Iterator
+from collections.abc import AsyncGenerator as _PyAsyncGenerator, AsyncIterator as _PyAsyncIterator, Generator, Iterator
 from typing import Annotated, Any, Generic, Literal, Protocol, TypeVar, Union
 
 import cott_runtime as _runtime
 from cott_runtime import *
 from cott_runtime import _cott_load, _cott_normalize_f32_abi, _cott_normalize_scalar, _cott_validate_abi, _cott_wrap_async_protocol
 assert "CottExternal" in _runtime.__all__
+assert "_cott_fixture_activate" not in _runtime.__all__
 assert _runtime.PROJECT_VERSION == "0.3.0"
+try:
+    __import__("_cott_impl.demo.run")
+except ModuleNotFoundError:
+    pass
+else:
+    raise AssertionError("private implementation package was importable")
+assert _runtime._cott_coverage_key("demo.State", "modifies:demo.State.value") == ("demo.State", 3, 0, "demo.State.value")
+assert _runtime._cott_coverage_key("demo.State", "modifies:demo..value") is None
 
 
 _T = TypeVar("_T")
+_N = TypeVar("_N")
+assert _runtime._cott_substitute_type(CottBuffer[Literal[_N]], {{_N: Literal[4]}}) == CottBuffer[Literal[4]]
 @dataclasses.dataclass(frozen=True)
 class Box(Generic[_T]):
     value: _T
@@ -179,19 +190,19 @@ _async = dict(cott_symbol="demo.async_run", kind="async_function", callable_kind
 _unresolved = dict(cott_symbol="demo.missing", kind="async_function", callable_kind="async", span=dict(start_byte=1, end_byte=2, start_line=1, start_column=1, end_line=1, end_column=2))
 def _generation_id(current: dict) -> str:
     identity = dict(current)
-    for key in ("generation_id", "verified", "verification", "agent_runs"):
+    for key in ("generation_id", "verified", "verification", "semantic_coverage", "agent_runs"):
         identity.pop(key)
-    payload = dict(domain="cott.generation.v5", schema_version=5, current=identity)
+    payload = dict(domain="cott.generation.v7", schema_version=7, current=identity)
     return "sha256:" + hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n").hexdigest()
 
 _current = dict(generation_id="", verified=True, project_version="0.3.0", compatibility=dict(
-    generation_schema=5, canonical_ir_schema=7, runtime_abi=5,
+    generation_schema=7, canonical_ir_schema=8, runtime_abi=7, contract_strategy_schema=5,
 ), inputs={{}}, tools=dict(
     python=dict(implementation=sys.implementation.name, version=platform.python_version(), cache_tag=sys.implementation.cache_tag, os=sys.platform, machine=platform.machine(), platform=sysconfig.get_platform(), executable=str(Path(sys.executable).resolve()), content_hash="sha256:"+hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest()),
     runtime=dict(abi=_runtime._COTT_RUNTIME_ABI, version=_runtime._COTT_RUNTIME_VERSION),
-), ir={{}}, contract_surface={{}}, public_python_symbols={{"demo":["CounterState","bad","external","run"],"support":["helper"]}}, implementations=[_good, _bad, _external, _method, _async], dependencies=[], managed_files={{}}, unresolved=[_unresolved], verification=None, agent_runs=[])
+), ir={{}}, contract_surface={{}}, public_python_symbols={{"demo":["CounterState","bad","external","run"],"support":["helper"]}}, implementations=[_good, _bad, _external, _method, _async], dependencies=[], managed_files={{}}, unresolved=[_unresolved], verification=None, semantic_coverage=dict(clauses=[], summary=dict(observed=0, unobserved=0, trust_declaration=0, unknown=0), policy=dict(selected=0, passed=True, violations=[])), agent_runs=[])
 _current["generation_id"] = _generation_id(_current)
-Path("generation.json").write_text(json.dumps(dict(schema_version=5, current=_current, last_verified=None), sort_keys=True, separators=(",", ":")) + "\n")
+Path("generation.json").write_text(json.dumps(dict(schema_version=7, current=_current, last_verified=None), sort_keys=True, separators=(",", ":")) + "\n")
 assert _runtime._cott_validate_generation_snapshot(_current, "current") is _current
 _invalid_unresolved = dict(_current)
 _invalid_unresolved["unresolved"] = [dict(_unresolved, span=dict(_unresolved["span"], end_line=0))]
@@ -288,6 +299,82 @@ async def _raw_async_generator():
     yield sent
 
 
+class _GatedAsyncGenerator(_PyAsyncGenerator):
+    def __init__(self, operation):
+        self.operation = operation
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def _wait(self, operation):
+        assert operation == self.operation
+        self.entered.set()
+        await self.release.wait()
+        return 1.234567
+
+    async def __anext__(self):
+        return await self._wait("__anext__")
+
+    async def asend(self, value):
+        return await self._wait("asend")
+
+    async def athrow(self, *args):
+        return await self._wait("athrow")
+
+    async def aclose(self):
+        await self._wait("aclose")
+
+
+class _CancelledThenValueIterator(_PyAsyncIterator):
+    def __init__(self):
+        self.calls = 0
+        self.entered = asyncio.Event()
+
+    async def __anext__(self):
+        self.calls += 1
+        if self.calls == 1:
+            self.entered.set()
+            await asyncio.Event().wait()
+        return 1.234567
+
+
+class _ExceptionThenValueIterator(_PyAsyncIterator):
+    def __init__(self, error):
+        self.calls = 0
+        self.error = error
+
+    async def __anext__(self):
+        self.calls += 1
+        if self.calls == 1:
+            raise self.error
+        return 1.234567
+
+
+class _CloseRetryIterator(_PyAsyncIterator):
+    def __init__(self, fail_first):
+        self.fail_first = fail_first
+        self.close_calls = 0
+        self.error = RuntimeError("close failed")
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+    async def aclose(self):
+        self.close_calls += 1
+        if self.fail_first and self.close_calls == 1:
+            raise self.error
+
+
+async def _complete_async_generator():
+    if False:
+        yield 1.234567
+
+
+async def _athrow_yields_invalid_value():
+    try:
+        yield 1.234567
+    except ValueError:
+        yield "not a float"
+
 async def _exercise_async_runtime():
     lock = _runtime._CottAsyncRLock()
     entered = asyncio.Event()
@@ -330,6 +417,99 @@ async def _exercise_async_runtime():
     assert second == _runtime._cott_normalize_f32(1.234567)
     await generator.aclose()
 
+    async def assert_concurrency_guard(operation):
+        raw = _GatedAsyncGenerator(operation)
+        wrapped = _cott_wrap_async_protocol(raw, AsyncGenerator[F32, I32])
+        if operation == "__anext__":
+            pending = asyncio.create_task(wrapped.__anext__())
+        elif operation == "asend":
+            pending = asyncio.create_task(wrapped.asend(None))
+        elif operation == "athrow":
+            pending = asyncio.create_task(wrapped.athrow(ValueError))
+        else:
+            pending = asyncio.create_task(wrapped.aclose())
+        await raw.entered.wait()
+        try:
+            await wrapped.asend("not an integer")
+        except CottContractViolation as error:
+            assert error.phase == "async-lifecycle"
+        else:
+            raise AssertionError(f"concurrent {{operation}} was accepted")
+        raw.release.set()
+        result = await pending
+        if operation == "aclose":
+            assert result is None
+        else:
+            assert result == _runtime._cott_normalize_f32(1.234567)
+
+    for operation in ("__anext__", "asend", "athrow", "aclose"):
+        await assert_concurrency_guard(operation)
+
+    cancelled_raw = _CancelledThenValueIterator()
+    cancelled = _cott_wrap_async_protocol(cancelled_raw, AsyncIterator[F32])
+    pending = asyncio.create_task(cancelled.__anext__())
+    await cancelled_raw.entered.wait()
+    pending.cancel()
+    try:
+        await pending
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("cancelled async iteration completed")
+    assert await cancelled.__anext__() == _runtime._cott_normalize_f32(1.234567)
+
+    ordinary_error = RuntimeError("ordinary async failure")
+    ordinary = _cott_wrap_async_protocol(_ExceptionThenValueIterator(ordinary_error), AsyncIterator[F32])
+    try:
+        await ordinary.__anext__()
+    except RuntimeError as error:
+        assert error is ordinary_error
+    else:
+        raise AssertionError("ordinary async exception was not preserved")
+    assert await ordinary.__anext__() == _runtime._cott_normalize_f32(1.234567)
+
+    terminal = _cott_wrap_async_protocol(_complete_async_generator(), AsyncGenerator[F32, I32])
+    try:
+        await terminal.__anext__()
+    except StopAsyncIteration:
+        pass
+    else:
+        raise AssertionError("completed async generator yielded a value")
+    for advance in (terminal.__anext__, lambda: terminal.asend(None), lambda: terminal.athrow(ValueError)):
+        try:
+            await advance()
+        except StopAsyncIteration:
+            pass
+        else:
+            raise AssertionError("completed async generator advanced")
+
+    invalid_throw = _cott_wrap_async_protocol(_athrow_yields_invalid_value(), AsyncGenerator[F32, I32])
+    assert await invalid_throw.__anext__() == _runtime._cott_normalize_f32(1.234567)
+    try:
+        await invalid_throw.athrow(ValueError)
+    except CottContractViolation as error:
+        assert error.phase == "validation"
+    else:
+        raise AssertionError("athrow yielded an invalid ABI value")
+    await invalid_throw.aclose()
+
+    retry_raw = _CloseRetryIterator(True)
+    retry = _cott_wrap_async_protocol(retry_raw, AsyncIterator[F32])
+    try:
+        await retry.aclose()
+    except RuntimeError as error:
+        assert error is retry_raw.error
+    else:
+        raise AssertionError("failing close completed")
+    await retry.aclose()
+    assert retry_raw.close_calls == 2
+
+    close_raw = _CloseRetryIterator(False)
+    close_once = _cott_wrap_async_protocol(close_raw, AsyncIterator[F32])
+    await close_once.aclose()
+    await close_once.aclose()
+    assert close_raw.close_calls == 1
+
     nested = _cott_wrap_async_protocol(Some(value=_AsyncValue(1.234567)), Option[AsyncIterator[F32]])
     assert await nested.value.__anext__() == _runtime._cott_normalize_f32(1.234567)
     boxed = _cott_wrap_async_protocol(
@@ -343,6 +523,12 @@ async def _exercise_async_runtime():
 
     initial_send = _cott_wrap_async_protocol(_raw_async_generator(), AsyncGenerator[F32, I32])
     assert await initial_send.asend(None) == _runtime._cott_normalize_f32(1.234567)
+    try:
+        await initial_send.asend("not an integer")
+    except CottContractViolation as error:
+        assert error.phase == "validation"
+    else:
+        raise AssertionError("invalid async send was accepted")
     await initial_send.aclose()
 
 
@@ -519,6 +705,56 @@ except CottContractViolation as error:
     assert isinstance(error.__cause__, ValueError)
 else:
     raise AssertionError("ordinary implementation failure was not wrapped")
+_fixture_root = Path("fixture-root")
+_fixture_root.mkdir()
+try:
+    _runtime._cott_fixture_now()
+except CottContractViolation as error:
+    assert error.phase == "fixture"
+else:
+    raise AssertionError("inactive fixture adapter was usable")
+with _runtime._cott_fixture_activate(
+    _runtime._cott_fixture_runner_token(),
+    root=_fixture_root,
+    http_url=None,
+    clock=17,
+    failures={{"clock.read": {{"occurrence": 2, "error": "clock stopped"}}}},
+    transcript_limit=16,
+):
+    _runtime._cott_fixture_write("nested/value", b"old")
+    assert _runtime._cott_fixture_read("nested/value") == b"old"
+    _runtime._cott_fixture_replace("nested/value", b"new")
+    assert _runtime._cott_fixture_read("nested/value") == b"new"
+    assert _runtime._cott_fixture_now() == 17
+    try:
+        _runtime._cott_fixture_now()
+    except OSError as error:
+        assert str(error) == "clock stopped"
+    else:
+        raise AssertionError("configured fixture failure did not fire")
+    _events = _runtime._cott_fixture_transcript()
+    assert [event["kind"] for event in _events] == ["filesystem.write", "filesystem.read", "filesystem.replace", "filesystem.read", "clock.read", "failure"]
+    assert all(str(_fixture_root) not in repr(event) for event in _events)
+with _runtime._cott_fixture_activate(
+    _runtime._cott_fixture_runner_token(),
+    root=_fixture_root,
+    http_url=None,
+    clock=None,
+    failures={{}},
+    transcript_limit=16_384,
+):
+    try:
+        _runtime._cott_fixture_now()
+    except CottContractViolation as error:
+        assert error.phase == "fixture" and error.message == "fixture clock is unavailable"
+    else:
+        raise AssertionError("missing fixture clock was usable")
+try:
+    _runtime._cott_fixture_read("nested/value")
+except CottContractViolation as error:
+    assert error.phase == "fixture"
+else:
+    raise AssertionError("fixture adapter survived cleanup")
 "#,
         good_hash = good_hash,
         bad_hash = bad_hash,

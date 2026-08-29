@@ -250,6 +250,10 @@ alias ByteMatrix = Matrix[U8, 2]
         "{stub}"
     );
     assert!(!stub.contains("CottTuple2"), "{stub}");
+    assert!(
+        !types.contains("_cott_validate_abi(self.values, CottArray[T, Literal[N]]"),
+        "{types}"
+    );
 }
 
 #[test]
@@ -353,8 +357,6 @@ fn emits_complete_deterministic_python_artifact_tree() {
     assert_eq!(first.files, second.files);
     let expected_paths = [
         "python/__init__.py",
-        "python/_cott_impl/__init__.py",
-        "python/_cott_impl/app/__init__.py",
         "python/cott_runtime/__init__.py",
         "python/cott_runtime/py.typed",
         "python/app_types.py",
@@ -370,6 +372,21 @@ fn emits_complete_deterministic_python_artifact_tree() {
         assert!(!bytes(&first.files, path).ends_with(b"\n\n"));
     }
     assert!(!first.files.contains_key(Path::new("python/__main__.py")));
+    assert!(
+        !first
+            .files
+            .contains_key(Path::new("python/_cott_impl/__init__.py"))
+    );
+    assert!(
+        !first
+            .files
+            .contains_key(Path::new("python/_cott_impl/app/__init__.py"))
+    );
+    assert!(
+        !first
+            .files
+            .contains_key(Path::new("python/_cott_impl/app/py.typed"))
+    );
     let facade = String::from_utf8_lossy(bytes(&first.files, "python/app.py"));
     assert!(facade.contains("_cott_load"));
     assert!(facade.contains("run"));
@@ -378,10 +395,18 @@ fn emits_complete_deterministic_python_artifact_tree() {
     let generation: serde_json::Value =
         serde_json::from_slice(bytes(&first.files, "generation.json"))
             .expect("generation record should be JSON");
-    assert_eq!(generation["schema_version"], 5);
+    assert_eq!(generation["schema_version"], 7);
     assert_eq!(generation["current"]["verified"], false);
     assert!(generation["current"].get("project").is_none());
     assert!(generation["current"].get("entry").is_none());
+    assert_eq!(
+        generation["current"]["semantic_coverage"],
+        serde_json::json!({
+            "clauses": [],
+            "summary": {"observed": 0, "unobserved": 0, "trust_declaration": 0, "unknown": 0},
+            "policy": {"selected": 0, "passed": true, "violations": []},
+        })
+    );
     let implementation = &generation["current"]["implementations"][0];
     assert_eq!(implementation["cott_symbol"], "app.run");
     assert_eq!(implementation["owner"], "manifest");
@@ -1886,5 +1911,144 @@ enum Tree:
         "generated enum hash behavior failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn struct_constructors_normalize_and_enforce_invariants_at_boundaries() {
+    if Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let files = emit_sources(&[(
+        "model.cott",
+        r#"module model
+
+struct Node:
+    value: I32
+    next: Option[Node] = Option.Nothing
+
+    invariant self.value >= 0
+"#,
+    )]);
+    let types = String::from_utf8_lossy(bytes(&files, "python/model_types.py"));
+    assert!(
+        types.contains("def __post_init__(self) -> None:"),
+        "{types}"
+    );
+    assert!(types.contains("_cott_validated_construction()"), "{types}");
+    assert!(types.contains("phase=\"invariant\""), "{types}");
+    let temp = TempDir::new();
+    for (relative, content) in &files {
+        let path = temp.path.join(relative);
+        fs::create_dir_all(path.parent().expect("generated artifact parent"))
+            .expect("generated artifact parent should be writable");
+        fs::write(path, content).expect("generated artifact should be writable");
+    }
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(
+            r#"from cott_runtime import CottContractViolation, _cott_validate_abi
+from model_types import Node
+try:
+    Node(value=-1)
+except CottContractViolation as error:
+    assert error.phase == "invariant" and error.symbol == "model.Node"
+else:
+    raise AssertionError("invalid constructor succeeded")
+node = Node(value=1)
+object.__setattr__(node, "value", -1)
+try:
+    _cott_validate_abi(node, Node)
+except CottContractViolation as error:
+    assert error.phase == "invariant"
+else:
+    raise AssertionError("forged value crossed active boundary")
+"#,
+        )
+        .current_dir(temp.path.join("python"))
+        .output()
+        .expect("python3 should execute generated structs");
+    assert!(
+        output.status.success(),
+        "generated struct invariants failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn scenarios_affect_contract_identity_without_python_projection() {
+    let files = emit_sources(&[(
+        "workflow.cott",
+        r#"module workflow
+
+fn run() -> Unit
+
+scenario check for run:
+    tick
+"#,
+    )]);
+    let facade = String::from_utf8_lossy(bytes(&files, "python/workflow.py"));
+    let types = String::from_utf8_lossy(bytes(&files, "python/workflow_types.py"));
+    let generation: Value = serde_json::from_slice(bytes(&files, "generation.json"))
+        .expect("generation record should be JSON");
+    assert!(!facade.contains("def check("), "{facade}");
+    assert!(!facade.contains("\"check\""), "{facade}");
+    assert!(!types.contains("\"check\""), "{types}");
+    assert!(
+        generation["current"]["contract_surface"]["workflow"]["declarations"]
+            .to_string()
+            .contains("workflow.scenario.check"),
+        "{generation}"
+    );
+    assert!(
+        !generation["current"]["public_python_symbols"]["workflow"]
+            .to_string()
+            .contains("check"),
+        "{generation}"
+    );
+}
+
+#[test]
+fn renders_location_and_browser_state_intrinsics() {
+    let files = emit_sources(&[(
+        "browser.cott",
+        r##"module browser
+
+enum LocationKind:
+    Web
+    File
+
+struct Location:
+    kind: LocationKind
+    target: Str
+
+    invariant self.kind != LocationKind.Web or starts_with(self.target, "https://")
+    invariant self.kind != LocationKind.File or not contains(self.target, "#")
+
+struct Visit:
+    location: Location
+    visited_at: U64
+
+struct BrowserState:
+    history: List[Visit]
+
+    invariant unique_by(self.history, Visit.location)
+    invariant descending_by(self.history, Visit.visited_at)
+"##,
+    )]);
+    let types = String::from_utf8_lossy(bytes(&files, "python/browser_types.py"));
+    assert!(
+        types.contains("_cott_starts_with((self).target, \"https://\")"),
+        "{types}"
+    );
+    assert!(types.contains("(\"#\" in (self).target)"), "{types}");
+    assert!(
+        types.contains("_cott_unique_by((self).history, \"location\")"),
+        "{types}"
+    );
+    assert!(
+        types.contains("_cott_descending_by((self).history, \"visited_at\")"),
+        "{types}"
     );
 }

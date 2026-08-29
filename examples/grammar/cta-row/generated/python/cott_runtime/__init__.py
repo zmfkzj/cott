@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio as _asyncio
 import dataclasses as _dataclasses
 import ast as _ast
+import contextlib as _contextlib
 import hashlib as _hashlib
 import importlib.metadata as _metadata
 import json as _json
@@ -17,6 +18,8 @@ import sys as _sys
 import sysconfig as _sysconfig
 import threading as _threading
 import types as _types
+import urllib.parse as _urlparse
+import urllib.request as _urlrequest
 from collections.abc import AsyncGenerator as _AsyncGenerator, AsyncIterator as _AsyncIterator, Generator as _Generator, Iterable, Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass
 from pathlib import Path as _Path
@@ -30,8 +33,8 @@ _COTT_PATH_TYPE = type(_Path())
 PROJECT_NAME = 'cta-row'
 _COTT_PROJECT_NAME = PROJECT_NAME
 PROJECT_VERSION = '0.1.0'
-_COTT_RUNTIME_ABI = "5"
-_COTT_RUNTIME_VERSION = '0.6.0'
+_COTT_RUNTIME_ABI = "7"
+_COTT_RUNTIME_VERSION = '0.8.0'
 
 
 _S = TypeVar("_S")
@@ -140,6 +143,41 @@ def _cott_euclidean_mod(left: int, right: int) -> int:
     if right == 0:
         raise CottContractViolation("integer remainder divisor is zero", phase="contract-expression")
     return left % abs(right)
+
+def _cott_starts_with(value: object, prefix: object) -> bool:
+    return type(value) is str and type(prefix) is str and value.startswith(prefix)
+
+
+def _cott_ends_with(value: object, suffix: object) -> bool:
+    return type(value) is str and type(suffix) is str and value.endswith(suffix)
+
+
+def _cott_canonical_equal(left: object, right: object) -> bool:
+    return type(left) is type(right) and left == right
+
+
+def _cott_unique_by(values: object, field: str) -> bool:
+    seen: list[object] = []
+    for value in values:
+        selected = getattr(value, field)
+        if any(_cott_canonical_equal(selected, previous) for previous in seen):
+            return False
+        seen.append(selected)
+    return True
+
+
+def _cott_descending_by(values: object, field: str) -> bool:
+    iterator = iter(values)
+    try:
+        previous = getattr(next(iterator), field)
+    except StopIteration:
+        return True
+    for value in iterator:
+        current = getattr(value, field)
+        if not current <= previous:
+            return False
+        previous = current
+    return True
 
 
 def _cott_normalize_scalar(value: object, annotation: object) -> object:
@@ -526,12 +564,42 @@ def _cott_substitute_type(annotation: object, substitutions: dict[object, object
     if not args:
         return annotation
     replaced = tuple(_cott_substitute_type(item, substitutions) for item in args)
+    origin = _get_origin(annotation)
+    if origin is Literal:
+        replaced = tuple(
+            value
+            for item in replaced
+            for value in (_get_args(item) if _get_origin(item) is Literal else (item,))
+        )
+        return Literal[replaced]
     if replaced == args:
         return annotation
     copier = getattr(annotation, "copy_with", None)
     if copier is not None:
         return copier(replaced)
+    if origin is not None:
+        try:
+            return origin[replaced]
+        except (AttributeError, TypeError):
+            pass
     return annotation
+
+
+_COTT_VALIDATED_CONSTRUCTION = _threading.local()
+
+
+def _cott_validated_construction() -> bool:
+    return getattr(_COTT_VALIDATED_CONSTRUCTION, "depth", 0) > 0
+
+
+@_contextlib.contextmanager
+def _cott_validated_construction_scope() -> Iterator[None]:
+    depth = getattr(_COTT_VALIDATED_CONSTRUCTION, "depth", 0)
+    _COTT_VALIDATED_CONSTRUCTION.depth = depth + 1
+    try:
+        yield
+    finally:
+        _COTT_VALIDATED_CONSTRUCTION.depth = depth
 
 
 def _cott_validate_abi(value: object, annotation: object, *, path: str = "$", _state: _CottTraversal | None = None, _depth: int = 0) -> object:
@@ -674,10 +742,18 @@ def _cott_validate_abi_value(value: object, annotation: object, path: str, state
         if _dataclasses.is_dataclass(nominal):
             substitutions = dict(zip(getattr(nominal, "__parameters__", ()), args))
             hints = _get_type_hints(nominal, include_extras=True)
-            return nominal(**{
-                field.name: _cott_validate_abi(getattr(value, field.name), _cott_substitute_type(hints.get(field.name, Any), substitutions), path=f"{path}.{field.name}", _state=state, _depth=depth + 1)
+            fields = {
+                field.name: _cott_validate_abi(
+                    getattr(value, field.name),
+                    _cott_substitute_type(hints.get(field.name, Any), substitutions),
+                    path=f"{path}.{field.name}",
+                    _state=state,
+                    _depth=depth + 1,
+                )
                 for field in _dataclasses.fields(nominal)
-            })
+            }
+            with _cott_validated_construction_scope():
+                return nominal(**fields)
         return value
     raise CottContractViolation(f"{path} does not match ABI type", phase="validation")
 
@@ -777,6 +853,224 @@ class CottContractViolation(Exception):
                 detail += f" [{label}={value}]"
         super().__init__(detail)
 
+_COTT_FIXTURE_TOKEN = object()
+_COTT_FIXTURE_STATE = _threading.local()
+_COTT_FIXTURE_TRANSCRIPT_LIMIT = 16_384
+_COTT_FIXTURE_BODY_LIMIT = 1 << 20
+
+
+@_final
+class _CottFixtureContext:
+    __slots__ = ()
+
+
+@dataclass(slots=True)
+class _CottFixtureState:
+    root: _Path
+    http_url: str | None
+    clock: int | None
+    failures: dict[str, tuple[int, str]]
+    transcript_limit: int
+    transcript: list[dict[str, object]]
+
+
+def _cott_fixture_runner_token() -> object:
+    return _COTT_FIXTURE_TOKEN
+
+
+def _cott_fixture_state() -> _CottFixtureState:
+    state = getattr(_COTT_FIXTURE_STATE, "value", None)
+    if type(state) is not _CottFixtureState:
+        raise CottContractViolation("fixture adapters are inactive", phase="fixture")
+    return state
+
+
+def _cott_fixture_record(state: _CottFixtureState, kind: str, **details: object) -> None:
+    if len(state.transcript) >= state.transcript_limit:
+        raise CottContractViolation("fixture transcript limit exceeded", phase="fixture")
+    state.transcript.append({"kind": kind, **details})
+
+
+def _cott_fixture_maybe_fail(state: _CottFixtureState, point: str) -> None:
+    occurrence, error = state.failures.get(point, (0, ""))
+    if occurrence <= 0:
+        return
+    if occurrence > 1:
+        state.failures[point] = (occurrence - 1, error)
+        return
+    state.failures[point] = (0, error)
+    _cott_fixture_record(state, "failure", point=point, error=error)
+    raise OSError(error)
+
+
+@_contextlib.contextmanager
+def _cott_fixture_activate(
+    token: object,
+    *,
+    root: object,
+    http_url: object,
+    clock: object,
+    failures: object,
+    transcript_limit: object,
+) -> Iterator[_CottFixtureContext]:
+    if token is not _COTT_FIXTURE_TOKEN:
+        raise CottContractViolation("fixture activation is runner-only", phase="fixture")
+    if getattr(_COTT_FIXTURE_STATE, "value", None) is not None:
+        raise CottContractViolation("fixture activation is already active", phase="fixture")
+    if (clock is not None and type(clock) is not int) or type(transcript_limit) is not int or not 0 < transcript_limit <= _COTT_FIXTURE_TRANSCRIPT_LIMIT:
+        raise CottContractViolation("fixture activation limits are invalid", phase="fixture")
+    if http_url is not None:
+        if type(http_url) is not str:
+            raise CottContractViolation("fixture HTTP endpoint is invalid", phase="fixture")
+        endpoint = _urlparse.urlsplit(http_url)
+        if (
+            endpoint.scheme != "http"
+            or endpoint.hostname not in ("127.0.0.1", "::1", "localhost")
+            or endpoint.username is not None
+            or endpoint.password is not None
+            or endpoint.query
+            or endpoint.fragment
+        ):
+            raise CottContractViolation("fixture HTTP endpoint is not compiler-owned loopback", phase="fixture")
+    if (
+        type(failures) is not dict
+        or any(
+            type(point) is not str
+            or type(value) is not dict
+            or set(value) != {"occurrence", "error"}
+            or type(value["occurrence"]) is not int
+            or value["occurrence"] <= 0
+            or type(value["error"]) is not str
+            or not value["error"]
+            for point, value in failures.items()
+        )
+    ):
+        raise CottContractViolation("fixture failures are invalid", phase="fixture")
+    try:
+        fixture_root = _Path(root).resolve(strict=True)
+    except (OSError, TypeError, ValueError) as error:
+        raise CottContractViolation(f"fixture root is invalid: {error}", phase="fixture") from error
+    if not fixture_root.is_dir():
+        raise CottContractViolation("fixture root is not a directory", phase="fixture")
+    _COTT_FIXTURE_STATE.value = _CottFixtureState(
+        root=fixture_root,
+        http_url=http_url,
+        clock=clock,
+        failures={point: (value["occurrence"], value["error"]) for point, value in failures.items()},
+        transcript_limit=transcript_limit,
+        transcript=[],
+    )
+    try:
+        yield _CottFixtureContext()
+    finally:
+        _COTT_FIXTURE_STATE.value = None
+
+
+def _cott_fixture_path(state: _CottFixtureState, path: object) -> tuple[str, _Path]:
+    if type(path) is not str or not path or path.startswith("/") or "\\" in path:
+        raise CottContractViolation("fixture path must be a non-empty relative POSIX path", phase="fixture")
+    parts = path.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise CottContractViolation("fixture path escapes its root", phase="fixture")
+    resolved = state.root.joinpath(*parts).resolve(strict=False)
+    if state.root not in resolved.parents:
+        raise CottContractViolation("fixture path escapes its root", phase="fixture")
+    return path, resolved
+
+def _cott_fixture_read(path: object) -> bytes:
+    state = _cott_fixture_state()
+    relative, target = _cott_fixture_path(state, path)
+    _cott_fixture_maybe_fail(state, "file.open")
+    _cott_fixture_maybe_fail(state, "file.read")
+    try:
+        value = target.read_bytes()
+    except OSError as error:
+        raise CottContractViolation(f"fixture read failed: {error}", phase="fixture") from error
+    _cott_fixture_record(state, "filesystem.read", path=relative, bytes=len(value))
+    return value
+
+
+def _cott_fixture_write(path: object, data: object) -> None:
+    state = _cott_fixture_state()
+    relative, target = _cott_fixture_path(state, path)
+    if type(data) is not bytes:
+        raise CottContractViolation("fixture write data must be bytes", phase="fixture")
+    _cott_fixture_maybe_fail(state, "file.open")
+    _cott_fixture_maybe_fail(state, "file.write")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        _cott_fixture_maybe_fail(state, "file.flush")
+    except OSError as error:
+        raise CottContractViolation(f"fixture write failed: {error}", phase="fixture") from error
+    _cott_fixture_record(state, "filesystem.write", path=relative, bytes=len(data))
+
+
+def _cott_fixture_replace(path: object, data: object) -> None:
+    state = _cott_fixture_state()
+    relative, target = _cott_fixture_path(state, path)
+    if type(data) is not bytes:
+        raise CottContractViolation("fixture replacement data must be bytes", phase="fixture")
+    _cott_fixture_maybe_fail(state, "file.open")
+    _cott_fixture_maybe_fail(state, "file.write")
+    temporary = target.with_name(f".{target.name}.cott.tmp")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = _os.open(temporary, _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL, 0o600)
+        with _os.fdopen(descriptor, "wb") as output:
+            output.write(data)
+            output.flush()
+            _cott_fixture_maybe_fail(state, "file.flush")
+            _os.fsync(output.fileno())
+        _cott_fixture_maybe_fail(state, "file.replace")
+        _os.replace(temporary, target)
+    except OSError as error:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise CottContractViolation(f"fixture replacement failed: {error}", phase="fixture") from error
+    _cott_fixture_record(state, "filesystem.replace", path=relative, bytes=len(data))
+
+
+def _cott_fixture_http(url: object) -> bytes:
+    state = _cott_fixture_state()
+    if type(url) is not str or state.http_url is None:
+        raise CottContractViolation("fixture HTTP endpoint is unavailable", phase="fixture")
+    expected, received = _urlparse.urlsplit(state.http_url), _urlparse.urlsplit(url)
+    if (received.scheme, received.netloc) != (expected.scheme, expected.netloc):
+        raise CottContractViolation("fixture HTTP endpoint is unauthorized", phase="fixture")
+    _cott_fixture_maybe_fail(state, "http.connect")
+    try:
+        with _urlrequest.urlopen(url, timeout=1) as response:
+            _cott_fixture_maybe_fail(state, "http.read")
+            value = response.read(_COTT_FIXTURE_BODY_LIMIT + 1)
+    except OSError as error:
+        raise CottContractViolation(f"fixture HTTP fetch failed: {error}", phase="fixture") from error
+    if len(value) > _COTT_FIXTURE_BODY_LIMIT:
+        raise CottContractViolation("fixture HTTP response exceeds its limit", phase="fixture")
+    _cott_fixture_record(state, "http.fetch", path=received.path, bytes=len(value))
+    return value
+
+
+def _cott_fixture_now() -> int:
+    state = _cott_fixture_state()
+    if state.clock is None:
+        raise CottContractViolation("fixture clock is unavailable", phase="fixture")
+    _cott_fixture_maybe_fail(state, "clock.read")
+    _cott_fixture_record(state, "clock.read")
+    return state.clock
+
+
+def _cott_fixture_fail(point: object) -> None:
+    if type(point) is not str:
+        raise CottContractViolation("fixture failure point is invalid", phase="fixture")
+    _cott_fixture_maybe_fail(_cott_fixture_state(), point)
+
+
+def _cott_fixture_transcript() -> list[dict[str, object]]:
+    return [dict(event) for event in _cott_fixture_state().transcript]
+
 @_final
 class _CottTraversalFailure(CottContractViolation):
     pass
@@ -875,11 +1169,11 @@ class _CottAsyncGenerator(_CottAsyncIterator[_T], _AsyncGenerator[_T, _S]):
     async def asend(self, value: _S) -> _T:
         if self._closed:
             raise StopAsyncIteration
-        if self._started or value is not None:
-            value = self._validator(value, self._send_type, path=f"{self._path}.send")
-        self._started = True
         self._begin()
         try:
+            if self._started or value is not None:
+                value = self._validator(value, self._send_type, path=f"{self._path}.send")
+            self._started = True
             result = await self._generator.asend(value)
         except StopAsyncIteration:
             self._closed = True
@@ -1313,11 +1607,134 @@ def _cott_is_unresolved(value: object) -> bool:
         and span["end_column"] > 0
     )
 
+def _cott_is_span(value: object) -> bool:
+    return (
+        type(value) is dict
+        and set(value) == {"start_byte", "end_byte", "start_line", "start_column", "end_line", "end_column"}
+        and all(type(value[key]) is int and value[key] >= 0 for key in value)
+        and value["end_byte"] >= value["start_byte"]
+        and value["end_line"] >= value["start_line"]
+        and value["start_line"] > 0
+        and value["start_column"] > 0
+        and value["end_line"] > 0
+        and value["end_column"] > 0
+    )
+
+
+def _cott_coverage_identifier(value: object) -> bool:
+    return (
+        type(value) is str
+        and bool(value)
+        and (value[0] == "_" or value[0].isalpha() and value[0].isascii())
+        and all(character == "_" or character.isalnum() and character.isascii() for character in value[1:])
+    )
+
+
+def _cott_coverage_symbol(value: object) -> bool:
+    return type(value) is str and bool(value) and all(
+        _cott_coverage_identifier(part) for part in value.split(".")
+    )
+
+
+def _cott_coverage_key(symbol: object, clause_id: object) -> tuple[str, int, int, str] | None:
+    if not _cott_coverage_symbol(symbol) or type(clause_id) is not str:
+        return None
+    kind, separator, identifier = clause_id.partition(":")
+    if not separator or not identifier or ":" in identifier:
+        return None
+    kind_order = {"requires": 0, "ensures": 1, "error": 2, "modifies": 3, "invariant": 4}.get(kind)
+    if kind_order is None:
+        return None
+    if kind == "modifies":
+        return (
+            (symbol, kind_order, 0, identifier)
+            if all(_cott_coverage_identifier(part) for part in identifier.split("."))
+            else None
+        )
+    if (
+        len(identifier) > 10
+        or not identifier.isascii()
+        or not identifier.isdecimal()
+        or str(int(identifier)) != identifier
+    ):
+        return None
+    numeric_id = int(identifier)
+    return (symbol, kind_order, numeric_id, "") if numeric_id <= 0xFFFF_FFFF else None
+
+
+def _cott_is_coverage_entry(value: object) -> bool:
+    return (
+        type(value) is dict
+        and set(value) == {"symbol", "clause_id", "span", "status", "evidence"}
+        and _cott_coverage_key(value["symbol"], value["clause_id"]) is not None
+        and _cott_is_span(value["span"])
+        and value["status"] in ("observed", "unobserved", "trust_declaration", "unknown")
+        and type(value["evidence"]) is list
+    )
+
+
+def _cott_is_semantic_coverage(value: object) -> bool:
+    if type(value) is not dict or set(value) != {"clauses", "summary", "policy"}:
+        return False
+    clauses, summary, policy = value["clauses"], value["summary"], value["policy"]
+    if (
+        type(clauses) is not list
+        or not all(_cott_is_coverage_entry(clause) for clause in clauses)
+        or type(summary) is not dict
+        or set(summary) != {"observed", "unobserved", "trust_declaration", "unknown"}
+        or any(type(count) is not int or count < 0 for count in summary.values())
+        or type(policy) is not dict
+        or set(policy) != {"selected", "passed", "violations"}
+        or type(policy["selected"]) is not int
+        or policy["selected"] < 0
+        or type(policy["passed"]) is not bool
+        or type(policy["violations"]) is not list
+    ):
+        return False
+    clause_keys = [_cott_coverage_key(clause["symbol"], clause["clause_id"]) for clause in clauses]
+    if clause_keys != sorted(clause_keys) or len(set(clause_keys)) != len(clause_keys):
+        return False
+    counts = {status: 0 for status in summary}
+    for clause in clauses:
+        counts[clause["status"]] += 1
+    if summary != counts or policy["selected"] > len(clauses):
+        return False
+    violations = policy["violations"]
+    if policy["passed"] != (not violations) or len(violations) > policy["selected"]:
+        return False
+    clause_index = {
+        _cott_coverage_key(clause["symbol"], clause["clause_id"]): clause for clause in clauses
+    }
+    violation_keys = []
+    for violation in violations:
+        if (
+            type(violation) is not dict
+            or set(violation) != {"symbol", "clause_id", "span", "status", "reason"}
+            or _cott_coverage_key(violation["symbol"], violation["clause_id"]) is None
+            or not _cott_is_span(violation["span"])
+            or violation["status"] not in counts
+            or type(violation["reason"]) is not str
+            or not violation["reason"].strip()
+        ):
+            return False
+        key = _cott_coverage_key(violation["symbol"], violation["clause_id"])
+        violation_keys.append(key)
+        clause = clause_index.get(key)
+        if (
+            clause is None
+            or clause["status"] != violation["status"]
+            or clause["span"] != violation["span"]
+            or violation["status"] == "observed"
+        ):
+            return False
+    return violation_keys == sorted(violation_keys) and len(set(violation_keys)) == len(violation_keys)
+
+
 def _cott_validate_generation_snapshot(snapshot: object, label: str) -> dict[object, object]:
     required = {
         "generation_id", "verified", "project_version", "compatibility", "inputs", "tools", "ir",
         "contract_surface", "public_python_symbols", "implementations", "dependencies", "managed_files",
-        "unresolved", "verification", "agent_runs",
+        "unresolved", "verification", "semantic_coverage", "agent_runs",
     }
     if type(snapshot) is not dict or set(snapshot) != required:
         raise _cott_violation(f"{label} generation snapshot is malformed")
@@ -1326,9 +1743,16 @@ def _cott_validate_generation_snapshot(snapshot: object, label: str) -> dict[obj
     compatibility = snapshot["compatibility"]
     if (
         type(compatibility) is not dict
-        or set(compatibility) != {"generation_schema", "canonical_ir_schema", "runtime_abi"}
+        or set(compatibility) != {
+            "generation_schema", "canonical_ir_schema", "runtime_abi", "contract_strategy_schema",
+        }
         or any(type(compatibility[key]) is not int for key in compatibility)
-        or compatibility != {"generation_schema": 5, "canonical_ir_schema": 7, "runtime_abi": 5}
+        or compatibility != {
+            "generation_schema": 7,
+            "canonical_ir_schema": 8,
+            "runtime_abi": 7,
+            "contract_strategy_schema": 5,
+        }
     ):
         raise _cott_violation(f"{label} generation compatibility is incompatible")
     for field in ("inputs", "ir", "managed_files"):
@@ -1404,6 +1828,7 @@ def _cott_validate_generation_snapshot(snapshot: object, label: str) -> dict[obj
         type(snapshot["unresolved"]) is not list
         or any(not _cott_is_unresolved(record) for record in snapshot["unresolved"])
         or not _cott_is_verification(snapshot["verification"])
+        or not _cott_is_semantic_coverage(snapshot["semantic_coverage"])
         or type(snapshot["agent_runs"]) is not list
         or any(not _cott_is_agent_run(agent_run) for agent_run in snapshot["agent_runs"])
     ):
@@ -1414,11 +1839,11 @@ def _cott_validate_generation_snapshot(snapshot: object, label: str) -> dict[obj
 def _cott_validate_generation_identity(snapshot: dict[object, object]) -> str:
     generation_id = snapshot["generation_id"]
     current = dict(snapshot)
-    for key in ("generation_id", "verified", "verification", "agent_runs"):
+    for key in ("generation_id", "verified", "verification", "semantic_coverage", "agent_runs"):
         current.pop(key)
     expected_id = _cott_sha256(
         _json.dumps(
-            {"domain": "cott.generation.v5", "schema_version": 5, "current": current},
+            {"domain": "cott.generation.v7", "schema_version": 7, "current": current},
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,
@@ -1441,7 +1866,7 @@ def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symb
         type(current_record) is not dict
         or set(current_record) != {"schema_version", "current", "last_verified"}
         or type(current_record["schema_version"]) is not int
-        or current_record["schema_version"] != 5
+        or current_record["schema_version"] != 7
     ):
         raise _cott_violation("generation record is malformed")
     current = _cott_validate_generation_snapshot(current_record["current"], "current")

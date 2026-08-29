@@ -1,0 +1,3 @@
+`CottList` and `CottSet` are directly iterable and support `len()`; use neither `.values` nor other wrapper accessors. `.values` is constructor syntax only.
+
+Implement the exact deterministic topological ordering and conditional error priority declared in the prompt. `plan_pipeline` must call the generated `curriculum.artifact_pipeline.topologically_order_steps` facade and propagate its error unchanged.

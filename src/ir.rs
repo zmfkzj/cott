@@ -11,9 +11,12 @@ use crate::hir::{
     HirEffect, HirExpr, HirExprKind, HirField, HirGenericArg, HirGenericParam, HirImplInitializer,
     HirImplMethod, HirMatchGuard, HirMethod, HirModule, HirParameter, HirParameterKind, HirPattern,
     HirPatternKind, HirProject, HirReference, HirResource, HirResourceTerminal,
-    HirResourceTransition, HirSelectedImplementation, HirType, HirUnaryOp, HirValue, HirVariance,
-    HirVariant, PrimitiveType,
+    HirResourceTransition, HirScenario, HirScenarioData, HirScenarioFailureError,
+    HirScenarioFailurePoint, HirScenarioFixtureKind, HirScenarioHttpOutcome, HirScenarioStep,
+    HirSelectedImplementation, HirType, HirUnaryOp, HirValue, HirVariance, HirVariant,
+    PrimitiveType,
 };
+use crate::provenance::CANONICAL_IR_SCHEMA_VERSION;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CanonicalIr {
@@ -108,7 +111,7 @@ fn render_module(module: &HirModule) -> CanonicalModule {
     json.string(&module.id.as_string());
     json.comma();
     json.key("schema_version");
-    json.number("7");
+    json.number_u32(CANONICAL_IR_SCHEMA_VERSION);
     json.comma();
     json.key("source");
     json.string(&source_string(&module.source));
@@ -202,6 +205,31 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
             json.comma();
             json.key("fields");
             render_fields(json, &value.fields);
+            json.comma();
+            json.key("invariants");
+            json.array_start();
+            for (index, invariant) in value.invariants.iter().enumerate() {
+                if index != 0 {
+                    json.comma();
+                }
+                json.object_start();
+                json.key("clause_id");
+                json.number_u32(invariant.clause_id);
+                json.comma();
+                json.key("expression");
+                render_expr(json, &invariant.expression);
+                json.comma();
+                json.key("guard");
+                match &invariant.guard {
+                    Some(guard) => render_match_guard(json, guard),
+                    None => json.null(),
+                }
+                json.comma();
+                json.key("span");
+                render_span(json, &invariant.span);
+                json.object_end();
+            }
+            json.array_end();
             json.object_end();
         }
         HirDeclaration::Enum(value) => {
@@ -504,6 +532,414 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
             }
             json.object_end();
         }
+        HirDeclaration::Scenario(value) => render_scenario(json, value),
+    }
+}
+
+fn render_scenario(json: &mut Json, value: &HirScenario) {
+    json.object_start();
+    json.key("doc");
+    render_doc(json, value.doc.as_ref());
+    json.comma();
+    json.key("fixtures");
+    json.array_start();
+    for (index, fixture) in value.fixtures.iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
+        json.object_start();
+        json.key("id");
+        json.string(&fixture.id.as_string());
+        json.comma();
+        json.key("kind");
+        match &fixture.kind {
+            HirScenarioFixtureKind::Filesystem { files } => {
+                json.string("fs");
+                json.comma();
+                json.key("files");
+                json.array_start();
+                for (index, file) in files.iter().enumerate() {
+                    if index != 0 {
+                        json.comma();
+                    }
+                    json.object_start();
+                    json.key("data");
+                    render_scenario_data(json, &file.data);
+                    json.comma();
+                    json.key("path");
+                    json.string(&file.path);
+                    json.comma();
+                    json.key("source_order");
+                    json.number_usize(file.source_order);
+                    json.comma();
+                    json.key("span");
+                    render_span(json, &file.span);
+                    json.object_end();
+                }
+                json.array_end();
+            }
+            HirScenarioFixtureKind::Http { routes } => {
+                json.string("http");
+                json.comma();
+                json.key("routes");
+                json.array_start();
+                for (index, route) in routes.iter().enumerate() {
+                    if index != 0 {
+                        json.comma();
+                    }
+                    json.object_start();
+                    json.key("outcome");
+                    render_scenario_outcome(json, &route.outcome);
+                    json.comma();
+                    json.key("path");
+                    json.string(&route.path);
+                    json.comma();
+                    json.key("source_order");
+                    json.number_usize(route.source_order);
+                    json.comma();
+                    json.key("span");
+                    render_span(json, &route.span);
+                    json.object_end();
+                }
+                json.array_end();
+            }
+            HirScenarioFixtureKind::Clock { start_ms, tick_ms } => {
+                json.string("clock");
+                json.comma();
+                json.key("start_ms");
+                json.number(&start_ms.to_string());
+                json.comma();
+                json.key("tick_ms");
+                json.number(&tick_ms.to_string());
+            }
+            HirScenarioFixtureKind::Failure {
+                point,
+                occurrence,
+                error,
+            } => {
+                json.string("failure");
+                json.comma();
+                json.key("error");
+                json.string(failure_error_name(*error));
+                json.comma();
+                json.key("occurrence");
+                json.number(&occurrence.to_string());
+                json.comma();
+                json.key("point");
+                json.string(failure_point_name(*point));
+            }
+        }
+        json.comma();
+        json.key("source_order");
+        json.number_usize(fixture.source_order);
+        json.comma();
+        json.key("span");
+        render_span(json, &fixture.span);
+        json.object_end();
+    }
+    json.array_end();
+    json.comma();
+    json.key("kind");
+    json.string("scenario");
+    json.comma();
+    json.key("lifecycle_limit");
+    json.number_u32(value.lifecycle_limit);
+    json.comma();
+    json.key("name");
+    json.string(&value.id.as_string());
+    json.comma();
+    json.key("public");
+    json.boolean(false);
+    json.comma();
+    json.key("required_effects");
+    render_effects(json, &value.required_effects);
+    json.comma();
+    json.key("source_order");
+    json.number_usize(value.source_order);
+    json.comma();
+    json.key("span");
+    render_span(json, &value.span);
+    json.comma();
+    json.key("steps");
+    json.array_start();
+    for (index, step) in value.steps.iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
+        render_scenario_step(json, step);
+    }
+    json.array_end();
+    json.comma();
+    json.key("target");
+    match &value.target {
+        Some(target) => json.string(&target.as_string()),
+        None => json.null(),
+    }
+    json.object_end();
+}
+
+fn render_scenario_data(json: &mut Json, data: &HirScenarioData) {
+    json.object_start();
+    match data {
+        HirScenarioData::Text(value) => {
+            json.key("kind");
+            json.string("text");
+            json.comma();
+            json.key("value");
+            json.string(value);
+        }
+        HirScenarioData::Bytes(value) => {
+            json.key("kind");
+            json.string("bytes");
+            json.comma();
+            json.key("value");
+            json.string(
+                &value
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>(),
+            );
+        }
+    }
+    json.object_end();
+}
+
+fn render_scenario_outcome(json: &mut Json, outcome: &HirScenarioHttpOutcome) {
+    json.object_start();
+    match outcome {
+        HirScenarioHttpOutcome::Response {
+            status,
+            body,
+            encoding,
+        } => {
+            json.key("kind");
+            json.string("response");
+            json.comma();
+            json.key("body");
+            render_scenario_data(json, body);
+            json.comma();
+            json.key("encoding");
+            json.string(encoding);
+            json.comma();
+            json.key("status");
+            json.number(&status.to_string());
+        }
+        HirScenarioHttpOutcome::Redirect { status, location } => {
+            json.key("kind");
+            json.string("redirect");
+            json.comma();
+            json.key("location");
+            json.string(location);
+            json.comma();
+            json.key("status");
+            json.number(&status.to_string());
+        }
+        HirScenarioHttpOutcome::Delay { milliseconds } => {
+            json.key("kind");
+            json.string("delay");
+            json.comma();
+            json.key("milliseconds");
+            json.number(&milliseconds.to_string());
+        }
+        HirScenarioHttpOutcome::Disconnect => {
+            json.key("kind");
+            json.string("disconnect");
+        }
+    }
+    json.object_end();
+}
+
+fn render_scenario_step(json: &mut Json, step: &HirScenarioStep) {
+    json.object_start();
+    match step {
+        HirScenarioStep::Call {
+            step_id,
+            span,
+            binding,
+            target,
+            callable_kind: scenario_callable_kind,
+            parameters,
+            return_type,
+            arguments,
+        } => {
+            json.key("arguments");
+            render_scenario_arguments(json, arguments);
+            json.comma();
+            json.key("binding");
+            json.string(&binding.as_string());
+            json.comma();
+            json.key("callable_kind");
+            json.string(callable_kind(*scenario_callable_kind));
+            json.comma();
+            json.key("kind");
+            json.string("call");
+            json.comma();
+            json.key("parameters");
+            render_scenario_types(json, parameters);
+            json.comma();
+            json.key("return_type");
+            render_type(json, return_type);
+            json.comma();
+            json.key("step_id");
+            json.number_u32(*step_id);
+            json.comma();
+            json.key("span");
+            render_span(json, span);
+            json.comma();
+            json.key("target");
+            json.string(&target.as_string());
+        }
+        HirScenarioStep::Spawn {
+            step_id,
+            span,
+            worker,
+            target,
+            parameters,
+            return_type,
+            arguments,
+        } => {
+            json.key("arguments");
+            render_scenario_arguments(json, arguments);
+            json.comma();
+            json.key("kind");
+            json.string("spawn");
+            json.comma();
+            json.key("parameters");
+            render_scenario_types(json, parameters);
+            json.comma();
+            json.key("return_type");
+            render_type(json, return_type);
+            json.comma();
+            json.key("step_id");
+            json.number_u32(*step_id);
+            json.comma();
+            json.key("span");
+            render_span(json, span);
+            json.comma();
+            json.key("target");
+            json.string(&target.as_string());
+            json.comma();
+            json.key("worker");
+            json.string(&worker.as_string());
+        }
+        HirScenarioStep::Await {
+            step_id,
+            span,
+            worker,
+            result,
+            return_type,
+            cancelled,
+        } => {
+            json.key("cancelled");
+            json.boolean(*cancelled);
+            json.comma();
+            json.key("kind");
+            json.string("await");
+            json.comma();
+            json.key("result");
+            match result {
+                Some(value) => json.string(&value.as_string()),
+                None => json.null(),
+            };
+            json.comma();
+            json.key("return_type");
+            render_type(json, return_type);
+            json.comma();
+            json.key("step_id");
+            json.number_u32(*step_id);
+            json.comma();
+            json.key("span");
+            render_span(json, span);
+            json.comma();
+            json.key("worker");
+            json.string(&worker.as_string());
+        }
+        HirScenarioStep::Cancel {
+            step_id,
+            span,
+            worker,
+        } => {
+            json.key("kind");
+            json.string("cancel");
+            json.comma();
+            json.key("step_id");
+            json.number_u32(*step_id);
+            json.comma();
+            json.key("span");
+            render_span(json, span);
+            json.comma();
+            json.key("worker");
+            json.string(&worker.as_string());
+        }
+        HirScenarioStep::Tick { step_id, span } => {
+            json.key("kind");
+            json.string("tick");
+            json.comma();
+            json.key("step_id");
+            json.number_u32(*step_id);
+            json.comma();
+            json.key("span");
+            render_span(json, span);
+        }
+        HirScenarioStep::Assert {
+            step_id,
+            span,
+            expression,
+        } => {
+            json.key("expression");
+            render_expr(json, expression);
+            json.comma();
+            json.key("kind");
+            json.string("assert");
+            json.comma();
+            json.key("step_id");
+            json.number_u32(*step_id);
+            json.comma();
+            json.key("span");
+            render_span(json, span);
+        }
+    }
+    json.object_end();
+}
+fn render_scenario_arguments(json: &mut Json, arguments: &[HirExpr]) {
+    json.array_start();
+    for (index, argument) in arguments.iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
+        render_expr(json, argument);
+    }
+    json.array_end();
+}
+fn render_scenario_types(json: &mut Json, values: &[HirType]) {
+    json.array_start();
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
+        render_type(json, value);
+    }
+    json.array_end();
+}
+fn failure_point_name(value: HirScenarioFailurePoint) -> &'static str {
+    match value {
+        HirScenarioFailurePoint::FileOpen => "file.open",
+        HirScenarioFailurePoint::FileRead => "file.read",
+        HirScenarioFailurePoint::FileWrite => "file.write",
+        HirScenarioFailurePoint::FileFlush => "file.flush",
+        HirScenarioFailurePoint::FileReplace => "file.replace",
+        HirScenarioFailurePoint::HttpConnect => "http.connect",
+        HirScenarioFailurePoint::HttpRead => "http.read",
+        HirScenarioFailurePoint::ClockRead => "clock.read",
+    }
+}
+fn failure_error_name(value: HirScenarioFailureError) -> &'static str {
+    match value {
+        HirScenarioFailureError::PermissionDenied => "permission_denied",
+        HirScenarioFailureError::NotFound => "not_found",
+        HirScenarioFailureError::DiskFull => "disk_full",
+        HirScenarioFailureError::Timeout => "timeout",
+        HirScenarioFailureError::ConnectionReset => "connection_reset",
     }
 }
 
@@ -1603,6 +2039,61 @@ fn render_expr(json: &mut Json, expression: &HirExpr) {
             json.comma();
             json.key("value");
             render_expr(json, value);
+        }
+        HirExprKind::Intrinsic {
+            intrinsic,
+            arguments,
+            selector,
+        } => {
+            json.string("intrinsic");
+            json.comma();
+            json.key("name");
+            json.string(match intrinsic {
+                crate::hir::HirIntrinsic::StartsWith => "starts_with",
+                crate::hir::HirIntrinsic::EndsWith => "ends_with",
+                crate::hir::HirIntrinsic::Contains => "contains",
+                crate::hir::HirIntrinsic::UniqueBy => "unique_by",
+                crate::hir::HirIntrinsic::DescendingBy => "descending_by",
+            });
+            json.comma();
+            json.key("arguments");
+            json.array_start();
+            for (index, argument) in arguments.iter().enumerate() {
+                if index != 0 {
+                    json.comma();
+                }
+                render_expr(json, argument);
+            }
+            json.array_end();
+            json.comma();
+            json.key("selector");
+            match selector {
+                Some(selector) => {
+                    json.object_start();
+                    json.key("owner");
+                    json.string(&selector.owner.as_string());
+                    json.comma();
+                    json.key("field");
+                    json.string(&selector.field.as_string());
+                    json.object_end();
+                }
+                None => json.null(),
+            }
+        }
+        HirExprKind::FixturePath { fixture, path } | HirExprKind::FixtureUrl { fixture, path } => {
+            json.string(
+                if matches!(&expression.kind, HirExprKind::FixturePath { .. }) {
+                    "fixture_path"
+                } else {
+                    "fixture_url"
+                },
+            );
+            json.comma();
+            json.key("fixture");
+            json.string(&fixture.as_string());
+            json.comma();
+            json.key("path");
+            json.string(path);
         }
         HirExprKind::Unary { op, operand } => {
             json.string("unary");

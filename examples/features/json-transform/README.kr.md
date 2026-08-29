@@ -1,7 +1,7 @@
 # json-transform
 
 ## 예제 목적
-이 v0.6 예제는 비어 있지 않은 문자열 키-값을 JSON 객체로 감싸고, 문자열 필드를 안전하게 꺼내며, 유한한 재귀 `JsonChain`을 구성합니다.
+이 v0.7 예제는 비어 있지 않은 문자열 키-값을 JSON 객체로 감싸고, 문자열 필드를 안전하게 꺼내며, 유한한 재귀 `JsonChain`을 구성합니다.
 
 ## 핵심 포인트
 - `wrap_scalar_json`은 명시적인 `async fn`이며, await한 반환값은 `JsonValue`입니다. `key.len > 0`이 필요합니다. Python 바인딩은 동기 브리지 없는 정확한 `async def`로서 `FrozenMap` 안의 `JsonString`으로 JSON 객체를 구성합니다.

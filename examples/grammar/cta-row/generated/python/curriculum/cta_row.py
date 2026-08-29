@@ -24,34 +24,42 @@ Success returns a RideRow containing nominal RouteCode, ServiceDate, and RideCou
     _expected_error_clause = None
     if _expected_error is None and ((not (((day_type == "U") or (day_type == "A")) or (day_type == "W")))):
         _expected_error = RideRowError_InvalidDayType
-        _expected_error_span = {"end_byte":1216,"end_column":103,"end_line":33,"start_byte":1118,"start_column":5,"start_line":33}
-        _expected_error_clause = "error:1"
+        _expected_error_span = {"end_byte":1344,"end_column":103,"end_line":35,"start_byte":1246,"start_column":5,"start_line":35}
+        _expected_error_clause = "error:2"
     if _expected_error is None and ((rides < 0)):
         _expected_error = RideRowError_InvalidRidership
-        _expected_error_span = {"end_byte":1271,"end_column":55,"end_line":34,"start_byte":1221,"start_column":5,"start_line":34}
-        _expected_error_clause = "error:2"
+        _expected_error_span = {"end_byte":1399,"end_column":55,"end_line":36,"start_byte":1349,"start_column":5,"start_line":36}
+        _expected_error_clause = "error:3"
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/cta_row/decode_row.py", "9119c4df86ae9805ce5fbecff043c594ebb803ac0da7b472d5549e9b8ce7d002", "decode_row", expected_project_name="cta-row", expected_cott_symbol="curriculum.cta_row.decode_row")
+        _implementation = _cott_load("_cott_impl/curriculum/cta_row/decode_row.py", "619809dcdb6911972e43edf3b11a457cf3e6076e0b330b7804ac0c0fe16df483", "decode_row", expected_project_name="cta-row", expected_cott_symbol="curriculum.cta_row.decode_row")
         _result = _implementation(route, date, day_type, rides)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.cta_row.decode_row"
         if _error.span is None:
-            _error.span = {"end_byte":1343,"end_column":1,"end_line":37,"start_byte":355,"start_column":1,"start_line":26}
+            _error.span = {"end_byte":1471,"end_column":1,"end_line":39,"start_byte":355,"start_column":1,"start_line":26}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.cta_row.decode_row", phase="implementation-call", span={"end_byte":1343,"end_column":1,"end_line":37,"start_byte":355,"start_column":1,"start_line":26}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.cta_row.decode_row", phase="implementation-call", span={"end_byte":1471,"end_column":1,"end_line":39,"start_byte":355,"start_column":1,"start_line":26}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.cta_row.decode_row", phase="implementation-call", span={"end_byte":1343,"end_column":1,"end_line":37,"start_byte":355,"start_column":1,"start_line":26}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.cta_row.decode_row", phase="implementation-call", span={"end_byte":1471,"end_column":1,"end_line":39,"start_byte":355,"start_column":1,"start_line":26}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[RideRow, RideRowError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="curriculum.cta_row.decode_row", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (RideRowError_InvalidRoute, RideRowError_InvalidDate,):
-            raise CottContractViolation("returned error is not allowed", symbol="curriculum.cta_row.decode_row", phase="error", span={"end_byte":1343,"end_column":1,"end_line":37,"start_byte":355,"start_column":1,"start_line":26}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="curriculum.cta_row.decode_row", phase="error", span={"end_byte":1471,"end_column":1,"end_line":39,"start_byte":355,"start_column":1,"start_line":26}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.cta_row.decode_row", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            row = _cott_match_value.value
+            return ((((((row).route).value == route) and (((row).date).value == date)) and (((row).rides).value <= 9223372036854775807)))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.cta_row.decode_row", clause="ensures:1", phase="ensures", span={"end_byte":1240,"end_column":127,"end_line":33,"start_byte":1118,"start_column":5,"start_line":33}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[RideRow, RideRowError], path="$.return", validator=_cott_validate_abi)
     return _result
 

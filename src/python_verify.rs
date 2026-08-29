@@ -7,11 +7,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
+use crate::binding::{PythonFileRole, audit_facade_file};
 use crate::contract_test::execute_contract_tests;
 use crate::hash::sha256_hex;
 use crate::ir::CanonicalIr;
 use crate::manifest::ProjectConfig;
-use crate::project::ProjectPaths;
+use crate::project::{ProjectPaths, discover_python_sources};
 use crate::proof::prove_contracts;
 use crate::provenance::{GenerationRecord, RUNTIME_ABI_VERSION};
 use crate::python::artifact_plan::{PythonArtifactPlan, PythonCallableKind};
@@ -58,6 +59,12 @@ pub fn verify_python(
     ir: &CanonicalIr,
     scope: Option<&BTreeSet<String>>,
 ) -> Result<VerificationEvidence, String> {
+    let generation = GenerationRecord::parse(
+        &fs::read(artifact_root.join("generation.json"))
+            .map_err(|error| format!("read staged generation record: {error}"))?,
+    )
+    .map_err(|error| format!("invalid staged generation record: {error}"))?;
+    audit_materialized_python(paths, artifact_root, &generation)?;
     let interpreter = executable(
         &paths.root,
         &config.python.interpreter,
@@ -84,6 +91,137 @@ pub fn verify_python(
         )),
         (Ok(evidence), Ok(())) => Ok(evidence),
     }
+}
+
+fn audit_materialized_python(
+    paths: &ProjectPaths,
+    artifact_root: &Path,
+    generation: &GenerationRecord,
+) -> Result<(), String> {
+    let managed_root = paths
+        .generated_dir
+        .parent()
+        .ok_or("target.python.generated has no artifact root")?;
+    let generated_relative = paths
+        .generated_dir
+        .strip_prefix(managed_root)
+        .map_err(|_| "generated Python path escaped artifact root")?;
+    let generated_root = artifact_root.join(generated_relative);
+    let managed_relative = managed_root
+        .strip_prefix(&paths.root)
+        .map_err(|_| "generated artifact root escaped project root")?;
+    let mut expected_implementations = BTreeMap::new();
+    let implementations = generation
+        .current
+        .implementations
+        .as_array()
+        .ok_or("generation implementations must be an array")?;
+    for implementation in implementations {
+        let origin = implementation
+            .get("runtime_origin")
+            .and_then(Value::as_str)
+            .ok_or("generation implementation is missing runtime_origin")?;
+        let hash = implementation
+            .get("content_hash")
+            .and_then(Value::as_str)
+            .ok_or("generation implementation is missing content_hash")?;
+        let origin = Path::new(origin);
+        if !safe_relative(origin) {
+            return Err("generation implementation runtime_origin is unsafe".to_owned());
+        }
+        let Ok(relative) = origin.strip_prefix(generated_relative) else {
+            continue;
+        };
+        if relative.starts_with("_cott_impl") {
+            expected_implementations.insert(relative.to_path_buf(), hash.to_owned());
+        }
+    }
+
+    let mut diagnostics = Vec::new();
+    let mut seen_implementations = BTreeSet::new();
+    for source in discover_python_sources(&generated_root)
+        .map_err(|error| format!("cannot audit Python artifact: {error}"))?
+    {
+        let relative = source.path;
+        let display_path = generated_relative.join(&relative);
+        if relative.starts_with("_cott_impl") {
+            seen_implementations.insert(relative.clone());
+            let expected = expected_implementations.get(&relative);
+            let managed = managed_relative.join(generated_relative).join(&relative);
+            let managed = managed.to_string_lossy().replace('\\', "/");
+            if expected.is_none()
+                || generation.current.managed_files.get(&managed) != expected
+                || expected.is_some_and(|expected| {
+                    expected != &format!("sha256:{}", sha256_hex(source.source.as_bytes()))
+                })
+            {
+                diagnostics.push(format!(
+                    "{}: unexpected private implementation artifact `{}`",
+                    display_path.display(),
+                    relative.display()
+                ));
+            }
+        } else if relative.starts_with("cott_bindings") {
+            diagnostics.push(format!(
+                "{}: unexpected private implementation artifact `{}`",
+                display_path.display(),
+                relative.display()
+            ));
+        }
+        diagnostics.extend(
+            audit_facade_file(
+                &display_path,
+                &source.source,
+                if relative.starts_with("_cott_impl") {
+                    PythonFileRole::GeneratedImplementation
+                } else if relative
+                    .file_name()
+                    .is_some_and(|name| name == "cott_runtime.py")
+                {
+                    PythonFileRole::GeneratedRuntime
+                } else {
+                    PythonFileRole::GeneratedFacade
+                },
+            )
+            .into_iter()
+            .map(|diagnostic| {
+                diagnostic.range.map_or_else(
+                    || format!("{}: {}", diagnostic.path.display(), diagnostic.message),
+                    |range| {
+                        format!(
+                            "{}:{}-{}: {}",
+                            diagnostic.path.display(),
+                            range.start,
+                            range.end,
+                            diagnostic.message
+                        )
+                    },
+                )
+            }),
+        );
+    }
+    for relative in expected_implementations.keys() {
+        if !seen_implementations.contains(relative) {
+            diagnostics.push(format!(
+                "{}: missing private implementation artifact `{}`",
+                generated_relative.display(),
+                relative.display()
+            ));
+        }
+    }
+    diagnostics.sort();
+    diagnostics.dedup();
+    (!diagnostics.is_empty())
+        .then(|| format!("facade boundary audit failed:\n{}", diagnostics.join("\n")))
+        .map_or(Ok(()), Err)
+}
+
+fn safe_relative(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && path.is_relative()
+        && path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
 }
 
 fn callable_identity(
@@ -118,7 +256,7 @@ fn verify_in_scratch(
     type_checker: &Path,
     scratch: &Path,
 ) -> Result<VerificationEvidence, String> {
-    let contract_proofs = prove_contracts(ir, scope)?;
+    let contract_proofs = prove_contracts(ir, scope, &config.verification)?;
     let python_probe = process(
         interpreter,
         vec![
@@ -276,6 +414,17 @@ fn verify_in_scratch(
     let selected_callables = callables
         .iter()
         .filter(|callable| scope.is_none_or(|scope| scope.contains(&callable.cott_symbol)))
+        .filter(|callable| {
+            matches!(
+                callable.kind,
+                PythonCallableKind::Function | PythonCallableKind::AsyncFunction
+            ) || callable
+                .declaration
+                .get("selected")
+                .and_then(|selected| selected.get("origin"))
+                .and_then(Value::as_str)
+                == Some("explicit")
+        })
         .collect::<Vec<_>>();
     let signature_requests = selected_callables
         .iter()
@@ -539,11 +688,18 @@ print(json.dumps(out,sort_keys=True,separators=(',',':')))
         &generated_root,
         &target_site_packages,
         ir,
+        &config.verification,
         config.python.runtime_validation.clone(),
         scope,
     )?;
     candidate_guard.keep = true;
     let report = json!({
+        "limits": {
+            "proof_node_limit": config.verification.proof_node_limit,
+            "proof_branch_limit": config.verification.proof_branch_limit,
+            "candidate_limit": config.verification.candidate_limit,
+            "lifecycle_limit": config.verification.lifecycle_limit,
+        },
         "contract_tests": contract_report,
         "contract_proofs": contract_proofs,
         "runtime_capability": {

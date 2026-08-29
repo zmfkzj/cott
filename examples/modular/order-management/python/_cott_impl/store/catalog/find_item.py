@@ -3,6 +3,7 @@ from store.catalog_types import Catalog, CatalogError, CatalogError_ItemNotFound
 
 
 def find_item(catalog: Catalog, sku: str) -> Result[Item, CatalogError]:
+    """Look up an item in the catalog by its SKU."""
     for item in catalog.items:
         if item.sku == sku:
             return Ok(value=item)

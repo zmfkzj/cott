@@ -21,7 +21,7 @@ def find_item(catalog: Catalog, sku: str) -> Result[Item, CatalogError]:
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/store/catalog/find_item.py", "e54a5ad6b22fd5efb8c01891012f2baf03b47bcfe2f80099cba5062a1f8297bb", "find_item", expected_project_name="order-management", expected_cott_symbol="store.catalog.find_item")
+        _implementation = _cott_load("_cott_impl/store/catalog/find_item.py", "ce922430a2b9266653a3c65177a05addc4d66a4f73a2097b5e97d6a49dbaa6ab", "find_item", expected_project_name="order-management", expected_cott_symbol="store.catalog.find_item")
         _result = _implementation(catalog, sku)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

@@ -1,3 +1,5 @@
+import contextlib
+import http.server
 import asyncio
 import collections.abc
 import dataclasses
@@ -9,11 +11,15 @@ import math
 import os
 import pathlib
 import struct
+import threading
+import urllib.parse
 import sys
 import types
 import typing
 
 import cott_runtime
+
+_SCENARIO_FIXTURES = {}
 
 OMIT = object()
 
@@ -539,6 +545,10 @@ def evaluate(expression, environment, module, receiver=None, result=None, old=No
         return environment[local(expression["symbol"])]
     if kind == "constant_ref":
         return resolve_symbol(expression["symbol"], module)
+    if kind == "fixture_path":
+        return _SCENARIO_FIXTURES[expression["fixture"]]["path"](expression["path"])
+    if kind == "fixture_url":
+        return _SCENARIO_FIXTURES[expression["fixture"]]["url"](expression["path"])
     if kind == "enum_singleton_ref":
         return getattr(module, variant(expression["symbol"]))()
     if kind == "self_ref":
@@ -856,6 +866,89 @@ def unexecuted(clauses, strategy, effectful_reason, never_reason):
         return observed, None, None
     grade = "trust declaration" if strategy["classification"] == "effectful" else "unobserved"
     return observed, grade, effectful_reason if grade == "trust declaration" else never_reason
+
+
+def obligation_stats(strategy):
+    return {
+        obligation["clause_id"]: {
+            "eligible_cases": 0,
+            "applicable_cases": 0,
+            "satisfied_cases": 0,
+            "condition_false_cases": 0,
+            "first_witness": None,
+        }
+        for obligation in strategy.get("obligations", ())
+    }
+
+
+def record_contract_observations(
+    clauses, observed, stats, environment, module, case_id, *, receiver=None, result=None, old=None
+):
+    conditional_errors = [
+        clause
+        for clause in clauses
+        if clause["kind"] == "error"
+        and (clause.get("guard") is not None or clause.get("when") is not None)
+        and condition_matches(clause, environment, module, receiver, result, old)
+    ]
+    first_conditional_error = min(
+        enumerate(conditional_errors),
+        key=lambda item: item[1].get("priority")
+        if item[1].get("priority") is not None
+        else item[0],
+        default=(None, None),
+    )[1]
+    for clause in clauses:
+        key = clause_key(clause)
+        if clause["kind"] == "requires":
+            observed[key] += 1
+            continue
+        if clause["kind"] == "ensures":
+            matched, scoped = checked_clause_environment(
+                clause, environment, module, receiver, result, old
+            )
+            stat = stats.get(key)
+            if stat is not None:
+                stat["eligible_cases"] += 1
+            if not matched:
+                if stat is not None:
+                    stat["condition_false_cases"] += 1
+                continue
+            if stat is not None:
+                stat["applicable_cases"] += 1
+            if not evaluate(clause["expression"], scoped, module, receiver, result, old):
+                raise AssertionError(f"ensures clause {key} failed independently")
+            observed[key] += 1
+            if stat is not None:
+                stat["satisfied_cases"] += 1
+                stat["first_witness"] = stat["first_witness"] or {"case_id": case_id}
+            continue
+        if clause["kind"] != "error":
+            continue
+        matches = (
+            type(result) is cott_runtime.Err
+            and type(result.error) is resolve_symbol(clause["variant"], module)
+        )
+        stat = stats.get(key)
+        if clause.get("guard") is not None or clause.get("when") is not None:
+            if stat is not None:
+                stat["eligible_cases"] += 1
+            if clause in conditional_errors:
+                if stat is not None:
+                    stat["applicable_cases"] += 1
+                if clause is first_conditional_error:
+                    if not matches:
+                        raise AssertionError(f"conditional error clause {key} failed independently")
+                    observed[key] += 1
+                    if stat is not None:
+                        stat["satisfied_cases"] += 1
+                        stat["first_witness"] = stat["first_witness"] or {"case_id": case_id}
+            elif stat is not None:
+                stat["condition_false_cases"] += 1
+        elif matches:
+            observed[key] += 1
+
+
 async def bounded(awaitable, symbol, action):
     task = asyncio.Task(awaitable, loop=asyncio.get_running_loop())
     try:
@@ -896,10 +989,12 @@ async def observe_protocol(result, strategy, hints, symbol):
         raise AssertionError(f"{symbol}: expected async_generator protocol result")
     lifecycle = {
         "symbol": symbol,
+        "lifecycle_limit": strategy["lifecycle_limit"],
         "lifecycle_steps": 0,
         "lifecycle_sent": False,
         "lifecycle_closed": False,
         "lifecycle_reason": None,
+        "operations": [],
     }
     try:
         send_value = OMIT
@@ -917,6 +1012,7 @@ async def observe_protocol(result, strategy, hints, symbol):
             sending = kind == "async_generator" and step and send_value is not OMIT
             operation = result.asend if sending else result.__anext__
             args = (send_value,) if sending else ()
+            operation_name = "asend" if sending else "anext"
             if sending:
                 lifecycle["lifecycle_sent"] = True
             try:
@@ -926,8 +1022,14 @@ async def observe_protocol(result, strategy, hints, symbol):
                     "protocol lifecycle step",
                 )
             except StopAsyncIteration:
+                lifecycle["operations"].append(
+                    {"operation": operation_name, "outcome": "completed"}
+                )
                 lifecycle["lifecycle_reason"] = "protocol completed"
                 break
+            lifecycle["operations"].append(
+                {"operation": operation_name, "outcome": "yielded"}
+            )
             lifecycle["lifecycle_steps"] += 1
         else:
             lifecycle["lifecycle_reason"] = "observation limit reached"
@@ -937,6 +1039,11 @@ async def observe_protocol(result, strategy, hints, symbol):
         raise AssertionError(f"{symbol}: lazy protocol contract violation: {error}") from error
     finally:
         await close_protocol(result, symbol)
+        lifecycle["operations"].append({"operation": "aclose", "outcome": "closed"})
+        await close_protocol(result, symbol)
+        lifecycle["operations"].append(
+            {"operation": "aclose", "outcome": "already_closed"}
+        )
         lifecycle["lifecycle_closed"] = True
     return lifecycle
 
@@ -1021,8 +1128,9 @@ async def run_function(module_value, declaration, strategy):
         "effectful function is not automatically executed",
         "Never-returning function is not automatically executed",
     )
+    stats = obligation_stats(strategy)
     if grade is not None:
-        return observed, grade, reason, None
+        return observed, grade, reason, None, stats
     callable_kind = strategy["callable_kind"]
     if callable_kind not in ("sync", "async"):
         raise AssertionError(f"{symbol}: unsupported callable_kind `{callable_kind}`")
@@ -1035,8 +1143,8 @@ async def run_function(module_value, declaration, strategy):
     hints = callable_hints(function)
     cases = invoke_cases(function, strategy)
     candidate_reason = input_candidate_reason(function, strategy) if not cases else None
+    requirements = [clause for clause in clauses if clause["kind"] == "requires"]
     for args, kwargs, environment in cases:
-        requirements = [clause for clause in clauses if clause["kind"] == "requires"]
         try:
             if not all(requires_holds(clause, environment, module) for clause in requirements):
                 continue
@@ -1051,42 +1159,16 @@ async def run_function(module_value, declaration, strategy):
             lifecycle = await observe_protocol(result, strategy, hints, symbol)
         elif strategy["return_kind"] != "value":
             await close_protocol(result, symbol)
-        valid_cases += 1
-        conditional_error = next(
-            (
-                clause
-                for clause in clauses
-                if clause["kind"] == "error"
-                and (clause.get("guard") is not None or clause.get("when") is not None)
-                and condition_matches(clause, environment, module, result=result)
-            ),
-            None,
+        record_contract_observations(
+            clauses, observed, stats, environment, module, f"case:{valid_cases}", result=result
         )
-        for clause in clauses:
-            clause_id = clause_key(clause)
-            if clause["kind"] == "requires":
-                observed[clause_id] += 1
-            elif clause["kind"] == "ensures":
-                matched, clause_environment = checked_clause_environment(
-                    clause, environment, module, result=result
-                )
-                if matched:
-                    if not evaluate(clause["expression"], clause_environment, module, result=result):
-                        raise AssertionError(f"{symbol}: ensures clause {clause_id} failed independently")
-                    observed[clause_id] += 1
-            elif clause["kind"] == "error":
-                variant = resolve_symbol(clause["variant"], module)
-                matches = type(result) is cott_runtime.Err and type(result.error) is variant
-                if clause is conditional_error and not matches:
-                    raise AssertionError(f"{symbol}: conditional error clause {clause_id} failed independently")
-                if matches:
-                    observed[clause_id] += 1
+        valid_cases += 1
     if valid_cases == 0:
         return observed, "unobserved", (
             candidate_reason
             or "no valid input candidate satisfied refinements and requires"
-        ), lifecycle
-    return observed, "test observation", None, lifecycle
+        ), lifecycle, stats
+    return observed, "test observation", None, lifecycle, stats
 
 
 def run_initializer(module, implementation, strategy):
@@ -1159,13 +1241,14 @@ async def run_method(module, implementation, method, strategy, constructor_cases
         "effectful method is not automatically executed",
         "Never-returning method is not automatically executed",
     )
+    stats = obligation_stats(strategy)
     if grade is not None:
-        return clauses, observed, grade, reason, None
+        return clauses, observed, grade, reason, None, stats
     if not constructor_cases:
         return clauses, observed, "unobserved", (
             input_candidate_reason(facade, strategy)
             or "no valid constructor candidate satisfied refinements and requires"
-        ), None
+        ), None, stats
     probe = facade(*constructor_cases[0][0], **constructor_cases[0][1])
     bound_method = getattr(probe, method_name)
     cases = invoke_cases(bound_method, strategy, (probe,))
@@ -1175,10 +1258,11 @@ async def run_method(module, implementation, method, strategy, constructor_cases
     requirements = [clause for clause in clauses if clause["kind"] == "requires"]
     state = [local(field["name"]) for field in implementation.get("state", ())]
     permitted = {local(field) for field in method.get("modifies", ())}
+    permitted.update(local(transition["field"]) for transition in method.get("transitions", ()))
     for constructor, case in itertools.islice(
         itertools.product(constructor_cases, cases), strategy["candidate_limit"]
     ):
-        args, kwargs, init_environment = constructor
+        args, kwargs, _ = constructor
         receiver = facade(*args, **kwargs)
         method_args, method_kwargs, environment = case
         try:
@@ -1203,89 +1287,348 @@ async def run_method(module, implementation, method, strategy, constructor_cases
             lifecycle = await observe_protocol(result, strategy, hints, symbol)
         elif strategy["return_kind"] != "value":
             await close_protocol(result, symbol)
-        valid_cases += 1
-        conditional_error = next(
-            (
-                clause
-                for clause in clauses
-                if clause["kind"] == "error"
-                and (clause.get("guard") is not None or clause.get("when") is not None)
-                and condition_matches(
-                    clause, environment, module, receiver=receiver, result=result, old=old
-                )
-            ),
-            None,
+        record_contract_observations(
+            clauses,
+            observed,
+            stats,
+            environment,
+            module,
+            f"case:{valid_cases}",
+            receiver=receiver,
+            result=result,
+            old=old,
         )
         for clause in clauses:
-            clause_id = clause_key(clause)
-            if clause["kind"] == "requires":
-                observed[clause_id] += 1
-            elif clause["kind"] == "ensures":
-                matched, clause_environment = checked_clause_environment(
-                    clause, environment, module, receiver=receiver, result=result, old=old
-                )
-                if matched:
-                    if not evaluate(
-                        clause["expression"], clause_environment, module, receiver, result, old
-                    ):
-                        raise AssertionError(f"{symbol}: ensures clause {clause_id} failed independently")
-                    observed[clause_id] += 1
-            elif clause["kind"] == "error":
-                matches = type(result) is cott_runtime.Err and type(result.error) is resolve_symbol(clause["variant"], module)
-                if clause is conditional_error and not matches:
-                    raise AssertionError(f"{symbol}: conditional error clause {clause_id} failed independently")
-                if matches:
-                    observed[clause_id] += 1
-            elif clause["kind"] == "modifies":
+            key = clause_key(clause)
+            if clause["kind"] == "modifies":
                 for field in state:
                     if field not in permitted and getattr(receiver, field) is not old[field]:
-                        raise AssertionError(f"{symbol}: modifies clause {clause_id} failed independently")
-                observed[clause_id] += 1
+                        raise AssertionError(f"{symbol}: modifies clause {key} failed independently")
+                observed[key] += 1
             elif clause["kind"] == "invariant":
-                matched, clause_environment = checked_clause_environment(
-                    clause, environment, module, receiver=receiver, result=result, old=old
+                matched, scoped = checked_clause_environment(
+                    clause, environment, module, receiver, result, old
                 )
                 if matched:
-                    if not evaluate(
-                        clause["expression"], clause_environment, module, receiver, result, old
-                    ):
-                        raise AssertionError(f"{symbol}: invariant clause {clause_id} failed independently")
-                    observed[clause_id] += 1
+                    if not evaluate(clause["expression"], scoped, module, receiver, result, old):
+                        raise AssertionError(f"{symbol}: invariant clause {key} failed independently")
+                    observed[key] += 1
+        valid_cases += 1
     if valid_cases == 0:
         return clauses, observed, "unobserved", (
             candidate_reason
             or "no valid input candidate satisfied refinements and requires"
-        ), lifecycle
-    return clauses, observed, "test observation", None, lifecycle
+        ), lifecycle, stats
+    return clauses, observed, "test observation", None, lifecycle, stats
 
 
-def evidence(symbol, clauses, observed, grade, reason, request):
-    return [{
-        "symbol": symbol,
-        "clause_id": clause_key(clause),
-        "span": clause["span"],
-        "evidence": [{
-            "grade": grade if grade != "test observation" or observed[clause_key(clause)] else "unobserved",
+def evidence(symbol, clauses, observed, grade, reason, request, stats=None):
+    stats = stats or {}
+    entries = []
+    for clause in clauses:
+        key = clause_key(clause)
+        item = {
+            "grade": grade if grade != "test observation" or observed[key] else "unobserved",
             "mode": request["runtime_validation"],
-            "valid_cases": observed[clause_key(clause)],
-            "reason": None if observed[clause_key(clause)] else reason or "no generated case exercised this conditional clause",
-        }],
-    } for clause in clauses]
+            "valid_cases": observed[key],
+            "reason": None if observed[key] else reason or "no generated case exercised this conditional clause",
+        }
+        if key in stats:
+            item.update(stats[key])
+        entries.append({
+            "symbol": symbol,
+            "clause_id": key,
+            "span": clause["span"],
+            "evidence": [item],
+        })
+    return entries
 
 
+def fixture_bytes(data, encoding="utf-8"):
+    if data["kind"] == "bytes":
+        return bytes.fromhex(data["value"])
+    return data["value"].encode(encoding)
+
+
+class FixtureHttpServer:
+    def __init__(self, fixtures, limits):
+        self.routes = {}
+        self.requests = 0
+        self.redirects = 0
+        self.limits = limits
+        for fixture in fixtures:
+            if fixture["kind"] != "http":
+                continue
+            for route in fixture["routes"]:
+                outcome = route["outcome"]
+                if outcome["kind"] == "response":
+                    encoding = outcome["encoding"]
+                    try:
+                        body = fixture_bytes(outcome["body"], encoding)
+                    except (LookupError, UnicodeError) as error:
+                        raise AssertionError("invalid HTTP fixture encoding") from error
+                    if len(body) > limits["http_body_bytes"]:
+                        raise AssertionError("HTTP fixture body exceeds configured limit")
+                self.routes[route["path"]] = outcome
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_GET(self):
+                outer.requests += 1
+                if outer.requests > outer.limits["http_requests"]:
+                    self.send_error(429)
+                    return
+                outcome = outer.routes.get(urllib.parse.urlsplit(self.path).path)
+                if outcome is None:
+                    self.send_error(404)
+                    return
+                kind = outcome["kind"]
+                if kind == "disconnect":
+                    self.connection.close()
+                    return
+                if kind == "delay":
+                    threading.Event().wait(outcome["milliseconds"] / 1000)
+                    self.send_response(204)
+                    self.end_headers()
+                    return
+                if kind == "redirect":
+                    outer.redirects += 1
+                    if outer.redirects > outer.limits["http_redirects"]:
+                        self.send_error(508)
+                        return
+                    self.send_response(outcome["status"])
+                    self.send_header("Location", outcome["location"])
+                    self.end_headers()
+                    return
+                encoding = outcome["encoding"]
+                body = fixture_bytes(outcome["body"], encoding)
+                self.send_response(outcome["status"])
+                self.send_header("Content-Type", f"text/plain; charset={encoding}")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    def start(self):
+        self.thread.start()
+
+    @property
+    def url(self):
+        return f"http://127.0.0.1:{self.server.server_port}"
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=0.1)
+
+
+def audit_fixture_root(root, limits):
+    files = 0
+    size = 0
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise AssertionError("fixture filesystem contains a symlink")
+        if path.is_file():
+            files += 1
+            size += path.stat().st_size
+    if files > limits["filesystem_files"] or size > limits["filesystem_bytes"]:
+        raise AssertionError("fixture filesystem exceeds configured limit")
+
+
+def prepare_scenario_fixtures(scenario, root):
+    root.mkdir(parents=True, exist_ok=False)
+    fixtures = {}
+    failures = {}
+    clock = 0
+    for fixture in scenario["fixtures"]:
+        kind = fixture["kind"]
+        if kind == "fs":
+            for file in fixture["files"]:
+                path = root.joinpath(*file["path"].split("/"))
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(fixture_bytes(file["data"]))
+            fixtures[fixture["id"]] = {
+                "path": lambda path: pathlib.Path(path),
+                "url": None,
+            }
+        elif kind == "clock":
+            clock = fixture["start_ms"]
+        elif kind == "failure":
+            failures[fixture["point"]] = {
+                "occurrence": fixture["occurrence"],
+                "error": fixture["error"],
+            }
+    audit_fixture_root(root, scenario["limits"])
+    return fixtures, failures, clock
+
+
+def scenario_facade(symbol):
+    module_name = symbol.rsplit(".", 1)[0]
+    module = importlib.import_module(module_name)
+    if hasattr(module, "_cott_set_test_context"):
+        module._cott_set_test_context(True)
+    return getattr(module, local(symbol)), module
+
+
+async def await_worker(worker, timeout, symbol):
+    return await asyncio.wait_for(asyncio.shield(worker["task"]), timeout=timeout)
+
+
+async def run_scenario(module_value, strategy, request):
+    scenario = strategy["scenario"]
+    if len(scenario["steps"]) > 64:
+        raise AssertionError(f"{scenario['id']}: step limit exceeds 64")
+    if scenario["lifecycle_limit"] > 64:
+        raise AssertionError(f"{scenario['id']}: lifecycle limit exceeds 64")
+    root_parent = pathlib.Path(request.get("fixture_root", os.environ.get("TMPDIR", ".")))
+    root = root_parent / f"scenario-{len(request.get('strategies', ()))}-{scenario['id'].rsplit('.', 1)[-1]}"
+    fixtures, failures, clock = prepare_scenario_fixtures(scenario, root)
+    has_http = any(fixture["kind"] == "http" for fixture in scenario["fixtures"])
+    server = FixtureHttpServer(scenario["fixtures"], scenario["limits"]) if has_http else None
+    if server is not None:
+        server.start()
+    for fixture in scenario["fixtures"]:
+        if fixture["kind"] == "http":
+            fixtures[fixture["id"]] = {
+                "path": None,
+                "url": lambda path, base=server.url: f"{base}{path}",
+            }
+    activate = getattr(cott_runtime, "_cott_fixture_activate", None)
+    token_factory = getattr(cott_runtime, "_cott_fixture_runner_token", None)
+    transcript = getattr(cott_runtime, "_cott_fixture_transcript", None)
+    if not all(callable(value) for value in (activate, token_factory, transcript)):
+        if server is not None:
+            server.close()
+        __import__("shutil").rmtree(root, ignore_errors=True)
+        raise AssertionError("fixture runtime adapters are unavailable")
+    workers = {}
+    values = {}
+    trace = []
+    assertions = []
+    ticks = 0
+    global _SCENARIO_FIXTURES
+    try:
+        with activate(
+            token_factory(),
+            root=root,
+            http_url=server.url if server is not None else None,
+            clock=clock,
+            failures=failures,
+            transcript_limit=scenario["limits"]["transcript_events"],
+        ):
+            _SCENARIO_FIXTURES = fixtures
+            assertion_module = importlib.import_module(module_value["module"])
+            for step in scenario["steps"]:
+                step_id = step["step_id"]
+                kind = step["kind"]
+                if kind == "call":
+                    function, module = scenario_facade(step["target"])
+                    args = [evaluate(argument, values, module) for argument in step["arguments"]]
+                    values[local(step["binding"])] = await invoke_facade(
+                        function, args, {}, strategy["symbol"], step["callable_kind"]
+                    )
+                    trace.append({"event_id": f"step:{step_id}", "kind": "call"})
+                elif kind == "spawn":
+                    if len(workers) >= scenario["lifecycle_limit"]:
+                        raise AssertionError(f"{scenario['id']}: worker limit exceeded")
+                    function, module = scenario_facade(step["target"])
+                    args = [evaluate(argument, values, module) for argument in step["arguments"]]
+                    task = asyncio.create_task(function(*args))
+                    workers[local(step["worker"])] = {"task": task, "cancelled": False, "awaited": False}
+                    trace.append({"event_id": f"step:{step_id}", "kind": "spawn"})
+                elif kind == "tick":
+                    if ticks >= scenario["lifecycle_limit"]:
+                        raise AssertionError(f"{scenario['id']}: lifecycle tick limit exceeded")
+                    ticks += 1
+                    await asyncio.sleep(0)
+                    trace.append({"event_id": f"step:{step_id}", "kind": "tick"})
+                elif kind == "cancel":
+                    worker = workers.get(local(step["worker"]))
+                    if worker is None or worker["awaited"] or worker["cancelled"] or worker["task"].done():
+                        raise AssertionError(f"{scenario['id']}: terminal worker cancellation")
+                    worker["task"].cancel()
+                    worker["cancelled"] = True
+                    trace.append({"event_id": f"step:{step_id}", "kind": "cancel"})
+                elif kind == "await":
+                    worker = workers.get(local(step["worker"]))
+                    if worker is None or worker["awaited"]:
+                        raise AssertionError(f"{scenario['id']}: terminal worker await")
+                    worker["awaited"] = True
+                    try:
+                        result = await await_worker(
+                            worker, scenario["limits"]["scenario_timeout_ms"] / 1000, strategy["symbol"]
+                        )
+                    except asyncio.CancelledError:
+                        if not step["cancelled"]:
+                            raise AssertionError(f"{scenario['id']}: worker was cancelled unexpectedly")
+                    else:
+                        if step["cancelled"]:
+                            raise AssertionError(f"{scenario['id']}: expected cancelled worker")
+                        values[local(step["result"])] = result
+                    trace.append({"event_id": f"step:{step_id}", "kind": "await"})
+                elif kind == "assert":
+                    if not evaluate(step["expression"], values, assertion_module):
+                        raise AssertionError(f"{scenario['id']}: assertion step:{step_id} failed")
+                    assertions.append({
+                        "assertion_id": f"assert:{step_id}",
+                        "span": step["span"],
+                        "grade": "test observation",
+                    })
+                    trace.append({"event_id": f"step:{step_id}", "kind": "assert"})
+                else:
+                    raise AssertionError(f"{scenario['id']}: unsupported scenario step `{kind}`")
+            live = [worker["task"] for worker in workers.values() if not worker["awaited"]]
+            if live:
+                raise AssertionError(f"{scenario['id']}: leaked live workers")
+            audit_fixture_root(root, scenario["limits"])
+            events = [
+                {"event_id": f"fixture:{index}", "kind": event["kind"]}
+                for index, event in enumerate(transcript())
+            ]
+            return {
+                "scenario_id": scenario["id"],
+                "grade": "test observation",
+                "trace": trace,
+                "assertions": assertions,
+                "fixtures": events,
+            }
+    finally:
+        _SCENARIO_FIXTURES = {}
+        for worker in workers.values():
+            if not worker["task"].done():
+                worker["task"].cancel()
+        pending = [worker["task"] for worker in workers.values() if not worker["task"].done()]
+        if pending:
+            await asyncio.wait(pending, timeout=0.1)
+        if server is not None:
+            server.close()
+        __import__("shutil").rmtree(root, ignore_errors=True)
 async def main():
     request = json.load(__import__("sys").stdin)
     strategies = {strategy["symbol"]: strategy for strategy in request["strategies"]}
     contracts = []
     lifecycle = []
+    scenarios = []
+    for module_value in request["modules"]:
+        for declaration in module_value["declarations"]:
+            if declaration["kind"] != "scenario":
+                continue
+            strategy = strategies.get(declaration["name"])
+            if strategy is not None and strategy.get("scenario") is not None:
+                scenarios.append(await run_scenario(module_value, strategy, request))
     for module_value in request["modules"]:
         for declaration in module_value["declarations"]:
             if declaration["kind"] == "function":
                 strategy = strategies.get(declaration["name"])
                 if strategy is None:
                     continue
-                observed, grade, reason, observation = await run_function(module_value, declaration, strategy)
-                contracts.extend(evidence(declaration["name"], declaration["contract"]["clauses"], observed, grade, reason, request))
+                observed, grade, reason, observation, stats = await run_function(module_value, declaration, strategy)
+                contracts.extend(evidence(declaration["name"], declaration["contract"]["clauses"], observed, grade, reason, request, stats))
                 if observation is not None:
                     lifecycle.append(observation)
             elif declaration["kind"] == "impl":
@@ -1335,7 +1678,7 @@ async def main():
                             "effectful method is not automatically executed",
                             "Never-returning method is not automatically executed",
                         )
-                        contracts.extend(evidence(symbol, clauses, observed, grade, reason, request))
+                        contracts.extend(evidence(symbol, clauses, observed, grade, reason, request, obligation_stats(strategy)))
                     continue
                 module = importlib.import_module(module_value["module"])
                 if hasattr(module, "_cott_set_test_context"):
@@ -1345,13 +1688,13 @@ async def main():
                     clauses, observed, grade, reason, initializer_cases = run_initializer(module, declaration, init_strategy)
                     contracts.extend(evidence(init_symbol, clauses, observed, grade, reason, request))
                 for method, symbol, strategy, _ in method_strategies:
-                    clauses, observed, grade, reason, observation = await run_method(
+                    clauses, observed, grade, reason, observation, stats = await run_method(
                         module, declaration, method, strategy, initializer_cases
                     )
-                    contracts.extend(evidence(symbol, clauses, observed, grade, reason, request))
+                    contracts.extend(evidence(symbol, clauses, observed, grade, reason, request, stats))
                     if observation is not None:
                         lifecycle.append(observation)
-    print(json.dumps({"contracts": contracts, "lifecycle": lifecycle}, sort_keys=True, separators=(",", ":")))
+    print(json.dumps({"contracts": contracts, "lifecycle": lifecycle, "scenarios": scenarios}, sort_keys=True, separators=(",", ":")))
 
 
 asyncio.run(main())

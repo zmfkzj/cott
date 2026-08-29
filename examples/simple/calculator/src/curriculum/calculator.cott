@@ -5,45 +5,15 @@ enum CalculatorOp:
     Subtract
     Multiply
     Divide
-    Power
 
 enum CalculatorError:
     DivideByZero
-    NonFinite
-    PowerDomain
-    Overflow
-
-fn validate_calculation(
-    left: F64,
-    operator: CalculatorOp,
-    right: F64,
-) -> Result[Unit, CalculatorError]:
-    doc """
-    Validates one calculator request before evaluation.
-    Errors have this priority: NonFinite when either operand is NaN or
-    infinity, DivideByZero when division uses either sign of zero as the
-    divisor, then PowerDomain when zero has a negative exponent or a negative
-    base has a non-integral exponent.
-    """
-
-    error CalculatorError.NonFinite
-    error CalculatorError.DivideByZero when operator == CalculatorOp.Divide and right == 0.0
-    error CalculatorError.PowerDomain
-
-    effects []
 
 fn calculate(left: F64, operator: CalculatorOp, right: F64) -> Result[F64, CalculatorError]:
     doc """
-    Validates and evaluates Add, Subtract, Multiply, Divide, or Power on two
-    binary64 operands. Validation errors are returned unchanged. A finite
-    result, including underflowed and signed zero values, is returned
-    unchanged; a non-finite result from finite operands returns Overflow.
-    Zero to the zero power is 1, and no operation returns a complex value.
+    Apply one arithmetic operation and reject division by zero.
     """
 
-    error CalculatorError.NonFinite
-    error CalculatorError.DivideByZero when operator == CalculatorOp.Divide and right == 0.0
-    error CalculatorError.PowerDomain
-    error CalculatorError.Overflow
+    ensures Result.Ok(value) => ((operator == CalculatorOp.Add and value == left + right) or (operator == CalculatorOp.Subtract and value == left - right) or (operator == CalculatorOp.Multiply and value == left * right) or (operator == CalculatorOp.Divide and right != 0.0 and value == left / right))
 
-    effects []
+    error CalculatorError.DivideByZero when operator == CalculatorOp.Divide and right == 0.0

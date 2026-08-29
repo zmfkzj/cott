@@ -1,0 +1,24 @@
+[project]
+name = "effects-selection"
+version = "0.1.0"
+source = "src"
+
+[target.python]
+source = "python"
+generated = "generated/python"
+stubs = "generated/stubs"
+interpreter = ".venv/bin/python"
+type_checker = ".venv/bin/basedpyright"
+runtime_validation = "boundary"
+
+[target.python.implementations]
+"curriculum.effects_selection.read_text" = "cott_bindings.curriculum.effects_selection.read_text:read_text"
+"curriculum.effects_selection.copy_text" = "cott_bindings.curriculum.effects_selection.copy_text:copy_text"
+"curriculum.effects_selection.fetch_local" = "cott_bindings.curriculum.effects_selection.fetch_local:fetch_local"
+"curriculum.effects_selection.text_result_is_ok" = "cott_bindings.curriculum.effects_selection.text_result_is_ok:text_result_is_ok"
+"curriculum.effects_selection.text_result_text" = "cott_bindings.curriculum.effects_selection.text_result_text:text_result_text"
+"curriculum.effects_selection.copy_result_is_ok" = "cott_bindings.curriculum.effects_selection.copy_result_is_ok:copy_result_is_ok"
+"curriculum.effects_selection.store_and_load" = "cott_bindings.curriculum.effects_selection.store_and_load:store_and_load"
+"curriculum.effects_selection.clock_ns" = "cott_bindings.curriculum.effects_selection.clock_ns:clock_ns"
+"curriculum.effects_selection.sample_index" = "cott_bindings.curriculum.effects_selection.sample_index:sample_index"
+"curriculum.effects_selection.exit_with_code" = "cott_bindings.curriculum.effects_selection.exit_with_code:exit_with_code"

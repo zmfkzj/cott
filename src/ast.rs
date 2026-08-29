@@ -35,6 +35,7 @@ pub enum Declaration {
     Specialize(SpecializeDecl),
     Resource(ResourceDecl),
     Rule(RuleDecl),
+    Scenario(Scenario),
 }
 
 impl Declaration {
@@ -52,6 +53,7 @@ impl Declaration {
             Self::Specialize(value) => &value.span,
             Self::Resource(value) => &value.span,
             Self::Rule(value) => &value.span,
+            Self::Scenario(value) => &value.span,
         }
     }
 }
@@ -103,6 +105,7 @@ pub struct StructDecl {
     pub name: String,
     pub generics: Vec<GenericParam>,
     pub fields: Vec<Field>,
+    pub invariants: Vec<StructInvariant>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -206,6 +209,13 @@ pub struct ImplInvariant {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StructInvariant {
+    pub span: Span,
+    pub guard: Option<MatchGuard>,
+    pub condition: Expr,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImplInitializer {
     pub span: Span,
     pub parameters: Vec<Parameter>,
@@ -252,6 +262,191 @@ pub struct ResourceTransition {
     pub span: Span,
     pub from: ResourceStateRef,
     pub to: ResourceStateRef,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Scenario {
+    pub span: Span,
+    pub annotations: Vec<Annotation>,
+    pub doc: Option<DocBlock>,
+    pub name: String,
+    pub target: Option<QualifiedName>,
+    pub fixtures: Vec<ScenarioFixture>,
+    pub steps: Vec<ScenarioStep>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScenarioFixture {
+    pub span: Span,
+    pub name: String,
+    pub config: ScenarioFixtureConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ScenarioFixtureConfig {
+    Filesystem {
+        span: Span,
+        files: Vec<ScenarioFile>,
+    },
+    Http {
+        span: Span,
+        routes: Vec<ScenarioHttpRoute>,
+    },
+    Clock {
+        span: Span,
+        start_ms: ScenarioInteger,
+        tick_ms: ScenarioInteger,
+    },
+    Failure {
+        span: Span,
+        point: ScenarioFailurePoint,
+        occurrence: ScenarioInteger,
+        error: ScenarioFailureError,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScenarioFile {
+    pub span: Span,
+    pub path: String,
+    pub contents: ScenarioData,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScenarioHttpRoute {
+    pub span: Span,
+    pub path: String,
+    pub outcome: ScenarioHttpOutcome,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ScenarioHttpOutcome {
+    Response {
+        span: Span,
+        status: ScenarioInteger,
+        body: ScenarioData,
+        encoding: String,
+    },
+    Redirect {
+        span: Span,
+        status: ScenarioInteger,
+        location: String,
+    },
+    Delay {
+        span: Span,
+        milliseconds: ScenarioInteger,
+    },
+    Disconnect {
+        span: Span,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScenarioData {
+    pub span: Span,
+    pub kind: ScenarioDataKind,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ScenarioDataKind {
+    Text(String),
+    Bytes(String),
+    Hex(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScenarioInteger {
+    pub span: Span,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScenarioFailurePoint {
+    pub span: Span,
+    pub kind: ScenarioFailurePointKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScenarioFailurePointKind {
+    FileOpen,
+    FileRead,
+    FileWrite,
+    FileFlush,
+    FileReplace,
+    HttpConnect,
+    HttpRead,
+    ClockRead,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScenarioFailureError {
+    pub span: Span,
+    pub kind: ScenarioFailureErrorKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScenarioFailureErrorKind {
+    PermissionDenied,
+    NotFound,
+    DiskFull,
+    Timeout,
+    ConnectionReset,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ScenarioStep {
+    Call {
+        span: Span,
+        binding: ScenarioBinding,
+        target: QualifiedName,
+        arguments: Vec<Expr>,
+    },
+    Spawn {
+        span: Span,
+        worker: ScenarioWorker,
+        target: QualifiedName,
+        arguments: Vec<Expr>,
+    },
+    Await {
+        span: Span,
+        worker: ScenarioWorkerRef,
+        outcome: ScenarioAwaitOutcome,
+    },
+    Cancel {
+        span: Span,
+        worker: ScenarioWorkerRef,
+    },
+    Tick {
+        span: Span,
+    },
+    Assert {
+        span: Span,
+        expression: Expr,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScenarioBinding {
+    pub span: Span,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScenarioWorker {
+    pub span: Span,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScenarioWorkerRef {
+    pub span: Span,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ScenarioAwaitOutcome {
+    Value(ScenarioBinding),
+    Cancelled { span: Span },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -530,9 +725,30 @@ pub enum ExprKind {
         base: Box<Expr>,
         name: String,
     },
+    Intrinsic {
+        kind: Intrinsic,
+        arguments: Vec<Expr>,
+    },
+    FixturePath {
+        fixture: String,
+        path: String,
+    },
+    FixtureUrl {
+        fixture: String,
+        path: String,
+    },
     OldStateField {
         field: ModifiedField,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Intrinsic {
+    StartsWith,
+    EndsWith,
+    Contains,
+    UniqueBy,
+    DescendingBy,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

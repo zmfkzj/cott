@@ -139,6 +139,7 @@ fn inspect(value: I32, other: I32) -> Result[I32, Failure]:
     doc """inspects values"""
     requires value == other
     ensures value > 0
+    ensures Result.Ok(output) => output > 0
     error Failure.Bad when value == other
     effects [network, database.write]
 "#,
@@ -243,7 +244,7 @@ fn inspect(value: I32, other: I32) -> Result[I32, Failure]:
             .iter()
             .map(|clause| clause.clause_id)
             .collect::<Vec<_>>(),
-        [1, 2, 3]
+        [1, 2, 3, 4]
     );
     assert!(matches!(
         &function.contract.clauses[0].kind,
@@ -257,6 +258,11 @@ fn inspect(value: I32, other: I32) -> Result[I32, Failure]:
     ));
     assert!(matches!(
         &function.contract.clauses[2].kind,
+        HirClauseKind::Ensures { guard: Some(_), expression }
+            if expression.ty == HirType::Primitive(PrimitiveType::Bool)
+    ));
+    assert!(matches!(
+        &function.contract.clauses[3].kind,
         HirClauseKind::Error {
             variant,
             priority: None,
@@ -1652,4 +1658,86 @@ struct Index:
             .iter()
             .any(|error| error.diagnostic.message == "Set item type must be hash-stable")
     );
+}
+
+#[test]
+fn struct_invariants_and_result_success_obligations_are_lowered() {
+    let parsed = parse_project([SourceFile::new(
+        "src/invariants.cott",
+        r#"module invariants
+
+enum Failure:
+    Bad
+
+struct Location:
+    target: Str
+
+    invariant starts_with(self.target, "https://")
+
+fn checked(value: Str) -> Result[Str, Failure]:
+    ensures Result.Ok(output) => starts_with(output, "https://")
+    error Failure.Bad when value == ""
+"#,
+    )])
+    .expect("fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("fixture should lower");
+    let HirDeclaration::Struct(location) = &project.modules[0].declarations[1] else {
+        panic!("expected Location struct");
+    };
+    assert_eq!(location.invariants.len(), 1);
+    assert!(matches!(
+        location.invariants[0].expression.kind,
+        HirExprKind::Intrinsic { .. }
+    ));
+}
+
+#[test]
+fn result_errors_require_a_guarded_ok_ensure() {
+    let parsed = parse_project([SourceFile::new(
+        "src/missing_success.cott",
+        r#"module missing_success
+
+enum Failure:
+    Bad
+
+fn checked(value: Str) -> Result[Str, Failure]:
+    error Failure.Bad when value == ""
+"#,
+    )])
+    .expect("fixture should parse");
+    let errors = lower(Path::new("src"), parsed).expect_err("missing success obligation must fail");
+    assert!(errors.iter().any(|error| {
+        error
+            .diagnostic
+            .message
+            .contains("guarded Result.Ok ensures")
+    }));
+}
+
+#[test]
+fn unique_by_accepts_nominal_selector_while_descending_requires_orderable_selector() {
+    let parsed = parse_project([SourceFile::new(
+        "src/selectors.cott",
+        r#"module selectors
+
+struct Location:
+    target: Str
+
+struct Visit:
+    location: Location
+    visited_at: U64
+
+struct BrowserState:
+    history: List[Visit]
+
+    invariant unique_by(self.history, Visit.location)
+    invariant descending_by(self.history, Visit.visited_at)
+"#,
+    )])
+    .expect("selector fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("nominal unique selector should lower");
+    let HirDeclaration::Struct(state) = &project.modules[0].declarations[2] else {
+        panic!("expected BrowserState");
+    };
+    assert_eq!(state.invariants.len(), 2);
 }

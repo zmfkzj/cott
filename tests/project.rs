@@ -3,7 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cott::project::{discover_sources_from_paths, load_config_with_paths};
+use cott::project::{discover_python_sources, discover_sources_from_paths, load_config_with_paths};
 #[cfg(unix)]
 use std::ffi::CString;
 #[cfg(unix)]
@@ -294,4 +294,87 @@ fn rejects_a_source_symlink_when_the_platform_supports_symlinks() {
 
     let (_, paths) = load_config_with_paths(&temp.path).expect("normative manifest should load");
     assert!(discover_sources_from_paths(&paths).is_err());
+}
+
+#[test]
+fn discovers_python_sources_in_lexical_order() {
+    let temp = valid_project();
+    fs::create_dir_all(temp.path.join("python/app")).expect("package directory");
+    fs::write(temp.path.join("python/z.py"), "z = 1\n").expect("Python source");
+    fs::write(temp.path.join("python/app/b.py"), "b = 1\n").expect("Python source");
+    fs::write(temp.path.join("python/app/a.py"), "a = 1\n").expect("Python source");
+
+    let sources = discover_python_sources(&temp.path.join("python")).expect("safe Python tree");
+    assert_eq!(
+        sources
+            .into_iter()
+            .map(|source| source.path)
+            .collect::<Vec<_>>(),
+        vec![
+            PathBuf::from("app/a.py"),
+            PathBuf::from("app/b.py"),
+            PathBuf::from("z.py"),
+        ]
+    );
+}
+
+#[test]
+fn excludes_python_environments_but_rejects_authored_symlinks() {
+    let temp = valid_project();
+    let python = temp.path.join("python");
+    fs::create_dir_all(python.join(".venv/site-packages")).expect("environment directory");
+    fs::create_dir(python.join("__pycache__")).expect("cache directory");
+    fs::write(
+        python.join(".venv/site-packages/bypass.py"),
+        "import _cott_impl.secret\n",
+    )
+    .expect("environment source");
+    fs::write(python.join("__pycache__/cached.pyc"), b"not Python").expect("cache bytecode");
+
+    assert!(
+        discover_python_sources(&python)
+            .expect("environment is outside authored tree")
+            .is_empty()
+    );
+    fs::write(python.join("authored.py"), "x = 1\n").expect("authored source");
+    if symlink_file(
+        &python.join("authored-link.py"),
+        &python.join("authored.py"),
+    )
+    .is_ok()
+    {
+        assert!(discover_python_sources(&python).is_err());
+    }
+}
+
+#[test]
+fn rejects_unsafe_python_tree_entries() {
+    let temp = valid_project();
+    let python = temp.path.join("python");
+    fs::write(python.join("app.py"), "x = 1\n").expect("Python source");
+    fs::write(python.join("bad.py"), [0xff]).expect("invalid Python source");
+    assert!(discover_python_sources(&python).is_err());
+    fs::remove_file(python.join("bad.py")).expect("remove invalid source");
+
+    if symlink_file(&python.join("link.py"), &python.join("app.py")).is_ok() {
+        assert!(discover_python_sources(&python).is_err());
+        fs::remove_file(python.join("link.py")).expect("remove symlink");
+    }
+    #[cfg(unix)]
+    {
+        fs::create_dir(python.join("real")).expect("real directory");
+        std::os::unix::fs::symlink(python.join("real"), python.join("linked"))
+            .expect("directory symlink");
+        assert!(discover_python_sources(&python).is_err());
+        fs::remove_file(python.join("linked")).expect("remove directory symlink");
+
+        let fifo = CString::new(python.join("pipe.py").as_os_str().as_bytes())
+            .expect("temporary FIFO path should not contain NUL");
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        assert!(discover_python_sources(&python).is_err());
+        fs::remove_file(python.join("pipe.py")).expect("remove FIFO");
+
+        fs::hard_link(python.join("app.py"), python.join("linked.py")).expect("hard link");
+        assert!(discover_python_sources(&python).is_err());
+    }
 }

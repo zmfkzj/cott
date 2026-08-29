@@ -1,0 +1,24 @@
+[project]
+name = "boundary-protocols"
+version = "0.1.0"
+source = "src"
+
+[target.python]
+source = "python"
+generated = "generated/python"
+stubs = "generated/stubs"
+interpreter = ".venv/bin/python"
+type_checker = ".venv/bin/basedpyright"
+runtime_validation = "boundary"
+
+[target.python.external_types]
+"curriculum.boundary_protocols.TextBuffer" = "io:StringIO"
+
+[target.python.implementations]
+"curriculum.boundary_protocols.wrap_handle" = "cott_bindings.curriculum.boundary_protocols.wrap_handle:wrap_handle"
+"curriculum.boundary_protocols.extract_handle_id" = "cott_bindings.curriculum.boundary_protocols.extract_handle_id:extract_handle_id"
+"curriculum.boundary_protocols.adapt_unknown" = "cott_bindings.curriculum.boundary_protocols.adapt_unknown:adapt_unknown"
+"curriculum.boundary_protocols.iter_lines" = "cott_bindings.curriculum.boundary_protocols.iter_lines:iter_lines"
+"curriculum.boundary_protocols.echo_values" = "cott_bindings.curriculum.boundary_protocols.echo_values:echo_values"
+"curriculum.boundary_protocols.async_lines" = "cott_bindings.curriculum.boundary_protocols.async_lines:async_lines"
+"curriculum.boundary_protocols.echo_async" = "cott_bindings.curriculum.boundary_protocols.echo_async:echo_async"

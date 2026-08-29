@@ -1,1 +1,0 @@
-{"schema_version":3,"symbol":"curriculum.case_ranking.score_case_overlap","seed":"sha256:902f2df0d7ae96e7ad34e8f7a99e3466638226333994507ba00506e2a291ce68","candidate_limit":64,"node_limit":64,"container_length_limit":3,"json_depth_limit":4,"lifecycle_limit":3,"callable_kind":"sync","return_kind":"value","classification":"pure","clause_ids":["ensures:1","ensures:2"]}

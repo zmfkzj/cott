@@ -1,0 +1,1 @@
+For list-valued generated code, iterate `CottList` directly; `.values` is constructor syntax only. Construct returned lists with `CottList(values=...)`. Call `classify_filename` through the public facade, and propagate the first `Err` unchanged.

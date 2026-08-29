@@ -1,13 +1,16 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::diagnostics::{Diagnostic, Span, code};
 use crate::hash::sha256_hex;
 use crate::python::artifact_plan::{PythonCallable, PythonCallableKind};
 use crate::sandbox::{BindMounts, NetworkAccess, ResourceLimits, SandboxSpec, run};
 use crate::version::{is_at_least, parse_version};
+
+const MAX_RULE_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AgentKind {
@@ -95,6 +98,344 @@ pub struct AgentRunCandidate {
     pub environment_names: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ShadowFacet {
+    Return,
+    Limit,
+    Error,
+    Atomicity,
+    Cleanup,
+}
+
+impl ShadowFacet {
+    pub const ALL: [Self; 5] = [
+        Self::Return,
+        Self::Limit,
+        Self::Error,
+        Self::Atomicity,
+        Self::Cleanup,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Return => "return",
+            Self::Limit => "limit",
+            Self::Error => "error",
+            Self::Atomicity => "atomicity",
+            Self::Cleanup => "cleanup",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "return" => Self::Return,
+            "limit" => Self::Limit,
+            "error" => Self::Error,
+            "atomicity" => Self::Atomicity,
+            "cleanup" => Self::Cleanup,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DomainRule {
+    pub symbol: String,
+    pub facet: ShadowFacet,
+    pub payload: String,
+    pub payload_span: Span,
+    pub source_order: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DomainRuleParse {
+    pub path: PathBuf,
+    pub rules: Vec<DomainRule>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DocCandidate {
+    pub facet: ShadowFacet,
+    pub span: Span,
+    pub source_order: usize,
+}
+
+pub fn parse_domain_rules(path: &Path, bytes: &[u8]) -> DomainRuleParse {
+    if bytes.len() > MAX_RULE_BYTES {
+        return DomainRuleParse {
+            path: path.to_path_buf(),
+            rules: Vec::new(),
+            diagnostics: vec![malformed_domain_rule(
+                "generator rules exceed 1 MiB",
+                Span::new(0, bytes.len()),
+            )],
+        };
+    }
+
+    let mut rules = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut offset = 0;
+
+    for raw_line in bytes.split_inclusive(|byte| *byte == b'\n') {
+        let line = if raw_line.last() == Some(&b'\n') {
+            &raw_line[..raw_line.len() - 1]
+        } else {
+            raw_line
+        };
+        if line.starts_with(b"cott-domain ") {
+            let line_span = Span::new(offset, offset + line.len());
+            if line.contains(&b'\r') {
+                diagnostics.push(malformed_domain_rule(
+                    "cott-domain directives must use LF line endings",
+                    line_span,
+                ));
+            } else if let Err(error) = std::str::from_utf8(line) {
+                diagnostics.push(malformed_domain_rule(
+                    "cott-domain directives must be valid UTF-8",
+                    Span::new(offset + error.valid_up_to(), offset + line.len()),
+                ));
+            } else if let Some(rule) = parse_domain_rule_line(line, offset, &mut diagnostics) {
+                if !seen.insert((rule.symbol.clone(), rule.facet)) {
+                    diagnostics.push(malformed_domain_rule(
+                        format!(
+                            "duplicate cott-domain directive for `{}` {}",
+                            rule.symbol,
+                            rule.facet.as_str()
+                        ),
+                        line_span,
+                    ));
+                } else {
+                    rules.push(rule);
+                }
+            }
+        }
+        offset += raw_line.len();
+    }
+
+    DomainRuleParse {
+        path: path.to_path_buf(),
+        rules,
+        diagnostics,
+    }
+}
+
+pub fn scan_doc_candidates(text: &str) -> Vec<DocCandidate> {
+    let bytes = text.as_bytes();
+    let mut candidates = Vec::new();
+    let mut start = 0;
+    for (index, byte) in bytes.iter().enumerate() {
+        if matches!(byte, b'.' | b'!' | b'?' | b'\n') {
+            scan_doc_sentence(
+                &text[start..index + usize::from(*byte != b'\n')],
+                start,
+                &mut candidates,
+            );
+            start = index + 1;
+        }
+    }
+    if start < bytes.len() {
+        scan_doc_sentence(&text[start..], start, &mut candidates);
+    }
+    candidates
+}
+
+pub fn has_normative_modal(sentence: &str) -> bool {
+    ["must", "shall", "required to", "must not"]
+        .into_iter()
+        .any(|modal| has_ascii_phrase(sentence.as_bytes(), modal.as_bytes()))
+}
+
+pub fn sentence_has_facet(sentence: &str, facet: ShadowFacet) -> bool {
+    facet_anchors(facet)
+        .iter()
+        .any(|anchor| has_ascii_phrase(sentence.as_bytes(), anchor.as_bytes()))
+}
+
+fn parse_domain_rule_line(
+    line: &[u8],
+    offset: usize,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<DomainRule> {
+    const PREFIX: &[u8] = b"cott-domain ";
+    let mut cursor = PREFIX.len();
+    let symbol_start = cursor;
+    cursor = next_ascii_whitespace(line, cursor);
+    if cursor == symbol_start {
+        diagnostics.push(malformed_domain_rule(
+            "cott-domain directive requires a fully qualified callable symbol",
+            Span::new(offset, offset + line.len()),
+        ));
+        return None;
+    }
+    let symbol = std::str::from_utf8(&line[symbol_start..cursor]).expect("validated directive");
+    if !canonical_callable_symbol(symbol) {
+        diagnostics.push(malformed_domain_rule(
+            "cott-domain directive symbol must be a fully qualified callable",
+            Span::new(offset + symbol_start, offset + cursor),
+        ));
+        return None;
+    }
+
+    let separator_start = cursor;
+    cursor = skip_ascii_whitespace(line, cursor);
+    if cursor == separator_start {
+        diagnostics.push(malformed_domain_rule(
+            "cott-domain directive requires a facet",
+            Span::new(offset, offset + line.len()),
+        ));
+        return None;
+    }
+    let facet_start = cursor;
+    cursor = next_ascii_whitespace_or_colon(line, cursor);
+    if cursor == facet_start || line.get(cursor) != Some(&b':') {
+        diagnostics.push(malformed_domain_rule(
+            "cott-domain directive facet must be followed immediately by `:`",
+            Span::new(offset + facet_start, offset + cursor),
+        ));
+        return None;
+    }
+    let facet_name = std::str::from_utf8(&line[facet_start..cursor]).expect("validated directive");
+    let Some(facet) = ShadowFacet::parse(facet_name) else {
+        diagnostics.push(malformed_domain_rule(
+            "cott-domain directive has an unknown facet",
+            Span::new(offset + facet_start, offset + cursor),
+        ));
+        return None;
+    };
+
+    cursor += 1;
+    let payload_start = skip_ascii_whitespace(line, cursor);
+    if payload_start == cursor || payload_start == line.len() {
+        diagnostics.push(malformed_domain_rule(
+            "cott-domain directive requires nonempty text after `:`",
+            Span::new(offset + cursor.saturating_sub(1), offset + line.len()),
+        ));
+        return None;
+    }
+    let payload = std::str::from_utf8(&line[payload_start..]).expect("validated directive");
+    if payload.bytes().all(|byte| byte.is_ascii_whitespace()) {
+        diagnostics.push(malformed_domain_rule(
+            "cott-domain directive requires nonempty text after `:`",
+            Span::new(offset + payload_start, offset + line.len()),
+        ));
+        return None;
+    }
+
+    Some(DomainRule {
+        symbol: symbol.to_owned(),
+        facet,
+        payload: payload.to_owned(),
+        payload_span: Span::new(offset + payload_start, offset + line.len()),
+        source_order: offset,
+    })
+}
+
+fn malformed_domain_rule(message: impl Into<String>, span: Span) -> Diagnostic {
+    let mut diagnostic = Diagnostic::error(code::CONTRACT, message, span.clone());
+    diagnostic.source_order = span.start;
+    diagnostic
+}
+
+fn canonical_callable_symbol(symbol: &str) -> bool {
+    symbol.split('.').count() >= 2
+        && symbol.split('.').all(|segment| {
+            let mut characters = segment.bytes();
+            characters
+                .next()
+                .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+                && characters.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+        })
+}
+
+fn skip_ascii_whitespace(bytes: &[u8], mut cursor: usize) -> usize {
+    while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+        cursor += 1;
+    }
+    cursor
+}
+
+fn next_ascii_whitespace(bytes: &[u8], mut cursor: usize) -> usize {
+    while bytes
+        .get(cursor)
+        .is_some_and(|byte| !byte.is_ascii_whitespace())
+    {
+        cursor += 1;
+    }
+    cursor
+}
+
+fn next_ascii_whitespace_or_colon(bytes: &[u8], mut cursor: usize) -> usize {
+    while bytes
+        .get(cursor)
+        .is_some_and(|byte| !byte.is_ascii_whitespace() && *byte != b':')
+    {
+        cursor += 1;
+    }
+    cursor
+}
+
+fn scan_doc_sentence(sentence: &str, start: usize, candidates: &mut Vec<DocCandidate>) {
+    if !has_normative_modal(sentence) {
+        return;
+    }
+    for facet in ShadowFacet::ALL {
+        if sentence_has_facet(sentence, facet) {
+            candidates.push(DocCandidate {
+                facet,
+                span: Span::new(start, start + sentence.len()),
+                source_order: start,
+            });
+        }
+    }
+}
+
+fn facet_anchors(facet: ShadowFacet) -> &'static [&'static str] {
+    match facet {
+        ShadowFacet::Return => &["return", "returns", "result", "same as"],
+        ShadowFacet::Limit => &[
+            "limit",
+            "maximum",
+            "minimum",
+            "at most",
+            "at least",
+            "less than",
+            "greater than",
+            "bytes",
+            "timeout",
+        ],
+        ShadowFacet::Error => &["error", "fail", "fails", "reject"],
+        ShadowFacet::Atomicity => &["atomic", "atomically", "all-or-nothing"],
+        ShadowFacet::Cleanup => &[
+            "cleanup",
+            "clean up",
+            "remove temporary",
+            "delete temporary",
+            "leave no",
+        ],
+    }
+}
+
+fn has_ascii_phrase(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .enumerate()
+        .any(|(start, candidate)| {
+            candidate.eq_ignore_ascii_case(needle)
+                && !haystack
+                    .get(start.wrapping_sub(1))
+                    .is_some_and(|byte| ascii_word(*byte))
+                && !haystack
+                    .get(start + needle.len())
+                    .is_some_and(|byte| ascii_word(*byte))
+        })
+}
+
+const fn ascii_word(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
 pub fn render_prompt(
     callable: &PythonCallable,
     selected_ir: &[u8],
@@ -112,7 +453,8 @@ pub fn render_prompt(
             callable.cott_symbol
         ));
     }
-    if rules.is_some_and(|rules| rules.len() > 1024 * 1024) || selected_ir.len() > 1024 * 1024 {
+    if rules.is_some_and(|rules| rules.len() > MAX_RULE_BYTES) || selected_ir.len() > MAX_RULE_BYTES
+    {
         return Err("agent prompt input exceeds 1 MiB".to_owned());
     }
     let ownership = match &callable.kind {
@@ -146,9 +488,12 @@ pub fn render_prompt(
     )
     .into_bytes();
     prompt.extend_from_slice(b"Standard ABI aliases, including integer widths, are annotations and MUST NOT be called. Construct result values only with top-level `cott_runtime.Ok(...)`/`cott_runtime.Err(...)`, never `Result.Ok`/`Result.Err`. Generated payload enum aliases have no members; import and construct top-level `<Enum>_<Variant>` classes from the exact generated `*_types` module, never `<Enum>.<Variant>`.\n");
+    prompt.extend_from_slice(b"Generated structs are exact keyword-only dataclasses and MUST be constructed as `Struct(field=...)`; never synthesize `<Struct>_<Variant>`. Payload and singleton variant classes exist only for declared enums. Inspect enum-valued struct fields with the exact `<Enum>_<Variant>` classes.\n");
     prompt.extend_from_slice(b"\nFACTORY TYPE MODEL\n`Factory[Concrete]` maps to `type[Concrete]`: it is the exact compiler-generated `Concrete` class object, never an instance, subclass, or arbitrary callable. Constructor calls MUST match `Concrete`'s inferred Cott init signature. Validation MUST NOT construct or invoke a Factory value.\n");
     prompt.extend_from_slice(b"\nDYN DISPATCH\nA `Dyn[Trait]` call is resolved only against that exact canonical trait origin and its declared inherited members; generic arguments remain part of its annotation. A nearer child member overrides a parent, while same-depth inherited members are ambiguous; unrelated traits with the same method name are not interchangeable. Await an async trait member and do not await a synchronous one.\n");
     prompt.extend_from_slice(b"\nEFFECT CALLS\nCall Cott functions only by their exact imported facade name. Do not alias, store, return, pass, rebind, or shadow a Cott callable, and do not call a value whose Cott identity is dynamic except an exact `dyn.value.method(...)` invocation. For an implementation target, a public sibling method of the same concrete may only be called through a parameter annotated with that concrete (normally `self`) or a direct local alias of one, as `<receiver>.<method>(...)`; it is a Cott call. Every direct or private-helper-reachable Cott call must be covered by the target function's declared effects. Imported stdlib, external projections, generated value constructors, exact Dyn construction, and exact Factory constructors are effect leaves.\n");
+    prompt.extend_from_slice(b"\nPRIVATE RUNTIME EFFECT ADAPTERS\nThe only private runtime effect adapters are `cott_runtime._cott_fixture_read`, `cott_runtime._cott_fixture_write`, `cott_runtime._cott_fixture_replace`, `cott_runtime._cott_fixture_http`, and `cott_runtime._cott_fixture_now`. They MAY be used only when the contract is targeted by a compatible declared scenario with an active fixture. Otherwise, an effectful callable MUST NOT invent an adapter name or authority; follow ordinary declared-effect implementation rules and leave it as trust evidence. Do not emulate an effect with stdlib I/O, inspect adapter internals, dynamically import an adapter, or retain an adapter value.\n");
+    prompt.extend_from_slice(b"\nSCENARIOS\nScenario fixtures and steps are runner-owned. Scenario calls are facade-only: invoke the exact generated public facade, never a private `_cott_impl` implementation or `cott_bindings` module.\n");
     prompt.extend_from_slice(b"\nCONTAINER ABI\nVariadic Cott `Tuple[T, ...]` uses native `tuple[T, ...]`. Cott `Array[T, N]` uses `CottArray[T, Literal[N]]` and is constructed only as `CottArray(values=(...))`; Cott `Buffer[N]` uses `CottBuffer[Literal[N]]` and is constructed only as `CottBuffer(data=bytes.fromhex(\"...\"))`. Import `CottArray` and `CottBuffer` from `cott_runtime` and `Literal` from `typing` when required; never substitute Python primitives or call ABI aliases.\n");
     if let Some(existing) = existing {
         prompt.extend_from_slice(b"\nEXISTING IMPLEMENTATION\n");

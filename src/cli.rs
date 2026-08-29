@@ -15,9 +15,13 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub use crate::agent::AgentKind;
-use crate::agent::{AgentRunCandidate, adapter, render_prompt, run_agent};
+use crate::agent::{
+    AgentRunCandidate, ShadowFacet, adapter, parse_domain_rules, render_prompt, run_agent,
+    scan_doc_candidates,
+};
 use crate::binding::{
-    ResolvedBinding, factory_concrete_imports, resolve_implementations, validate_candidate,
+    PythonFileRole, ResolvedBinding, audit_facade_file, factory_concrete_imports,
+    resolve_implementations, validate_candidate,
 };
 use crate::compiler::{ProjectDiagnostic, parse_project};
 use crate::diagnostics::{
@@ -27,9 +31,13 @@ use crate::hash::sha256_hex;
 use crate::hir::lower_with_effects;
 use crate::ir::render;
 use crate::manifest::{ApiVersion, parse_api_version};
-use crate::project::{ProjectPaths, discover_sources_from_paths, load_config_with_paths};
+use crate::project::{
+    ProjectPaths, discover_python_sources, discover_sources_from_paths, load_config_with_paths,
+};
 use crate::provenance::{
-    AgentRun, AgentStatus, GenerationRecord, StreamDigest, compare_implementation_identities,
+    AgentRun, AgentStatus, ClauseCoverage, CoveragePolicyResult, CoverageStatus, CoverageSummary,
+    CoverageViolation, GenerationRecord, SemanticCoverage, SourceSpan as ProvenanceSpan,
+    StreamDigest, compare_implementation_identities,
 };
 use crate::python::artifact_plan::{PythonArtifactPlan, PythonCallable, PythonCallableKind};
 use crate::python_emit::{Emission, EmitDiagnostic, emit};
@@ -174,13 +182,14 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
                     0
                 }
                 Err(messages) => {
-                    let proof_disproved = messages
-                        .iter()
-                        .any(|message| crate::proof::is_disproved_error(message));
+                    let contract_failure = messages.iter().any(|message| {
+                        crate::proof::is_disproved_error(message)
+                            || message.starts_with(COVERAGE_POLICY_PREFIX)
+                    });
                     for message in messages {
                         eprintln!("error: {message}");
                     }
-                    if proof_disproved { 3 } else { 4 }
+                    if contract_failure { 3 } else { 4 }
                 }
             },
             Err(code) => code,
@@ -250,8 +259,15 @@ fn run_json(arguments: Vec<OsString>) -> i32 {
         .filter(|line| !line.is_empty())
         .enumerate()
     {
-        let body = line.strip_prefix("error: ").unwrap_or(line);
-        let mut diagnostic = Diagnostic::error(error_code, body, Span::new(0, 0));
+        let warning = line.starts_with("warning: ");
+        let body = line
+            .strip_prefix(if warning { "warning: " } else { "error: " })
+            .unwrap_or(line);
+        let mut diagnostic = if warning {
+            Diagnostic::warning(code::SHADOW_SPECIFICATION, body, Span::new(0, 0))
+        } else {
+            Diagnostic::error(error_code, body, Span::new(0, 0))
+        };
         diagnostic.source_order = source_order;
         if let Some(paths) = &project_paths
             && let Some((location, message)) = body.rsplit_once(": ")
@@ -260,15 +276,20 @@ fn run_json(arguments: Vec<OsString>) -> i32 {
             && let (Ok(start), Ok(end)) = (start.parse::<usize>(), end.parse::<usize>())
         {
             let relative = PathBuf::from(path);
-            let absolute = paths.source_dir.join(&relative);
+            let absolute = paths
+                .root
+                .join(&relative)
+                .is_file()
+                .then(|| paths.root.join(&relative))
+                .unwrap_or_else(|| paths.source_dir.join(&relative));
             if let Ok(bytes) = fs::read(&absolute) {
-                let source_root = paths
-                    .source_dir
+                let source_path = absolute
                     .strip_prefix(&paths.root)
-                    .unwrap_or(&paths.source_dir);
+                    .unwrap_or(&absolute)
+                    .to_path_buf();
                 let file = *source_ids
-                    .entry(relative.clone())
-                    .or_insert_with(|| sources.add(source_root.join(&relative), bytes));
+                    .entry(source_path.clone())
+                    .or_insert_with(|| sources.add(source_path, bytes));
                 diagnostic.message = message.to_owned();
                 diagnostic.span = Span::new(start, end);
                 diagnostic.source_span = Some(SourceSpan {
@@ -644,6 +665,155 @@ fn parse_diff(values: &[OsString]) -> Result<Command, &'static str> {
     })
 }
 
+fn audit_authored_python(paths: &ProjectPaths) -> Result<(), Vec<String>> {
+    let mut diagnostics = discover_python_sources(&paths.python_source_dir)
+        .map_err(|error| vec![format!("cannot audit authored Python: {error}")])?
+        .into_iter()
+        .flat_map(|source| {
+            let display = source
+                .disk_path
+                .strip_prefix(&paths.root)
+                .unwrap_or(&source.disk_path)
+                .to_path_buf();
+            audit_facade_file(&display, &source.source, PythonFileRole::Authored)
+                .into_iter()
+                .map(|diagnostic| {
+                    diagnostic.range.map_or_else(
+                        || format!("{}: {}", diagnostic.path.display(), diagnostic.message),
+                        |range| {
+                            format!(
+                                "{}:{}-{}: {}",
+                                diagnostic.path.display(),
+                                range.start,
+                                range.end,
+                                diagnostic.message
+                            )
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    diagnostics.sort();
+    diagnostics.dedup();
+    (!diagnostics.is_empty())
+        .then_some(diagnostics)
+        .map_or(Ok(()), Err)
+}
+fn supports_shadow_facet(declaration: &serde_json::Value, facet: ShadowFacet) -> bool {
+    let contract = declaration.get("contract");
+    match facet {
+        ShadowFacet::Return => declaration.get("return_type").is_some(),
+        ShadowFacet::Limit => false,
+        ShadowFacet::Error => contract
+            .and_then(|contract| contract.get("clauses"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|clauses| {
+                clauses.iter().any(|clause| {
+                    clause.get("kind").and_then(serde_json::Value::as_str) == Some("error")
+                })
+            }),
+        ShadowFacet::Atomicity | ShadowFacet::Cleanup => contract
+            .and_then(|contract| contract.get("effects"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|effects| {
+                effects.iter().any(|effect| {
+                    effect.get("key").and_then(serde_json::Value::as_str) == Some(facet.as_str())
+                })
+            }),
+    }
+}
+
+fn shadow_warnings(
+    config: &crate::manifest::ProjectConfig,
+    paths: &ProjectPaths,
+    ir: &crate::ir::CanonicalIr,
+) -> Result<Vec<String>, String> {
+    let mut facets = BTreeMap::new();
+    let mut warnings = Vec::new();
+    for module in &ir.modules {
+        let value = crate::ir::load(&module.bytes)?;
+        for declaration in value
+            .get("declarations")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|declaration| {
+                declaration.get("kind").and_then(serde_json::Value::as_str) == Some("function")
+            })
+        {
+            let symbol = declaration
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("function declaration has no canonical name")?
+                .to_owned();
+            let supported = ShadowFacet::ALL
+                .into_iter()
+                .filter(|facet| supports_shadow_facet(declaration, *facet))
+                .collect::<BTreeSet<_>>();
+            if let Some(doc) = declaration.get("doc") {
+                if let Some(text) = doc.get("text").and_then(serde_json::Value::as_str) {
+                    let span = doc.get("span").ok_or("function doc has no span")?;
+                    let start = span
+                        .get("start_byte")
+                        .and_then(serde_json::Value::as_u64)
+                        .ok_or("function doc has invalid span")?
+                        as usize;
+                    for candidate in scan_doc_candidates(text) {
+                        if !supported.contains(&candidate.facet) {
+                            warnings.push(format!(
+                                "{}:{}-{}: {}: possible shadow specification: {} duty is stated in documentation for `{symbol}` but has no formal evidence",
+                                display_path(&paths.root, &module.source),
+                                start + candidate.span.start,
+                                start + candidate.span.end,
+                                code::SHADOW_SPECIFICATION,
+                                candidate.facet.as_str(),
+                            ));
+                        }
+                    }
+                }
+            }
+            facets.insert(symbol, supported);
+        }
+    }
+    if let Some(rule_path) = &config.generator.rules {
+        let path = paths.root.join(rule_path);
+        let parsed = parse_domain_rules(
+            &path,
+            &fs::read(&path)
+                .map_err(|error| format!("read generator rules {}: {error}", path.display()))?,
+        );
+        if let Some(diagnostic) = parsed.diagnostics.first() {
+            return Err(format!(
+                "{}:{}-{}: {}",
+                display_path(&paths.root, &parsed.path),
+                diagnostic.span.start,
+                diagnostic.span.end,
+                diagnostic.message
+            ));
+        }
+        for rule in parsed.rules {
+            if !facets
+                .get(&rule.symbol)
+                .is_some_and(|supported| supported.contains(&rule.facet))
+            {
+                warnings.push(format!(
+                    "{}:{}-{}: {}: possible shadow specification: {} duty is stated in generator rules for `{}` but has no formal evidence",
+                    display_path(&paths.root, &parsed.path),
+                    rule.payload_span.start,
+                    rule.payload_span.end,
+                    code::SHADOW_SPECIFICATION,
+                    rule.facet.as_str(),
+                    rule.symbol,
+                ));
+            }
+        }
+    }
+    warnings.sort();
+    warnings.dedup();
+    Ok(warnings)
+}
+
 struct PlannedProject {
     session: ProjectSession,
     config: crate::manifest::ProjectConfig,
@@ -678,6 +848,12 @@ fn plan_with_session(session: ProjectSession) -> Result<PlannedProject, i32> {
     if let Err(message) = artifact_root_for_paths(&paths) {
         eprintln!("error: {message}");
         return Err(2);
+    }
+    if let Err(diagnostics) = audit_authored_python(&paths) {
+        for diagnostic in diagnostics {
+            eprintln!("error: {diagnostic}");
+        }
+        return Err(4);
     }
     let sources = match discover_sources_from_paths(&paths) {
         Ok(sources) => sources,
@@ -715,6 +891,17 @@ fn plan_with_session(session: ProjectSession) -> Result<PlannedProject, i32> {
             return Err(1);
         }
     };
+    match shadow_warnings(&config, &paths, &ir) {
+        Ok(warnings) => {
+            for warning in warnings {
+                eprintln!("warning: {warning}");
+            }
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
+            return Err(3);
+        }
+    }
     let plan = match PythonArtifactPlan::from_ir(&ir) {
         Ok(plan) => plan,
         Err(error) => {
@@ -1385,6 +1572,12 @@ fn generate_project(
             return 2;
         }
     };
+    if let Err(diagnostics) = audit_authored_python(&paths) {
+        for diagnostic in diagnostics {
+            eprintln!("error: {diagnostic}");
+        }
+        return 4;
+    }
     let sources = match discover_sources_from_paths(&paths) {
         Ok(sources) => sources,
         Err(error) => {
@@ -1421,6 +1614,17 @@ fn generate_project(
             return 1;
         }
     };
+    match shadow_warnings(&config, &paths, &ir) {
+        Ok(warnings) => {
+            for warning in warnings {
+                eprintln!("warning: {warning}");
+            }
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 3;
+        }
+    }
     let plan = match PythonArtifactPlan::from_ir(&ir) {
         Ok(plan) => plan,
         Err(error) => {
@@ -2711,6 +2915,12 @@ fn check_project(project_argument: Option<PathBuf>, selected: Option<PathBuf>) -
             return 2;
         }
     };
+    if let Err(diagnostics) = audit_authored_python(&paths) {
+        for diagnostic in diagnostics {
+            eprintln!("error: {diagnostic}");
+        }
+        return 4;
+    }
     if let Some(selected) = selected {
         let selected = paths.root.join(selected);
         let valid = selected
@@ -2740,7 +2950,18 @@ fn check_project(project_argument: Option<PathBuf>, selected: Option<PathBuf>) -
     };
     let custom_effects = config.effects.keys().cloned().collect();
     match lower_with_effects(&paths.source_dir, parsed, &custom_effects) {
-        Ok(_) => 0,
+        Ok(hir) => match render(&hir).and_then(|ir| shadow_warnings(&config, &paths, &ir)) {
+            Ok(warnings) => {
+                for warning in warnings {
+                    eprintln!("warning: {warning}");
+                }
+                0
+            }
+            Err(error) => {
+                eprintln!("error: {error}");
+                3
+            }
+        },
         Err(diagnostics) => {
             print_project_diagnostics(&diagnostics);
             3
@@ -3785,11 +4006,15 @@ fn verify(plan: &PlannedProject) -> Result<(), Vec<String>> {
             serde_json::to_value(implementation_comparison)
                 .map_err(|message| vec![message.to_string()])?,
         );
+    let coverage = semantic_coverage(&verification, &plan.config.verification.coverage)
+        .map_err(|message| vec![message])?;
+    let policy = coverage.policy.clone();
     let mut record = expected_record;
     record.current.tools = evidence.tools;
     record.current.dependencies = evidence.dependencies;
     record.current.verified = true;
     record.current.verification = verification;
+    record.current.semantic_coverage = coverage;
     record
         .current
         .compute_generation_id()
@@ -3812,9 +4037,255 @@ fn verify(plan: &PlannedProject) -> Result<(), Vec<String>> {
     changes.generation_record_last = true;
     session
         .apply(&snapshot, &changes)
-        .map_err(|error| vec![error.to_string()])
+        .map_err(|error| vec![error.to_string()])?;
+    if !policy.passed {
+        return Err(policy
+            .violations
+            .into_iter()
+            .map(|violation| {
+                format!(
+                    "{COVERAGE_POLICY_PREFIX}{}:{}:{}-{}: {}",
+                    violation.symbol,
+                    violation.clause_id,
+                    violation.span.start_byte,
+                    violation.span.end_byte,
+                    violation.reason,
+                )
+            })
+            .collect());
+    }
+    Ok(())
 }
 
+const COVERAGE_POLICY_PREFIX: &str = "semantic coverage policy failed: ";
+
+fn provenance_span(value: &serde_json::Value) -> Result<ProvenanceSpan, String> {
+    let field = |name| {
+        value
+            .get(name)
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| format!("coverage evidence has invalid span field `{name}`"))
+    };
+    Ok(ProvenanceSpan {
+        start_byte: field("start_byte")?,
+        end_byte: field("end_byte")?,
+        start_line: field("start_line")?,
+        start_column: field("start_column")?,
+        end_line: field("end_line")?,
+        end_column: field("end_column")?,
+    })
+}
+
+fn coverage_status(evidence: &[serde_json::Value]) -> CoverageStatus {
+    let observed = evidence.iter().any(|entry| {
+        matches!(
+            entry.get("status").and_then(serde_json::Value::as_str),
+            Some("proved")
+        ) || matches!(
+            entry.get("grade").and_then(serde_json::Value::as_str),
+            Some("runtime check" | "test observation")
+        )
+    });
+    if observed {
+        return CoverageStatus::Observed;
+    }
+    if evidence.is_empty()
+        || evidence.iter().any(|entry| {
+            matches!(
+                entry.get("status").and_then(serde_json::Value::as_str),
+                Some("unknown")
+            ) || entry
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|reason| {
+                    let reason = reason.to_ascii_lowercase();
+                    reason.contains("unsupported") || reason.contains("limit")
+                })
+        })
+    {
+        return CoverageStatus::Unknown;
+    }
+    if evidence.iter().any(|entry| {
+        entry.get("grade").and_then(serde_json::Value::as_str) == Some("trust declaration")
+    }) {
+        return CoverageStatus::TrustDeclaration;
+    }
+    CoverageStatus::Unobserved
+}
+
+fn coverage_order_values(symbol: &str, clause_id: &str) -> (String, u8, u32, String) {
+    let (kind, id) = clause_id
+        .split_once(':')
+        .expect("coverage evidence clause IDs originate in canonical IR");
+    let order = match kind {
+        "requires" => 0,
+        "ensures" => 1,
+        "error" => 2,
+        "modifies" => 3,
+        "invariant" => 4,
+        _ => 5,
+    };
+    (
+        symbol.to_owned(),
+        order,
+        id.parse().unwrap_or_default(),
+        if kind == "modifies" {
+            id.to_owned()
+        } else {
+            String::new()
+        },
+    )
+}
+
+fn coverage_order(clause: &ClauseCoverage) -> (String, u8, u32, String) {
+    coverage_order_values(&clause.symbol, &clause.clause_id)
+}
+
+fn semantic_coverage(
+    report: &serde_json::Value,
+    policy: &crate::manifest::CoveragePolicy,
+) -> Result<SemanticCoverage, String> {
+    let mut clauses = BTreeMap::<(String, String), (ProvenanceSpan, Vec<serde_json::Value>)>::new();
+    let mut insert =
+        |entry: &serde_json::Value, payloads: Vec<serde_json::Value>| -> Result<(), String> {
+            let symbol = entry
+                .get("symbol")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("coverage evidence has no symbol")?;
+            let clause_id = entry
+                .get("clause_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("coverage evidence has no clause_id")?;
+            let span = provenance_span(entry.get("span").ok_or("coverage evidence has no span")?)?;
+            let key = (symbol.to_owned(), clause_id.to_owned());
+            match clauses.get_mut(&key) {
+                Some((existing, evidence)) => {
+                    if *existing != span {
+                        return Err(format!(
+                            "coverage evidence disagrees on span for `{symbol}:{clause_id}`"
+                        ));
+                    }
+                    evidence.extend(payloads);
+                }
+                None => {
+                    clauses.insert(key, (span, payloads));
+                }
+            }
+            Ok(())
+        };
+
+    for entry in report
+        .pointer("/contract_tests/contracts")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let payloads = entry
+            .get("evidence")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        insert(entry, payloads)?;
+    }
+    for entry in report
+        .pointer("/contract_proofs/contracts")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry.get("clause_id").is_some())
+    {
+        insert(entry, vec![entry.clone()])?;
+    }
+
+    let mut clauses = clauses
+        .into_iter()
+        .map(|((symbol, clause_id), (span, evidence))| ClauseCoverage {
+            symbol,
+            clause_id,
+            span,
+            status: coverage_status(&evidence),
+            evidence,
+        })
+        .collect::<Vec<_>>();
+    clauses.sort_by(|left, right| coverage_order(left).cmp(&coverage_order(right)));
+    let mut summary = CoverageSummary::default();
+    for clause in &clauses {
+        match clause.status {
+            CoverageStatus::Observed => summary.observed += 1,
+            CoverageStatus::Unobserved => summary.unobserved += 1,
+            CoverageStatus::TrustDeclaration => summary.trust_declaration += 1,
+            CoverageStatus::Unknown => summary.unknown += 1,
+        }
+    }
+
+    let by_key = clauses
+        .iter()
+        .map(|clause| ((clause.symbol.as_str(), clause.clause_id.as_str()), clause))
+        .collect::<BTreeMap<_, _>>();
+    let mut selected = BTreeSet::new();
+    for (rule_index, rule) in policy.rules.iter().enumerate() {
+        let known = clauses.iter().any(|clause| clause.symbol == rule.symbol);
+        if !known {
+            return Err(format!(
+                "coverage policy rule {rule_index} selects unknown symbol `{}`",
+                rule.symbol
+            ));
+        }
+        for clause_id in &rule.clauses {
+            if !by_key.contains_key(&(rule.symbol.as_str(), clause_id.as_str())) {
+                return Err(format!(
+                    "coverage policy rule {rule_index} selects unknown clause `{}:{clause_id}`",
+                    rule.symbol
+                ));
+            }
+            selected.insert((rule.symbol.as_str(), clause_id.as_str()));
+        }
+    }
+    let mut violations = Vec::new();
+    for (rule_index, rule) in policy.rules.iter().enumerate() {
+        for clause_id in &rule.clauses {
+            let clause = by_key[&(rule.symbol.as_str(), clause_id.as_str())];
+            let allowed = match clause.status {
+                CoverageStatus::Observed => true,
+                CoverageStatus::Unobserved => rule.allow_unobserved,
+                CoverageStatus::TrustDeclaration => rule.allow_trust_declaration,
+                CoverageStatus::Unknown => rule.allow_unknown,
+            };
+            if !allowed {
+                violations.push(CoverageViolation {
+                    symbol: clause.symbol.clone(),
+                    clause_id: clause.clause_id.clone(),
+                    span: clause.span.clone(),
+                    status: clause.status.clone(),
+                    reason: format!(
+                        "coverage policy rule {rule_index} does not allow `{}`",
+                        match clause.status {
+                            CoverageStatus::Observed => "observed",
+                            CoverageStatus::Unobserved => "unobserved",
+                            CoverageStatus::TrustDeclaration => "trust_declaration",
+                            CoverageStatus::Unknown => "unknown",
+                        }
+                    ),
+                });
+            }
+        }
+    }
+    violations.sort_by(|left, right| {
+        coverage_order_values(&left.symbol, &left.clause_id)
+            .cmp(&coverage_order_values(&right.symbol, &right.clause_id))
+    });
+    violations
+        .dedup_by(|left, right| left.symbol == right.symbol && left.clause_id == right.clause_id);
+    Ok(SemanticCoverage {
+        clauses,
+        summary,
+        policy: CoveragePolicyResult {
+            selected: selected.len() as u64,
+            passed: violations.is_empty(),
+            violations,
+        },
+    })
+}
 fn comparable_snapshot(snapshot: &crate::provenance::GenerationSnapshot) -> serde_json::Value {
     let mut value = serde_json::to_value(snapshot).expect("generation snapshot serializes");
     let object = value
@@ -3823,6 +4294,7 @@ fn comparable_snapshot(snapshot: &crate::provenance::GenerationSnapshot) -> serd
     for field in [
         "agent_runs",
         "generation_id",
+        "semantic_coverage",
         "tools",
         "verification",
         "verified",

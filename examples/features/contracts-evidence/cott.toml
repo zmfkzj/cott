@@ -1,0 +1,28 @@
+[project]
+name = "contracts-evidence"
+version = "0.1.0"
+source = "src"
+
+[target.python]
+source = "python"
+generated = "generated/python"
+stubs = "generated/stubs"
+interpreter = ".venv/bin/python"
+type_checker = ".venv/bin/basedpyright"
+runtime_validation = "boundary"
+
+[verification]
+proof_node_limit = 257
+proof_branch_limit = 65
+candidate_limit = 17
+lifecycle_limit = 5
+
+[[verification.coverage.rules]]
+symbol = "curriculum.contracts_evidence.assess_label"
+clauses = ["ensures:2", "error:5"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[target.python.implementations]
+"curriculum.contracts_evidence.assess_label" = "cott_bindings.curriculum.contracts_evidence.assess_label:assess_label"

@@ -4,7 +4,10 @@ use std::path::Path;
 
 use cott::hash::sha256_hex;
 
-use cott::agent::{AgentKind, CODEX, OMP, adapter, render_prompt};
+use cott::agent::{
+    AgentKind, CODEX, OMP, ShadowFacet, adapter, has_normative_modal, parse_domain_rules,
+    render_prompt, scan_doc_candidates, sentence_has_facet,
+};
 use cott::python::artifact_plan::{PythonCallable, PythonCallableKind};
 
 #[test]
@@ -128,7 +131,16 @@ fn prompt_has_fixed_sections_and_final_instruction() {
         "EFFECT CALLS\nCall Cott functions only by their exact imported facade name. Do not alias, store, return, pass, rebind, or shadow a Cott callable"
     ));
     assert!(text.contains(
+        "PRIVATE RUNTIME EFFECT ADAPTERS\nThe only private runtime effect adapters are `cott_runtime._cott_fixture_read`, `cott_runtime._cott_fixture_write`, `cott_runtime._cott_fixture_replace`, `cott_runtime._cott_fixture_http`, and `cott_runtime._cott_fixture_now`. They MAY be used only when the contract is targeted by a compatible declared scenario with an active fixture. Otherwise, an effectful callable MUST NOT invent an adapter name or authority; follow ordinary declared-effect implementation rules and leave it as trust evidence. Do not emulate an effect with stdlib I/O, inspect adapter internals, dynamically import an adapter, or retain an adapter value."
+    ));
+    assert!(text.contains(
+        "SCENARIOS\nScenario fixtures and steps are runner-owned. Scenario calls are facade-only"
+    ));
+    assert!(text.contains(
         "Standard ABI aliases, including integer widths, are annotations and MUST NOT be called. Construct result values only with top-level `cott_runtime.Ok(...)`/`cott_runtime.Err(...)`, never `Result.Ok`/`Result.Err`. Generated payload enum aliases have no members; import and construct top-level `<Enum>_<Variant>` classes from the exact generated `*_types` module, never `<Enum>.<Variant>`."
+    ));
+    assert!(text.contains(
+        "Generated structs are exact keyword-only dataclasses and MUST be constructed as `Struct(field=...)`; never synthesize `<Struct>_<Variant>`."
     ));
     assert!(
         text.ends_with(
@@ -259,4 +271,158 @@ fn specialization_prompt_is_rejected_as_compiler_owned() {
         error,
         "compiler-owned specialization implementation method `app.Reader.fetch` must not be sent to an agent"
     );
+}
+
+#[test]
+fn domain_rules_are_normalized_with_exact_payload_spans_and_source_order() {
+    let rules = b"ordinary guidance\ncott-domain app.fetch return: return this value\ncott-domain app.fetch limit: at most ten bytes\ncott-domain app.fetch error: reject \xc3\xa9\ncott-domain app.fetch atomicity: all-or-nothing write\ncott-domain app.Reader.close cleanup: delete temporary files\n";
+    let parsed = parse_domain_rules(Path::new("generator.rules"), rules);
+
+    assert!(parsed.diagnostics.is_empty());
+    assert_eq!(parsed.path.as_path(), Path::new("generator.rules"));
+    assert_eq!(
+        parsed
+            .rules
+            .iter()
+            .map(|rule| rule.facet)
+            .collect::<Vec<_>>(),
+        vec![
+            ShadowFacet::Return,
+            ShadowFacet::Limit,
+            ShadowFacet::Error,
+            ShadowFacet::Atomicity,
+            ShadowFacet::Cleanup,
+        ]
+    );
+    assert_eq!(parsed.rules[0].symbol, "app.fetch");
+    assert_eq!(parsed.rules[0].payload, "return this value");
+    assert_eq!(parsed.rules[0].source_order, b"ordinary guidance\n".len());
+    assert_eq!(
+        &rules[parsed.rules[1].payload_span.start..parsed.rules[1].payload_span.end],
+        b"at most ten bytes"
+    );
+    assert_eq!(parsed.rules[2].payload, "reject é");
+    assert_eq!(
+        &rules[parsed.rules[2].payload_span.start..parsed.rules[2].payload_span.end],
+        "reject é".as_bytes()
+    );
+    assert_eq!(
+        &rules[parsed.rules[4].payload_span.start..parsed.rules[4].payload_span.end],
+        b"delete temporary files"
+    );
+}
+
+#[test]
+fn malformed_or_duplicate_domain_rules_are_diagnostics_not_prose() {
+    let rules = b"cott-domain app.fetch unknown: text\n\
+cott-domain app.fetch return: first\n\
+cott-domain app.fetch return: second\n\
+cott-domain fetch return: text\n\
+cott-domain app.fetch limit : text\n\
+cott-domain app.fetch error:\n\
+cott-domain app.fetch cleanup: text\r\n\
+cott-domain app.fetch atomicity: \xff\n";
+    let parsed = parse_domain_rules(Path::new("generator.rules"), rules);
+
+    assert_eq!(parsed.rules.len(), 1);
+    assert_eq!(parsed.rules[0].payload, "first");
+    assert_eq!(parsed.diagnostics.len(), 7);
+    assert!(
+        parsed
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code == "COTT-K001")
+    );
+    assert!(
+        parsed
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("unknown facet"))
+    );
+    assert!(
+        parsed
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("duplicate"))
+    );
+    assert!(
+        parsed
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("valid UTF-8"))
+    );
+    assert!(
+        parsed
+            .diagnostics
+            .windows(2)
+            .all(|pair| pair[0].source_order < pair[1].source_order)
+    );
+    assert!(parsed.diagnostics.iter().any(|diagnostic| {
+        diagnostic.message.contains("LF line endings")
+            && &rules[diagnostic.span.start..diagnostic.span.end]
+                == b"cott-domain app.fetch cleanup: text\r"
+    }));
+}
+
+#[test]
+fn ordinary_rule_prose_is_ignored_and_prompt_bytes_are_unchanged() {
+    let rules = b"Must return safely.\nordinary cott-domain-like prose\ncott-domain app.fetch return: exact \xff bytes\n";
+    let parsed = parse_domain_rules(Path::new("generator.rules"), rules);
+    assert!(parsed.rules.is_empty());
+    assert_eq!(parsed.diagnostics.len(), 1);
+
+    let callable = PythonCallable {
+        module: "app".to_owned(),
+        cott_symbol: "app.run".to_owned(),
+        name: "run".to_owned(),
+        kind: PythonCallableKind::Function,
+        declaration: serde_json::json!({}),
+        owner: None,
+    };
+    let prompt = render_prompt(
+        &callable,
+        br#"{"module":"app"}"#,
+        "docs",
+        "types",
+        &BTreeMap::new(),
+        "bound",
+        None,
+        Some(rules),
+        Path::new("python/_cott_impl/app/run.py"),
+    )
+    .expect("prompt");
+    let marker = b"\nPROJECT RULES\n";
+    let start = prompt
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .expect("rules marker")
+        + marker.len();
+    assert_eq!(&prompt[start..start + rules.len()], rules);
+}
+
+#[test]
+fn doc_scanner_requires_closed_ascii_modal_and_facet_pairs() {
+    let doc = "é\nMust return the result.\nMust atomically clean up temporary files!\nMustard returns no duty.\nThe timeout is noted.\nMust proceed.";
+    let candidates = scan_doc_candidates(doc);
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|candidate| candidate.facet)
+            .collect::<Vec<_>>(),
+        vec![
+            ShadowFacet::Return,
+            ShadowFacet::Atomicity,
+            ShadowFacet::Cleanup
+        ]
+    );
+    assert_eq!(candidates[0].span.start, "é\n".len());
+    assert_eq!(
+        &doc.as_bytes()[candidates[1].span.start..candidates[1].span.end],
+        b"Must atomically clean up temporary files!"
+    );
+    assert!(has_normative_modal("REQUIRED TO return a result"));
+    assert!(has_normative_modal("must not fail"));
+    assert!(!has_normative_modal("mustard returns"));
+    assert!(sentence_has_facet("at least one byte", ShadowFacet::Limit));
+    assert!(!sentence_has_facet("returning later", ShadowFacet::Return));
 }

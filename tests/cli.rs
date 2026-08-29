@@ -191,12 +191,18 @@ fn recompute_generation_id(snapshot: &mut serde_json::Value) {
     let current = current
         .as_object_mut()
         .expect("generation snapshot is an object");
-    for key in ["generation_id", "verified", "verification", "agent_runs"] {
+    for key in [
+        "generation_id",
+        "verified",
+        "verification",
+        "semantic_coverage",
+        "agent_runs",
+    ] {
         current.remove(key);
     }
     let identity = serde_json::json!({
-        "domain": "cott.generation.v5",
-        "schema_version": 5,
+        "domain": "cott.generation.v7",
+        "schema_version": 7,
         "current": current,
     });
     let mut bytes = serde_json::to_vec(&identity).expect("canonical generation identity");
@@ -230,8 +236,8 @@ r=json.loads(p.read_bytes())
 e=pathlib.Path(sys.executable).resolve()
 r["current"]["tools"]["python"]={"cache_tag":sys.implementation.cache_tag,"content_hash":"sha256:"+hashlib.sha256(e.read_bytes()).hexdigest(),"executable":str(e),"implementation":sys.implementation.name,"machine":platform.machine(),"os":sys.platform,"platform":sysconfig.get_platform(),"version":platform.python_version()}
 i=dict(r["current"])
-for k in ("generation_id","verified","verification","agent_runs"): i.pop(k,None)
-i={"domain":"cott.generation.v5","schema_version":5,"current":i}
+for k in ("generation_id","verified","verification","semantic_coverage","agent_runs"): i.pop(k,None)
+i={"domain":"cott.generation.v7","schema_version":7,"current":i}
 r["current"]["generation_id"]="sha256:"+hashlib.sha256(json.dumps(i,ensure_ascii=False,separators=(",",":"),sort_keys=True).encode()+b"\n").hexdigest()
 p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True)+"\n")
 "#;
@@ -254,8 +260,8 @@ r=json.loads(p.read_bytes())
 s=r["last_verified"]
 s["implementations"][0]["python_symbol"]=sys.argv[1]
 i=dict(s)
-for k in ("generation_id","verified","verification","agent_runs"): i.pop(k,None)
-i={"domain":"cott.generation.v5","schema_version":5,"current":i}
+for k in ("generation_id","verified","verification","semantic_coverage","agent_runs"): i.pop(k,None)
+i={"domain":"cott.generation.v7","schema_version":7,"current":i}
 s["generation_id"]="sha256:"+hashlib.sha256(json.dumps(i,ensure_ascii=False,separators=(",",":"),sort_keys=True).encode()+b"\n").hexdigest()
 p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True)+"\n")
 "#;
@@ -278,8 +284,8 @@ r=json.loads(p.read_bytes())
 i=r["current"]["implementations"][0]
 for k in ("kind","callable_kind","concrete","method"): i.pop(k)
 c=dict(r["current"])
-for k in ("generation_id","verified","verification","agent_runs"): c.pop(k,None)
-i={"domain":"cott.generation.v5","schema_version":5,"current":c}
+for k in ("generation_id","verified","verification","semantic_coverage","agent_runs"): c.pop(k,None)
+i={"domain":"cott.generation.v7","schema_version":7,"current":c}
 r["current"]["generation_id"]="sha256:"+hashlib.sha256(json.dumps(i,ensure_ascii=False,separators=(",",":"),sort_keys=True).encode()+b"\n").hexdigest()
 p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True)+"\n")
 "#;
@@ -380,6 +386,87 @@ fn emits_complete_tree_and_verifies_exact_bytes() {
     let rejected = cott(&project.path, &["verify"]);
     assert_eq!(rejected.status.code(), Some(4));
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("managed artifact differs"));
+}
+
+#[test]
+fn verification_limits_reach_evidence_and_generated_strategies() {
+    let project = project();
+    let manifest = fs::read_to_string(project.path.join("cott.toml")).expect("manifest");
+    fs::write(
+        project.path.join("cott.toml"),
+        format!(
+            "{manifest}\n[verification]\nproof_node_limit = 17\nproof_branch_limit = 19\ncandidate_limit = 23\nlifecycle_limit = 29\n"
+        ),
+    )
+    .expect("verification overrides should be writable");
+
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let strategy: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/tests/generated/app/run.json"))
+            .expect("generated contract strategy"),
+    )
+    .expect("generated contract strategy is JSON");
+    assert_eq!(strategy["schema_version"], 5);
+    assert_eq!(strategy["proof_node_limit"], 17);
+    assert_eq!(strategy["proof_branch_limit"], 19);
+    assert_eq!(strategy["candidate_limit"], 23);
+    assert_eq!(strategy["lifecycle_limit"], 29);
+    assert_eq!(strategy["node_limit"], 64);
+    assert_eq!(strategy["container_length_limit"], 3);
+    assert_eq!(strategy["json_depth_limit"], 4);
+
+    let verified = cott(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let record: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json"))
+            .expect("verified generation record"),
+    )
+    .expect("verified generation record is JSON");
+    assert_eq!(
+        record["current"]["verification"]["limits"],
+        serde_json::json!({
+            "proof_node_limit": 17,
+            "proof_branch_limit": 19,
+            "candidate_limit": 23,
+            "lifecycle_limit": 29,
+        })
+    );
+}
+
+#[test]
+fn invalid_verification_limits_preserve_managed_tree() {
+    let absent = project();
+    let manifest = fs::read_to_string(absent.path.join("cott.toml")).expect("manifest");
+    fs::write(
+        absent.path.join("cott.toml"),
+        format!("{manifest}\n[verification]\nproof_node_limit = 0\n"),
+    )
+    .expect("invalid manifest should be writable");
+    let rejected = cott(&absent.path, &["emit", "python"]);
+    assert!(!rejected.status.success());
+    assert!(!absent.path.join("generated").exists());
+
+    let project = project();
+    assert!(cott(&project.path, &["emit", "python"]).status.success());
+    let before = file_snapshot(&project.path.join("generated"));
+    let manifest = fs::read_to_string(project.path.join("cott.toml")).expect("manifest");
+    fs::write(
+        project.path.join("cott.toml"),
+        format!("{manifest}\n[verification]\ncandidate_limit = 1025\n"),
+    )
+    .expect("invalid manifest should be writable");
+    let rejected = cott(&project.path, &["emit", "python"]);
+    assert!(!rejected.status.success());
+    assert_eq!(file_snapshot(&project.path.join("generated")), before);
 }
 
 #[test]
@@ -565,7 +652,7 @@ fn emit_refreshes_stale_compiler_and_runtime_tool_versions() {
         regenerated["current"]["tools"]["compiler"]["version"],
         env!("CARGO_PKG_VERSION")
     );
-    assert_eq!(regenerated["current"]["tools"]["runtime"]["abi"], "5");
+    assert_eq!(regenerated["current"]["tools"]["runtime"]["abi"], "7");
     assert_eq!(
         regenerated["current"]["tools"]["runtime"]["version"],
         env!("CARGO_PKG_VERSION")
@@ -600,6 +687,38 @@ fn emit_refreshes_stale_compiler_and_runtime_tool_versions() {
         String::from_utf8(diff.stdout).expect("diff output is UTF-8"),
         "NO CHANGE\n"
     );
+}
+
+#[test]
+fn emit_rejects_stale_generation_compatibility_without_mutating_managed_tree() {
+    let project = project();
+    assert!(cott(&project.path, &["emit", "python"]).status.success());
+    let path = project.path.join("generated/generation.json");
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("generation record"))
+            .expect("generation record is JSON");
+    record["current"]["compatibility"] = serde_json::json!({
+        "generation_schema": 5,
+        "canonical_ir_schema": 6,
+        "runtime_abi": 5
+    });
+    recompute_generation_id(&mut record["current"]);
+    fs::write(
+        &path,
+        serde_json::to_vec(&record).expect("stale generation record serialization"),
+    )
+    .expect("stale generation record should be writable");
+    let before = file_snapshot(&project.path.join("generated"));
+
+    let rejected = cott(&project.path, &["emit", "python"]);
+
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr).contains("invalid generation provenance"),
+        "{}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+    assert_eq!(file_snapshot(&project.path.join("generated")), before);
 }
 
 #[test]
@@ -1418,6 +1537,11 @@ fn process_bar_generation_records_unresolved_and_verified_transitions() {
     let project = TempDir::new();
     fs::copy(fixture.join("cott.toml"), project.path.join("cott.toml"))
         .expect("process-bar manifest should be copied");
+    fs::copy(
+        fixture.join("GENERATOR_RULES.txt"),
+        project.path.join("GENERATOR_RULES.txt"),
+    )
+    .expect("process-bar generator rules should be copied");
     fs::create_dir_all(project.path.join("src/foo")).expect("fixture source directory");
     fs::copy(
         fixture.join("src/foo/bar.cott"),
@@ -1772,14 +1896,15 @@ fn diff_enforces_version_compatibility_and_emits_closed_json() {
     let baseline: serde_json::Value =
         serde_json::from_slice(&fs::read(project.path.join("baseline.json")).expect("baseline"))
             .expect("baseline should be JSON");
-    assert_eq!(baseline["schema_version"], 5);
+    assert_eq!(baseline["schema_version"], 7);
     assert_eq!(baseline["current"]["project_version"], "0.1.0");
     assert_eq!(
         baseline["current"]["compatibility"],
         serde_json::json!({
-            "generation_schema": 5,
-            "canonical_ir_schema": 7,
-            "runtime_abi": 5
+            "generation_schema": 7,
+            "canonical_ir_schema": 8,
+            "runtime_abi": 7,
+            "contract_strategy_schema": 5
         })
     );
     let manifest = fs::read_to_string(project.path.join("cott.toml")).expect("manifest");
@@ -1869,7 +1994,7 @@ fn diff_enforces_version_compatibility_and_emits_closed_json() {
     let bad = fs::read_to_string(project.path.join("baseline.json")).expect("baseline");
     fs::write(
         project.path.join("bad-baseline.json"),
-        bad.replace("\"runtime_abi\":5", "\"runtime_abi\":1"),
+        bad.replace("\"runtime_abi\":7", "\"runtime_abi\":1"),
     )
     .expect("invalid baseline should be writable");
     let rejected = cott(&project.path, &["diff", "--baseline", "bad-baseline.json"]);
@@ -2201,8 +2326,8 @@ fn bounded(value: F32) -> F32:
     requires value + 0.5 <= 1.0
 
 fn guarded(value: I32) -> Result[I32, GateError]:
+    ensures Result.Ok(output) => output == value
     error GateError.Rejected when value < 0
-
 fn terminate(code: I32) -> Never:
     effects [process.exit]
 

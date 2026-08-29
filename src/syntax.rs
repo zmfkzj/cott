@@ -48,6 +48,15 @@ pub enum Keyword {
     Override,
     Delete,
     Remove,
+    Scenario,
+    Call,
+    Spawn,
+    Await,
+    Cancel,
+    Tick,
+    Assert,
+    As,
+    Cancelled,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -470,6 +470,15 @@ fn keyword(word: &str) -> Option<Keyword> {
         "override" => Keyword::Override,
         "delete" => Keyword::Delete,
         "remove" => Keyword::Remove,
+        "scenario" => Keyword::Scenario,
+        "call" => Keyword::Call,
+        "spawn" => Keyword::Spawn,
+        "await" => Keyword::Await,
+        "cancel" => Keyword::Cancel,
+        "tick" => Keyword::Tick,
+        "assert" => Keyword::Assert,
+        "as" => Keyword::As,
+        "cancelled" => Keyword::Cancelled,
         _ => return None,
     })
 }

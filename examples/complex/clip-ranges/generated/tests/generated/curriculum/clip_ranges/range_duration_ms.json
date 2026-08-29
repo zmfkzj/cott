@@ -1,1 +1,0 @@
-{"schema_version":3,"symbol":"curriculum.clip_ranges.range_duration_ms","seed":"sha256:b75432d44ff758263b73ef53810904f76b0ec21701f9c9e6efb3217b4888df8b","candidate_limit":64,"node_limit":64,"container_length_limit":3,"json_depth_limit":4,"lifecycle_limit":3,"callable_kind":"sync","return_kind":"value","classification":"pure","clause_ids":["requires:1"]}

@@ -1,0 +1,3 @@
+CottList fields such as Catalog.items and Order.lines are directly iterable and len-able. Use `.values` only to construct a CottList, never to read one.
+
+In calculate_order, call the public facades `store.order.validate_line` and `store.catalog.find_item`; propagate Err results. Do not duplicate their validation or lookup logic or import implementation modules directly.

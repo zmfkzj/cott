@@ -1,0 +1,167 @@
+module curriculum.effects_selection
+
+enum EffectError:
+    InputMissing(path: Path)
+    OperationFailed(message: Str)
+
+fn read_text(source: Path) -> Result[Str, EffectError]:
+    doc """
+    Read UTF-8 text from a compiler-owned filesystem fixture.
+    """
+
+    ensures Result.Ok(text) => text.len >= 0
+
+    error EffectError.InputMissing
+    error EffectError.OperationFailed
+
+    effects [file.read]
+
+fn copy_text(source: Path, destination: Path) -> Result[U64, EffectError]:
+    doc """
+    Read source through its public facade and atomically replace destination.
+    """
+
+    ensures Result.Ok(written) => written >= 0
+
+    error EffectError.InputMissing
+    error EffectError.OperationFailed
+
+    effects [file.read, file.write]
+
+fn fetch_local(url: Str) -> Result[Str, EffectError]:
+    doc """
+    Fetch UTF-8 text from a compiler-owned local HTTP fixture.
+    """
+
+    ensures Result.Ok(text) => text.len >= 0
+
+    error EffectError.OperationFailed when url == ""
+    error EffectError.OperationFailed
+
+    effects [network]
+
+fn text_result_is_ok(result: Result[Str, EffectError]) -> Bool:
+    doc """
+    Return whether a text effect result is successful.
+    """
+
+fn text_result_text(result: Result[Str, EffectError]) -> Str:
+    doc """
+    Return successful text, or an empty string for an error result.
+    """
+
+fn copy_result_is_ok(result: Result[U64, EffectError]) -> Bool:
+    doc """
+    Return whether a copy effect result is successful.
+    """
+
+fn store_and_load(database: Path, key: Str, value: Str) -> Result[Str, EffectError]:
+    doc """
+    Store value under key in a SQLite database, then read that value back.
+    """
+
+    ensures Result.Ok(stored) => stored == value
+
+    error EffectError.OperationFailed
+
+    effects [database.read, database.write]
+
+fn clock_ns() -> U64:
+    doc """
+    Return a compiler-owned deterministic fixture clock in nanoseconds.
+    """
+
+    effects [clock]
+
+fn sample_index(limit: U8, seed: U64) -> U8:
+    doc """
+    Choose one index below limit from a deterministic seeded random stream.
+    """
+
+    requires limit > 0
+
+    ensures result < limit
+
+    effects [random]
+
+fn exit_with_code(code: U8) -> Never:
+    doc """
+    End the current process with code.
+    """
+
+    effects [process.exit]
+
+scenario filesystem_copy:
+    fixtures:
+        fs files:
+            file "input.txt" text("new text")
+            file "output.txt" text("old text")
+    call read = read_text(files.path("input.txt"))
+    call read_ok = text_result_is_ok(read)
+    assert read_ok
+    call read_value = text_result_text(read)
+    assert read_value == "new text"
+    call copied = copy_text(files.path("input.txt"), files.path("output.txt"))
+    call copied_ok = copy_result_is_ok(copied)
+    assert copied_ok
+    call replaced = read_text(files.path("output.txt"))
+    call replaced_ok = text_result_is_ok(replaced)
+    assert replaced_ok
+    call replaced_value = text_result_text(replaced)
+    assert replaced_value == "new text"
+
+scenario filesystem_replace_failure:
+    fixtures:
+        fs files:
+            file "input.txt" text("new text")
+            file "output.txt" text("old text")
+        failure disk_full:
+            point: file.replace
+            occurrence: 1
+            error: disk_full
+    call failed = copy_text(files.path("input.txt"), files.path("output.txt"))
+    call failed_ok = copy_result_is_ok(failed)
+    assert not failed_ok
+    call preserved = read_text(files.path("output.txt"))
+    call preserved_ok = text_result_is_ok(preserved)
+    assert preserved_ok
+    call preserved_value = text_result_text(preserved)
+    assert preserved_value == "old text"
+
+scenario local_http:
+    fixtures:
+        http service:
+            route "/utf8" -> response(status: 200, body: text("café"), encoding: "utf-8")
+            route "/redirect" -> redirect(status: 302, location: "/utf8")
+            route "/sized" -> response(status: 200, body: text("12345678"), encoding: "utf-8")
+            route "/slow" -> delay(ms: 25)
+        failure timeout:
+            point: http.read
+            occurrence: 3
+            error: timeout
+    call redirected = fetch_local(service.url("/redirect"))
+    call redirected_ok = text_result_is_ok(redirected)
+    assert redirected_ok
+    call redirected_text = text_result_text(redirected)
+    assert redirected_text == "café"
+    call sized = fetch_local(service.url("/sized"))
+    call sized_ok = text_result_is_ok(sized)
+    assert sized_ok
+    call sized_text = text_result_text(sized)
+    assert sized_text.len == 8
+    call timed_out = fetch_local(service.url("/slow"))
+    call timed_out_ok = text_result_is_ok(timed_out)
+    assert not timed_out_ok
+    call rejected = fetch_local("")
+    call rejected_ok = text_result_is_ok(rejected)
+    assert not rejected_ok
+
+scenario deterministic_clock:
+    fixtures:
+        clock clock:
+            start_ms: 17
+            tick_ms: 1
+    call first = clock_ns()
+    call second = clock_ns()
+    assert first == 17000000
+    assert second == first

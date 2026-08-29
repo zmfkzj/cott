@@ -7,18 +7,22 @@ use cott::contract_test::{Classification, ContractTestStrategy, derive_strategie
 use cott::hash::sha256_hex;
 use cott::hir::ModuleId;
 use cott::ir::{CanonicalIr, CanonicalModule, canonical_bytes};
+use cott::manifest::VerificationConfig;
 use cott::python_runtime::render_runtime;
 use serde_json::{Value, json};
 
 #[test]
-fn strategy_has_fixed_deterministic_limits() {
+fn strategy_has_default_and_fixed_limits() {
     let strategy = ContractTestStrategy::new(
         "foo.bar.run",
         b"canonical-ir",
         "sync",
         Classification::Pure,
         vec!["requires:0".to_owned()],
+        &VerificationConfig::default(),
     );
+    assert_eq!(strategy.proof_node_limit, 1024);
+    assert_eq!(strategy.proof_branch_limit, 256);
     assert_eq!(strategy.candidate_limit, 64);
     assert_eq!(strategy.node_limit, 64);
     assert_eq!(strategy.container_length_limit, 3);
@@ -31,6 +35,99 @@ fn strategy_has_fixed_deterministic_limits() {
             .expect("UTF-8")
             .contains("\"symbol\":\"foo.bar.run\"")
     );
+}
+
+#[test]
+fn derived_strategy_serializes_verification_limits() {
+    let config = VerificationConfig {
+        proof_node_limit: 17,
+        proof_branch_limit: 19,
+        candidate_limit: 23,
+        lifecycle_limit: 29,
+        ..VerificationConfig::default()
+    };
+    let ir = CanonicalIr {
+        modules: vec![module(
+            "configured",
+            vec![function("configured.run", "bool", &[], &[])],
+        )],
+    };
+    let strategy = derive_strategies(&ir, &config)
+        .expect("configured strategy")
+        .pop()
+        .expect("one strategy");
+    assert_eq!(
+        serde_json::to_value(&strategy).expect("strategy JSON"),
+        json!({
+            "schema_version": 5,
+            "symbol": "configured.run",
+            "seed": format!("sha256:{}", sha256_hex(&ir.modules[0].bytes)),
+            "proof_node_limit": 17,
+            "proof_branch_limit": 19,
+            "candidate_limit": 23,
+            "node_limit": 64,
+            "container_length_limit": 3,
+            "json_depth_limit": 4,
+            "lifecycle_limit": 29,
+            "callable_kind": "sync",
+            "return_kind": "value",
+            "classification": "pure",
+            "obligations": [],
+            "scenario": null,
+            "clause_ids": [],
+        })
+    );
+}
+
+#[test]
+fn strategy_schema_rejects_invalid_configurable_limits() {
+    for config in [
+        VerificationConfig {
+            proof_node_limit: 0,
+            ..VerificationConfig::default()
+        },
+        VerificationConfig {
+            proof_node_limit: 16_385,
+            ..VerificationConfig::default()
+        },
+        VerificationConfig {
+            proof_branch_limit: 0,
+            ..VerificationConfig::default()
+        },
+        VerificationConfig {
+            proof_branch_limit: 4_097,
+            ..VerificationConfig::default()
+        },
+        VerificationConfig {
+            candidate_limit: 0,
+            ..VerificationConfig::default()
+        },
+        VerificationConfig {
+            candidate_limit: 1_025,
+            ..VerificationConfig::default()
+        },
+        VerificationConfig {
+            lifecycle_limit: 0,
+            ..VerificationConfig::default()
+        },
+        VerificationConfig {
+            lifecycle_limit: 65,
+            ..VerificationConfig::default()
+        },
+    ] {
+        assert!(
+            ContractTestStrategy::new(
+                "configured.run",
+                b"canonical-ir",
+                "sync",
+                Classification::Pure,
+                Vec::new(),
+                &config,
+            )
+            .bytes()
+            .is_err()
+        );
+    }
 }
 
 fn span() -> Value {
@@ -231,7 +328,7 @@ fn module(name: &str, declarations: Vec<Value>) -> CanonicalModule {
         "declarations": declarations,
         "imports": [],
         "module": name,
-        "schema_version": 7,
+        "schema_version": 8,
         "source": format!("{name}.cott")
     });
     CanonicalModule {
@@ -255,8 +352,10 @@ fn derived_strategy_bytes_are_deterministic_in_module_declaration_order() {
             module("second", vec![function("second.run", "bool", &[], &[])]),
         ],
     };
-    let first = derive_strategies(&ir).expect("canonical IR strategies");
-    let second = derive_strategies(&ir).expect("canonical IR strategies");
+    let first =
+        derive_strategies(&ir, &VerificationConfig::default()).expect("canonical IR strategies");
+    let second =
+        derive_strategies(&ir, &VerificationConfig::default()).expect("canonical IR strategies");
     assert_eq!(first, second);
     assert_eq!(
         first
@@ -284,7 +383,8 @@ fn derived_strategy_seed_hashes_canonical_module_bytes() {
             vec![function("seeded.run", "bool", &[], &[])],
         )],
     };
-    let strategies = derive_strategies(&ir).expect("canonical IR strategies");
+    let strategies =
+        derive_strategies(&ir, &VerificationConfig::default()).expect("canonical IR strategies");
     let strategy = &strategies[0];
     assert_eq!(
         strategy.seed,
@@ -305,7 +405,8 @@ fn derived_strategy_clause_ids_preserve_source_order() {
             )],
         )],
     };
-    let strategies = derive_strategies(&ir).expect("canonical IR strategies");
+    let strategies =
+        derive_strategies(&ir, &VerificationConfig::default()).expect("canonical IR strategies");
     let strategy = &strategies[0];
     assert_eq!(
         strategy.clause_ids,
@@ -325,7 +426,8 @@ fn derived_strategy_classifies_pure_effectful_and_never() {
             ],
         )],
     };
-    let strategies = derive_strategies(&ir).expect("canonical IR strategies");
+    let strategies =
+        derive_strategies(&ir, &VerificationConfig::default()).expect("canonical IR strategies");
     assert_eq!(
         strategies
             .iter()
@@ -348,9 +450,12 @@ fn derived_strategy_classifies_pure_effectful_and_never() {
 fn derived_free_function_strategy_carries_async_callable_kind() {
     let mut declaration = function("async_fixture.run", "bool", &[], &[]);
     declaration["callable_kind"] = json!("async");
-    let strategy = derive_strategies(&CanonicalIr {
-        modules: vec![module("async_fixture", vec![declaration])],
-    })
+    let strategy = derive_strategies(
+        &CanonicalIr {
+            modules: vec![module("async_fixture", vec![declaration])],
+        },
+        &VerificationConfig::default(),
+    )
     .expect("async function strategy")
     .pop()
     .expect("one strategy");
@@ -366,17 +471,20 @@ fn derived_impl_strategy_carries_async_callable_and_protocol_return_kinds() {
         "send": {"kind": "primitive", "name": "i32"},
         "yield": {"kind": "primitive", "name": "bool"},
     });
-    let strategy = derive_strategies(&CanonicalIr {
-        modules: vec![module(
-            "fixture",
-            vec![implementation(
-                "fixture.Stream",
-                Some((vec![], vec![])),
-                &[],
-                vec![method],
+    let strategy = derive_strategies(
+        &CanonicalIr {
+            modules: vec![module(
+                "fixture",
+                vec![implementation(
+                    "fixture.Stream",
+                    Some((vec![], vec![])),
+                    &[],
+                    vec![method],
+                )],
             )],
-        )],
-    })
+        },
+        &VerificationConfig::default(),
+    )
     .expect("async impl strategy")
     .into_iter()
     .find(|strategy| strategy.symbol == "fixture.Stream.stream")
@@ -392,9 +500,12 @@ fn derived_async_iterator_strategy_carries_protocol_return_kind() {
         "kind": "async_iterator",
         "item": {"kind": "primitive", "name": "bool"},
     });
-    let strategy = derive_strategies(&CanonicalIr {
-        modules: vec![module("async_fixture", vec![declaration])],
-    })
+    let strategy = derive_strategies(
+        &CanonicalIr {
+            modules: vec![module("async_fixture", vec![declaration])],
+        },
+        &VerificationConfig::default(),
+    )
     .expect("async iterator strategy")
     .pop()
     .expect("one strategy");
@@ -437,7 +548,8 @@ fn derived_impl_strategies_follow_canonical_member_order_and_cover_all_clauses()
         )],
     };
 
-    let strategies = derive_strategies(&ir).expect("canonical impl strategies");
+    let strategies =
+        derive_strategies(&ir, &VerificationConfig::default()).expect("canonical impl strategies");
     assert_eq!(
         strategies
             .iter()
@@ -582,7 +694,8 @@ fn selected_slots_resolve_explicit_and_concrete_default_signatures() {
     let ir = CanonicalIr {
         modules: vec![module("fixture", vec![trait_declaration, implementation])],
     };
-    let strategies = derive_strategies(&ir).expect("selected strategies");
+    let strategies =
+        derive_strategies(&ir, &VerificationConfig::default()).expect("selected strategies");
     assert_eq!(
         strategies
             .iter()
@@ -650,9 +763,12 @@ fn selected_slots_coalesce_inherited_specializations_in_diamonds() {
         "source_order": 2, "span": span(), "state": [],
         "traits": [{"args": [], "kind": "named", "name": "fixture.Child"}]
     });
-    let strategies = derive_strategies(&CanonicalIr {
-        modules: vec![module("fixture", vec![parent, child, implementation])],
-    })
+    let strategies = derive_strategies(
+        &CanonicalIr {
+            modules: vec![module("fixture", vec![parent, child, implementation])],
+        },
+        &VerificationConfig::default(),
+    )
     .expect("inherited specialization strategies");
     assert_eq!(
         strategies
@@ -677,7 +793,7 @@ fn selected_methods_are_authoritative() {
         modules: vec![module("fixture", vec![implementation])],
     };
     assert_eq!(
-        derive_strategies(&ir)
+        derive_strategies(&ir, &VerificationConfig::default())
             .expect("selected strategies")
             .iter()
             .map(|strategy| strategy.symbol.as_str())
@@ -699,7 +815,7 @@ fn free_function_strategy_serialization_is_byte_compatible() {
             )],
         )],
     };
-    let strategy = derive_strategies(&ir)
+    let strategy = derive_strategies(&ir, &VerificationConfig::default())
         .expect("canonical function strategy")
         .pop()
         .expect("function strategy");
@@ -709,6 +825,7 @@ fn free_function_strategy_serialization_is_byte_compatible() {
         "sync",
         Classification::Pure,
         vec!["requires:4".to_owned(), "ensures:9".to_owned()],
+        &VerificationConfig::default(),
     );
     assert_eq!(strategy, expected);
     assert_eq!(
@@ -738,7 +855,8 @@ fn malformed_function_ir_is_rejected() {
         }],
     };
 
-    let error = derive_strategies(&ir).expect_err("missing return type must fail");
+    let error = derive_strategies(&ir, &VerificationConfig::default())
+        .expect_err("missing return type must fail");
     assert!(error.contains("schema violation"));
 }
 #[test]
@@ -815,9 +933,11 @@ fn contract_runner_observes_local_result_error_variant() {
             "return_kind": "value",
             "classification": "pure",
             "clause_ids": ["error:0"],
-            "schema_version": 3,
+            "schema_version": 4,
             "seed": "sha256:test",
             "symbol": "demo.run",
+            "proof_node_limit": 1024,
+            "proof_branch_limit": 256,
             "candidate_limit": 64,
             "node_limit": 64,
             "container_length_limit": 3,
@@ -915,9 +1035,11 @@ fn runner_strategy(symbol: &str, clause_ids: Vec<String>) -> Value {
         "return_kind": "value",
         "classification": "pure",
         "clause_ids": clause_ids,
-        "schema_version": 3,
+        "schema_version": 4,
         "seed": "sha256:test",
         "symbol": symbol,
+        "proof_node_limit": 1024,
+        "proof_branch_limit": 256,
         "candidate_limit": 64,
         "node_limit": 64,
         "container_length_limit": 3,
@@ -976,6 +1098,18 @@ fn runner_comparison(left: Value, operator: &str, right: Value) -> Value {
 
 fn runner_clause(kind: &str, clause_id: u64, expression: Value) -> Value {
     json!({"clause_id": clause_id, "expression": expression, "guard": null, "kind": kind, "span": span()})
+}
+
+fn runner_conditional_error_clause(clause_id: u64, variant: &str) -> Value {
+    json!({
+        "clause_id": clause_id,
+        "guard": null,
+        "kind": "error",
+        "priority": clause_id,
+        "span": span(),
+        "variant": variant,
+        "when": runner_literal(json!({"kind": "bool", "value": true}))
+    })
 }
 
 fn runner_function(name: &str, clauses: Vec<Value>) -> Value {
@@ -1070,12 +1204,99 @@ fn runner_request(declaration: Value, strategies: Vec<Value>) -> Value {
             "declarations": [declaration],
             "imports": [],
             "module": "demo",
-            "schema_version": 7,
+            "schema_version": 8,
             "source": "demo.cott"
         }],
         "runtime_validation": "boundary",
         "strategies": strategies
     })
+}
+
+#[test]
+fn contract_runner_uses_first_applicable_conditional_error() {
+    let declaration = runner_function(
+        "demo.run",
+        vec![
+            runner_conditional_error_clause(0, "demo.Failure.First"),
+            runner_conditional_error_clause(1, "demo.Failure.Second"),
+        ],
+    );
+    let mut strategy =
+        runner_strategy("demo.run", vec!["error:0".to_owned(), "error:1".to_owned()]);
+    strategy["obligations"] = json!([
+        {"clause_id": "error:0", "role": "conditional_error"},
+        {"clause_id": "error:1", "role": "conditional_error"},
+    ]);
+    let request = runner_request(declaration, vec![strategy]);
+    let source = "from cott_runtime import Err, Result\n\nclass Failure_First:\n    pass\n\nclass Failure_Second:\n    pass\n\ndef run() -> Result[int, object]:\n    return Err(error=Failure_First())\n";
+    let Some(output) = run_contract_runner(source, request.clone()) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    let first = &report["contracts"][0]["evidence"][0];
+    let second = &report["contracts"][1]["evidence"][0];
+    assert_eq!(first["grade"], "test observation");
+    assert_eq!(first["eligible_cases"], 1);
+    assert_eq!(first["applicable_cases"], 1);
+    assert_eq!(first["satisfied_cases"], 1);
+    assert_eq!(second["grade"], "unobserved");
+    assert_eq!(second["eligible_cases"], 1);
+    assert_eq!(second["applicable_cases"], 1);
+    assert_eq!(second["satisfied_cases"], 0);
+
+    let wrong_source = "from cott_runtime import Err, Result\n\nclass Failure_First:\n    pass\n\nclass Failure_Second:\n    pass\n\ndef run() -> Result[int, object]:\n    return Err(error=Failure_Second())\n";
+    let Some(wrong) = run_contract_runner(wrong_source, request) else {
+        return;
+    };
+    assert!(!wrong.status.success());
+    assert!(
+        String::from_utf8_lossy(&wrong.stderr)
+            .contains("conditional error clause error:0 failed independently")
+    );
+}
+
+#[test]
+fn contract_runner_keeps_unobserved_success_as_evidence() {
+    let mut success = runner_clause(
+        "ensures",
+        0,
+        runner_literal(json!({"kind": "bool", "value": true})),
+    );
+    success["guard"] = json!({
+        "pattern": {"arguments": [], "kind": "result_ok"},
+        "scrutinee": runner_expression("result_ref", json!({})),
+        "span": span()
+    });
+    let declaration = runner_function("demo.run", vec![success]);
+    let mut strategy = runner_strategy("demo.run", vec!["ensures:0".to_owned()]);
+    strategy["obligations"] = json!([{"clause_id": "ensures:0", "role": "success"}]);
+    let Some(output) = run_contract_runner(
+        "from cott_runtime import Err, Result\n\ndef run() -> Result[int, object]:\n    return Err(error=object())\n",
+        runner_request(declaration, vec![strategy]),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    let evidence = &report["contracts"][0]["evidence"][0];
+    assert_eq!(evidence["grade"], "unobserved");
+    assert_eq!(
+        evidence["reason"],
+        "no generated case exercised this conditional clause"
+    );
+    assert_eq!(evidence["eligible_cases"], 1);
+    assert_eq!(evidence["applicable_cases"], 0);
+    assert_eq!(evidence["satisfied_cases"], 0);
+    assert_eq!(evidence["condition_false_cases"], 1);
 }
 
 #[test]
@@ -1901,7 +2122,7 @@ fn contract_runner_observes_and_closes_pure_async_protocols() {
     let mut iterator_strategy = runner_strategy("demo.stream", vec!["ensures:0".to_owned()]);
     iterator_strategy["return_kind"] = json!("async_iterator");
     let Some(output) = run_contract_runner(
-        "import collections.abc\n\nclass Stream(collections.abc.AsyncIterator):\n    def __init__(self): self.steps = 0; self.closed = False\n    def __aiter__(self): return self\n    async def __anext__(self):\n        if self.closed or self.steps == 3: raise StopAsyncIteration\n        self.steps += 1\n        return self.steps\n    async def aclose(self): self.closed = True\n\ndef stream() -> collections.abc.AsyncIterator[int]:\n    return Stream()\n",
+        "import collections.abc\n\nclass Stream(collections.abc.AsyncIterator):\n    def __init__(self): self.steps = 0; self.closed = False\n    def __aiter__(self): return self\n    async def __anext__(self):\n        if self.closed or self.steps == 2: raise StopAsyncIteration\n        self.steps += 1\n        return self.steps\n    async def aclose(self): self.closed = True\n\ndef stream() -> collections.abc.AsyncIterator[int]:\n    return Stream()\n",
         runner_request(iterator, vec![iterator_strategy]),
     ) else {
         return;
@@ -1912,12 +2133,23 @@ fn contract_runner_observes_and_closes_pure_async_protocols() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
-    assert_eq!(report["lifecycle"][0]["lifecycle_steps"], 3);
+    assert_eq!(report["lifecycle"][0]["lifecycle_limit"], 3);
+    assert_eq!(report["lifecycle"][0]["lifecycle_steps"], 2);
     assert_eq!(report["lifecycle"][0]["lifecycle_sent"], false);
     assert_eq!(report["lifecycle"][0]["lifecycle_closed"], true);
     assert_eq!(
         report["lifecycle"][0]["lifecycle_reason"],
-        "observation limit reached"
+        "protocol completed"
+    );
+    assert_eq!(
+        report["lifecycle"][0]["operations"],
+        json!([
+            {"operation": "anext", "outcome": "yielded"},
+            {"operation": "anext", "outcome": "yielded"},
+            {"operation": "anext", "outcome": "completed"},
+            {"operation": "aclose", "outcome": "closed"},
+            {"operation": "aclose", "outcome": "already_closed"},
+        ])
     );
 
     let mut generator = runner_function(
@@ -1947,12 +2179,62 @@ fn contract_runner_observes_and_closes_pure_async_protocols() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    assert_eq!(report["lifecycle"][0]["lifecycle_limit"], 3);
     assert_eq!(report["lifecycle"][0]["lifecycle_steps"], 1);
     assert_eq!(report["lifecycle"][0]["lifecycle_sent"], true);
     assert_eq!(report["lifecycle"][0]["lifecycle_closed"], true);
     assert_eq!(
         report["lifecycle"][0]["lifecycle_reason"],
         "protocol completed"
+    );
+    assert_eq!(
+        report["lifecycle"][0]["operations"],
+        json!([
+            {"operation": "anext", "outcome": "yielded"},
+            {"operation": "asend", "outcome": "completed"},
+            {"operation": "aclose", "outcome": "closed"},
+            {"operation": "aclose", "outcome": "already_closed"},
+        ])
+    );
+    let mut limited_strategy = runner_strategy("demo.limited", vec!["ensures:0".to_owned()]);
+    limited_strategy["return_kind"] = json!("async_iterator");
+    limited_strategy["lifecycle_limit"] = json!(2);
+    let Some(output) = run_contract_runner(
+        "import collections.abc\n\nclass Stream(collections.abc.AsyncIterator):\n    def __aiter__(self): return self\n    async def __anext__(self): return 1\n    async def aclose(self): pass\n\ndef limited() -> collections.abc.AsyncIterator[int]:\n    return Stream()\n",
+        runner_request(
+            runner_function(
+                "demo.limited",
+                vec![runner_clause(
+                    "ensures",
+                    0,
+                    runner_literal(json!({"kind": "bool", "value": true})),
+                )],
+            ),
+            vec![limited_strategy],
+        ),
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "contract runner failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    assert_eq!(report["lifecycle"][0]["lifecycle_limit"], 2);
+    assert_eq!(report["lifecycle"][0]["lifecycle_steps"], 2);
+    assert_eq!(
+        report["lifecycle"][0]["lifecycle_reason"],
+        "observation limit reached"
+    );
+    assert_eq!(
+        report["lifecycle"][0]["operations"],
+        json!([
+            {"operation": "anext", "outcome": "yielded"},
+            {"operation": "anext", "outcome": "yielded"},
+            {"operation": "aclose", "outcome": "closed"},
+            {"operation": "aclose", "outcome": "already_closed"},
+        ])
     );
 }
 

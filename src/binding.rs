@@ -39,6 +39,544 @@ pub struct BindingDiagnostic {
     pub message: String,
 }
 
+/// The authority assigned to a Python file at the facade boundary.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum PythonFileRole {
+    Authored,
+    ManifestBinding,
+    DurableImplementation,
+    GeneratedFacade,
+    GeneratedRuntime,
+    GeneratedImplementation,
+}
+
+/// The Python syntax which introduced an import reference.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ImportForm {
+    Import,
+    ImportFrom,
+    DynamicImport,
+}
+
+/// An import target proven by the AST, or a dynamic target that cannot be proven.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ImportTarget {
+    Literal(String),
+    UnknownDynamic,
+}
+
+/// A source-range import reference, retained for deterministic boundary diagnostics.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImportReference {
+    pub range: std::ops::Range<usize>,
+    pub form: ImportForm,
+    pub target: ImportTarget,
+}
+
+/// One deterministic facade-boundary violation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FacadeBoundaryDiagnostic {
+    pub path: PathBuf,
+    pub range: Option<std::ops::Range<usize>>,
+    pub message: String,
+}
+
+/// Parses one authored or materialized Python file and records every static or
+/// recognized dynamic import without inspecting comments or strings.
+pub fn inspect_python_imports(source: &str) -> Result<Vec<ImportReference>, String> {
+    let suite = ast::Suite::parse(source, "<facade-boundary>")
+        .map_err(|error| format!("cannot audit Python imports: {error}"))?;
+    let mut visitor = PythonImportVisitor {
+        source,
+        importlib_modules: BTreeSet::new(),
+        import_module_functions: BTreeSet::new(),
+        references: Vec::new(),
+    };
+    for statement in suite {
+        visitor.visit_statement(&statement);
+    }
+    visitor.references.sort_by(|left, right| {
+        (left.range.start, left.range.end, left.form, &left.target).cmp(&(
+            right.range.start,
+            right.range.end,
+            right.form,
+            &right.target,
+        ))
+    });
+    visitor.references.dedup();
+    Ok(visitor.references)
+}
+
+/// Audits one file after its ownership role has been resolved. All roles may
+/// define their own private implementation, but none may import a private root.
+pub fn audit_facade_file(
+    path: &Path,
+    source: &str,
+    _role: PythonFileRole,
+) -> Vec<FacadeBoundaryDiagnostic> {
+    audit_facade_boundary(path, source)
+}
+
+/// Audits a project-owned Python file for attempts to bypass the generated facade.
+pub fn audit_facade_boundary(path: &Path, source: &str) -> Vec<FacadeBoundaryDiagnostic> {
+    let references = match inspect_python_imports(source) {
+        Ok(references) => references,
+        Err(message) => {
+            return vec![FacadeBoundaryDiagnostic {
+                path: path.to_path_buf(),
+                range: None,
+                message,
+            }];
+        }
+    };
+    let mut diagnostics = references
+        .into_iter()
+        .filter_map(|reference| {
+            let message = match reference.target {
+                ImportTarget::Literal(target) if private_root(&target) == Some("_cott_impl") => {
+                    Some(format!(
+                        "facade boundary bypass: project source must import generated facade, not private module `{target}`"
+                    ))
+                }
+                ImportTarget::Literal(target) if private_root(&target) == Some("cott_bindings") => {
+                    Some(format!(
+                        "facade boundary bypass: project source must not import manifest implementation module `{target}`"
+                    ))
+                }
+                ImportTarget::UnknownDynamic => Some(
+                    "facade boundary bypass: dynamic import target must be a dotted string literal"
+                        .to_owned(),
+                ),
+                _ => None,
+            }?;
+            Some(FacadeBoundaryDiagnostic {
+                path: path.to_path_buf(),
+                range: Some(reference.range),
+                message,
+            })
+        })
+        .collect::<Vec<_>>();
+    diagnostics.sort_by(|left, right| {
+        (
+            &left.path,
+            left.range.as_ref().map(|range| (range.start, range.end)),
+            &left.message,
+        )
+            .cmp(&(
+                &right.path,
+                right.range.as_ref().map(|range| (range.start, range.end)),
+                &right.message,
+            ))
+    });
+    diagnostics.dedup();
+    diagnostics
+}
+
+struct PythonImportVisitor<'a> {
+    source: &'a str,
+    importlib_modules: BTreeSet<String>,
+    import_module_functions: BTreeSet<String>,
+    references: Vec<ImportReference>,
+}
+
+impl PythonImportVisitor<'_> {
+    fn push_literal(&mut self, range: ast::text_size::TextRange, form: ImportForm, target: &str) {
+        self.references.push(ImportReference {
+            range: target_range(self.source, range, target),
+            form,
+            target: ImportTarget::Literal(target.to_owned()),
+        });
+    }
+
+    fn push_dynamic(&mut self, call: &ast::ExprCall) {
+        let target = call.args.first().and_then(|argument| match argument {
+            ast::Expr::Constant(value) => match &value.value {
+                ast::Constant::Str(target) if dotted_module(target) => {
+                    Some((ImportTarget::Literal(target.clone()), value.range))
+                }
+                _ => None,
+            },
+            _ => None,
+        });
+        let (target, range) = target.unwrap_or((ImportTarget::UnknownDynamic, call.range));
+        self.references.push(ImportReference {
+            range: usize::from(range.start())..usize::from(range.end()),
+            form: ImportForm::DynamicImport,
+            target,
+        });
+    }
+
+    fn visit_statements(&mut self, statements: &[ast::Stmt]) {
+        for statement in statements {
+            self.visit_statement(statement);
+        }
+    }
+
+    fn visit_definition(
+        &mut self,
+        arguments: &ast::Arguments,
+        decorators: &[ast::Expr],
+        returns: Option<&ast::Expr>,
+        body: &[ast::Stmt],
+    ) {
+        arguments
+            .posonlyargs
+            .iter()
+            .chain(&arguments.args)
+            .chain(&arguments.kwonlyargs)
+            .filter_map(|argument| argument.default.as_deref())
+            .for_each(|default| self.visit_expression(default));
+        decorators
+            .iter()
+            .for_each(|decorator| self.visit_expression(decorator));
+        if let Some(returns) = returns {
+            self.visit_expression(returns);
+        }
+        self.visit_statements(body);
+    }
+
+    fn visit_statement(&mut self, statement: &ast::Stmt) {
+        match statement {
+            ast::Stmt::Import(node) => {
+                for alias in &node.names {
+                    let module = alias.name.as_str();
+                    let binding = alias.asname.as_ref().map_or_else(
+                        || module.split('.').next().unwrap_or(module),
+                        |name| name.as_str(),
+                    );
+                    if module == "importlib" {
+                        self.importlib_modules.insert(binding.to_owned());
+                    }
+                    self.push_literal(alias.range, ImportForm::Import, module);
+                }
+            }
+            ast::Stmt::ImportFrom(node) => {
+                let Some(module) = node.module.as_ref().map(|module| module.as_str()) else {
+                    return;
+                };
+                for alias in &node.names {
+                    let binding = alias
+                        .asname
+                        .as_ref()
+                        .map_or(alias.name.as_str(), |name| name.as_str());
+                    if module == "importlib" && alias.name.as_str() == "import_module" {
+                        self.import_module_functions.insert(binding.to_owned());
+                    }
+                }
+                self.push_literal(node.range, ImportForm::ImportFrom, module);
+            }
+            ast::Stmt::FunctionDef(node) => self.visit_definition(
+                &node.args,
+                &node.decorator_list,
+                node.returns.as_deref(),
+                &node.body,
+            ),
+            ast::Stmt::AsyncFunctionDef(node) => self.visit_definition(
+                &node.args,
+                &node.decorator_list,
+                node.returns.as_deref(),
+                &node.body,
+            ),
+            ast::Stmt::ClassDef(node) => {
+                node.bases
+                    .iter()
+                    .for_each(|base| self.visit_expression(base));
+                node.keywords
+                    .iter()
+                    .for_each(|keyword| self.visit_expression(&keyword.value));
+                node.decorator_list
+                    .iter()
+                    .for_each(|decorator| self.visit_expression(decorator));
+                self.visit_statements(&node.body);
+            }
+            ast::Stmt::Return(node) => {
+                if let Some(value) = &node.value {
+                    self.visit_expression(value);
+                }
+            }
+            ast::Stmt::Delete(node) => node
+                .targets
+                .iter()
+                .for_each(|value| self.visit_expression(value)),
+            ast::Stmt::Assign(node) => {
+                node.targets
+                    .iter()
+                    .for_each(|value| self.visit_expression(value));
+                self.visit_expression(&node.value);
+            }
+            ast::Stmt::TypeAlias(node) => self.visit_expression(&node.value),
+            ast::Stmt::AugAssign(node) => {
+                self.visit_expression(&node.target);
+                self.visit_expression(&node.value);
+            }
+            ast::Stmt::AnnAssign(node) => {
+                if let Some(value) = &node.value {
+                    self.visit_expression(value);
+                }
+            }
+            ast::Stmt::For(node) => {
+                self.visit_expression(&node.iter);
+                self.visit_statements(&node.body);
+                self.visit_statements(&node.orelse);
+            }
+            ast::Stmt::AsyncFor(node) => {
+                self.visit_expression(&node.iter);
+                self.visit_statements(&node.body);
+                self.visit_statements(&node.orelse);
+            }
+            ast::Stmt::While(node) => {
+                self.visit_expression(&node.test);
+                self.visit_statements(&node.body);
+                self.visit_statements(&node.orelse);
+            }
+            ast::Stmt::If(node) => {
+                self.visit_expression(&node.test);
+                self.visit_statements(&node.body);
+                self.visit_statements(&node.orelse);
+            }
+            ast::Stmt::With(node) => {
+                for item in &node.items {
+                    self.visit_expression(&item.context_expr);
+                }
+                self.visit_statements(&node.body);
+            }
+            ast::Stmt::AsyncWith(node) => {
+                for item in &node.items {
+                    self.visit_expression(&item.context_expr);
+                }
+                self.visit_statements(&node.body);
+            }
+            ast::Stmt::Match(node) => {
+                self.visit_expression(&node.subject);
+                for case in &node.cases {
+                    if let Some(guard) = &case.guard {
+                        self.visit_expression(guard);
+                    }
+                    self.visit_statements(&case.body);
+                }
+            }
+            ast::Stmt::Raise(node) => {
+                for value in [&node.exc, &node.cause].into_iter().flatten() {
+                    self.visit_expression(value);
+                }
+            }
+            ast::Stmt::Try(node) => {
+                self.visit_statements(&node.body);
+                self.visit_statements(&node.orelse);
+                self.visit_statements(&node.finalbody);
+                for handler in &node.handlers {
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    if let Some(ty) = &handler.type_ {
+                        self.visit_expression(ty);
+                    }
+                    self.visit_statements(&handler.body);
+                }
+            }
+            ast::Stmt::TryStar(node) => {
+                self.visit_statements(&node.body);
+                self.visit_statements(&node.orelse);
+                self.visit_statements(&node.finalbody);
+                for handler in &node.handlers {
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    if let Some(ty) = &handler.type_ {
+                        self.visit_expression(ty);
+                    }
+                    self.visit_statements(&handler.body);
+                }
+            }
+            ast::Stmt::Assert(node) => {
+                self.visit_expression(&node.test);
+                if let Some(message) = &node.msg {
+                    self.visit_expression(message);
+                }
+            }
+            ast::Stmt::Expr(node) => self.visit_expression(&node.value),
+            ast::Stmt::Pass(_)
+            | ast::Stmt::Break(_)
+            | ast::Stmt::Continue(_)
+            | ast::Stmt::Global(_)
+            | ast::Stmt::Nonlocal(_) => {}
+        }
+    }
+
+    fn visit_expression(&mut self, expression: &ast::Expr) {
+        match expression {
+            ast::Expr::Call(node) => {
+                let dynamic_import = match &*node.func {
+                    ast::Expr::Name(name) => {
+                        name.id.as_str() == "__import__"
+                            || self.import_module_functions.contains(name.id.as_str())
+                    }
+                    ast::Expr::Attribute(attribute) => {
+                        attribute.attr.as_str() == "import_module"
+                            && matches!(
+                                &*attribute.value,
+                                ast::Expr::Name(name)
+                                    if self.importlib_modules.contains(name.id.as_str())
+                            )
+                    }
+                    _ => false,
+                };
+                if dynamic_import {
+                    self.push_dynamic(node);
+                }
+                self.visit_expression(&node.func);
+                node.args
+                    .iter()
+                    .for_each(|value| self.visit_expression(value));
+                node.keywords
+                    .iter()
+                    .for_each(|keyword| self.visit_expression(&keyword.value));
+            }
+            ast::Expr::BoolOp(node) => node
+                .values
+                .iter()
+                .for_each(|value| self.visit_expression(value)),
+            ast::Expr::NamedExpr(node) => {
+                self.visit_expression(&node.target);
+                self.visit_expression(&node.value);
+            }
+            ast::Expr::BinOp(node) => {
+                self.visit_expression(&node.left);
+                self.visit_expression(&node.right);
+            }
+            ast::Expr::UnaryOp(node) => self.visit_expression(&node.operand),
+            ast::Expr::Lambda(node) => self.visit_expression(&node.body),
+            ast::Expr::IfExp(node) => {
+                self.visit_expression(&node.test);
+                self.visit_expression(&node.body);
+                self.visit_expression(&node.orelse);
+            }
+            ast::Expr::Dict(node) => {
+                node.keys
+                    .iter()
+                    .flatten()
+                    .for_each(|value| self.visit_expression(value));
+                node.values
+                    .iter()
+                    .for_each(|value| self.visit_expression(value));
+            }
+            ast::Expr::Set(node) => node
+                .elts
+                .iter()
+                .for_each(|value| self.visit_expression(value)),
+            ast::Expr::List(node) => node
+                .elts
+                .iter()
+                .for_each(|value| self.visit_expression(value)),
+            ast::Expr::Tuple(node) => node
+                .elts
+                .iter()
+                .for_each(|value| self.visit_expression(value)),
+            ast::Expr::Await(node) => self.visit_expression(&node.value),
+            ast::Expr::Yield(node) => {
+                if let Some(value) = &node.value {
+                    self.visit_expression(value);
+                }
+            }
+            ast::Expr::YieldFrom(node) => self.visit_expression(&node.value),
+            ast::Expr::Compare(node) => {
+                self.visit_expression(&node.left);
+                node.comparators
+                    .iter()
+                    .for_each(|value| self.visit_expression(value));
+            }
+            ast::Expr::FormattedValue(node) => {
+                self.visit_expression(&node.value);
+                if let Some(specification) = &node.format_spec {
+                    self.visit_expression(specification);
+                }
+            }
+            ast::Expr::JoinedStr(node) => node
+                .values
+                .iter()
+                .for_each(|value| self.visit_expression(value)),
+            ast::Expr::Attribute(node) => self.visit_expression(&node.value),
+            ast::Expr::Subscript(node) => {
+                self.visit_expression(&node.value);
+                self.visit_expression(&node.slice);
+            }
+            ast::Expr::Starred(node) => self.visit_expression(&node.value),
+            ast::Expr::ListComp(node) => {
+                self.visit_expression(&node.elt);
+                for generator in &node.generators {
+                    self.visit_expression(&generator.target);
+                    self.visit_expression(&generator.iter);
+                    generator
+                        .ifs
+                        .iter()
+                        .for_each(|value| self.visit_expression(value));
+                }
+            }
+            ast::Expr::SetComp(node) => {
+                self.visit_expression(&node.elt);
+                for generator in &node.generators {
+                    self.visit_expression(&generator.target);
+                    self.visit_expression(&generator.iter);
+                    generator
+                        .ifs
+                        .iter()
+                        .for_each(|value| self.visit_expression(value));
+                }
+            }
+            ast::Expr::GeneratorExp(node) => {
+                self.visit_expression(&node.elt);
+                for generator in &node.generators {
+                    self.visit_expression(&generator.target);
+                    self.visit_expression(&generator.iter);
+                    generator
+                        .ifs
+                        .iter()
+                        .for_each(|value| self.visit_expression(value));
+                }
+            }
+            ast::Expr::DictComp(node) => {
+                self.visit_expression(&node.key);
+                self.visit_expression(&node.value);
+                for generator in &node.generators {
+                    self.visit_expression(&generator.target);
+                    self.visit_expression(&generator.iter);
+                    generator
+                        .ifs
+                        .iter()
+                        .for_each(|value| self.visit_expression(value));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn target_range(
+    source: &str,
+    range: ast::text_size::TextRange,
+    target: &str,
+) -> std::ops::Range<usize> {
+    let start = usize::from(range.start());
+    let end = usize::from(range.end());
+    let target_start = source
+        .get(start..end)
+        .and_then(|fragment| fragment.find(target))
+        .map_or(start, |offset| start + offset);
+    target_start..target_start + target.len()
+}
+
+fn dotted_module(value: &str) -> bool {
+    !value.is_empty()
+        && value.split('.').all(|part| {
+            !part.is_empty()
+                && part.bytes().enumerate().all(|(index, byte)| {
+                    byte == b'_'
+                        || byte.is_ascii_alphanumeric() && (index > 0 || !byte.is_ascii_digit())
+                })
+        })
+}
+
+fn private_root(target: &str) -> Option<&str> {
+    let root = target.split('.').next()?;
+    matches!(root, "_cott_impl" | "cott_bindings").then_some(root)
+}
+
 /// Resolution separates absent durable sources from invalid sources so
 /// `generate` can supply only truly unresolved functions to an agent.
 #[derive(Clone, Debug, Eq, PartialEq)]

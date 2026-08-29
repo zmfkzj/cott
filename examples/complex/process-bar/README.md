@@ -1,8 +1,9 @@
 # process-bar
 
 ## Purpose
-Show a flow that separates byte-payload validation, processing, and output assembly while preserving original metadata.
+Show the observed full-generation composition: validate a byte payload, process its bytes purely, and preserve its metadata in output.
 
 ## Key points
-- The Cott contract rejects empty bytes with `InvalidPayload`, then constructs output containing the original size and type after the byte-processing stage with network effects.
-- The current Python binding's `process_payload_bytes` returns the bytes unchanged, and `process_bar` likewise only checks empty input before making output from the input bytes and metadata.
+- `process_bar` preserves the distinct generated `foo.bar` facade graph: `validate_payload -> process_payload_bytes -> build_output`.
+- Every function in that graph is pure. Validation and declared processing `Err` values propagate unchanged; an empty payload produces `InvalidPayload`.
+- `build_output` receives the processed bytes and the validated payload's original size and format.

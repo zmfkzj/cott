@@ -34,7 +34,7 @@ fn checked_in_canonical_ir_schema_is_parseable() {
     );
     assert_eq!(
         object.get("$id").and_then(serde_json::Value::as_str),
-        Some("https://cott.dev/schema/canonical-ir/v7")
+        Some("https://cott.dev/schema/canonical-ir/v8")
     );
     assert_eq!(
         object
@@ -44,7 +44,7 @@ fn checked_in_canonical_ir_schema_is_parseable() {
             .and_then(serde_json::Value::as_object)
             .and_then(|version| version.get("const"))
             .and_then(serde_json::Value::as_u64),
-        Some(7)
+        Some(8)
     );
 
     let definitions = object
@@ -298,7 +298,7 @@ fn renders_and_closes_advanced_type_nodes() {
     assert_eq!(first.modules[0].bytes, second.modules[0].bytes);
 
     let text = json(&first.modules[0]);
-    assert!(text.contains(r#""schema_version":7"#));
+    assert!(text.contains(r#""schema_version":8"#));
     assert_in_order(
         text,
         &[
@@ -326,7 +326,7 @@ fn renders_and_closes_advanced_type_nodes() {
     ));
 
     let value = load(&first.modules[0].bytes).expect("advanced canonical IR must load");
-    assert_eq!(value["schema_version"], 7);
+    assert_eq!(value["schema_version"], 8);
     assert_eq!(value["declarations"][0]["kind"], "external_type");
     let external = value["declarations"][0]
         .as_object()
@@ -350,7 +350,7 @@ fn renders_and_closes_factory_type_nodes() {
     ));
 
     let value = load(&rendered.modules[0].bytes).expect("Factory canonical IR must load");
-    assert_eq!(value["schema_version"], 7);
+    assert_eq!(value["schema_version"], 8);
     let declarations = value["declarations"].as_array().expect("declarations");
     let alias = declarations
         .iter()
@@ -558,6 +558,15 @@ fn assert_schema_rejects(value: serde_json::Value, message: &str) {
 }
 
 #[test]
+fn schema_rejects_v7_documents() {
+    let rendered = render(&advanced_types_project()).expect("advanced fixture must render");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&rendered.modules[0].bytes).expect("canonical IR must parse");
+    value["schema_version"] = serde_json::json!(7);
+    assert_schema_rejects(value, "v7 canonical IR must fail closed");
+}
+
+#[test]
 fn schema_rejects_malformed_advanced_type_nodes() {
     let rendered = render(&advanced_types_project()).expect("advanced fixture must render");
     let value: serde_json::Value = serde_json::from_slice(&rendered.modules[0].bytes).unwrap();
@@ -681,7 +690,7 @@ fn schema_rejects_malformed_impl_nodes() {
 }
 
 #[test]
-fn renders_v7_associated_async_and_resource_identity() {
+fn renders_v8_associated_async_and_resource_identity() {
     let parsed = parse_project([source(
         "src/v03.cott",
         r#"module v03
@@ -710,7 +719,7 @@ async fn fetch() -> I32
     let rendered = render(&project).expect("v0.3 HIR must render");
     let value = load(&rendered.modules[0].bytes).expect("v0.3 IR must load");
     let declarations = value["declarations"].as_array().expect("declarations");
-    assert_eq!(value["schema_version"], 7);
+    assert_eq!(value["schema_version"], 8);
     assert_eq!(
         declarations[0]["associated_types"][0]["name"],
         "v03.Stream.Item"
@@ -761,7 +770,7 @@ async fn fetch() -> I32
 }
 
 #[test]
-fn renders_v7_inheritance_specialization_variance_and_dyn_slots() {
+fn renders_v8_inheritance_specialization_variance_and_dyn_slots() {
     let parsed = parse_project([source(
         "src/v05_ir.cott",
         r#"module v05_ir
@@ -997,7 +1006,7 @@ enum Tree:
     assert_eq!(first.modules[0].bytes, second.modules[0].bytes);
 
     let value = load(&first.modules[0].bytes).expect("recursive canonical IR must load");
-    assert_eq!(value["schema_version"], 7);
+    assert_eq!(value["schema_version"], 8);
     let chain = value["declarations"]
         .as_array()
         .expect("declarations")
@@ -1019,4 +1028,29 @@ enum Tree:
         "type_parameter"
     );
     assert_eq!(next["type"]["item"]["args"][0]["type"]["name"], "T");
+}
+
+#[test]
+fn canonical_ir_includes_struct_invariants_deterministically() {
+    let parsed = parse_project([SourceFile::new(
+        "src/location.cott",
+        r#"module location
+
+struct Location:
+    target: Str
+
+    invariant starts_with(self.target, "https://")
+"#,
+    )])
+    .expect("fixture should parse");
+    let project = cott::hir::lower(Path::new("src"), parsed).expect("fixture should lower");
+    let first = render(&project).expect("fixture should render");
+    let second = render(&project).expect("fixture should render deterministically");
+    assert_eq!(first.modules[0].bytes, second.modules[0].bytes);
+    let value = load(&first.modules[0].bytes).expect("invariant IR should validate");
+    let location = value["declarations"][0]
+        .as_object()
+        .expect("struct declaration");
+    assert_eq!(location["invariants"][0]["clause_id"], 0);
+    assert_eq!(location["invariants"][0]["expression"]["kind"], "intrinsic");
 }

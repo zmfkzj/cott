@@ -11,3 +11,5 @@ interpreter = ".venv/bin/python"
 type_checker = ".venv/bin/basedpyright"
 runtime_validation = "boundary"
 
+[generator]
+rules = "GENERATOR_RULES.txt"

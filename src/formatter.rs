@@ -1,8 +1,9 @@
 use crate::ast::{
     Annotation, BinaryOp, CallableKind, Clause, ClauseKind, CompareOp, ConstExpr, Declaration,
-    DocBlock, Expr, ExprKind, File, FunctionBody, GenericArgKind, GenericParam, LiteralKind,
-    MatchGuard, Pattern, PatternKind, QualifiedName, RuleClause, RuleClauseAction, Type, UnaryOp,
-    Variance,
+    DocBlock, Expr, ExprKind, File, FunctionBody, GenericArgKind, GenericParam, Intrinsic,
+    LiteralKind, MatchGuard, Pattern, PatternKind, QualifiedName, RuleClause, RuleClauseAction,
+    ScenarioAwaitOutcome, ScenarioData, ScenarioDataKind, ScenarioFixture, ScenarioFixtureConfig,
+    ScenarioHttpOutcome, ScenarioStep, Type, UnaryOp, Variance,
 };
 use crate::diagnostics::{Diagnostic, Span};
 use crate::syntax::{Cst, TokenKind};
@@ -195,6 +196,19 @@ impl<'a> Printer<'a> {
                     }
                     self.push(1, line);
                     self.inline_for(&field.span);
+                }
+                if !value.fields.is_empty() && !value.invariants.is_empty() {
+                    self.blank();
+                }
+                for invariant in &value.invariants {
+                    self.leading(invariant.span.start, 1);
+                    self.guarded_expression_line(
+                        1,
+                        "invariant ",
+                        invariant.guard.as_ref(),
+                        &invariant.condition,
+                    );
+                    self.inline_for(&invariant.span);
                 }
             }
             Declaration::Enum(value) => {
@@ -489,6 +503,27 @@ impl<'a> Printer<'a> {
                     previous_group = Some(group);
                 }
             }
+            Declaration::Scenario(value) => {
+                self.annotations(&value.annotations);
+                self.doc(value.doc.as_ref(), 0);
+                let target = value
+                    .target
+                    .as_ref()
+                    .map(|target| format!(" for {}", qname(target)))
+                    .unwrap_or_default();
+                self.push(0, format!("scenario {}{target}:", value.name));
+                self.inline_line(self.keyword_line(&value.span, "scenario "));
+                if !value.fixtures.is_empty() {
+                    self.push(1, "fixtures:".to_owned());
+                    for fixture in &value.fixtures {
+                        self.scenario_fixture(fixture);
+                    }
+                }
+                for step in &value.steps {
+                    self.scenario_step(step);
+                }
+            }
+
             Declaration::Function(value) => {
                 self.annotations(&value.annotations);
                 let parameters = value
@@ -535,6 +570,148 @@ impl<'a> Printer<'a> {
                     }
                 }
             }
+        }
+    }
+    fn scenario_fixture(&mut self, fixture: &ScenarioFixture) {
+        match &fixture.config {
+            ScenarioFixtureConfig::Filesystem { files, .. } => {
+                self.push(2, format!("fs {}:", fixture.name));
+                for file in files {
+                    self.push(
+                        3,
+                        format!(
+                            "file {} {}",
+                            serde_json::to_string(&file.path).unwrap(),
+                            self.scenario_data(&file.contents)
+                        ),
+                    );
+                }
+            }
+            ScenarioFixtureConfig::Http { routes, .. } => {
+                self.push(2, format!("http {}:", fixture.name));
+                for route in routes {
+                    self.push(
+                        3,
+                        format!(
+                            "route {} -> {}",
+                            serde_json::to_string(&route.path).unwrap(),
+                            self.http_outcome(&route.outcome)
+                        ),
+                    );
+                }
+            }
+            ScenarioFixtureConfig::Clock {
+                start_ms, tick_ms, ..
+            } => {
+                self.push(2, format!("clock {}:", fixture.name));
+                self.push(3, format!("start_ms: {}", start_ms.value));
+                self.push(3, format!("tick_ms: {}", tick_ms.value));
+            }
+            ScenarioFixtureConfig::Failure {
+                point,
+                occurrence,
+                error,
+                ..
+            } => {
+                self.push(2, format!("failure {}:", fixture.name));
+                self.push(3, format!("point: {}", failure_point(point.kind)));
+                self.push(3, format!("occurrence: {}", occurrence.value));
+                self.push(3, format!("error: {}", failure_error(error.kind)));
+            }
+        }
+    }
+
+    fn scenario_step(&mut self, step: &ScenarioStep) {
+        match step {
+            ScenarioStep::Call {
+                binding,
+                target,
+                arguments,
+                ..
+            } => self.push(
+                1,
+                format!(
+                    "call {} = {}({})",
+                    binding.name,
+                    qname(target),
+                    arguments
+                        .iter()
+                        .map(|argument| self.expr(argument, 0))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ),
+            ScenarioStep::Spawn {
+                worker,
+                target,
+                arguments,
+                ..
+            } => self.push(
+                1,
+                format!(
+                    "spawn {} = {}({})",
+                    worker.name,
+                    qname(target),
+                    arguments
+                        .iter()
+                        .map(|argument| self.expr(argument, 0))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ),
+            ScenarioStep::Await {
+                worker, outcome, ..
+            } => match outcome {
+                ScenarioAwaitOutcome::Value(binding) => {
+                    self.push(1, format!("await {} as {}", worker.name, binding.name));
+                }
+                ScenarioAwaitOutcome::Cancelled { .. } => {
+                    self.push(1, format!("await {} cancelled", worker.name));
+                }
+            },
+            ScenarioStep::Cancel { worker, .. } => {
+                self.push(1, format!("cancel {}", worker.name));
+            }
+            ScenarioStep::Tick { .. } => self.push(1, "tick".to_owned()),
+            ScenarioStep::Assert { expression, .. } => {
+                self.expression_line(1, "assert ", expression);
+            }
+        }
+    }
+
+    fn scenario_data(&self, data: &ScenarioData) -> String {
+        let (kind, value) = match &data.kind {
+            ScenarioDataKind::Text(value) => ("text", value),
+            ScenarioDataKind::Bytes(value) => ("bytes", value),
+            ScenarioDataKind::Hex(value) => ("hex", value),
+        };
+        format!("{kind}({})", serde_json::to_string(value).unwrap())
+    }
+
+    fn http_outcome(&self, outcome: &ScenarioHttpOutcome) -> String {
+        match outcome {
+            ScenarioHttpOutcome::Response {
+                status,
+                body,
+                encoding,
+                ..
+            } => format!(
+                "response(status: {}, body: {}, encoding: {})",
+                status.value,
+                self.scenario_data(body),
+                serde_json::to_string(encoding).unwrap()
+            ),
+            ScenarioHttpOutcome::Redirect {
+                status, location, ..
+            } => format!(
+                "redirect(status: {}, location: {})",
+                status.value,
+                serde_json::to_string(location).unwrap()
+            ),
+            ScenarioHttpOutcome::Delay { milliseconds, .. } => {
+                format!("delay(ms: {})", milliseconds.value)
+            }
+            ScenarioHttpOutcome::Disconnect { .. } => "disconnect()".to_owned(),
         }
     }
 
@@ -870,6 +1047,21 @@ impl<'a> Printer<'a> {
             ExprKind::Field { base, name } => {
                 format!("{}.{}", self.expr(base, precedence), name)
             }
+            ExprKind::Intrinsic { kind, arguments } => format!(
+                "{}({})",
+                intrinsic_name(*kind),
+                arguments
+                    .iter()
+                    .map(|argument| self.expr(argument, 0))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            ExprKind::FixturePath { fixture, path } => {
+                format!("{fixture}.path({})", serde_json::to_string(path).unwrap())
+            }
+            ExprKind::FixtureUrl { fixture, path } => {
+                format!("{fixture}.url({})", serde_json::to_string(path).unwrap())
+            }
             ExprKind::OldStateField { field } => format!("old(self.{})", field.name),
         };
         if precedence < parent_precedence {
@@ -1044,6 +1236,39 @@ impl<'a> Printer<'a> {
 
 fn qname(name: &QualifiedName) -> String {
     name.segments.join(".")
+}
+
+const fn intrinsic_name(intrinsic: Intrinsic) -> &'static str {
+    match intrinsic {
+        Intrinsic::StartsWith => "starts_with",
+        Intrinsic::EndsWith => "ends_with",
+        Intrinsic::Contains => "contains",
+        Intrinsic::UniqueBy => "unique_by",
+        Intrinsic::DescendingBy => "descending_by",
+    }
+}
+
+const fn failure_point(point: crate::ast::ScenarioFailurePointKind) -> &'static str {
+    match point {
+        crate::ast::ScenarioFailurePointKind::FileOpen => "file.open",
+        crate::ast::ScenarioFailurePointKind::FileRead => "file.read",
+        crate::ast::ScenarioFailurePointKind::FileWrite => "file.write",
+        crate::ast::ScenarioFailurePointKind::FileFlush => "file.flush",
+        crate::ast::ScenarioFailurePointKind::FileReplace => "file.replace",
+        crate::ast::ScenarioFailurePointKind::HttpConnect => "http.connect",
+        crate::ast::ScenarioFailurePointKind::HttpRead => "http.read",
+        crate::ast::ScenarioFailurePointKind::ClockRead => "clock.read",
+    }
+}
+
+const fn failure_error(error: crate::ast::ScenarioFailureErrorKind) -> &'static str {
+    match error {
+        crate::ast::ScenarioFailureErrorKind::PermissionDenied => "permission_denied",
+        crate::ast::ScenarioFailureErrorKind::NotFound => "not_found",
+        crate::ast::ScenarioFailureErrorKind::DiskFull => "disk_full",
+        crate::ast::ScenarioFailureErrorKind::Timeout => "timeout",
+        crate::ast::ScenarioFailureErrorKind::ConnectionReset => "connection_reset",
+    }
 }
 
 fn clause_group(clause: &Clause) -> u8 {

@@ -3,6 +3,9 @@ name = "order-management"
 version = "0.1.0"
 source = "src"
 
+[generator]
+rules = "GENERATOR_RULES.txt"
+
 [target.python]
 source = "python"
 generated = "generated/python"

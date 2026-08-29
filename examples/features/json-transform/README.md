@@ -1,7 +1,7 @@
 # json-transform
 
 ## Purpose
-This v0.6 example wraps nonempty string key-value pairs in a JSON object, safely extracts a string field, and constructs a finite recursive `JsonChain`.
+This v0.7 example wraps nonempty string key-value pairs in a JSON object, safely extracts a string field, and constructs a finite recursive `JsonChain`.
 
 ## Key points
 - `wrap_scalar_json` is an explicit `async fn` whose awaited return is `JsonValue`; `key.len > 0` is required. Its Python binding is an exact `async def` with no synchronous bridge, constructing the JSON object from a `JsonString` inside a `FrozenMap`.

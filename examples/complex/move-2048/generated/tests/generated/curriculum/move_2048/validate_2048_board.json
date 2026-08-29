@@ -1,1 +1,0 @@
-{"schema_version":3,"symbol":"curriculum.move_2048.validate_2048_board","seed":"sha256:d7a4308abad0b5f47234c5732fce29ebe3446b34de371e760623b28355feb8bd","candidate_limit":64,"node_limit":64,"container_length_limit":3,"json_depth_limit":4,"lifecycle_limit":3,"callable_kind":"sync","return_kind":"value","classification":"pure","clause_ids":["error:1","error:2"]}

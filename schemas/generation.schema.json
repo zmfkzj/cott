@@ -1,19 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cott.dev/schema/generation/v5",
-  "title": "cott generation record v5",
+  "$id": "https://cott.dev/schema/generation/v7",
+  "title": "cott generation record v7",
   "type": "object",
   "required": ["schema_version", "current", "last_verified"],
   "additionalProperties": false,
   "properties": {
-    "schema_version": {"const": 5},
+    "schema_version": {"const": 7},
     "current": {"$ref": "#/$defs/snapshot"},
     "last_verified": {"anyOf": [{"$ref": "#/$defs/snapshot"}, {"type": "null"}]}
   },
   "$defs": {
     "snapshot": {
       "type": "object",
-      "required": ["generation_id", "verified", "project_version", "compatibility", "inputs", "tools", "ir", "contract_surface", "public_python_symbols", "implementations", "dependencies", "managed_files", "unresolved", "verification", "agent_runs"],
+      "required": ["generation_id", "verified", "project_version", "compatibility", "inputs", "tools", "ir", "contract_surface", "public_python_symbols", "implementations", "dependencies", "managed_files", "unresolved", "verification", "semantic_coverage", "agent_runs"],
       "additionalProperties": false,
       "properties": {
         "generation_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
@@ -41,17 +41,19 @@
             }
           ]
         },
+        "semantic_coverage": {"$ref": "#/$defs/semantic_coverage"},
         "agent_runs": {"type": "array"}
       }
     },
     "compatibility": {
       "type": "object",
-      "required": ["generation_schema", "canonical_ir_schema", "runtime_abi"],
+      "required": ["generation_schema", "canonical_ir_schema", "runtime_abi", "contract_strategy_schema"],
       "additionalProperties": false,
       "properties": {
-        "generation_schema": {"const": 5},
-        "canonical_ir_schema": {"const": 7},
-        "runtime_abi": {"const": 5}
+        "generation_schema": {"const": 7},
+        "canonical_ir_schema": {"const": 8},
+        "runtime_abi": {"const": 7},
+        "contract_strategy_schema": {"const": 5}
       }
     },
     "implementation": {
@@ -225,6 +227,64 @@
         "before": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "after": {"anyOf": [{"type": "string"}, {"type": "null"}]}
       }
+    },
+    "semantic_coverage": {
+      "type": "object",
+      "required": ["clauses", "summary", "policy"],
+      "additionalProperties": false,
+      "properties": {
+        "clauses": {"type": "array", "items": {"$ref": "#/$defs/clause_coverage"}},
+        "summary": {"$ref": "#/$defs/coverage_summary"},
+        "policy": {"$ref": "#/$defs/coverage_policy_result"}
+      }
+    },
+    "clause_coverage": {
+      "type": "object",
+      "required": ["symbol", "clause_id", "span", "status", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "symbol": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"},
+        "clause_id": {"type": "string", "pattern": "^(?:(?:requires|ensures|error|invariant):(0|[1-9][0-9]*)|modifies:[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)$"},
+        "span": {"$ref": "#/$defs/source_span"},
+        "status": {"$ref": "#/$defs/coverage_status"},
+        "evidence": {"type": "array", "items": {}}
+      }
+    },
+    "coverage_summary": {
+      "type": "object",
+      "required": ["observed", "unobserved", "trust_declaration", "unknown"],
+      "additionalProperties": false,
+      "properties": {
+        "observed": {"type": "integer", "minimum": 0},
+        "unobserved": {"type": "integer", "minimum": 0},
+        "trust_declaration": {"type": "integer", "minimum": 0},
+        "unknown": {"type": "integer", "minimum": 0}
+      }
+    },
+    "coverage_policy_result": {
+      "type": "object",
+      "required": ["selected", "passed", "violations"],
+      "additionalProperties": false,
+      "properties": {
+        "selected": {"type": "integer", "minimum": 0},
+        "passed": {"type": "boolean"},
+        "violations": {"type": "array", "items": {"$ref": "#/$defs/coverage_violation"}}
+      }
+    },
+    "coverage_violation": {
+      "type": "object",
+      "required": ["symbol", "clause_id", "span", "status", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "symbol": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"},
+        "clause_id": {"type": "string", "pattern": "^(?:(?:requires|ensures|error|invariant):(0|[1-9][0-9]*)|modifies:[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)$"},
+        "span": {"$ref": "#/$defs/source_span"},
+        "status": {"$ref": "#/$defs/coverage_status"},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "coverage_status": {
+      "enum": ["observed", "unobserved", "trust_declaration", "unknown"]
     }
   }
 }

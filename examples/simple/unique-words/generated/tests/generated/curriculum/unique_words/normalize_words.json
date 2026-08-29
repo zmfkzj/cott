@@ -1,1 +1,0 @@
-{"schema_version":3,"symbol":"curriculum.unique_words.normalize_words","seed":"sha256:cbca2cc1faac5307fdebb6adc867bba894056eacba96910fa59a74d7e2683cfc","candidate_limit":64,"node_limit":64,"container_length_limit":3,"json_depth_limit":4,"lifecycle_limit":3,"callable_kind":"sync","return_kind":"value","classification":"pure","clause_ids":["ensures:1"]}

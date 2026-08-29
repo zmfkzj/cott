@@ -13,6 +13,20 @@ fn assert_rejected(source: &str) {
     assert!(!result.unwrap_err().is_empty());
 }
 
+fn assert_syntax_error_at(source: &str, message: &str, token: &str) {
+    let errors = parse(source).expect_err("source should be rejected");
+    let diagnostic = errors
+        .iter()
+        .find(|diagnostic| diagnostic.message == message)
+        .unwrap_or_else(|| panic!("missing `{message}` in {errors:#?}"));
+    assert_eq!(diagnostic.code, "COTT-S001");
+    assert_eq!(
+        diagnostic.span.start,
+        source.find(token).expect("diagnostic token")
+    );
+    assert!(diagnostic.span.end > diagnostic.span.start);
+}
+
 #[test]
 fn parses_declarations_imports_docs_clauses_patterns_and_precedence() {
     let source = r#"module demo.core
@@ -1129,6 +1143,7 @@ enum Tree:
         &file.declarations[..],
         [
             Declaration::Struct(chain),
+
             Declaration::Struct(left),
             Declaration::Struct(right),
             Declaration::Enum(stop),
@@ -1139,4 +1154,185 @@ enum Tree:
             && stop.name == "Stop"
             && tree.name == "Tree"
     ));
+}
+#[test]
+fn parses_struct_invariants_and_all_closed_scenario_fixture_and_step_forms() {
+    let source = r##"module acceptance.parser
+
+struct Location:
+    target: Str
+    fragment: Option[Str] = Option.Nothing
+
+    invariant starts_with(self.target, "https://")
+    invariant self.fragment matches Option.Some(value) => not starts_with(value, "#")
+
+scenario complete for app.run:
+    fixtures:
+        fs files:
+            file "input.txt" text("input")
+            file "payload.bin" bytes("raw")
+            file "wire.bin" hex("00ff")
+        http service:
+            route "/ok" -> response(status: 200, body: text("ok"), encoding: "utf-8")
+            route "/next" -> redirect(status: 302, location: "/ok")
+            route "/slow" -> delay(ms: 25)
+            route "/broken" -> disconnect()
+        clock clock:
+            start_ms: 10
+            tick_ms: 2
+        failure denied:
+            point: file.write
+            occurrence: 1
+            error: permission_denied
+    call model = app.open(files.path("input.txt"))
+    spawn request = app.fetch(service.url("/ok"))
+    tick
+    await request as reply
+    call applied = app.apply(model, reply)
+    assert applied == reply
+    spawn stale = app.fetch(service.url("/slow"))
+    cancel stale
+    await stale cancelled
+"##;
+    let file = parse(source).expect("closed scenario syntax should parse");
+    let Declaration::Struct(location) = &file.declarations[0] else {
+        panic!("expected Location struct");
+    };
+    assert_eq!(location.fields.len(), 2);
+    assert_eq!(location.invariants.len(), 2);
+    assert_eq!(
+        location.invariants[0].span.start,
+        source.find("invariant starts_with").unwrap()
+    );
+    assert!(matches!(
+        &location.invariants[0].condition.kind,
+        ExprKind::Intrinsic { .. }
+    ));
+    assert!(location.invariants[1].guard.is_some());
+
+    let Declaration::Scenario(scenario) = &file.declarations[1] else {
+        panic!("expected scenario declaration");
+    };
+    assert_eq!(scenario.name, "complete");
+    assert_eq!(scenario.target.as_ref().unwrap().segments, ["app", "run"]);
+    assert_eq!(scenario.fixtures.len(), 4);
+    assert!(matches!(
+        &scenario.fixtures[0].config,
+        cott::ast::ScenarioFixtureConfig::Filesystem { files, .. }
+            if files.len() == 3
+                && matches!(&files[0].contents.kind, cott::ast::ScenarioDataKind::Text(_))
+                && matches!(&files[1].contents.kind, cott::ast::ScenarioDataKind::Bytes(_))
+                && matches!(&files[2].contents.kind, cott::ast::ScenarioDataKind::Hex(_))
+    ));
+    assert!(matches!(
+        &scenario.fixtures[1].config,
+        cott::ast::ScenarioFixtureConfig::Http { routes, .. }
+            if matches!(routes.iter().map(|route| &route.outcome).collect::<Vec<_>>().as_slice(),
+                [
+                    cott::ast::ScenarioHttpOutcome::Response { .. },
+                    cott::ast::ScenarioHttpOutcome::Redirect { .. },
+                    cott::ast::ScenarioHttpOutcome::Delay { .. },
+                    cott::ast::ScenarioHttpOutcome::Disconnect { .. },
+                ])
+    ));
+    assert!(matches!(
+        &scenario.fixtures[2].config,
+        cott::ast::ScenarioFixtureConfig::Clock { start_ms, tick_ms, .. }
+            if start_ms.value == "10" && tick_ms.value == "2"
+    ));
+    assert!(matches!(
+        &scenario.fixtures[3].config,
+        cott::ast::ScenarioFixtureConfig::Failure {
+            point,
+            occurrence,
+            error,
+            ..
+        } if point.kind == cott::ast::ScenarioFailurePointKind::FileWrite
+            && occurrence.value == "1"
+            && error.kind == cott::ast::ScenarioFailureErrorKind::PermissionDenied
+    ));
+    assert_eq!(scenario.steps.len(), 9);
+    assert!(matches!(
+        &scenario.steps[..],
+        [
+            cott::ast::ScenarioStep::Call { arguments, .. },
+            cott::ast::ScenarioStep::Spawn { arguments: spawned, .. },
+            cott::ast::ScenarioStep::Tick { .. },
+            cott::ast::ScenarioStep::Await { outcome: cott::ast::ScenarioAwaitOutcome::Value(_), .. },
+            cott::ast::ScenarioStep::Call { .. },
+            cott::ast::ScenarioStep::Assert { .. },
+            cott::ast::ScenarioStep::Spawn { .. },
+            cott::ast::ScenarioStep::Cancel { .. },
+            cott::ast::ScenarioStep::Await { outcome: cott::ast::ScenarioAwaitOutcome::Cancelled { .. }, .. },
+        ] if matches!(&arguments[0].kind, ExprKind::FixturePath { .. })
+            && matches!(&spawned[0].kind, ExprKind::FixtureUrl { .. })
+    ));
+}
+
+#[test]
+fn rejects_closed_struct_and_scenario_escape_hatches_with_stable_spans() {
+    let field_after_invariant =
+        "module bad\nstruct Item:\n    value: I32\n    invariant self.value >= 0\n    later: I32\n";
+    assert_syntax_error_at(
+        field_after_invariant,
+        "struct fields must precede invariants",
+        "later",
+    );
+    let arbitrary_call =
+        "module bad\nstruct Item:\n    value: Str\n    invariant predicate(self.value)\n";
+    assert_syntax_error_at(
+        arbitrary_call,
+        "function calls are limited to closed invariant intrinsics",
+        "predicate",
+    );
+    let bad_arity =
+        "module bad\nstruct Item:\n    value: Str\n    invariant starts_with(self.value)\n";
+    assert_syntax_error_at(
+        bad_arity,
+        "closed invariant intrinsics require exactly two arguments",
+        "starts_with",
+    );
+
+    for (source, message, token) in [
+        (
+            "module bad\nscenario unsafe:\n    fixtures:\n        fs files:\n            file \"../host\" text(\"x\")\n    tick\n",
+            "fixture path must be normalized relative UTF-8 without symlinks",
+            "\"../host\"",
+        ),
+        (
+            "module bad\nscenario unsafe:\n    fixtures:\n        http service:\n            route \"//authority\" -> disconnect()\n    tick\n",
+            "http route must be a normalized relative path",
+            "\"//authority\"",
+        ),
+        (
+            "module bad\nscenario unsafe:\n    fixtures:\n        http service:\n            route \"/next\" -> redirect(status: 302, location: \"https://example.test/\")\n    tick\n",
+            "redirect location must be relative to compiler-owned endpoint",
+            "\"https://example.test/\"",
+        ),
+        (
+            "module bad\nscenario unsafe:\n    fixtures:\n        fs files:\n            file \"payload\" hex(\"0fg\")\n    tick\n",
+            "fixture hex data must contain an even number of hex digits",
+            "hex",
+        ),
+        (
+            "module bad\nscenario broken:\n    call value app.open()\n    tick\n",
+            "expected `=` after call result binding",
+            "app",
+        ),
+    ] {
+        assert_syntax_error_at(source, message, token);
+    }
+}
+
+#[test]
+fn rejects_framework_tree_and_general_execution_inside_scenarios() {
+    for source in [
+        "module bad\nscenario invalid:\n    if true\n",
+        "module bad\nscenario invalid:\n    for item in items\n",
+        "module bad\nscenario invalid:\n    widget Panel\n",
+        "module bad\nscenario invalid:\n    tree root\n",
+        "module bad\nscenario invalid:\n    call value = app.open()\n    return value\n",
+    ] {
+        assert_rejected(source);
+    }
 }

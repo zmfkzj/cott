@@ -11,8 +11,8 @@ use serde_json::Value;
 
 use crate::hash::sha256_hex;
 use crate::ir::CanonicalIr;
-use crate::manifest::RuntimeValidation;
-use crate::sandbox::{BindMounts, NetworkAccess, ResourceLimits, SandboxSpec, run};
+use crate::manifest::{RuntimeValidation, VerificationConfig};
+use crate::sandbox::{BindMounts, NetworkAccess, ResourceLimits, SandboxError, SandboxSpec, run};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -23,11 +23,65 @@ pub enum Classification {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContractObligationRole {
+    Success,
+    ConditionalError,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContractObligation {
+    pub clause_id: String,
+    pub role: ContractObligationRole,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScenarioLimits {
+    pub scenario_timeout_ms: u32,
+    pub filesystem_bytes: u64,
+    pub filesystem_files: u32,
+    pub http_body_bytes: u64,
+    pub http_requests: u32,
+    pub http_redirects: u32,
+    pub transcript_events: u32,
+}
+
+impl ScenarioLimits {
+    fn from_verification(verification: &VerificationConfig) -> Self {
+        let fixtures = &verification.fixtures;
+        Self {
+            scenario_timeout_ms: fixtures.scenario_timeout_ms,
+            filesystem_bytes: fixtures.filesystem_bytes,
+            filesystem_files: fixtures.filesystem_files,
+            http_body_bytes: fixtures.http_body_bytes,
+            http_requests: fixtures.http_requests,
+            http_redirects: fixtures.http_redirects,
+            transcript_events: fixtures.transcript_events,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScenarioStrategy {
+    pub id: String,
+    pub required_effects: Vec<String>,
+    pub fixtures: Vec<Value>,
+    pub steps: Vec<Value>,
+    pub lifecycle_limit: u32,
+    pub limits: ScenarioLimits,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContractTestStrategy {
     pub schema_version: u32,
     pub symbol: String,
     pub seed: String,
+    pub proof_node_limit: u32,
+    pub proof_branch_limit: u32,
     pub candidate_limit: u32,
     pub node_limit: u32,
     pub container_length_limit: u32,
@@ -37,6 +91,8 @@ pub struct ContractTestStrategy {
     pub return_kind: String,
     pub classification: Classification,
     pub clause_ids: Vec<String>,
+    pub obligations: Vec<ContractObligation>,
+    pub scenario: Option<ScenarioStrategy>,
 }
 
 impl ContractTestStrategy {
@@ -46,20 +102,25 @@ impl ContractTestStrategy {
         callable_kind: impl Into<String>,
         classification: Classification,
         clause_ids: Vec<String>,
+        verification: &VerificationConfig,
     ) -> Self {
         Self {
-            schema_version: 3,
+            schema_version: crate::provenance::CONTRACT_STRATEGY_SCHEMA_VERSION,
             symbol: symbol.into(),
             seed: format!("sha256:{}", sha256_hex(ir_bytes)),
-            candidate_limit: 64,
+            proof_node_limit: verification.proof_node_limit,
+            proof_branch_limit: verification.proof_branch_limit,
+            candidate_limit: verification.candidate_limit,
             node_limit: 64,
             container_length_limit: 3,
             json_depth_limit: 4,
-            lifecycle_limit: 3,
+            lifecycle_limit: verification.lifecycle_limit,
             callable_kind: callable_kind.into(),
             return_kind: "value".to_owned(),
             classification,
             clause_ids,
+            obligations: Vec::new(),
+            scenario: None,
         }
     }
 
@@ -72,10 +133,13 @@ impl ContractTestStrategy {
     }
 }
 
-/// Derive metadata-only contract test strategies from canonical IR v7 module
+/// Derive metadata-only contract test strategies from canonical IR v8 module
 /// bytes, preserving canonical module, declaration, and selected-slot order.
-pub fn derive_strategies(ir: &CanonicalIr) -> Result<Vec<ContractTestStrategy>, String> {
-    Ok(derive_strategy_entries(ir)?
+pub fn derive_strategies(
+    ir: &CanonicalIr,
+    verification: &VerificationConfig,
+) -> Result<Vec<ContractTestStrategy>, String> {
+    Ok(derive_strategy_entries(ir, verification)?
         .into_iter()
         .map(|(strategy, _)| strategy)
         .collect())
@@ -83,6 +147,7 @@ pub fn derive_strategies(ir: &CanonicalIr) -> Result<Vec<ContractTestStrategy>, 
 
 fn derive_strategy_entries(
     ir: &CanonicalIr,
+    verification: &VerificationConfig,
 ) -> Result<Vec<(ContractTestStrategy, Option<String>)>, String> {
     let modules = ir
         .modules
@@ -135,8 +200,15 @@ fn derive_strategy_entries(
                         callable_kind,
                         classification,
                         clause_ids,
+                        verification,
                     );
                     strategy.return_kind = protocol_return_kind(return_type)?.to_owned();
+                    strategy.obligations = contract_obligations(
+                        contract,
+                        &["clauses"],
+                        return_type,
+                        &format!("{context} function {symbol}"),
+                    )?;
                     strategy.bytes()?;
                     strategies.push((strategy, None));
                 }
@@ -170,6 +242,7 @@ fn derive_strategy_entries(
                         "sync",
                         Classification::Pure,
                         init_clause_ids,
+                        verification,
                     );
                     strategy.bytes()?;
                     strategies.push((strategy, None));
@@ -378,11 +451,68 @@ fn derive_strategy_entries(
                             callable_kind,
                             classification,
                             clause_ids,
+                            verification,
                         );
                         strategy.return_kind = protocol_return_kind(return_type)?.to_owned();
+                        strategy.obligations = match selected_kind {
+                            "explicit" => contract_obligations(
+                                required_object(source, "contracts").map_err(|error| {
+                                    format!("{context} impl {name} selected method {method_name}: {error}")
+                                })?,
+                                &["requires", "ensures", "errors"],
+                                return_type,
+                                &format!("{context} impl {name} selected method {method_name}"),
+                            ),
+                            "default" | "specialization" => contract_obligations(
+                                required_object(source, "contract").map_err(|error| {
+                                    format!("{context} impl {name} selected method {method_name}: {error}")
+                                })?,
+                                &["clauses"],
+                                return_type,
+                                &format!("{context} impl {name} selected method {method_name}"),
+                            ),
+                            _ => unreachable!("selected implementation was checked"),
+                        }?;
                         strategy.bytes()?;
                         strategies.push((strategy, Some(init_symbol.clone())));
                     }
+                }
+                "scenario" => {
+                    let symbol = required_string(declaration, "name")
+                        .map_err(|error| format!("{context}: {error}"))?;
+                    let required_effects = required_array(declaration, "required_effects")
+                        .map_err(|error| format!("{context} scenario {symbol}: {error}"))?
+                        .iter()
+                        .enumerate()
+                        .map(|(index, effect)| {
+                            required_string(effect, "key")
+                                .map(str::to_owned)
+                                .map_err(|error| {
+                                    format!("{context} scenario {symbol} effect {index}: {error}")
+                                })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut strategy = ContractTestStrategy::new(
+                        symbol,
+                        &module.bytes,
+                        "sync",
+                        if required_effects.is_empty() {
+                            Classification::Pure
+                        } else {
+                            Classification::Effectful
+                        },
+                        Vec::new(),
+                        verification,
+                    );
+                    strategy.scenario = Some(scenario_strategy(
+                        declaration,
+                        symbol,
+                        required_effects,
+                        verification,
+                        &context,
+                    )?);
+                    strategy.bytes()?;
+                    strategies.push((strategy, None));
                 }
                 _ => {}
             }
@@ -578,6 +708,189 @@ fn contract_clause_ids(
         .map(|(_, _, _, clause_id)| clause_id)
         .collect())
 }
+fn contract_obligations(
+    contract: &Value,
+    fields: &[&str],
+    return_type: &Value,
+    context: &str,
+) -> Result<Vec<ContractObligation>, String> {
+    if required_string(return_type, "kind").map_err(|error| format!("{context}: {error}"))?
+        != "result"
+    {
+        return Ok(Vec::new());
+    }
+    let mut clauses = Vec::new();
+    for (field_order, field) in fields.iter().enumerate() {
+        for (clause_order, clause) in required_array(contract, field)
+            .map_err(|error| format!("{context} {field}: {error}"))?
+            .iter()
+            .enumerate()
+        {
+            let kind = required_string(clause, "kind")
+                .map_err(|error| format!("{context} {field} clause {clause_order}: {error}"))?;
+            let clause_id = required_field(clause, "clause_id")
+                .and_then(|value| {
+                    value.as_u64().ok_or_else(|| {
+                        "required field `clause_id` must be a non-negative integer".to_owned()
+                    })
+                })
+                .map_err(|error| format!("{context} {field} clause {clause_order}: {error}"))?;
+            clauses.push((clause_id, field_order, clause_order, kind, clause));
+        }
+    }
+    if !clauses.iter().any(|(_, _, _, kind, _)| *kind == "error") {
+        return Ok(Vec::new());
+    }
+    clauses.sort_unstable_by_key(|(id, field, order, _, _)| (*id, *field, *order));
+    Ok(clauses
+        .into_iter()
+        .filter_map(|(clause_id, _, _, kind, clause)| {
+            let role = match kind {
+                "ensures"
+                    if clause
+                        .pointer("/guard/pattern/kind")
+                        .and_then(Value::as_str)
+                        == Some("result_ok") =>
+                {
+                    Some(ContractObligationRole::Success)
+                }
+                "error"
+                    if clause.get("guard").is_some_and(|guard| !guard.is_null())
+                        || clause.get("when").is_some_and(|when| !when.is_null()) =>
+                {
+                    Some(ContractObligationRole::ConditionalError)
+                }
+                _ => None,
+            }?;
+            Some(ContractObligation {
+                clause_id: format!("{kind}:{clause_id}"),
+                role,
+            })
+        })
+        .collect())
+}
+
+fn scenario_strategy(
+    declaration: &Value,
+    id: &str,
+    required_effects: Vec<String>,
+    verification: &VerificationConfig,
+    context: &str,
+) -> Result<ScenarioStrategy, String> {
+    let fixtures = required_array(declaration, "fixtures")
+        .map_err(|error| format!("{context} scenario {id}: {error}"))?
+        .clone();
+    let steps = required_array(declaration, "steps")
+        .map_err(|error| format!("{context} scenario {id}: {error}"))?
+        .clone();
+    if steps.len() > 64 {
+        return Err(format!("{context} scenario {id}: step limit exceeds 64"));
+    }
+    let lifecycle_limit = required_field(declaration, "lifecycle_limit")
+        .and_then(|value| {
+            value
+                .as_u64()
+                .filter(|value| (1..=64).contains(value))
+                .ok_or_else(|| "lifecycle_limit must be in 1..=64".to_owned())
+        })
+        .map_err(|error| format!("{context} scenario {id}: {error}"))?;
+    let lifecycle_limit = u32::try_from(lifecycle_limit)
+        .map_err(|_| format!("{context} scenario {id}: lifecycle_limit exceeds u32"))?;
+    let mut fixture_ids = BTreeSet::new();
+    for (index, fixture) in fixtures.iter().enumerate() {
+        let fixture_id = required_string(fixture, "id")
+            .map_err(|error| format!("{context} scenario {id} fixture {index}: {error}"))?;
+        if !fixture_ids.insert(fixture_id) {
+            return Err(format!(
+                "{context} scenario {id}: duplicate fixture id `{fixture_id}`"
+            ));
+        }
+        validate_scenario_fixture(fixture)
+            .map_err(|error| format!("{context} scenario {id} fixture {index}: {error}"))?;
+    }
+    let mut step_ids = BTreeSet::new();
+    for (index, step) in steps.iter().enumerate() {
+        let step_id = required_field(step, "step_id")
+            .and_then(|value| {
+                value.as_u64().ok_or_else(|| {
+                    "required field `step_id` must be a non-negative integer".to_owned()
+                })
+            })
+            .map_err(|error| format!("{context} scenario {id} step {index}: {error}"))?;
+        if step_id != index as u64 || !step_ids.insert(step_id) {
+            return Err(format!(
+                "{context} scenario {id}: step IDs must be ordered and unique"
+            ));
+        }
+        let kind = required_string(step, "kind")
+            .map_err(|error| format!("{context} scenario {id} step {index}: {error}"))?;
+        if matches!(kind, "call" | "spawn")
+            && required_string(step, "target")
+                .map_err(|error| format!("{context} scenario {id} step {index}: {error}"))?
+                .is_empty()
+        {
+            return Err(format!(
+                "{context} scenario {id} step {index}: empty facade target"
+            ));
+        }
+    }
+    Ok(ScenarioStrategy {
+        id: id.to_owned(),
+        required_effects,
+        fixtures,
+        steps,
+        lifecycle_limit,
+        limits: ScenarioLimits::from_verification(verification),
+    })
+}
+
+fn validate_scenario_fixture(fixture: &Value) -> Result<(), String> {
+    match required_string(fixture, "kind")? {
+        "fs" => {
+            for file in required_array(fixture, "files")? {
+                if !closed_relative_path(required_string(file, "path")?) {
+                    return Err("filesystem fixture path must be a closed relative path".to_owned());
+                }
+            }
+        }
+        "http" => {
+            for route in required_array(fixture, "routes")? {
+                if !closed_route_path(required_string(route, "path")?) {
+                    return Err("HTTP fixture route must be a closed absolute route".to_owned());
+                }
+            }
+        }
+        "clock" | "failure" => {}
+        kind => return Err(format!("unsupported fixture kind `{kind}`")),
+    }
+    Ok(())
+}
+
+fn closed_relative_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.split('/').all(|part| {
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
+}
+
+fn closed_route_path(path: &str) -> bool {
+    path.strip_prefix('/').is_some_and(|path| {
+        path.is_empty()
+            || path.split('/').all(|part| {
+                !part.is_empty()
+                    && part != "."
+                    && part != ".."
+                    && part.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                    })
+            })
+    })
+}
 
 fn invariant_clause_ids(invariants: &[Value], context: &str) -> Result<Vec<String>, String> {
     invariants
@@ -596,16 +909,49 @@ fn invariant_clause_ids(invariants: &[Value], context: &str) -> Result<Vec<Strin
         .collect()
 }
 
+fn unavailable_scenario_evidence(strategies: &[ContractTestStrategy]) -> Vec<Value> {
+    strategies
+        .iter()
+        .filter_map(|strategy| strategy.scenario.as_ref())
+        .map(|scenario| {
+            let assertions = scenario
+                .steps
+                .iter()
+                .filter(|step| step.get("kind").and_then(Value::as_str) == Some("assert"))
+                .filter_map(|step| {
+                    step.get("step_id").and_then(Value::as_u64).map(|step_id| {
+                        serde_json::json!({
+                            "assertion_id": format!("assert:{step_id}"),
+                            "grade": "unobserved",
+                            "reason": "isolated loopback capability unavailable",
+                            "span": step.get("span").cloned().unwrap_or(Value::Null),
+                        })
+                    })
+                })
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "assertions": assertions,
+                "fixtures": [],
+                "grade": "unobserved",
+                "reason": "isolated loopback capability unavailable",
+                "scenario_id": scenario.id,
+                "trace": [],
+            })
+        })
+        .collect()
+}
+
 pub fn execute_contract_tests(
     interpreter: &Path,
     generated_root: &Path,
     site_packages: &[PathBuf],
     ir: &CanonicalIr,
+    verification: &VerificationConfig,
     runtime_validation: RuntimeValidation,
     scope: Option<&BTreeSet<String>>,
 ) -> Result<Value, String> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let strategies = derive_strategy_entries(ir)?;
+    let strategies = derive_strategy_entries(ir, verification)?;
     let selected_initializers = scope.map(|scope| {
         strategies
             .iter()
@@ -631,16 +977,6 @@ pub fn execute_contract_tests(
         .iter()
         .map(|module| crate::ir::load(&module.bytes))
         .collect::<Result<Vec<_>, _>>()?;
-    let request = serde_json::json!({
-        "modules": modules,
-        "runtime_validation": match runtime_validation {
-            RuntimeValidation::Off => "off",
-            RuntimeValidation::Boundary => "boundary",
-            RuntimeValidation::TestOnly => "test-only",
-        },
-        "strategies": strategies,
-    });
-    let stdin = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
@@ -656,6 +992,31 @@ pub fn execute_contract_tests(
             scratch.display()
         )
     })?;
+    let needs_loopback = strategies.iter().any(|strategy| {
+        strategy.scenario.as_ref().is_some_and(|scenario| {
+            scenario
+                .fixtures
+                .iter()
+                .any(|fixture| fixture.get("kind").and_then(Value::as_str) == Some("http"))
+        })
+    });
+    let fallback_scope = strategies
+        .iter()
+        .filter(|strategy| strategy.scenario.is_none())
+        .map(|strategy| strategy.symbol.clone())
+        .collect::<BTreeSet<_>>();
+    let fixture_root = scratch.join("fixtures");
+    let request = serde_json::json!({
+        "fixture_root": fixture_root,
+        "modules": modules,
+        "runtime_validation": match runtime_validation {
+            RuntimeValidation::Off => "off",
+            RuntimeValidation::Boundary => "boundary",
+            RuntimeValidation::TestOnly => "test-only",
+        },
+        "strategies": strategies.clone(),
+    });
+    let stdin = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
     let mut read_only = vec![
         generated_root
             .parent()
@@ -697,7 +1058,11 @@ pub fn execute_contract_tests(
             read_only,
             writable: vec![scratch.clone()],
         },
-        network: NetworkAccess::Disabled,
+        network: if needs_loopback {
+            NetworkAccess::IsolatedLoopback
+        } else {
+            NetworkAccess::Disabled
+        },
         limits: ResourceLimits::contract_test(),
     });
     let cleanup = fs::remove_dir_all(&scratch);
@@ -707,7 +1072,31 @@ pub fn execute_contract_tests(
             scratch.display()
         ));
     }
-    let completed = result.map_err(|error| error.to_string())?;
+    let completed = match result {
+        Ok(completed) => completed,
+        Err(SandboxError::UnsupportedLoopback) if needs_loopback => {
+            let mut report = if fallback_scope.is_empty() {
+                serde_json::json!({"contracts": [], "lifecycle": [], "scenarios": []})
+            } else {
+                execute_contract_tests(
+                    interpreter,
+                    generated_root,
+                    site_packages,
+                    ir,
+                    verification,
+                    runtime_validation,
+                    Some(&fallback_scope),
+                )?
+            };
+            let scenarios = report
+                .get_mut("scenarios")
+                .and_then(Value::as_array_mut)
+                .ok_or("contract-test fallback report has no scenarios array")?;
+            scenarios.extend(unavailable_scenario_evidence(&strategies));
+            return Ok(report);
+        }
+        Err(error) => return Err(error.to_string()),
+    };
     if completed.status != Some(0) {
         return Err(format!(
             "contract test process exited {:?}: {}",
@@ -878,5 +1267,36 @@ mod tests {
         let report = serde_json::from_slice::<Value>(&output.stdout).expect("report");
         assert_eq!(report["contracts"].as_array().map(Vec::len), Some(1));
         assert_eq!(report["contracts"][0]["evidence"][0]["grade"], "unobserved");
+    }
+    #[test]
+    fn unavailable_loopback_emits_only_logical_unobserved_scenario_evidence() {
+        let verification = VerificationConfig::default();
+        let mut strategy = ContractTestStrategy::new(
+            "demo.scenario.fetch",
+            b"module",
+            "sync",
+            Classification::Effectful,
+            Vec::new(),
+            &verification,
+        );
+        strategy.scenario = Some(ScenarioStrategy {
+            id: "demo.scenario.fetch".to_owned(),
+            required_effects: vec!["network".to_owned()],
+            fixtures: vec![serde_json::json!({"kind": "http"})],
+            steps: vec![serde_json::json!({
+                "kind": "assert",
+                "step_id": 7,
+                "span": {"start_byte": 0, "end_byte": 1, "start_line": 1, "start_column": 1, "end_line": 1, "end_column": 2},
+            })],
+            lifecycle_limit: 64,
+            limits: ScenarioLimits::from_verification(&verification),
+        });
+        let evidence = unavailable_scenario_evidence(&[strategy]);
+        assert_eq!(evidence[0]["grade"], "unobserved");
+        assert_eq!(
+            evidence[0]["assertions"][0]["reason"],
+            "isolated loopback capability unavailable"
+        );
+        assert!(evidence[0]["trace"].as_array().is_some_and(Vec::is_empty));
     }
 }

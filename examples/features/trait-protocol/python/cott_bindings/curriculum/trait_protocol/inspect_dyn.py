@@ -4,5 +4,5 @@ from cott_runtime import Dyn
 from curriculum.trait_protocol import TaskView
 
 
-def inspect_dyn(item: Dyn[TaskView]) -> str:
-    return item.value.summary()
+async def inspect_dyn(item: Dyn[TaskView[str]]) -> str:
+    return await item.value.summary()

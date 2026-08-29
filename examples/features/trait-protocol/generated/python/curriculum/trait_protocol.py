@@ -11,80 +11,96 @@ from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, C
 
 from curriculum.trait_protocol_types import Completable, Prioritizable, Summarizable, TaskLifecycle, TaskLifecycle_Completed, TaskLifecycle_Pending, TaskView, _cott_curriculum_trait_protocol_Summarizable_Summary_91a0038fc149a52d660ec2d4c914e0f201ef340095a79ffc2c9cd89ad6d2311f, _cott_curriculum_trait_protocol_Summarizable_curriculum_trait_protocol_Summarizable_Summary, _cott_curriculum_trait_protocol_TaskView_curriculum_trait_protocol_Summarizable_Summary
 
-_cott_format_summary_T = TypeVar("_cott_format_summary_T", bound=Summarizable)
-_cott_inspect_task_T = TypeVar("_cott_inspect_task_T", bound=TaskView)
+T = TypeVar("T")
 
-def format_summary(item: _cott_format_summary_T) -> str:
-    """Format the summary string from any item implementing {Summarizable}."""
-    item = _cott_validate_abi(item, _cott_format_summary_T, path="$.item")
+async def default_category(receiver: TaskView[T]) -> str:
+    receiver = _cott_validate_abi(receiver, TaskView[T], path="$.receiver")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/format_summary.py", "71428b73a1d0ba4a5cd902b5bb784aba4d2a86a720150ad42c5db188b94dc66e", "format_summary", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.format_summary")
-        _result = _implementation(item)
+        _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/default_category.py", "0f96a9f763965a83e7ce0b63dc264dbb593eec656b12751f42e5592888c993d7", "default_category", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.default_category")
+        _result = await _implementation(receiver)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
-            _error.symbol = "curriculum.trait_protocol.format_summary"
+            _error.symbol = "curriculum.trait_protocol.default_category"
         if _error.span is None:
-            _error.span = {"end_byte":465,"end_column":1,"end_line":24,"start_byte":274,"start_column":1,"start_line":15}
+            _error.span = {"end_byte":484,"end_column":1,"end_line":20,"start_byte":408,"start_column":1,"start_line":17}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.trait_protocol.format_summary", phase="implementation-call", span={"end_byte":465,"end_column":1,"end_line":24,"start_byte":274,"start_column":1,"start_line":15}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.trait_protocol.default_category", phase="implementation-call", span={"end_byte":484,"end_column":1,"end_line":20,"start_byte":408,"start_column":1,"start_line":17}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.trait_protocol.format_summary", phase="implementation-call", span={"end_byte":465,"end_column":1,"end_line":24,"start_byte":274,"start_column":1,"start_line":15}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.trait_protocol.default_category", phase="implementation-call", span={"end_byte":484,"end_column":1,"end_line":20,"start_byte":408,"start_column":1,"start_line":17}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, str, path="$.return")
-    if not ((len(_result) >= 0)):
-        raise CottContractViolation("ensures clause failed", symbol="curriculum.trait_protocol.format_summary", clause="ensures:1", phase="ensures", span={"end_byte":447,"end_column":28,"end_line":20,"start_byte":424,"start_column":5,"start_line":20}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result
 
-def inspect_task(item: _cott_inspect_task_T) -> str:
-    """Inspect an item implementing {TaskView}."""
-    item = _cott_validate_abi(item, _cott_inspect_task_T, path="$.item")
+async def specialized_display(receiver: SimpleTask) -> str:
+    receiver = _cott_validate_abi(receiver, SimpleTask, path="$.receiver")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/inspect_task.py", "b19c28aa7a30faf056d522d3301677d8e4141a3d0d90af38c7b91a0ece99b24a", "inspect_task", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.inspect_task")
-        _result = _implementation(item)
+        _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/specialized_display.py", "1d868ab442f2268702870583134a20ccc854cbab4cf84db6a64972ba85d7b5b1", "specialized_display", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.specialized_display")
+        _result = await _implementation(receiver)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
-            _error.symbol = "curriculum.trait_protocol.inspect_task"
+            _error.symbol = "curriculum.trait_protocol.specialized_display"
         if _error.span is None:
-            _error.span = {"end_byte":621,"end_column":1,"end_line":33,"start_byte":465,"start_column":1,"start_line":24}
+            _error.span = {"end_byte":559,"end_column":1,"end_line":23,"start_byte":484,"start_column":1,"start_line":20}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.trait_protocol.inspect_task", phase="implementation-call", span={"end_byte":621,"end_column":1,"end_line":33,"start_byte":465,"start_column":1,"start_line":24}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.trait_protocol.specialized_display", phase="implementation-call", span={"end_byte":559,"end_column":1,"end_line":23,"start_byte":484,"start_column":1,"start_line":20}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.trait_protocol.inspect_task", phase="implementation-call", span={"end_byte":621,"end_column":1,"end_line":33,"start_byte":465,"start_column":1,"start_line":24}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.trait_protocol.specialized_display", phase="implementation-call", span={"end_byte":559,"end_column":1,"end_line":23,"start_byte":484,"start_column":1,"start_line":20}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, str, path="$.return")
-    if not ((len(_result) > 0)):
-        raise CottContractViolation("ensures clause failed", symbol="curriculum.trait_protocol.inspect_task", clause="ensures:1", phase="ensures", span={"end_byte":603,"end_column":27,"end_line":29,"start_byte":581,"start_column":5,"start_line":29}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result
 
-def inspect_dyn(item: Dyn[TaskView]) -> str:
-    item = _cott_validate_abi(item, Dyn[TaskView], path="$.item")
+def task_factory() -> type[SimpleTask]:
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/inspect_dyn.py", "1d063ed8744dc4a59599f14e89ab99026650a9938f2129da66500a055f8cdc3a", "inspect_dyn", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.inspect_dyn")
-        _result = _implementation(item)
+        _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/task_factory.py", "f52620e94324be5221c5c3484c7085c59bc5a7ef0d7f83d1b23400ea50f1afa4", "task_factory", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.task_factory")
+        _result = _implementation()
+    except CottContractViolation as _error:
+        if _error.symbol is None or _error.symbol == "_cott_load":
+            _error.symbol = "curriculum.trait_protocol.task_factory"
+        if _error.span is None:
+            _error.span = {"end_byte":617,"end_column":1,"end_line":26,"start_byte":559,"start_column":1,"start_line":23}
+        raise
+    except SystemExit as _error:
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.trait_protocol.task_factory", phase="implementation-call", span={"end_byte":617,"end_column":1,"end_line":26,"start_byte":559,"start_column":1,"start_line":23}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+    except Exception as _error:
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.trait_protocol.task_factory", phase="implementation-call", span={"end_byte":617,"end_column":1,"end_line":26,"start_byte":559,"start_column":1,"start_line":23}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+    _result = _cott_validate_abi(_result, type[SimpleTask], path="$.return")
+    _result = _cott_wrap_async_protocol(_result, type[SimpleTask], path="$.return", validator=_cott_validate_abi)
+    return _result
+
+async def inspect_dyn(item: Dyn[TaskView[str]]) -> str:
+    item = _cott_validate_abi(item, Dyn[TaskView[str]], path="$.item")
+    try:
+        _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/inspect_dyn.py", "e45e94b9aa9476d9fb70ba1a198be6db88270bb401907461fc01acacd0fd58b2", "inspect_dyn", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.inspect_dyn")
+        _result = await _implementation(item)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.trait_protocol.inspect_dyn"
         if _error.span is None:
-            _error.span = {"end_byte":681,"end_column":1,"end_line":36,"start_byte":621,"start_column":1,"start_line":33}
+            _error.span = {"end_byte":688,"end_column":1,"end_line":29,"start_byte":617,"start_column":1,"start_line":26}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.trait_protocol.inspect_dyn", phase="implementation-call", span={"end_byte":681,"end_column":1,"end_line":36,"start_byte":621,"start_column":1,"start_line":33}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.trait_protocol.inspect_dyn", phase="implementation-call", span={"end_byte":688,"end_column":1,"end_line":29,"start_byte":617,"start_column":1,"start_line":26}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.trait_protocol.inspect_dyn", phase="implementation-call", span={"end_byte":681,"end_column":1,"end_line":36,"start_byte":621,"start_column":1,"start_line":33}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.trait_protocol.inspect_dyn", phase="implementation-call", span={"end_byte":688,"end_column":1,"end_line":29,"start_byte":617,"start_column":1,"start_line":26}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result
 
+_cott_default_SimpleTask_category = default_category
+
+_cott_default_SimpleTask_display = specialized_display
+
 @final
 class SimpleTask:
     _cott_traits = (Completable, Prioritizable, Summarizable, TaskView,)
-    _cott_trait_specs = (Completable, Prioritizable, Summarizable, TaskView,)
+    _cott_trait_specs = (Completable, Prioritizable, Summarizable, TaskView[str],)
     title: str
     urgency: I32
     lifecycle: TaskLifecycle
-    __slots__ = ("title", "urgency", "lifecycle", "_cott_lock",)
+    completion_count: I32
+    __slots__ = ("title", "urgency", "lifecycle", "completion_count", "_cott_lock",)
 
     def __init_subclass__(cls, **_kwargs: object) -> None:
         raise TypeError("SimpleTask is final")
@@ -93,133 +109,344 @@ class SimpleTask:
         title = _cott_validate_abi(title, str, path="$.title")
         urgency = _cott_validate_abi(urgency, I32, path="$.urgency")
         if not ((len(title) > 0)):
-            raise CottContractViolation("requires clause failed", symbol="curriculum.trait_protocol.SimpleTask", clause="requires:0", phase="requires", span={"end_byte":1107,"end_column":31,"end_line":54,"start_byte":1085,"start_column":9,"start_line":54}, expected="true", actual="false")
+            raise CottContractViolation("requires clause failed", symbol="curriculum.trait_protocol.SimpleTask", clause="requires:0", phase="requires", span={"end_byte":1296,"end_column":31,"end_line":52,"start_byte":1274,"start_column":9,"start_line":52}, expected="true", actual="false")
         if not ((urgency >= 0)):
-            raise CottContractViolation("requires clause failed", symbol="curriculum.trait_protocol.SimpleTask", clause="requires:1", phase="requires", span={"end_byte":1137,"end_column":30,"end_line":55,"start_byte":1116,"start_column":9,"start_line":55}, expected="true", actual="false")
+            raise CottContractViolation("requires clause failed", symbol="curriculum.trait_protocol.SimpleTask", clause="requires:1", phase="requires", span={"end_byte":1326,"end_column":30,"end_line":53,"start_byte":1305,"start_column":9,"start_line":53}, expected="true", actual="false")
         self.title = _cott_validate_abi(title, str, path="$.title")
         self.urgency = _cott_validate_abi(urgency, I32, path="$.urgency")
         self.lifecycle = _cott_validate_abi(TaskLifecycle_Pending(), TaskLifecycle, path="$.lifecycle")
-        self._cott_lock = _threading.RLock()
+        self.completion_count = _cott_validate_abi(0, I32, path="$.completion_count")
+        self._cott_lock = _CottAsyncRLock()
         if not (((self).title == title)):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.trait_protocol.SimpleTask", clause="ensures:2", phase="ensures", span={"end_byte":1174,"end_column":36,"end_line":57,"start_byte":1147,"start_column":9,"start_line":57}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="curriculum.trait_protocol.SimpleTask", clause="ensures:2", phase="ensures", span={"end_byte":1363,"end_column":36,"end_line":55,"start_byte":1336,"start_column":9,"start_line":55}, expected="true", actual="false")
         if not (((self).urgency == urgency)):
-            raise CottContractViolation("ensures clause failed", symbol="curriculum.trait_protocol.SimpleTask", clause="ensures:3", phase="ensures", span={"end_byte":1214,"end_column":40,"end_line":58,"start_byte":1183,"start_column":9,"start_line":58}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="curriculum.trait_protocol.SimpleTask", clause="ensures:3", phase="ensures", span={"end_byte":1403,"end_column":40,"end_line":56,"start_byte":1372,"start_column":9,"start_line":56}, expected="true", actual="false")
         if not ((len((self).title) > 0)):
-            raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:0", phase="invariant", span={"end_byte":1007,"end_column":33,"end_line":50,"start_byte":979,"start_column":5,"start_line":50}, expected="true", actual="false")
+            raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:0", phase="invariant", span={"end_byte":1155,"end_column":33,"end_line":47,"start_byte":1127,"start_column":5,"start_line":47}, expected="true", actual="false")
         if not (((self).urgency >= 0)):
-            raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:1", phase="invariant", span={"end_byte":1039,"end_column":32,"end_line":51,"start_byte":1012,"start_column":5,"start_line":51}, expected="true", actual="false")
+            raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:1", phase="invariant", span={"end_byte":1187,"end_column":32,"end_line":48,"start_byte":1160,"start_column":5,"start_line":48}, expected="true", actual="false")
+        if not (((self).completion_count >= 0)):
+            raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:2", phase="invariant", span={"end_byte":1228,"end_column":41,"end_line":49,"start_byte":1192,"start_column":5,"start_line":49}, expected="true", actual="false")
 
-    def complete(self: SimpleTask) -> bool:
-        with self._cott_lock:
+    async def complete(self: SimpleTask) -> bool:
+        async with self._cott_lock:
             _cott_old_title = self.title
             _cott_old_urgency = self.urgency
             _cott_old_lifecycle = self.lifecycle
+            _cott_old_completion_count = self.completion_count
             try:
-                _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/SimpleTask/complete.py", "8d8670d9dcc6d1620876221c534dadafae4063a6546c350c4240233de04dad2d", "_cott_impl_SimpleTask_complete", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.SimpleTask.complete")
-                _result = _implementation(self)
-            except CottContractViolation as _error:
-                if _error.symbol is None or _error.symbol == "_cott_load":
-                    _error.symbol = "curriculum.trait_protocol.SimpleTask.complete"
-                if _error.span is None:
-                    _error.span = {"end_byte":1541,"end_column":1,"end_line":74,"start_byte":1397,"start_column":5,"start_line":70}
+                _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/SimpleTask/complete.py", "c2eeca85cc7bc2ee21ef4c92a8cd59a30715ec11af53e613faa70f5d3693f6c5", "_cott_impl_SimpleTask_complete", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.SimpleTask.complete")
+                _result = await _implementation(self)
+            except BaseException as _error:
+                self.title = _cott_validate_abi(self.title, str, path="$.title")
+                self.urgency = _cott_validate_abi(self.urgency, I32, path="$.urgency")
+                self.lifecycle = _cott_validate_abi(self.lifecycle, TaskLifecycle, path="$.lifecycle")
+                self.completion_count = _cott_validate_abi(self.completion_count, I32, path="$.completion_count")
+                if _cott_old_lifecycle is not TaskLifecycle_Pending():
+                    raise CottContractViolation("exceptional resource transition source failed", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="exceptional-transitions", span={"end_byte":1880,"end_column":1,"end_line":77,"start_byte":1598,"start_column":5,"start_line":68}, expected="_cott_old_lifecycle is TaskLifecycle_Pending", actual=repr(_cott_old_lifecycle))
+                if self.lifecycle is not _cott_old_lifecycle and self.lifecycle is not TaskLifecycle_Completed():
+                    raise CottContractViolation("exceptional resource transition target failed", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="exceptional-transitions", span={"end_byte":1880,"end_column":1,"end_line":77,"start_byte":1598,"start_column":5,"start_line":68}, expected="self.lifecycle is old or TaskLifecycle_Completed", actual=repr(self.lifecycle))
+                if self.title is not _cott_old_title:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="exceptional-frame", span={"end_byte":1880,"end_column":1,"end_line":77,"start_byte":1598,"start_column":5,"start_line":68}, expected="self.title unchanged", actual="self.title changed")
+                if self.urgency is not _cott_old_urgency:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="exceptional-frame", span={"end_byte":1880,"end_column":1,"end_line":77,"start_byte":1598,"start_column":5,"start_line":68}, expected="self.urgency unchanged", actual="self.urgency changed")
+                if not ((len((self).title) > 0)):
+                    raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:0", phase="invariant", span={"end_byte":1155,"end_column":33,"end_line":47,"start_byte":1127,"start_column":5,"start_line":47}, expected="true", actual="false")
+                if not (((self).urgency >= 0)):
+                    raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:1", phase="invariant", span={"end_byte":1187,"end_column":32,"end_line":48,"start_byte":1160,"start_column":5,"start_line":48}, expected="true", actual="false")
+                if not (((self).completion_count >= 0)):
+                    raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:2", phase="invariant", span={"end_byte":1228,"end_column":41,"end_line":49,"start_byte":1192,"start_column":5,"start_line":49}, expected="true", actual="false")
+                if isinstance(_error, _asyncio.CancelledError):
+                    raise
+                if isinstance(_error, CottContractViolation):
+                    if _error.symbol is None or _error.symbol == "_cott_load":
+                        _error.symbol = "curriculum.trait_protocol.SimpleTask.complete"
+                    if _error.span is None:
+                        _error.span = {"end_byte":1880,"end_column":1,"end_line":77,"start_byte":1598,"start_column":5,"start_line":68}
+                    raise
+                if isinstance(_error, SystemExit):
+                    raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="implementation-call", span={"end_byte":1880,"end_column":1,"end_line":77,"start_byte":1598,"start_column":5,"start_line":68}, expected="ordinary return", actual="SystemExit") from _error
+                if isinstance(_error, Exception):
+                    raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="implementation-call", span={"end_byte":1880,"end_column":1,"end_line":77,"start_byte":1598,"start_column":5,"start_line":68}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
                 raise
-            except SystemExit as _error:
-                raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="implementation-call", span={"end_byte":1541,"end_column":1,"end_line":74,"start_byte":1397,"start_column":5,"start_line":70}, expected="ordinary return", actual="SystemExit") from _error
-            except Exception as _error:
-                raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="implementation-call", span={"end_byte":1541,"end_column":1,"end_line":74,"start_byte":1397,"start_column":5,"start_line":70}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
             _result = _cott_validate_abi(_result, bool, path="$.return")
             self.title = _cott_validate_abi(self.title, str, path="$.title")
             self.urgency = _cott_validate_abi(self.urgency, I32, path="$.urgency")
             self.lifecycle = _cott_validate_abi(self.lifecycle, TaskLifecycle, path="$.lifecycle")
+            self.completion_count = _cott_validate_abi(self.completion_count, I32, path="$.completion_count")
             if _cott_old_lifecycle is not TaskLifecycle_Pending():
-                raise CottContractViolation("resource transition source failed", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="transitions", span={"end_byte":1541,"end_column":1,"end_line":74,"start_byte":1397,"start_column":5,"start_line":70}, expected="self.lifecycle is TaskLifecycle_Pending", actual=repr(_cott_old_lifecycle))
+                raise CottContractViolation("resource transition source failed", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="transitions", span={"end_byte":1880,"end_column":1,"end_line":77,"start_byte":1598,"start_column":5,"start_line":68}, expected="self.lifecycle is TaskLifecycle_Pending", actual=repr(_cott_old_lifecycle))
             if self.lifecycle is not TaskLifecycle_Completed():
-                raise CottContractViolation("resource transition target failed", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="transitions", span={"end_byte":1541,"end_column":1,"end_line":74,"start_byte":1397,"start_column":5,"start_line":70}, expected="self.lifecycle is TaskLifecycle_Completed", actual=repr(self.lifecycle))
+                raise CottContractViolation("resource transition target failed", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="transitions", span={"end_byte":1880,"end_column":1,"end_line":77,"start_byte":1598,"start_column":5,"start_line":68}, expected="self.lifecycle is TaskLifecycle_Completed", actual=repr(self.lifecycle))
             if self.title is not _cott_old_title:
-                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="modifies", span={"end_byte":1541,"end_column":1,"end_line":74,"start_byte":1397,"start_column":5,"start_line":70}, expected="self.title unchanged", actual="self.title changed")
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="modifies", span={"end_byte":1880,"end_column":1,"end_line":77,"start_byte":1598,"start_column":5,"start_line":68}, expected="self.title unchanged", actual="self.title changed")
             if self.urgency is not _cott_old_urgency:
-                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="modifies", span={"end_byte":1541,"end_column":1,"end_line":74,"start_byte":1397,"start_column":5,"start_line":70}, expected="self.urgency unchanged", actual="self.urgency changed")
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.complete", phase="modifies", span={"end_byte":1880,"end_column":1,"end_line":77,"start_byte":1598,"start_column":5,"start_line":68}, expected="self.urgency unchanged", actual="self.urgency changed")
             if not ((_result == True)):
-                raise CottContractViolation("ensures clause failed", symbol="curriculum.trait_protocol.SimpleTask.complete", clause="ensures:1", phase="ensures", span={"end_byte":1540,"end_column":31,"end_line":73,"start_byte":1518,"start_column":9,"start_line":73}, expected="true", actual="false")
+                raise CottContractViolation("ensures clause failed", symbol="curriculum.trait_protocol.SimpleTask.complete", clause="ensures:2", phase="ensures", span={"end_byte":1787,"end_column":31,"end_line":73,"start_byte":1765,"start_column":9,"start_line":73}, expected="true", actual="false")
+            if not (((_cott_old_completion_count + 1) == (self).completion_count)):
+                raise CottContractViolation("ensures clause failed", symbol="curriculum.trait_protocol.SimpleTask.complete", clause="ensures:3", phase="ensures", span={"end_byte":1859,"end_column":72,"end_line":74,"start_byte":1796,"start_column":9,"start_line":74}, expected="true", actual="false")
             if not ((len((self).title) > 0)):
-                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:0", phase="invariant", span={"end_byte":1007,"end_column":33,"end_line":50,"start_byte":979,"start_column":5,"start_line":50}, expected="true", actual="false")
+                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:0", phase="invariant", span={"end_byte":1155,"end_column":33,"end_line":47,"start_byte":1127,"start_column":5,"start_line":47}, expected="true", actual="false")
             if not (((self).urgency >= 0)):
-                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:1", phase="invariant", span={"end_byte":1039,"end_column":32,"end_line":51,"start_byte":1012,"start_column":5,"start_line":51}, expected="true", actual="false")
+                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:1", phase="invariant", span={"end_byte":1187,"end_column":32,"end_line":48,"start_byte":1160,"start_column":5,"start_line":48}, expected="true", actual="false")
+            if not (((self).completion_count >= 0)):
+                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:2", phase="invariant", span={"end_byte":1228,"end_column":41,"end_line":49,"start_byte":1192,"start_column":5,"start_line":49}, expected="true", actual="false")
             _result = _cott_wrap_async_protocol(_result, bool, path="$.return", validator=_cott_validate_abi)
             return _result
 
-    def priority_level(self: SimpleTask) -> I32:
-        with self._cott_lock:
+    async def priority_level(self: SimpleTask) -> I32:
+        async with self._cott_lock:
             _cott_old_title = self.title
             _cott_old_urgency = self.urgency
             _cott_old_lifecycle = self.lifecycle
+            _cott_old_completion_count = self.completion_count
             try:
-                _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/SimpleTask/priority_level.py", "92bf43065b798d4d42e429f7acee7e21a80dbc4401a2f8af266a983290c53e5a", "_cott_impl_SimpleTask_priority_level", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.SimpleTask.priority_level")
-                _result = _implementation(self)
-            except CottContractViolation as _error:
-                if _error.symbol is None or _error.symbol == "_cott_load":
-                    _error.symbol = "curriculum.trait_protocol.SimpleTask.priority_level"
-                if _error.span is None:
-                    _error.span = {"end_byte":1397,"end_column":5,"end_line":70,"start_byte":1301,"start_column":5,"start_line":65}
+                _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/SimpleTask/priority_level.py", "c602f09d3f61a255dfd819dc2c15a6dd0bd89e9fb69277717f9ccaa57259f0be", "_cott_impl_SimpleTask_priority_level", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.SimpleTask.priority_level")
+                _result = await _implementation(self)
+            except BaseException as _error:
+                self.title = _cott_validate_abi(self.title, str, path="$.title")
+                self.urgency = _cott_validate_abi(self.urgency, I32, path="$.urgency")
+                self.lifecycle = _cott_validate_abi(self.lifecycle, TaskLifecycle, path="$.lifecycle")
+                self.completion_count = _cott_validate_abi(self.completion_count, I32, path="$.completion_count")
+                if self.title is not _cott_old_title:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.priority_level", phase="exceptional-frame", span={"end_byte":1598,"end_column":5,"end_line":68,"start_byte":1496,"start_column":5,"start_line":63}, expected="self.title unchanged", actual="self.title changed")
+                if self.urgency is not _cott_old_urgency:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.priority_level", phase="exceptional-frame", span={"end_byte":1598,"end_column":5,"end_line":68,"start_byte":1496,"start_column":5,"start_line":63}, expected="self.urgency unchanged", actual="self.urgency changed")
+                if self.lifecycle is not _cott_old_lifecycle:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.priority_level", phase="exceptional-frame", span={"end_byte":1598,"end_column":5,"end_line":68,"start_byte":1496,"start_column":5,"start_line":63}, expected="self.lifecycle unchanged", actual="self.lifecycle changed")
+                if self.completion_count is not _cott_old_completion_count:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.priority_level", phase="exceptional-frame", span={"end_byte":1598,"end_column":5,"end_line":68,"start_byte":1496,"start_column":5,"start_line":63}, expected="self.completion_count unchanged", actual="self.completion_count changed")
+                if not ((len((self).title) > 0)):
+                    raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:0", phase="invariant", span={"end_byte":1155,"end_column":33,"end_line":47,"start_byte":1127,"start_column":5,"start_line":47}, expected="true", actual="false")
+                if not (((self).urgency >= 0)):
+                    raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:1", phase="invariant", span={"end_byte":1187,"end_column":32,"end_line":48,"start_byte":1160,"start_column":5,"start_line":48}, expected="true", actual="false")
+                if not (((self).completion_count >= 0)):
+                    raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:2", phase="invariant", span={"end_byte":1228,"end_column":41,"end_line":49,"start_byte":1192,"start_column":5,"start_line":49}, expected="true", actual="false")
+                if isinstance(_error, _asyncio.CancelledError):
+                    raise
+                if isinstance(_error, CottContractViolation):
+                    if _error.symbol is None or _error.symbol == "_cott_load":
+                        _error.symbol = "curriculum.trait_protocol.SimpleTask.priority_level"
+                    if _error.span is None:
+                        _error.span = {"end_byte":1598,"end_column":5,"end_line":68,"start_byte":1496,"start_column":5,"start_line":63}
+                    raise
+                if isinstance(_error, SystemExit):
+                    raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.trait_protocol.SimpleTask.priority_level", phase="implementation-call", span={"end_byte":1598,"end_column":5,"end_line":68,"start_byte":1496,"start_column":5,"start_line":63}, expected="ordinary return", actual="SystemExit") from _error
+                if isinstance(_error, Exception):
+                    raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.trait_protocol.SimpleTask.priority_level", phase="implementation-call", span={"end_byte":1598,"end_column":5,"end_line":68,"start_byte":1496,"start_column":5,"start_line":63}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
                 raise
-            except SystemExit as _error:
-                raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.trait_protocol.SimpleTask.priority_level", phase="implementation-call", span={"end_byte":1397,"end_column":5,"end_line":70,"start_byte":1301,"start_column":5,"start_line":65}, expected="ordinary return", actual="SystemExit") from _error
-            except Exception as _error:
-                raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.trait_protocol.SimpleTask.priority_level", phase="implementation-call", span={"end_byte":1397,"end_column":5,"end_line":70,"start_byte":1301,"start_column":5,"start_line":65}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
             _result = _cott_validate_abi(_result, I32, path="$.return")
             self.title = _cott_validate_abi(self.title, str, path="$.title")
             self.urgency = _cott_validate_abi(self.urgency, I32, path="$.urgency")
             self.lifecycle = _cott_validate_abi(self.lifecycle, TaskLifecycle, path="$.lifecycle")
+            self.completion_count = _cott_validate_abi(self.completion_count, I32, path="$.completion_count")
             if self.title is not _cott_old_title:
-                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.priority_level", phase="modifies", span={"end_byte":1397,"end_column":5,"end_line":70,"start_byte":1301,"start_column":5,"start_line":65}, expected="self.title unchanged", actual="self.title changed")
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.priority_level", phase="modifies", span={"end_byte":1598,"end_column":5,"end_line":68,"start_byte":1496,"start_column":5,"start_line":63}, expected="self.title unchanged", actual="self.title changed")
             if self.urgency is not _cott_old_urgency:
-                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.priority_level", phase="modifies", span={"end_byte":1397,"end_column":5,"end_line":70,"start_byte":1301,"start_column":5,"start_line":65}, expected="self.urgency unchanged", actual="self.urgency changed")
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.priority_level", phase="modifies", span={"end_byte":1598,"end_column":5,"end_line":68,"start_byte":1496,"start_column":5,"start_line":63}, expected="self.urgency unchanged", actual="self.urgency changed")
             if self.lifecycle is not _cott_old_lifecycle:
-                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.priority_level", phase="modifies", span={"end_byte":1397,"end_column":5,"end_line":70,"start_byte":1301,"start_column":5,"start_line":65}, expected="self.lifecycle unchanged", actual="self.lifecycle changed")
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.priority_level", phase="modifies", span={"end_byte":1598,"end_column":5,"end_line":68,"start_byte":1496,"start_column":5,"start_line":63}, expected="self.lifecycle unchanged", actual="self.lifecycle changed")
+            if self.completion_count is not _cott_old_completion_count:
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.priority_level", phase="modifies", span={"end_byte":1598,"end_column":5,"end_line":68,"start_byte":1496,"start_column":5,"start_line":63}, expected="self.completion_count unchanged", actual="self.completion_count changed")
             if not ((_result == (self).urgency)):
-                raise CottContractViolation("ensures clause failed", symbol="curriculum.trait_protocol.SimpleTask.priority_level", clause="ensures:0", phase="ensures", span={"end_byte":1371,"end_column":39,"end_line":66,"start_byte":1341,"start_column":9,"start_line":66}, expected="true", actual="false")
+                raise CottContractViolation("ensures clause failed", symbol="curriculum.trait_protocol.SimpleTask.priority_level", clause="ensures:0", phase="ensures", span={"end_byte":1572,"end_column":39,"end_line":64,"start_byte":1542,"start_column":9,"start_line":64}, expected="true", actual="false")
             if not ((len((self).title) > 0)):
-                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:0", phase="invariant", span={"end_byte":1007,"end_column":33,"end_line":50,"start_byte":979,"start_column":5,"start_line":50}, expected="true", actual="false")
+                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:0", phase="invariant", span={"end_byte":1155,"end_column":33,"end_line":47,"start_byte":1127,"start_column":5,"start_line":47}, expected="true", actual="false")
             if not (((self).urgency >= 0)):
-                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:1", phase="invariant", span={"end_byte":1039,"end_column":32,"end_line":51,"start_byte":1012,"start_column":5,"start_line":51}, expected="true", actual="false")
+                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:1", phase="invariant", span={"end_byte":1187,"end_column":32,"end_line":48,"start_byte":1160,"start_column":5,"start_line":48}, expected="true", actual="false")
+            if not (((self).completion_count >= 0)):
+                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:2", phase="invariant", span={"end_byte":1228,"end_column":41,"end_line":49,"start_byte":1192,"start_column":5,"start_line":49}, expected="true", actual="false")
             _result = _cott_wrap_async_protocol(_result, I32, path="$.return", validator=_cott_validate_abi)
             return _result
 
-    def summary(self: SimpleTask) -> str:
-        with self._cott_lock:
+    async def summary(self: SimpleTask) -> str:
+        async with self._cott_lock:
             _cott_old_title = self.title
             _cott_old_urgency = self.urgency
             _cott_old_lifecycle = self.lifecycle
+            _cott_old_completion_count = self.completion_count
             try:
-                _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/SimpleTask/summary.py", "69f34fe32008918eea69c5e761cf85f2fc66436d2aba6c6078ae33f22b0d47b8", "_cott_impl_SimpleTask_summary", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.SimpleTask.summary")
-                _result = _implementation(self)
-            except CottContractViolation as _error:
-                if _error.symbol is None or _error.symbol == "_cott_load":
-                    _error.symbol = "curriculum.trait_protocol.SimpleTask.summary"
-                if _error.span is None:
-                    _error.span = {"end_byte":1301,"end_column":5,"end_line":65,"start_byte":1220,"start_column":5,"start_line":60}
+                _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/SimpleTask/summary.py", "32cd3a679cf07989bd53e30b092110359ce4f02e8f8964b3dfd2198134d32c96", "_cott_impl_SimpleTask_summary", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.SimpleTask.summary")
+                _result = await _implementation(self)
+            except BaseException as _error:
+                self.title = _cott_validate_abi(self.title, str, path="$.title")
+                self.urgency = _cott_validate_abi(self.urgency, I32, path="$.urgency")
+                self.lifecycle = _cott_validate_abi(self.lifecycle, TaskLifecycle, path="$.lifecycle")
+                self.completion_count = _cott_validate_abi(self.completion_count, I32, path="$.completion_count")
+                if self.title is not _cott_old_title:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.summary", phase="exceptional-frame", span={"end_byte":1496,"end_column":5,"end_line":63,"start_byte":1409,"start_column":5,"start_line":58}, expected="self.title unchanged", actual="self.title changed")
+                if self.urgency is not _cott_old_urgency:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.summary", phase="exceptional-frame", span={"end_byte":1496,"end_column":5,"end_line":63,"start_byte":1409,"start_column":5,"start_line":58}, expected="self.urgency unchanged", actual="self.urgency changed")
+                if self.lifecycle is not _cott_old_lifecycle:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.summary", phase="exceptional-frame", span={"end_byte":1496,"end_column":5,"end_line":63,"start_byte":1409,"start_column":5,"start_line":58}, expected="self.lifecycle unchanged", actual="self.lifecycle changed")
+                if self.completion_count is not _cott_old_completion_count:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.summary", phase="exceptional-frame", span={"end_byte":1496,"end_column":5,"end_line":63,"start_byte":1409,"start_column":5,"start_line":58}, expected="self.completion_count unchanged", actual="self.completion_count changed")
+                if not ((len((self).title) > 0)):
+                    raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:0", phase="invariant", span={"end_byte":1155,"end_column":33,"end_line":47,"start_byte":1127,"start_column":5,"start_line":47}, expected="true", actual="false")
+                if not (((self).urgency >= 0)):
+                    raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:1", phase="invariant", span={"end_byte":1187,"end_column":32,"end_line":48,"start_byte":1160,"start_column":5,"start_line":48}, expected="true", actual="false")
+                if not (((self).completion_count >= 0)):
+                    raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:2", phase="invariant", span={"end_byte":1228,"end_column":41,"end_line":49,"start_byte":1192,"start_column":5,"start_line":49}, expected="true", actual="false")
+                if isinstance(_error, _asyncio.CancelledError):
+                    raise
+                if isinstance(_error, CottContractViolation):
+                    if _error.symbol is None or _error.symbol == "_cott_load":
+                        _error.symbol = "curriculum.trait_protocol.SimpleTask.summary"
+                    if _error.span is None:
+                        _error.span = {"end_byte":1496,"end_column":5,"end_line":63,"start_byte":1409,"start_column":5,"start_line":58}
+                    raise
+                if isinstance(_error, SystemExit):
+                    raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.trait_protocol.SimpleTask.summary", phase="implementation-call", span={"end_byte":1496,"end_column":5,"end_line":63,"start_byte":1409,"start_column":5,"start_line":58}, expected="ordinary return", actual="SystemExit") from _error
+                if isinstance(_error, Exception):
+                    raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.trait_protocol.SimpleTask.summary", phase="implementation-call", span={"end_byte":1496,"end_column":5,"end_line":63,"start_byte":1409,"start_column":5,"start_line":58}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
                 raise
-            except SystemExit as _error:
-                raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.trait_protocol.SimpleTask.summary", phase="implementation-call", span={"end_byte":1301,"end_column":5,"end_line":65,"start_byte":1220,"start_column":5,"start_line":60}, expected="ordinary return", actual="SystemExit") from _error
-            except Exception as _error:
-                raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.trait_protocol.SimpleTask.summary", phase="implementation-call", span={"end_byte":1301,"end_column":5,"end_line":65,"start_byte":1220,"start_column":5,"start_line":60}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
             _result = _cott_validate_abi(_result, str, path="$.return")
             self.title = _cott_validate_abi(self.title, str, path="$.title")
             self.urgency = _cott_validate_abi(self.urgency, I32, path="$.urgency")
             self.lifecycle = _cott_validate_abi(self.lifecycle, TaskLifecycle, path="$.lifecycle")
+            self.completion_count = _cott_validate_abi(self.completion_count, I32, path="$.completion_count")
             if self.title is not _cott_old_title:
-                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.summary", phase="modifies", span={"end_byte":1301,"end_column":5,"end_line":65,"start_byte":1220,"start_column":5,"start_line":60}, expected="self.title unchanged", actual="self.title changed")
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.summary", phase="modifies", span={"end_byte":1496,"end_column":5,"end_line":63,"start_byte":1409,"start_column":5,"start_line":58}, expected="self.title unchanged", actual="self.title changed")
             if self.urgency is not _cott_old_urgency:
-                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.summary", phase="modifies", span={"end_byte":1301,"end_column":5,"end_line":65,"start_byte":1220,"start_column":5,"start_line":60}, expected="self.urgency unchanged", actual="self.urgency changed")
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.summary", phase="modifies", span={"end_byte":1496,"end_column":5,"end_line":63,"start_byte":1409,"start_column":5,"start_line":58}, expected="self.urgency unchanged", actual="self.urgency changed")
             if self.lifecycle is not _cott_old_lifecycle:
-                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.summary", phase="modifies", span={"end_byte":1301,"end_column":5,"end_line":65,"start_byte":1220,"start_column":5,"start_line":60}, expected="self.lifecycle unchanged", actual="self.lifecycle changed")
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.summary", phase="modifies", span={"end_byte":1496,"end_column":5,"end_line":63,"start_byte":1409,"start_column":5,"start_line":58}, expected="self.lifecycle unchanged", actual="self.lifecycle changed")
+            if self.completion_count is not _cott_old_completion_count:
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.summary", phase="modifies", span={"end_byte":1496,"end_column":5,"end_line":63,"start_byte":1409,"start_column":5,"start_line":58}, expected="self.completion_count unchanged", actual="self.completion_count changed")
             if not ((len(_result) > 0)):
-                raise CottContractViolation("ensures clause failed", symbol="curriculum.trait_protocol.SimpleTask.summary", clause="ensures:0", phase="ensures", span={"end_byte":1275,"end_column":31,"end_line":61,"start_byte":1253,"start_column":9,"start_line":61}, expected="true", actual="false")
+                raise CottContractViolation("ensures clause failed", symbol="curriculum.trait_protocol.SimpleTask.summary", clause="ensures:0", phase="ensures", span={"end_byte":1470,"end_column":31,"end_line":59,"start_byte":1448,"start_column":9,"start_line":59}, expected="true", actual="false")
             if not ((len((self).title) > 0)):
-                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:0", phase="invariant", span={"end_byte":1007,"end_column":33,"end_line":50,"start_byte":979,"start_column":5,"start_line":50}, expected="true", actual="false")
+                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:0", phase="invariant", span={"end_byte":1155,"end_column":33,"end_line":47,"start_byte":1127,"start_column":5,"start_line":47}, expected="true", actual="false")
             if not (((self).urgency >= 0)):
-                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:1", phase="invariant", span={"end_byte":1039,"end_column":32,"end_line":51,"start_byte":1012,"start_column":5,"start_line":51}, expected="true", actual="false")
+                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:1", phase="invariant", span={"end_byte":1187,"end_column":32,"end_line":48,"start_byte":1160,"start_column":5,"start_line":48}, expected="true", actual="false")
+            if not (((self).completion_count >= 0)):
+                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:2", phase="invariant", span={"end_byte":1228,"end_column":41,"end_line":49,"start_byte":1192,"start_column":5,"start_line":49}, expected="true", actual="false")
             _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
             return _result
 
-__all__ = ["Completable", "Prioritizable", "SimpleTask", "Summarizable", "TaskLifecycle", "TaskLifecycle_Completed", "TaskLifecycle_Pending", "TaskView", "format_summary", "inspect_dyn", "inspect_task"]
+    async def category(self: SimpleTask) -> str:
+        async with self._cott_lock:
+            _cott_old_title = self.title
+            _cott_old_urgency = self.urgency
+            _cott_old_lifecycle = self.lifecycle
+            _cott_old_completion_count = self.completion_count
+            try:
+                _result = await _cott_default_SimpleTask_category(self)
+            except BaseException as _error:
+                self.title = _cott_validate_abi(self.title, str, path="$.title")
+                self.urgency = _cott_validate_abi(self.urgency, I32, path="$.urgency")
+                self.lifecycle = _cott_validate_abi(self.lifecycle, TaskLifecycle, path="$.lifecycle")
+                self.completion_count = _cott_validate_abi(self.completion_count, I32, path="$.completion_count")
+                if self.title is not _cott_old_title:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.category", phase="exceptional-frame", span={"end_byte":350,"end_column":80,"end_line":12,"start_byte":275,"start_column":5,"start_line":12}, expected="self.title unchanged", actual="self.title changed")
+                if self.urgency is not _cott_old_urgency:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.category", phase="exceptional-frame", span={"end_byte":350,"end_column":80,"end_line":12,"start_byte":275,"start_column":5,"start_line":12}, expected="self.urgency unchanged", actual="self.urgency changed")
+                if self.lifecycle is not _cott_old_lifecycle:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.category", phase="exceptional-frame", span={"end_byte":350,"end_column":80,"end_line":12,"start_byte":275,"start_column":5,"start_line":12}, expected="self.lifecycle unchanged", actual="self.lifecycle changed")
+                if self.completion_count is not _cott_old_completion_count:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.category", phase="exceptional-frame", span={"end_byte":350,"end_column":80,"end_line":12,"start_byte":275,"start_column":5,"start_line":12}, expected="self.completion_count unchanged", actual="self.completion_count changed")
+                if not ((len((self).title) > 0)):
+                    raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:0", phase="invariant", span={"end_byte":1155,"end_column":33,"end_line":47,"start_byte":1127,"start_column":5,"start_line":47}, expected="true", actual="false")
+                if not (((self).urgency >= 0)):
+                    raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:1", phase="invariant", span={"end_byte":1187,"end_column":32,"end_line":48,"start_byte":1160,"start_column":5,"start_line":48}, expected="true", actual="false")
+                if not (((self).completion_count >= 0)):
+                    raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:2", phase="invariant", span={"end_byte":1228,"end_column":41,"end_line":49,"start_byte":1192,"start_column":5,"start_line":49}, expected="true", actual="false")
+                if isinstance(_error, _asyncio.CancelledError):
+                    raise
+                if isinstance(_error, CottContractViolation):
+                    if _error.symbol is None or _error.symbol == "_cott_load":
+                        _error.symbol = "curriculum.trait_protocol.SimpleTask.category"
+                    if _error.span is None:
+                        _error.span = {"end_byte":350,"end_column":80,"end_line":12,"start_byte":275,"start_column":5,"start_line":12}
+                    raise
+                if isinstance(_error, SystemExit):
+                    raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.trait_protocol.SimpleTask.category", phase="implementation-call", span={"end_byte":350,"end_column":80,"end_line":12,"start_byte":275,"start_column":5,"start_line":12}, expected="ordinary return", actual="SystemExit") from _error
+                if isinstance(_error, Exception):
+                    raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.trait_protocol.SimpleTask.category", phase="implementation-call", span={"end_byte":350,"end_column":80,"end_line":12,"start_byte":275,"start_column":5,"start_line":12}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+                raise
+            _result = _cott_validate_abi(_result, str, path="$.return")
+            self.title = _cott_validate_abi(self.title, str, path="$.title")
+            self.urgency = _cott_validate_abi(self.urgency, I32, path="$.urgency")
+            self.lifecycle = _cott_validate_abi(self.lifecycle, TaskLifecycle, path="$.lifecycle")
+            self.completion_count = _cott_validate_abi(self.completion_count, I32, path="$.completion_count")
+            if self.title is not _cott_old_title:
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.category", phase="modifies", span={"end_byte":350,"end_column":80,"end_line":12,"start_byte":275,"start_column":5,"start_line":12}, expected="self.title unchanged", actual="self.title changed")
+            if self.urgency is not _cott_old_urgency:
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.category", phase="modifies", span={"end_byte":350,"end_column":80,"end_line":12,"start_byte":275,"start_column":5,"start_line":12}, expected="self.urgency unchanged", actual="self.urgency changed")
+            if self.lifecycle is not _cott_old_lifecycle:
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.category", phase="modifies", span={"end_byte":350,"end_column":80,"end_line":12,"start_byte":275,"start_column":5,"start_line":12}, expected="self.lifecycle unchanged", actual="self.lifecycle changed")
+            if self.completion_count is not _cott_old_completion_count:
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.category", phase="modifies", span={"end_byte":350,"end_column":80,"end_line":12,"start_byte":275,"start_column":5,"start_line":12}, expected="self.completion_count unchanged", actual="self.completion_count changed")
+            if not ((len((self).title) > 0)):
+                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:0", phase="invariant", span={"end_byte":1155,"end_column":33,"end_line":47,"start_byte":1127,"start_column":5,"start_line":47}, expected="true", actual="false")
+            if not (((self).urgency >= 0)):
+                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:1", phase="invariant", span={"end_byte":1187,"end_column":32,"end_line":48,"start_byte":1160,"start_column":5,"start_line":48}, expected="true", actual="false")
+            if not (((self).completion_count >= 0)):
+                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:2", phase="invariant", span={"end_byte":1228,"end_column":41,"end_line":49,"start_byte":1192,"start_column":5,"start_line":49}, expected="true", actual="false")
+            _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
+            return _result
+
+    async def display(self: SimpleTask) -> str:
+        async with self._cott_lock:
+            _cott_old_title = self.title
+            _cott_old_urgency = self.urgency
+            _cott_old_lifecycle = self.lifecycle
+            _cott_old_completion_count = self.completion_count
+            try:
+                _result = await _cott_default_SimpleTask_display(self)
+            except BaseException as _error:
+                self.title = _cott_validate_abi(self.title, str, path="$.title")
+                self.urgency = _cott_validate_abi(self.urgency, I32, path="$.urgency")
+                self.lifecycle = _cott_validate_abi(self.lifecycle, TaskLifecycle, path="$.lifecycle")
+                self.completion_count = _cott_validate_abi(self.completion_count, I32, path="$.completion_count")
+                if self.title is not _cott_old_title:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.display", phase="exceptional-frame", span={"end_byte":270,"end_column":32,"end_line":11,"start_byte":243,"start_column":5,"start_line":11}, expected="self.title unchanged", actual="self.title changed")
+                if self.urgency is not _cott_old_urgency:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.display", phase="exceptional-frame", span={"end_byte":270,"end_column":32,"end_line":11,"start_byte":243,"start_column":5,"start_line":11}, expected="self.urgency unchanged", actual="self.urgency changed")
+                if self.lifecycle is not _cott_old_lifecycle:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.display", phase="exceptional-frame", span={"end_byte":270,"end_column":32,"end_line":11,"start_byte":243,"start_column":5,"start_line":11}, expected="self.lifecycle unchanged", actual="self.lifecycle changed")
+                if self.completion_count is not _cott_old_completion_count:
+                    raise CottContractViolation("exceptional frame clause failed", symbol="curriculum.trait_protocol.SimpleTask.display", phase="exceptional-frame", span={"end_byte":270,"end_column":32,"end_line":11,"start_byte":243,"start_column":5,"start_line":11}, expected="self.completion_count unchanged", actual="self.completion_count changed")
+                if not ((len((self).title) > 0)):
+                    raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:0", phase="invariant", span={"end_byte":1155,"end_column":33,"end_line":47,"start_byte":1127,"start_column":5,"start_line":47}, expected="true", actual="false")
+                if not (((self).urgency >= 0)):
+                    raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:1", phase="invariant", span={"end_byte":1187,"end_column":32,"end_line":48,"start_byte":1160,"start_column":5,"start_line":48}, expected="true", actual="false")
+                if not (((self).completion_count >= 0)):
+                    raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:2", phase="invariant", span={"end_byte":1228,"end_column":41,"end_line":49,"start_byte":1192,"start_column":5,"start_line":49}, expected="true", actual="false")
+                if isinstance(_error, _asyncio.CancelledError):
+                    raise
+                if isinstance(_error, CottContractViolation):
+                    if _error.symbol is None or _error.symbol == "_cott_load":
+                        _error.symbol = "curriculum.trait_protocol.SimpleTask.display"
+                    if _error.span is None:
+                        _error.span = {"end_byte":270,"end_column":32,"end_line":11,"start_byte":243,"start_column":5,"start_line":11}
+                    raise
+                if isinstance(_error, SystemExit):
+                    raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.trait_protocol.SimpleTask.display", phase="implementation-call", span={"end_byte":270,"end_column":32,"end_line":11,"start_byte":243,"start_column":5,"start_line":11}, expected="ordinary return", actual="SystemExit") from _error
+                if isinstance(_error, Exception):
+                    raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.trait_protocol.SimpleTask.display", phase="implementation-call", span={"end_byte":270,"end_column":32,"end_line":11,"start_byte":243,"start_column":5,"start_line":11}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+                raise
+            _result = _cott_validate_abi(_result, str, path="$.return")
+            self.title = _cott_validate_abi(self.title, str, path="$.title")
+            self.urgency = _cott_validate_abi(self.urgency, I32, path="$.urgency")
+            self.lifecycle = _cott_validate_abi(self.lifecycle, TaskLifecycle, path="$.lifecycle")
+            self.completion_count = _cott_validate_abi(self.completion_count, I32, path="$.completion_count")
+            if self.title is not _cott_old_title:
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.display", phase="modifies", span={"end_byte":270,"end_column":32,"end_line":11,"start_byte":243,"start_column":5,"start_line":11}, expected="self.title unchanged", actual="self.title changed")
+            if self.urgency is not _cott_old_urgency:
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.display", phase="modifies", span={"end_byte":270,"end_column":32,"end_line":11,"start_byte":243,"start_column":5,"start_line":11}, expected="self.urgency unchanged", actual="self.urgency changed")
+            if self.lifecycle is not _cott_old_lifecycle:
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.display", phase="modifies", span={"end_byte":270,"end_column":32,"end_line":11,"start_byte":243,"start_column":5,"start_line":11}, expected="self.lifecycle unchanged", actual="self.lifecycle changed")
+            if self.completion_count is not _cott_old_completion_count:
+                raise CottContractViolation("modifies clause failed", symbol="curriculum.trait_protocol.SimpleTask.display", phase="modifies", span={"end_byte":270,"end_column":32,"end_line":11,"start_byte":243,"start_column":5,"start_line":11}, expected="self.completion_count unchanged", actual="self.completion_count changed")
+            if not ((len((self).title) > 0)):
+                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:0", phase="invariant", span={"end_byte":1155,"end_column":33,"end_line":47,"start_byte":1127,"start_column":5,"start_line":47}, expected="true", actual="false")
+            if not (((self).urgency >= 0)):
+                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:1", phase="invariant", span={"end_byte":1187,"end_column":32,"end_line":48,"start_byte":1160,"start_column":5,"start_line":48}, expected="true", actual="false")
+            if not (((self).completion_count >= 0)):
+                raise CottContractViolation("invariant failed", symbol="curriculum.trait_protocol.SimpleTask", clause="invariant:2", phase="invariant", span={"end_byte":1228,"end_column":41,"end_line":49,"start_byte":1192,"start_column":5,"start_line":49}, expected="true", actual="false")
+            _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
+            return _result
+
+__all__ = ["Completable", "Prioritizable", "SimpleTask", "Summarizable", "TaskLifecycle", "TaskLifecycle_Completed", "TaskLifecycle_Pending", "TaskView", "default_category", "inspect_dyn", "specialized_display", "task_factory"]

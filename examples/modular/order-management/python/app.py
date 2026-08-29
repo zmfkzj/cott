@@ -1,8 +1,6 @@
-from cott_runtime import CottList, Err, Ok, U32, U64
-from store.catalog import find_item
-from store.catalog_types import Catalog, Item
-from store.order import calculate_order
-from store.order_types import Order, OrderLine
+from cott_runtime import CottList, Ok, U32, U64
+from store.catalog import Catalog, Item, find_item
+from store.order import Order, OrderLine, calculate_order
 
 
 def main() -> None:

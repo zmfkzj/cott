@@ -1,0 +1,2 @@
+For `_cott_impl_SimpleTask_complete` only, follow the generated prompt's async helper shape and its exact annotations and imports.
+Assign `self.lifecycle = TaskLifecycle_Completed()` using `TaskLifecycle_Completed` imported from `curriculum.trait_protocol_types`, increment `self.completion_count` exactly once, then return `True`.

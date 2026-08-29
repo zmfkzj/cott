@@ -31,7 +31,7 @@ ordinary F64 rounding and underflow are retained."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/portfolio_cost/calculate_portfolio_cost.py", "f10195afdca19baa480cc5fea1cfb0a4bbca07062ecef742bc236306118f11ac", "calculate_portfolio_cost", expected_project_name="portfolio-cost", expected_cott_symbol="curriculum.portfolio_cost.calculate_portfolio_cost")
+        _implementation = _cott_load("_cott_impl/curriculum/portfolio_cost/calculate_portfolio_cost.py", "1912be591cc10f05d318f71d66ccd833efef219ca56b22abb873f2d3292a2623", "calculate_portfolio_cost", expected_project_name="portfolio-cost", expected_cott_symbol="curriculum.portfolio_cost.calculate_portfolio_cost")
         _result = _implementation(rows)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

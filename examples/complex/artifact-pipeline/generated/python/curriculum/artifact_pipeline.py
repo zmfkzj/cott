@@ -20,25 +20,25 @@ errors. Ready steps are ordered lexicographically."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/artifact_pipeline/topologically_order_steps.py", "75cd641bcc9533d75efed41bd2c8b2c4fd8040aed0ace98727cce9ac8e77da7c", "topologically_order_steps", expected_project_name="artifact-pipeline", expected_cott_symbol="curriculum.artifact_pipeline.topologically_order_steps")
+        _implementation = _cott_load("_cott_impl/curriculum/artifact_pipeline/topologically_order_steps.py", "bd63d2d9e07f1cb2d4b5180716014b3ff4deda3f0eeed2eac21fa5e38e3a2ae0", "topologically_order_steps", expected_project_name="artifact-pipeline", expected_cott_symbol="curriculum.artifact_pipeline.topologically_order_steps")
         _result = _implementation(steps)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.artifact_pipeline.topologically_order_steps"
         if _error.span is None:
-            _error.span = {"end_byte":953,"end_column":1,"end_line":37,"start_byte":303,"start_column":1,"start_line":20}
+            _error.span = {"end_byte":952,"end_column":1,"end_line":37,"start_byte":302,"start_column":1,"start_line":20}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.artifact_pipeline.topologically_order_steps", phase="implementation-call", span={"end_byte":953,"end_column":1,"end_line":37,"start_byte":303,"start_column":1,"start_line":20}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.artifact_pipeline.topologically_order_steps", phase="implementation-call", span={"end_byte":952,"end_column":1,"end_line":37,"start_byte":302,"start_column":1,"start_line":20}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.artifact_pipeline.topologically_order_steps", phase="implementation-call", span={"end_byte":953,"end_column":1,"end_line":37,"start_byte":303,"start_column":1,"start_line":20}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.artifact_pipeline.topologically_order_steps", phase="implementation-call", span={"end_byte":952,"end_column":1,"end_line":37,"start_byte":302,"start_column":1,"start_line":20}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[str], ArtifactPipelineError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="curriculum.artifact_pipeline.topologically_order_steps", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (ArtifactPipelineError_BlankStepName, ArtifactPipelineError_DuplicateStep, ArtifactPipelineError_UnknownDependency, ArtifactPipelineError_SelfDependency, ArtifactPipelineError_Cycle,):
-            raise CottContractViolation("returned error is not allowed", symbol="curriculum.artifact_pipeline.topologically_order_steps", phase="error", span={"end_byte":953,"end_column":1,"end_line":37,"start_byte":303,"start_column":1,"start_line":20}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="curriculum.artifact_pipeline.topologically_order_steps", phase="error", span={"end_byte":952,"end_column":1,"end_line":37,"start_byte":302,"start_column":1,"start_line":20}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.artifact_pipeline.topologically_order_steps", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     def _cott_match_ensures_1() -> bool:
@@ -48,7 +48,7 @@ errors. Ready steps are ordered lexicographically."""
             return ((len(ordered_steps) == len(steps)))
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="curriculum.artifact_pipeline.topologically_order_steps", clause="ensures:1", phase="ensures", span={"end_byte":707,"end_column":71,"end_line":27,"start_byte":641,"start_column":5,"start_line":27}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.artifact_pipeline.topologically_order_steps", clause="ensures:1", phase="ensures", span={"end_byte":706,"end_column":71,"end_line":27,"start_byte":640,"start_column":5,"start_line":27}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[str], ArtifactPipelineError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -60,25 +60,25 @@ and construct an artifact plan, propagating any ordering error unchanged."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/artifact_pipeline/plan_pipeline.py", "58846d410e11e424a80280c76e3b7070040b927f773ac2cd1bc6eb15a058369a", "plan_pipeline", expected_project_name="artifact-pipeline", expected_cott_symbol="curriculum.artifact_pipeline.plan_pipeline")
+        _implementation = _cott_load("_cott_impl/curriculum/artifact_pipeline/plan_pipeline.py", "e8a7ab87c45f0842b4575f513338093348f9b69db13e8e52431f3c3a7c06cfb7", "plan_pipeline", expected_project_name="artifact-pipeline", expected_cott_symbol="curriculum.artifact_pipeline.plan_pipeline")
         _result = _implementation(pipeline)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.artifact_pipeline.plan_pipeline"
         if _error.span is None:
-            _error.span = {"end_byte":1538,"end_column":1,"end_line":52,"start_byte":953,"start_column":1,"start_line":37}
+            _error.span = {"end_byte":1537,"end_column":1,"end_line":52,"start_byte":952,"start_column":1,"start_line":37}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.artifact_pipeline.plan_pipeline", phase="implementation-call", span={"end_byte":1538,"end_column":1,"end_line":52,"start_byte":953,"start_column":1,"start_line":37}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.artifact_pipeline.plan_pipeline", phase="implementation-call", span={"end_byte":1537,"end_column":1,"end_line":52,"start_byte":952,"start_column":1,"start_line":37}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.artifact_pipeline.plan_pipeline", phase="implementation-call", span={"end_byte":1538,"end_column":1,"end_line":52,"start_byte":953,"start_column":1,"start_line":37}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.artifact_pipeline.plan_pipeline", phase="implementation-call", span={"end_byte":1537,"end_column":1,"end_line":52,"start_byte":952,"start_column":1,"start_line":37}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[ArtifactPlan, ArtifactPipelineError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="curriculum.artifact_pipeline.plan_pipeline", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (ArtifactPipelineError_BlankStepName, ArtifactPipelineError_DuplicateStep, ArtifactPipelineError_UnknownDependency, ArtifactPipelineError_SelfDependency, ArtifactPipelineError_Cycle,):
-            raise CottContractViolation("returned error is not allowed", symbol="curriculum.artifact_pipeline.plan_pipeline", phase="error", span={"end_byte":1538,"end_column":1,"end_line":52,"start_byte":953,"start_column":1,"start_line":37}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="curriculum.artifact_pipeline.plan_pipeline", phase="error", span={"end_byte":1537,"end_column":1,"end_line":52,"start_byte":952,"start_column":1,"start_line":37}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.artifact_pipeline.plan_pipeline", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     def _cott_match_ensures_1() -> bool:
@@ -88,7 +88,7 @@ and construct an artifact plan, propagating any ordering error unchanged."""
             return ((len((plan).ordered_steps) == len((pipeline).steps)))
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="curriculum.artifact_pipeline.plan_pipeline", clause="ensures:1", phase="ensures", span={"end_byte":1293,"end_column":76,"end_line":43,"start_byte":1222,"start_column":5,"start_line":43}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.artifact_pipeline.plan_pipeline", clause="ensures:1", phase="ensures", span={"end_byte":1292,"end_column":76,"end_line":43,"start_byte":1221,"start_column":5,"start_line":43}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[ArtifactPlan, ArtifactPipelineError], path="$.return", validator=_cott_validate_abi)
     return _result
 

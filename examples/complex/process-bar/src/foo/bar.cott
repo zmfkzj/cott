@@ -34,7 +34,7 @@ struct BarOptions:
 
 fn validate_payload(data: InputPayload) -> Result[InputPayload, BarError]:
     doc """
-    Reject empty payload bytes before any effectful processing.
+    Reject empty payload bytes before pure processing.
     """
 
     ensures Result.Ok(validated) => validated.data == data.data
@@ -47,7 +47,7 @@ fn validate_payload(data: InputPayload) -> Result[InputPayload, BarError]:
 
 fn process_payload_bytes(data: Bytes, options: BarOptions) -> Result[Bytes, BarError]:
     doc """
-    Perform the effectful byte-processing step without changing payload bytes.
+    Perform the pure byte-processing step without changing payload bytes.
     """
 
     ensures Result.Ok(processed) => processed == data
@@ -55,7 +55,7 @@ fn process_payload_bytes(data: Bytes, options: BarOptions) -> Result[Bytes, BarE
     error BarError.ServiceUnavailable
     error BarError.ProcessingFailed
 
-    effects [network]
+    effects []
 
 fn build_output(data: Bytes, source_size: PayloadSize, format: PayloadFormat) -> OutputPayload:
     doc """
@@ -70,7 +70,8 @@ fn build_output(data: Bytes, source_size: PayloadSize, format: PayloadFormat) ->
 
 fn process_bar(data: InputPayload, options: BarOptions) -> Result[OutputPayload, BarError]:
     doc """
-    Validate, process, and construct output through the three direct helpers.
+    Compose validate_payload, process_payload_bytes, and build_output in that
+    order, propagating validation and processing errors unchanged.
     """
 
     ensures Result.Ok(output) => output.data == data.data
@@ -81,4 +82,4 @@ fn process_bar(data: InputPayload, options: BarOptions) -> Result[OutputPayload,
     error BarError.ServiceUnavailable
     error BarError.ProcessingFailed
 
-    effects [network]
+    effects []

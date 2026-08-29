@@ -30,6 +30,8 @@ fn decode_row(route: Str, date: Str, day_type: Str, rides: I64) -> Result[RideRo
     Success returns a RideRow containing nominal RouteCode, ServiceDate, and RideCount values and the mapped DayType variant. The function has no external effects.
     """
 
+    ensures Result.Ok(row) => (row.route.value == route and row.date.value == date and row.rides.value <= 9223372036854775807)
+
     error RideRowError.InvalidDayType when not (day_type == "U" or day_type == "A" or day_type == "W")
     error RideRowError.InvalidRidership when rides < 0
     error RideRowError.InvalidRoute

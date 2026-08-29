@@ -1,16 +1,16 @@
 # cott 기본 설계 문서
 
-**문서 상태:** Implemented v0.6
+**문서 상태:** Implemented v0.8
 **프로젝트명:** cott
 **파일 확장자:** `.cott`
 **CLI 명령:** `cott`
 
 
-## 0.6 릴리스 호환성
+## 0.8 릴리스 호환성
 
-이 문서는 구현된 v0.6 언어와 Python backend를 규정한다. package version은 `0.6.0`이다. CPython `>=3.14.6,<3.15`, BasedPyright `>=1.39.9`, uv `>=0.12.3`, Codex CLI `>=0.147.0`, OMP `>=17.2.12`를 지원한다. 각 tool version은 이 lower bound 이상이어야 하며, full version과 content hash는 provenance에 기록한다.
+이 문서는 구현된 v0.8 언어와 Python backend를 규정한다. package version은 `0.8.0`이다. CPython `>=3.14.6,<3.15`, BasedPyright `>=1.39.9`, uv `>=0.12.3`, Codex CLI `>=0.147.0`, OMP `>=17.2.12`를 지원한다. 각 tool version은 이 lower bound 이상이어야 하며, full version과 content hash는 provenance에 기록한다.
 
-Canonical IR schema는 **v7**, generation record schema와 generation domain은 **v5**, Python runtime ABI는 **5**, contract-test strategy schema는 **v3**다. 이 compatibility number와 project version `0.6.0`은 generation snapshot·facade·runtime identity에 함께 기록하며, 현재 값과 다른 record·runtime은 읽거나 load하지 않는다. `[project].version`은 compiler version이 아니라 공개 API version이며 generation snapshot의 `project_version`과 facade runtime identity가 반드시 일치한다.
+Canonical IR schema는 **v8**, generation record schema와 generation domain은 **v7**/`cott.generation.v7`, Python runtime ABI는 **7**, contract-test strategy schema는 **v5**다. 이 compatibility number와 compiler package `0.8.0`은 generation snapshot·facade·runtime identity에 함께 기록하며, 현재 값과 다른 generation record·runtime·strategy는 읽거나 load하지 않는다. diagnostics schema는 **v1**을 유지한다. `[project].version`은 compiler version이 아니라 공개 API version이며 generation snapshot의 `project_version`과 facade runtime identity에만 쓰인다. 예제 project의 공개 version은 계속 `0.1.0`이다.
 
 `emit python`과 `verify`는 agent를 호출하지 않는다. agent 호출은 `generate`에서만 조건부로 수행한다. 기존 project command의 `--project <dir>`은 subcommand 뒤 어느 위치에서나 한 번만 허용하며 기본은 현재 directory다. `init`은 target path를 받고 `--project`를 거부한다.
 ---
@@ -201,7 +201,7 @@ Python 문법과 완전히 호환되도록 만들면 Python의 다음 문제까�
 
 ## 4. 비목표
 
-v0.6에서도 다음 기능은 구현하지 않는다.
+v0.8에서도 다음 기능은 구현하지 않는다.
 
 * 범용 코드 실행, 반복문, 일반적인 조건문
 * 클래스 상속, 메타프로그래밍, 매크로, 런타임 리플렉션, 임의 Python 코드 삽입
@@ -213,7 +213,7 @@ v0.6에서도 다음 기능은 구현하지 않는다.
 * dependency resolver/package manager, live reader transaction snapshot isolation, installed wheel whole-origin verification
 * SMT 또는 무제한 정리 증명
 
-async impl method, async protocol lifecycle, trait inheritance·specialization·variance·`Dyn`, guarded recursive nominal type은 v0.6의 구현 범위다. `AsyncIterator`·`AsyncGenerator`는 native async-generator implementation 함수가 아니라 반환 protocol이며, lifecycle은 16.4의 bounded observation으로만 evidence를 남긴다.
+async impl method, async protocol lifecycle, trait inheritance·specialization·variance·`Dyn`, guarded recursive nominal type, struct cross-field invariant, finite scenario와 compiler-owned fixture는 v0.8의 구현 범위다. `AsyncIterator`·`AsyncGenerator`는 native async-generator implementation 함수가 아니라 반환 protocol이다. `boundary`와 contract-test context의 wrapper는 각 async protocol operation을 runtime에서 강제하고, contract test는 configured lifecycle limit 안의 실제 관찰만 evidence로 남긴다.
 ## 5. 기본 문법
 
 ### 5.1 모듈
@@ -362,7 +362,7 @@ Python target validation은 CPython 3.14 hard keyword와 단독 `_`를 identifie
 
 일반 문자열은 JSON escape를 사용하는 double-quoted literal이고 `doc`만 triple double quote를 사용한다. 정수는 10진수, float는 소수점 또는 exponent가 있는 10진수이며 빈 괄호 `()`는 `Unit` literal이다. 부호는 literal이 아니라 unary operator다. tab과 semicolon은 금지한다. parser는 일관된 space indentation을 받고 formatter는 4칸으로 정규화한다. `#`부터 newline까지는 comment다. blank 또는 comment-only physical line은 `NEWLINE`, `INDENT`, `DEDENT` token을 만들지 않는다.
 
-다음 EBNF가 v0.6의 선언 surface다. `INDENT`와 `DEDENT`는 indentation token이고 `{x}`는 0회 이상, `[x]`는 선택이다.
+다음 EBNF가 v0.8의 선언 surface다. `INDENT`와 `DEDENT`는 indentation token이고 `{x}`는 0회 이상, `[x]`는 선택이다.
 
 ```text
 file          = module_decl, { use_decl }, { declaration } ;
@@ -371,13 +371,15 @@ use_decl      = "use", qname, [ ".{", name_list, "}" ], NEWLINE ;
 
 declaration   = ( [ doc_block ], ( alias_decl | newtype_decl | struct_decl
                 | enum_decl | trait_decl | resource_decl | rule_decl | const_decl
-                | external_type_decl | specialization_decl ) ) | fn_decl | impl_decl ;
+                | external_type_decl | specialization_decl | scenario_decl ) ) | fn_decl | impl_decl ;
 external_type_decl = "external", "type", type_name, NEWLINE ;
 alias_decl    = "alias", type_name, "=", type, NEWLINE ;
 newtype_decl  = "newtype", type_name, "(", type, ")", NEWLINE,
                 [ INDENT, "where", expression, NEWLINE, DEDENT ] ;
 struct_decl   = "struct", type_name, [ generic_params ], ":", NEWLINE,
-                INDENT, field, { field }, DEDENT ;
+                INDENT, { field }, { invariant_clause }, DEDENT ;
+scenario_decl = "scenario", identifier, [ "for", qname ], ":", NEWLINE,
+                INDENT, [ fixtures_block ], scenario_step, { scenario_step }, DEDENT ;
 enum_decl     = "enum", type_name, [ generic_params ], ":", NEWLINE,
                 INDENT, variant, { variant }, DEDENT ;
 trait_decl    = "trait", type_name, [ generic_params ], [ "for", trait_ref, { "+", trait_ref } ], ":", NEWLINE,
@@ -428,6 +430,23 @@ method_clause = function_clause | "transitions", "self", ".", field_name, ":", q
                   { ",", "self", ".", field_name, ":", qname, "->", qname }, NEWLINE
                 | "modifies", "self", ".", field_name, { ",", "self", ".", field_name }, NEWLINE ;
 guarded_condition = expression | expression, "matches", pattern, "=>", expression ;
+fixtures_block = "fixtures", ":", NEWLINE, INDENT, { fixture }, DEDENT ;
+fixture       = "fs", identifier, ":", NEWLINE, INDENT, { "file", string_literal, scenario_data, NEWLINE }, DEDENT
+              | "http", identifier, ":", NEWLINE, INDENT, { "route", string_literal, "->", http_outcome, NEWLINE }, DEDENT
+              | "clock", identifier, ":", NEWLINE, INDENT, "start_ms", ":", integer, NEWLINE, "tick_ms", ":", integer, NEWLINE, DEDENT
+              | "failure", identifier, ":", NEWLINE, INDENT, "point", ":", failure_point, NEWLINE,
+                "occurrence", ":", integer, NEWLINE, "error", ":", failure_error, NEWLINE, DEDENT ;
+scenario_data = ("text" | "bytes" | "hex"), "(", string_literal, ")" ;
+http_outcome  = "response(status:", integer, ", body:", scenario_data, ", encoding:", string_literal, ")"
+              | "redirect(status:", integer, ", location:", string_literal, ")" | "delay(ms:", integer, ")" | "disconnect()" ;
+failure_point = "file.open" | "file.read" | "file.write" | "file.flush" | "file.replace"
+              | "http.connect" | "http.read" | "clock.read" ;
+failure_error = "permission_denied" | "not_found" | "disk_full" | "timeout" | "connection_reset" ;
+scenario_arguments = expression, { ",", expression } ;
+scenario_step = "call", binding_name, "=", qname, "(", [ scenario_arguments ], ")", NEWLINE
+              | "spawn", binding_name, "=", qname, "(", [ scenario_arguments ], ")", NEWLINE
+              | "await", binding_name, ("as", binding_name | "cancelled"), NEWLINE
+              | "cancel", binding_name, NEWLINE | "tick", NEWLINE | "assert", expression, NEWLINE ;
 doc_block     = "doc", triple_string, NEWLINE ;
 
 generic_params = "[", generic_param, { ",", generic_param }, [ "," ], "]" ;
@@ -451,7 +470,7 @@ const_name    = identifier ;
 external type HttpRequest
 ```
 
-external declaration은 target이나 source path를 갖지 않는 semantic named Cott type이다. AST와 HIR은 common declaration metadata와 name만 보존하며 `target`·`path` field를 두지 않는다. Canonical IR v7의 `external_type` declaration도 `annotations`, `doc`, `kind`, `name`, `public`, `source_order`, `span`만 가지며 target projection은 절대 serialize하지 않는다.
+external declaration은 target이나 source path를 갖지 않는 semantic named Cott type이다. AST와 HIR은 common declaration metadata와 name만 보존하며 `target`·`path` field를 두지 않는다. Canonical IR v8의 `external_type` declaration도 `annotations`, `doc`, `kind`, `name`, `public`, `source_order`, `span`만 가지며 target projection은 절대 serialize하지 않는다.
 
 각 backend는 자신의 manifest projection table로 external declaration을 해석한다. Python에서는 `[target.python.external_types]`의 quoted fully qualified Cott external symbol을 key로, `module:Qualname`을 value로 사용한다. key는 존재하는 external declaration과 정확히 일치하고 value는 안전한 Python module/qualname이어야 한다. mapping의 누락·stale key·non-external key·malformed value는 emit 전에 hard error다. Target-side import or signature inspection은 별도 capability이며 declaration validity나 IR을 바꾸지 않는다. Rust와 TypeScript target/table은 구현되어 있지 않다.
 
@@ -723,9 +742,9 @@ async fn fetch_payload(id: PayloadId) -> Result[Payload, FetchError]:
 
 ### 10.1 계약 표현식
 
-refinement, `requires`, `ensures`, `error`, invariant와 rule clause는 하나의 정규화된 순수 표현식 언어와 통일된 match guard를 사용한다.
+refinement, `requires`, `ensures`, `error`, struct/impl invariant와 rule clause는 하나의 정규화된 순수 표현식 언어와 통일된 match guard를 사용한다.
 
-허용 대상은 숫자·문자열·boolean·`Unit` literal, 현재 declaration parameter·constant, `ensures`의 `result`, refinement/impl의 `self`, cott field와 `.len`, method `ensures`의 `old(self.field)`, 산술·연쇄 비교·동등성·`and`·`or`·`not`이다. guard의 scrutinee는 그 clause의 base scope에서 평가되고 pattern binding은 guard condition에만 보인다. `requires`와 invariant guard는 matched 경우에만 obligation을 만든다; `ensures` guard는 normal return 뒤 match한 경우에만 검사한다. legacy `ensures Pattern => condition`은 result scrutinee shorthand다.
+허용 대상은 숫자·문자열·boolean·`Unit` literal, 현재 declaration parameter·constant, `ensures`의 `result`, struct/refinement/impl의 `self`, cott field와 `.len`, method `ensures`의 `old(self.field)`, 산술·연쇄 비교·동등성·`and`·`or`·`not`이다. struct invariant에서만 `starts_with(Str, Str)`, `ends_with(Str, Str)`, `contains(Str, Str)`, `unique_by(List[T], T.field)`, `descending_by(List[T], T.field)`의 다섯 total intrinsic을 추가로 허용한다. 후자의 selector는 resolve된 nominal element field여야 하며 runtime callable·문자열 selector가 아니다. `unique_by`는 canonical Cott equality를, `descending_by`는 orderable scalar의 non-increasing order를 검사한다. 빈/singleton list는 둘 다 참이다. guard의 scrutinee는 그 clause의 base scope에서 평가되고 pattern binding은 guard condition에만 보인다. `requires`와 invariant guard는 matched 경우에만 obligation을 만든다; `ensures` guard는 normal return 뒤 match한 경우에만 검사한다. legacy `ensures Pattern => condition`은 result scrutinee shorthand다.
 
 선언되지 않은 ambient 이름, file/network/database/clock/random 접근, object method와 임의 Python function call, state change와 nondeterministic expression은 금지한다. 표현식의 모든 이름과 type은 HIR에서 해석한다. 숫자 literal은 문맥 type을 따르고 연쇄 비교는 short-circuit `and`로 정규화한다. equality operand는 같은 resolved non-trait cott value type이어야 하며 type parameter, trait 또는 `Opaque`를 transitive하게 포함할 수 없다. 모든 refinement, guard condition, `requires`, `ensures`, invariant와 `when`의 최종 type은 `Bool`이어야 한다.
 
@@ -762,6 +781,8 @@ ensures Result.Err(SliceError.OutOfBounds) => offset + length > values.len
 
 pattern이 없으면 expression scope는 function argument, constant와 반환값 전체를 가리키는 `result`다. pattern이 있으면 일치하는 반환에서만 expression을 검사하고 scope는 function argument, constant와 그 pattern binding이며 `result`는 사용할 수 없다. impl method는 두 scope 모두에 `self`를 더하고 §7의 제한된 `old(self.field)` snapshot도 사용할 수 있다. 반환 type 검사 후 source order의 모든 applicable `ensures`를 검사한다.
 
+`Result[T, E]` 반환 callable의 최종 resolved contract에 `error` 절이 하나 이상 있으면 적어도 하나의 정확한 top-level `ensures Result.Ok(binding) => Bool`이 있어야 한다. 이것이 성공 의무의 유일한 표기다. wildcard·`Result.Err`·중첩/별칭/boolean result 검사로는 충족하지 않으며, 여러 Ok `ensures`는 각각 독립 의무다. rule expansion·override/delete 뒤에 lint하므로 source fragment가 아니라 effective contract가 판정 대상이다. 없으면 callable span에 `Result contract with errors requires a guarded Result.Ok ensures success obligation`을 낸다.
+
 ```cott
 fn append[T](
     values: List[T],
@@ -787,7 +808,7 @@ fn load_payload(
     effects [file.read]
 ```
 
-`error Variant with scrutinee matches Pattern when condition`은 match한 반환 context에서 `condition`이 참이면 해당 variant를 반환해야 하는 검사 가능한 의무다. `with` guard가 없으면 `when`은 ordinary argument/constant (`impl`은 `self` 포함) scope에서 평가한다. 둘 이상의 applicable conditional error가 참이면 source order의 첫 번째만 의무가 되고 뒤 절은 면제된다. 조건 없는 `error Variant`는 허용된 환경 실패를 선언할 뿐 항상 일치하는 조건으로 취급하지 않는다.
+`error Variant with scrutinee matches Pattern when condition` 또는 `error Variant when condition`은 match/condition이 참일 때 해당 variant를 반환해야 하는 조건부 도메인 의무다. 조건 없는 `error Variant`는 허용된 환경 실패 allowance일 뿐 conditional coverage 영역에 포함하지 않는다. `when true`도 conditional이며 bare error로 접지 않는다. 모든 requires-valid input에서 모든 조건부 predicate를 source order로 평가한다. 서로 다른 variant를 포함해 여러 predicate가 동시에 참이면 source-order 첫 conditional error가 규범적으로 반환 variant를 정하고, runner는 뒤의 applicable clause도 condition/applicability evidence로 기록하되 모순이나 별도 반환 의무로 취급하지 않는다. 같은 variant의 distinct clause도 각각 evidence를 가진다.
 
 `Result` 함수에 `error` 절이 하나라도 있으면 그 목록은 허용된 오류 variant의 exhaustive set이다. 런타임 검사가 활성화된 facade는 모든 `Err` 반환이 이 집합에 속하는지 검사한다. `off`에서는 이 항목을 신뢰 선언으로 낮춘다. `error`는 `Result[T, E]` function 또는 impl method에만 올 수 있고 variant는 `E`에 속해야 한다.
 
@@ -838,6 +859,24 @@ manifest effect key는 qname 문법이고 value는 literal `true`여야 한다. 
 
 
 `effects`는 Canonical IR metadata이자 implementation-call-graph 검증 대상이다. implementation은 exact generated facade로만 다른 Cott free function을 호출할 수 있고, verifier는 canonical function에서 same-file private helper까지 도달하는 모든 그 call edge의 declared callee effect를 합집합으로 계산한다. caller effect set이 이를 포함하지 않으면 path를 포함한 implementation error다. async callee는 반드시 `await`, sync callee는 절대 `await`하지 않는다. stdlib·external projection·generated value constructor와 exact Factory constructor는 effect leaf이며, Cott 밖 코드의 실제 side effect와 import-time behavior는 여전히 trust declaration이다.
+
+### 10.6 Struct invariant와 canonical constructor
+
+`struct` body는 `field* invariant*`다. invariant 뒤 field는 syntax error이고 duplicate invariant는 source order 그대로 허용한다. invariant는 기존 `SCRUTINEE matches PATTERN => BOOL` guard를 그대로 쓴다. fields와 generic을 먼저 lower한 뒤 `self`를 `Named[Struct, declared generic args]`로 type-check하며 `result`, `old`, ambient name은 허용하지 않는다. intrinsic arity/type/selector 오류는 expression span에, Bool 이외 condition은 `struct invariant condition must be boolean`으로 보고한다.
+
+IR의 모든 struct는 source-order `invariants`를 반드시 가진다(없는 경우 `[]`). 각 node는 `clause_id`, `guard`, typed `expression`, `span`이며, intrinsic은 closed name·typed arguments·resolved `{owner, field}` selector를 canonical JSON에 저장한다. AST/HIR/source spelling을 재해석하지 않고 이 IR만 emitter와 runner가 소비한다.
+
+생성된 frozen keyword-only dataclass가 유일한 canonical smart constructor다. Python argument/default factory 평가 뒤 `__post_init__`가 declaration order로 field ABI를 validate·normalize하고 `object.__setattr__`한 다음 invariant guard/condition을 clause order로 평가한다. 첫 false는 `CottContractViolation`에 `symbol`, `clause="invariant:N"`, `phase="invariant"`, canonical span과 expected/actual을 담아 실패한다. guard non-match는 satisfied다. direct construction도 이 순서를 우회하지 않는다. active facade ABI boundary는 exact nominal type·concrete generic substitution·depth 64/node 1024/cycle 검사를 공유 traversal state에서 끝낸 뒤 같은 constructor로 재구성하므로 `object.__new__`, deserialization, mutation으로 만든 invalid value도 거부한다. `off`가 facade traversal을 생략해도 constructor invariant는 끄지 않는다. default가 명백히 false면 compile error이고, 그 외에는 repair·sort·deduplicate 없이 construction failure다.
+
+### 10.7 Finite scenario, fixture와 workflow
+
+scenario는 public facade만 호출하는 비공개 declaration이며 Python API symbol을 만들지 않는다. `call value = facade(args)`는 sync call 또는 async facade의 completion을 저장하고, `spawn worker = async_facade(args)`는 async public facade만 허용한다. `await worker as value`, `await worker cancelled`, `cancel worker`, `tick`, `assert Bool`만 있다. loop, branch, sleep, callback, arbitrary code, private implementation/binding import와 widget/tree syntax는 없다. prior value와 typed field만 다음 argument/assertion에 쓸 수 있고 worker reference는 ABI value가 아니다.
+
+scenario는 최대 64 step이고 적어도 한 step을 가져야 한다. `verification.lifecycle_limit` (1..64)은 동시 live worker와 총 tick의 상한이다. worker는 `pending -> completed(value)|failed(exception)|cancel_requested -> cancelled`이며 `cancel`은 live worker에 한 번만, value/cancelled await는 terminal outcome에 한 번만 유효하다. scenario는 `ready -> running -> passed|failed -> cleaned`; 종료 시 live/unconsumed worker가 있으면 실패하고 모두 cancel/join한다. `tick`은 정확히 한 cooperative `asyncio.sleep(0)` turn이다. 100 ms bounded join과 OS resource limit은 containment이지 ordering evidence가 아니다.
+
+`fixtures:` 안의 closed kind는 `fs`, `http`, `clock`, `failure`뿐이다. filesystem은 normalized relative POSIX path와 inline `text`/`bytes` file만, HTTP는 normalized `/path`와 `response(status, body, encoding)`·relative `redirect(status, location)`·`delay(ms)`·`disconnect()`만, clock은 unsigned `start_ms`/`tick_ms`만 가진다. failure는 `file.open|read|write|flush|replace`, `http.connect|read`, `clock.read`의 정확히 한 occurrence와 `permission_denied|not_found|disk_full|timeout|connection_reset`만 가진다. source/manifest/IR에는 host path, socket address, remote URL, script, plugin 또는 monkeypatch name이 없다. HIR은 target/argument/result/fixture reference를 resolve하고 required effect union과 fixture authority의 exact match를 강제한다. custom/database/random/process effect는 fixture backend가 없으므로 observed scenario가 될 수 없다.
+
+scenario strategy는 source order, stable IDs/spans, resolved facade/callable identity, typed steps, required effects, closed fixtures, effective limits를 v5 JSON으로 serialize한다. scratch root, port, PID, host time은 strategy/evidence에 serialize하지 않는다. trace는 source order `{step_id, operation, facade?, worker?, outcome, value_binding?}`와 ABI type/assertion boolean만 기록하며 arbitrary/opaque value와 host exception text는 기록하지 않는다. successful scenario evidence는 bounds, cleanup outcome, referenced fixture event IDs를 가진 `test observation`; unavailable execution capability는 `unobserved`다. facade를 호출했다는 사실만으로 unrelated clause evidence를 credit하지 않는다.
 
 ## 11. 상태를 타입으로 표현하기
 
@@ -1084,19 +1123,19 @@ system.data.InputPayload
 
 ### 15.4 Canonical IR
 
-Canonical IR v7는 에이전트나 특정 언어 문법에 종속되지 않는 정규 표현이다. normative `schema_version`은 **7**이며 compiler는 emit 직전과 IR load 직후 v7 schema를 검증한다. 다음 JSON은 필드 형태를 보여 주는 비규범 표시 fragment이며 schema-conformant instance가 아니다.
+Canonical IR v8는 에이전트나 특정 언어 문법에 종속되지 않는 정규 표현이다. normative `schema_version`은 **8**이며 compiler는 emit 직전과 IR load 직후 v8 schema를 검증한다. 다음 JSON은 필드 형태를 보여 주는 비규범 표시 fragment이며 schema-conformant instance가 아니다.
 
 실제 IR file의 top-level object는 `schema_version`, fully qualified `module`, project-relative `source`, sorted `imports`와 `declarations`를 가진다. declaration은 공통 `kind`·fully qualified `name`·`public`·`doc`·`span`을 가진다. function과 trait/impl method는 `callable_kind` (`sync` 또는 `async`)를 보존한다. trait는 generic variance·ordered parent closure·associated type·method/default identity를, specialization은 concrete·trait·selected slot을, impl은 associated assignment·selected method slot·resource transition을, resource는 initial state·ordered states/edges를 추가한다. external type은 target projection이 아닌 semantic metadata만 가진다.
 
 type node kind는 `primitive`, `named`, `type_parameter`, `associated_projection`, `any`, `unknown`, `list`, `set`, `map`, `tuple`, `array`, `buffer`, `option`, `result`, `iterator`, `generator`, `async_iterator`, `async_generator`, `factory`, `dyn`, `opaque`로 닫혀 있다. generic argument는 type 또는 canonical const value다. alias는 IR type에서 제거하고 `named`는 fully qualified declaration과 ordered argument를 가진다. recursive `named` edge is symbolic, never an expanded copy. `factory` node는 type argument 없는 impl declaration의 `named` node이고 `dyn` node는 exact trait reference다. expression과 match guard/pattern은 resolved cott type·symbol identity와 span을 가진다.
 
-declaration kind와 추가 field는 닫혀 있다: `alias(target)`, `newtype(carrier, refinement)`, `struct(generics, fields)`, `enum(generics, variants)`, `trait(generics, parents, associated_types, methods)`, `specialization(concrete, trait, slots)`, `impl(traits, associated_types, state, invariants, init, methods, selected_methods)`, `resource(initial, states, terminals, edges)`, `rule(generics, base, clauses)`, `const(type, value)`, `function(callable_kind, generics, parameters, return_type, contract, effects)`, `external_type()`. resource `terminals`는 terminal declaration의 state identity·source order·span을 별도로 보존하고 `states[].terminal` membership과 일치해야 한다. clause는 kind-specific fields, optional typed match guard, expression, source span과 stable clause ID를 가진다.
+declaration kind와 추가 field는 닫혀 있다: `alias(target)`, `newtype(carrier, refinement)`, `struct(generics, fields, invariants)`, `enum(generics, variants)`, `trait(generics, parents, associated_types, methods)`, `specialization(concrete, trait, slots)`, `impl(traits, associated_types, state, invariants, init, methods, selected_methods)`, `resource(initial, states, terminals, edges)`, `rule(generics, base, clauses)`, `const(type, value)`, `function(callable_kind, generics, parameters, return_type, contract, effects)`, `scenario(target, required_effects, fixtures, steps, lifecycle_limit)`, `external_type()`. scenario는 `public:false`이고 facade symbol이 아니지만 contract projection에는 포함된다. resource `terminals`는 terminal declaration의 state identity·source order·span을 별도로 보존하고 `states[].terminal` membership과 일치해야 한다. clause는 kind-specific fields, optional typed match guard, expression, source span과 stable clause ID를 가진다.
 
 integer canonical value는 sign을 포함한 base-10 string, `F32`·`F64`는 width와 IEEE bit-pattern lowercase hex, `Bool`·`Str`은 JSON scalar, `Bytes`와 `Buffer`는 lowercase hex, `Unit`은 typed null로 저장한다. tuple/array child value는 declaration order, set element와 map entry는 typed canonical key JSON bytes order다. `Array` value의 item count와 `Buffer` byte count는 declared canonical length와 같아야 한다.
 
 declaration, field, parameter와 contract clause array는 source order를 보존한다. 의미가 set인 effect와 import는 fully qualified name으로 정렬한다. source span은 raw UTF-8의 0-based start·exclusive-end byte offset과 1-based line·Unicode-scalar column을 함께 가진다. schema에 없는 field는 거부한다. IR JSON은 sorted key, insignificant whitespace 없음, final newline 하나로 canonicalize하고 schema version을 `generation_id`에 포함한다.
 
-normative schema는 repository의 `schemas/canonical-ir.schema.json` (v7), `schemas/generation.schema.json` (v5), `schemas/diagnostics.schema.json`, `schemas/contract-test.schema.json` (v3)이다. 모두 JSON Schema Draft 2020-12이며 compiler binary가 embed하고 IR/generation/diagnostic/contract-strategy writer와 reader가 해당 current schema를 검증한다.
+normative schema는 repository의 `schemas/canonical-ir.schema.json` (v8), `schemas/generation.schema.json` (v7), `schemas/diagnostics.schema.json` (v1), `schemas/contract-test.schema.json` (v5)이다. 모두 JSON Schema Draft 2020-12이며 compiler binary가 embed하고 IR/generation/diagnostic/contract-strategy writer와 reader가 해당 current schema를 검증한다. v7 IR, v6 generation, ABI 6, v4 strategy의 reader/default/shim은 없다.
 
 ```json
 {
@@ -1210,7 +1249,7 @@ IR은 다음 목적으로 사용한다.
 
 에이전트 prompt의 semantic payload는 선택 symbol의 Canonical IR과 사람이 읽을 수 있게 렌더한 `doc`·clause·관련 type이다. raw `.cott` source는 workspace에서 read-only context로만 제공하고 agent나 target이 다시 parse한 결과를 계약 의미로 사용하지 않는다.
 
-`contracts.requires`, `contracts.ensures`, `contracts.errors`는 원본의 모든 절을 순서대로 보존한다. 각 절은 kind별 source-order `clause_id`, source span과 resolved expression을 가진다. `ensures.pattern`은 `null`이거나 `variant`·`binding`·`wildcard`의 재귀 node며 expression과 별도로 타입 검사한다. 조건부 `error`는 source-order `priority`를, 조건 없는 `error`는 `priority: null`, `when: null`을 가진다. target은 문자열을 재파싱하지 않는다.
+`contracts.requires`, `contracts.ensures`, `contracts.errors`는 원본의 모든 절을 순서대로 보존한다. 각 절은 kind별 source-order `clause_id`, source span과 resolved expression을 가진다. `ensures.pattern`은 `null`이거나 `variant`·`binding`·`wildcard`의 재귀 node며 expression과 별도로 타입 검사한다. 조건부 `error`의 `priority`는 source-order identity/diagnostic ordering이면서 overlap precedence다. 동시에 applicable한 conditional error에서는 첫 priority만 반환 variant를 결정한다. 조건 없는 `error`는 `priority: null`, `when: null`을 가진다. target은 문자열을 재파싱하지 않는다.
 
 상수는 `{"kind": "const", "name", "type", "value", "public", "span"}` declaration으로 저장한다. 값은 compile-time canonical value다. refinement·default·contract expression의 constant reference는 항상 canonical `constant_ref` node와 symbol identity를 보존하며 Canonical IR이나 `contract_surface`에서 값으로 inline하지 않는다. target 최적화는 이 단계 뒤에만 값을 inline할 수 있다. `public_python_symbols(IR)`은 모든 공개 declaration을 alias 이름, trait `Protocol`, struct·newtype class, enum union alias·variant class, constant와 function의 결정적 Python target symbol 집합으로 투영하며 compiler-synthesized `TypeVar`·합성 `Protocol`·support name은 제외한다.
 
@@ -1257,11 +1296,11 @@ generated/
 └── generation.json
 
 ```
-`tests/generated/<module path>/<callable>.json`은 compiler가 실행하는 deterministic managed contract-test strategy v3다. callable은 free function의 `<function>` 또는 impl method의 `<Concrete>/<method>`다. 닫힌 object는 `{"schema_version":3,"symbol":<FQN>,"seed":"sha256:<hex>","candidate_limit":64,"node_limit":64,"container_length_limit":3,"json_depth_limit":4,"lifecycle_limit":3,"callable_kind":"sync"|"async","return_kind":"value"|"async_iterator"|"async_generator","classification":"pure"|"effectful"|"never","clause_ids":[<source-order IDs>]}`이며 generated Python source가 해석하지 않는다. impl method strategy는 여기에 deterministic `init_cases`를 추가하며, 각 case는 required state field의 named ABI value와 defaulted field를 생략할지 여부를 source order로 기록한다. recursive candidate generation은 depth·node budget 안에서 terminating productive branch만 만든다; finite candidate가 없거나 budget이 소진되면 해당 clause는 `미관찰`이다.
+`tests/generated/<module path>/<callable>.json`은 compiler가 실행하는 deterministic managed contract-test strategy v5다. callable은 free function의 `<function>` 또는 impl method의 `<Concrete>/<method>`다. 닫힌 object는 `schema_version`, `symbol`, `seed`, seven existing limits, `callable_kind`, `return_kind`, `classification`, ordered `clause_ids`, ordered `obligations:[{clause_id, role:"success"|"conditional_error"}]`, 그리고 `scenario:null|{id,required_effects,fixtures,steps,lifecycle_limit,limits}`를 가진다. scenario의 `steps`는 64개 이하이고 limits는 effective `verification.fixtures` ceiling이다. generated Python source는 strategy를 해석하지 않는다.
 
-`cott_runtime` ABI **5**는 numeric alias `I8`…`U64`·`F32`·`F64`, `Option`·`Result`, `Ok`·`Err`·`Some`·`Nothing`, `Unit`·`UNIT`, `Opaque`, `Dyn`, `CottList`·`CottSet`·`FrozenMap`·`CottArray`·`CottBuffer`, numeric metadata, `JsonValue` union·variant와 `CottContractViolation`의 유일한 runtime identity 원본이다. `Any`는 `typing.Any`, `Unknown`은 `object`, `Iterator[T]`는 `typing.Iterator[T]`, `Generator[Y, S, R]`는 `typing.Generator[Y, S, R]`, `AsyncIterator[T]`는 `typing.AsyncIterator[T]`, `AsyncGenerator[Y, S]`는 `typing.AsyncGenerator[Y, S]`로 직접 투영된다. runtime ABI value가 expected ABI 5와 다르면 facade load는 실패한다.
+`cott_runtime` ABI **7**는 numeric alias `I8`…`U64`·`F32`·`F64`, `Option`·`Result`, `Ok`·`Err`·`Some`·`Nothing`, `Unit`·`UNIT`, `Opaque`, `Dyn`, `CottList`·`CottSet`·`FrozenMap`·`CottArray`·`CottBuffer`, numeric metadata, `JsonValue` union·variant와 `CottContractViolation`의 유일한 runtime identity 원본이다. ABI 7은 canonical struct construction/invariant, fixture adapter activation과 closed v7 generation snapshot validation을 포함한다. `Any`는 `typing.Any`, `Unknown`은 `object`, iterator protocol은 기존 direct Python typing projection을 쓴다. runtime ABI value가 expected ABI 7와 다르면 facade load는 실패한다.
 
-Python environment 하나에는 generated cott project 하나만 설치한다. `cott_runtime`과 각 facade는 normalized `[project].name`, `[project].version`, runtime ABI 5를 embed하고 서로 다르면 import를 거부한다. `generated/python`은 public cott module, runtime과 verified local implementation copy를 함께 담는 단일 runtime/package root이며 `<module>_types.py`는 user type·constant만 정의한다.
+Python environment 하나에는 generated cott project 하나만 설치한다. `cott_runtime`과 각 facade는 normalized `[project].name`, `[project].version`, runtime ABI 7를 embed하고 서로 다르면 import를 거부한다. `generated/python`은 public cott module, runtime과 verified local implementation copy를 함께 담는 단일 runtime/package root이며 `<module>_types.py`는 user type·constant만 정의한다.
 
 `facade_exports(IR, resolved)`는 모든 public non-callable, resolved public free function, every selected slot이 explicit implementation, specialization 또는 verified trait default facade로 resolved된 impl class의 합집합이다. unresolved explicit sync/async impl method만 `generation.json.current.unresolved`에 기록한다. default/specialization-selected method에는 durable agent implementation source·record가 없다.
 
@@ -1276,16 +1315,16 @@ record의 필수 field를 보여 주는 다음 JSON은 객체·배열 entry 일�
 
 ```json
 {
-  "schema_version": 5,
+  "schema_version": 7,
   "current": {
     "generation_id": "sha256:...",
     "verified": false,
-    "project_version": "0.6.0",
-    "compatibility": {"generation_schema": 5, "canonical_ir_schema": 7, "runtime_abi": 5},
+    "project_version": "0.1.0",
+    "compatibility": {"generation_schema": 7, "canonical_ir_schema": 8, "runtime_abi": 7, "contract_strategy_schema": 5},
     "inputs": {"AGENTS.md": "sha256:...", "cott.toml": "sha256:...", "python/pyproject.toml": "sha256:...", "python/uv.lock": "sha256:...", "src/foo/bar.cott": "sha256:..."},
     "tools": {
-      "compiler": {"version": "0.6.0", "executable": "/canonical/cott", "content_hash": "sha256:..."},
-      "runtime": {"abi": "5", "version": "0.6.0"},
+      "compiler": {"version": "0.8.0", "executable": "/canonical/cott", "content_hash": "sha256:..."},
+      "runtime": {"abi": "7", "version": "0.8.0"},
       "python": {"implementation": "cpython", "version": "3.14.6", "cache_tag": "cpython-314", "os": "darwin", "machine": "arm64", "platform": "macosx-15.0-arm64", "executable": "/canonical/python", "content_hash": "sha256:..."},
       "basedpyright": {"version": "...", "executable": "/canonical/basedpyright", "content_hash": "sha256:..."}
     },
@@ -1317,13 +1356,18 @@ record의 필수 field를 보여 주는 다음 JSON은 객체·배열 entry 일�
     },
     "unresolved": [],
     "verification": null,
+    "semantic_coverage": {
+      "clauses": [],
+      "summary": {"observed": 0, "unobserved": 0, "trust_declaration": 0, "unknown": 0},
+      "policy": {"selected": 0, "passed": true, "violations": []}
+    },
     "agent_runs": []
   },
   "last_verified": null
 }
 ```
 
-project-owned path는 project-relative POSIX path이고 dependency import origin만 distribution-relative POSIX path다. hash는 raw file bytes의 SHA-256 lowercase hex다. map key와 set-derived array를 정렬한 UTF-8 JSON으로 쓰며 file 끝 newline 하나만 둔다. `generation.json` 자체는 self-reference를 피하려고 `managed_files`에서 제외한다. `generation_id`는 canonical object `{"current": <normalized current>, "domain": "cott.generation.v5", "schema_version": 5}`의 hash이며 normalized current에서는 `generation_id`·`verified`·`verification`·`agent_runs`를 뺀다. `last_verified`는 pointer가 아니라 verified current snapshot의 deep copy다.
+project-owned path는 project-relative POSIX path이고 dependency import origin만 distribution-relative POSIX path다. hash는 raw file bytes의 SHA-256 lowercase hex다. map key와 set-derived array를 정렬한 UTF-8 JSON으로 쓰며 file 끝 newline 하나만 둔다. `generation.json` 자체는 self-reference를 피하려고 `managed_files`에서 제외한다. `generation_id`는 canonical object `{"current": <normalized current>, "domain": "cott.generation.v7", "schema_version": 7}`의 hash이며 normalized current에서는 `generation_id`·`verified`·`verification`·`semantic_coverage`·`agent_runs`를 뺀다. coverage/policy는 semantic identity의 alternate source가 아니라 verification result이므로 generation identity를 바꾸지 않는다. `last_verified`는 pointer가 아니라 certified current snapshot의 deep copy다.
 
 `agent_runs`는 현재 agent implementation content hash와 일치하는 callable별 마지막 successful run만 담는다. 이후 emit·verify에서도 hash가 같으면 보존하고 agent 재생성 시 교체하며 user edit로 hash가 달라지면 제거한다. 실패·폐기된 run과 무제한 history는 generation record에 누적하지 않는다.
 
@@ -1449,14 +1493,15 @@ runtime_validation = "boundary"
 | cancellation의 exception containment 및 cancellation 뒤 invariant | 항상 | 항상 | 항상 |
 | 미선언 `Exception` → `CottContractViolation` | 항상 | 항상 | 항상 |
 | eager concrete public boundary type·numeric range | 신뢰 선언 | 런타임 검사 | test context에서 검사 |
-| `Iterator`·`Generator`·`AsyncIterator`·`AsyncGenerator` protocol/lifecycle | 신뢰 선언 | creation protocol만 검사; lifecycle은 observed evidence | test context에서 bounded lifecycle 관찰 |
+| `Iterator`·`Generator` protocol/lifecycle | 신뢰 선언 | creation protocol만 검사 | test context에서 bounded lifecycle 관찰 |
+| `AsyncIterator`·`AsyncGenerator` protocol/lifecycle | 신뢰 선언 | 모든 `__anext__`·`asend`·`athrow`·completion·`aclose` operation을 runtime에서 중재·검사 | 같은 operation enforcement와 configured bounded observation |
 | 지워진 `TypeVar` 관계 | 정적 검사 | 정적 검사 | 정적 검사 |
 
-free-function wrapper order는 고정한다: statically concrete argument `F32` ABI normalization → 활성 mode의 concrete input type·numeric range·refinement, 모든 `requires`와 첫 applicable conditional `error` 기록 → sync implementation call 또는 async implementation coroutine의 direct `await` → return `F32` ABI normalization → 활성 mode의 concrete return type·numeric range, allowed `Err` set·기록된 conditional error obligation과 applicable guarded `ensures`. async impl wrapper has the same sequence under the task-aware reentrant lock. On cancellation it applies the same exception containment and post-cancellation invariant check, then re-raises `CancelledError`; it never checks a return contract, invents a transition, or performs implicit cleanup. Runner records a leaked background task as failed observation.
+free-function wrapper order는 고정한다: statically concrete argument `F32` ABI normalization → 활성 mode의 concrete input type·numeric range·refinement와 struct reconstruction/invariant → 모든 `requires`와 모든 applicable conditional `error` 기록 → sync implementation call 또는 async implementation coroutine의 direct `await` → return `F32` ABI normalization → 활성 mode의 concrete return type·numeric range와 struct reconstruction/invariant → allowed `Err` set·모든 recorded conditional error obligation·applicable guarded `ensures`. 서로 다른 conditional error가 동시에 applicable이면 implementation을 해석하기 전에 contract ambiguity다. async impl wrapper has the same sequence under the task-aware reentrant lock.
 
 facade의 always-on ABI pass는 expected type에서 statically concrete `F32` path만 recursive traversal한다. 값이 반올림되면 같은 immutable cott carrier를 다시 만들며 raw Python container를 convert하지 않는다. 이 path의 shape mismatch는 `off`에서도 ABI violation이고 erased `TypeVar` 내부는 static-only다. 이와 별도로 newtype 생성자는 6.2의 carrier ABI와 refinement를 항상 재귀 검사한다.
 
-validator는 alias를 해소하고 cott_runtime nominal class, struct·enum field, container element와 newtype refinement를 재귀 검사한다. ABI traversal has hard depth limit `64` and node limit `1024`, distinct from the contract-test candidate budget; an active nominal cycle is rejected, while memoized sharing of an already validated non-active object is accepted without re-traversal. `Dyn`은 sealed wrapper, exact compiler-owned concrete carrier, exact trait origin·specialization을 검사한다. trait Protocol member-presence는 non-`Dyn` structural boundary check일 뿐이다. `Never` 값은 항상 실패하고 `Opaque`는 wrapper identity와 literal tag를 확인한다. sync/async lazy protocol은 boundary에서 return object만 검사하고 consumption, yield/send, completion, `close`/`aclose`를 미리 실행하거나 전부 validated라고 주장하지 않는다.
+validator는 alias를 해소하고 cott_runtime nominal class, struct·enum field, container element와 newtype refinement를 재귀 검사한다. ABI traversal has hard depth limit `64` and node limit `1024`, distinct from the contract-test candidate budget; an active nominal cycle is rejected, while memoized sharing of an already validated non-active object is accepted without re-traversal. `Dyn`은 sealed wrapper, exact compiler-owned concrete carrier, exact trait origin·specialization을 검사한다. trait Protocol member-presence는 non-`Dyn` structural boundary check일 뿐이다. `Never` 값은 항상 실패하고 `Opaque`는 wrapper identity와 literal tag를 확인한다. sync lazy protocol은 boundary에서 return object만 검사하고 consumption, yield/send, completion, `close`를 미리 실행하거나 전부 validated라고 주장하지 않는다. async lazy protocol은 `off`에서 신뢰 선언이고 다른 mode에서는 wrapper가 실제 operation마다 검사한다.
 
 `test-only` context는 cott 계약 테스트 실행기만 활성화하며 일반 환경 변수로 켤 수 없다. `runtime_validation` 값은 emit 시 facade·wrapper bytes에 compile-time specialize되어 managed file hash에 포함된다. 설치된 runtime은 `cott.toml`, `generation.json`이나 environment에서 mode를 다시 읽지 않는다.
 
@@ -1464,21 +1509,21 @@ validator는 alias를 해소하고 cott_runtime nominal class, struct·enum fiel
 
 Declaration syntax/name/type validity는 항상 checked다. target projection, implementation selection, bounded static proof, runtime verification, contract-test observation은 분리된 capability와 evidence entry다. missing runtime, sandbox, valid candidate, external provenance linkage, execution permission, unsupported formula 또는 fixed proof budget exhaustion은 관련 evidence만 `미관찰` 또는 `신뢰 선언`으로 낮추며 valid declaration을 reject하지 않는다. malformed syntax, unresolved name, invalid generic arity, impossible constant, invalid Opaque tag, inadmissible hash key와 static proof가 실제 반례를 찾은 contract는 hard error다.
 
-bounded proof engine은 `bounded-dnf-difference-constraints` v1만 사용한다. it proves refinement satisfiability and conjunction consistency of unguarded `requires` over its supported affine integer domain. fixed budgets are nodes `1024`, depth `128`, symbols `128`, atoms `1024`, branches `256`; unsupported expression 또는 limit exhaustion yields `unknown`, not a proof. An explicit impl method proves its own concrete method `requires`; a default- or specialization-selected slot proves the selected free function obligation instead and never duplicates it for the slot. `proved` and `unknown` are persisted under `verification.contract_proofs` separately from static checker, runtime capability and contract-test entries. `disproved` includes a counterexample, fails `cott verify`, and exits with code `3`; it is not downgraded into test evidence.
+bounded proof engine은 `bounded-dnf-difference-constraints` v2만 사용한다. refinement satisfiability와 unguarded `requires` conjunction consistency를 sound DNF difference-constraint theory로 증명한다. immutable field path와 `.len` path를 변수로 취급하고, `U64`를 포함한 모든 fixed-width integer domain을 checked wide-integer arithmetic으로 계산한다. 지원 atom은 boolean symbol 및 normalized `x - y <= c`의 equality·ordering뿐이며, nonlinear multiplication·division·modulo, floating-point, quantifier, SMT는 지원하지 않는다. configured proof node/branch budget과 fixed depth `128`, symbols `128`, atoms `1024`를 넘거나 지원하지 않는 formula는 `unknown`이며 proof가 아니다. `proved`는 sound proof, `disproved`는 counterexample과 함께 contract error, `unknown`은 unsupported formula 또는 budget exhaustion이다. An explicit impl method proves its own concrete method `requires`; a default- or specialization-selected slot proves the selected free function obligation instead and never duplicates it for the slot. 이 classification은 `verification.contract_proofs`에 static checker, runtime capability, contract-test entries와 분리해 기록한다.
 
-| 등급 | 의미 | v0.6 예시 |
+| 등급 | 의미 | v0.8 예시 |
 | --- | --- | --- |
-| 정적 증명 | 실행 없이 결정적으로 검사 또는 bounded proof | public symbol, signature, variance/trait closure, guarded recursion, exact helper path; supported refinement/`requires`의 `proved` |
-| 런타임 검사 | 실제 production mode의 실행 경계에서 검사 | eager ABI, `requires`, refinement, allowed error, `ensures`, init/invariant/modifies/cancellation |
-| 테스트 관찰 | deterministic bounded valid case에서 확인 | pure sync/async callable, async protocol lifecycle의 observed prefix |
-| 미관찰 | candidate·budget·execution capability가 없어 실행 증거 없음 | finite recursive candidate 없음, depth/node/lifecycle limit exhausted |
-| 신뢰 선언 | v0.6이 일반적으로 증명/관찰하지 않음 | hidden effect, off-mode optional boundary check, effectful callable, archive-to-install linkage |
+| 정적 증명 | 실행 없이 결정적으로 검사 또는 bounded proof | public symbol, signature, variance/trait closure, guarded recursion, exact helper path; supported refinement/`requires`와 branch reachability의 `proved` |
+| 런타임 검사 | 실제 production mode의 실행 경계에서 검사 | eager ABI, canonical struct invariant, `requires`, refinement, allowed error, `ensures`, init/invariant/modifies/cancellation, async protocol operation |
+| 테스트 관찰 | deterministic bounded valid case 또는 fixture scenario에서 확인 | pure sync/async callable, fixture-authorized effect scenario, configured prefix에서 관찰한 async protocol operation |
+| 미관찰 | candidate·budget·execution capability가 없어 실행 증거 없음 | finite recursive candidate 없음, depth/node/lifecycle limit exhausted, unavailable Linux isolated-loopback |
+| 신뢰 선언 | 자동으로 증명/관찰하지 않음 | hidden effect, off-mode optional boundary check, effectful callable without executable scenario, archive-to-install linkage |
 
-automatic input generator uses IR hash and callable FQN seed, at most 64 candidates, container length 0–3, recursive `JsonValue` depth 4, recursive nominal node budget 64 and strategy lifecycle budget 3. It allocates only productive terminating recursive branches. Factory has no source literal, and `Dyn` requires a compiler-owned initialized concrete case; without one the clause is `미관찰`. impl method instantiates recorded `init_cases` in source order; an impossible required state candidate is `미관찰`.
+automatic input generator uses IR hash and callable FQN seed, at most configured `candidate_limit` candidates, container length 0–3, recursive `JsonValue` depth 4, recursive nominal node budget 64 and configured strategy lifecycle budget. It allocates only productive terminating recursive branches. Factory has no source literal, and `Dyn` requires a compiler-owned initialized concrete case; without one the clause is `미관찰`. impl method instantiates recorded `init_cases` in source order; an impossible required state candidate is `미관찰`. Struct candidate that fails its canonical invariant is discarded deterministically rather than being mistaken for an implementation failure.
 
-automatic contract tests execute only pure sync/async free functions and impl methods whose resolved transitive effect set is empty and whose return is not `Never`, each in a separate deny-by-default OS sandbox. For `AsyncIterator`/`AsyncGenerator`, the pure runner awaits creation, consumes no more than `lifecycle_limit`, checks yielded ABI/contract evidence, and calls `aclose` when available. effectful or `Never` callable and their lifecycle are retained as `신뢰 선언` or `미관찰`; the runner does not import a facade solely to execute them.
+automatic contract tests execute pure sync/async free functions and impl methods whose resolved transitive effect set is empty and whose return is not `Never`, each in a separate deny-by-default OS sandbox. A valid fixture-authorized scenario additionally executes its selected effectful facade. For `AsyncIterator`/`AsyncGenerator`, the pure runner uses the same per-operation wrapper enforcement, observes at most `lifecycle_limit` actual operations, checks send/yield ABI and contract evidence, and calls `aclose` when available. The configured prefix is an observation budget, not a lifecycle-enforcement boundary. effectful or `Never` callable without such a scenario remains `신뢰 선언` or `미관찰`; the runner does not import a facade solely to execute it.
 
-contract test runner calls free-function candidates through staged facade symbols and impl methods through compiler-owned init/public wrapper, then independently evaluates typed IR clauses. verification report retains `{symbol, clause_id, span, evidence: [{grade, mode, valid_cases, reason}]}` for every clause plus separate `contract_proofs`, `static`, `runtime_capability` and `contract_tests` evidence. It never merges these into a highest grade and never upgrades zero cases to test observation.
+For each requires-valid generated case the runner records `eligible_cases`, `applicable_cases`, `satisfied_cases`, `condition_false_cases` and deterministic first witness for every success/conditional-error obligation. It evaluates every conditional-error predicate; when several apply, only the source-order first clause must match the returned `Err`, while lower clauses retain condition/applicability counts without contradiction or satisfaction. An `Err` never satisfies an Ok obligation. A pure callable with valid cases but no observed Ok leaves each success obligation as stable `unobserved` evidence with its exact counters and no fabricated witness; default verification does not reject it solely for that absence. The required top-level Ok success-obligation lint remains, and semantic coverage policy can deny selected unobserved clauses, including always-Err implementations. Zero valid cases remains unobserved. Proof reports success-region and conditional-error reachability as `proved`/`disproved`/`unknown`, but never upgrades implementation coverage. contract report retains exact ids/spans and separate proof/runtime/test evidence.
 
 `CottContractViolation`은 `Exception`의 하위 타입이며 `cott_runtime`에서 import한다. `symbol`, `phase`, clause `span`, expected·actual summary와 original `Exception` cause를 보존한다. verified loader의 identity·origin·hash preflight 실패도 target 호출 전에 `phase = "provenance"`인 이 exception으로 발생한다. facade exception boundary는 lazy load·symbol lookup과 invocation 전체를 감싼다. existing contract violation은 재포장하지 않고, module load `Exception`은 `implementation-load`, implementation `Exception`은 invocation violation으로 변환한다. `CancelledError` is re-raised after the async wrapper's cancellation invariant handling; other `BaseException` is not captured.
 
@@ -1580,17 +1625,50 @@ cache miss 또는 stamp drift의 loader preflight는 target 실행 전에 record
 
 해석된 public free function과 every emitted impl class만 facade와 `__all__`에 포함한다. 미구현 free function 또는 impl method에는 placeholder를 만들지 않고 `current.unresolved`에 기록하며, unresolved method가 있는 impl class 자체도 emit하지 않는다. `cott verify`는 unresolved가 하나라도 있거나 verified facade projection이 전체 IR과 다르면 실패한다.
 
-#### 16.6.1 유지 curriculum generation-first convention
+### 16.7 Facade 우회 감사
 
-유지되는 curriculum module의 source order는 type 선언, 작은 domain leaf function, 더 큰 composition function, domain-named final operation 순서다. 의미 있는 경계만 stage로 공개한다. grammar lesson은 의도적으로 leaf 하나일 수 있고 simple·complex lesson도 domain responsibility가 독립적인 경우에만 stage를 추가한다.
+계약 runtime entry point는 generated public facade뿐이다. compiler는 `PythonArtifactPlan` 뒤 binding/emission 전에 authored `target.python.source` tree를, type/proof/runtime 실행 전에 staged/current deployed artifact tree를 각각 AST로 감사한다. 두 tree 모두 lexical-relative regular single-link `.py`만 허용하며 parent/file symlink, non-regular file, Unix hardlink를 거부한다. dependency site-packages는 provenance 대상이지만 이 project-boundary scan 대상은 아니다.
+
+| 대상/형태 | authored tree | deployed tree |
+| --- | --- | --- |
+| generated public facade의 exact public symbol import | 허용 | compiler-owned facade에서만 허용 |
+| standard library·locked external distribution import | 허용 | runtime/facade 필요분만 허용 |
+| exact manifest binding source | binding role로만 허용 | 없음 |
+| exact hashed `_cott_impl/**/<callable>.py` loader origin | 없음 | generated implementation role로만 허용 |
+| `import`/`from`/alias로 `_cott_impl` 또는 `cott_bindings` | 거부 | 거부 |
+| literal `__import__`, `importlib.import_module` 또는 aliased equivalent로 private target | 거부 | 거부 |
+| computed/unknown dynamic import target | 거부 | 거부 |
+| `_cott_impl`·`cott_bindings` public re-export, `__all__` 노출 | 거부 | 거부 |
+
+검사는 static import, `from`/alias, literal dynamic import와 unknown dynamic target을 rustpython AST/source range로 분류한다. comment/string은 대상이 아니며 first failure에서 멈추지 않는다. 모든 violation은 normalized path, source range, kind 순으로 정렬해 반환한다. `cott_bindings`는 authored binding location일 뿐 public package가 아니고 `_cott_impl`은 loader-only implementation storage다. generated facade는 path/hash verified loader를 사용하며 implementation module을 import/re-export하지 않는다. staged artifact에는 generation record가 허용한 exact runtime origin/hash 이외의 `_cott_impl` 또는 어떤 `cott_bindings`도 존재할 수 없다.
+
+### 16.8 Fixture sandbox와 관찰 경계
+
+fixture scenario는 fresh compiler-owned scratch 하나에서 serial로 실행한다. fixture setup 전에 facade import를 막고 authorization을 설치하며, setup → local endpoint start → facade invocation → clause/assertion observation → task/server stop → root inspection → delete/absence check 순서를 항상 지킨다. import root와 locked distribution은 read-only이고 fixture root만 writable이다. audit hook은 fixture root 밖 filesystem, active endpoint 외 socket/DNS, subprocess, process exit, dynamic code를 거부한다. direct time read는 CPython audit event가 아니므로 runtime clock adapter 밖의 clock access는 observed evidence가 아니라 bypass/unsupported diagnostic이다.
+
+filesystem entry는 descriptor-relative no-follow creation으로 materialize하고 byte/file ceiling을 streaming 중 적용한다. HTTP는 sandbox의 compiler-owned loopback listener 한 개만 사용하며 exact route·relative redirect·body/request/redirect ceiling을 적용한다. transcript는 bounded source-order logical event `{seq, fixture, operation, relative_path|route, outcome, byte_count, occurrence}`만 담고 port, absolute root, PID, host duration, directory iteration order, raw exception은 담지 않는다. failure counter는 scenario-local이며 import/setup/cleanup은 occurrence를 소비하지 않는다. atomic replace evidence는 same fixture directory의 old-or-absent before, observed successful `file.replace`, exact after, declared temporary path absence를 모두 요구한다; injected flush/replace failure에는 old bytes와 cleanup absence가 모두 남아야 한다.
+
+network mode는 `Disabled` 또는 `IsolatedLoopback`이다. 후자는 host network enable이 아니라 Linux bubblewrap network namespace 안에서 compiler-owned listener에만 connect/listen할 수 있다는 뜻이다. external interface·DNS·다른 local port는 계속 deny다. Linux+bubblewrap에서 loopback namespace를 실제로 establish하지 못하면 verification은 `effectful scenario fixtures require supported Linux bubblewrap isolation`으로 unobserved를 남기고 fail closed한다. macOS/Windows, missing/old bubblewrap도 같은 unavailable outcome이며 unsandboxed fallback, trust-to-observed downgrade, external service fallback은 없다. timeout·read/limit error에는 complete sandbox process group을 terminate하고 setup error·assertion failure·exception·cancel·timeout·success 모두에서 cleanup한다. cleanup failure는 success를 override한다.
+
+### 16.9 Semantic coverage 정책
+
+`verified`는 artifact/type/runtime/proof/runner verification이 성공하여 snapshot을 certify했음을 뜻하고, semantic coverage CI policy와 별개다. Canonical IR clause inventory `(symbol, kind:clause_id, span)`와 runner contract evidence의 one-to-one join만 coverage truth source다. normalized status는 positive valid-case `test observation`의 `observed`, `unobserved`, `trust declaration`, 그리고 missing/duplicate/contradictory/unrecognized evidence의 `unknown` 네 가지뿐이다. doc, generator rule, log, proof outcome, rerun은 `unknown`을 repair하거나 grade를 승격할 수 없다.
+
+`[[verification.coverage.rules]]`는 exact canonical callable `symbol`, nonempty sorted-unique `clauses=["ensures:2","error:5"]`, 그리고 `allow_unobserved`, `allow_trust_declaration`, `allow_unknown` boolean만 가진 deny-unknown policy다. duplicate `(symbol, clause)` selection, invalid selector/qname와 empty clause list는 manifest error다. rule이 없으면 selected clause도 gate도 없다. selected clause는 manifest allowance가 없을 때 해당 status로 deterministic violation이 되고 unselected clause는 gate하지 않는다.
+
+verify는 모든 evidence를 먼저 finalize하고 `current.verified=true`, closed `semantic_coverage={clauses,summary,policy}`와 `last_verified`를 atomic publish한다. 그 뒤 policy violation이면 verification certification을 되돌리지 않고 sorted violation과 coverage summary를 출력하여 distinct exit code `8`로 실패한다. policy passed이면 ordinary verify success다. runtime loader는 artifact `verified`만 보고 project coverage policy를 재평가하지 않는다. 따라서 policy-failed yet artifact-verified snapshot도 loadable이며 policy를 runtime의 두 번째 truth boundary로 만들지 않는다.
+
+### 16.10 유지 example generation-first policy
+
+유지 inventory는 grammar 6개(`checked-add`, `assignment-rule`, `cta-row`, `fractional-range-values`, `portfolio-cost`, `stock-record`), simple 3개(`alphabetical-file-groups`, `calculator`, `decimal-binary`), 순수 complex curriculum 1개(`artifact-pipeline`), 별도 full-generation fixture `process-bar`, focused feature 7개(`declarations-generics`, `contracts-evidence`, `boundary-protocols`, `trait-protocol`, `json-transform`, `effects-selection`, `workflow-scenario`), multi-module `order-management`, FastAPI external projection `fastapi-hello`로 총 20 project다. `process-bar`는 curriculum count에 넣지 않는다.
+
+유지되는 curriculum module의 source order는 type 선언, 작은 domain leaf function, 더 큰 composition function, domain-named final operation 순서다. 의미 있는 경계만 stage로 공개한다. grammar lesson은 의도적으로 leaf 하나일 수 있고 simple·complex lesson도 domain responsibility가 독립적인 경우에만 stage를 추가한다. `artifact-pipeline`은 순수 topological artifact-plan composition이고, `process-bar`는 `foo.bar` 전체의 unresolved-to-agent-generation 전환을 집중적으로 보이는 fixture다.
 
 `.cott` declaration은 항상 bodyless다. free-function composition edge는 `from <exact cott module> import <declared public function>` 형태의 alias-free import로 exact generated public facade를 통과해야 하며 implementation file끼리 직접 호출하지 않는다. same-file private helper call은 implementation detail이고 impl canonical function의 only cross-contract method composition edge는 `self.<declared_method>(...)` public wrapper다. effect verifier는 caller와 same-file helper가 도달하는 Cott facade callee의 declared effects를 transitive하게 검사한다; external/stdlib operation은 declaration의 trust boundary로 남는다. helper가 Cott로 승격되어 public function이 되면 모든 ABI-valid input에 선언된 결과를 반환하거나 caller가 호출 전에 확립할 수 있는 Cott `requires`를 선언해야 한다.
 
-`examples/grammar/checked-add`만 manifest binding syntax를 가르치는 lesson이다. 이 project만 `[target.python.implementations]` mapping과 `python/cott_bindings/<cott module>/<function>.py`의 authored source를 checkout에 둔다. 16.5의 manifest binding과 source/runtime provenance 규칙은 일반 product feature로 계속 지원하지만 다른 유지 example의 authoring model은 아니다.
+`checked-add`는 manifest binding syntax를 집중적으로 가르치는 lesson이다. 구현 선택은 항상 각 project의 `[target.python.implementations]`과 generation record가 정한다. Binding은 compatible project-local implementation을 선택할 뿐 Cott contract를 정의하지 않으며, example마다 binding 또는 agent implementation을 임의로 일반화해서는 안 된다. checkout에 commit된 `generated/`는 compiler-owned result이고, agent-owned free-function `python/_cott_impl/<cott module>/<function>.py` 및 impl-method `python/_cott_impl/<cott module>/<Concrete>/<method>.py`는 matching `agent_runs` provenance가 있는 실제 `cott generate --agent <agent> --target python` 성공 결과다. `.venv/`, `.cott/`, `__pycache__/`는 transient이며 managed artifact나 evidence가 아니다.
 
-나머지 41개 curriculum project와 `examples/complex/process-bar`에는 implementation mapping이나 authored `cott_bindings` function source가 없다. checkout에 유지하는 free-function `python/_cott_impl/<cott module>/<function>.py`, impl-method `python/_cott_impl/<cott module>/<Concrete>/<method>.py`와 `generated/` tree는 모두 실제 `cott generate --agent <agent> --target python` 성공 결과여야 하며 generation record의 matching `agent_runs` provenance를 보존한다. 이 generated source를 제거한 clean contract state에서 `cott emit python`은 agent를 호출하지 않고 unresolved metadata만 materialize하고, `cott generate`는 각 미구현 callable의 Cott contract와 allowed direct helper contract로 prompt를 만들어 callable별 durable source를 다시 생성한다. 생성 뒤 composition도 위 exact facade 경계를 통과하며 모든 public free function과 impl method가 생성되어야 `cott verify`가…
-
-유지되는 curriculum은 generic `run` function, forwarding alias, direct implementation-to-implementation call, duplicated validation, nominal-wrapper-only helper를 금지한다.
+`cott emit python`은 agent를 호출하지 않고 compiler-owned output과 unresolved metadata만 materialize한다. `cott generate`는 eligible unresolved callable에만 callable별 durable source를 생성한다. 생성 뒤 composition도 위 exact facade 경계를 통과하며 필요한 implementation selection과 managed artifact가 모두 일치해야 `cott verify`가 certify한다. 유지되는 example은 generic `run` function, forwarding alias, direct implementation-to-implementation call, duplicated validation, nominal-wrapper-only helper를 금지한다.
 
 ---
 
@@ -1633,9 +1711,9 @@ cott는 17.1의 입력을 하나의 callable별 구현 지시로 구성하여 �
 
 각 에이전트 adapter는 실행 파일, prompt 전달 방식, 작업 디렉터리, 환경 변수, 종료 상태를 명시한다.
 
-compiler release마다 adapter별 minimum supported CLI version과 exact argv template를 고정한다. v0.6은 Codex CLI `>=0.147.0`, OMP `>=17.2.12`를 허용한다. executable은 `PATH`에서 한 번 resolve하고 version probe부터 아래 containment에서 실행한다. version output이 해석 불가능하거나 minimum version보다 낮으면 본 실행 전에 실패한다.
+compiler release마다 adapter별 minimum supported CLI version과 exact argv template를 고정한다. v0.8은 Codex CLI `>=0.147.0`, OMP `>=17.2.12`를 허용한다. executable은 `PATH`에서 한 번 resolve하고 version probe부터 아래 containment에서 실행한다. version output이 해석 불가능하거나 minimum version보다 낮으면 본 실행 전에 실패한다.
 
-v0.6의 exact main-process argv template는 다음과 같다. 각 항목은 shell 재해석 없이 별도 argv다. `<workspace>`·`<scratch>/omp.yaml`·`<seconds>`와 `<prompt>`만 run별 값으로 치환한다.
+v0.8의 exact main-process argv template는 다음과 같다. 각 항목은 shell 재해석 없이 별도 argv다. `<workspace>`·`<scratch>/omp.yaml`·`<seconds>`와 `<prompt>`만 run별 값으로 치환한다.
 
 * Codex: `codex exec --strict-config --ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox workspace-write --color never --cd <workspace> -`; prompt bytes는 stdin으로 전달한다.
 * OMP: `omp -p --cwd <workspace> --no-session --no-rules --no-skills --no-extensions --no-lsp --no-pty --no-title --tools read,grep,glob,edit,write --approval-mode yolo --max-time <seconds>s --config <scratch>/omp.yaml <prompt>`; prompt는 마지막 단일 argv다.
@@ -1792,7 +1870,7 @@ cott init <path> --format json
 
 `init`은 아직 project가 없어서 17.4의 project lock/journal을 쓰지 않는 유일한 명령이다. canonical parent directory handle 아래에 mode `0700` private sibling temporary scaffold를 만들고 target root의 mode `0600` `.cott-init` file에 closed `schema_version`·nonce ownership record를 저장한다. 모든 file을 fsync한 뒤 directory를 bottom-up fsync하고, Linux `renameat2(RENAME_NOREPLACE)` 또는 macOS `renameatx_np(RENAME_EXCL)`에 해당하는 같은-parent atomic no-replace rename으로만 publish한 다음 parent를 fsync한다. publish 전 실패는 init-owned temp를 no-follow로 제거하고 parent를 fsync한다. 경합 `EEXIST`는 이 cleanup까지 성공한 경우에만 exit `2`이며, 다른 scaffold·rename·fsync 실패나 cleanup 실패는 exit `6`이다. publish 뒤에는 uv 실행과 모든 probe를 먼저 완료한다. `.cott-init` unlink가 final commit transition이며, unlink 전 실패는 root file identity와 in-memory nonce가 marker record와 모두 일치하는 init-owned target만 no-follow로 제거하고 parent를 fsync한 뒤 원래 exit code를 반환한다. identity가 달라졌거나 cleanup이 실패하면 target을 보존하고 exit `6`을 반환한다. unlink를 시작한 뒤에는 target을 자동 삭제하지 않는다. unlink 또는 이어지는 target-root fsync가 실패하면 exact completed tree나 ownership-marked completed tree를 보존하고 exit `6`과 수동 확인 경로를 진단하며, 둘 다 성공해야 init이 성공한다. process crash로 남은 ownership-marked temp·target도 다음 init이 자동 삭제하거나 overwrite하지 않고 exit `2`와 수동 확인 경로를 진단한다. uv가 한 번이라도 시작된 뒤 실패하면 선택된 human 또는 JSON diagnostic에 global managed-Python·cache 변경이 남고 rollback되지 않을 수 있음을 반드시 포함한다.
 
-scaffold는 `python/.python-version`에 `3.14`를 쓰고 `python/pyproject.toml`의 `requires-python`을 `>=3.14.6,<3.15`로 고정하며 BasedPyright `>=1.39.9`를 dev dependency로 둔다. v0.6은 CPython `>=3.14.6,<3.15`와 uv `0.12.3` 이상을 지원하며, init은 그 범위의 managed CPython patch를 설치·probe한다. `uv.lock`은 Python exact patch를 고정하지 않으며, 실제 설치된 full patch는 이후 generation provenance에 고정한다.
+scaffold는 `python/.python-version`에 `3.14`를 쓰고 `python/pyproject.toml`의 `requires-python`을 `>=3.14.6,<3.15`로 고정하며 BasedPyright `>=1.39.9`를 dev dependency로 둔다. v0.8은 CPython `>=3.14.6,<3.15`와 uv `0.12.3` 이상을 지원하며, init은 그 범위의 managed CPython patch를 설치·probe한다. `uv.lock`은 Python exact patch를 고정하지 않으며, 실제 설치된 full patch는 이후 generation provenance에 고정한다.
 
 uv executable은 shell 없이 PATH에서 한 번만 canonical regular file로 resolve하고 version이 `0.12.3` 이상인지 검사한다. uv subprocess environment는 empty base에서 compiler-fixed sanitized `PATH`와 허용한 `HOME`·temporary-directory·platform TLS/certificate 변수만 복사하고 inherited `UV_*`, `VIRTUAL_ENV`, `CONDA_PREFIX`는 전부 제외한 뒤 `UV_PYTHON`·`UV_PROJECT_ENVIRONMENT`만 해당 단계에 명시하며 canonical uv를 `--no-config`로 실행한다. `<uv> --no-config python dir`의 canonical managed-install root를 기록한 뒤 다음 순서로 실행한다: `<uv> --no-config python install --upgrade 3.14`; `<uv> --no-config python find --managed-python --system 3.14`가 반환한 canonical path가 그 root 아래인지 확인하고 해당 interpreter를 `-I -c <compiler-fixed-identity-probe>`로 실행해 CPython `>=3.14.6,<3.15`를 검증; project cwd `python/`에서 lock, sync 순서를 수행한다.
 
@@ -1857,15 +1935,15 @@ cott verify
 * facade와 tool-only stub의 독립적인 Canonical IR 일치
 * BasedPyright strict 결과와 binding/agent source의 static signature
 * binding/agent file의 canonical symbol/path·exact signature, same-file private helper/`Final` policy와 allowed `self` method edge
-* deterministic init-case construction을 포함한 순수 free function/impl method 계약 테스트, init/invariant/modifies clause별 evidence와 미관찰 사례의 정확한 등급 강하
+* deterministic init-case construction과 canonical struct candidate filtering을 포함한 pure/fixture scenario contract test, init/invariant/modifies/success/conditional-error clause별 counts·witness·unobserved evidence
 * unresolved callable과 compiler-owned stale module·symbol, stale durable implementation 진단
 * generated copy의 verified-loader runtime signature, facade/type/source/runtime origin·content hash와 copy byte identity
-* direct cott facade import의 exact module·public free-function identity와 금지된 module·alias·type·constant·star·`_cott_impl` import
+* authored/deployed tree의 facade-only AST audit, `_cott_impl`·`cott_bindings` direct/dynamic import·re-export와 symlink/hardlink/unknown import 거부
 * 모든 external import의 selected lock entry, installed distribution identity·version·metadata·origin·content hash와 archive-to-install 신뢰 등급
-* configured mode의 public callable `requires`, concrete 반환 타입, allowed error variant와 `ensures`, always-on impl init/state checks
-* recursive-placement `Opaque` tag/key admissibility와 reserved target path, staging allowlist, filesystem·effect sandbox와 transaction recovery, current/last_verified provenance
+* configured mode의 public callable `requires`, concrete 반환 타입, canonical struct invariant, allowed error variant와 `ensures`, always-on impl init/state checks
+* recursive-placement `Opaque` tag/key admissibility와 reserved target path, staged sandbox/isolated-loopback fixture authorization·cleanup·process-group containment, closed semantic coverage/policy와 current/last_verified provenance
 
-`cott verify`는 result cache를 사용하지 않고 현재 contract·manifest·lock·implementation input에서 expected IR·Python·stub·docs·test artifact를 staging에 다시 만든 뒤 실제 managed file 집합과 byte-for-byte 비교한다. input drift는 새 검증 대상으로 허용하지만 missing·extra·hand-edited managed file은 hard failure이며 `cott emit` 또는 `cott generate`로 먼저 갱신해야 한다. verify는 source와 managed file을 고치지 않고, 시작 snapshot이 실행 중 달라져도 실패한다. 모두 성공한 뒤 `generation.json`만 journal transaction으로 갱신해 같은 snapshot을 `current.verified = true`와 `last_verified`에 기록한다.
+`cott verify`는 result cache를 사용하지 않고 현재 contract·manifest·lock·implementation input에서 expected IR·Python·stub·docs·test artifact를 staging에 다시 만든 뒤 실제 managed file 집합과 byte-for-byte 비교한다. input drift는 새 검증 대상으로 허용하지만 missing·extra·hand-edited managed file은 hard failure이며 `cott emit` 또는 `cott generate`로 먼저 갱신해야 한다. verify는 source와 managed file을 고치지 않고, 시작 snapshot이 실행 중 달라져도 실패한다. artifact verification이 성공하면 `generation.json`만 journal transaction으로 갱신해 same snapshot의 `current.verified=true`, complete evidence/`semantic_coverage`, `last_verified`를 먼저 publish한다. 이후 selected coverage policy 위반은 이 certified record를 되돌리지 않고 exit `8`로 gate만 실패시킨다.
 
 ### 18.8 변경점 확인
 
@@ -1924,11 +2002,12 @@ cott lsp
 | `5` | agent 또는 init uv 실행·probe 실패, timeout 또는 취소 |
 | `6` | init filesystem·cleanup·atomic no-replace rename, lock, 동시 수정, sandbox 또는 원자적 반영 실패 |
 | `7` | `cott diff --exit-code`에서 breaking contract 발견 |
-| `8` | `cott fmt --check` format mismatch |
+| `8` | certified semantic coverage policy gate 실패 |
+| `9` | `cott fmt --check` format mismatch |
 
-`cott diff`는 기본적으로 차이를 출력하고 0을 반환하며 `--exit-code`에서만 breaking change를 7로 반환한다. `cott emit`의 미구현 진단과 `verified = false`는 emitter 자체가 성공했다면 0이지만 배포 성공을 뜻하지 않는다.
+`cott diff`는 기본적으로 차이를 출력하고 0을 반환하며 `--exit-code`에서만 breaking change를 7로 반환한다. `cott emit`의 미구현 진단과 `verified = false`는 emitter 자체가 성공했다면 0이지만 배포 성공을 뜻하지 않는다. policy-failed verify는 generic `verified` success line을 출력하지 않지만 record는 publication되어 diff/provenance가 policy failure를 관찰할 수 있다.
 
-여러 문제가 동시에 있으면 argument·subcommand 및 init의 missing/unsupported uv·invalid args/path/name 오류 `2` → init filesystem·cleanup·atomic no-replace rename과 lock·journal recovery `6` → cleanup이 성공한 init target collision `2` → manifest 구성 `2` → diff baseline resolution `2` → cott semantic `3` → implementation·provenance `4` → agent 또는 init uv 실행·probe `5` → formatter 비멱등성 등 internal compiler error `1` → apply `6` → command-specific diff·format 상태 `7`·`8` 순서에서 처음 검출된 실패 하나를 반환한다. code를 합치거나 더 늦은 오류로 덮어쓰지 않는다.
+여러 문제가 동시에 있으면 argument·subcommand 및 init의 missing/unsupported uv·invalid args/path/name 오류 `2` → init filesystem·cleanup·atomic no-replace rename과 lock·journal recovery `6` → cleanup이 성공한 init target collision `2` → manifest 구성 `2` → diff baseline resolution `2` → cott semantic `3` → implementation·provenance `4` → agent 또는 init uv 실행·probe `5` → formatter 비멱등성 등 internal compiler error `1` → apply `6` → command-specific diff·coverage-policy·format 상태 `7`·`8`·`9` 순서에서 처음 검출된 실패 하나를 반환한다. code를 합치거나 더 늦은 오류로 덮어쓰지 않는다.
 
 ---
 
@@ -2088,6 +2167,12 @@ interpreter = ".venv/bin/python"
 type_checker = ".venv/bin/basedpyright"
 runtime_validation = "boundary"
 
+[verification]
+proof_node_limit = 1024
+proof_branch_limit = 256
+candidate_limit = 64
+lifecycle_limit = 3
+
 [target.python.external_types]
 "foo.data.HttpRequest" = "starlette.requests:Request"
 
@@ -2098,10 +2183,24 @@ runtime_validation = "boundary"
 rules = "AGENTS.md"
 timeout_seconds = 900
 ```
-
 MVP manifest schema는 닫혀 있고 Python target 하나만 허용한다. `[effects]`, `[target.python.implementations]`, `[target.python.external_types]`의 동적 key 외 unknown table·field는 configuration error다. `[target.python.external_types]` key는 quoted fully qualified Cott external symbol이고 value는 `module:Qualname`이다; key는 선언된 external type에 정확히 하나씩 대응해야 하며 non-external·missing·stale key, malformed module/qualname과 prompt에 안전하지 않은 value는 configuration error다. 이 projection table은 target configuration일 뿐 Canonical IR이나 implementation selection에 들어가지 않는다.
 
-`[project]`의 `name`·`version`·`source`와 `[target.python]`의 `source`·`generated`·`stubs`·`interpreter`·`type_checker`·`runtime_validation`은 필수다. `lockfile`은 아래 dependency 규칙의 조건부 필드이고 `[effects]`, `[target.python.implementations]`, `[target.python.external_types]`, `[generator]`는 선택이다. `[generator]`가 없으면 `timeout_seconds = 900`이고 project coding rule은 없으며, 있으면 `rules`는 선택적인 project-relative regular file이고 `timeout_seconds`는 선택적인 1–3600 정수다.
+`[verification]`은 선택적 closed table이며 proof/candidate/lifecycle limit과 closed `[verification.fixtures]`, `[verification.coverage]`만 허용한다. 누락하면 default를 사용하고 zero, non-integer, unknown key 또는 hard maximum 초과는 configuration error로 즉시 fail closed하며 managed tree를 쓰지 않는다.
+
+| field | default | hard maximum | 용도 |
+| --- | ---: | ---: | --- |
+| `proof_node_limit` | 1024 | 16384 | bounded proof node |
+| `proof_branch_limit` | 256 | 4096 | bounded proof branch |
+| `candidate_limit` | 64 | 1024 | contract-test candidate |
+| `lifecycle_limit` | 3 | 64 | async worker/tick observation |
+| `fixtures.scenario_timeout_ms` | 1000 | 60000 | scenario wall bound |
+| `fixtures.filesystem_bytes` / `filesystem_files` | 16777216 / 256 | 268435456 / 4096 | compiler-owned fs ceiling |
+| `fixtures.http_body_bytes` / `http_requests` / `http_redirects` | 1048576 / 64 / 8 | 16777216 / 4096 / 64 | local HTTP ceiling |
+| `fixtures.transcript_events` | 1024 | 16384 | fixture evidence ceiling |
+
+fixture limits are resource ceilings only: fixture content, path, route, host, command, script and plugin registration are manifest syntax가 아니다. `[[verification.coverage.rules]]`의 exact selector/allow booleans는 16.9 규칙을 따르며 별도 suppression/severity knob는 없다. effective verification budget과 fixture ceiling은 strategy v5와 verification evidence에 기록한다. limit 변경은 `proved`·`disproved`·`unknown`, test observation·`미관찰`의 의미를 바꾸지 않는다.
+
+`[project]`의 `name`·`version`·`source`와 `[target.python]`의 `source`·`generated`·`stubs`·`interpreter`·`type_checker`·`runtime_validation`은 필수다. `lockfile`은 아래 dependency 규칙의 조건부 필드이고 `[effects]`, `[target.python.implementations]`, `[target.python.external_types]`, `[generator]`, `[verification]`는 선택이다. `[generator]`가 없으면 `timeout_seconds = 900`이고 project coding rule은 없으며, 있으면 `rules`는 선택적인 project-relative regular file이고 `timeout_seconds`는 선택적인 1–3600 정수다.
 
 모든 manifest path는 project-relative normalized path여야 하며 absolute path와 `..`를 거부한다. content file·directory는 symlink일 수 없다. `[project].source`, `[target.python].source`, artifact root, `tests/generated`, `.cott` directory root는 서로 disjoint하며 중첩할 수 없다. artifact root는 필수 `[target.python].generated`의 parent directory로 derive하고 `generated`의 basename은 반드시 `python`이어야 한다. `[target.python].stubs`는 `<artifact-root>/stubs`여야 하며 IR·docs·record는 각각 `<artifact-root>/ir`, `<artifact-root>/docs`, `<artifact-root>/generation.json`으로 derive한다. executable path만 symlink를 해소해 canonical regular file로 실행한다.
 
@@ -2184,6 +2283,12 @@ cott init <path> --format json
 
 byte offset은 0-based end-exclusive, line·Unicode-scalar column은 1-based end-exclusive인 15.4의 span 규칙을 따른다. `severity`는 `error`, `warning`, `note`의 closed enum이고 `related` 원소는 `{span, message}`다. source가 없는 manifest·tool·sandbox 오류는 `span: null`이다.
 
+### 20.1 그림자 명세 경고
+
+`COTT-K101`은 warning `possible shadow specification`이다. 실행 가능한 증거나 proof가 아니며 command exit status를 바꾸지 않는다. scanner는 declaration doc의 exact sentence와 reserved generator directive만 본다. doc candidate는 `.`, `!`, `?`, newline에서 split한 원 source byte span이며 closed ASCII case-insensitive modal `must`, `shall`, `required to`, `must not`와 facet anchor를 모두 가져야 한다. facet은 source-order `return`, `limit`, `error`, `atomicity`, `cleanup`뿐이다. ordinary 설명, implementation instruction, modal-only prose와 arbitrary generator guidance는 인식하지 않는다.
+
+generator rules의 reserved single-line syntax는 `cott-domain <fully.qualified.callable> <return|limit|error|atomicity|cleanup>: <nonempty UTF-8 text>`다. LF만 허용하며 malformed reserved line, unknown facet, bad canonical symbol, duplicate `(symbol, facet)`는 hard diagnostic이다. 원 bytes는 prompt에 그대로 남고 scanner가 rewrite하지 않는다. formal evidence가 effective resolved `ensures`이면 return, refinement/requires/ensures이면 limit, `error`이면 error, scenario fixture/atomic assertion이면 atomicity, scenario cleanup evidence이면 cleanup candidate를 suppress한다. scenario가 없는 경우 expressible clause/effect evidence만 suppress하며 나머지는 경고로 남긴다. diagnostic은 exact sentence/directive payload span, source order와 facet order로 안정 정렬하고 generator-file finding에는 callable declaration을 related evidence로 붙인다.
+
 ---
 
 ## 21. 포맷터 규칙
@@ -2193,145 +2298,78 @@ cott는 idempotent한 공식 format 하나만 제공한다.
 * UTF-8, LF newline, file 끝 newline 하나
 * indentation 4 spaces, tab·trailing whitespace 금지
 * token 사이 spacing과 operator 양쪽 한 space
-* module 뒤 빈 줄 하나; contiguous `use` declaration 사이는 붙이고 그 block 뒤와 top-level declaration 사이는 빈 줄 하나; field·variant·같은 clause group은 빈 줄 없이 한 logical line에 하나, non-empty clause group 사이는 빈 줄 하나
-* parameter·import-name·type-argument·payload·effects comma-list는 rendered line의 Unicode-scalar column 수가 100 이하이면 한 줄로 유지하고, 넘으면 결정적으로 item별 line로 나누며, 이 multiline list에는 grammar가 허용하는 경우에만 trailing comma를 붙임
-* single-line list의 trailing comma와 grammar가 허용하지 않는 trailing comma는 제거
-* contract expression은 Unicode-scalar column 수가 100 이하이면 한 줄로 유지하고, 넘으면 괄호를 추가한 뒤 낮은 precedence operator부터 결정적으로 나눔
-* `doc`, `requires`, `ensures`, `error`, `effects` group order와 각 group 내부 source order 보존
-* comment의 다음 syntax node attachment, literal spelling과 `doc` content 보존
+* module 뒤 빈 줄 하나; contiguous `use` declaration 사이는 붙이고 그 block 뒤와 top-level declaration 사이는 빈 줄 하나
+* struct field 뒤 invariant group 앞에는 빈 줄 하나, fixture/step과 clause group은 source order를 보존
+* parameter·import-name·type-argument·payload·effects comma-list는 rendered line의 Unicode-scalar column 수가 100 이하이면 한 줄로 유지하고, 넘으면 결정적으로 item별 line로 나누며 grammar가 허용할 때만 trailing comma를 붙임
+* contract/scenario expression은 100 column을 넘으면 괄호를 추가한 뒤 낮은 precedence operator부터 결정적으로 나눔
+* literal spelling, `doc` content와 comment attachment를 보존
 
-legal breakpoint가 없는 string·qualified name은 Unicode-scalar column 수가 100을 넘을 수 있다. parse error가 있으면 file을 쓰지 않는다. `cott fmt --check`는 formatter output과 raw input bytes를 비교하고, 두 번 format한 결과가 한 번 결과와 다르면 compiler bug로 실패한다.
+parse error가 있으면 file을 쓰지 않으며 `cott fmt --check`는 formatter output과 raw input bytes를 비교한다. 두 번 format한 결과가 한 번 결과와 다르면 compiler bug다.
 
 ---
 
-## 22. v0.6 구현 범위
+## 22. v0.8 구현 범위
 
-### 22.1 v0.6에 포함
+### 22.1 v0.8에 포함
 
-* v0.6 grammar, const generic, heterogeneous `Tuple`, `Array`, `Buffer`, aggregate constant와 guarded recursive nominal type
-* immutable type/enum/resource, associated projection/assignment, trait inheritance closure, specialization, declaration-site variance와 sealed exact `Dyn`
-* sync/async free function·trait/impl method, task-aware reentrant async impl lock, cancellation boundary, async protocol bounded lifecycle observation
-* unified match guard, rule composition, ordered error, resource transition, transitive Cott effect check
-* Canonical IR v7, generation schema/domain v5, runtime ABI5, contract strategy v3와 project API version identity
-* Python facade/stub/runtime, static ABI check, bounded proof, separate runtime/test evidence, verified loader, deterministic contract test
-* `current`/`last_verified` provenance and project-version-aware contract/implementation diff with migration advice
+* v0.8 grammar, const generic, heterogeneous `Tuple`, `Array`, `Buffer`, aggregate constant, guarded recursion, `struct field* invariant*`와 five closed invariant intrinsic
+* canonical frozen struct constructor와 active-boundary reconstruction, Result Ok success obligation, complete conditional-error overlap/reachability evidence
+* sync/async free function·trait/impl method, task-aware reentrant async impl lock, bounded protocol observation
+* finite facade-only scenario state machine, closed fs/http/clock/failure fixtures, compiler-owned Linux isolated-loopback sandbox, bounded trace/transcript와 cleanup/atomicity evidence
+* `COTT-K101` shadow warning, authored/deployed facade bypass audit, deterministic canonical-evidence inventory와 separated certification/coverage-policy gate
+* Canonical IR v8, generation schema/domain v7/`cott.generation.v7`, runtime ABI7, contract strategy v5, diagnostics schema v1와 project API version identity
+* Python facade/stub/runtime, static ABI check, bounded proof v2, verified loader, deterministic pure/scenario contract test, `current`/`last_verified` provenance and diff/migration advice
 
-### 22.2 v0.6에서 제외
+### 22.2 v0.8에서 제외
 
-* `.cott` execution body, parameter default, generic overload
-* ownership, borrow checker, lifetime
-* arbitrary/unbounded theorem proving, arbitrary/unbounded recursive candidate expansion 또는 lifecycle observation
-* Cott 밖 Python call graph/effect inference, project-local implementation direct import
-* mutable Cott container state, arbitrary `old()`, automatic refactoring/adapter/exception conversion
+* `.cott` execution body, parameter default, generic overload, arbitrary call/lambda/quantifier와 user-defined fixture/plugin
+* ownership, borrow checker, lifetime, arbitrary/unbounded theorem proof·candidate expansion·lifecycle observation
+* Cott 밖 Python call graph/effect inference, private implementation entry, mutable Cott container state, arbitrary `old()`, automatic refactoring/adapter/exception conversion
 * multi-target backend, full IDE plugin, multi-project Python environment, external struct/enum direct binding
 * dependency resolver/package manager, live reader transaction snapshot isolation, installed wheel whole-origin verification
+* non-Linux or unsandboxed effect-fixture execution; unavailable capability is explicit unobserved, never an alternate profile
+
 ---
 
-## 23. MVP 완료 기준
+## 23. 완료 기준
 
-MVP는 다음 조건을 모두 자동 검증할 때 완료다.
+v0.8은 다음을 모두 자동 검증할 때 완료다.
 
-1. 14장 예시를 clean checkout에서 parse, emit, generate, verify할 수 있다.
-2. module path가 injective하고 reserved prelude·target path 충돌이 emit 전에 실패한다.
-3. syntax, name, type와 contract 오류가 정확한 source span을 가진다.
-4. 모든 declaration·type·contract clause와 pattern이 normative schema를 통과하는 typed IR node며 ambient name과 불법 expression을 거부한다.
-5. conditional `error` priority와 error list의 allowed variant exhaustiveness를 source order에서 결정적으로 보존한다.
-6. public constant와 impl class를 포함한 public symbol이 IR, type module, facade, stub과 diff에 동일하게 나타난다.
-7. facade와 stub을 각각 `public_python_symbols(IR)`과 비교하고 declared `Any`·`Unknown`을 각각 `typing.Any`·`object`로 보존하며 누락 annotation과 혼동하지 않는 compiler-owned BasedPyright strict 검사를 통과한다.
-8. project identity가 일치하는 `cott_runtime` 하나만 표준 union, container, numeric metadata와 contract exception identity를 소유한다.
-9. statically concrete `F32` binary32 normalization을 모든 mode에서, integer range를 검사가 활성화된 ABI boundary에서 보존한다.
-10. `Path`, `Unit`, `Never`, `Any`, `Unknown`, sync/async iterator·generator protocol, `Dyn`, `JsonValue`, `Opaque`, external type, struct, enum, newtype, heterogeneous tuple, Array와 Buffer ABI를 보존한다.
-11. type/const variance, associated projection/assignment, inherited trait closure, specialization selection과 exact `Dyn` generic trait identity를 static verifier와 BasedPyright/runtime에서 유지한다.
-12. newtype constructor는 모든 mode에서 carrier ABI와 refinement를 재귀 검사하고 raw Python container를 받지 않는다.
-13. boundary mode는 public callable concrete nested value, `requires`, allowed error variant와 `ensures`를 검사한다.
-14. compiler-owned impl init은 exact state assignment·init clauses·post-init invariant를, sync/async method wrapper는 identity state snapshot·`modifies`·transition·normal `Ok`/`Err` invariant를 모든 mode에서 검사한다. sync wrapper는 per-instance `RLock`, async wrapper는 task-aware reentrant lock으로 serialize하고 cancellation 뒤 invariant를 검사한 뒤 cancellation을 재전파한다.
-15. off·test-only mode는 16.4 표보다 강한 보증을 보고하지 않으며 `Dyn`는 exact sealed wrapper와 compiler-owned carrier만 받는다.
-16. 자동 test input은 refinement·`requires`를 만족하고 productive recursive nominal branch와 fixed candidate/node/depth budget을 지키며, impl method는 deterministic init case로 instantiate하고 생성 실패 clause를 `미관찰`로 보고한다.
-17. pure free-function/impl-method test는 deny-by-default OS sandbox에서 facade wrapper를 통해서만 실행하고 effectful callable과 `Never` 반환 callable은 자동 실행하지 않는다. pure async protocol은 bounded yield/completion/`aclose` lifecycle만 관찰한다.
-18. free-function binding과 implementation import를 이번 staged type module·Canonical IR에 대해 import 없이 해석하고, project-local module access는 compiler-generated package/facade namespace로 제한하며 cross-contract call은 declared public function 또는 `self` method wrapper만 허용해 각 callable을 별도로 생성·검증한다.
-19. impl class는 ordinary final slot shell이며 inheritance·subclassing·dynamic attribute·`__del__` 없이 inherited trait closure를 exact coverage하고 every explicit sync/async impl method가 canonical agent-only helper/path, default/specialization slot이 compiler-owned exact target, same-file private helper/`Final` policy로 해석됨을 검증한다.
-20. 모든 implementation external import는 frozen production dependency closure의 selected lock hash, installed distribution identity·version·metadata·origin·content hash 없이는 실패하며 archive-to-install 연결의 신뢰 등급을 정직하게 보고한다.
-21. local implementation은 generated runtime copy로 고정하고 verified loader가 그 exact bytes를 실행 전 검증한다.
-22. implementation signature, numeric metadata, source/runtime origin, copy byte identity와 content drift를 탐지하고 impl provenance/unresolved record를 canonical callable symbol과 kind로 남긴다.
-23. agent는 user-selected supported CLI만 shell 없이 callable별 process와 single-file write sandbox에서 실행하며 impl method manifest binding을 거부한다.
-24. 선택 callable file 외 project·contract·manifest·binding·non-selected implementation 변경을 막는다.
-25. 최초 partial generate와 verified-baseline partial generate 규칙을 구분하고 baseline declaration의 비선택 surface를 보존하되 새 declaration 추가를 허용하며 항상 `current.verified = false`로 남긴다.
-26. unresolved free function 또는 impl method, incomplete public projection이 full verify를 실패시킨다.
-27. successful full verify만 동일한 current snapshot을 `last_verified`로 승격한다.
-28. `cott diff` 기본 baseline은 `last_verified`이며 contract, implementation과 stale implementation을 구분한다.
-29. semantic·implementation input drift가 `generation_id`를 바꾸고 target을 다시 emit하며 verify는 전부 재실행된다.
-30. stale compiler output은 삭제하지만 durable agent source는 자동 삭제하지 않는다.
-31. crash injection을 journal state publish와 각 post-image fsync·rename·delete·commit, rollback restore·fsync·journal cleanup의 재중단 단계에 수행해 반복된 다음 lock acquisition마다 old 또는 new complete snapshot으로 복구한다.
-32. CLI는 bounded static proof의 counterexample을 contract error code `3`으로, format mismatch를 포함한 나머지 상태를 18.10의 stable exit code로 반환한다.
-33. 배포 gate는 full `cott verify`와 transaction 뒤 시작된 새 Python process만 허용한다.
-34. formatter는 21장의 canonical format, parse-error no-write, 두 번 format의 byte-identical idempotence와 raw-byte `--check`를 검증한다.
-35. JSON diagnostic은 20장의 closed schema, 안정 정렬, 단일 object·끝 newline과 human prose·색상 없는 출력을 검증한다.
-36. `cott init`은 absent target만 허용하고 exact scaffold·template, supported uv release가 제공하는 최신 CPython 3.14 patch managed install·upgrade, lock과 기본 sync, `--no-sync`의 sync 및 root venv Python·BasedPyright probe 생략, atomic collision no-write, publish 전과 final marker commit 전 실패의 ownership-checked cleanup, 가능한 global uv side effect의 human·JSON diagnostic과 stable exit code를 자동 검증한다. init 전용 file·directory fsync, no-replace publish, parent fsync, marker unlink와 temp·target cleanup 각 단계에는 failure·crash injection을 수행한다. crash 뒤에는 absent target, ownership-marked incomplete/complete target 또는 exact markerless completed tree만 허용하며 existing target은 자동 overwrite하지 않는다.
-37. Canonical IR v7과 generation schema/domain v5, runtime ABI5, contract strategy v3 및 package `0.6.0` identity mismatch를 reader·writer·facade load에서 거부한다.
-38. async impl helper는 exact `async def`이고 manifest binding 없이 agent-only로 해석되며, task-aware reentrant serialization·cancellation invariant/exception semantics를 generated wrapper가 보존한다.
-39. `AsyncIterator`와 `AsyncGenerator`의 return protocol, bounded pure lifecycle observation, leaked task detection 및 effectful lifecycle의 분리된 evidence를 보존한다.
-40. trait inheritance diamond/coalescing, specialization precedence, declaration-site variance와 exact generic `Dyn` construction/dispatch/validation을 보존한다.
-41. guarded struct·enum self·mutual·generic recursion만 symbolic IR과 deterministic terminating candidate로 보존하고 alias/newtype cycle은 거부한다. runtime ABI traversal depth `64`/nodes `1024`, active-cycle rejection과 memoized sharing은 candidate budget과 별도로 적용한다. bounded proof의 `proved`/`unknown`/counterexample `disproved`와 explicit impl·selected default/specialization의 non-duplicated obligation, runtime·test evidence를 별도 보고한다.
+1. clean checkout의 declared project가 parse, format, IR emit, Python emit, generate, verify를 수행하고 public projection·stub·facade·runtime이 동일 IR을 소비한다.
+2. 모든 declaration/type/clause/scenario/fixture가 v8 typed IR와 closed v7/v5 generation/strategy schema를 통과하고 legacy identity를 fail closed한다.
+3. struct invariant의 syntax/order/type/intrinsic selector, canonical bytes/hash, direct construction, defaults/generic/recursive values와 forged facade input/return rejection을 확인한다.
+4. Result error contract의 top-level Ok success obligation lint, source-order conditional predicate priority, branch reachability와 bounded runner counts/witness를 확인하며 unobserved Ok evidence는 semantic coverage policy로 선택해 gate한다.
+5. pure candidate generation은 refinement/requires/invariant를 만족하고 invalid constructor candidate를 결정적으로 skip하며 zero valid case를 observation으로 위장하지 않는다.
+6. scenario는 public facade resolution만 허용하고 64-step/lifecycle bounds, worker terminal state, ordered trace, assertion, cancellation·stale exclusion·coalescing observable contract와 cleanup을 확인한다.
+7. fixture parser/IR/strategy는 closed fs/http/clock/failure data shape, path/route normalization, exact effect match와 effective resource ceiling을 보존한다.
+8. Linux bubblewrap isolated-loopback에서만 fixture observation을 얻고 external network/DNS/other port/filesystem escape/subprocess/dynamic code와 capability-missing unsandboxed fallback을 거부한다.
+9. fixture transcript/atomic replace/encoding/redirect/failure occurrence/cleanup evidence는 bounded deterministic logical data만 기록한다.
+10. `COTT-K101`은 exact doc/directive span과 formal-evidence suppression만 사용하고 ordinary prompt prose, semantic proof와 command exit을 바꾸지 않는다.
+11. authored/deployed Python tree는 facade allow/deny matrix, exact generated implementation role/hash, no-follow/single-link rule과 all-violation diagnostic ordering을 통과한다.
+12. semantic coverage는 IR inventory와 runner evidence만 join하여 `observed|unobserved|trust_declaration|unknown`을 만들고 policy-selected clause만 gate한다.
+13. artifact verification은 policy 전 evidence와 `verified=true` snapshot을 atomic publish하며 policy failure를 exit `8`로 반환해도 runtime loader의 artifact trust와 `last_verified` baseline을 되돌리지 않는다.
+14. `cott diff`는 project API version만 비교하고 compiler/package/wire version은 compatibility reader/writer boundary에서만 비교한다. example project public version은 `0.1.0`으로 유지한다.
+15. agent/binding/implementation provenance, strict type checking, exact verified loader, transaction recovery, diagnostics v1, formatter idempotence와 init atomicity의 기존 guarantees를 보존한다.
 
 ---
 
 ## 24. 구현 언어 및 내부 구조
 
-cott 컴파일러는 Rust로 구현한다.
-
-MVP는 crate 경계를 미리 늘리지 않고 `cott` 단일 crate 안에 다음 module을 둔다. 독립 배포나 compile-time 필요가 생길 때만 분리한다.
-
-```text
-cli
-manifest
-syntax
-parser
-ast
-hir
-typeck
-contract
-ir
-python::{emit, binding, loader, verify}
-lsp
-agent
-sandbox
-transaction
-provenance
-diagnostics
-formatter
-```
-
-핵심 원칙:
-
-* 파서는 복구 가능한 오류를 지원한다.
-* 소스 위치 정보를 모든 단계에서 유지한다.
-* AST와 HIR을 분리한다.
-* emitter가 AST를 직접 참조하지 않는다.
-* 모든 대상 언어의 계약 의미는 Canonical IR에서만 가져오고 target 연결 정보는 manifest에서 가져온다.
-* 타입 검사기는 agent나 특정 Python 구현에 의존하지 않는다.
-* generation record를 제외한 managed compiler 산출물은 IR, target 설정, compiler·runtime version, exact target Python identity·platform, lock과 implementation identity·source/runtime origin·content hash에 대해 결정적이다.
-* implementation 본문, source origin과 agent 실행은 durable provenance로 기록하고 verification result는 cache하지 않는다.
-
-`cott lsp`는 parser와 HIR을 재사용하는 editor-analysis surface만 제공한다. 완전한 IDE plugin, generation, publishing과 agent invocation은 이 command의 범위 밖이다.
+cott 컴파일러는 Rust 단일 crate이며 `cli`, `manifest`, `syntax`, `parser`, `ast`, `hir`, `typeck`, `contract`, `ir`, `python::{emit,binding,loader,verify}`, `lsp`, `agent`, `sandbox`, `transaction`, `provenance`, `diagnostics`, `formatter` module을 둔다. 파서는 복구 가능한 오류와 source position을 보존하고 AST/HIR을 분리한다. emitter는 AST를 직접 참조하지 않으며 모든 target 계약 의미는 Canonical IR에서, target 연결 정보는 manifest에서만 얻는다. implementation body/source origin/agent run은 durable provenance이고 verification result는 cache하지 않는다. `cott lsp`는 parser/HIR 기반 editor analysis만 제공하며 generation·publish·agent invocation은 하지 않는다.
 
 ---
 
 ## 25. 향후 확장
 
-v0.6 항목은 이 문서의 구현 범위이며 roadmap이 아니다.
-
-### v0.7
-
-* bounded observation을 넘는 async iterator/generator `send`·completion·close semantic proof
-* richer solver fragment과 configurable proof/candidate budgets; current bounded result의 soundness classification은 유지
-* additional target backend와 installed-wheel whole-origin verification
+v0.8의 struct invariant, success/conditional-error coverage, fixture/workflow scenario, shadow warning, semantic coverage gate와 facade audit은 모두 구현 계약이다. 이 문서에는 이 기능의 partial profile, legacy reader, unsandboxed fallback 또는 second source of truth가 없다.
 
 ### v1.0 이후
 
 * language/IR compatibility policy stabilization
-* official additional backend와 package installation model
+* official additional backend와 complete target parity
+* package installation model, selected lock artifact-to-installed-wheel/tree whole-origin verification
+* dependency resolver 또는 installer receipt format
 * IDE plugin
-
 
 ---
 
@@ -2347,15 +2385,15 @@ MVP module graph는 비순환이고 source path mapping은 injective며 package 
 
 ### 결정 3
 
-MVP type system은 fixed-width scalar, const generic, declared variance, heterogeneous tuple, Array/Buffer, guarded recursive nominal type, immutable struct/enum/resource, associated type·inherited structural trait·specialization과 sealed `Dyn`을 가진 Cott-owned stateful impl을 제공한다.
+MVP type system은 fixed-width scalar, const generic, declared variance, heterogeneous tuple, Array/Buffer, guarded recursive nominal type, immutable struct/enum/resource, struct cross-field invariant/canonical constructor, associated type·inherited structural trait·specialization과 sealed `Dyn`을 가진 Cott-owned stateful impl을 제공한다.
 
 ### 결정 4
 
-trait default/specialization facade dispatch, associated type, resource transition, transitive Cott effect check와 sync/async free·trait·impl callable은 구현되었다. async impl은 task-aware reentrant serialization과 cancellation invariant boundary를 가지며 async protocol lifecycle은 bounded observation evidence로만 주장한다. ownership, unbounded lifecycle semantics와 unbounded proof는 범위 밖이다.
+trait default/specialization facade dispatch, associated type, resource transition, transitive Cott effect check와 sync/async free·trait/impl callable은 구현되었다. async impl은 task-aware reentrant serialization과 cancellation invariant boundary를 가지며, `boundary`와 contract-test context의 async protocol wrapper는 모든 실제 operation을 강제한다. bounded observation evidence는 configured prefix에서 실제 관찰한 operation만 주장한다. ownership, unbounded lifecycle semantics와 unbounded proof는 범위 밖이다.
 
 ### 결정 5
 
-계약 표현식은 닫힌 순수 언어다. pattern과 clause는 typed IR이고 constant reference identity, error priority·exhaustiveness를 결정적으로 보존한다.
+계약 표현식은 닫힌 순수 언어다. pattern과 clause는 typed IR이고 constant reference identity, allowed-error exhaustiveness, Result.Ok success obligation과 source-order conditional-error applicability/priority evidence를 결정적으로 보존한다.
 
 ### 결정 6
 
@@ -2367,11 +2405,11 @@ Python ABI의 표준 identity는 project identity를 embed한 generated `cott_ru
 
 ### 결정 8
 
-검증은 bounded static proof, runtime 검사, test 관찰, 미관찰과 trust declaration을 분리해 실제보다 강하게 보고하지 않는다. proof counterexample은 contract error이고 `unknown`은 proof가 아니다.
+검증은 proof v2의 sound `proved`, counterexample `disproved`, `unknown`, runtime 검사, test 관찰, 미관찰과 trust declaration을 분리해 실제보다 강하게 보고하지 않는다.
 
 ### 결정 9
 
-자동 계약 테스트는 유효한 bounded pure callable input과 deterministic impl init case를 staged facade를 통해 deny-by-default OS sandbox에서 실행한다. productive recursive candidate와 pure async protocol lifecycle prefix만 관찰하며 effectful callable과 `Never` 반환 callable은 자동 실행하지 않는다.
+자동 계약 테스트는 유효한 bounded pure callable input과 deterministic impl init case를 staged facade를 통해 deny-by-default OS sandbox에서 실행한다. fixture-authorized effect scenario는 같은 facade-only boundary에서만 실행하며 pure async protocol은 wrapper가 모든 실제 operation을 강제하고 configured lifecycle prefix만 관찰한다. scenario 없는 effectful callable과 `Never` 반환 callable은 observation으로 위장하지 않는다.
 
 ### 결정 10
 
@@ -2383,7 +2421,7 @@ binding은 import 없이 staged type module에 대해 정적으로 해석한다.
 
 ### 결정 12
 
-호출자는 cott path의 typed facade만 사용한다. facade는 embedded provenance로 local implementation의 generated copy를 검증하고 direct external dependency origin·hash를 preflight한 뒤 canonical name당 하나의 implementation module만 lazy load하며 load와 invocation을 같은 exception boundary로 감싼다.
+호출자는 cott path의 typed facade만 사용한다. facade는 embedded provenance로 local implementation의 generated copy를 검증하고 direct external dependency origin·hash를 preflight한 뒤 canonical name당 하나의 implementation module만 lazy load하며 load와 invocation을 같은 exception boundary로 감싼다. authored/deployed AST audit은 `_cott_impl`·`cott_bindings` direct/dynamic bypass와 public re-export를 거부한다.
 
 ### 결정 13
 
@@ -2409,7 +2447,7 @@ runtime reader snapshot isolation은 보장하지 않는다. 변경 중 같은 p
 
 ### 결정 19
 
-`generation.json.current`는 latest applied state, `last_verified`는 latest full-verified baseline이다. fmt·emit·generate는 후자를 보존하고 full verify만 승격한다.
+`generation.json.current`는 latest applied state, `last_verified`는 latest artifact-verified baseline이다. fmt·emit·generate는 후자를 보존한다. verify는 complete evidence와 `semantic_coverage`를 publish한 뒤 policy failure도 baseline과 violation을 남긴 채 CI gate만 실패시킨다.
 
 ### 결정 20
 
@@ -2421,11 +2459,12 @@ MVP는 generation·verification result cache를 두지 않고 emit·generate와 
 
 ### 결정 22
 
-배포 gate는 unresolved가 없고 current hash가 일치하는 full `cott verify`다.
+배포 gate는 unresolved가 없고 current hash가 일치하는 full `cott verify`이며 selected semantic coverage policy가 허용하지 않는 status가 없을 때만 성공한다. artifact verification과 policy gate는 같은 boolean이 아니다.
 
 ### 결정 23
 
 BasedPyright 검증은 user config가 아니라 compiler-owned strict config를 사용하며 유일한 diagnostic override는 cott static verifier가 대체하는 `reportInvalidTypeVarUse`다.
+
 
 ### 결정 24
 
@@ -2438,3 +2477,18 @@ MVP compiler host와 runtime target은 같은 OS family·architecture의 `x86_64
 ### 결정 26
 
 `cott init`은 absent target에 minimal scaffold를 만들고 uv에 supported Python minor의 최신 patch 설치·lock·sync만 위임한다. cott는 dependency resolver나 package manager가 아니다.
+### 결정 27
+
+struct 생성·facade boundary·IR은 하나의 canonical constructor/invariant 의미를 공유한다. direct Python construction, fixture, runner, loader 어느 경로도 별도 validation profile을 갖지 않는다.
+
+### 결정 28
+
+success/conditional branch observation, scenario trace, fixture transcript와 semantic coverage는 provenance에 closed evidence로 남는다. proof와 doc은 이를 대체하거나 observation을 승격하지 않으며 `verified`와 CI policy도 같은 상태가 아니다.
+
+### 결정 29
+
+effect scenario는 compiler-owned fs/local HTTP/clock/failure adapter와 Linux isolated-loopback sandbox에서만 observed다. capability가 없으면 fail-closed unobserved이며 unsandboxed execution은 지원하지 않는다.
+
+### 결정 30
+
+facade는 유일한 public implementation entry다. authored/deployed tree의 `_cott_impl`·`cott_bindings` direct/dynamic import, public re-export와 unsafe link/artifact shape는 verify가 모두 보고하고 거부한다.

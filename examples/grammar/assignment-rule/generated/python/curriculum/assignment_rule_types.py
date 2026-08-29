@@ -6,33 +6,31 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Final, ForwardRef, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable
 
-from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, UNIT, Unit, _cott_euclidean_mod, _cott_normalize_f32, _cott_validate_abi
+from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_descending_by, _cott_ends_with, _cott_euclidean_mod, _cott_normalize_f32, _cott_starts_with, _cott_unique_by, _cott_validate_abi, _cott_validated_construction
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
-class Assignment:
-    __hash__ = None
-    name: str
-    value: str
-
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class ParseAssignmentError_MissingEquals:
+class AccessCodeError_LegacyFormat:
     pass
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
-class ParseAssignmentError_EmptyName:
+class AccessCodeError_EmptyCode:
     pass
 
-ParseAssignmentError: TypeAlias = Union[ParseAssignmentError_MissingEquals, ParseAssignmentError_EmptyName]
-
-"""Base rule for {Assignment} requiring non-empty name."""
-class BaseAssignmentRule:
+@final
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AccessCodeError_TooShort:
     pass
 
-"""Strict rule inheriting from {BaseAssignmentRule} with overridden name constraint, deleted error, and added non-empty value constraint."""
-class StrictAssignmentRule(BaseAssignmentRule):
+AccessCodeError: TypeAlias = Union[AccessCodeError_LegacyFormat, AccessCodeError_EmptyCode, AccessCodeError_TooShort]
+
+"""Base error clauses for an access code."""
+class BaseAccessCodeRule:
     pass
 
-"""Parses one {Assignment} without I/O or mutation following {StrictAssignmentRule}."""
-__all__ = ["Assignment", "BaseAssignmentRule", "ParseAssignmentError", "ParseAssignmentError_EmptyName", "ParseAssignmentError_MissingEquals", "StrictAssignmentRule"]
+"""Current access-code clauses composed from the base rule."""
+class StrictAccessCodeRule(BaseAccessCodeRule):
+    pass
+
+"""Trim an access code and require at least four characters."""
+__all__ = ["AccessCodeError", "AccessCodeError_EmptyCode", "AccessCodeError_LegacyFormat", "AccessCodeError_TooShort", "BaseAccessCodeRule", "StrictAccessCodeRule"]

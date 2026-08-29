@@ -275,6 +275,7 @@ enum Error:
 fn guarded(value: I32) -> Result[I32, Error]:
     requires value > 0
     ensures value > 1
+    ensures Result.Ok(output) => output > 0
     error Error.Bad when value == 0
     effects [network]
 "#,
@@ -282,17 +283,27 @@ fn guarded(value: I32) -> Result[I32, Error]:
     let HirDeclaration::Function(function) = &project.modules[0].declarations[1] else {
         panic!("expected guarded function");
     };
-    assert_eq!(function.contract.clauses.len(), 3);
+    assert_eq!(function.contract.clauses.len(), 4);
     assert!(matches!(
         &function.contract.clauses[0].kind,
         HirClauseKind::Requires { .. }
     ));
     assert!(matches!(
         &function.contract.clauses[1].kind,
-        HirClauseKind::Ensures { .. }
+        HirClauseKind::Ensures { guard: None, .. }
     ));
     assert!(matches!(
         &function.contract.clauses[2].kind,
+        HirClauseKind::Ensures {
+            guard: Some(guard),
+            ..
+        } if matches!(
+            &guard.pattern.kind,
+            HirPatternKind::Variant { symbol, .. } if symbol.name == "Result.Ok"
+        )
+    ));
+    assert!(matches!(
+        &function.contract.clauses[3].kind,
         HirClauseKind::Error { .. }
     ));
     assert_eq!(function.contract.effects[0].key, "network");
@@ -1644,4 +1655,484 @@ struct Right:
         }),
         "expected cross-module recursion diagnostic: {errors:#?}"
     );
+}
+
+fn assert_semantic_error_at(source_text: &str, message: &str, token: &str, occurrence: usize) {
+    let errors = lower_diagnostics([source("src/acceptance.cott", source_text)]);
+    let error = errors
+        .iter()
+        .find(|error| error.diagnostic.message == message)
+        .unwrap_or_else(|| panic!("missing `{message}` in {errors:#?}"));
+    let start = source_text
+        .match_indices(token)
+        .nth(occurrence)
+        .map(|(start, _)| start)
+        .expect("diagnostic token occurrence");
+    assert_eq!(error.path, Path::new("src/acceptance.cott"));
+    assert_eq!(error.diagnostic.span.start, start);
+    assert!(error.diagnostic.span.end > error.diagnostic.span.start);
+}
+
+#[test]
+fn lowers_location_browser_state_invariants_with_generics_defaults_and_selectors() {
+    let project = lower_project([source(
+        "src/acceptance.cott",
+        r##"module acceptance
+
+enum LocationKind:
+    Web
+    File
+
+struct Location:
+    kind: LocationKind
+    target: Str
+    fragment: Option[Str] = Option.Nothing
+
+    invariant self.kind != LocationKind.Web or starts_with(self.target, "https://")
+    invariant self.kind != LocationKind.File or not contains(self.target, "#")
+    invariant self.fragment matches Option.Some(value) => not starts_with(value, "#")
+
+struct Visit[T]:
+    location: Location
+    visited_at: U64
+    payload: T
+
+struct BrowserState[T]:
+    history: List[Visit[T]]
+    selected: Option[T] = Option.Nothing
+
+    invariant unique_by(self.history, Visit.location)
+    invariant descending_by(self.history, Visit.visited_at)
+"##,
+    )]);
+    let module = &project.modules[0];
+    let HirDeclaration::Struct(location) = &module.declarations[1] else {
+        panic!("expected Location struct");
+    };
+    assert_eq!(location.fields.len(), 3);
+    assert_eq!(location.invariants.len(), 3);
+    assert!(matches!(
+        &location.fields[2].default,
+        Some(cott::hir::HirValue::Option(None))
+    ));
+    let HirDeclaration::Struct(browser_state) = &module.declarations[3] else {
+        panic!("expected BrowserState struct");
+    };
+    assert_eq!(browser_state.generics.len(), 1);
+    assert_eq!(browser_state.invariants.len(), 2);
+    for invariant in &browser_state.invariants {
+        let cott::hir::HirExprKind::Intrinsic {
+            selector: Some(selector),
+            ..
+        } = &invariant.expression.kind
+        else {
+            panic!("expected resolved list selector intrinsic");
+        };
+        assert_eq!(selector.owner.name, "Visit");
+        assert!(
+            selector.field.name == "Visit.location" || selector.field.name == "Visit.visited_at"
+        );
+    }
+}
+
+#[test]
+fn rejects_invalid_struct_invariant_types_selectors_and_ambient_references() {
+    for (source_text, message, token, occurrence) in [
+        (
+            "module acceptance\nstruct Item:\n    value: Str\n    invariant self.value\n",
+            "struct invariant condition must be boolean",
+            "self.value",
+            0,
+        ),
+        (
+            "module acceptance\nstruct Item:\n    value: Str\n    invariant starts_with(self.value, 1)\n",
+            "intrinsic arguments are incompatible with its closed signature",
+            "starts_with",
+            0,
+        ),
+        (
+            "module acceptance\nstruct Item:\n    value: Str\n    invariant result == self.value\n",
+            "unknown type or declaration `result`",
+            "result",
+            0,
+        ),
+        (
+            "module acceptance\nstruct Item:\n    value: Str\n    invariant ambient == self.value\n",
+            "unknown type or declaration `ambient`",
+            "ambient",
+            0,
+        ),
+        (
+            "module acceptance\nstruct Item:\n    values: List[Item]\n    flag: Bool\n    invariant unique_by(self.values, Item.missing)\n",
+            "unknown list element selector field",
+            "Item.missing",
+            0,
+        ),
+        (
+            "module acceptance\nstruct Item:\n    values: List[Item]\n    flag: Bool\n    invariant descending_by(self.values, Item.flag)\n",
+            "list selector field must have an orderable type",
+            "Item.flag",
+            0,
+        ),
+        (
+            "module acceptance\nstruct Item:\n    values: List[Item]\n    invariant unique_by(self.values, Other.value)\nstruct Other:\n    value: Str\n",
+            "list selector must name a field of the exact list element type",
+            "Other.value",
+            0,
+        ),
+    ] {
+        assert_semantic_error_at(source_text, message, token, occurrence);
+    }
+}
+
+#[test]
+fn rejects_scenario_resolution_binding_worker_and_assertion_misuse() {
+    let cases = [
+        (
+            r#"module acceptance
+enum NotCallable:
+    Value
+scenario invalid for NotCallable:
+    tick
+"#,
+            "scenario target must be a public callable",
+            "NotCallable",
+            1,
+        ),
+        (
+            r#"module acceptance
+fn sync(value: Str) -> Str
+scenario invalid:
+    spawn worker = sync("x")
+    cancel worker
+    await worker cancelled
+"#,
+            "scenario spawn requires an async callable",
+            "spawn",
+            0,
+        ),
+        (
+            r#"module acceptance
+async fn fetch(value: Str) -> Str
+scenario invalid:
+    spawn worker = fetch("x")
+    await worker as first
+    await worker as second
+"#,
+            "unknown scenario worker",
+            "worker",
+            2,
+        ),
+        (
+            r#"module acceptance
+async fn fetch(value: Str) -> Str
+scenario invalid:
+    await worker as result
+    spawn worker = fetch("x")
+    cancel worker
+    await worker cancelled
+"#,
+            "unknown scenario worker",
+            "worker",
+            0,
+        ),
+        (
+            r#"module acceptance
+async fn fetch(value: Str) -> Str
+scenario invalid:
+    spawn worker = fetch("x")
+    spawn worker = fetch("y")
+    cancel worker
+    await worker cancelled
+"#,
+            "duplicate scenario value or worker binding",
+            "worker",
+            1,
+        ),
+        (
+            r#"module acceptance
+async fn fetch(value: Str) -> Str
+scenario invalid:
+    spawn worker = fetch("x")
+    cancel worker
+    cancel worker
+    await worker cancelled
+"#,
+            "scenario worker is already cancelled",
+            "worker",
+            2,
+        ),
+        (
+            r#"module acceptance
+fn open(value: Str) -> Str
+scenario invalid:
+    call first = open(second)
+    call second = open("x")
+"#,
+            "unknown type or declaration `second`",
+            "second",
+            0,
+        ),
+        (
+            r#"module acceptance
+fn open(value: Str) -> Str
+scenario invalid:
+    call value = open("x")
+    call value = open("y")
+"#,
+            "duplicate scenario value or worker binding",
+            "value",
+            2,
+        ),
+        (
+            r#"module acceptance
+fn open(value: Str) -> Str
+scenario invalid:
+    call value = open(1)
+"#,
+            "scenario argument does not match callable parameter type",
+            "1",
+            0,
+        ),
+        (
+            r#"module acceptance
+fn open(value: Str) -> Str
+scenario invalid:
+    call value = open()
+"#,
+            "scenario call argument count does not match callable signature",
+            "call",
+            0,
+        ),
+        (
+            r#"module acceptance
+scenario invalid:
+    call value = missing()
+"#,
+            "unknown type or declaration `missing`",
+            "missing",
+            0,
+        ),
+        (
+            r#"module acceptance
+scenario invalid:
+    assert 1
+"#,
+            "scenario assertion must be boolean",
+            "assert",
+            0,
+        ),
+    ];
+    for (source_text, message, token, occurrence) in cases {
+        assert_semantic_error_at(source_text, message, token, occurrence);
+    }
+}
+
+#[test]
+fn rejects_scenario_lifecycle_bound_and_live_workers_with_stable_spans() {
+    let too_many_steps = format!(
+        "module acceptance\nscenario overflow:\n{}",
+        "    tick\n".repeat(65)
+    );
+    assert_semantic_error_at(
+        &too_many_steps,
+        "scenario exceeds lifecycle limit",
+        "scenario",
+        0,
+    );
+    assert_semantic_error_at(
+        "module acceptance\nasync fn fetch() -> Str\nscenario unfinished:\n    spawn worker = fetch()\n",
+        "scenario ends with live workers",
+        "scenario",
+        0,
+    );
+}
+
+#[test]
+fn retains_result_success_obligations_after_rule_override_and_delete() {
+    let project = lower_project([source(
+        "src/acceptance.cott",
+        r#"module acceptance
+
+
+enum Failure:
+    Bad
+    Empty
+
+rule Base:
+    ensures Result.Ok(value) => value.len > 0
+    error Failure.Bad
+
+rule Selected(Base):
+    override ensures Result.Ok(value) => value.len > 1
+    delete error Failure.Bad
+    error Failure.Empty
+"#,
+    )]);
+    let HirDeclaration::Rule(selected) = &project.modules[0].declarations[2] else {
+        panic!("expected selected rule");
+    };
+    assert!(selected.contract.clauses.iter().any(|clause| {
+        matches!(
+            &clause.kind,
+            HirClauseKind::Ensures {
+                guard: Some(guard),
+                ..
+
+            } if matches!(
+                &guard.pattern.kind,
+                HirPatternKind::Variant { symbol, .. } if symbol.name == "Result.Ok"
+            )
+        )
+    }));
+    assert!(selected.contract.clauses.iter().any(|clause| {
+        matches!(
+            &clause.kind,
+            HirClauseKind::Error { variant, .. } if variant.name == "Failure.Empty"
+        )
+    }));
+    assert!(!selected.contract.clauses.iter().any(|clause| {
+        matches!(
+            &clause.kind,
+            HirClauseKind::Error { variant, .. } if variant.name == "Failure.Bad"
+        )
+    }));
+}
+#[test]
+fn resolves_scenario_calls_to_the_exact_imported_public_facade() {
+    let project = lower_project([
+        source("src/app.cott", "module app\nfn open(input: Str) -> Str\n"),
+        source(
+            "src/consumer.cott",
+            r#"module consumer
+use app.open
+
+scenario verify:
+    call value = open("x")
+    assert value == "x"
+"#,
+        ),
+    ]);
+    let consumer = project
+        .modules
+        .iter()
+        .find(|module| module.id.segments == ["consumer"])
+        .expect("consumer module");
+    let HirDeclaration::Scenario(scenario) = &consumer.declarations[0] else {
+        panic!("expected scenario");
+    };
+    let cott::hir::HirScenarioStep::Call { target, .. } = &scenario.steps[0] else {
+        panic!("expected resolved scenario call");
+    };
+    assert_eq!(target.module.segments, ["app"]);
+    assert_eq!(target.name, "open");
+}
+#[test]
+fn unions_required_effects_from_all_resolved_scenario_facades() {
+    let project = lower_project([source(
+        "src/acceptance.cott",
+        r#"module acceptance
+fn read() -> Str:
+    effects [file.read]
+
+fn fetch() -> Str:
+    effects [network]
+
+scenario covered:
+    fixtures:
+        fs files:
+            file "input" text("x")
+        http service:
+            route "/ok" -> disconnect()
+    call file = read()
+    call reply = fetch()
+"#,
+    )]);
+    let HirDeclaration::Scenario(scenario) = &project.modules[0].declarations[2] else {
+        panic!("expected scenario");
+    };
+    assert_eq!(
+        scenario
+            .required_effects
+            .iter()
+            .map(|effect| effect.key.as_str())
+            .collect::<Vec<_>>(),
+        ["file.read", "network"]
+    );
+}
+
+#[test]
+fn rejects_scenario_references_without_declared_fixture_authority() {
+    assert_semantic_error_at(
+        "module acceptance\nfn read(path: Path) -> Str\nscenario invalid:\n    call value = read(files.path(\"input.txt\"))\n",
+        "unknown scenario fixture reference",
+        "files",
+        0,
+    );
+}
+
+#[test]
+fn requires_result_ok_success_obligations_for_result_contracts_with_errors() {
+    assert_semantic_error_at(
+        r#"module acceptance
+enum Failure:
+    Bad
+
+fn unresolved() -> Result[Str, Failure]:
+    error Failure.Bad
+"#,
+        "Result contract with errors requires a guarded Result.Ok ensures success obligation",
+        "fn unresolved",
+        0,
+    );
+}
+
+#[test]
+fn rejects_duplicate_and_incompatible_scenario_fixture_authority() {
+    for (source_text, message, token, occurrence) in [
+        (
+            "module acceptance\nscenario duplicate:\n    fixtures:\n        fs files:\n            file \"first\" text(\"one\")\n        fs files:\n            file \"second\" text(\"two\")\n    tick\n",
+            "duplicate scenario fixture name",
+            "fs files",
+            1,
+        ),
+        (
+            "module acceptance\nscenario duplicate:\n    fixtures:\n        fs files:\n            file \"same\" text(\"one\")\n            file \"same\" text(\"two\")\n    tick\n",
+            "duplicate filesystem fixture path",
+            "file \"same\"",
+            1,
+        ),
+        (
+            "module acceptance\nscenario duplicate:\n    fixtures:\n        http service:\n            route \"/same\" -> disconnect()\n            route \"/same\" -> disconnect()\n    tick\n",
+            "duplicate HTTP fixture route",
+            "route \"/same\"",
+            1,
+        ),
+        (
+            "module acceptance\nfn read(path: Path) -> Str\nscenario mismatch:\n    fixtures:\n        clock clock:\n            start_ms: 0\n            tick_ms: 1\n    call value = read(clock.path(\"input\"))\n",
+            "fixture .path() requires a filesystem fixture",
+            "clock.path",
+            0,
+        ),
+        (
+            "module acceptance\nfn fetch() -> Str:\n    effects [network]\nscenario missing:\n    call value = fetch()\n",
+            "scenario required effect is missing a compatible fixture",
+            "network",
+            0,
+        ),
+        (
+            "module acceptance\nfn query() -> Str:\n    effects [database.read]\nscenario unsupported:\n    call value = query()\n",
+            "scenario effect has no supported fixture backend",
+            "database.read",
+            0,
+        ),
+        (
+            "module acceptance\nscenario unused:\n    fixtures:\n        fs files:\n            file \"input\" text(\"x\")\n    tick\n",
+            "scenario fixture grants unused authority",
+            "fs files",
+            0,
+        ),
+    ] {
+        assert_semantic_error_at(source_text, message, token, occurrence);
+    }
 }

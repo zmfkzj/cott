@@ -1,0 +1,1 @@
+Generated Python newtypes are frozen nominal objects, not numeric subclasses. Access their numeric carriers through `.value`: use `step.value` for arithmetic and `limit.value` for range limits. Construct returned Cott lists as `CottList(values=...)`. Preserve the generated annotations and imports exactly.

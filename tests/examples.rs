@@ -1,6 +1,13 @@
+use cott::provenance::{
+    GENERATION_SCHEMA_VERSION, GenerationCompatibility, GenerationRecord, GenerationSnapshot,
+    RUNTIME_ABI_VERSION,
+};
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -28,24 +35,6 @@ const EXAMPLES: &[Example] = &[
         final_symbol: "decode_row",
     },
     Example {
-        path: "grammar/validated-stock",
-        module: "curriculum.validated_stock",
-        public_functions: &["value_stock"],
-        final_symbol: "value_stock",
-    },
-    Example {
-        path: "grammar/stock-input-validation",
-        module: "curriculum.stock_input_validation",
-        public_functions: &["validate_stock_input"],
-        final_symbol: "validate_stock_input",
-    },
-    Example {
-        path: "grammar/parse-assignment",
-        module: "curriculum.parse_assignment",
-        public_functions: &["parse_assignment"],
-        final_symbol: "parse_assignment",
-    },
-    Example {
         path: "grammar/stock-record",
         module: "curriculum.stock_record",
         public_functions: &["value_record", "value_stock_record"],
@@ -64,27 +53,15 @@ const EXAMPLES: &[Example] = &[
         final_symbol: "build_bounded_range",
     },
     Example {
-        path: "grammar/module-export-snapshot",
-        module: "curriculum.module_export_snapshot",
-        public_functions: &["build_snapshot"],
-        final_symbol: "build_snapshot",
-    },
-    Example {
         path: "grammar/assignment-rule",
         module: "curriculum.assignment_rule",
-        public_functions: &["parse_assignment"],
-        final_symbol: "parse_assignment",
-    },
-    Example {
-        path: "simple/calculate-age",
-        module: "curriculum.calculate_age",
-        public_functions: &["calculate_age_days", "summarize_age"],
-        final_symbol: "summarize_age",
+        public_functions: &["validate_access_code"],
+        final_symbol: "validate_access_code",
     },
     Example {
         path: "simple/calculator",
         module: "curriculum.calculator",
-        public_functions: &["validate_calculation", "calculate"],
+        public_functions: &["calculate"],
         final_symbol: "calculate",
     },
     Example {
@@ -98,194 +75,16 @@ const EXAMPLES: &[Example] = &[
         final_symbol: "convert_binary_decimal",
     },
     Example {
-        path: "simple/textfile-analysis",
-        module: "curriculum.textfile_analysis",
-        public_functions: &["extract_casefolded_words", "analyze_text"],
-        final_symbol: "analyze_text",
-    },
-    Example {
-        path: "simple/compute-iou",
-        module: "curriculum.compute_iou",
-        public_functions: &["calculate_intersection_union", "compute_iou"],
-        final_symbol: "compute_iou",
-    },
-    Example {
-        path: "simple/numbers-to-words",
-        module: "curriculum.numbers_to_words",
-        public_functions: &["spell_under_thousand", "spell_cardinal"],
-        final_symbol: "spell_cardinal",
-    },
-    Example {
-        path: "simple/rock-paper-scissors",
-        module: "curriculum.rock_paper_scissors",
-        public_functions: &["user_beats_computer", "decide_round"],
-        final_symbol: "decide_round",
-    },
-    Example {
-        path: "simple/tic-tac-toe",
-        module: "curriculum.tic_tac_toe",
-        public_functions: &["validate_board_state", "apply_tic_tac_toe_move"],
-        final_symbol: "apply_tic_tac_toe_move",
-    },
-    Example {
-        path: "simple/random-password-generator",
-        module: "curriculum.random_password",
-        public_functions: &["required_password_draws", "generate_password"],
-        final_symbol: "generate_password",
-    },
-    Example {
-        path: "simple/unique-words",
-        module: "curriculum.unique_words",
-        public_functions: &["normalize_words", "find_unique_words"],
-        final_symbol: "find_unique_words",
-    },
-    Example {
-        path: "simple/split-file",
-        module: "curriculum.split_file",
-        public_functions: &["validate_split_request", "split_lines"],
-        final_symbol: "split_lines",
-    },
-    Example {
-        path: "simple/currency-converter",
-        module: "curriculum.currency_converter",
-        public_functions: &["validate_conversion_request", "convert_currency"],
-        final_symbol: "convert_currency",
-    },
-    Example {
-        path: "simple/json-to-csv",
-        module: "curriculum.json_to_csv",
-        public_functions: &["escape_csv_field", "serialize_csv"],
-        final_symbol: "serialize_csv",
-    },
-    Example {
         path: "simple/alphabetical-file-groups",
         module: "curriculum.alphabetical_file_groups",
         public_functions: &["classify_filename", "group_filenames"],
         final_symbol: "group_filenames",
     },
     Example {
-        path: "simple/billing-system",
-        module: "curriculum.billing_system",
-        public_functions: &["validate_bill_lines", "calculate_bill"],
-        final_symbol: "calculate_bill",
-    },
-    Example {
-        path: "simple/website-connectivity",
-        module: "curriculum.website_connectivity",
-        public_functions: &["classify_observation", "classify_websites"],
-        final_symbol: "classify_websites",
-    },
-    Example {
-        path: "complex/archive-request",
-        module: "curriculum.archive_request",
-        public_functions: &[
-            "canonicalize_archive_url",
-            "compose_archive_plan",
-            "plan_archive",
-        ],
-        final_symbol: "plan_archive",
-    },
-    Example {
-        path: "complex/track-metadata",
-        module: "curriculum.track_metadata",
-        public_functions: &[
-            "trim_track_draft",
-            "format_track_metadata",
-            "normalize_track_metadata",
-        ],
-        final_symbol: "normalize_track_metadata",
-    },
-    Example {
-        path: "complex/clip-ranges",
-        module: "curriculum.clip_ranges",
-        public_functions: &["range_duration_ms", "plan_clip_ranges"],
-        final_symbol: "plan_clip_ranges",
-    },
-    Example {
-        path: "complex/experiment-ranking",
-        module: "curriculum.experiment_ranking",
-        public_functions: &["order_run_ids", "rank_experiments"],
-        final_symbol: "rank_experiments",
-    },
-    Example {
-        path: "complex/color-quantization",
-        module: "curriculum.color_quantization",
-        public_functions: &["rank_palette_colors", "quantize_colors"],
-        final_symbol: "quantize_colors",
-    },
-    Example {
-        path: "complex/move-2048",
-        module: "curriculum.move_2048",
-        public_functions: &["validate_2048_board", "merge_move_line", "apply_2048_move"],
-        final_symbol: "apply_2048_move",
-    },
-    Example {
-        path: "complex/backup-plan",
-        module: "curriculum.backup_plan",
-        public_functions: &[
-            "validate_backup_request",
-            "classify_backup_paths",
-            "plan_backup",
-        ],
-        final_symbol: "plan_backup",
-    },
-    Example {
-        path: "complex/expense-split",
-        module: "curriculum.expense_split",
-        public_functions: &["calculate_balances", "settle_balances", "settle_expense"],
-        final_symbol: "settle_expense",
-    },
-    Example {
-        path: "complex/reputation",
-        module: "curriculum.reputation",
-        public_functions: &["reputation_delta", "calculate_reputation"],
-        final_symbol: "calculate_reputation",
-    },
-    Example {
-        path: "complex/flashcard-schedule",
-        module: "curriculum.flashcard_schedule",
-        public_functions: &["validate_review_ease", "schedule_review"],
-        final_symbol: "schedule_review",
-    },
-    Example {
-        path: "complex/roast-analysis",
-        module: "curriculum.roast_analysis",
-        public_functions: &[
-            "validate_roast_profile",
-            "summarize_roast_samples",
-            "analyze_roast_profile",
-        ],
-        final_symbol: "analyze_roast_profile",
-    },
-    Example {
-        path: "complex/publication-workflow",
-        module: "curriculum.publication_workflow",
-        public_functions: &["transition_target", "transition_publication"],
-        final_symbol: "transition_publication",
-    },
-    Example {
-        path: "complex/inventory-reorder",
-        module: "curriculum.inventory_reorder",
-        public_functions: &["available_stock", "plan_reorder"],
-        final_symbol: "plan_reorder",
-    },
-    Example {
-        path: "complex/page-build",
-        module: "curriculum.page_build",
-        public_functions: &["escape_page_text", "render_page_html", "build_page"],
-        final_symbol: "build_page",
-    },
-    Example {
         path: "complex/artifact-pipeline",
         module: "curriculum.artifact_pipeline",
         public_functions: &["topologically_order_steps", "plan_pipeline"],
         final_symbol: "plan_pipeline",
-    },
-    Example {
-        path: "complex/case-ranking",
-        module: "curriculum.case_ranking",
-        public_functions: &["score_case_overlap", "order_matching_cases", "rank_cases"],
-        final_symbol: "rank_cases",
     },
 ];
 
@@ -322,6 +121,16 @@ fn copied_project(example: &str) -> TempDir {
         .join("examples")
         .join(example);
     copy_tree(&source, &temp.path);
+    retarget_copied_generation(&temp.path);
+    let path = temp.path.join(".cott");
+    if let Err(error) = fs::remove_dir_all(&path) {
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::NotFound,
+            "failed to remove copied transient state {}: {error}",
+            path.display()
+        );
+    }
     install_fake_python_tools(&temp.path);
     temp
 }
@@ -366,17 +175,27 @@ fn copy_tree(source: &Path, destination: &Path) {
     let entries = fs::read_dir(source).expect("example directory should be readable");
     for entry in entries {
         let entry = entry.expect("example directory entry should be readable");
+        let name = entry.file_name();
+        if matches!(name.to_str(), Some(".venv" | ".cott" | "__pycache__"))
+            || name.to_string_lossy().ends_with(".pyc")
+        {
+            continue;
+        }
         let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
-        let metadata =
-            fs::symlink_metadata(&source_path).expect("example metadata should be readable");
-        if metadata.is_dir() {
+        let destination_path = destination.join(&name);
+        let file_type = entry
+            .file_type()
+            .expect("example entry type should be readable");
+        if file_type.is_symlink() || file_type.is_socket() {
+            continue;
+        }
+        if file_type.is_dir() {
             copy_tree(&source_path, &destination_path);
-        } else if metadata.is_file() {
+        } else if file_type.is_file() {
             fs::copy(&source_path, &destination_path).expect("example file should be copyable");
         } else {
             panic!(
-                "example contains unsupported filesystem entry: {}",
+                "example contains unsafe filesystem entry: {}",
                 source_path.display()
             );
         }
@@ -444,10 +263,10 @@ fn assert_public_projection(root: &Path, example: &Example, implementations_gene
 
     let mut functions = Vec::new();
     let mut type_and_constant_exports = Vec::new();
-    for declaration in ir["declarations"]
+    let declarations = ir["declarations"]
         .as_array()
-        .expect("IR declarations should be an array")
-    {
+        .expect("IR declarations should be an array");
+    for declaration in declarations {
         if declaration["public"] != true {
             continue;
         }
@@ -534,55 +353,134 @@ fn assert_public_projection(root: &Path, example: &Example, implementations_gene
     );
 }
 
-fn retarget_generation_to_host_python(root: &Path) -> Vec<u8> {
+fn assert_v08_generation_metadata(generation: &serde_json::Value) {
+    assert_eq!(generation["schema_version"], 7);
+    assert_eq!(
+        generation["current"]["compatibility"],
+        serde_json::json!({
+            "generation_schema": 7,
+            "canonical_ir_schema": 8,
+            "runtime_abi": 7,
+            "contract_strategy_schema": 5,
+        })
+    );
+    assert_eq!(
+        generation["current"]["semantic_coverage"],
+        serde_json::json!({
+            "clauses": [],
+            "summary": {"observed": 0, "unobserved": 0, "trust_declaration": 0, "unknown": 0},
+            "policy": {"selected": 0, "passed": true, "violations": []},
+        })
+    );
+}
+
+fn update_generation_record(
+    root: &Path,
+    mut update: impl FnMut(&mut GenerationSnapshot),
+) -> Option<Vec<u8>> {
     let generation = root.join("generated/generation.json");
-    let original = fs::read(&generation).expect("generation record");
+    let original = match fs::read(&generation) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
+        Err(error) => panic!(
+            "read copied generation record {}: {error}",
+            generation.display()
+        ),
+    };
+    let mut record: GenerationRecord = serde_json::from_slice(&original).unwrap_or_else(|error| {
+        panic!(
+            "deserialize copied generation record {} without validation: {error}",
+            generation.display()
+        )
+    });
+    record.schema_version = GENERATION_SCHEMA_VERSION;
+    for snapshot in std::iter::once(&mut record.current).chain(record.last_verified.iter_mut()) {
+        update(snapshot);
+        snapshot
+            .compute_generation_id()
+            .expect("recompute copied generation identity");
+    }
+    let bytes = record
+        .canonical_bytes()
+        .expect("serialize retargeted generation record");
+    fs::write(&generation, bytes).expect("write retargeted generation record");
+    Some(original)
+}
+
+fn retarget_copied_generation(root: &Path) {
+    let retargeted = update_generation_record(root, |snapshot| {
+        snapshot.compatibility = GenerationCompatibility::current();
+        snapshot
+            .tools
+            .as_object_mut()
+            .expect("copied generation tool evidence must be an object")
+            .insert(
+                "runtime".to_owned(),
+                serde_json::json!({
+                    "abi": RUNTIME_ABI_VERSION.to_string(),
+                    "version": env!("CARGO_PKG_VERSION"),
+                }),
+            );
+    });
+    assert!(
+        retargeted.is_some() || !root.join("generated").exists(),
+        "copied managed tree lacks generated/generation.json"
+    );
+}
+
+fn retarget_generation_to_python(root: &Path, python: impl AsRef<Path>) -> Vec<u8> {
     let script = r#"import hashlib,json,pathlib,platform,sys,sysconfig
-p=pathlib.Path("generated/generation.json")
-r=json.loads(p.read_bytes())
 e=pathlib.Path(sys.executable).resolve()
-r["current"]["tools"]["python"]={"cache_tag":sys.implementation.cache_tag,"content_hash":"sha256:"+hashlib.sha256(e.read_bytes()).hexdigest(),"executable":str(e),"implementation":sys.implementation.name,"machine":platform.machine(),"os":sys.platform,"platform":sysconfig.get_platform(),"version":platform.python_version()}
-i=dict(r["current"])
-for k in ("generation_id","verified","verification","agent_runs"): i.pop(k,None)
-r["current"]["generation_id"]="sha256:"+hashlib.sha256(json.dumps({"current":i,"domain":"cott.generation.v5","schema_version":r["schema_version"]},ensure_ascii=False,separators=(",",":"),sort_keys=True).encode()+b"\n").hexdigest()
-p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True)+"\n")
+print(json.dumps({"cache_tag":sys.implementation.cache_tag,"content_hash":"sha256:"+hashlib.sha256(e.read_bytes()).hexdigest(),"executable":str(e),"implementation":sys.implementation.name,"machine":platform.machine(),"os":sys.platform,"platform":sysconfig.get_platform(),"version":platform.python_version()}))
 "#;
-    let output = Command::new("python3")
+    let output = Command::new(python.as_ref())
         .args(["-c", script])
-        .current_dir(root)
         .output()
-        .expect("host Python should retarget test provenance");
+        .expect("Python should inspect test provenance");
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    original
+    let python_tools: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("Python tool evidence should be JSON");
+    update_generation_record(root, |snapshot| {
+        snapshot
+            .tools
+            .as_object_mut()
+            .expect("generation tool evidence must be an object")
+            .insert("python".to_owned(), python_tools.clone());
+    })
+    .expect("emitted generation record")
+}
+
+fn retarget_generation_to_host_python(root: &Path) -> Vec<u8> {
+    retarget_generation_to_python(root, "python3")
 }
 
 #[test]
 fn curriculum_inventory_and_final_symbols_are_exact() {
-    assert_eq!(EXAMPLES.len(), 42);
+    assert_eq!(EXAMPLES.len(), 10);
     assert_eq!(
         EXAMPLES
             .iter()
             .filter(|example| example.path.starts_with("grammar/"))
             .count(),
-        10
+        6
     );
     assert_eq!(
         EXAMPLES
             .iter()
             .filter(|example| example.path.starts_with("simple/"))
             .count(),
-        16
+        3
     );
     assert_eq!(
         EXAMPLES
             .iter()
             .filter(|example| example.path.starts_with("complex/"))
             .count(),
-        16
+        1
     );
 
     let paths = EXAMPLES
@@ -616,12 +514,6 @@ fn curriculum_inventory_and_final_symbols_are_exact() {
     on_disk.remove("complex/process-bar");
     assert_eq!(paths, on_disk, "curriculum inventory changed");
     for example in EXAMPLES {
-        assert_ne!(example.path, "complex/process-bar");
-        assert!(
-            !example.public_functions.contains(&"run"),
-            "{} exports run",
-            example.path
-        );
         assert!(
             example.public_functions.contains(&example.final_symbol),
             "{} final symbol is outside its exact public set",
@@ -631,7 +523,7 @@ fn curriculum_inventory_and_final_symbols_are_exact() {
 }
 
 #[test]
-fn every_documented_example_emits_and_verifies() {
+fn every_curriculum_example_is_formatted_checked_emitted_and_verified() {
     for example in EXAMPLES {
         let project = copied_project(example.path);
         let checked_add = example.path == "grammar/checked-add";
@@ -700,6 +592,7 @@ fn every_documented_example_emits_and_verifies() {
                 .expect("generation record should be readable"),
         )
         .expect("generation record should be JSON");
+        assert_v08_generation_metadata(&generation);
         let implementations = generation["current"]["implementations"]
             .as_array()
             .expect("implementations should be an array");
@@ -759,7 +652,7 @@ fn every_documented_example_emits_and_verifies() {
 }
 
 #[test]
-fn every_documented_example_runs_when_python3_is_available() {
+fn checked_add_generated_example_runs_when_python3_is_available() {
     let usable_python = Command::new("python3")
         .args([
             "-c",
@@ -771,18 +664,7 @@ fn every_documented_example_runs_when_python3_is_available() {
         return;
     }
 
-    let example = EXAMPLES
-        .iter()
-        .find(|example| example.path == "grammar/checked-add")
-        .expect("checked-add should be in the curriculum");
-    let project = copied_project(example.path);
-    let emitted = cott(&project.path, &["emit", "python"]);
-    assert!(
-        emitted.status.success(),
-        "{} failed to emit: {}",
-        example.path,
-        String::from_utf8_lossy(&emitted.stderr)
-    );
+    let project = copied_project("grammar/checked-add");
     let generation = retarget_generation_to_host_python(&project.path);
     let output = Command::new("python3")
         .args([
@@ -796,22 +678,13 @@ fn every_documented_example_runs_when_python3_is_available() {
         .expect("restore verified generation record");
     assert!(
         output.status.success(),
-        "{} failed to run: {}",
-        example.path,
+        "checked-add failed to run: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
         String::from_utf8(output.stdout).expect("example stdout must be UTF-8"),
         "5\n",
-        "{} emitted unexpected stdout",
-        example.path
-    );
-    let verified = cott(&project.path, &["verify"]);
-    assert!(
-        verified.status.success(),
-        "{} failed to verify after execution: {}",
-        example.path,
-        String::from_utf8_lossy(&verified.stderr)
+        "checked-add emitted unexpected stdout"
     );
 }
 #[test]
@@ -884,32 +757,33 @@ fn modular_order_management_example_emits_verifies_and_runs() {
 }
 
 #[test]
-fn feature_examples_emit_and_check() {
-    let features: [(&str, &[&str]); 5] = [
+fn feature_examples_are_formatted_checked_emitted_verified_and_run() {
+    let features: [(&str, &str); 7] = [
         (
             "features/trait-protocol",
-            &[
-                "Write Documentation (urgency: 2)",
-                "[2] Write Documentation (urgency: 2)",
-                "Priority: 2",
-                "Completed: True",
-            ],
+            "Factory exact: True\nExplicit: Write Documentation\nSpecialized: specialized: Write Documentation\nDefault: default\nDyn: Write Documentation\nPriority: 2\nCompleted: True\nCompletion count: 1\n",
         ),
+        ("features/workflow-scenario", "new result\npublished\n"),
         (
-            "features/opaque-resource",
-            &[
-                "Extracted handle id: 42",
-                "Lines: alpha,beta",
-                "Generated values: first,7",
-                "Generator return count: 2",
-            ],
+            "features/effects-selection",
+            "Compiler-owned fixture scenarios exercise: copy_text, fetch_local, clock_ns, copy_result_is_ok, text_result_is_ok, text_result_text\n",
         ),
         (
             "features/json-transform",
-            &["Extracted JSON field: Hello Cott"],
+            "Extracted JSON field: Hello Cott\nRecursive JSON chain: first\n",
         ),
-        ("features/pair-tuple", &["Swapped pair: (20, 10)"]),
-        ("features/system-effects", &["Inspected path: /etc/hosts"]),
+        (
+            "features/declarations-generics",
+            "label=Cott; values=(3, 1, 4, 1); bytes=636f7474\n",
+        ),
+        (
+            "features/contracts-evidence",
+            "LabelEvidenceError_Missing()\nLabelEvidenceError_TooShort(actual='ok')\nevidence\n",
+        ),
+        (
+            "features/boundary-protocols",
+            "Wrapped raw id: 42\nExtracted handle id: 42\nNarrowed unknown: explicit\nLines: alpha,beta\nGenerator return count: 2\nGenerated values: first,7\nAsync lines: gamma,delta\nAsync iterator completed\nAsync generated values: first,7\nAsync generator completed\nAsync generator closed twice\n",
+        ),
     ];
     let usable_python = Command::new("python3")
         .args([
@@ -919,7 +793,7 @@ fn feature_examples_emit_and_check() {
         .status()
         .is_ok_and(|status| status.success());
 
-    for (feature, expected_outputs) in features {
+    for (feature, expected_output) in features {
         let project = copied_project(feature);
         let formatted = cott(&project.path, &["fmt", "--check"]);
         assert!(
@@ -939,6 +813,49 @@ fn feature_examples_emit_and_check() {
             "{feature} failed to emit: {}",
             String::from_utf8_lossy(&emitted.stderr)
         );
+        let generation: serde_json::Value = serde_json::from_slice(
+            &fs::read(project.path.join("generated/generation.json"))
+                .expect("generation record should be readable"),
+        )
+        .expect("generation record should be JSON");
+        assert_v08_generation_metadata(&generation);
+
+        if feature == "features/workflow-scenario" {
+            let workflow = Example {
+                path: feature,
+                module: "curriculum.workflow_scenario",
+                public_functions: &[
+                    "apply_search",
+                    "begin_save",
+                    "begin_search",
+                    "flush_save",
+                    "request_save",
+                    "resolve_search",
+                ],
+                final_symbol: "flush_save",
+            };
+            assert_public_projection(&project.path, &workflow, true);
+            let ir: serde_json::Value = serde_json::from_slice(
+                &fs::read(generated_module_file(
+                    &project.path,
+                    "ir",
+                    workflow.module,
+                    ".json",
+                ))
+                .expect("scenario IR should be readable"),
+            )
+            .expect("scenario IR should be JSON");
+            assert_eq!(
+                ir["declarations"]
+                    .as_array()
+                    .expect("scenario declarations should be an array")
+                    .iter()
+                    .filter(|declaration| declaration["kind"] == "scenario")
+                    .map(|declaration| declaration["public"].as_bool())
+                    .collect::<Vec<_>>(),
+                [Some(false)]
+            );
+        }
 
         if usable_python {
             let generation = retarget_generation_to_host_python(&project.path);
@@ -947,43 +864,152 @@ fn feature_examples_emit_and_check() {
                 .env("PYTHONPATH", project.path.join("generated/python"))
                 .output()
                 .expect("feature app.py should run");
+            fs::write(project.path.join("generated/generation.json"), generation)
+                .expect("restore verified generation record");
             assert!(
                 output.status.success(),
                 "{feature} app.py failed to run: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            let stdout = String::from_utf8(output.stdout).expect("output must be UTF-8");
-            for &expected_output in expected_outputs {
-                assert!(
-                    stdout.contains(expected_output),
-                    "{feature} output did not contain {expected_output}: {stdout}"
-                );
-            }
-            if feature == "features/trait-protocol" {
-                let generated = Command::new("python3")
-                    .args([
-                        "-c",
-                        concat!(
-                            "from curriculum.trait_protocol import SimpleTask, TaskLifecycle_Completed, format_summary, inspect_task\n",
-                            "task = SimpleTask('Write Documentation', 2)\n",
-                            "assert format_summary(task) == 'Write Documentation (urgency: 2)'\n",
-                            "assert inspect_task(task) == '[2] Write Documentation (urgency: 2)'\n",
-                            "assert task.priority_level() == 2\n",
-                            "assert task.complete() is True\n",
-                            "assert type(task.lifecycle) is TaskLifecycle_Completed\n",
-                        ),
-                    ])
-                    .env("PYTHONPATH", project.path.join("generated/python"))
-                    .output()
-                    .expect("generated SimpleTask should run");
-                assert!(
-                    generated.status.success(),
-                    "generated SimpleTask behavior failed: {}",
-                    String::from_utf8_lossy(&generated.stderr)
-                );
-            }
-            fs::write(project.path.join("generated/generation.json"), generation)
-                .expect("restore verified generation record");
+            assert_eq!(
+                String::from_utf8(output.stdout).expect("output must be UTF-8"),
+                expected_output,
+                "{feature} output changed"
+            );
         }
+
+        let verified = cott(&project.path, &["verify"]);
+        assert!(
+            verified.status.success(),
+            "{feature} failed to verify: {}",
+            String::from_utf8_lossy(&verified.stderr)
+        );
+        if feature == "features/workflow-scenario" {
+            let generation: serde_json::Value = serde_json::from_slice(
+                &fs::read(project.path.join("generated/generation.json"))
+                    .expect("verified generation record should be readable"),
+            )
+            .expect("verified generation record should be JSON");
+            let scenarios = generation["current"]["verification"]["contract_tests"]["scenarios"]
+                .as_array()
+                .expect("verification should record scenario evidence");
+            assert_eq!(scenarios.len(), 1);
+            assert_eq!(
+                scenarios[0]["scenario_id"],
+                "curriculum.workflow_scenario.scenario.latest_result_and_coalesced_save"
+            );
+            assert_eq!(scenarios[0]["grade"], "test observation");
+            assert!(
+                scenarios[0]["assertions"]
+                    .as_array()
+                    .expect("scenario should record assertions")
+                    .iter()
+                    .all(|assertion| assertion["grade"] == "test observation")
+            );
+            assert_eq!(
+                generation["current"]["semantic_coverage"]["summary"],
+                serde_json::json!({
+                    "observed": 4,
+                    "unobserved": 0,
+                    "trust_declaration": 0,
+                    "unknown": 0,
+                })
+            );
+        }
+        if feature == "features/effects-selection" {
+            let generation: serde_json::Value = serde_json::from_slice(
+                &fs::read(project.path.join("generated/generation.json"))
+                    .expect("verified generation record should be readable"),
+            )
+            .expect("verified generation record should be JSON");
+            let scenarios = generation["current"]["verification"]["contract_tests"]["scenarios"]
+                .as_array()
+                .expect("verification should record effect scenarios");
+            assert_eq!(
+                scenarios
+                    .iter()
+                    .map(|scenario| scenario["scenario_id"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                [
+                    "curriculum.effects_selection.scenario.filesystem_copy",
+                    "curriculum.effects_selection.scenario.filesystem_replace_failure",
+                    "curriculum.effects_selection.scenario.local_http",
+                    "curriculum.effects_selection.scenario.deterministic_clock",
+                ]
+            );
+            assert!(
+                scenarios
+                    .iter()
+                    .all(|scenario| scenario["grade"] == "unobserved")
+            );
+            assert_eq!(
+                generation["current"]["semantic_coverage"]["summary"],
+                serde_json::json!({
+                    "observed": 0,
+                    "unobserved": 0,
+                    "trust_declaration": 11,
+                    "unknown": 2,
+                })
+            );
+        }
+    }
+}
+
+#[test]
+fn fastapi_hello_projects_external_request_through_testclient_when_available() {
+    let project = copied_project("integrations/fastapi-hello");
+    for arguments in [
+        ["fmt", "--check"].as_slice(),
+        ["check"].as_slice(),
+        ["emit", "python"].as_slice(),
+    ] {
+        let output = cott(&project.path, arguments);
+        assert!(
+            output.status.success(),
+            "integrations/fastapi-hello failed cott {}: {}",
+            arguments.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let generation: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/generation.json"))
+            .expect("generation record should be readable"),
+    )
+    .expect("generation record should be JSON");
+    assert_v08_generation_metadata(&generation);
+
+    let interpreter = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/integrations/fastapi-hello/.venv/bin/python");
+    let usable_testclient = Command::new(&interpreter)
+        .args([
+            "-c",
+            "import fastapi; from fastapi.testclient import TestClient",
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+    if usable_testclient {
+        let generation = retarget_generation_to_python(&project.path, &interpreter);
+        let output = Command::new(&interpreter)
+            .args([
+                "-c",
+                concat!(
+                    "from fastapi.testclient import TestClient\n",
+                    "from app import app\n",
+                    "response = TestClient(app).get('/')\n",
+                    "assert response.status_code == 200\n",
+                    "assert response.json() == {'message': 'Hello World', 'method': 'GET'}\n",
+                ),
+            ])
+            .current_dir(project.path.join("python"))
+            .env("PYTHONPATH", project.path.join("generated/python"))
+            .output()
+            .expect("FastAPI TestClient should run");
+        fs::write(project.path.join("generated/generation.json"), generation)
+            .expect("restore verified generation record");
+        assert!(
+            output.status.success(),
+            "FastAPI external request projection failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

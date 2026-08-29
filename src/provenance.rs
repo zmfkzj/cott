@@ -6,9 +6,10 @@ use serde_json::{Value, json};
 
 use crate::hash::sha256_hex;
 
-pub const GENERATION_SCHEMA_VERSION: u32 = 5;
-pub const CANONICAL_IR_SCHEMA_VERSION: u32 = 7;
-pub const RUNTIME_ABI_VERSION: u32 = 5;
+pub const GENERATION_SCHEMA_VERSION: u32 = 7;
+pub const CANONICAL_IR_SCHEMA_VERSION: u32 = 8;
+pub const RUNTIME_ABI_VERSION: u32 = 7;
+pub const CONTRACT_STRATEGY_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -16,6 +17,7 @@ pub struct GenerationCompatibility {
     pub generation_schema: u32,
     pub canonical_ir_schema: u32,
     pub runtime_abi: u32,
+    pub contract_strategy_schema: u32,
 }
 
 impl GenerationCompatibility {
@@ -24,6 +26,7 @@ impl GenerationCompatibility {
             generation_schema: GENERATION_SCHEMA_VERSION,
             canonical_ir_schema: CANONICAL_IR_SCHEMA_VERSION,
             runtime_abi: RUNTIME_ABI_VERSION,
+            contract_strategy_schema: CONTRACT_STRATEGY_SCHEMA_VERSION,
         }
     }
 
@@ -31,6 +34,7 @@ impl GenerationCompatibility {
         self.generation_schema == GENERATION_SCHEMA_VERSION
             && self.canonical_ir_schema == CANONICAL_IR_SCHEMA_VERSION
             && self.runtime_abi == RUNTIME_ABI_VERSION
+            && self.contract_strategy_schema == CONTRACT_STRATEGY_SCHEMA_VERSION
     }
 }
 
@@ -51,6 +55,70 @@ pub struct SourceSpan {
     pub start_column: u64,
     pub end_line: u64,
     pub end_column: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverageStatus {
+    Observed,
+    Unobserved,
+    TrustDeclaration,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClauseCoverage {
+    pub symbol: String,
+    pub clause_id: String,
+    pub span: SourceSpan,
+    pub status: CoverageStatus,
+    pub evidence: Vec<Value>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoverageSummary {
+    pub observed: u64,
+    pub unobserved: u64,
+    pub trust_declaration: u64,
+    pub unknown: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoverageViolation {
+    pub symbol: String,
+    pub clause_id: String,
+    pub span: SourceSpan,
+    pub status: CoverageStatus,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoveragePolicyResult {
+    pub selected: u64,
+    pub passed: bool,
+    pub violations: Vec<CoverageViolation>,
+}
+
+impl Default for CoveragePolicyResult {
+    fn default() -> Self {
+        Self {
+            selected: 0,
+            passed: true,
+            violations: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticCoverage {
+    pub clauses: Vec<ClauseCoverage>,
+    pub summary: CoverageSummary,
+    pub policy: CoveragePolicyResult,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -87,6 +155,7 @@ pub struct GenerationSnapshot {
     pub managed_files: BTreeMap<String, String>,
     pub unresolved: Vec<UnresolvedRecord>,
     pub verification: Value,
+    pub semantic_coverage: SemanticCoverage,
     pub agent_runs: Vec<AgentRun>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -307,11 +376,12 @@ fn validate_snapshot_identity(snapshot: &GenerationSnapshot) -> Result<(), Strin
     }
     if !snapshot.compatibility.is_current() {
         return Err(format!(
-            "generation compatibility must be {GENERATION_SCHEMA_VERSION}/{CANONICAL_IR_SCHEMA_VERSION}/{RUNTIME_ABI_VERSION}"
+            "generation compatibility must be {GENERATION_SCHEMA_VERSION}/{CANONICAL_IR_SCHEMA_VERSION}/{RUNTIME_ABI_VERSION}/{CONTRACT_STRATEGY_SCHEMA_VERSION}"
         ));
     }
     validate_unresolved_records(&snapshot.unresolved)?;
     validate_implementation_records(&snapshot.implementations)?;
+    validate_semantic_coverage(&snapshot.semantic_coverage)?;
     let mut expected = snapshot.clone();
     expected.compute_generation_id()?;
     if expected.generation_id == snapshot.generation_id {
@@ -329,11 +399,17 @@ fn normalized_generation_identity(snapshot: &GenerationSnapshot) -> Result<Value
     let object = current
         .as_object_mut()
         .expect("generation snapshot serializes as object");
-    for key in ["generation_id", "verified", "verification", "agent_runs"] {
+    for key in [
+        "generation_id",
+        "verified",
+        "verification",
+        "semantic_coverage",
+        "agent_runs",
+    ] {
         object.remove(key);
     }
     Ok(json!({
-        "domain": "cott.generation.v5",
+        "domain": "cott.generation.v7",
         "schema_version": GENERATION_SCHEMA_VERSION,
         "current": current,
     }))
@@ -375,6 +451,132 @@ fn validate_unresolved_records(unresolved: &[UnresolvedRecord]) -> Result<(), St
         }
     }
     Ok(())
+}
+
+fn validate_semantic_coverage(coverage: &SemanticCoverage) -> Result<(), String> {
+    let mut summary = CoverageSummary::default();
+    let mut previous = None;
+    let mut clauses = BTreeMap::new();
+    for clause in &coverage.clauses {
+        if !valid_coverage_symbol(&clause.symbol) {
+            return Err(format!(
+                "semantic coverage clause has invalid symbol `{}`",
+                clause.symbol
+            ));
+        }
+        let key = coverage_sort_key(&clause.symbol, &clause.clause_id).ok_or_else(|| {
+            format!(
+                "semantic coverage clause `{}` has an invalid clause_id",
+                clause.symbol
+            )
+        })?;
+        if previous.as_ref().is_some_and(|previous| previous >= &key) {
+            return Err("semantic coverage clauses must be sorted and unique".to_owned());
+        }
+        previous = Some(key);
+        if !valid_source_span(&clause.span) {
+            return Err(format!(
+                "semantic coverage clause `{}:{}` has an invalid span",
+                clause.symbol, clause.clause_id
+            ));
+        }
+        clauses.insert((clause.symbol.as_str(), clause.clause_id.as_str()), clause);
+        match clause.status {
+            CoverageStatus::Observed => summary.observed += 1,
+            CoverageStatus::Unobserved => summary.unobserved += 1,
+            CoverageStatus::TrustDeclaration => summary.trust_declaration += 1,
+            CoverageStatus::Unknown => summary.unknown += 1,
+        }
+    }
+    if coverage.summary != summary {
+        return Err("semantic coverage summary does not match clause statuses".to_owned());
+    }
+    if coverage.policy.selected > coverage.clauses.len() as u64 {
+        return Err("semantic coverage policy selected count exceeds clauses".to_owned());
+    }
+    if coverage.policy.passed != coverage.policy.violations.is_empty() {
+        return Err("semantic coverage policy passed must match violations".to_owned());
+    }
+    if coverage.policy.violations.len() as u64 > coverage.policy.selected {
+        return Err("semantic coverage policy violations exceed selected clauses".to_owned());
+    }
+    let mut previous = None;
+    for violation in &coverage.policy.violations {
+        let key = coverage_sort_key(&violation.symbol, &violation.clause_id).ok_or_else(|| {
+            format!(
+                "semantic coverage policy violation `{}` has an invalid clause_id",
+                violation.symbol
+            )
+        })?;
+        if previous.as_ref().is_some_and(|previous| previous >= &key) {
+            return Err("semantic coverage policy violations must be sorted and unique".to_owned());
+        }
+        previous = Some(key);
+        if violation.reason.trim().is_empty() {
+            return Err("semantic coverage policy violation has an empty reason".to_owned());
+        }
+        let clause = clauses
+            .get(&(violation.symbol.as_str(), violation.clause_id.as_str()))
+            .ok_or_else(|| {
+                format!(
+                    "semantic coverage policy violation `{}:{}` has no clause",
+                    violation.symbol, violation.clause_id
+                )
+            })?;
+        if violation.status != clause.status || violation.span != clause.span {
+            return Err(format!(
+                "semantic coverage policy violation `{}:{}` does not match its clause",
+                violation.symbol, violation.clause_id
+            ));
+        }
+        if matches!(violation.status, CoverageStatus::Observed) {
+            return Err("semantic coverage policy cannot reject an observed clause".to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn coverage_sort_key(symbol: &str, clause_id: &str) -> Option<(String, u8, u32, String)> {
+    let (kind, id) = clause_id.split_once(':')?;
+    if id.is_empty() || id.contains(':') {
+        return None;
+    }
+    let kind_order = match kind {
+        "requires" => 0,
+        "ensures" => 1,
+        "error" => 2,
+        "modifies" => 3,
+        "invariant" => 4,
+        _ => return None,
+    };
+    if kind == "modifies" {
+        valid_coverage_symbol(id).then(|| (symbol.to_owned(), kind_order, 0, id.to_owned()))
+    } else {
+        let numeric_id = id.parse::<u32>().ok()?;
+        (numeric_id.to_string() == id)
+            .then(|| (symbol.to_owned(), kind_order, numeric_id, String::new()))
+    }
+}
+
+fn valid_coverage_symbol(symbol: &str) -> bool {
+    !symbol.is_empty() && symbol.split('.').all(valid_coverage_identifier)
+}
+
+fn valid_coverage_identifier(value: &str) -> bool {
+    let mut chars = value.bytes();
+    chars
+        .next()
+        .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+        && chars.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+}
+
+fn valid_source_span(span: &SourceSpan) -> bool {
+    span.end_byte >= span.start_byte
+        && span.end_line >= span.start_line
+        && span.start_line != 0
+        && span.start_column != 0
+        && span.end_line != 0
+        && span.end_column != 0
 }
 
 fn validate_implementation_records(implementations: &Value) -> Result<(), String> {
@@ -482,5 +684,152 @@ fn validate(value: &Value) -> Result<(), String> {
         Ok(())
     } else {
         Err(errors.join("; "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span() -> SourceSpan {
+        SourceSpan {
+            start_byte: 0,
+            end_byte: 1,
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 2,
+        }
+    }
+
+    fn coverage() -> SemanticCoverage {
+        SemanticCoverage {
+            clauses: vec![
+                ClauseCoverage {
+                    symbol: "app.fetch".to_owned(),
+                    clause_id: "requires:0".to_owned(),
+                    span: span(),
+                    status: CoverageStatus::Observed,
+                    evidence: vec![],
+                },
+                ClauseCoverage {
+                    symbol: "app.fetch".to_owned(),
+                    clause_id: "ensures:1".to_owned(),
+                    span: span(),
+                    status: CoverageStatus::Unobserved,
+                    evidence: vec![],
+                },
+                ClauseCoverage {
+                    symbol: "app.fetch".to_owned(),
+                    clause_id: "error:2".to_owned(),
+                    span: span(),
+                    status: CoverageStatus::TrustDeclaration,
+                    evidence: vec![],
+                },
+                ClauseCoverage {
+                    symbol: "app.fetch".to_owned(),
+                    clause_id: "modifies:curriculum.trait_protocol.SimpleTask.completion_count"
+                        .to_owned(),
+                    span: span(),
+                    status: CoverageStatus::Unknown,
+                    evidence: vec![],
+                },
+                ClauseCoverage {
+                    symbol: "app.fetch".to_owned(),
+                    clause_id: "invariant:3".to_owned(),
+                    span: span(),
+                    status: CoverageStatus::Observed,
+                    evidence: vec![],
+                },
+            ],
+            summary: CoverageSummary {
+                observed: 2,
+                unobserved: 1,
+                trust_declaration: 1,
+                unknown: 1,
+            },
+            policy: CoveragePolicyResult::default(),
+        }
+    }
+
+    #[test]
+    fn empty_semantic_coverage_has_no_gate() {
+        let coverage = SemanticCoverage::default();
+
+        assert_eq!(coverage.policy.selected, 0);
+        assert!(coverage.policy.passed);
+        validate_semantic_coverage(&coverage).expect("empty coverage must be valid");
+    }
+
+    #[test]
+    fn generation_compatibility_requires_exact_current_members() {
+        assert!(GenerationCompatibility::current().is_current());
+        let legacy = GenerationCompatibility {
+            generation_schema: 6,
+            canonical_ir_schema: 7,
+            runtime_abi: 6,
+            contract_strategy_schema: 4,
+        };
+        assert!(!legacy.is_current());
+
+        assert!(
+            serde_json::from_value::<GenerationCompatibility>(serde_json::json!({
+                "generation_schema": GENERATION_SCHEMA_VERSION,
+                "canonical_ir_schema": CANONICAL_IR_SCHEMA_VERSION,
+                "runtime_abi": RUNTIME_ABI_VERSION,
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn semantic_coverage_requires_sorted_consistent_policy_evidence() {
+        let mut coverage = coverage();
+        coverage.policy = CoveragePolicyResult {
+            selected: 2,
+            passed: false,
+            violations: vec![CoverageViolation {
+                symbol: "app.fetch".to_owned(),
+                clause_id: "ensures:1".to_owned(),
+                span: span(),
+                status: CoverageStatus::Unobserved,
+                reason: "not observed".to_owned(),
+            }],
+        };
+        validate_semantic_coverage(&coverage).expect("consistent semantic coverage must be valid");
+
+        coverage.summary.observed = 1;
+        assert!(validate_semantic_coverage(&coverage).is_err());
+    }
+
+    #[test]
+    fn semantic_coverage_does_not_change_generation_identity() {
+        let mut snapshot = GenerationSnapshot {
+            generation_id: String::new(),
+            verified: false,
+            project_version: "0.1.0".to_owned(),
+            compatibility: GenerationCompatibility::current(),
+            inputs: serde_json::json!({}),
+            tools: serde_json::json!({}),
+            ir: serde_json::json!({}),
+            contract_surface: serde_json::json!({}),
+            public_python_symbols: serde_json::json!({}),
+            implementations: serde_json::json!([]),
+            dependencies: serde_json::json!([]),
+            managed_files: BTreeMap::new(),
+            unresolved: vec![],
+            verification: Value::Null,
+            semantic_coverage: SemanticCoverage::default(),
+            agent_runs: vec![],
+        };
+        snapshot
+            .compute_generation_id()
+            .expect("baseline identity should compute");
+        let identity = snapshot.generation_id.clone();
+        snapshot.semantic_coverage = coverage();
+        snapshot
+            .compute_generation_id()
+            .expect("coverage identity should compute");
+        assert_eq!(snapshot.generation_id, identity);
     }
 }

@@ -1,1 +1,0 @@
-{"schema_version":3,"symbol":"curriculum.textfile_analysis.analyze_text","seed":"sha256:f951de2c59fdd044add7287bccc8ff9d5292311032a180f924eeaf2ac3365b2b","candidate_limit":64,"node_limit":64,"container_length_limit":3,"json_depth_limit":4,"lifecycle_limit":3,"callable_kind":"sync","return_kind":"value","classification":"pure","clause_ids":["ensures:1","ensures:2","ensures:3"]}

@@ -3,7 +3,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use cott::binding::{resolve_bindings, resolve_implementations, validate_candidate};
+use cott::binding::{
+    audit_facade_boundary, inspect_python_imports, resolve_bindings, resolve_implementations,
+    validate_candidate,
+};
 use cott::compiler::{SourceFile, parse_project};
 use cott::hir::lower;
 use cott::ir::render;
@@ -11,7 +14,7 @@ use cott::manifest::ProjectConfig;
 use cott::project::{ProjectPaths, load_config_with_paths};
 use cott::provenance::{
     AgentRun, AgentStatus, GENERATION_SCHEMA_VERSION, GenerationCompatibility, GenerationRecord,
-    GenerationSnapshot, StreamDigest,
+    GenerationSnapshot, SemanticCoverage, StreamDigest,
 };
 use cott::python::artifact_plan::{PythonArtifactPlan, PythonCallableKind};
 
@@ -313,6 +316,7 @@ fn record_agent_provenance(fixture: &Fixture, symbol: &str, source: &PathBuf, by
             managed_files: BTreeMap::new(),
             unresolved: Vec::new(),
             verification: serde_json::Value::Null,
+            semantic_coverage: SemanticCoverage::default(),
             agent_runs: vec![AgentRun {
                 symbol: symbol.to_owned(),
                 adapter: "test".to_owned(),
@@ -2160,4 +2164,48 @@ fn retains_unsafe_source_rejections() {
         .expect_err("unsafe candidate must fail");
         assert!(error.contains(expected), "{error}");
     }
+}
+
+#[test]
+fn audits_private_import_aliases_and_dynamic_imports() {
+    let source = concat!(
+        "import _cott_impl.app as implementation\n",
+        "from cott_bindings.app import run as binding\n",
+        "import importlib as il\n",
+        "from importlib import import_module as load\n",
+        "il.import_module('_cott_impl.app')\n",
+        "load('cott_bindings.app')\n",
+        "__import__(module_name)\n",
+    );
+    let diagnostics = audit_facade_boundary(PathBuf::from("app.py").as_path(), source);
+    assert_eq!(diagnostics.len(), 5);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.range.clone().expect("import span"))
+            .collect::<Vec<_>>(),
+        vec![7..21, 45..62, 169..185, 192..211, 213..236]
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("dotted string literal"))
+    );
+}
+
+#[test]
+fn import_audit_ignores_comments_and_strings_and_orders_references() {
+    let source = "# import _cott_impl.bad\nvalue = '_cott_impl.bad'\nimport os\n";
+    assert!(audit_facade_boundary(PathBuf::from("app.py").as_path(), source).is_empty());
+    let imports = inspect_python_imports("import z\nimport a\n").expect("valid Python");
+    assert_eq!(
+        imports
+            .into_iter()
+            .map(|reference| match reference.target {
+                cott::binding::ImportTarget::Literal(target) => target,
+                cott::binding::ImportTarget::UnknownDynamic => "unknown".to_owned(),
+            })
+            .collect::<Vec<_>>(),
+        vec!["z", "a"]
+    );
 }

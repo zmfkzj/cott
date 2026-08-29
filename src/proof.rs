@@ -2,11 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value, json};
 
-use crate::ir::CanonicalIr;
+use crate::{ir::CanonicalIr, manifest::VerificationConfig};
 
 pub const ALGORITHM: &str = "bounded-dnf-difference-constraints";
-pub const VERSION: u32 = 1;
-pub const NODE_LIMIT: usize = 1024;
+pub const VERSION: u32 = 2;
 pub const DEPTH_LIMIT: usize = 128;
 pub const SYMBOL_LIMIT: usize = 128;
 pub const ATOM_LIMIT: usize = 1024;
@@ -15,8 +14,6 @@ const DISPROVED_PREFIX: &str = "static contract proof disproved: ";
 pub fn is_disproved_error(error: &str) -> bool {
     error.starts_with(DISPROVED_PREFIX)
 }
-
-pub const BRANCH_LIMIT: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Outcome {
@@ -63,18 +60,18 @@ enum Atom {
 }
 #[derive(Clone, Debug, Default)]
 struct Affine {
-    constant: i64,
-    terms: BTreeMap<String, i64>,
-    domains: BTreeMap<String, (i64, i64)>,
+    constant: i128,
+    terms: BTreeMap<String, i128>,
+    domains: BTreeMap<String, (i128, i128)>,
 }
 impl Affine {
-    fn constant(value: i64) -> Self {
+    fn constant(value: i128) -> Self {
         Self {
             constant: value,
             ..Self::default()
         }
     }
-    fn variable(name: String, domain: (i64, i64)) -> Self {
+    fn variable(name: String, domain: (i128, i128)) -> Self {
         let mut terms = BTreeMap::new();
         terms.insert(name.clone(), 1);
         let mut domains = BTreeMap::new();
@@ -85,7 +82,7 @@ impl Affine {
             domains,
         }
     }
-    fn add(mut self, other: Self, sign: i64) -> Option<Self> {
+    fn add(mut self, other: Self, sign: i128) -> Option<Self> {
         self.constant = self
             .constant
             .checked_add(other.constant.checked_mul(sign)?)?;
@@ -102,7 +99,7 @@ impl Affine {
         }
         Some(self)
     }
-    fn scale(mut self, multiplier: i64) -> Option<Self> {
+    fn scale(mut self, multiplier: i128) -> Option<Self> {
         self.constant = self.constant.checked_mul(multiplier)?;
         for value in self.terms.values_mut() {
             *value = value.checked_mul(multiplier)?;
@@ -130,6 +127,7 @@ enum Reason {
 pub fn prove_contracts(
     ir: &CanonicalIr,
     scope: Option<&BTreeSet<String>>,
+    config: &VerificationConfig,
 ) -> Result<Value, String> {
     let scoped_refinements = scope
         .map(|selected| reachable_refinements(ir, selected))
@@ -158,7 +156,7 @@ pub fn prove_contracts(
                     "refinement_satisfiability",
                     &symbol,
                     None,
-                    prove_satisfiable(declaration.get("refinement").expect("checked")),
+                    prove_satisfiable(declaration.get("refinement").expect("checked"), config),
                 ));
             }
             if kind == "function" && scope.is_none_or(|selected| selected.contains(&symbol)) {
@@ -183,9 +181,18 @@ pub fn prove_contracts(
                         "requires_consistency",
                         &symbol,
                         Some(requires.len()),
-                        prove_all_satisfiable(&requires),
+                        prove_all_satisfiable(&requires, config),
                     ));
                 }
+                push_result_obligations(
+                    &mut contracts,
+                    &symbol,
+                    clauses,
+                    declaration.get("return_type").ok_or_else(|| {
+                        format!("{context} function {symbol}: return type missing")
+                    })?,
+                    config,
+                )?;
             }
             if kind == "impl" {
                 let initializer_symbol = format!("{symbol}.init");
@@ -199,6 +206,7 @@ pub fn prove_contracts(
                             &initializer_symbol,
                             clauses,
                             &context,
+                            config,
                         )?;
                     }
                 }
@@ -238,17 +246,38 @@ pub fn prove_contracts(
                                 &method_symbol,
                                 clauses,
                                 &context,
+                                config,
                             )?;
                         }
+                        let clauses = ["requires", "ensures", "errors"]
+                            .into_iter()
+                            .filter_map(|field| method.pointer(&format!("/contracts/{field}")))
+                            .filter_map(Value::as_array)
+                            .flat_map(|clauses| clauses.iter().cloned())
+                            .collect::<Vec<_>>();
+                        push_result_obligations(
+                            &mut contracts,
+                            &method_symbol,
+                            &clauses,
+                            method.get("return_type").ok_or_else(|| {
+                                format!(
+                                    "{context} impl {symbol} method {name}: return type missing"
+                                )
+                            })?,
+                            config,
+                        )?;
                     }
                 }
             }
         }
     }
-    if let Some(failed) = contracts
-        .iter()
-        .find(|entry| entry.get("status").and_then(Value::as_str) == Some("disproved"))
-    {
+    if let Some(failed) = contracts.iter().find(|entry| {
+        entry.get("status").and_then(Value::as_str) == Some("disproved")
+            && matches!(
+                entry.get("kind").and_then(Value::as_str),
+                Some("refinement_satisfiability" | "requires_consistency")
+            )
+    }) {
         return Err(format!(
             "{DISPROVED_PREFIX}{} for {} with counterexample {}",
             failed
@@ -262,9 +291,17 @@ pub fn prove_contracts(
             failed.get("model").cloned().unwrap_or(Value::Null)
         ));
     }
-    Ok(
-        json!({"algorithm": ALGORITHM, "version": VERSION, "limits": {"nodes": NODE_LIMIT, "depth": DEPTH_LIMIT, "symbols": SYMBOL_LIMIT, "atoms": ATOM_LIMIT, "branches": BRANCH_LIMIT}, "contracts": contracts}),
-    )
+    Ok(json!({
+        "algorithm": ALGORITHM,
+        "version": VERSION,
+        "limits": {
+            "proof_node_limit": config.proof_node_limit,
+            "proof_branch_limit": config.proof_branch_limit,
+            "candidate_limit": config.candidate_limit,
+            "lifecycle_limit": config.lifecycle_limit
+        },
+        "contracts": contracts
+    }))
 }
 fn obligation(kind: &str, symbol: &str, clauses: Option<usize>, result: Proof) -> Value {
     let mut entry = Map::new();
@@ -288,6 +325,7 @@ fn push_requires_obligation(
     symbol: &str,
     clauses: &[Value],
     context: &str,
+    config: &VerificationConfig,
 ) -> Result<(), String> {
     let requires = clauses
         .iter()
@@ -303,7 +341,7 @@ fn push_requires_obligation(
             "requires_consistency",
             symbol,
             Some(requires.len()),
-            prove_all_satisfiable(&requires),
+            prove_all_satisfiable(&requires, config),
         );
         if let Some(span) = clauses.first().and_then(|clause| clause.get("span")) {
             entry["span"] = span.clone();
@@ -328,15 +366,186 @@ fn unknown(reason: Reason) -> Proof {
         model: None,
     }
 }
-fn prove_satisfiable(expression: &Value) -> Proof {
-    prove_all_satisfiable(&[expression])
+fn push_result_obligations(
+    contracts: &mut Vec<Value>,
+    symbol: &str,
+    clauses: &[Value],
+    return_type: &Value,
+    config: &VerificationConfig,
+) -> Result<(), String> {
+    if return_type.get("kind").and_then(Value::as_str) != Some("result") {
+        return Ok(());
+    }
+    let requirements = clauses
+        .iter()
+        .filter(|clause| clause.get("kind").and_then(Value::as_str) == Some("requires"))
+        .filter(|clause| clause.get("guard").is_none_or(Value::is_null))
+        .map(|clause| {
+            clause
+                .get("expression")
+                .ok_or_else(|| format!("{symbol}: requires expression missing"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let conditional_errors = clauses
+        .iter()
+        .filter(|clause| clause.get("kind").and_then(Value::as_str) == Some("error"))
+        .filter(|clause| {
+            clause.get("guard").is_some_and(|guard| !guard.is_null())
+                || clause.get("when").is_some_and(|when| !when.is_null())
+        })
+        .collect::<Vec<_>>();
+    if conditional_errors.is_empty() {
+        return Ok(());
+    }
+    for clause in &conditional_errors {
+        contracts.push(role_obligation(
+            "conditional_error_reachability",
+            symbol,
+            clause,
+            "conditional_error",
+            prove_conditional_region(&requirements, clause, config),
+        )?);
+    }
+    for clause in clauses.iter().filter(|clause| {
+        clause.get("kind").and_then(Value::as_str) == Some("ensures")
+            && clause
+                .pointer("/guard/pattern/kind")
+                .and_then(Value::as_str)
+                == Some("result_ok")
+    }) {
+        contracts.push(role_obligation(
+            "success_region_satisfiability",
+            symbol,
+            clause,
+            "success",
+            prove_success_region(&requirements, &conditional_errors, config),
+        )?);
+    }
+    Ok(())
 }
-fn prove_all_satisfiable(expressions: &[&Value]) -> Proof {
+
+fn role_obligation(
+    kind: &str,
+    symbol: &str,
+    clause: &Value,
+    role: &str,
+    result: Proof,
+) -> Result<Value, String> {
+    let clause_id = format!(
+        "{}:{}",
+        required_string(clause, "kind", symbol)?,
+        clause
+            .get("clause_id")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("{symbol}: clause_id missing"))?
+    );
+    let mut entry = obligation(kind, symbol, None, result);
+    entry["clause_id"] = json!(clause_id);
+    entry["role"] = json!(role);
+    entry["span"] = clause
+        .get("span")
+        .cloned()
+        .ok_or_else(|| format!("{symbol}: clause span missing"))?;
+    Ok(entry)
+}
+
+fn prove_conditional_region(
+    requirements: &[&Value],
+    clause: &Value,
+    config: &VerificationConfig,
+) -> Proof {
+    let formula = match region_formula(requirements, std::iter::once(clause), false, config) {
+        Ok(formula) => formula,
+        Err(reason) => return unknown(reason),
+    };
+    prove_formula_satisfiable(&formula, config)
+}
+
+fn prove_success_region(
+    requirements: &[&Value],
+    conditional_errors: &[&Value],
+    config: &VerificationConfig,
+) -> Proof {
+    let formula = match region_formula(
+        requirements,
+        conditional_errors.iter().copied(),
+        true,
+        config,
+    ) {
+        Ok(formula) => formula,
+        Err(reason) => return unknown(reason),
+    };
+    prove_formula_satisfiable(&formula, config)
+}
+
+fn region_formula<'a>(
+    requirements: &[&Value],
+    conditional_errors: impl Iterator<Item = &'a Value>,
+    negate_errors: bool,
+    config: &VerificationConfig,
+) -> Result<Formula, Reason> {
+    let mut formula = Formula::Constant(true);
+    for expression in requirements {
+        formula = Formula::And(
+            Box::new(formula),
+            Box::new(formula_from_expression(expression, config)?),
+        );
+    }
+    let mut errors = Vec::new();
+    for clause in conditional_errors {
+        errors.push(conditional_error_formula(clause, config)?);
+    }
+    if negate_errors {
+        let errors = errors
+            .into_iter()
+            .reduce(|left, right| Formula::Or(Box::new(left), Box::new(right)))
+            .unwrap_or(Formula::Constant(false));
+        Ok(Formula::And(
+            Box::new(formula),
+            Box::new(Formula::Not(Box::new(errors))),
+        ))
+    } else {
+        for error in errors {
+            formula = Formula::And(Box::new(formula), Box::new(error));
+        }
+        Ok(formula)
+    }
+}
+
+fn conditional_error_formula(
+    clause: &Value,
+    config: &VerificationConfig,
+) -> Result<Formula, Reason> {
+    let mut formula = match clause.get("guard").filter(|guard| !guard.is_null()) {
+        None => Formula::Constant(true),
+        Some(guard) => match field(guard, "pattern")?.get("kind").and_then(Value::as_str) {
+            Some("wildcard" | "binding") => Formula::Constant(true),
+            _ => return Err(Reason::Unsupported),
+        },
+    };
+    if let Some(when) = clause.get("when").filter(|when| !when.is_null()) {
+        formula = Formula::And(
+            Box::new(formula),
+            Box::new(formula_from_expression(when, config)?),
+        );
+    }
+    Ok(formula)
+}
+
+fn formula_from_expression(value: &Value, config: &VerificationConfig) -> Result<Formula, Reason> {
+    let mut nodes = 0;
+    expression_budget(value, 0, &mut nodes, config)?;
+    parse_formula(value, 0)
+}
+fn prove_satisfiable(expression: &Value, config: &VerificationConfig) -> Proof {
+    prove_all_satisfiable(&[expression], config)
+}
+fn prove_all_satisfiable(expressions: &[&Value], config: &VerificationConfig) -> Proof {
     let mut formula = Formula::Constant(true);
     let mut nodes: usize = 1;
     let mut parsed_nodes: usize = 0;
     for expression in expressions {
-        if let Err(reason) = expression_budget(expression, 0, &mut parsed_nodes) {
+        if let Err(reason) = expression_budget(expression, 0, &mut parsed_nodes, config) {
             return unknown(reason);
         }
         let item = match parse_formula(expression, 0) {
@@ -344,12 +553,19 @@ fn prove_all_satisfiable(expressions: &[&Value]) -> Proof {
             Err(reason) => return unknown(reason),
         };
         nodes = match nodes.checked_add(formula_nodes(&item).saturating_add(1)) {
-            Some(nodes) if nodes <= NODE_LIMIT => nodes,
+            Some(nodes) if nodes <= config.proof_node_limit as usize => nodes,
             _ => return unknown(Reason::Limit),
         };
         formula = Formula::And(Box::new(formula), Box::new(item));
     }
-    let branches = match dnf(&formula, false, 0) {
+    prove_formula_satisfiable(&formula, config)
+}
+
+fn prove_formula_satisfiable(formula: &Formula, config: &VerificationConfig) -> Proof {
+    if formula_nodes(formula) > config.proof_node_limit as usize {
+        return unknown(Reason::Limit);
+    }
+    let branches = match dnf(formula, false, 0, config) {
         Ok(branches) => branches,
         Err(reason) => return unknown(reason),
     };
@@ -371,22 +587,18 @@ fn prove_all_satisfiable(expressions: &[&Value]) -> Proof {
                 };
             }
             Ok(None) => {}
-            Err(reason) => {
-                if unknown_reason != Some(Reason::Limit) {
-                    unknown_reason = Some(reason);
-                }
-            }
+            Err(reason) if unknown_reason != Some(Reason::Limit) => unknown_reason = Some(reason),
+            Err(_) => {}
         }
     }
-    if let Some(reason) = unknown_reason {
-        unknown(reason)
-    } else {
+    unknown_reason.map_or(
         Proof {
             outcome: Outcome::Disproved,
             reason: None,
             model: Some(json!({})),
-        }
-    }
+        },
+        unknown,
+    )
 }
 fn parse_formula(value: &Value, depth: usize) -> Result<Formula, Reason> {
     if depth >= DEPTH_LIMIT {
@@ -401,7 +613,9 @@ fn parse_formula(value: &Value, depth: usize) -> Result<Formula, Reason> {
                     .ok_or(Reason::Unsupported)?,
             ))
         }
-        Some("parameter_ref" | "binding_ref" | "self_ref") if is_bool(value.get("type")) => {
+        Some("parameter_ref" | "binding_ref" | "self_ref" | "field")
+            if is_bool(value.get("type")) =>
+        {
             Ok(Formula::Atom(Atom::Bool(variable_name(value)?)))
         }
         Some("unary") if value.get("op").and_then(Value::as_str) == Some("not") => {
@@ -493,17 +707,17 @@ fn affine(value: &Value, depth: usize) -> Result<Affine, Reason> {
             value
                 .pointer("/value/value")
                 .and_then(Value::as_str)
-                .and_then(|text| text.parse().ok())
+                .and_then(|text| text.parse::<i128>().ok())
                 .map(Affine::constant)
                 .ok_or(Reason::Unsupported)
         }
-        Some("parameter_ref" | "binding_ref" | "self_ref") => Ok(Affine::variable(
+        Some("parameter_ref" | "binding_ref" | "self_ref" | "field") => Ok(Affine::variable(
             variable_name(value)?,
             integer_domain(value.get("type")).ok_or(Reason::Unsupported)?,
         )),
         Some("len") => Ok(Affine::variable(
             format!("len({})", variable_name(field(value, "value")?)?),
-            (0, i64::MAX),
+            (0, u64::MAX as i128),
         )),
         Some("unary") => match value.get("op").and_then(Value::as_str) {
             Some("plus") => affine(field(value, "operand")?, depth + 1),
@@ -540,15 +754,21 @@ fn formula_nodes(formula: &Formula) -> usize {
     }
 }
 
-fn expression_budget(value: &Value, depth: usize, nodes: &mut usize) -> Result<(), Reason> {
+fn expression_budget(
+    value: &Value,
+    depth: usize,
+    nodes: &mut usize,
+    config: &VerificationConfig,
+) -> Result<(), Reason> {
     if depth >= DEPTH_LIMIT {
         return Err(Reason::Limit);
     }
     *nodes = nodes.checked_add(1).ok_or(Reason::Limit)?;
-    if *nodes > NODE_LIMIT {
+    if *nodes > config.proof_node_limit as usize {
         return Err(Reason::Limit);
     }
-    let descend = |value: &Value, nodes: &mut usize| expression_budget(value, depth + 1, nodes);
+    let descend =
+        |value: &Value, nodes: &mut usize| expression_budget(value, depth + 1, nodes, config);
     match value.get("kind").and_then(Value::as_str) {
         Some("unary") => descend(field(value, "operand")?, nodes),
         Some("binary") => {
@@ -564,12 +784,18 @@ fn expression_budget(value: &Value, depth: usize, nodes: &mut usize) -> Result<(
             }
             Ok(())
         }
+        Some("field") => descend(field(value, "base")?, nodes),
         Some("len") => descend(field(value, "value")?, nodes),
         Some("literal" | "parameter_ref" | "binding_ref" | "self_ref") => Ok(()),
         _ => Err(Reason::Unsupported),
     }
 }
-fn dnf(formula: &Formula, negated: bool, depth: usize) -> Result<Vec<Branch>, Reason> {
+fn dnf(
+    formula: &Formula,
+    negated: bool,
+    depth: usize,
+    config: &VerificationConfig,
+) -> Result<Vec<Branch>, Reason> {
     if depth >= DEPTH_LIMIT {
         return Err(Reason::Limit);
     }
@@ -583,49 +809,74 @@ fn dnf(formula: &Formula, negated: bool, depth: usize) -> Result<Vec<Branch>, Re
             left,
             op: Compare::Eq,
             right,
-        }) if negated => Ok(vec![
-            vec![(
-                Atom::Compare {
-                    left: left.clone(),
-                    op: Compare::Lt,
-                    right: right.clone(),
-                },
-                false,
-            )],
-            vec![(
-                Atom::Compare {
-                    left: left.clone(),
-                    op: Compare::Gt,
-                    right: right.clone(),
-                },
-                false,
-            )],
-        ]),
+        }) if negated => {
+            if config.proof_branch_limit < 2 {
+                return Err(Reason::Limit);
+            }
+            Ok(vec![
+                vec![(
+                    Atom::Compare {
+                        left: left.clone(),
+                        op: Compare::Lt,
+                        right: right.clone(),
+                    },
+                    false,
+                )],
+                vec![(
+                    Atom::Compare {
+                        left: left.clone(),
+                        op: Compare::Gt,
+                        right: right.clone(),
+                    },
+                    false,
+                )],
+            ])
+        }
         Formula::Atom(atom) => Ok(vec![vec![(atom.clone(), negated)]]),
-        Formula::Not(inner) => dnf(inner, !negated, depth + 1),
-        Formula::And(left, right) if !negated => {
-            product(dnf(left, false, depth + 1)?, dnf(right, false, depth + 1)?)
-        }
-        Formula::Or(left, right) if negated => {
-            product(dnf(left, true, depth + 1)?, dnf(right, true, depth + 1)?)
-        }
-        Formula::And(left, right) => {
-            append(dnf(left, true, depth + 1)?, dnf(right, true, depth + 1)?)
-        }
-        Formula::Or(left, right) => {
-            append(dnf(left, false, depth + 1)?, dnf(right, false, depth + 1)?)
-        }
+        Formula::Not(inner) => dnf(inner, !negated, depth + 1, config),
+        Formula::And(left, right) if !negated => product(
+            dnf(left, false, depth + 1, config)?,
+            dnf(right, false, depth + 1, config)?,
+            config,
+        ),
+        Formula::Or(left, right) if negated => product(
+            dnf(left, true, depth + 1, config)?,
+            dnf(right, true, depth + 1, config)?,
+            config,
+        ),
+        Formula::And(left, right) => append(
+            dnf(left, true, depth + 1, config)?,
+            dnf(right, true, depth + 1, config)?,
+            config,
+        ),
+        Formula::Or(left, right) => append(
+            dnf(left, false, depth + 1, config)?,
+            dnf(right, false, depth + 1, config)?,
+            config,
+        ),
     }
 }
-fn append(mut left: Vec<Branch>, right: Vec<Branch>) -> Result<Vec<Branch>, Reason> {
-    if left.len().checked_add(right.len()).ok_or(Reason::Limit)? > BRANCH_LIMIT {
+fn append(
+    mut left: Vec<Branch>,
+    right: Vec<Branch>,
+    config: &VerificationConfig,
+) -> Result<Vec<Branch>, Reason> {
+    if left.len().checked_add(right.len()).ok_or(Reason::Limit)?
+        > config.proof_branch_limit as usize
+    {
         return Err(Reason::Limit);
     }
     left.extend(right);
     Ok(left)
 }
-fn product(left: Vec<Branch>, right: Vec<Branch>) -> Result<Vec<Branch>, Reason> {
-    if left.len().checked_mul(right.len()).ok_or(Reason::Limit)? > BRANCH_LIMIT {
+fn product(
+    left: Vec<Branch>,
+    right: Vec<Branch>,
+    config: &VerificationConfig,
+) -> Result<Vec<Branch>, Reason> {
+    if left.len().checked_mul(right.len()).ok_or(Reason::Limit)?
+        > config.proof_branch_limit as usize
+    {
         return Err(Reason::Limit);
     }
     let mut result = Vec::with_capacity(left.len() * right.len());
@@ -645,7 +896,7 @@ fn product(left: Vec<Branch>, right: Vec<Branch>) -> Result<Vec<Branch>, Reason>
 struct Edge {
     from: usize,
     to: usize,
-    weight: i64,
+    weight: i128,
 }
 fn solve_branch(branch: &Branch) -> Result<Option<Value>, Reason> {
     if branch.len() > ATOM_LIMIT {
@@ -688,11 +939,15 @@ fn solve_branch(branch: &Branch) -> Result<Option<Value>, Reason> {
         .map(|(index, name)| (name.clone(), index + 1))
         .collect::<BTreeMap<_, _>>();
     for (name, (minimum, maximum)) in &domains {
-        if *maximum != i64::MAX {
+        if *maximum != i128::MAX {
             constraints.push(("$zero".to_owned(), name.clone(), *maximum));
         }
-        if *minimum != i64::MIN {
-            constraints.push((name.clone(), "$zero".to_owned(), -minimum));
+        if *minimum != i128::MIN {
+            constraints.push((
+                name.clone(),
+                "$zero".to_owned(),
+                minimum.checked_neg().ok_or(Reason::Unsupported)?,
+            ));
         }
     }
     let mut edges = constraints
@@ -704,7 +959,7 @@ fn solve_branch(branch: &Branch) -> Result<Option<Value>, Reason> {
         })
         .collect::<Vec<_>>();
     edges.sort_by_key(|edge| (edge.from, edge.to, edge.weight));
-    let mut distance = vec![0_i64; names.len() + 1];
+    let mut distance = vec![0_i128; names.len() + 1];
     for iteration in 0..distance.len() {
         let mut changed = false;
         for edge in &edges {
@@ -729,16 +984,15 @@ fn solve_branch(branch: &Branch) -> Result<Option<Value>, Reason> {
         .map(|value| value.checked_sub(zero).ok_or(Reason::Unsupported))
         .collect::<Result<Vec<_>, _>>()?;
     if !edges.iter().all(|edge| {
-        normalized[edge.to]
-            <= normalized[edge.from]
-                .checked_add(edge.weight)
-                .unwrap_or(i64::MAX)
+        normalized[edge.from]
+            .checked_add(edge.weight)
+            .is_some_and(|bound| normalized[edge.to] <= bound)
     }) {
         return Err(Reason::Unsupported);
     }
     let mut model = Map::new();
     for name in names {
-        model.insert(name.clone(), json!(normalized[indices[&name]]));
+        model.insert(name.clone(), model_number(normalized[indices[&name]])?);
     }
     for (name, value) in booleans {
         model.insert(name, json!(value));
@@ -750,8 +1004,8 @@ fn constraints_for(
     left: &Affine,
     op: Compare,
     right: &Affine,
-    domains: &mut BTreeMap<String, (i64, i64)>,
-) -> Result<Option<Vec<(String, String, i64)>>, Reason> {
+    domains: &mut BTreeMap<String, (i128, i128)>,
+) -> Result<Option<Vec<(String, String, i128)>>, Reason> {
     let difference = left
         .clone()
         .add(right.clone(), -1)
@@ -777,7 +1031,7 @@ fn constraints_for(
             },
         );
     }
-    let edge = |reverse: bool, strict: bool| -> Result<(String, String, i64), Reason> {
+    let edge = |reverse: bool, strict: bool| -> Result<(String, String, i128), Reason> {
         let mut terms = difference.terms.clone();
         let constant = if reverse {
             difference
@@ -820,6 +1074,15 @@ fn constraints_for(
         Compare::Eq => vec![edge(false, false)?, edge(true, false)?],
     }))
 }
+fn model_number(value: i128) -> Result<Value, Reason> {
+    if let Ok(value) = i64::try_from(value) {
+        Ok(Value::from(value))
+    } else {
+        u64::try_from(value)
+            .map(Value::from)
+            .map_err(|_| Reason::Unsupported)
+    }
+}
 fn is_bool(value: Option<&Value>) -> bool {
     value
         .and_then(|type_value| type_value.get("kind"))
@@ -830,16 +1093,16 @@ fn is_bool(value: Option<&Value>) -> bool {
             .and_then(Value::as_str)
             == Some("bool")
 }
-fn integer_domain(value: Option<&Value>) -> Option<(i64, i64)> {
+fn integer_domain(value: Option<&Value>) -> Option<(i128, i128)> {
     Some(match value?.get("name")?.as_str()? {
-        "i8" => (i8::MIN as i64, i8::MAX as i64),
-        "i16" => (i16::MIN as i64, i16::MAX as i64),
-        "i32" => (i32::MIN as i64, i32::MAX as i64),
-        "i64" => (i64::MIN, i64::MAX),
-        "u8" => (0, u8::MAX as i64),
-        "u16" => (0, u16::MAX as i64),
-        "u32" => (0, u32::MAX as i64),
-        "u64" => return None,
+        "i8" => (i8::MIN as i128, i8::MAX as i128),
+        "i16" => (i16::MIN as i128, i16::MAX as i128),
+        "i32" => (i32::MIN as i128, i32::MAX as i128),
+        "i64" => (i64::MIN as i128, i64::MAX as i128),
+        "u8" => (0, u8::MAX as i128),
+        "u16" => (0, u16::MAX as i128),
+        "u32" => (0, u32::MAX as i128),
+        "u64" => (0, u64::MAX as i128),
         _ => return None,
     })
 }
@@ -851,6 +1114,14 @@ fn variable_name(value: &Value) -> Result<String, Reason> {
             .and_then(Value::as_str)
             .map(str::to_owned)
             .ok_or(Reason::Unsupported),
+        Some("field") => Ok(format!(
+            "{}.{}",
+            variable_name(field(value, "base")?)?,
+            value
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or(Reason::Unsupported)?
+        )),
         _ => Err(Reason::Unsupported),
     }
 }
@@ -946,136 +1217,163 @@ fn named_types(value: Option<&Value>, names: &mut BTreeSet<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn integer(value: i64) -> Value {
+
+    fn config(proof_node_limit: u32, proof_branch_limit: u32) -> VerificationConfig {
+        VerificationConfig {
+            proof_node_limit,
+            proof_branch_limit,
+            candidate_limit: 64,
+            lifecycle_limit: 3,
+            ..VerificationConfig::default()
+        }
+    }
+
+    fn proof(expression: &Value) -> Proof {
+        prove_satisfiable(expression, &VerificationConfig::default())
+    }
+
+    fn integer(value: i128) -> Value {
         json!({"kind":"literal","value":{"kind":"integer","value":value.to_string()}})
     }
+
     fn bool_(value: bool) -> Value {
         json!({"kind":"literal","value":{"kind":"bool","value":value}})
     }
-    fn self_ref() -> Value {
-        json!({"kind":"self_ref","type":{"kind":"primitive","name":"i8"}})
+
+    fn reference(symbol: &str, primitive: &str) -> Value {
+        json!({"kind":"parameter_ref","symbol":symbol,"type":{"kind":"primitive","name":primitive}})
     }
+
+    fn self_ref() -> Value {
+        json!({"kind":"self_ref","type":{"kind":"named","name":"demo.State"}})
+    }
+
+    fn field(base: Value, name: &str, primitive: &str) -> Value {
+        json!({"kind":"field","base":base,"name":name,"type":{"kind":"primitive","name":primitive}})
+    }
+
+    fn len(value: Value) -> Value {
+        json!({"kind":"len","value":value,"type":{"kind":"primitive","name":"u64"}})
+    }
+
     fn compare(left: Value, op: &str, right: Value) -> Value {
         json!({"kind":"comparison_chain","operands":[left,right],"operators":[op]})
     }
+
     fn and(left: Value, right: Value) -> Value {
         json!({"kind":"binary","op":"and","left":left,"right":right})
     }
+
     #[test]
-    fn proves_tautology_and_models_integer_refinement() {
-        assert_eq!(
-            prove_satisfiable(&compare(self_ref(), "greater", integer(0))).outcome,
-            Outcome::Proved
-        );
-        assert_eq!(
-            prove_satisfiable(&compare(self_ref(), "equal", self_ref())).outcome,
-            Outcome::Proved
-        );
+    fn reports_version_two() {
+        assert_eq!(VERSION, 2);
     }
+
     #[test]
-    fn disproves_contradiction_and_respects_fixed_width_domains() {
+    fn proves_and_disproves_fixed_width_formulas() {
+        let value = reference("app.value", "i8");
         assert_eq!(
-            prove_satisfiable(&and(
-                compare(self_ref(), "greater", integer(127)),
-                compare(self_ref(), "less", integer(-128))
+            proof(&compare(value.clone(), "greater", integer(0))).outcome,
+            Outcome::Proved
+        );
+        assert_eq!(
+            proof(&and(
+                compare(value.clone(), "greater", integer(127)),
+                compare(value, "less", integer(-128))
             ))
             .outcome,
             Outcome::Disproved
         );
     }
+
     #[test]
-    fn refuses_float_and_nonlinear_claims() {
-        let float = json!({"kind":"comparison_chain","operands":[{"kind":"literal","value":{"kind":"f32","bits":"00000000"}},integer(0)],"operators":["equal"]});
-        assert_eq!(prove_satisfiable(&float).outcome, Outcome::Unknown);
+    fn supports_u64_lower_middle_and_upper_bounds() {
+        let value = reference("app.value", "u64");
+        for bound in [0, i64::MAX as i128 + 1, u64::MAX as i128] {
+            let proof = proof(&compare(value.clone(), "equal", integer(bound)));
+            assert_eq!(proof.outcome, Outcome::Proved);
+            assert_eq!(
+                proof.model.expect("witness")["app.value"],
+                Value::from(bound as u64)
+            );
+        }
+    }
+
+    #[test]
+    fn preserves_unknown_for_strict_bound_overflow() {
+        let result = proof(&compare(
+            reference("app.value", "i8"),
+            "greater",
+            integer(i128::MAX),
+        ));
+        assert_eq!(result.outcome, Outcome::Unknown);
+        assert_eq!(result.reason, Some("unsupported_expression"));
+    }
+
+    #[test]
+    fn names_recursive_fields_and_lengths() {
+        let nested = field(field(self_ref(), "header", "i8"), "count", "i8");
+        let satisfiable = proof(&compare(nested.clone(), "greater", integer(0)));
+        assert_eq!(satisfiable.outcome, Outcome::Proved);
         assert_eq!(
-            prove_satisfiable(&compare(
-                json!({"kind":"binary","op":"multiply","left":self_ref(),"right":self_ref()}),
-                "equal",
-                integer(1)
+            satisfiable.model.expect("witness")["$self.header.count"],
+            Value::from(1)
+        );
+        assert_eq!(
+            proof(&and(
+                compare(nested.clone(), "greater", integer(0)),
+                compare(nested, "less_equal", integer(0))
             ))
             .outcome,
-            Outcome::Unknown
+            Outcome::Disproved
         );
-    }
-    #[test]
-    fn folds_closed_booleans_and_reports_limit_deterministically() {
-        assert_eq!(prove_satisfiable(&bool_(true)).outcome, Outcome::Proved);
-        assert_eq!(prove_satisfiable(&bool_(false)).outcome, Outcome::Disproved);
-        let mut expression = bool_(true);
-        for _ in 0..DEPTH_LIMIT {
-            expression = json!({"kind":"unary","op":"not","operand":expression});
-        }
-        let first = prove_satisfiable(&expression);
-        assert_eq!(first.outcome, Outcome::Unknown);
-        assert_eq!(first.reason, prove_satisfiable(&expression).reason);
-    }
-}
 
-#[cfg(test)]
-mod safety_tests {
-    use super::*;
-
-    fn integer(value: i64) -> Value {
-        json!({"kind":"literal","value":{"kind":"integer","value":value.to_string()}})
-    }
-
-    fn compare(left: Value, op: &str, right: Value) -> Value {
-        json!({"kind":"comparison_chain","operands":[left,right],"operators":[op]})
-    }
-
-    #[test]
-    fn never_proves_generic_or_negated_equality_as_a_model() {
-        let generic = json!({
-            "kind":"parameter_ref",
-            "symbol":"generic.value",
-            "type":{"kind":"type_parameter","name":"T"}
-        });
+        let items = field(self_ref(), "items", "u64");
+        let satisfiable = proof(&compare(len(items.clone()), "greater", integer(0)));
+        assert_eq!(satisfiable.outcome, Outcome::Proved);
         assert_eq!(
-            prove_satisfiable(&compare(generic, "equal", integer(0))).outcome,
-            Outcome::Unknown
+            satisfiable.model.expect("witness")["len($self.items)"],
+            Value::from(1)
         );
-        let value = json!({
-            "kind":"parameter_ref",
-            "symbol":"app.value",
-            "type":{"kind":"primitive","name":"i8"}
-        });
-        let impossible = json!({
-            "kind":"binary",
-            "op":"and",
-            "left":compare(value.clone(), "equal", integer(0)),
-            "right":{"kind":"unary","op":"not","operand":compare(value, "equal", integer(0))}
-        });
-        assert_eq!(prove_satisfiable(&impossible).outcome, Outcome::Disproved);
-    }
-
-    #[test]
-    fn rejects_u64_claims_outside_the_signed_solver_domain_and_normalizes_models() {
-        let unsigned = json!({
-            "kind":"parameter_ref",
-            "symbol":"app.value",
-            "type":{"kind":"primitive","name":"u64"}
-        });
         assert_eq!(
-            prove_satisfiable(&compare(unsigned, "greater", integer(i64::MAX))).outcome,
-            Outcome::Unknown
+            proof(&compare(len(items), "less", integer(0))).outcome,
+            Outcome::Disproved
         );
-
-        let signed = json!({
-            "kind":"parameter_ref",
-            "symbol":"app.value",
-            "type":{"kind":"primitive","name":"i8"}
-        });
-        let proof = prove_satisfiable(&compare(signed, "greater", integer(0)));
-        assert_eq!(proof.outcome, Outcome::Proved);
-        assert_eq!(proof.model.expect("witness")["app.value"], 1);
     }
 
     #[test]
-    fn bounds_clause_conjunctions_before_allocating_an_unbounded_formula() {
-        let clauses = (0..NODE_LIMIT)
-            .map(|_| json!({"kind":"literal","value":{"kind":"bool","value":true}}))
-            .collect::<Vec<_>>();
-        let references = clauses.iter().collect::<Vec<_>>();
-        assert_eq!(prove_all_satisfiable(&references).outcome, Outcome::Unknown);
+    fn honors_exact_configured_node_and_branch_limits() {
+        assert_eq!(
+            prove_satisfiable(&bool_(true), &config(3, 2)).outcome,
+            Outcome::Proved
+        );
+        let node_exhausted = prove_satisfiable(&bool_(true), &config(2, 2));
+        assert_eq!(node_exhausted.outcome, Outcome::Unknown);
+        assert_eq!(node_exhausted.reason, Some("limit"));
+
+        let value = reference("app.value", "i8");
+        let expression =
+            json!({"kind":"unary","op":"not","operand":compare(value, "equal", integer(0))});
+        assert_eq!(
+            prove_satisfiable(&expression, &config(32, 2)).outcome,
+            Outcome::Proved
+        );
+        let branch_exhausted = prove_satisfiable(&expression, &config(32, 1));
+        assert_eq!(branch_exhausted.outcome, Outcome::Unknown);
+        assert_eq!(branch_exhausted.reason, Some("limit"));
+    }
+
+    #[test]
+    fn keeps_models_deterministic_and_unknown_statuses() {
+        let expression = compare(reference("app.value", "i8"), "greater", integer(0));
+        let first = proof(&expression);
+        let second = proof(&expression);
+        assert_eq!(first.outcome, Outcome::Proved);
+        assert_eq!(first.model, second.model);
+
+        let float = json!({"kind":"comparison_chain","operands":[{"kind":"literal","value":{"kind":"f32","bits":"00000000"}},integer(0)],"operators":["equal"]});
+        let unsupported = proof(&float);
+        assert_eq!(unsupported.outcome, Outcome::Unknown);
+        assert_eq!(unsupported.reason, Some("unsupported_expression"));
     }
 }

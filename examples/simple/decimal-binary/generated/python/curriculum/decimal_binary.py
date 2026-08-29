@@ -26,7 +26,7 @@ value returns `NegativeDecimal`."""
         _expected_error_span = {"end_byte":706,"end_column":57,"end_line":27,"start_byte":654,"start_column":5,"start_line":27}
         _expected_error_clause = "error:2"
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/decimal_binary/decimal_to_binary.py", "25609f36dfdefbf79bccbc2a2b03978ddf06304ede2e128104641bd9aacc739a", "decimal_to_binary", expected_project_name="decimal-binary", expected_cott_symbol="curriculum.decimal_binary.decimal_to_binary")
+        _implementation = _cott_load("_cott_impl/curriculum/decimal_binary/decimal_to_binary.py", "57e8f5283f4cdcbeec8d6ae1b56f209b2f44674ebc78708e41b0ee0aaeaa9eda", "decimal_to_binary", expected_project_name="decimal-binary", expected_cott_symbol="curriculum.decimal_binary.decimal_to_binary")
         _result = _implementation(value)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -70,7 +70,7 @@ returns `Overflow`, so invalid characters take priority over overflow."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/decimal_binary/binary_to_decimal.py", "71f7577df389fb955989419fbd7f9c9d6b62acb31a5975f183dcf062696a86e0", "binary_to_decimal", expected_project_name="decimal-binary", expected_cott_symbol="curriculum.decimal_binary.binary_to_decimal")
+        _implementation = _cott_load("_cott_impl/curriculum/decimal_binary/binary_to_decimal.py", "fda62d17b76e1a9c6724fd4ffbd652eb76d464acf01750f02e58e772cb0cdd65", "binary_to_decimal", expected_project_name="decimal-binary", expected_cott_symbol="curriculum.decimal_binary.binary_to_decimal")
         _result = _implementation(digits)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -112,7 +112,7 @@ Errors from the selected operation are returned unchanged."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/decimal_binary/convert_binary_decimal.py", "0c47f2431ac0aea34b93eb2a292ea379ce9abba08f132b1a72ca917d47c8493b", "convert_binary_decimal", expected_project_name="decimal-binary", expected_cott_symbol="curriculum.decimal_binary.convert_binary_decimal")
+        _implementation = _cott_load("_cott_impl/curriculum/decimal_binary/convert_binary_decimal.py", "44e992a4f2a7ef7125105bc33a0f8be9b6ff91c7a24fec3f9a63e93649afa203", "convert_binary_decimal", expected_project_name="decimal-binary", expected_cott_symbol="curriculum.decimal_binary.convert_binary_decimal")
         _result = _implementation(operation)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

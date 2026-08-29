@@ -1,0 +1,1 @@
+Keep the public `foo.bar` facade graph distinct: `process_bar` calls `validate_payload`, then `process_payload_bytes`, then `build_output`, propagating Err results unchanged. All three functions are pure; never invent effects, clients, adapters, or external calls.

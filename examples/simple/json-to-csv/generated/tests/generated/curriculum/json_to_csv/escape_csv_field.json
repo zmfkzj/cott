@@ -1,1 +1,0 @@
-{"schema_version":3,"symbol":"curriculum.json_to_csv.escape_csv_field","seed":"sha256:661ec04a7eda3e58f4bad8053a053cba99b88c45d88f9a3c8e7219a61cc0ec64","candidate_limit":64,"node_limit":64,"container_length_limit":3,"json_depth_limit":4,"lifecycle_limit":3,"callable_kind":"sync","return_kind":"value","classification":"pure","clause_ids":[]}
