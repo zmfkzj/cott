@@ -3,7 +3,33 @@ module real.pgcli
 enum ConnectionError:
     MissingDatabase
     InvalidPort(value: Str)
+    InvalidDsn(value: Str)
+    ProfileMissing(name: Str)
+    TlsInvalid(message: Str)
+    SshInvalid(message: Str)
+    CredentialUnavailable(message: Str)
     PromptDisabled
+    ConnectionFailed(message: Str)
+
+enum DatabaseError:
+    ConnectionFailed(message: Str)
+    QueryFailed(message: Str)
+
+enum ClientError:
+    InvalidCommand(source: Str)
+    InvalidSql(message: Str)
+    CatalogFailed(message: Str)
+    QueryFailed(message: Str)
+    TransactionFailed(message: Str)
+    ImportFailed(path: Path, message: Str)
+    ExportFailed(path: Path, message: Str)
+    HistoryFailed(path: Path, message: Str)
+    FavoriteFailed(name: Str)
+    EditorFailed(message: Str)
+    PagerFailed(message: Str)
+    NotificationFailed(message: Str)
+    TerminalFailed(message: Str)
+    UnsupportedFormat(value: Str)
 
 struct ConnectionInputs:
     host: Str
@@ -26,9 +52,61 @@ struct ConnectionSettings:
     password: Str
     database: Str
 
+struct TlsSettings:
+    mode: Str
+    root_certificate: Path
+    certificate: Path
+    private_key: Path
+
+struct SshSettings:
+    host: Str
+    port: U16
+    user: Str
+    private_key: Path
+
+struct ConnectionProfile:
+    name: Str
+    dsn: Str
+    inputs: ConnectionInputs
+    tls: TlsSettings
+    ssh: Option[SshSettings]
+
+struct ConnectionRequest:
+    dsn: Str
+    profile: Str
+    inputs: ConnectionInputs
+    environment: EnvironmentInputs
+    tls: TlsSettings
+    ssh: Option[SshSettings]
+
+struct ConnectionPlan:
+    settings: ConnectionSettings
+    dsn: Str
+    tls: TlsSettings
+    ssh: Option[SshSettings]
+
+enum PasswordSource:
+    Supplied
+    Environment
+    Keyring
+    Prompt
+    None
+
 enum PromptAction:
     UsePassword
     PromptPassword
+
+struct CredentialRequest:
+    service: Str
+    user: Str
+    supplied_password: Str
+    environment_password: Str
+    no_prompt: Bool
+    use_keyring: Bool
+
+struct CredentialResolution:
+    password: Str
+    source: PasswordSource
 
 struct ColumnCatalog:
     name: Str
@@ -38,17 +116,69 @@ struct TableCatalog:
     name: Str
     columns: List[ColumnCatalog]
 
+struct RelationCatalog:
+    schema: Str
+    name: Str
+    kind: Str
+    columns: List[ColumnCatalog]
+
+struct RoutineCatalog:
+    schema: Str
+    name: Str
+    arguments: Str
+    result_type: Str
+
+struct Catalog:
+    databases: List[Str]
+    schemas: List[Str]
+    relations: List[RelationCatalog]
+    routines: List[RoutineCatalog]
+    roles: List[Str]
+    extensions: List[Str]
+    publications: List[Str]
+    subscriptions: List[Str]
+    refreshed_at_ms: U64
+    limit: U64
+
+struct CatalogRefreshRequest:
+    connection: ConnectionPlan
+    include_system: Bool
+    limit: U64
+
 struct CompletionRequest:
     source: Str
     cursor: U64
     catalog: List[TableCatalog]
 
+struct CompletionPolicy:
+    max_candidates: U64
+    include_keywords: Bool
+
 struct CompletionResult:
     candidates: List[Str]
     replace_start: U64
 
+struct HighlightRequest:
+    source: Str
+    color: Bool
+
+struct HighlightedSql:
+    text: Str
+    contains_error: Bool
+
 enum RenderLayout:
     Horizontal
+    Vertical
+
+enum TableFormat:
+    Aligned
+    Csv
+    Tsv
+    Json
+    JsonLines
+    Html
+    Latex
+    Markdown
     Vertical
 
 struct RenderRequest:
@@ -57,10 +187,130 @@ struct RenderRequest:
     terminal_width: U16
     vertical: Bool
 
+struct FormatRequest:
+    query: QueryResult
+    format: TableFormat
+    terminal_width: U16
+    max_column_width: U16
+    max_rows: U64
+
 struct RenderedQuery:
     text: Str
     layout: RenderLayout
     width: U16
+
+struct FormattedQuery:
+    rendered: RenderedQuery
+    truncated_rows: U64
+
+struct QueryResult:
+    columns: List[Str]
+    rows: List[List[Str]]
+
+struct ExecutedQuery:
+    result: QueryResult
+    status: Str
+    affected_rows: U64
+    elapsed_ms: U64
+    notices: List[Str]
+
+struct QueryRequest:
+    connection: ConnectionPlan
+    sql: Str
+    max_rows: U64
+    transaction: TransactionMode
+    timing: Bool
+
+struct QueryPlan:
+    sql: Str
+    statement_count: U64
+    requires_terminator: Bool
+
+struct InputBuffer:
+    text: Str
+    cursor: U64
+    multiline: Bool
+
+struct EditorRequest:
+    buffer: InputBuffer
+    editor: Str
+    temporary_path: Path
+
+struct PagerRequest:
+    text: Str
+    pager: Str
+    enabled: Bool
+    terminal_height: U16
+
+struct HistoryEntry:
+    sql: Str
+    executed_at_ms: U64
+    database: Str
+    success: Bool
+
+struct HistoryPolicy:
+    path: Path
+    max_entries: U64
+    unique: Bool
+
+struct Favorite:
+    name: Str
+    sql: Str
+    tags: List[Str]
+
+struct FavoriteStore:
+    path: Path
+    max_entries: U64
+
+struct ExportRequest:
+    sql: Str
+    target: Path
+    format: TableFormat
+    delimiter: Str
+    header: Bool
+    max_rows: U64
+
+struct ImportRequest:
+    table: Str
+    source: Path
+    delimiter: Str
+    header: Bool
+    null_text: Str
+    max_rows: U64
+
+struct TransferResult:
+    rows: U64
+    path: Path
+
+struct Notification:
+    channel: Str
+    payload: Str
+    pid: U32
+
+struct NotificationRequest:
+    connection: ConnectionPlan
+    channels: List[Str]
+    timeout_ms: U32
+    max_notifications: U64
+
+struct WatchRequest:
+    query: QueryRequest
+    interval_ms: U32
+    max_iterations: U64
+
+struct WatchResult:
+    executions: U64
+    last_result: ExecutedQuery
+
+enum TransactionMode:
+    AutoCommit
+    Manual
+    ReadOnly
+
+struct TransactionState:
+    mode: TransactionMode
+    active: Bool
+    failed: Bool
 
 enum BackslashCommand:
     Quit
@@ -69,13 +319,108 @@ enum BackslashCommand:
     Describe
     Unknown
 
-struct QueryResult:
-    columns: List[Str]
-    rows: List[List[Str]]
+enum MetaCommand:
+    Quit
+    Shell(command: Str)
+    RefreshCatalog
+    Help
+    SqlHelp(topic: Str)
+    SetFormat(format: TableFormat)
+    Connect(database: Str)
+    ConnectionInfo
+    Copy(table: Str, path: Path, from_file: Bool)
+    Describe(pattern: Str)
+    ListDomains(pattern: Str)
+    ListForeignTables(pattern: Str)
+    ListTextSearchConfigurations(pattern: Str)
+    ListDataTypes(pattern: Str)
+    ListTablespaces(pattern: Str)
+    ListDefaultPrivileges(pattern: Str)
+    ListFunctions(pattern: Str)
+    ListIndexes(pattern: Str)
+    ListMaterializedViews(pattern: Str)
+    ListSchemas(pattern: Str)
+    ListPrivileges(pattern: Str)
+    ListSequences(pattern: Str)
+    ListTables(pattern: Str)
+    ListRoles
+    ListViews(pattern: Str)
+    ListExtensions
+    ListDatabases
+    ShowFunction(pattern: Str)
+    EditBuffer
+    Echo(text: Str)
+    ReadFile(path: Path)
+    ReadRelativeFile(path: Path)
+    NamedQuery(name: Str, arguments: List[Str])
+    SetLogFile(path: Path)
+    DeleteNamedQuery(name: Str)
+    PrintNamedQuery(name: Str)
+    SaveNamedQuery(name: Str, sql: Str)
+    SetOutput(path: Path)
+    ClearOutput
+    SetPager(enabled: Bool)
+    SetOptions(key: Str, value: Str)
+    QueryOutputEcho(text: Str)
+    Timing
+    VerboseErrors(enabled: Bool)
+    Watch(interval_ms: U32)
+    Expanded
+    ExecuteBuffer
+    ExecuteExpanded
+    PrintBuffer
+    ResetBuffer
+    WriteBuffer(path: Path)
+    History(pattern: Str)
+    Favorite(name: Str)
+    ListFavorites(pattern: Str)
+    DeleteFavorite(name: Str)
+    Password
+    ListNotifications
+    Unknown(source: Str)
 
-enum DatabaseError:
-    ConnectionFailed(message: Str)
-    QueryFailed(message: Str)
+struct CommandInvocation:
+    command: MetaCommand
+    buffer: InputBuffer
+
+struct SessionOptions:
+    connection: ConnectionPlan
+    catalog_limit: U64
+    completion_limit: U64
+    history: HistoryPolicy
+    favorites: FavoriteStore
+    format: TableFormat
+    timing: Bool
+    pager: Bool
+    multiline: Bool
+    transaction: TransactionMode
+
+struct CommandResult:
+    buffer: InputBuffer
+    output: Str
+    quit: Bool
+
+struct InteractiveRequest:
+    options: SessionOptions
+    initial_sql: Str
+    execute_once: Bool
+
+fn parse_dsn(value: Str) -> Result[ConnectionInputs, ConnectionError]:
+    ensures Result.Ok(inputs) => inputs.database != ""
+
+    error ConnectionError.InvalidDsn
+
+    effects []
+
+fn resolve_profile(
+    name: Str,
+    profiles: List[ConnectionProfile],
+) -> Result[ConnectionProfile, ConnectionError]:
+    ensures Result.Ok(profile) => profile.name == name
+
+    error ConnectionError.ProfileMissing
+
+    effects []
 
 fn resolve_connection(
     inputs: ConnectionInputs,
@@ -87,8 +432,22 @@ fn resolve_connection(
     ensures Result.Ok(settings) => ((inputs.password != "" and settings.password == inputs.password) or (inputs.password == "" and settings.password == environment.password))
     ensures Result.Ok(settings) => ((inputs.database != "" and settings.database == inputs.database) or (inputs.database == "" and settings.database == environment.database))
 
-    error ConnectionError.MissingDatabase when inputs.database == "" and environment.database == ""
+    error ConnectionError.MissingDatabase
     error ConnectionError.InvalidPort
+
+    effects []
+
+fn resolve_connection_plan(
+    request: ConnectionRequest,
+    profile: Option[ConnectionProfile],
+) -> Result[ConnectionPlan, ConnectionError]:
+    ensures Result.Ok(plan) => plan.settings.database != ""
+
+    error ConnectionError.MissingDatabase
+    error ConnectionError.InvalidPort
+    error ConnectionError.InvalidDsn
+    error ConnectionError.TlsInvalid
+    error ConnectionError.SshInvalid
 
     effects []
 
@@ -99,13 +458,64 @@ fn prompt_policy(no_prompt: Bool, password: Str) -> Result[PromptAction, Connect
 
     effects []
 
+fn resolve_credential(request: CredentialRequest) -> Result[CredentialResolution, ConnectionError]:
+    ensures Result.Ok(resolution) => (resolution.password != "" or resolution.source == PasswordSource.None)
+
+    error ConnectionError.CredentialUnavailable
+    error ConnectionError.PromptDisabled
+
+    effects [file.read, network]
+
+fn connect(plan: ConnectionPlan) -> Result[Unit, ConnectionError]:
+    ensures Result.Ok(connected) => connected == ()
+
+    error ConnectionError.ConnectionFailed
+
+    effects [network, database.read, database.write]
+
+fn refresh_catalog(request: CatalogRefreshRequest) -> Result[Catalog, ClientError]:
+    ensures Result.Ok(catalog) => catalog.limit == request.limit
+    ensures Result.Ok(catalog) => catalog.relations.len <= request.limit
+
+    error ClientError.CatalogFailed
+
+    effects [database.read, clock]
+
 fn complete_sql(request: CompletionRequest) -> CompletionResult:
+    effects []
+
+fn complete_catalog_sql(request: CompletionRequest, policy: CompletionPolicy) -> CompletionResult:
+    ensures result.candidates.len <= policy.max_candidates
+
+    effects []
+
+fn highlight_sql(request: HighlightRequest) -> HighlightedSql:
+    effects []
+
+fn plan_query(buffer: InputBuffer) -> Result[QueryPlan, ClientError]:
+    ensures Result.Ok(plan) => plan.sql == buffer.text
+
+    error ClientError.InvalidSql
+
+    effects []
+
+fn edit_multiline(buffer: InputBuffer, input: Str) -> InputBuffer:
+    ensures result.cursor <= result.text.len
+
+    effects []
+
+fn recognize_backslash(source: Str) -> BackslashCommand:
+    effects []
+
+fn parse_meta_command(source: Str) -> MetaCommand:
     effects []
 
 fn render_query(request: RenderRequest) -> RenderedQuery:
     effects []
 
-fn recognize_backslash(source: Str) -> BackslashCommand:
+fn format_query(request: FormatRequest) -> FormattedQuery:
+    ensures result.truncated_rows <= request.max_rows
+
     effects []
 
 fn execute_query(connection: ConnectionSettings, sql: Str) -> Result[QueryResult, DatabaseError]:
@@ -115,3 +525,172 @@ fn execute_query(connection: ConnectionSettings, sql: Str) -> Result[QueryResult
     error DatabaseError.QueryFailed
 
     effects [database.read, database.write]
+
+fn execute_planned_query(request: QueryRequest) -> Result[ExecutedQuery, ClientError]:
+    ensures Result.Ok(executed) => executed.result.rows.len <= request.max_rows
+
+    error ClientError.QueryFailed
+    error ClientError.TransactionFailed
+
+    effects [database.read, database.write, clock]
+
+fn begin_transaction(mode: TransactionMode) -> TransactionState:
+    ensures result.mode == mode
+
+    effects [database.write]
+
+fn commit_transaction(transaction: TransactionState) -> Result[TransactionState, ClientError]:
+    ensures Result.Ok(committed) => not committed.active
+
+    error ClientError.TransactionFailed
+
+    effects [database.write]
+
+fn rollback_transaction(transaction: TransactionState) -> Result[TransactionState, ClientError]:
+    ensures Result.Ok(rolled_back) => not rolled_back.active
+
+    error ClientError.TransactionFailed
+
+    effects [database.write]
+
+fn load_history(policy: HistoryPolicy) -> Result[List[HistoryEntry], ClientError]:
+    ensures Result.Ok(entries) => entries.len <= policy.max_entries
+
+    error ClientError.HistoryFailed
+
+    effects [file.read]
+
+fn save_history(policy: HistoryPolicy, entries: List[HistoryEntry]) -> Result[Unit, ClientError]:
+    ensures Result.Ok(saved) => saved == ()
+
+    error ClientError.HistoryFailed
+
+    effects [file.write]
+
+fn remember_history(
+    policy: HistoryPolicy,
+    entries: List[HistoryEntry],
+    entry: HistoryEntry,
+) -> List[HistoryEntry]:
+    ensures result.len <= policy.max_entries
+
+    effects []
+
+fn load_favorites(store: FavoriteStore) -> Result[List[Favorite], ClientError]:
+    ensures Result.Ok(favorites) => favorites.len <= store.max_entries
+
+    error ClientError.FavoriteFailed
+
+    effects [file.read]
+
+fn save_favorites(store: FavoriteStore, favorites: List[Favorite]) -> Result[Unit, ClientError]:
+    ensures Result.Ok(saved) => saved == ()
+
+    error ClientError.FavoriteFailed
+
+    effects [file.write]
+
+fn import_delimited(
+    plan: ConnectionPlan,
+    request: ImportRequest,
+) -> Result[TransferResult, ClientError]:
+    ensures Result.Ok(imported) => imported.rows <= request.max_rows
+
+    error ClientError.ImportFailed
+    error ClientError.QueryFailed
+
+    effects [file.read, database.write]
+
+fn export_query(
+    plan: ConnectionPlan,
+    request: ExportRequest,
+) -> Result[TransferResult, ClientError]:
+    ensures Result.Ok(exported) => exported.rows <= request.max_rows
+
+    error ClientError.ExportFailed
+    error ClientError.QueryFailed
+
+    effects [database.read, file.write]
+
+fn edit_in_editor(request: EditorRequest) -> Result[InputBuffer, ClientError]:
+    ensures Result.Ok(buffer) => buffer.cursor <= buffer.text.len
+
+    error ClientError.EditorFailed
+
+    effects [file.read, file.write]
+
+fn page_output(request: PagerRequest) -> Result[Unit, ClientError]:
+    ensures Result.Ok(paged) => paged == ()
+
+    error ClientError.PagerFailed
+
+    effects [file.read, file.write]
+
+fn receive_notifications(request: NotificationRequest) -> Result[List[Notification], ClientError]:
+    ensures Result.Ok(notifications) => notifications.len <= request.max_notifications
+
+    error ClientError.NotificationFailed
+
+    effects [database.read, clock]
+
+fn watch_query(request: WatchRequest) -> Result[WatchResult, ClientError]:
+    ensures Result.Ok(watched) => watched.executions <= request.max_iterations
+
+    error ClientError.QueryFailed
+    error ClientError.TransactionFailed
+
+    effects [database.read, database.write, clock]
+
+fn run_meta_command(
+    invocation: CommandInvocation,
+    options: SessionOptions,
+    catalog: Catalog,
+) -> Result[CommandResult, ClientError]:
+    ensures Result.Ok(step) => step.quit or step.buffer.cursor <= step.buffer.text.len
+
+    error ClientError.InvalidCommand
+    error ClientError.CatalogFailed
+    error ClientError.QueryFailed
+    error ClientError.TransactionFailed
+    error ClientError.ImportFailed
+    error ClientError.ExportFailed
+    error ClientError.HistoryFailed
+    error ClientError.FavoriteFailed
+    error ClientError.EditorFailed
+    error ClientError.PagerFailed
+    error ClientError.NotificationFailed
+
+    effects [file.read, file.write, database.read, database.write, clock]
+
+fn run_interactive(request: InteractiveRequest) -> Result[Unit, ClientError]:
+    ensures Result.Ok(finished) => finished == ()
+
+    error ClientError.InvalidCommand
+    error ClientError.InvalidSql
+    error ClientError.CatalogFailed
+    error ClientError.QueryFailed
+    error ClientError.TransactionFailed
+    error ClientError.HistoryFailed
+    error ClientError.FavoriteFailed
+    error ClientError.EditorFailed
+    error ClientError.PagerFailed
+    error ClientError.NotificationFailed
+    error ClientError.TerminalFailed
+
+    effects [file.read, file.write, network, database.read, database.write, clock]
+
+fn run(arguments: List[Str]) -> Never:
+    doc """
+    Run an interactive PostgreSQL session and print client errors before exiting.
+    """
+
+    effects [
+        file.read,
+        file.write,
+        network,
+        database.read,
+        database.write,
+        clock,
+        random,
+        process.exit,
+    ]

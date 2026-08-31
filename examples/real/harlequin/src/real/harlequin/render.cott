@@ -1,32 +1,93 @@
 module real.harlequin.render
 
 use real.harlequin.catalog.{CatalogColumn, CatalogMatch, CatalogRelation}
-use real.harlequin.core.{QueryResult}
+use real.harlequin.core.{FileReference, QueryResult}
+
+enum RenderLayout:
+    Table
+    Vertical
+
+enum ExportFormat:
+    Csv
+    Tsv
+    Json
+    Markdown
+    Sql
+
+struct RenderOptions:
+    layout: RenderLayout
+    terminal_width: U16
+    maximum_cell_width: U16
+    maximum_rows: U32
+
+struct Theme:
+    name: Str
+    foreground: Str
+    background: Str
+    accent: Str
+
+struct KeyBinding:
+    key: Str
+    command: Str
+
+struct Keymap:
+    name: Str
+    bindings: List[KeyBinding]
+
+struct ExportRequest:
+    result: QueryResult
+    format: ExportFormat
+    destination: FileReference
+
+enum RenderError:
+    InvalidWidth(width: U16)
+    UnsupportedCell(message: Str)
+    DestinationDenied(destination: FileReference)
+    ExportFailed(destination: FileReference, message: Str)
 
 fn render_table(result: QueryResult) -> Str:
-    doc """
-    Render a query result deterministically in horizontal or vertical table form.
-    """
+    effects []
+
+fn render_vertical(result: QueryResult) -> Str:
+    effects []
+
+fn render_result(result: QueryResult, options: RenderOptions) -> Result[Str, RenderError]:
+    ensures Result.Ok(rendered) => rendered.len > 0
+
+    error RenderError.InvalidWidth
+    error RenderError.UnsupportedCell
 
     effects []
 
 fn render_catalog_relations(relations: List[CatalogRelation]) -> Str:
-    doc """
-    Render catalog relations in deterministic table order.
-    """
-
     effects []
 
 fn render_catalog_columns(columns: List[CatalogColumn]) -> Str:
-    doc """
-    Render catalog columns in deterministic table order.
-    """
-
     effects []
 
 fn render_catalog_matches(catalog_matches: List[CatalogMatch]) -> Str:
+    effects []
+
+fn bundled_themes() -> List[Theme]:
+    effects []
+
+fn bundled_keymaps() -> List[Keymap]:
+    effects []
+
+fn resolve_theme(themes: List[Theme], name: Str) -> Option[Theme]:
+    effects []
+
+fn resolve_keymap(keymaps: List[Keymap], name: Str) -> Option[Keymap]:
+    effects []
+
+fn export_result(request: ExportRequest) -> Result[Unit, RenderError]:
     doc """
-    Render catalog matches in deterministic table order.
+    Match destination.location as FileLocation_Local/S3; serialize row.values; use boto3 Any.
     """
 
-    effects []
+    ensures Result.Ok(written) => request.destination.writable
+
+    error RenderError.DestinationDenied
+    error RenderError.ExportFailed
+
+    effects [file.write, network]

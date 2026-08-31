@@ -1,6 +1,6 @@
 module real.harlequin.catalog
 
-use real.harlequin.core.{DatabaseTarget, SqlClientError}
+use real.harlequin.core.{Connection, DatabaseTarget, SqlClientError}
 
 enum RelationKind:
     Table
@@ -30,6 +30,32 @@ struct CatalogMatch:
     name: Str
     ordinal: U32
 
+struct CatalogScope:
+    connection_id: Str
+    namespace: Option[Str]
+
+struct CatalogSnapshot:
+    scope: CatalogScope
+    relations: List[CatalogRelation]
+    refreshed_at: Str
+
+struct CompletionRequest:
+    source: Str
+    cursor: U64
+    scope: CatalogScope
+    maximum_candidates: U64
+
+struct CompletionResult:
+    candidates: List[Str]
+    replace_start: U64
+    replace_end: U64
+
+enum CatalogError:
+    ConnectionMissing(connection_id: Str)
+    NamespaceMissing(namespace: Str)
+    Failed(message: Str)
+    LimitExceeded(limit: U32)
+
 fn catalog_relations(database: DatabaseTarget) -> Result[List[CatalogRelation], SqlClientError]:
     ensures Result.Ok(relations) => relations.len <= 100000
 
@@ -56,3 +82,32 @@ fn search_catalog(
     error SqlClientError.SqliteFailure
 
     effects [database.read]
+
+fn refresh_catalog(
+    connection: Connection,
+    scope: CatalogScope,
+) -> Result[CatalogSnapshot, CatalogError]:
+    ensures Result.Ok(snapshot) => snapshot.relations.len <= 100000
+
+    error CatalogError.ConnectionMissing
+    error CatalogError.NamespaceMissing
+    error CatalogError.Failed
+    error CatalogError.LimitExceeded
+
+    effects [database.read, network]
+
+fn complete_sql(request: CompletionRequest, snapshot: CatalogSnapshot) -> CompletionResult:
+    ensures result.candidates.len <= request.maximum_candidates
+
+    effects []
+
+fn find_catalog(
+    snapshot: CatalogSnapshot,
+    term: Str,
+    maximum_matches: U64,
+) -> Result[List[CatalogMatch], CatalogError]:
+    ensures Result.Ok(found) => found.len <= maximum_matches
+
+    error CatalogError.LimitExceeded
+
+    effects []

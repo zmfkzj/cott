@@ -5,11 +5,15 @@ source = "src"
 
 [target.python]
 source = "python"
+lockfile = "python/uv.lock"
 generated = "generated/python"
 stubs = "generated/stubs"
 interpreter = ".venv/bin/python"
 type_checker = ".venv/bin/basedpyright"
 runtime_validation = "boundary"
+
+[target.python.implementations]
+"real.harlequin.core.run" = "cott_bindings.real.harlequin.core.run:run"
 
 [generator]
 rules = "generator.rules"

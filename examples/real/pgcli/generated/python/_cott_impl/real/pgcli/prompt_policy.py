@@ -1,5 +1,11 @@
 from cott_runtime import Err, Ok, Result
-from real.pgcli_types import ConnectionError, ConnectionError_PromptDisabled, PromptAction, PromptAction_PromptPassword, PromptAction_UsePassword
+from real.pgcli_types import (
+    ConnectionError,
+    ConnectionError_PromptDisabled,
+    PromptAction,
+    PromptAction_PromptPassword,
+    PromptAction_UsePassword,
+)
 
 
 def prompt_policy(no_prompt: bool, password: str) -> Result[PromptAction, ConnectionError]:

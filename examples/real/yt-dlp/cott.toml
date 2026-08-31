@@ -5,11 +5,15 @@ source = "src"
 
 [target.python]
 source = "python"
+lockfile = "python/uv.lock"
 generated = "generated/python"
 stubs = "generated/stubs"
 interpreter = ".venv/bin/python"
 type_checker = ".venv/bin/basedpyright"
 runtime_validation = "boundary"
+
+[target.python.implementations]
+"real.yt_dlp.transfer_media" = "cott_bindings.real.yt_dlp.transfer_media:transfer_media"
 
 [generator]
 rules = "generator.rules"

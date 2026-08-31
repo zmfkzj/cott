@@ -45,7 +45,7 @@ use crate::python_verify::verify_python;
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession};
 use crate::version::{is_at_least, parse_version};
 
-const USAGE: &str = "Cott compiles contracts into verifiable Python.\n\nUsage:\n  cott init <path> [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
+const USAGE: &str = "Cott compiles contracts into verifiable Python.\n\nUsage:\n  cott init <path> [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python [-j <jobs>] [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
 
 #[cfg(test)]
 thread_local! {
@@ -181,9 +181,10 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
         Ok(Command::Generate {
             symbol,
             agent,
+            jobs,
             project,
             ..
-        }) => generate_project(project, symbol, agent),
+        }) => generate_project(project, symbol, agent, jobs),
         Ok(Command::Diff {
             baseline,
             exit_code,
@@ -391,6 +392,7 @@ pub enum Command {
     Generate {
         symbol: Option<String>,
         agent: Option<AgentKind>,
+        jobs: usize,
         project: Option<PathBuf>,
         format: OutputFormat,
     },
@@ -599,6 +601,7 @@ fn parse_generate(values: &[OsString]) -> Result<Command, &'static str> {
     let mut symbol = None;
     let mut agent = None;
     let mut target = None;
+    let mut jobs = None;
     let mut options = ExistingOptions::default();
     let mut index = 0;
     while index < values.len() {
@@ -619,6 +622,17 @@ fn parse_generate(values: &[OsString]) -> Result<Command, &'static str> {
                         .get(index)
                         .and_then(|value| value.to_str())
                         .ok_or("`--target` requires `python`")?,
+                );
+            }
+            Some("-j" | "--jobs") if jobs.is_none() => {
+                index += 1;
+                jobs = Some(
+                    values
+                        .get(index)
+                        .and_then(|value| value.to_str())
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .filter(|value| (1..=64).contains(value))
+                        .ok_or("`--jobs` requires an integer from 1 to 64")?,
                 );
             }
             Some("--project") if options.project.is_none() => {
@@ -650,6 +664,7 @@ fn parse_generate(values: &[OsString]) -> Result<Command, &'static str> {
     Ok(Command::Generate {
         symbol,
         agent,
+        jobs: jobs.unwrap_or(1),
         project: options.project,
         format: options.format,
     })
@@ -1247,6 +1262,7 @@ fn dependency_records(paths: &ProjectPaths) -> Result<serde_json::Value, String>
 fn verified_baseline_guard(
     paths: &ProjectPaths,
     inputs: &BTreeMap<String, String>,
+    allowed_missing: &[PathBuf],
 ) -> Result<(), String> {
     let generation = artifact_root_for_paths(paths)?.join("generation.json");
     let bytes = match fs::read(&generation) {
@@ -1272,12 +1288,25 @@ fn verified_baseline_guard(
         .inputs
         .as_object()
         .ok_or("verified baseline inputs are not an object")?;
-    let changed_inputs = baseline_inputs
+    let allowed_missing = allowed_missing
         .iter()
-        .any(|(path, hash)| inputs.get(path).map(String::as_str) != hash.as_str())
-        || inputs
-            .keys()
-            .any(|path| !baseline_inputs.contains_key(path));
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .collect::<BTreeSet<_>>();
+    let replacing_verified = baseline_inputs
+        .keys()
+        .any(|path| !inputs.contains_key(path) && allowed_missing.contains(path));
+    if replacing_verified {
+        return Ok(());
+    }
+    let changed_inputs = baseline_inputs.iter().any(|(path, hash)| {
+        inputs
+            .get(path)
+            .map(String::as_str)
+            .is_some_and(|current| current != hash)
+            || (!inputs.contains_key(path) && !allowed_missing.contains(path))
+    }) || inputs
+        .keys()
+        .any(|path| !baseline_inputs.contains_key(path));
     if changed_inputs {
         return Err(
             "verified baseline inputs changed; run `cott emit python` and `cott verify` before generation"
@@ -1570,10 +1599,33 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
         }
     }
 }
+fn run_scoped_wave<T, R, E>(
+    items: &[T],
+    work: impl Fn(&T) -> Result<R, E> + Sync,
+    panic_error: impl Fn(&T) -> E + Sync,
+) -> Vec<Result<R, E>>
+where
+    T: Sync,
+    R: Send,
+    E: Send,
+{
+    thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(items.len());
+        for item in items {
+            workers.push((item, scope.spawn(|| work(item))));
+        }
+        workers
+            .into_iter()
+            .map(|(item, worker)| worker.join().unwrap_or_else(|_| Err(panic_error(item))))
+            .collect()
+    })
+}
+
 fn generate_project(
     project_argument: Option<PathBuf>,
     symbol: Option<String>,
     agent: Option<AgentKind>,
+    jobs: usize,
 ) -> i32 {
     let Ok(root) = project_root(project_argument) else {
         return 2;
@@ -1709,21 +1761,29 @@ fn generate_project(
             return 6;
         }
     };
-    let input_snapshot = match capture_expected_inputs(&paths, &input_hashes, candidate_paths) {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            eprintln!("error: {error}");
-            return 6;
-        }
-    };
+    let input_snapshot =
+        match capture_expected_inputs(&paths, &input_hashes, candidate_paths.clone()) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return 6;
+            }
+        };
     let mut durable_sources = Vec::new();
     let mut generated_runs = Vec::new();
+    let mut generation_failure = None;
+    let generation_total = unresolved.len();
+    let generation_positions = unresolved
+        .iter()
+        .enumerate()
+        .map(|(index, binding)| (binding.cott_symbol.clone(), index + 1))
+        .collect::<BTreeMap<_, _>>();
     if !unresolved.is_empty() {
         let Some(agent) = agent else {
             eprintln!("error: unresolved selected callable requires `--agent codex|claude|omp`");
             return 2;
         };
-        if let Err(error) = verified_baseline_guard(&paths, &input_hashes) {
+        if let Err(error) = verified_baseline_guard(&paths, &input_hashes, &candidate_paths) {
             eprintln!("error: {error}");
             return 4;
         }
@@ -1734,101 +1794,104 @@ fn generate_project(
                 return 5;
             }
         };
-        for unresolved_binding in unresolved {
-            let callable = callables
-                .get(&unresolved_binding.cott_symbol)
-                .expect("resolution callable was selected from the artifact plan");
-            let temporary = match agent_workspace() {
-                Ok(paths) => paths,
-                Err(error) => {
-                    eprintln!("error: {error}");
-                    return 6;
-                }
-            };
-            let target = temporary.workspace.join("implementation.py");
-            let module_ir = match ir
-                .modules
-                .iter()
-                .find(|module| module.module.as_string() == callable.module)
-            {
-                Some(module) => module.bytes.clone(),
-                None => {
-                    let _ = fs::remove_dir_all(&temporary.root);
-                    eprintln!("error: selected callable has no canonical IR module");
-                    return 1;
-                }
-            };
-            let fully_qualified = callable.cott_symbol.clone();
-            let bound_symbols = bindings
-                .iter()
-                .filter(|binding| {
-                    matches!(
-                        &binding.kind,
-                        PythonCallableKind::Function | PythonCallableKind::AsyncFunction
-                    )
-                })
-                .map(|binding| format!("from {} import {}", binding.module, binding.function))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let binding_context = bindings
-                .iter()
-                .map(|binding| {
-                    format!(
-                        "# {}\n{}",
-                        binding.source.display(),
-                        String::from_utf8_lossy(&binding.bytes)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            let mut target_rules = match &callable.kind {
-                PythonCallableKind::Function | PythonCallableKind::AsyncFunction => format!(
-                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, UNIT, Some, Nothing, CottList, CottSet, FrozenMap, CottArray, and CottBuffer from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict; native `tuple[...]` annotations and `(a, b)` values are required for Cott Tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` is the annotation and `UNIT` is its only value; return `Ok(value=UNIT)` for Result[Unit, E]. For Option annotations use the top-level `Some(value=...)` and `Nothing()` variants, never `Option.Some` or `Option.Nothing`; narrow an Option with structural `match` before reading a Some payload. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={{}}), CottArray(values=xs), and CottBuffer(data=xs); Cott Tuple uses native `tuple[...]` annotations and `(a, b)` values. For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err, raise, catch, or inspect Result. Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `{0}_types` module, never `<Enum>.<Variant>`. `typing.cast` MAY be used only from a concrete external SDK return to its declared external projection when upstream stubs are incompatible; never cast Cott-owned values. Do not use classes, mutable module state, `Any`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. For other modules import public generated symbols only through `from {0} import name` and generated value types only through `from {0}_types import Type`. Do not import concrete facade classes from generated type modules.",
-                    callable.module
-                ),
-                PythonCallableKind::ImplMethod { concrete }
-                | PythonCallableKind::AsyncImplMethod { concrete } => format!(
-                    "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. The canonical function's leading `self` annotation must be `{concrete}`. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, UNIT, Some, Nothing, CottList, CottSet, FrozenMap, CottArray, and CottBuffer from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict; native `tuple[...]` annotations and `(a, b)` values are required for Cott Tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use ordinary arithmetic and comparisons and return the result directly, never call or construct a numeric alias. The compiler owns the public concrete facade; define only the private implementation function and never define a class or public method.",
-                ),
-            };
-            if matches!(
-                &callable.kind,
-                PythonCallableKind::AsyncFunction | PythonCallableKind::AsyncImplMethod { .. }
-            ) {
-                target_rules.push_str(
+        let generate_candidate =
+            |unresolved_binding: &crate::binding::UnresolvedBinding,
+             bindings: &[ResolvedBinding]|
+             -> Result<(PythonCallable, AgentRunCandidate), (i32, String)> {
+                let callable = callables
+                    .get(&unresolved_binding.cott_symbol)
+                    .expect("resolution callable was selected from the artifact plan");
+                let temporary = match agent_workspace() {
+                    Ok(paths) => paths,
+                    Err(error) => {
+                        return Err((6, error));
+                    }
+                };
+                let target = temporary.workspace.join("implementation.py");
+                let module_ir = match ir
+                    .modules
+                    .iter()
+                    .find(|module| module.module.as_string() == callable.module)
+                {
+                    Some(module) => module.bytes.clone(),
+                    None => {
+                        let _ = fs::remove_dir_all(&temporary.root);
+                        return Err((1, "selected callable has no canonical IR module".to_owned()));
+                    }
+                };
+                let fully_qualified = callable.cott_symbol.clone();
+                let position = generation_positions[&fully_qualified];
+                eprintln!("generate [{position}/{generation_total}] start `{fully_qualified}`");
+                let bound_symbols = bindings
+                    .iter()
+                    .filter(|binding| {
+                        matches!(
+                            &binding.kind,
+                            PythonCallableKind::Function | PythonCallableKind::AsyncFunction
+                        )
+                    })
+                    .map(|binding| format!("from {} import {}", binding.module, binding.function))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let binding_context = bindings
+                    .iter()
+                    .map(|binding| {
+                        format!(
+                            "# {}\n{}",
+                            binding.source.display(),
+                            String::from_utf8_lossy(&binding.bytes)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let mut target_rules = match &callable.kind {
+                    PythonCallableKind::Function | PythonCallableKind::AsyncFunction => format!(
+                        "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, UNIT, Some, Nothing, CottList, CottSet, FrozenMap, CottArray, and CottBuffer from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict; native `tuple[...]` annotations and `(a, b)` values are required for Cott Tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` is the annotation and `UNIT` is its only value; return `Ok(value=UNIT)` for Result[Unit, E]. For Option annotations use the top-level `Some(value=...)` and `Nothing()` variants, never `Option.Some` or `Option.Nothing`; narrow an Option with structural `match` before reading a Some payload. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={{}}), CottArray(values=xs), and CottBuffer(data=xs); Cott Tuple uses native `tuple[...]` annotations and `(a, b)` values. For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err, raise, catch, or inspect Result. Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `{0}_types` module, never `<Enum>.<Variant>`. `typing.cast` MAY be used only from a concrete external SDK return to its declared external projection when upstream stubs are incompatible; never cast Cott-owned values. Do not use classes, mutable module state, `Any`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. For other modules import public generated symbols only through `from {0} import name` and generated value types only through `from {0}_types import Type`. Do not import concrete facade classes from generated type modules.",
+                        callable.module
+                    ),
+                    PythonCallableKind::ImplMethod { concrete }
+                    | PythonCallableKind::AsyncImplMethod { concrete } => format!(
+                        "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. The canonical function's leading `self` annotation must be `{concrete}`. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, UNIT, Some, Nothing, CottList, CottSet, FrozenMap, CottArray, and CottBuffer from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict; native `tuple[...]` annotations and `(a, b)` values are required for Cott Tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use ordinary arithmetic and comparisons and return the result directly, never call or construct a numeric alias. The compiler owns the public concrete facade; define only the private implementation function and never define a class or public method.",
+                    ),
+                };
+                if matches!(
+                    &callable.kind,
+                    PythonCallableKind::AsyncFunction | PythonCallableKind::AsyncImplMethod { .. }
+                ) {
+                    target_rules.push_str(
                     "\nThe canonical function MUST be an exact undecorated top-level `async def`; private helpers remain synchronous. Await every exact async Cott facade call and never await a synchronous Cott facade. Detached task APIs (`create_task`, `ensure_future`, `Task`, and loop task creation) are forbidden; only direct awaited `asyncio.gather(...)` and `async with asyncio.TaskGroup() as <name>` are allowed.\n",
                 );
-            }
-            target_rules.push_str(
+                }
+                target_rules.push_str(
                 "\nExact generated Cott facade modules MAY be imported directly or from their parent package, with an optional alias, for module-qualified access. Import generated value types for annotations through `from module_types import Type`, and do not import any other project-local module.\n",
             );
-            let factory_imports = factory_concrete_imports(&plan, callable)
-                .into_iter()
-                .flat_map(|(module, concretes)| {
-                    concretes
-                        .into_iter()
-                        .map(move |concrete| format!("from {module} import {concrete}"))
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            if !factory_imports.is_empty() {
-                target_rules.push_str(
+                let factory_imports = factory_concrete_imports(&plan, callable)
+                    .into_iter()
+                    .flat_map(|(module, concretes)| {
+                        concretes
+                            .into_iter()
+                            .map(move |concrete| format!("from {module} import {concrete}"))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !factory_imports.is_empty() {
+                    target_rules.push_str(
                     "\nFactory annotations require these exact concrete public-facade imports; do not substitute them or import from `*_types`:\n",
                 );
-                target_rules.push_str(&factory_imports);
-                target_rules.push('\n');
-                target_rules.push_str(
+                    target_rules.push_str(&factory_imports);
+                    target_rules.push('\n');
+                    target_rules.push_str(
                     "Use each listed `from module import Concrete` line for annotations. The same exact generated facade may also be imported under the general module-import rule when its class object is needed.\n",
                 );
-            }
-            let project_rules = config
-                .generator
-                .rules
-                .as_ref()
-                .map(|path| fs::read(paths.root.join(path)))
-                .transpose()
-                .map_err(|error| error.to_string());
-            let result = project_rules.and_then(|project_rules| {
+                }
+                let project_rules = config
+                    .generator
+                    .rules
+                    .as_ref()
+                    .map(|path| fs::read(paths.root.join(path)))
+                    .transpose()
+                    .map_err(|error| error.to_string());
+                let result = project_rules.and_then(|project_rules| {
                 let prompt = render_prompt(
                     callable,
                     &module_ir,
@@ -1849,6 +1912,9 @@ fn generate_project(
                     prompt,
                     config.generator.timeout_seconds,
                 )?;
+                eprintln!(
+                    "generate [{position}/{generation_total}] validate `{fully_qualified}`"
+                );
                 let mut retry_rules = project_rules.unwrap_or_default();
                 for attempt in 0..=2 {
                     match validate_candidate(
@@ -1858,9 +1924,18 @@ fn generate_project(
                         &fully_qualified,
                         &candidate.implementation,
                     ) {
-                        Ok(()) => return Ok(candidate),
+                        Ok(()) => {
+                            eprintln!(
+                                "generate [{position}/{generation_total}] done `{fully_qualified}`"
+                            );
+                            return Ok(candidate);
+                        }
                         Err(validation_error) if attempt == 2 => return Err(validation_error),
                         Err(validation_error) => {
+                            eprintln!(
+                                "generate [{position}/{generation_total}] retry {}/2 `{fully_qualified}`",
+                                attempt + 1
+                            );
                             if !retry_rules.is_empty() && !retry_rules.ends_with(b"\n") {
                                 retry_rules.push(b'\n');
                             }
@@ -1896,57 +1971,128 @@ fn generate_project(
                                 retry_prompt,
                                 config.generator.timeout_seconds,
                             )?;
+                            eprintln!(
+                                "generate [{position}/{generation_total}] validate `{fully_qualified}`"
+                            );
                         }
                     }
                 }
                 unreachable!()
             });
-            let _ = fs::remove_dir_all(&temporary.root);
-            let candidate = match result {
-                Ok(candidate) => candidate,
-                Err(error) => {
-                    eprintln!("error: agent generation for `{fully_qualified}` failed: {error}");
-                    return 5;
-                }
+                let _ = fs::remove_dir_all(&temporary.root);
+                result
+                    .map(|candidate| (callable.clone(), candidate))
+                    .map_err(|error| {
+                        (
+                            5,
+                            format!("agent generation for `{fully_qualified}` failed: {error}"),
+                        )
+                    })
             };
-            let bytes = candidate.implementation.clone();
-            generated_runs.push((fully_qualified, agent, candidate));
-            let generated_relative = unresolved_binding
-                .source
-                .strip_prefix(&paths.python_source_dir)
-                .expect("implementation path is rooted at Python source")
-                .to_path_buf();
-            let relative_source = unresolved_binding
-                .source
-                .strip_prefix(&paths.root)
-                .expect("implementation path is project-relative")
-                .to_path_buf();
-            durable_sources.push((relative_source, bytes.clone()));
-            let implementation_module = match &callable.kind {
-                PythonCallableKind::Function | PythonCallableKind::AsyncFunction => {
-                    format!("_cott_impl.{}.{}", callable.module, callable.name)
-                }
-                PythonCallableKind::ImplMethod { concrete }
-                | PythonCallableKind::AsyncImplMethod { concrete } => {
-                    format!(
-                        "_cott_impl.{}.{concrete}.{}",
-                        callable.module, callable.name
-                    )
-                }
+        let merge_candidate =
+            |unresolved_binding: crate::binding::UnresolvedBinding,
+             callable: PythonCallable,
+             candidate: AgentRunCandidate,
+             bindings: &mut Vec<ResolvedBinding>,
+             durable_sources: &mut Vec<(PathBuf, Vec<u8>)>,
+             generated_runs: &mut Vec<(String, AgentKind, AgentRunCandidate)>| {
+                let fully_qualified = callable.cott_symbol.clone();
+                let bytes = candidate.implementation.clone();
+                generated_runs.push((fully_qualified, agent, candidate));
+                let generated_relative = unresolved_binding
+                    .source
+                    .strip_prefix(&paths.python_source_dir)
+                    .expect("implementation path is rooted at Python source")
+                    .to_path_buf();
+                let relative_source = unresolved_binding
+                    .source
+                    .strip_prefix(&paths.root)
+                    .expect("implementation path is project-relative")
+                    .to_path_buf();
+                durable_sources.push((relative_source, bytes.clone()));
+                let implementation_module = match &callable.kind {
+                    PythonCallableKind::Function | PythonCallableKind::AsyncFunction => {
+                        format!("_cott_impl.{}.{}", callable.module, callable.name)
+                    }
+                    PythonCallableKind::ImplMethod { concrete }
+                    | PythonCallableKind::AsyncImplMethod { concrete } => {
+                        format!(
+                            "_cott_impl.{}.{concrete}.{}",
+                            callable.module, callable.name
+                        )
+                    }
+                };
+                bindings.push(ResolvedBinding {
+                    module: callable.module.clone(),
+                    function: callable.name.clone(),
+                    cott_symbol: callable.cott_symbol.clone(),
+                    kind: callable.kind.clone(),
+                    implementation_module,
+                    implementation_function: unresolved_binding.expected_implementation_function,
+                    owner: crate::binding::BindingOwner::Agent,
+                    source: unresolved_binding.source,
+                    generated_relative,
+                    sha256: crate::hash::sha256_hex(&bytes),
+                    bytes,
+                });
             };
-            bindings.push(ResolvedBinding {
-                module: callable.module.clone(),
-                function: callable.name.clone(),
-                cott_symbol: callable.cott_symbol.clone(),
-                kind: callable.kind.clone(),
-                implementation_module,
-                implementation_function: unresolved_binding.expected_implementation_function,
-                owner: crate::binding::BindingOwner::Agent,
-                source: unresolved_binding.source,
-                generated_relative,
-                sha256: crate::hash::sha256_hex(&bytes),
-                bytes,
-            });
+        if jobs == 1 {
+            for unresolved_binding in unresolved {
+                let (callable, candidate) = match generate_candidate(&unresolved_binding, &bindings)
+                {
+                    Ok(candidate) => candidate,
+                    Err((code, error)) => {
+                        eprintln!("error: {error}");
+                        generation_failure = Some(code);
+                        break;
+                    }
+                };
+                merge_candidate(
+                    unresolved_binding,
+                    callable,
+                    candidate,
+                    &mut bindings,
+                    &mut durable_sources,
+                    &mut generated_runs,
+                );
+            }
+        } else {
+            for wave in unresolved.chunks(jobs) {
+                let pre_wave_bindings = bindings.clone();
+                let generated = run_scoped_wave(
+                    wave,
+                    |unresolved_binding| {
+                        let binding_context = pre_wave_bindings.clone();
+                        generate_candidate(unresolved_binding, &binding_context).map(
+                            |(callable, candidate)| {
+                                (unresolved_binding.clone(), callable, candidate)
+                            },
+                        )
+                    },
+                    |_| (1, "agent worker panicked".to_owned()),
+                );
+                let mut wave_failed = false;
+                for result in generated {
+                    match result {
+                        Ok((unresolved_binding, callable, candidate)) => merge_candidate(
+                            unresolved_binding,
+                            callable,
+                            candidate,
+                            &mut bindings,
+                            &mut durable_sources,
+                            &mut generated_runs,
+                        ),
+                        Err((code, error)) => {
+                            eprintln!("error: {error}");
+                            generation_failure.get_or_insert(code);
+                            wave_failed = true;
+                        }
+                    }
+                }
+                if wave_failed {
+                    break;
+                }
+            }
         }
     }
     bindings.sort_by(|left, right| left.cott_symbol.cmp(&right.cott_symbol));
@@ -1972,7 +2118,8 @@ fn generate_project(
         eprintln!("error: {message}");
         return 4;
     }
-    if !generated_scope.is_empty() {
+    let mut validation_failed = false;
+    if !generated_scope.is_empty() && generation_failure.is_none() {
         let staged = match materialize_candidate_artifacts(&emission) {
             Ok(path) => path,
             Err(error) => {
@@ -1991,7 +2138,7 @@ fn generate_project(
         }
         if let Err(error) = validation {
             eprintln!("error: generated candidate validation failed: {error}");
-            return 5;
+            validation_failed = true;
         }
     }
     match publish_with_sources(
@@ -2005,7 +2152,7 @@ fn generate_project(
         },
         &durable_sources,
     ) {
-        Ok(()) => 0,
+        Ok(()) => generation_failure.unwrap_or(if validation_failed { 5 } else { 0 }),
         Err(error) => {
             eprintln!("error: {error}");
             6
@@ -4425,6 +4572,51 @@ fn validate_python_bytecode_cache(directory: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn scoped_wave_limits_concurrency_and_preserves_input_order() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+
+    struct InFlight(Arc<AtomicUsize>);
+
+    impl Drop for InFlight {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    let items = [0, 1, 2, 3, 4];
+    let barrier = Arc::new(Barrier::new(items.len()));
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    let maximum = Arc::new(AtomicUsize::new(0));
+    let completed = Arc::new(AtomicUsize::new(0));
+    let results = run_scoped_wave(
+        &items,
+        |item| {
+            barrier.wait();
+            let active = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            maximum.fetch_max(active, Ordering::SeqCst);
+            let _guard = InFlight(Arc::clone(&in_flight));
+            thread::sleep(Duration::from_millis((items.len() - *item) as u64 * 20));
+            Ok::<_, ()>((*item, completed.fetch_add(1, Ordering::SeqCst)))
+        },
+        |_| (),
+    );
+
+    let results = results
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("wave workers should succeed");
+    assert_eq!(
+        results.iter().map(|(item, _)| *item).collect::<Vec<_>>(),
+        items
+    );
+    assert_eq!(maximum.load(Ordering::SeqCst), items.len());
+    assert_eq!(in_flight.load(Ordering::SeqCst), 0);
+    assert!(results[0].1 > results[4].1);
 }
 
 #[cfg(test)]

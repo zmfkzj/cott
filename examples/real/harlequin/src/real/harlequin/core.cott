@@ -1,5 +1,94 @@
 module real.harlequin.core
 
+enum AdapterKind:
+    DuckDb
+    Sqlite
+    PostgreSql
+    MySql
+    Odbc
+    BigQuery
+    Trino
+    Databricks
+    Adbc
+    Cassandra
+    NebulaGraph
+
+struct AdapterDescriptor:
+    kind: AdapterKind
+    display_name: Str
+    uri_schemes: List[Str]
+    supports_transactions: Bool
+    supports_catalog: Bool
+    supports_files: Bool
+
+struct Setting:
+    name: Str
+    value: Str
+
+struct ConnectionProfile:
+    name: Str
+    adapter: AdapterKind
+    endpoint: Str
+    settings: List[Setting]
+    read_only: Bool
+
+struct Configuration:
+    profiles: List[ConnectionProfile]
+    default_profile: Option[Str]
+    theme: Str
+    keymap: Str
+
+struct CliOptions:
+    profile: Option[Str]
+    adapter: Option[AdapterKind]
+    connection: Option[Str]
+    query_file: Option[Path]
+    read_only: Bool
+    no_config: Bool
+    source_argument_count: U64
+
+struct ConnectionRequest:
+    adapter: AdapterKind
+    endpoint: Str
+    settings: List[Setting]
+    read_only: Bool
+
+struct Connection:
+    id: Str
+    adapter: AdapterKind
+    endpoint: Str
+    read_only: Bool
+
+struct QueryTab:
+    id: Str
+    title: Str
+    source: Str
+    cursor: U64
+    dirty: Bool
+
+struct QueryHistoryEntry:
+    source: Str
+    executed_at: Str
+    succeeded: Bool
+
+struct QueryHistory:
+    entries: List[QueryHistoryEntry]
+    capacity: U64
+
+struct IdeSession:
+    connection: Connection
+    tabs: List[QueryTab]
+    active_tab_id: Option[Str]
+    history: QueryHistory
+
+struct FileReference:
+    location: FileLocation
+    writable: Bool
+
+enum FileLocation:
+    Local(path: Path)
+    S3(bucket: Str, key: Str)
+
 enum DatabaseTarget:
     Memory
     File(path: Path)
@@ -19,12 +108,179 @@ struct QueryResult:
     rows: List[TypedRow]
     affected_rows: I64
 
+struct QueryBatch:
+    statements: List[Str]
+    results: List[QueryResult]
+
+struct Transaction:
+    connection_id: Str
+    active: Bool
+
+struct LoadedFile:
+    reference: FileReference
+    source: Str
+
+struct SavedFile:
+    reference: FileReference
+    bytes_written: U64
+
+enum CliError:
+    UnknownOption(argument: Str)
+    MissingOptionValue(option: Str)
+    InvalidAdapter(value: Str)
+    ConflictingConnectionInputs
+
+enum ConfigurationError:
+    Missing(path: Path)
+    Invalid(path: Path, message: Str)
+    ProfileMissing(name: Str)
+    ProfileDuplicate(name: Str)
+
+enum ConnectionError:
+    AdapterUnavailable(adapter: AdapterKind)
+    InvalidEndpoint(endpoint: Str)
+    AuthenticationFailed(message: Str)
+    Failed(message: Str)
+
+enum SessionError:
+    TabMissing(tab_id: Str)
+    HistoryCapacityInvalid
+
+enum FileError:
+    NotFound(reference: FileReference)
+    PermissionDenied(reference: FileReference)
+    InvalidEncoding(reference: FileReference)
+    TransferFailed(reference: FileReference, message: Str)
+
 enum SqlClientError:
     EmptySql
     UnterminatedSql(delimiter: Str)
     ReadOnlyViolation(statement: Str)
     SqliteFailure(message: Str)
     UnsupportedValue(type_name: Str)
+    ExecutionFailed(statement: Str, message: Str)
+    ResultLimitExceeded(limit: U32)
+    Cancelled
+
+fn adapter_descriptors() -> List[AdapterDescriptor]:
+    ensures result.len == 11
+
+    effects []
+
+fn parse_cli(arguments: List[Str]) -> Result[CliOptions, CliError]:
+    ensures Result.Ok(options) => options.source_argument_count <= arguments.len
+
+    error CliError.UnknownOption
+    error CliError.MissingOptionValue
+    error CliError.InvalidAdapter
+    error CliError.ConflictingConnectionInputs
+
+    effects []
+
+fn load_configuration(path: Path) -> Result[Configuration, ConfigurationError]:
+    doc """
+    Use tomllib; cast each dict/list to dict[str, object]/list[object] before use.
+    """
+
+    ensures Result.Ok(configuration) => configuration.profiles.len <= 100000
+
+    error ConfigurationError.Missing
+    error ConfigurationError.Invalid
+    error ConfigurationError.ProfileDuplicate
+
+    effects [file.read]
+
+fn resolve_profile(
+    configuration: Configuration,
+    options: CliOptions,
+) -> Result[ConnectionRequest, ConfigurationError]:
+    doc """
+    Use isinstance, not match, for each Option; select the named or default profile.
+    """
+
+    ensures Result.Ok(request) => request.endpoint.len > 0
+
+    error ConfigurationError.ProfileMissing
+
+    effects []
+
+fn connect(request: ConnectionRequest) -> Result[Connection, ConnectionError]:
+    ensures Result.Ok(connection) => connection.adapter == request.adapter
+
+    error ConnectionError.AdapterUnavailable
+    error ConnectionError.InvalidEndpoint
+    error ConnectionError.AuthenticationFailed
+    error ConnectionError.Failed
+
+    effects [database.read, network]
+
+fn disconnect(connection: Connection) -> Unit:
+    effects [database.read, network]
+
+fn begin_transaction(connection: Connection) -> Result[Transaction, ConnectionError]:
+    ensures Result.Ok(transaction) => transaction.connection_id == connection.id
+
+    error ConnectionError.Failed
+
+    effects [database.write, network]
+
+fn commit_transaction(transaction: Transaction) -> Result[Transaction, ConnectionError]:
+    ensures Result.Ok(updated) => updated.connection_id == transaction.connection_id
+
+    error ConnectionError.Failed
+
+    effects [database.write, network]
+
+fn rollback_transaction(transaction: Transaction) -> Result[Transaction, ConnectionError]:
+    ensures Result.Ok(updated) => updated.connection_id == transaction.connection_id
+
+    error ConnectionError.Failed
+
+    effects [database.write, network]
+
+fn open_query_tab(id: Str, title: Str, source: Str) -> QueryTab:
+    effects []
+
+fn edit_query_tab(tab: QueryTab, source: Str, cursor: U64) -> QueryTab:
+    ensures result.cursor <= result.source.len
+
+    effects []
+
+fn append_query_history(history: QueryHistory, entry: QueryHistoryEntry) -> QueryHistory:
+    ensures result.entries.len <= history.capacity
+
+    effects []
+
+fn start_session(connection: Connection, history_capacity: U64) -> IdeSession:
+    ensures result.connection == connection
+    ensures result.tabs.len == 0
+    ensures result.history.entries.len == 0
+    ensures result.history.capacity == history_capacity
+
+    effects []
+
+fn add_query_tab(session: IdeSession, tab: QueryTab) -> IdeSession:
+    ensures result.tabs.len == session.tabs.len + 1
+
+    effects []
+
+fn activate_query_tab(session: IdeSession, tab_id: Str) -> Result[IdeSession, SessionError]:
+    ensures Result.Ok(updated) => updated.tabs.len == session.tabs.len
+
+    error SessionError.TabMissing
+
+    effects []
+
+fn close_query_tab(session: IdeSession, tab_id: Str) -> Result[IdeSession, SessionError]:
+    doc """
+    Use isinstance checks, not match, for active_tab_id.
+    """
+
+    ensures Result.Ok(updated) => updated.tabs.len < session.tabs.len
+
+    error SessionError.TabMissing
+
+    effects []
 
 fn split_statements(sql: Str) -> Result[List[Str], SqlClientError]:
     ensures Result.Ok(statements) => statements.len > 0
@@ -48,3 +304,48 @@ fn execute_sql(
     error SqlClientError.UnsupportedValue
 
     effects [database.read, database.write]
+
+fn execute_statements(
+    connection: Connection,
+    sql: Str,
+    maximum_rows: U32,
+) -> Result[QueryBatch, SqlClientError]:
+    ensures Result.Ok(batch) => batch.statements.len == batch.results.len
+
+    error SqlClientError.EmptySql
+    error SqlClientError.UnterminatedSql
+    error SqlClientError.ReadOnlyViolation
+    error SqlClientError.ExecutionFailed
+    error SqlClientError.ResultLimitExceeded
+    error SqlClientError.Cancelled
+
+    effects [database.read, database.write, network]
+
+fn load_query_file(reference: FileReference) -> Result[LoadedFile, FileError]:
+    doc """
+    Set sdk: Any = boto3; client: Any = sdk.client("s3"); decode Body to source: str.
+    """
+
+    ensures Result.Ok(loaded) => loaded.reference == reference
+
+    error FileError.NotFound
+    error FileError.PermissionDenied
+    error FileError.InvalidEncoding
+    error FileError.TransferFailed
+
+    effects [file.read, network]
+
+fn save_query_file(reference: FileReference, source: Str) -> Result[SavedFile, FileError]:
+    ensures Result.Ok(saved) => saved.reference == reference
+
+    error FileError.PermissionDenied
+    error FileError.TransferFailed
+
+    effects [file.write, network]
+
+fn run(arguments: List[Str]) -> Never:
+    doc """
+    Parse/connect; read SQL at sql> until .quit/EOF; execute and print tab-separated results.
+    """
+
+    effects [file.read, file.write, network, database.read, database.write, clock, process.exit]

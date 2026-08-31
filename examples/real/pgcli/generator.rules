@@ -1,21 +1,2 @@
-Do not access, copy, summarize, or reuse upstream source code, tests, or prose.
-Implement only this project contract as a clean-room reimplementation.
-Use direct deterministic Python code; do not add compatibility layers or speculative features.
-Imports are closed: use only necessary Python standard-library modules, generated `real.pgcli` facade/type modules and `cott_runtime`, plus top-level `psycopg` from the locked Psycopg distribution. Do not import any other or transitive Psycopg modules, third-party distributions, dynamic-import facilities, or unrelated modules.
-NEVER use subprocess, shell commands, external executables, or any mechanism that launches a child process, including `os.system`, `os.popen`, `os.spawn*`, or asyncio subprocess APIs.
-cott-domain real.pgcli.resolve_connection return: explicit nonempty inputs override matching PG environment values
-cott-domain real.pgcli.prompt_policy error: reject an absent password when no_prompt is true
-cott-domain real.pgcli.complete_sql return: candidates are stable catalog-derived SQL names for the cursor context
-cott-domain real.pgcli.render_query return: output, layout, and width are deterministic from the request
-cott-domain real.pgcli.recognize_backslash return: recognize only the declared commands
-cott-domain real.pgcli.execute_query error: return declared database errors instead of raising database exceptions
-
-Use CottList by its public ABI: iterate it directly (`for item in items`) and convert it with `list(items)` or `tuple(items)`. NEVER access `items.values`; BasedPyright's missing-attribute error for `.values` is forbidden.
-Construct CottList only as `CottList(values=tuple(...))`, including empty lists as `CottList(values=())`.
-For an empty CottList with a known element type, bind a concrete annotation first (for example, `rows: CottList[Row] = CottList(values=())`); do not rely on empty-literal inference or casts.
-Preserve concrete element types through loops: annotate empty CottList accumulators and keep loop variables and derived collections typed rather than allowing Unknown propagation.
-
-Execute the intentionally raw interactive CLI query only as `cursor.execute(sql.encode("utf-8"))`; Psycopg accepts UTF-8 `bytes` queries. NEVER wrap interactive query text in `sql.SQL(...)`, which requires a `LiteralString`.
-Keep Psycopg data types explicit: default connection and cursor rows are `tuple[Any, ...]`; annotate them accordingly, and only consume `cursor.description` after its `None` check by binding its non-optional value to a typed local before deriving column names.
-NEVER use `typing.cast`, `# type: ignore`, or BasedPyright/Pyright suppression directives to evade these CottList or Psycopg typing requirements.
-NEVER bind unused alias, token, or other local variables. When unpacking requires a deliberately ignored value, bind it as `_` only.
+Implement the declared Cott contract deterministically.
+Iterate CottList; Option: test Some then direct else; final union variant direct; fail closed.

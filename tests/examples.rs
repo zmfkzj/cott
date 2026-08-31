@@ -66,11 +66,9 @@ const REAL_EXAMPLES: &[RealExample] = &[
         path: "real/frogmouth",
         upstream_url: "https://github.com/Textualize/frogmouth",
         source_files: &[
-            "src/real/frogmouth/application.cott",
             "src/real/frogmouth/document.cott",
             "src/real/frogmouth/model.cott",
             "src/real/frogmouth/navigation.cott",
-            "src/real/frogmouth/persistence.cott",
         ],
         adapter_files: &[
             "python/frogmouth_ui/__init__.py",
@@ -666,17 +664,27 @@ fn real_inventory_has_canonical_origins_and_verified_generated_shape() {
         );
         let mappings = implementation_mappings(&manifest);
         let binding_root = project.join("python/cott_bindings");
-        if example.path == "real/frogmouth" {
-            assert!(
-                mappings.len() <= 2,
-                "Frogmouth may have at most two bindings: {mappings:?}"
-            );
-        } else {
-            assert!(
-                mappings.is_empty(),
-                "{} must not use manifest bindings: {mappings:?}",
-                example.path
-            );
+        let expected_mappings = match example.path {
+            "real/yt-dlp" => vec![
+                "\"real.yt_dlp.transfer_media\" = \"cott_bindings.real.yt_dlp.transfer_media:transfer_media\"",
+            ],
+            "real/harlequin" => {
+                vec!["\"real.harlequin.core.run\" = \"cott_bindings.real.harlequin.core.run:run\""]
+            }
+            "real/posting" => vec![
+                "\"real.posting.client.send_request\" = \"cott_bindings.real.posting.client.send_request:send_request\"",
+            ],
+            "real/frogmouth" => vec![
+                "\"frogmouth.document.load_document\" = \"cott_bindings.frogmouth.document.load_document:load_document\"",
+            ],
+            _ => Vec::new(),
+        };
+        assert_eq!(
+            mappings, expected_mappings,
+            "{} must retain only its essential bindings",
+            example.path
+        );
+        if mappings.is_empty() {
             assert!(
                 !binding_root.exists(),
                 "{} must not have a cott_bindings source tree",
@@ -737,7 +745,7 @@ fn real_inventory_has_canonical_origins_and_verified_generated_shape() {
             );
         }
 
-        if example.path == "real/frogmouth" {
+        if !mappings.is_empty() {
             let mapped_binding_sources = mappings
                 .iter()
                 .map(|mapping| binding_source_file(mapping))
@@ -751,18 +759,16 @@ fn real_inventory_has_canonical_origins_and_verified_generated_shape() {
                         .to_path_buf()
                 })
                 .collect::<BTreeSet<_>>();
-            assert!(
-                binding_sources.len() <= 2,
-                "Frogmouth may have at most two binding sources: {binding_sources:?}"
-            );
             assert_eq!(
                 binding_sources, mapped_binding_sources,
-                "Frogmouth binding sources must match its manifest mappings"
+                "{} binding sources must match its manifest mappings",
+                example.path
             );
             for source in mapped_binding_sources {
                 assert!(
                     project.join(&source).is_file(),
-                    "Frogmouth mapped binding source must exist: {}",
+                    "{} mapped binding source must exist: {}",
+                    example.path,
                     source.display()
                 );
             }

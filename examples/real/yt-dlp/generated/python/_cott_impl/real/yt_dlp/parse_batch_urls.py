@@ -3,18 +3,26 @@ from real.yt_dlp_types import MediaError, MediaError_InvalidInput
 
 
 def parse_batch_urls(batch: str, comment_prefixes: CottList[str]) -> Result[CottList[str], MediaError]:
-    """Parse trimmed batch URLs while ignoring configured comment prefixes."""
+    prefix: str
     for prefix in comment_prefixes:
         if prefix == "":
-            return Err(error=MediaError_InvalidInput(message="comment prefixes must be nonempty"))
+            return Err(error=MediaError_InvalidInput(message="comment prefixes must not be empty"))
 
     urls: list[str] = []
+    line: str
     for line in batch.splitlines():
-        left_trimmed = line.lstrip()
-        if left_trimmed == "":
+        url: str = line.strip()
+        if url == "":
             continue
-        if any(left_trimmed.startswith(prefix) for prefix in comment_prefixes):
+
+        is_comment: bool = False
+        for prefix in comment_prefixes:
+            if url.startswith(prefix):
+                is_comment = True
+                break
+        if is_comment:
             continue
-        urls.append(line.strip())
+
+        urls.append(url)
 
     return Ok(value=CottList(values=tuple(urls)))

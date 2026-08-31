@@ -17,12 +17,6 @@ class LoadError_NotFound:
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
-class LoadError_PermissionDenied:
-    __hash__ = None
-    source: str
-
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
 class LoadError_InvalidEncoding:
     __hash__ = None
     source: str
@@ -35,32 +29,19 @@ class LoadError_TooLarge:
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
-class LoadError_HttpFailure:
-    __hash__ = None
-    url: str
-    status: U16
-
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class LoadError_NetworkUnavailable:
-    __hash__ = None
-    url: str
-
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class LoadError_InvalidLocation:
-    __hash__ = None
-    message: str
-
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class LoadError_ReadFailure:
+class LoadError_NetworkFailed:
     __hash__ = None
     source: str
     message: str
 
-LoadError: TypeAlias = Union[LoadError_NotFound, LoadError_PermissionDenied, LoadError_InvalidEncoding, LoadError_TooLarge, LoadError_HttpFailure, LoadError_NetworkUnavailable, LoadError_InvalidLocation, LoadError_ReadFailure]
+@final
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LoadError_ReadFailed:
+    __hash__ = None
+    source: str
+    message: str
 
-"""Remove YAML front matter from Markdown."""
-"""Report whether Markdown loading succeeded."""
-__all__ = ["LoadError", "LoadError_HttpFailure", "LoadError_InvalidEncoding", "LoadError_InvalidLocation", "LoadError_NetworkUnavailable", "LoadError_NotFound", "LoadError_PermissionDenied", "LoadError_ReadFailure", "LoadError_TooLarge"]
+LoadError: TypeAlias = Union[LoadError_NotFound, LoadError_InvalidEncoding, LoadError_TooLarge, LoadError_NetworkFailed, LoadError_ReadFailed]
+
+"""Load at most 5 MiB of UTF-8 Markdown and derive a title from its first heading."""
+__all__ = ["LoadError", "LoadError_InvalidEncoding", "LoadError_NetworkFailed", "LoadError_NotFound", "LoadError_ReadFailed", "LoadError_TooLarge"]

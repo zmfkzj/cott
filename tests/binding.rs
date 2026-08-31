@@ -1798,6 +1798,14 @@ fn effect_verification_leaves_factories_and_stdlib_constructors_unexecuted() {
         &stdlib.paths,
         &stdlib.plan,
         "api.service.run",
+        b"import tomllib\n\ndef run() -> object:\n    return tomllib.loads(\"value = 1\")\n",
+    )
+    .expect("an imported tomllib stdlib call is an effect leaf");
+    validate_candidate(
+        &stdlib.config,
+        &stdlib.paths,
+        &stdlib.plan,
+        "api.service.run",
         b"def run() -> object:\n    SystemExit(0)\n    return isinstance(1, int)\n",
     )
     .expect("permitted Python builtins are non-Cott effect leaves");

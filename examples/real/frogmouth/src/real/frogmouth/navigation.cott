@@ -4,82 +4,21 @@ use frogmouth.model.{Location, LocationKind}
 
 enum NavigationError:
     EmptyInput
-    MissingBase
     UnsupportedScheme(scheme: Str)
-    InvalidLocation(value: Str)
 
-fn normalize_location_input(value: Str) -> Result[Str, NavigationError]:
-    ensures Result.Ok(normalized) => normalized.len > 0
-
-    error NavigationError.EmptyInput when value.len == 0
-    error NavigationError.EmptyInput
-
-fn resolve_forge_location(value: Str) -> Result[Location, NavigationError]:
-    ensures Result.Ok(location) => location.target.len > 0
-
-    error NavigationError.InvalidLocation when value.len == 0
-    error NavigationError.InvalidLocation
-
-fn resolve_absolute_location(value: Str) -> Result[Location, NavigationError]:
-    ensures Result.Ok(location) => location.target.len > 0
-
-    error NavigationError.UnsupportedScheme
-    error NavigationError.InvalidLocation when value.len == 0
-    error NavigationError.InvalidLocation
-
-fn resolve_relative_location(
-    value: Str,
-    base: Option[Location],
-    working_directory: Path,
-) -> Result[Location, NavigationError]:
-    ensures Result.Ok(location) => location.target.len > 0
-
-    error NavigationError.MissingBase
-    error NavigationError.InvalidLocation when value.len == 0
-    error NavigationError.InvalidLocation
-
-fn resolve_location(
-    value: Str,
-    base: Option[Location],
-    working_directory: Path,
-) -> Result[Location, NavigationError]:
-    ensures Result.Ok(location) => location.target.len > 0
-
-    error NavigationError.EmptyInput when value.len == 0
-    error NavigationError.EmptyInput
-    error NavigationError.MissingBase
-    error NavigationError.UnsupportedScheme
-    error NavigationError.InvalidLocation
-
-fn normalization_is_ok(result: Result[Str, NavigationError]) -> Bool:
+fn resolve_location(value: Str, working_directory: Path) -> Result[Location, NavigationError]:
     doc """
-    Report whether location normalization succeeded.
+    Return LocationKind.Http for HTTP(S); otherwise return an absolute LocationKind.Local path.
     """
 
-fn location_resolution_is_ok(result: Result[Location, NavigationError]) -> Bool:
-    doc """
-    Report whether location resolution succeeded.
-    """
+    ensures Result.Ok(location) => location.target.len > 0
+
+    error NavigationError.EmptyInput
+    error NavigationError.UnsupportedScheme
+
+    effects []
 
 fn display_location(location: Location) -> Str:
     ensures result.len > 0
 
-scenario normalized_input:
-    call normalized = normalize_location_input("  changelog  ")
-    call normalized_ok = normalization_is_ok(normalized)
-    assert normalized_ok
-
-scenario empty_input:
-    call empty = normalize_location_input("")
-    call empty_ok = normalization_is_ok(empty)
-    assert not empty_ok
-
-scenario absolute_location:
-    call absolute = resolve_absolute_location("https://example.com/guide#intro")
-    call absolute_ok = location_resolution_is_ok(absolute)
-    assert absolute_ok
-
-scenario forge_location:
-    call forge = resolve_forge_location("gh owner/repo#intro")
-    call forge_ok = location_resolution_is_ok(forge)
-    assert forge_ok
+    effects []

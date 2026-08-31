@@ -1666,13 +1666,15 @@ verify는 모든 evidence를 먼저 finalize하고 `current.verified=true`, clos
 
 유지되는 curriculum module의 source order는 type 선언, 작은 domain leaf function, 더 큰 composition function, domain-named final operation 순서다. 의미 있는 경계만 stage로 공개한다. grammar lesson은 의도적으로 leaf 하나일 수 있고 simple·complex lesson도 domain responsibility가 독립적인 경우에만 stage를 추가한다. `artifact-pipeline`은 순수 topological artifact-plan composition이고, `process-bar`는 `foo.bar` 전체의 unresolved-to-agent-generation 전환을 집중적으로 보이는 fixture다.
 
-real project는 각자 독립 generation-first example이며 project API version은 `0.1.0`이다. adapter는 exact generated public facade만 사용하고 implementation·binding을 직접 import하거나 public re-export하지 않는다. 각 real project README의 H1은 canonical upstream URL이고, 다음 generation phase 뒤 verified generated artifact를 commit한다. binding은 `real/frogmouth`에만 최대 2개 허용되며 나머지 real project의 binding은 0개다.
+real project는 각자 독립 generation-first example이며 project API version은 `0.1.0`이다. adapter는 exact generated public facade만 사용하고 implementation·binding을 직접 import하거나 public re-export하지 않는다. 각 real project README의 H1은 canonical upstream URL이고, 다음 generation phase 뒤 verified generated artifact를 commit한다. binding은 essential host boundary인 `real.yt_dlp.transfer_media`, `real.harlequin.core.run`, `real.posting.client.send_request`, `frogmouth.document.load_document`에 각각 1개만 허용하며 나머지 real project의 binding은 0개다.
 
 `.cott` declaration은 항상 bodyless다. free-function composition edge는 `from <exact cott module> import <declared public function>` 형태의 alias-free import로 exact generated public facade를 통과해야 하며 implementation file끼리 직접 호출하지 않는다. same-file private helper call은 implementation detail이고 impl canonical function의 only cross-contract method composition edge는 `self.<declared_method>(...)` public wrapper다. effect verifier는 caller와 same-file helper가 도달하는 Cott facade callee의 declared effects를 transitive하게 검사한다; external/stdlib operation은 declaration의 trust boundary로 남는다. helper가 Cott로 승격되어 public function이 되면 모든 ABI-valid input에 선언된 결과를 반환하거나 caller가 호출 전에 확립할 수 있는 Cott `requires`를 선언해야 한다.
 
 `checked-add`는 manifest binding syntax를 집중적으로 가르치는 lesson이다. 구현 선택은 항상 각 project의 `[target.python.implementations]`과 generation record가 정한다. Binding은 compatible project-local implementation을 선택할 뿐 Cott contract를 정의하지 않으며, example마다 binding 또는 agent implementation을 임의로 일반화해서는 안 된다. checkout에 commit된 `generated/`는 compiler-owned result이고, agent-owned free-function `python/_cott_impl/<cott module>/<function>.py` 및 impl-method `python/_cott_impl/<cott module>/<Concrete>/<method>.py`는 matching `agent_runs` provenance가 있는 실제 `cott generate --agent <agent> --target python` 성공 결과다. `.venv/`, `.cott/`, `__pycache__/`는 transient이며 managed artifact나 evidence가 아니다.
 
 `cott emit python`은 agent를 호출하지 않고 compiler-owned output과 unresolved metadata만 materialize한다. `cott generate`는 eligible unresolved callable에만 callable별 durable source를 생성한다. 생성 뒤 composition도 위 exact facade 경계를 통과하며 필요한 implementation selection과 managed artifact가 모두 일치해야 `cott verify`가 certify한다. 유지되는 example은 generic `run` function, forwarding alias, direct implementation-to-implementation call, duplicated validation, nominal-wrapper-only helper를 금지한다.
+
+`generate -j <jobs>`는 callable을 stable source-order wave로 최대 `jobs`개씩 실행하고 callable별 `start`, `validate`, `retry`, `done` progress를 stderr에 기록한다. 한 agent 또는 final bundle validation이 실패해도 source audit를 통과한 candidate는 `current.verified = false`인 transaction checkpoint로 publish하며 command는 exit `5`를 유지한다. 다음 generate는 checkpoint에서 unresolved callable만 재개한다. final diagnostic이 가리키는 checkpoint source는 삭제하고 `emit python` 뒤 해당 symbol을 다시 generate할 수 있다.
 
 ---
 
@@ -1712,7 +1714,7 @@ cott는 17.1의 입력을 하나의 callable별 구현 지시로 구성하여 �
 
 #### 17.2.1 에이전트 실행 계약
 
-선택 범위의 미구현 callable마다 fully qualified symbol 정렬 순서로 agent process 하나를 실행한다. 각 process의 유일한 implementation write target은 해당 free-function file 또는 impl-method helper file이며 어떤 run이라도 실패하면 전체 generate transaction을 폐기한다. `agent_runs`에는 callable별 record를 source order가 아니라 이 실행 순서로 남긴다.
+선택 범위의 미구현 callable은 fully qualified symbol 정렬 순서로 처리한다. `-j <jobs>` (또는 `--jobs`)는 1..=64이며 기본값은 1이다. 기본값에서는 callable별 agent process를 순차 실행한다. 더 큰 값에서는 최대 `jobs`개의 callable을 정렬된 wave로 함께 실행하고, wave의 모든 process는 같은 wave 시작 시점의 immutable resolved binding context를 받는다. wave 전체가 성공한 뒤에만 결과를 symbol 순서로 merge하며, 어느 run이라도 실패하면 모든 isolated workspace를 정리하고 전체 generate transaction을 폐기한다. `agent_runs`에는 callable별 record를 source order가 아니라 이 실행 순서로 남긴다.
 
 각 에이전트 adapter는 실행 파일, prompt 전달 방식, 작업 디렉터리, 환경 변수, 종료 상태를 명시한다.
 
@@ -1922,6 +1924,8 @@ cott emit python
 ### 18.6 구현 생성
 
 ```bash
+cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python [-j <jobs>] [--project <dir>] [--format json]
+
 cott generate --agent claude --target python
 cott generate foo.bar.process_bar --agent omp --target python
 cott generate foo.bar.Counter.increment --agent codex --target python

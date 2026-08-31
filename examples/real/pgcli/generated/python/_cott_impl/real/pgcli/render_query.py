@@ -1,70 +1,120 @@
-from real.pgcli_types import RenderLayout_Horizontal, RenderLayout_Vertical, RenderRequest, RenderedQuery
+from cott_runtime import U16
+from real.pgcli_types import (
+    RenderLayout,
+    RenderLayout_Horizontal,
+    RenderLayout_Vertical,
+    RenderRequest,
+    RenderedQuery,
+)
 
 
-def _column_widths(columns: list[str], rows: list[list[str]]) -> list[int]:
-    widths = [len(column) for column in columns]
-    for row in rows:
-        limit = min(len(widths), len(row))
-        for index in range(limit):
-            value_width = len(row[index])
-            if value_width > widths[index]:
-                widths[index] = value_width
-    return widths
+def _single_line(value: str) -> str:
+    return value.replace("\r\n", "↵").replace("\r", "↵").replace("\n", "↵")
 
 
-def _horizontal_text(columns: list[str], rows: list[list[str]], widths: list[int]) -> str:
-    if not columns:
+def _prepare_data(request: RenderRequest) -> tuple[list[str], list[list[str]]]:
+    columns: list[str] = []
+    for column in request.columns:
+        columns.append(column)
+
+    rows: list[list[str]] = []
+    for source_row in request.rows:
+        row: list[str] = []
+        column_index = 0
+        for value in source_row:
+            if column_index >= len(columns):
+                break
+            row.append(value)
+            column_index += 1
+        while len(row) < len(columns):
+            row.append("")
+        rows.append(row)
+    return (columns, rows)
+
+
+def _text_width(text: str) -> U16:
+    widest = 0
+    for line in text.split("\n"):
+        if len(line) > widest:
+            widest = len(line)
+    if widest > 65535:
+        return 65535
+    return widest
+
+
+def _horizontal_text(columns: list[str], rows: list[list[str]]) -> str:
+    if len(columns) == 0:
         return ""
-    border = "+" + "+".join("-" * (width + 2) for width in widths) + "+"
-    header = "| " + " | ".join(columns[index].ljust(widths[index]) for index in range(len(columns))) + " |"
-    lines: list[str] = [border, header, border]
+
+    widths: list[int] = []
+    for column in columns:
+        widths.append(len(_single_line(column)))
+    for row in rows:
+        column_index = 0
+        while column_index < len(columns):
+            cell_width = len(_single_line(row[column_index]))
+            if cell_width > widths[column_index]:
+                widths[column_index] = cell_width
+            column_index += 1
+
+    lines: list[str] = []
+    header: list[str] = []
+    column_index = 0
+    while column_index < len(columns):
+        header.append(_single_line(columns[column_index]).ljust(widths[column_index]))
+        column_index += 1
+    lines.append(" | ".join(header))
+
+    separators: list[str] = []
+    for width in widths:
+        separators.append("-" * width)
+    lines.append("-+-".join(separators))
+
     for row in rows:
         cells: list[str] = []
-        for index in range(len(columns)):
-            value = row[index] if index < len(row) else ""
-            cells.append(value.ljust(widths[index]))
-        lines.append("| " + " | ".join(cells) + " |")
-    lines.append(border)
+        column_index = 0
+        while column_index < len(columns):
+            cells.append(_single_line(row[column_index]).ljust(widths[column_index]))
+            column_index += 1
+        lines.append(" | ".join(cells))
     return "\n".join(lines)
 
 
-def _vertical_text(columns: list[str], rows: list[list[str]]) -> tuple[str, int]:
-    if not columns or not rows:
-        return "", 0
-    label_width = max(len(column) for column in columns)
-    rendered_width = 0
-    for row_number, row in enumerate(rows, start=1):
-        header_width = len("-[ RECORD " + str(row_number) + " ]")
-        if header_width > rendered_width:
-            rendered_width = header_width
-        for index, column in enumerate(columns):
-            value = row[index] if index < len(row) else ""
-            line_width = label_width + 3 + len(value)
-            if line_width > rendered_width:
-                rendered_width = line_width
+def _vertical_text(columns: list[str], rows: list[list[str]]) -> str:
+    if len(columns) == 0 or len(rows) == 0:
+        return ""
+
+    name_width = 0
+    for column in columns:
+        column_width = len(_single_line(column))
+        if column_width > name_width:
+            name_width = column_width
 
     lines: list[str] = []
-    for row_number, row in enumerate(rows, start=1):
-        record_header = "-[ RECORD " + str(row_number) + " ]"
-        lines.append(record_header + "-" * (rendered_width - len(record_header)))
-        for index, column in enumerate(columns):
-            value = row[index] if index < len(row) else ""
-            lines.append(column.ljust(label_width) + " | " + value)
-    return "\n".join(lines), rendered_width
+    row_index = 0
+    while row_index < len(rows):
+        if row_index > 0:
+            lines.append("")
+        lines.append("-[ RECORD " + str(row_index + 1) + " ]-")
+        column_index = 0
+        while column_index < len(columns):
+            lines.append(
+                _single_line(columns[column_index]).ljust(name_width)
+                + " | "
+                + _single_line(rows[row_index][column_index])
+            )
+            column_index += 1
+        row_index += 1
+    return "\n".join(lines)
 
 
 def render_query(request: RenderRequest) -> RenderedQuery:
-    columns: list[str] = list(request.columns)
-    rows: list[list[str]] = []
-    for source_row in request.rows:
-        row: list[str] = list(source_row)
-        rows.append(row)
-
-    widths = _column_widths(columns, rows)
-    horizontal_width = sum(widths) + 3 * len(widths) + 1 if widths else 0
-    if request.vertical or horizontal_width > request.terminal_width:
-        text, width = _vertical_text(columns, rows)
-        return RenderedQuery(text=text, layout=RenderLayout_Vertical(), width=width)
-
-    text = _horizontal_text(columns, rows, widths)
-    return RenderedQuery(text=text, layout=RenderLayout_Horizontal(), width=horizontal_width)
+    columns, rows = _prepare_data(request)
+    layout: RenderLayout = RenderLayout_Horizontal()
+    text = _horizontal_text(columns, rows)
+    width = _text_width(text)
+    if request.vertical or width > request.terminal_width:
+        text = _vertical_text(columns, rows)
+        layout = RenderLayout_Vertical()
+        width = _text_width(text)
+    return RenderedQuery(text=text, layout=layout, width=width)

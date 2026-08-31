@@ -4203,6 +4203,7 @@ fn stdlib_modules() -> HashSet<&'static str> {
         "time",
         "timeit",
         "token",
+        "tomllib",
         "traceback",
         "types",
         "typing",

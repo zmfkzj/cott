@@ -9,247 +9,164 @@ from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 
-from real.toolong_types import EntryKind, EntryKind_Access, EntryKind_Error, EntryKind_Json, EntryKind_Plain, LogEntry, LogPage, LogSource, ToolongError, ToolongError_CompressedAppendUnsupported, ToolongError_DecodeFailed, ToolongError_InvalidIndent, ToolongError_InvalidLimit, ToolongError_InvalidOffset, ToolongError_OpenFailed
+from real.toolong_types import LogEntry, ToolongError, ToolongError_InvalidArguments, ToolongError_ReadFailed, ViewerOptions
 
-def load_log(source: LogSource, limit: U64) -> Result[LogPage, ToolongError]:
-    source = _cott_validate_abi(source, LogSource, path="$.source")
-    limit = _cott_validate_abi(limit, U64, path="$.limit")
+def parse_arguments(arguments: CottList[str]) -> Result[ViewerOptions, ToolongError]:
+    """Parse [--contains TEXT] followed by one or more log paths."""
+    arguments = _cott_validate_abi(arguments, CottList[str], path="$.arguments")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
-    if _expected_error is None and ((limit == 0)):
-        _expected_error = ToolongError_InvalidLimit
-        _expected_error_span = {"end_byte":801,"end_column":52,"end_line":38,"start_byte":754,"start_column":5,"start_line":38}
-        _expected_error_clause = "error:2"
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/load_log.py", "69bbf8e7580f68be98eec10eb165f8fd8dc9e04c6df5f41a7e9086ee115e161e", "load_log", expected_project_name="toolong", expected_cott_symbol="real.toolong.load_log")
-        _result = _implementation(source, limit)
+        _implementation = _cott_load("_cott_impl/real/toolong/parse_arguments.py", "bd0df7e058f57cbddde47aa9e3311b3b71c5f0a87481899452c5c2ce952a32b2", "parse_arguments", expected_project_name="toolong", expected_cott_symbol="real.toolong.parse_arguments")
+        _result = _implementation(arguments)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
-            _error.symbol = "real.toolong.load_log"
+            _error.symbol = "real.toolong.parse_arguments"
         if _error.span is None:
-            _error.span = {"end_byte":898,"end_column":1,"end_line":44,"start_byte":562,"start_column":1,"start_line":34}
+            _error.span = {"end_byte":534,"end_column":1,"end_line":27,"start_byte":253,"start_column":1,"start_line":16}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.load_log", phase="implementation-call", span={"end_byte":898,"end_column":1,"end_line":44,"start_byte":562,"start_column":1,"start_line":34}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.parse_arguments", phase="implementation-call", span={"end_byte":534,"end_column":1,"end_line":27,"start_byte":253,"start_column":1,"start_line":16}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.load_log", phase="implementation-call", span={"end_byte":898,"end_column":1,"end_line":44,"start_byte":562,"start_column":1,"start_line":34}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
-    _result = _cott_validate_abi(_result, Result[LogPage, ToolongError], path="$.return")
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.parse_arguments", phase="implementation-call", span={"end_byte":534,"end_column":1,"end_line":27,"start_byte":253,"start_column":1,"start_line":16}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+    _result = _cott_validate_abi(_result, Result[ViewerOptions, ToolongError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
-                raise CottContractViolation("conditional error clause failed", symbol="real.toolong.load_log", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
-        elif type(_result.error) not in (ToolongError_OpenFailed, ToolongError_DecodeFailed,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.toolong.load_log", phase="error", span={"end_byte":898,"end_column":1,"end_line":44,"start_byte":562,"start_column":1,"start_line":34}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+                raise CottContractViolation("conditional error clause failed", symbol="real.toolong.parse_arguments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
+        elif type(_result.error) not in (ToolongError_InvalidArguments,):
+            raise CottContractViolation("returned error is not allowed", symbol="real.toolong.parse_arguments", phase="error", span={"end_byte":534,"end_column":1,"end_line":27,"start_byte":253,"start_column":1,"start_line":16}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
-        raise CottContractViolation("expected conditional error was not returned", symbol="real.toolong.load_log", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    def _cott_match_ensures_0() -> bool:
-        _cott_match_value = _result
-        if type(_cott_match_value) is Ok and True:
-            page = _cott_match_value.value
-            return (((page).source == source))
-        return True
-    if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.toolong.load_log", clause="ensures:0", phase="ensures", span={"end_byte":691,"end_column":53,"end_line":35,"start_byte":643,"start_column":5,"start_line":35}, expected="true", actual="false")
+        raise CottContractViolation("expected conditional error was not returned", symbol="real.toolong.parse_arguments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
-            page = _cott_match_value.value
-            return ((len((page).entries) <= limit))
+            options = _cott_match_value.value
+            return ((len((options).sources) > 0))
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.toolong.load_log", clause="ensures:1", phase="ensures", span={"end_byte":748,"end_column":57,"end_line":36,"start_byte":696,"start_column":5,"start_line":36}, expected="true", actual="false")
-    _result = _cott_wrap_async_protocol(_result, Result[LogPage, ToolongError], path="$.return", validator=_cott_validate_abi)
+        raise CottContractViolation("ensures clause failed", symbol="real.toolong.parse_arguments", clause="ensures:1", phase="ensures", span={"end_byte":475,"end_column":58,"end_line":21,"start_byte":422,"start_column":5,"start_line":21}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[ViewerOptions, ToolongError], path="$.return", validator=_cott_validate_abi)
     return _result
 
-def render_jsonl(entries: CottList[LogEntry], indent: U8) -> Result[CottList[str], ToolongError]:
-    entries = _cott_validate_abi(entries, CottList[LogEntry], path="$.entries")
-    indent = _cott_validate_abi(indent, U8, path="$.indent")
+def load_entries(sources: CottList[Path]) -> Result[CottList[LogEntry], ToolongError]:
+    """Read UTF-8 log lines in source order and number each source from one."""
+    sources = _cott_validate_abi(sources, CottList[Path], path="$.sources")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
-    if _expected_error is None and ((indent == 0)):
-        _expected_error = ToolongError_InvalidIndent
-        _expected_error_span = {"end_byte":1104,"end_column":54,"end_line":47,"start_byte":1055,"start_column":5,"start_line":47}
-        _expected_error_clause = "error:1"
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/render_jsonl.py", "8020c0e1fcc8f6375671a8410ae7e5e8d4b411c61c02f46b64f23427bbc085fb", "render_jsonl", expected_project_name="toolong", expected_cott_symbol="real.toolong.render_jsonl")
-        _result = _implementation(entries, indent)
+        _implementation = _cott_load("_cott_impl/real/toolong/load_entries.py", "c7b9d559d4a88bebffda092dd9dfb887b6ce39cb414bf80b07a6869f5a8aa5e7", "load_entries", expected_project_name="toolong", expected_cott_symbol="real.toolong.load_entries")
+        _result = _implementation(sources)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
-            _error.symbol = "real.toolong.render_jsonl"
+            _error.symbol = "real.toolong.load_entries"
         if _error.span is None:
-            _error.span = {"end_byte":1122,"end_column":1,"end_line":51,"start_byte":898,"start_column":1,"start_line":44}
+            _error.span = {"end_byte":818,"end_column":1,"end_line":38,"start_byte":534,"start_column":1,"start_line":27}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.render_jsonl", phase="implementation-call", span={"end_byte":1122,"end_column":1,"end_line":51,"start_byte":898,"start_column":1,"start_line":44}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.load_entries", phase="implementation-call", span={"end_byte":818,"end_column":1,"end_line":38,"start_byte":534,"start_column":1,"start_line":27}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.render_jsonl", phase="implementation-call", span={"end_byte":1122,"end_column":1,"end_line":51,"start_byte":898,"start_column":1,"start_line":44}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
-    _result = _cott_validate_abi(_result, Result[CottList[str], ToolongError], path="$.return")
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.load_entries", phase="implementation-call", span={"end_byte":818,"end_column":1,"end_line":38,"start_byte":534,"start_column":1,"start_line":27}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+    _result = _cott_validate_abi(_result, Result[CottList[LogEntry], ToolongError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
-                raise CottContractViolation("conditional error clause failed", symbol="real.toolong.render_jsonl", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
-        elif type(_result.error) not in ():
-            raise CottContractViolation("returned error is not allowed", symbol="real.toolong.render_jsonl", phase="error", span={"end_byte":1122,"end_column":1,"end_line":51,"start_byte":898,"start_column":1,"start_line":44}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+                raise CottContractViolation("conditional error clause failed", symbol="real.toolong.load_entries", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
+        elif type(_result.error) not in (ToolongError_ReadFailed,):
+            raise CottContractViolation("returned error is not allowed", symbol="real.toolong.load_entries", phase="error", span={"end_byte":818,"end_column":1,"end_line":38,"start_byte":534,"start_column":1,"start_line":27}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
-        raise CottContractViolation("expected conditional error was not returned", symbol="real.toolong.render_jsonl", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    def _cott_match_ensures_0() -> bool:
+        raise CottContractViolation("expected conditional error was not returned", symbol="real.toolong.load_entries", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    def _cott_match_ensures_1() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            entries = _cott_match_value.value
+            return ((len(sources) > 0))
+        return True
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="real.toolong.load_entries", clause="ensures:1", phase="ensures", span={"end_byte":756,"end_column":50,"end_line":32,"start_byte":711,"start_column":5,"start_line":32}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[CottList[LogEntry], ToolongError], path="$.return", validator=_cott_validate_abi)
+    return _result
+
+def filter_entries(entries: CottList[LogEntry], contains: Option[str]) -> CottList[LogEntry]:
+    """Keep all entries without a filter; otherwise keep case-insensitive substring matches."""
+    entries = _cott_validate_abi(entries, CottList[LogEntry], path="$.entries")
+    contains = _cott_validate_abi(contains, Option[str], path="$.contains")
+    try:
+        _implementation = _cott_load("_cott_impl/real/toolong/filter_entries.py", "f12bb90139231155d801ec61e130fa01c8c0668f052abdb35136c4ad16a53571", "filter_entries", expected_project_name="toolong", expected_cott_symbol="real.toolong.filter_entries")
+        _result = _implementation(entries, contains)
+    except CottContractViolation as _error:
+        if _error.symbol is None or _error.symbol == "_cott_load":
+            _error.symbol = "real.toolong.filter_entries"
+        if _error.span is None:
+            _error.span = {"end_byte":1030,"end_column":1,"end_line":45,"start_byte":818,"start_column":1,"start_line":38}
+        raise
+    except SystemExit as _error:
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.filter_entries", phase="implementation-call", span={"end_byte":1030,"end_column":1,"end_line":45,"start_byte":818,"start_column":1,"start_line":38}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+    except Exception as _error:
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.filter_entries", phase="implementation-call", span={"end_byte":1030,"end_column":1,"end_line":45,"start_byte":818,"start_column":1,"start_line":38}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+    _result = _cott_validate_abi(_result, CottList[LogEntry], path="$.return")
+    _result = _cott_wrap_async_protocol(_result, CottList[LogEntry], path="$.return", validator=_cott_validate_abi)
+    return _result
+
+def render_entries(entries: CottList[LogEntry]) -> str:
+    """Render path:line and text for each entry, separated by newlines."""
+    entries = _cott_validate_abi(entries, CottList[LogEntry], path="$.entries")
+    try:
+        _implementation = _cott_load("_cott_impl/real/toolong/render_entries.py", "6c8020ec71d266ea6fc539f6133b3b239f24657f6d1cf1ce834a57d479e86ae8", "render_entries", expected_project_name="toolong", expected_cott_symbol="real.toolong.render_entries")
+        _result = _implementation(entries)
+    except CottContractViolation as _error:
+        if _error.symbol is None or _error.symbol == "_cott_load":
+            _error.symbol = "real.toolong.render_entries"
+        if _error.span is None:
+            _error.span = {"end_byte":1187,"end_column":1,"end_line":52,"start_byte":1030,"start_column":1,"start_line":45}
+        raise
+    except SystemExit as _error:
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.render_entries", phase="implementation-call", span={"end_byte":1187,"end_column":1,"end_line":52,"start_byte":1030,"start_column":1,"start_line":45}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+    except Exception as _error:
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.render_entries", phase="implementation-call", span={"end_byte":1187,"end_column":1,"end_line":52,"start_byte":1030,"start_column":1,"start_line":45}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+    _result = _cott_validate_abi(_result, str, path="$.return")
+    _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
+    return _result
+
+def execute(arguments: CottList[str]) -> Result[str, ToolongError]:
+    """Parse arguments, load logs, apply the optional filter, and render matching entries."""
+    arguments = _cott_validate_abi(arguments, CottList[str], path="$.arguments")
+    _expected_error = None
+    _expected_error_span = None
+    _expected_error_clause = None
+    try:
+        _implementation = _cott_load("_cott_impl/real/toolong/execute.py", "92cec9de3dd5238cd5ebec7dcbe7ca205da8ca2272ca6337479a0e42a7633e94", "execute", expected_project_name="toolong", expected_cott_symbol="real.toolong.execute")
+        _result = _implementation(arguments)
+    except CottContractViolation as _error:
+        if _error.symbol is None or _error.symbol == "_cott_load":
+            _error.symbol = "real.toolong.execute"
+        if _error.span is None:
+            _error.span = {"end_byte":1512,"end_column":1,"end_line":63,"start_byte":1187,"start_column":1,"start_line":52}
+        raise
+    except SystemExit as _error:
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.execute", phase="implementation-call", span={"end_byte":1512,"end_column":1,"end_line":63,"start_byte":1187,"start_column":1,"start_line":52}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+    except Exception as _error:
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.execute", phase="implementation-call", span={"end_byte":1512,"end_column":1,"end_line":63,"start_byte":1187,"start_column":1,"start_line":52}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+    _result = _cott_validate_abi(_result, Result[str, ToolongError], path="$.return")
+    if type(_result) is Err:
+        if _expected_error is not None:
+            if type(_result.error) is not _expected_error:
+                raise CottContractViolation("conditional error clause failed", symbol="real.toolong.execute", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
+        elif type(_result.error) not in (ToolongError_InvalidArguments, ToolongError_ReadFailed,):
+            raise CottContractViolation("returned error is not allowed", symbol="real.toolong.execute", phase="error", span={"end_byte":1512,"end_column":1,"end_line":63,"start_byte":1187,"start_column":1,"start_line":52}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+    elif _expected_error is not None:
+        raise CottContractViolation("expected conditional error was not returned", symbol="real.toolong.execute", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             rendered = _cott_match_value.value
-            return ((len(rendered) == len(entries)))
-        return True
-    if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.toolong.render_jsonl", clause="ensures:0", phase="ensures", span={"end_byte":1049,"end_column":63,"end_line":45,"start_byte":991,"start_column":5,"start_line":45}, expected="true", actual="false")
-    _result = _cott_wrap_async_protocol(_result, Result[CottList[str], ToolongError], path="$.return", validator=_cott_validate_abi)
-    return _result
-
-def merge_pages(pages: CottList[LogPage], limit: U64) -> Result[CottList[LogEntry], ToolongError]:
-    pages = _cott_validate_abi(pages, CottList[LogPage], path="$.pages")
-    limit = _cott_validate_abi(limit, U64, path="$.limit")
-    _expected_error = None
-    _expected_error_span = None
-    _expected_error_clause = None
-    if _expected_error is None and ((limit == 0)):
-        _expected_error = ToolongError_InvalidLimit
-        _expected_error_span = {"end_byte":1317,"end_column":52,"end_line":54,"start_byte":1270,"start_column":5,"start_line":54}
-        _expected_error_clause = "error:1"
-    try:
-        _implementation = _cott_load("_cott_impl/real/toolong/merge_pages.py", "7bb8327e9a4e2b501a064c003ac1043e767433117b2b8ef523a115a980e5df8b", "merge_pages", expected_project_name="toolong", expected_cott_symbol="real.toolong.merge_pages")
-        _result = _implementation(pages, limit)
-    except CottContractViolation as _error:
-        if _error.symbol is None or _error.symbol == "_cott_load":
-            _error.symbol = "real.toolong.merge_pages"
-        if _error.span is None:
-            _error.span = {"end_byte":1335,"end_column":1,"end_line":58,"start_byte":1122,"start_column":1,"start_line":51}
-        raise
-    except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.merge_pages", phase="implementation-call", span={"end_byte":1335,"end_column":1,"end_line":58,"start_byte":1122,"start_column":1,"start_line":51}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
-    except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.merge_pages", phase="implementation-call", span={"end_byte":1335,"end_column":1,"end_line":58,"start_byte":1122,"start_column":1,"start_line":51}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
-    _result = _cott_validate_abi(_result, Result[CottList[LogEntry], ToolongError], path="$.return")
-    if type(_result) is Err:
-        if _expected_error is not None:
-            if type(_result.error) is not _expected_error:
-                raise CottContractViolation("conditional error clause failed", symbol="real.toolong.merge_pages", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
-        elif type(_result.error) not in ():
-            raise CottContractViolation("returned error is not allowed", symbol="real.toolong.merge_pages", phase="error", span={"end_byte":1335,"end_column":1,"end_line":58,"start_byte":1122,"start_column":1,"start_line":51}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
-    elif _expected_error is not None:
-        raise CottContractViolation("expected conditional error was not returned", symbol="real.toolong.merge_pages", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    def _cott_match_ensures_0() -> bool:
-        _cott_match_value = _result
-        if type(_cott_match_value) is Ok and True:
-            merged = _cott_match_value.value
-            return ((len(merged) <= limit))
-        return True
-    if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.toolong.merge_pages", clause="ensures:0", phase="ensures", span={"end_byte":1264,"end_column":53,"end_line":52,"start_byte":1216,"start_column":5,"start_line":52}, expected="true", actual="false")
-    _result = _cott_wrap_async_protocol(_result, Result[CottList[LogEntry], ToolongError], path="$.return", validator=_cott_validate_abi)
-    return _result
-
-def search_entries(entries: CottList[LogEntry], needle: str, limit: U64) -> Result[CottList[LogEntry], ToolongError]:
-    entries = _cott_validate_abi(entries, CottList[LogEntry], path="$.entries")
-    needle = _cott_validate_abi(needle, str, path="$.needle")
-    limit = _cott_validate_abi(limit, U64, path="$.limit")
-    _expected_error = None
-    _expected_error_span = None
-    _expected_error_clause = None
-    if _expected_error is None and ((limit == 0)):
-        _expected_error = ToolongError_InvalidLimit
-        _expected_error_span = {"end_byte":1562,"end_column":52,"end_line":65,"start_byte":1515,"start_column":5,"start_line":65}
-        _expected_error_clause = "error:1"
-    try:
-        _implementation = _cott_load("_cott_impl/real/toolong/search_entries.py", "fcad354e6e627a2a676d29b42b9ca456ea215ae6cd6b49d749cd258dcf3a2a5d", "search_entries", expected_project_name="toolong", expected_cott_symbol="real.toolong.search_entries")
-        _result = _implementation(entries, needle, limit)
-    except CottContractViolation as _error:
-        if _error.symbol is None or _error.symbol == "_cott_load":
-            _error.symbol = "real.toolong.search_entries"
-        if _error.span is None:
-            _error.span = {"end_byte":1580,"end_column":1,"end_line":69,"start_byte":1335,"start_column":1,"start_line":58}
-        raise
-    except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.search_entries", phase="implementation-call", span={"end_byte":1580,"end_column":1,"end_line":69,"start_byte":1335,"start_column":1,"start_line":58}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
-    except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.search_entries", phase="implementation-call", span={"end_byte":1580,"end_column":1,"end_line":69,"start_byte":1335,"start_column":1,"start_line":58}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
-    _result = _cott_validate_abi(_result, Result[CottList[LogEntry], ToolongError], path="$.return")
-    if type(_result) is Err:
-        if _expected_error is not None:
-            if type(_result.error) is not _expected_error:
-                raise CottContractViolation("conditional error clause failed", symbol="real.toolong.search_entries", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
-        elif type(_result.error) not in ():
-            raise CottContractViolation("returned error is not allowed", symbol="real.toolong.search_entries", phase="error", span={"end_byte":1580,"end_column":1,"end_line":69,"start_byte":1335,"start_column":1,"start_line":58}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
-    elif _expected_error is not None:
-        raise CottContractViolation("expected conditional error was not returned", symbol="real.toolong.search_entries", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    def _cott_match_ensures_0() -> bool:
-        _cott_match_value = _result
-        if type(_cott_match_value) is Ok and True:
-            found = _cott_match_value.value
-            return ((len(found) <= limit))
-        return True
-    if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.toolong.search_entries", clause="ensures:0", phase="ensures", span={"end_byte":1509,"end_column":51,"end_line":63,"start_byte":1463,"start_column":5,"start_line":63}, expected="true", actual="false")
-    _result = _cott_wrap_async_protocol(_result, Result[CottList[LogEntry], ToolongError], path="$.return", validator=_cott_validate_abi)
-    return _result
-
-def read_appended(source: LogSource, from_byte: U64, limit: U64) -> Result[LogPage, ToolongError]:
-    source = _cott_validate_abi(source, LogSource, path="$.source")
-    from_byte = _cott_validate_abi(from_byte, U64, path="$.from_byte")
-    limit = _cott_validate_abi(limit, U64, path="$.limit")
-    _expected_error = None
-    _expected_error_span = None
-    _expected_error_clause = None
-    if _expected_error is None and ((limit == 0)):
-        _expected_error = ToolongError_InvalidLimit
-        _expected_error_span = {"end_byte":1899,"end_column":52,"end_line":74,"start_byte":1852,"start_column":5,"start_line":74}
-        _expected_error_clause = "error:3"
-    try:
-        _implementation = _cott_load("_cott_impl/real/toolong/read_appended.py", "31340b478ce726e851fc153f2a58153818cc917684ca95c70a057fa4fff40263", "read_appended", expected_project_name="toolong", expected_cott_symbol="real.toolong.read_appended")
-        _result = _implementation(source, from_byte, limit)
-    except CottContractViolation as _error:
-        if _error.symbol is None or _error.symbol == "_cott_load":
-            _error.symbol = "real.toolong.read_appended"
-        if _error.span is None:
-            _error.span = {"end_byte":2083,"end_column":1,"end_line":81,"start_byte":1580,"start_column":1,"start_line":69}
-        raise
-    except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.read_appended", phase="implementation-call", span={"end_byte":2083,"end_column":1,"end_line":81,"start_byte":1580,"start_column":1,"start_line":69}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
-    except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.read_appended", phase="implementation-call", span={"end_byte":2083,"end_column":1,"end_line":81,"start_byte":1580,"start_column":1,"start_line":69}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
-    _result = _cott_validate_abi(_result, Result[LogPage, ToolongError], path="$.return")
-    if type(_result) is Err:
-        if _expected_error is not None:
-            if type(_result.error) is not _expected_error:
-                raise CottContractViolation("conditional error clause failed", symbol="real.toolong.read_appended", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
-        elif type(_result.error) not in (ToolongError_InvalidOffset, ToolongError_OpenFailed, ToolongError_DecodeFailed, ToolongError_CompressedAppendUnsupported,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.toolong.read_appended", phase="error", span={"end_byte":2083,"end_column":1,"end_line":81,"start_byte":1580,"start_column":1,"start_line":69}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
-    elif _expected_error is not None:
-        raise CottContractViolation("expected conditional error was not returned", symbol="real.toolong.read_appended", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
-    def _cott_match_ensures_0() -> bool:
-        _cott_match_value = _result
-        if type(_cott_match_value) is Ok and True:
-            page = _cott_match_value.value
-            return (((page).source == source))
-        return True
-    if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.toolong.read_appended", clause="ensures:0", phase="ensures", span={"end_byte":1730,"end_column":53,"end_line":70,"start_byte":1682,"start_column":5,"start_line":70}, expected="true", actual="false")
-    def _cott_match_ensures_1() -> bool:
-        _cott_match_value = _result
-        if type(_cott_match_value) is Ok and True:
-            page = _cott_match_value.value
-            return ((len((page).entries) <= limit))
+            return ((len(arguments) > 0))
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.toolong.read_appended", clause="ensures:1", phase="ensures", span={"end_byte":1787,"end_column":57,"end_line":71,"start_byte":1735,"start_column":5,"start_line":71}, expected="true", actual="false")
-    def _cott_match_ensures_2() -> bool:
-        _cott_match_value = _result
-        if type(_cott_match_value) is Ok and True:
-            page = _cott_match_value.value
-            return (((page).next_byte >= from_byte))
-        return True
-    if not (_cott_match_ensures_2()):
-        raise CottContractViolation("ensures clause failed", symbol="real.toolong.read_appended", clause="ensures:2", phase="ensures", span={"end_byte":1846,"end_column":59,"end_line":72,"start_byte":1792,"start_column":5,"start_line":72}, expected="true", actual="false")
-    _result = _cott_wrap_async_protocol(_result, Result[LogPage, ToolongError], path="$.return", validator=_cott_validate_abi)
+        raise CottContractViolation("ensures clause failed", symbol="real.toolong.execute", clause="ensures:1", phase="ensures", span={"end_byte":1411,"end_column":53,"end_line":57,"start_byte":1363,"start_column":5,"start_line":57}, expected="true", actual="false")
+    _result = _cott_wrap_async_protocol(_result, Result[str, ToolongError], path="$.return", validator=_cott_validate_abi)
     return _result
 
-__all__ = ["EntryKind", "EntryKind_Access", "EntryKind_Error", "EntryKind_Json", "EntryKind_Plain", "LogEntry", "LogPage", "LogSource", "ToolongError", "ToolongError_CompressedAppendUnsupported", "ToolongError_DecodeFailed", "ToolongError_InvalidIndent", "ToolongError_InvalidLimit", "ToolongError_InvalidOffset", "ToolongError_OpenFailed", "load_log", "merge_pages", "read_appended", "render_jsonl", "search_entries"]
+__all__ = ["LogEntry", "ToolongError", "ToolongError_InvalidArguments", "ToolongError_ReadFailed", "ViewerOptions", "execute", "filter_entries", "load_entries", "parse_arguments", "render_entries"]

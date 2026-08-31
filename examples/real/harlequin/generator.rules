@@ -1,21 +1,2 @@
-Implement every callable directly from its Cott contract with deterministic standard-library Python.
-Do not copy, translate, quote, inspect, import, or reuse upstream Harlequin source or prose.
-Use only Python standard-library modules (including sqlite3), generated Cott facade/type modules, and cott_runtime; do not add dependencies or bindings.
-NEVER use subprocess, multiprocessing, shell commands, external executables, dynamic imports, or any mechanism that launches a child process (including os.system, os.popen, os.spawn*, or asyncio subprocess APIs).
-Split semicolons only outside SQL strings, quoted identifiers, and line or block comments.
-Reject empty SQL and unterminated strings, identifiers, or block comments with SqlClientError variants.
-Execute split statements in order and return one QueryResult per statement.
-In read-only mode use SQLite query_only enforcement and map denied mutations to ReadOnlyViolation.
-Reject mutations hidden in a WITH statement as well as direct write statements.
-For `DatabaseTarget_Memory`, use the string `":memory:"`. For `DatabaseTarget_File`, pass `target.path` directly to `sqlite3.connect`, but any helper annotated to return `str` for a database name MUST return `str(target.path)`, never `target.path`; this prevents Path-to-str return errors.
-Return cells as Null, Integer, Real, Text, or Blob; reject other SQLite values as UnsupportedValue.
-List catalog tables and views from main.sqlite_master excluding names beginning sqlite_.
-Search relation and column names using case-insensitive literal substring matching.
-Order catalog relations by name, columns by ordinal, and search results by relation then kind then ordinal.
-Render cells as NULL, decimal integers, Python repr-style finite floats, text with \\n, \\r, and \\t escaped, and blobs as lowercase 0x hex.
-Render tables and catalog output as ASCII grids with deterministic column widths and left-aligned cells.
-
-Use CottList by its public ABI: iterate it directly (`for item in items`) and convert it with `list(items)` or `tuple(items)`. NEVER access `items.values`; BasedPyright's missing-attribute error for `.values` is forbidden.
-Construct CottList only as `CottList(values=tuple(...))`, including empty lists as `CottList(values=())`.
-For an empty CottList with a known element type, bind a concrete annotation first (for example, `rows: CottList[Row] = CottList(values=())`); do not rely on empty-literal inference or casts.
-Preserve concrete element types through loops: annotate empty CottList accumulators and keep loop variables/derived collections typed rather than allowing Unknown propagation.
+Generate from Cott contracts; preserve declared types, errors, effects, and invariants.
+CottList: iterate directly; Option: use isinstance, not match; compose declared facades only.

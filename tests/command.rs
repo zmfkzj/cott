@@ -31,6 +31,7 @@ fn parses_global_options_in_any_position() {
         Command::Generate {
             symbol: Some("foo.bar.run".to_owned()),
             agent: Some(AgentKind::Omp),
+            jobs: 1,
             project: None,
             format: OutputFormat::Human
         },
@@ -47,6 +48,7 @@ fn parses_global_options_in_any_position() {
         Command::Generate {
             symbol: Some("foo.bar.Reader.read".to_owned()),
             agent: Some(AgentKind::Codex),
+            jobs: 1,
             project: None,
             format: OutputFormat::Human
         },
@@ -63,10 +65,29 @@ fn parses_global_options_in_any_position() {
         Command::Generate {
             symbol: Some("foo.bar.Writer.write".to_owned()),
             agent: Some(AgentKind::Claude),
+            jobs: 1,
             project: None,
             format: OutputFormat::Human
         },
     );
+}
+
+#[test]
+fn parses_generate_jobs() {
+    for option in ["-j", "--jobs"] {
+        assert_eq!(
+            parse(&[
+                "generate", "--target", "python", "--agent", "omp", option, "5",
+            ]),
+            Command::Generate {
+                symbol: None,
+                agent: Some(AgentKind::Omp),
+                jobs: 5,
+                project: None,
+                format: OutputFormat::Human,
+            },
+        );
+    }
 }
 
 #[test]
@@ -125,4 +146,16 @@ fn rejects_duplicate_or_invalid_options() {
         parse_command(&["generate", "--agent", "unknown"].map(OsString::from)),
         Err("`--agent` requires `codex`, `claude`, or `omp`")
     );
+}
+
+#[test]
+fn rejects_invalid_generate_jobs() {
+    for arguments in [
+        &["generate", "--target", "python", "-j", "0"][..],
+        &["generate", "--target", "python", "-j"][..],
+        &["generate", "--target", "python", "--jobs", "five"][..],
+        &["generate", "--target", "python", "-j", "2", "--jobs", "3"][..],
+    ] {
+        assert!(parse_command(&arguments.iter().map(OsString::from).collect::<Vec<_>>()).is_err());
+    }
 }

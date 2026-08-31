@@ -77,7 +77,7 @@ cott init <path> [--name <name>] [--no-sync] [--format json]
 cott check [<source.cott>] [--project <dir>] [--format json]
 cott fmt [--check] [--project <dir>] [--format json]
 cott emit ir|python [--project <dir>] [--format json]
-cott generate [<fully.qualified.function>] --agent codex|claude|omp --target python [--project <dir>] [--format json]
+cott generate [<fully.qualified.function>] --agent codex|claude|omp --target python [-j <jobs>] [--project <dir>] [--format json]
 cott verify [--project <dir>] [--format json]
 cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]
 cott lsp
@@ -87,6 +87,9 @@ cott lsp
 `emit python` never invokes an agent. `generate` invokes the selected agent only for eligible
 unresolved callables. `verify` rebuilds and checks the complete target without a cache, then updates
 provenance and applies any selected semantic-coverage gate.
+`generate -j` runs stable waves and reports per-callable progress. Agent or final validation
+failures checkpoint source-audited candidates as unverified, retain exit `5`, and resume unresolved
+callables on the next generate.
 
 `generate` has three direct adapters: `codex`, direct `claude`, and `omp`; selecting a Claude
 model inside OMP is still `omp`, never the direct Claude adapter. Before generation, direct Claude's
@@ -142,8 +145,8 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
 
 - Each `examples/real/` project is generation-first with project API `0.1.0`: adapters use public
   facades only, and its README H1 is the canonical upstream URL. After the generation phase,
-  commit its verified generated artifacts. Only `real/frogmouth` may have bindings (at most two);
-  the other real projects have none.
+  commit its verified generated artifacts. Manifest bindings are limited to the essential host
+  boundaries: yt-dlp transfer, Harlequin REPL, Posting HTTP, and Frogmouth document loading.
 
 ## Important Files
 

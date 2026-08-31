@@ -5,18 +5,31 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottList, CottSet, Dyn, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
+
+from real.harlequin.render_types import ExportFormat as ExportFormat, ExportFormat_Csv as ExportFormat_Csv, ExportFormat_Json as ExportFormat_Json, ExportFormat_Markdown as ExportFormat_Markdown, ExportFormat_Sql as ExportFormat_Sql, ExportFormat_Tsv as ExportFormat_Tsv, ExportRequest as ExportRequest, KeyBinding as KeyBinding, Keymap as Keymap, RenderError as RenderError, RenderError_DestinationDenied as RenderError_DestinationDenied, RenderError_ExportFailed as RenderError_ExportFailed, RenderError_InvalidWidth as RenderError_InvalidWidth, RenderError_UnsupportedCell as RenderError_UnsupportedCell, RenderLayout as RenderLayout, RenderLayout_Table as RenderLayout_Table, RenderLayout_Vertical as RenderLayout_Vertical, RenderOptions as RenderOptions, Theme as Theme
 from real.harlequin.catalog_types import CatalogColumn, CatalogMatch, CatalogRelation
-from real.harlequin.core_types import QueryResult
-"""Render a query result deterministically in horizontal or vertical table form."""
+from real.harlequin.core_types import FileReference, QueryResult
 def render_table(result: QueryResult) -> str: ...
 
-"""Render catalog relations in deterministic table order."""
+def render_vertical(result: QueryResult) -> str: ...
+
+def render_result(result: QueryResult, options: RenderOptions) -> Result[str, RenderError]: ...
+
 def render_catalog_relations(relations: CottList[CatalogRelation]) -> str: ...
 
-"""Render catalog columns in deterministic table order."""
 def render_catalog_columns(columns: CottList[CatalogColumn]) -> str: ...
 
-"""Render catalog matches in deterministic table order."""
 def render_catalog_matches(catalog_matches: CottList[CatalogMatch]) -> str: ...
 
-__all__ = ["render_catalog_columns", "render_catalog_matches", "render_catalog_relations", "render_table"]
+def bundled_themes() -> CottList[Theme]: ...
+
+def bundled_keymaps() -> CottList[Keymap]: ...
+
+def resolve_theme(themes: CottList[Theme], name: str) -> Option[Theme]: ...
+
+def resolve_keymap(keymaps: CottList[Keymap], name: str) -> Option[Keymap]: ...
+
+"""Match destination.location as FileLocation_Local/S3; serialize row.values; use boto3 Any."""
+def export_result(request: ExportRequest) -> Result[Unit, RenderError]: ...
+
+__all__ = ["ExportFormat", "ExportFormat_Csv", "ExportFormat_Json", "ExportFormat_Markdown", "ExportFormat_Sql", "ExportFormat_Tsv", "ExportRequest", "KeyBinding", "Keymap", "RenderError", "RenderError_DestinationDenied", "RenderError_ExportFailed", "RenderError_InvalidWidth", "RenderError_UnsupportedCell", "RenderLayout", "RenderLayout_Table", "RenderLayout_Vertical", "RenderOptions", "Theme", "bundled_keymaps", "bundled_themes", "export_result", "render_catalog_columns", "render_catalog_matches", "render_catalog_relations", "render_result", "render_table", "render_vertical", "resolve_keymap", "resolve_theme"]

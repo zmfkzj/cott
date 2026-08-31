@@ -14,6 +14,11 @@ class HttpMethod_Get:
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
+class HttpMethod_Head:
+    pass
+
+@final
+@dataclass(frozen=True, slots=True, kw_only=True)
 class HttpMethod_Post:
     pass
 
@@ -34,15 +39,16 @@ class HttpMethod_Delete:
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
-class HttpMethod_Head:
+class HttpMethod_Options:
     pass
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
-class HttpMethod_Options:
-    pass
+class HttpMethod_Custom:
+    __hash__ = None
+    name: str
 
-HttpMethod: TypeAlias = Union[HttpMethod_Get, HttpMethod_Post, HttpMethod_Put, HttpMethod_Patch, HttpMethod_Delete, HttpMethod_Head, HttpMethod_Options]
+HttpMethod: TypeAlias = Union[HttpMethod_Get, HttpMethod_Head, HttpMethod_Post, HttpMethod_Put, HttpMethod_Patch, HttpMethod_Delete, HttpMethod_Options, HttpMethod_Custom]
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -59,18 +65,15 @@ class Header:
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
-class RequestDocument:
+class Request:
     __hash__ = None
-    name: str
     method: HttpMethod
     url: str
     headers: CottList[Header]
     body: str
-    json_body: bool
+    timeout_ms: U32
 
     def __post_init__(self) -> None:
-        if not _cott_validated_construction():
-            object.__setattr__(self, "name", _cott_validate_abi(self.name, str, path="$.name"))
         if not _cott_validated_construction():
             object.__setattr__(self, "method", _cott_validate_abi(self.method, HttpMethod, path="$.method"))
         if not _cott_validated_construction():
@@ -80,80 +83,38 @@ class RequestDocument:
         if not _cott_validated_construction():
             object.__setattr__(self, "body", _cott_validate_abi(self.body, str, path="$.body"))
         if not _cott_validated_construction():
-            object.__setattr__(self, "json_body", _cott_validate_abi(self.json_body, bool, path="$.json_body"))
+            object.__setattr__(self, "timeout_ms", _cott_validate_abi(self.timeout_ms, U32, path="$.timeout_ms"))
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
-class CollectionEntry:
-    __hash__ = None
-    path: Path
-    name: str
-
-    def __post_init__(self) -> None:
-        if not _cott_validated_construction():
-            object.__setattr__(self, "path", _cott_validate_abi(self.path, Path, path="$.path"))
-        if not _cott_validated_construction():
-            object.__setattr__(self, "name", _cott_validate_abi(self.name, str, path="$.name"))
-
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class HttpResponse:
+class Response:
     __hash__ = None
     status: U16
+    url: str
     headers: CottList[Header]
-    body: bytes
+    body: str
 
     def __post_init__(self) -> None:
         if not _cott_validated_construction():
             object.__setattr__(self, "status", _cott_validate_abi(self.status, U16, path="$.status"))
         if not _cott_validated_construction():
+            object.__setattr__(self, "url", _cott_validate_abi(self.url, str, path="$.url"))
+        if not _cott_validated_construction():
             object.__setattr__(self, "headers", _cott_validate_abi(self.headers, CottList[Header], path="$.headers"))
         if not _cott_validated_construction():
-            object.__setattr__(self, "body", _cott_validate_abi(self.body, bytes, path="$.body"))
+            object.__setattr__(self, "body", _cott_validate_abi(self.body, str, path="$.body"))
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
-class PostingError_CollectionRootMissing:
+class PostingError_InvalidArguments:
     __hash__ = None
-    path: Path
-
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class PostingError_RequestMissing:
-    __hash__ = None
-    path: Path
-
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class PostingError_InvalidYaml:
-    __hash__ = None
-    path: Path
     message: str
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PostingError_InvalidRequest:
     __hash__ = None
-    path: Path
     message: str
-
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class PostingError_InvalidHeader:
-    __hash__ = None
-    message: str
-
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class PostingError_InvalidJson:
-    __hash__ = None
-    message: str
-
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class PostingError_UnresolvedVariable:
-    __hash__ = None
-    name: str
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -161,26 +122,11 @@ class PostingError_NetworkFailed:
     __hash__ = None
     message: str
 
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class PostingError_TimedOut:
-    __hash__ = None
-    timeout_ms: U32
+PostingError: TypeAlias = Union[PostingError_InvalidArguments, PostingError_InvalidRequest, PostingError_NetworkFailed]
 
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class PostingError_SaveFailed:
-    __hash__ = None
-    path: Path
-    message: str
-
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class PostingError_ReadFailed:
-    __hash__ = None
-    path: Path
-    message: str
-
-PostingError: TypeAlias = Union[PostingError_CollectionRootMissing, PostingError_RequestMissing, PostingError_InvalidYaml, PostingError_InvalidRequest, PostingError_InvalidHeader, PostingError_InvalidJson, PostingError_UnresolvedVariable, PostingError_NetworkFailed, PostingError_TimedOut, PostingError_SaveFailed, PostingError_ReadFailed]
-
-__all__ = ["CollectionEntry", "Header", "HttpMethod", "HttpMethod_Delete", "HttpMethod_Get", "HttpMethod_Head", "HttpMethod_Options", "HttpMethod_Patch", "HttpMethod_Post", "HttpMethod_Put", "HttpResponse", "PostingError", "PostingError_CollectionRootMissing", "PostingError_InvalidHeader", "PostingError_InvalidJson", "PostingError_InvalidRequest", "PostingError_InvalidYaml", "PostingError_NetworkFailed", "PostingError_ReadFailed", "PostingError_RequestMissing", "PostingError_SaveFailed", "PostingError_TimedOut", "PostingError_UnresolvedVariable", "RequestDocument"]
+"""Accept standard HTTP methods case-insensitively; preserve other non-empty methods."""
+"""Parse METHOD URL [BODY]; use a 30-second timeout and no headers."""
+"""Send one HTTP request and retain status, final URL, headers, and response bytes."""
+"""Render status and final URL, then headers and a UTF-8 replacement-decoded body."""
+"""Parse arguments, send the request, and render its response."""
+__all__ = ["Header", "HttpMethod", "HttpMethod_Custom", "HttpMethod_Delete", "HttpMethod_Get", "HttpMethod_Head", "HttpMethod_Options", "HttpMethod_Patch", "HttpMethod_Post", "HttpMethod_Put", "PostingError", "PostingError_InvalidArguments", "PostingError_InvalidRequest", "PostingError_NetworkFailed", "Request", "Response"]

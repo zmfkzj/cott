@@ -1,187 +1,333 @@
 import sqlite3
-from collections.abc import Iterable
-from contextlib import closing
-from typing import cast
 
 from cott_runtime import CottList, Err, Ok, Result
-from real.harlequin.core_types import Cell, Cell_Blob, Cell_Integer, Cell_Null, Cell_Real, Cell_Text, DatabaseTarget, DatabaseTarget_File, DatabaseTarget_Memory, QueryResult, SqlClientError, SqlClientError_EmptySql, SqlClientError_ReadOnlyViolation, SqlClientError_SqliteFailure, SqlClientError_UnterminatedSql, SqlClientError_UnsupportedValue, TypedRow
+from real.harlequin.core_types import (
+    Cell,
+    Cell_Blob,
+    Cell_Integer,
+    Cell_Null,
+    Cell_Real,
+    Cell_Text,
+    DatabaseTarget,
+    DatabaseTarget_File,
+    DatabaseTarget_Memory,
+    QueryResult,
+    SqlClientError,
+    SqlClientError_EmptySql,
+    SqlClientError_ReadOnlyViolation,
+    SqlClientError_UnsupportedValue,
+    SqlClientError_UnterminatedSql,
+    TypedRow,
+)
 
 
-def _split_statements(sql: str) -> Result[CottList[str], SqlClientError]:
+def _split_sql(sql: str) -> tuple[list[str], str | None]:
     statements: list[str] = []
-    characters: list[str] = []
-    delimiter = ""
-    has_sql = False
+    buffer: list[str] = []
+    state = "normal"
+    has_code = False
     index = 0
     while index < len(sql):
         character = sql[index]
         following = sql[index + 1] if index + 1 < len(sql) else ""
-        if delimiter == "--":
-            characters.append(character)
-            if character == "\n" or character == "\r":
-                delimiter = ""
+        if state == "normal":
+            if character == "-" and following == "-":
+                buffer.append(character)
+                buffer.append(following)
+                state = "line-comment"
+                index += 2
+                continue
+            if character == "/" and following == "*":
+                buffer.append(character)
+                buffer.append(following)
+                state = "block-comment"
+                index += 2
+                continue
+            if character == "'":
+                buffer.append(character)
+                state = "single-quote"
+                has_code = True
+                index += 1
+                continue
+            if character == '"':
+                buffer.append(character)
+                state = "double-quote"
+                has_code = True
+                index += 1
+                continue
+            if character == "`":
+                buffer.append(character)
+                state = "backtick"
+                has_code = True
+                index += 1
+                continue
+            if character == "[":
+                buffer.append(character)
+                state = "bracket"
+                has_code = True
+                index += 1
+                continue
+            if character == ";":
+                if has_code:
+                    candidate = "".join(buffer)
+                    if not sqlite3.complete_statement(candidate + character):
+                        buffer.append(character)
+                        index += 1
+                        continue
+                    statements.append(candidate.strip())
+                buffer = []
+                has_code = False
+                index += 1
+                continue
+            buffer.append(character)
+            if not character.isspace():
+                has_code = True
             index += 1
-        elif delimiter == "/*":
-            characters.append(character)
+            continue
+        if state == "line-comment":
+            buffer.append(character)
+            if character == "\n":
+                state = "normal"
+            index += 1
+            continue
+        if state == "block-comment":
+            buffer.append(character)
             if character == "*" and following == "/":
-                characters.append(following)
-                delimiter = ""
+                buffer.append(following)
+                state = "normal"
                 index += 2
             else:
                 index += 1
-        elif delimiter == "'":
-            characters.append(character)
+            continue
+        buffer.append(character)
+        if state == "single-quote" and character == "'":
+            if following == "'":
+                buffer.append(following)
+                index += 2
+            else:
+                state = "normal"
+                index += 1
+            continue
+        if state == "double-quote" and character == '"':
+            if following == '"':
+                buffer.append(following)
+                index += 2
+            else:
+                state = "normal"
+                index += 1
+            continue
+        if state == "backtick" and character == "`":
+            if following == "`":
+                buffer.append(following)
+                index += 2
+            else:
+                state = "normal"
+                index += 1
+            continue
+        if state == "bracket" and character == "]":
+            if following == "]":
+                buffer.append(following)
+                index += 2
+            else:
+                state = "normal"
+                index += 1
+            continue
+        index += 1
+
+    if state == "single-quote":
+        return statements, "'"
+    if state == "double-quote":
+        return statements, '"'
+    if state == "backtick":
+        return statements, "`"
+    if state == "bracket":
+        return statements, "["
+    if state == "block-comment":
+        return statements, "/*"
+    if has_code:
+        statements.append("".join(buffer).strip())
+    return statements, None
+
+
+def _statement_is_read_only(statement: str) -> bool:
+    keywords: list[str] = []
+    state = "normal"
+    depth = 0
+    has_top_level_assignment = False
+    index = 0
+    while index < len(statement):
+        character = statement[index]
+        following = statement[index + 1] if index + 1 < len(statement) else ""
+        if state == "normal":
+            if character == "-" and following == "-":
+                state = "line-comment"
+                index += 2
+                continue
+            if character == "/" and following == "*":
+                state = "block-comment"
+                index += 2
+                continue
             if character == "'":
-                if following == "'":
-                    characters.append(following)
-                    index += 2
-                else:
-                    delimiter = ""
-                    index += 1
-            else:
+                state = "single-quote"
                 index += 1
-        elif delimiter == '"':
-            characters.append(character)
+                continue
             if character == '"':
-                if following == '"':
-                    characters.append(following)
-                    index += 2
-                else:
-                    delimiter = ""
-                    index += 1
-            else:
+                state = "double-quote"
                 index += 1
-        elif delimiter == "`":
-            characters.append(character)
+                continue
             if character == "`":
-                if following == "`":
-                    characters.append(following)
-                    index += 2
-                else:
-                    delimiter = ""
-                    index += 1
+                state = "backtick"
+                index += 1
+                continue
+            if character == "[":
+                state = "bracket"
+                index += 1
+                continue
+            if character == "(":
+                depth += 1
+                index += 1
+                continue
+            if character == ")":
+                if depth > 0:
+                    depth -= 1
+                index += 1
+                continue
+            if depth == 0 and character == "=":
+                has_top_level_assignment = True
+                index += 1
+                continue
+            if depth == 0 and (character.isalpha() or character == "_"):
+                end = index + 1
+                while end < len(statement) and (statement[end].isalnum() or statement[end] == "_"):
+                    end += 1
+                keywords.append(statement[index:end].upper())
+                index = end
+                continue
+            index += 1
+            continue
+        if state == "line-comment":
+            if character == "\n":
+                state = "normal"
+            index += 1
+            continue
+        if state == "block-comment":
+            if character == "*" and following == "/":
+                state = "normal"
+                index += 2
             else:
                 index += 1
-        elif delimiter == "[":
-            characters.append(character)
-            if character == "]":
-                delimiter = ""
-            index += 1
-        elif character == "-" and following == "-":
-            characters.append(character)
-            characters.append(following)
-            delimiter = "--"
-            index += 2
-        elif character == "/" and following == "*":
-            characters.append(character)
-            characters.append(following)
-            delimiter = "/*"
-            index += 2
-        elif character == "'" or character == '"' or character == "`" or character == "[":
-            characters.append(character)
-            delimiter = character
-            has_sql = True
-            index += 1
-        elif character == ";":
-            if has_sql:
-                statements.append("".join(characters).strip())
-            characters = []
-            has_sql = False
-            index += 1
-        else:
-            characters.append(character)
-            if not character.isspace():
-                has_sql = True
-            index += 1
+            continue
+        if state == "single-quote" and character == "'":
+            if following == "'":
+                index += 2
+            else:
+                state = "normal"
+                index += 1
+            continue
+        if state == "double-quote" and character == '"':
+            if following == '"':
+                index += 2
+            else:
+                state = "normal"
+                index += 1
+            continue
+        if state == "backtick" and character == "`":
+            if following == "`":
+                index += 2
+            else:
+                state = "normal"
+                index += 1
+            continue
+        if state == "bracket" and character == "]":
+            if following == "]":
+                index += 2
+            else:
+                state = "normal"
+                index += 1
+            continue
+        index += 1
 
-    if delimiter != "" and delimiter != "--":
-        return Err(error=SqlClientError_UnterminatedSql(delimiter=delimiter))
-    if has_sql:
-        statements.append("".join(characters).strip())
-    if len(statements) == 0:
-        return Err(error=SqlClientError_EmptySql())
-    return Ok(value=CottList(values=tuple(statements)))
+    if len(keywords) == 0:
+        return False
+    first = keywords[0]
+    if first == "SELECT" or first == "VALUES" or first == "EXPLAIN":
+        return True
+    if first == "PRAGMA":
+        return not has_top_level_assignment
+    if first != "WITH":
+        return False
+    for keyword in keywords[1:]:
+        if keyword == "SELECT" or keyword == "VALUES":
+            return True
+        if keyword == "INSERT" or keyword == "UPDATE" or keyword == "DELETE" or keyword == "REPLACE":
+            return False
+    return False
 
 
-def _connect(database: DatabaseTarget) -> sqlite3.Connection:
-    match database:
-        case DatabaseTarget_Memory():
-            return sqlite3.connect(":memory:")
-        case DatabaseTarget_File() as target:
-            return sqlite3.connect(target.path)
-
-
-def _cell(value: object) -> Result[Cell, SqlClientError]:
+def _to_cell(value: object) -> Cell | None:
     match value:
         case None:
-            return Ok(value=Cell_Null())
-        case bool():
-            return Err(error=SqlClientError_UnsupportedValue(type_name="bool"))
-        case int() as integer:
-            return Ok(value=Cell_Integer(value=integer))
-        case float() as real:
-            return Ok(value=Cell_Real(value=real))
-        case str() as text:
-            return Ok(value=Cell_Text(value=text))
-        case bytes() as blob:
-            return Ok(value=Cell_Blob(value=blob))
-        case bytearray():
-            return Err(error=SqlClientError_UnsupportedValue(type_name="bytearray"))
-        case memoryview():
-            return Err(error=SqlClientError_UnsupportedValue(type_name="memoryview"))
+            return Cell_Null()
+        case bool() as integer_value:
+            return Cell_Integer(value=integer_value)
+        case int() as integer_value:
+            return Cell_Integer(value=integer_value)
+        case float() as real_value:
+            return Cell_Real(value=real_value)
+        case str() as text_value:
+            return Cell_Text(value=text_value)
+        case bytes() as blob_value:
+            return Cell_Blob(value=blob_value)
         case _:
-            return Err(error=SqlClientError_UnsupportedValue(type_name="object"))
-
-
-def _read_only_failure(error: sqlite3.Error) -> bool:
-    message = str(error).casefold()
-    return "readonly" in message or "read-only" in message
+            return None
 
 
 def execute_sql(database: DatabaseTarget, sql: str, read_only: bool) -> Result[CottList[QueryResult], SqlClientError]:
-    match _split_statements(sql):
-        case Err(error=error):
-            return Err(error=error)
-        case Ok(value=statements):
-            try:
-                connection = _connect(database)
-            except sqlite3.Error as error:
-                return Err(error=SqlClientError_SqliteFailure(message=str(error)))
+    statements, unterminated_delimiter = _split_sql(sql)
+    if unterminated_delimiter is not None:
+        return Err(error=SqlClientError_UnterminatedSql(delimiter=unterminated_delimiter))
+    if len(statements) == 0:
+        return Err(error=SqlClientError_EmptySql())
+    if read_only:
+        for statement in statements:
+            if not _statement_is_read_only(statement):
+                return Err(error=SqlClientError_ReadOnlyViolation(statement=statement))
 
-            results: list[QueryResult] = []
-            statement = ""
-            with closing(connection):
-                try:
-                    for statement in statements:
-                        if read_only:
-                            connection.execute("PRAGMA query_only = ON").close()
-                        cursor = connection.execute(statement)
-                        with closing(cursor):
-                            description = cursor.description
-                            if description is None:
-                                columns: CottList[str] = CottList(values=())
-                                rows: CottList[TypedRow] = CottList(values=())
-                                affected_rows = cursor.rowcount if cursor.rowcount >= 0 else 0
-                            else:
-                                columns = CottList(values=tuple(column[0] for column in description))
-                                typed_rows: list[TypedRow] = []
-                                source_rows = cast(Iterable[tuple[object, ...]], cursor)
-                                for source_row in source_rows:
-                                    cells: list[Cell] = []
-                                    for value in source_row:
-                                        match _cell(value):
-                                            case Err(error=error):
-                                                return Err(error=error)
-                                            case Ok(value=cell):
-                                                cells.append(cell)
-                                    typed_rows.append(TypedRow(values=CottList(values=tuple(cells))))
-                                rows = CottList(values=tuple(typed_rows))
-                                affected_rows = cursor.rowcount if cursor.rowcount >= 0 else 0
-                            results.append(QueryResult(columns=columns, rows=rows, affected_rows=affected_rows))
-                    connection.commit()
-                except sqlite3.Error as error:
-                    if read_only and statement != "" and _read_only_failure(error):
-                        return Err(error=SqlClientError_ReadOnlyViolation(statement=statement))
-                    return Err(error=SqlClientError_SqliteFailure(message=str(error)))
+    match database:
+        case DatabaseTarget_Memory():
+            connection = sqlite3.connect(":memory:")
+        case DatabaseTarget_File(path=path):
+            connection = sqlite3.connect(path)
+    if read_only:
+        connection.execute("PRAGMA query_only = ON")
 
-            return Ok(value=CottList(values=tuple(results)))
+    results: list[QueryResult] = []
+    for statement in statements:
+        cursor = connection.execute(statement)
+        columns: list[str] = []
+        rows: list[TypedRow] = []
+        if cursor.description is not None:
+            columns = [description[0] for description in cursor.description]
+            for raw_row in cursor.fetchall():
+                values: list[Cell] = []
+                for raw_value in raw_row:
+                    cell = _to_cell(raw_value)
+                    if cell is None:
+                        connection.close()
+                        return Err(error=SqlClientError_UnsupportedValue(type_name="unsupported SQLite value"))
+                    values.append(cell)
+                rows.append(TypedRow(values=CottList(values=values)))
+        affected_rows = cursor.rowcount
+        if affected_rows < 0:
+            affected_rows = 0
+        results.append(
+            QueryResult(
+                columns=CottList(values=columns),
+                rows=CottList(values=rows),
+                affected_rows=affected_rows,
+            )
+        )
+
+    connection.commit()
+    connection.close()
+    return Ok(value=CottList(values=results))

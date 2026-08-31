@@ -16,23 +16,11 @@ class NavigationError_EmptyInput:
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
-class NavigationError_MissingBase:
-    pass
-
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
 class NavigationError_UnsupportedScheme:
     __hash__ = None
     scheme: str
 
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class NavigationError_InvalidLocation:
-    __hash__ = None
-    value: str
+NavigationError: TypeAlias = Union[NavigationError_EmptyInput, NavigationError_UnsupportedScheme]
 
-NavigationError: TypeAlias = Union[NavigationError_EmptyInput, NavigationError_MissingBase, NavigationError_UnsupportedScheme, NavigationError_InvalidLocation]
-
-"""Report whether location normalization succeeded."""
-"""Report whether location resolution succeeded."""
-__all__ = ["NavigationError", "NavigationError_EmptyInput", "NavigationError_InvalidLocation", "NavigationError_MissingBase", "NavigationError_UnsupportedScheme"]
+"""Return LocationKind.Http for HTTP(S); otherwise return an absolute LocationKind.Local path."""
+__all__ = ["NavigationError", "NavigationError_EmptyInput", "NavigationError_UnsupportedScheme"]

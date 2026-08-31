@@ -12,6 +12,9 @@ interpreter = ".venv/bin/python"
 type_checker = ".venv/bin/basedpyright"
 runtime_validation = "boundary"
 
+[target.python.implementations]
+"real.posting.client.send_request" = "cott_bindings.real.posting.client.send_request:send_request"
+
 [generator]
 rules = "generator.rules"
 timeout_seconds = 900

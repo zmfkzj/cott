@@ -1835,6 +1835,7 @@ case "$prompt" in
     printf '%s\n' 'agent-run=process_bar'
     ;;
   *"Symbol: foo.bar.process_payload_bytes"*)
+    exit 0 # FAIL_PROCESS_PAYLOAD_ONCE
     printf '%s\n' 'from cott_runtime import Ok, Result' 'from foo.bar_types import BarError, BarOptions' '' '' 'def process_payload_bytes(data: bytes, options: BarOptions) -> Result[bytes, BarError]:' '    return Ok(value=data)' > implementation.py
     printf '%s\n' 'agent-run=process_payload_bytes'
     ;;
@@ -1859,6 +1860,58 @@ esac
     let path = std::env::join_paths([tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
         .expect("PATH");
     let before_generate = file_snapshot(&project.path);
+    let partial = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .args([
+            "generate",
+            "--agent",
+            "omp",
+            "--target",
+            "python",
+            "-j",
+            "2",
+            "--project",
+        ])
+        .arg(&project.path)
+        .env("PATH", &path)
+        .output()
+        .expect("partial generate should run");
+    assert_eq!(partial.status.code(), Some(5));
+    let partial_progress = String::from_utf8_lossy(&partial.stderr);
+    for (symbol, index) in [
+        "foo.bar.build_output",
+        "foo.bar.process_bar",
+        "foo.bar.validate_payload",
+    ]
+    .into_iter()
+    .zip([1, 2, 4])
+    {
+        assert!(
+            partial_progress.contains(&format!("generate [{index}/4] done `{symbol}`")),
+            "successful partial result was not reported: {partial_progress}"
+        );
+    }
+    assert!(
+        partial_progress.contains("agent generation for `foo.bar.process_payload_bytes` failed")
+    );
+    for relative in [
+        "python/_cott_impl/foo/bar/build_output.py",
+        "python/_cott_impl/foo/bar/process_bar.py",
+        "python/_cott_impl/foo/bar/validate_payload.py",
+    ] {
+        assert!(
+            project.path.join(relative).is_file(),
+            "successful partial result was not checkpointed: {relative}: {partial_progress}"
+        );
+    }
+    assert!(
+        !project
+            .path
+            .join("python/_cott_impl/foo/bar/process_payload_bytes.py")
+            .exists()
+    );
+    let failing_agent = fs::read_to_string(&omp).expect("read fake OMP");
+    let recovered_agent = failing_agent.replace("    exit 0 # FAIL_PROCESS_PAYLOAD_ONCE\n", "");
+    fs::write(&omp, recovered_agent).expect("recover fake OMP");
     let generated_all = Command::new(env!("CARGO_BIN_EXE_cott"))
         .args([
             "generate",
@@ -1866,6 +1919,8 @@ esac
             "omp",
             "--target",
             "python",
+            "-j",
+            "2",
             "--project",
         ])
         .arg(&project.path)
@@ -1877,6 +1932,15 @@ esac
         "{}",
         String::from_utf8_lossy(&generated_all.stderr)
     );
+    let progress = String::from_utf8_lossy(&generated_all.stderr);
+    for state in ["start", "validate", "done"] {
+        assert!(
+            progress.contains(&format!(
+                "generate [1/1] {state} `foo.bar.process_payload_bytes`"
+            )),
+            "missing {state} progress for resumed callable: {progress}"
+        );
+    }
 
     let expected_bindings = [
         (
@@ -2014,6 +2078,7 @@ esac
         ])
     );
 
+    fs::write(&omp, failing_agent).expect("restore fake OMP");
     let after_generate = file_snapshot(&project.path);
     let mut changed = before_generate
         .keys()
@@ -2073,6 +2138,45 @@ esac
         String::from_utf8(diff.stdout).expect("diff output should be UTF-8"),
         "NO CHANGE\n"
     );
+
+    fs::remove_file(
+        project
+            .path
+            .join("python/_cott_impl/foo/bar/validate_payload.py"),
+    )
+    .expect("verified implementation should be removable for regeneration");
+    let rules = project.path.join("GENERATOR_RULES.txt");
+    let rules_text = fs::read_to_string(&rules).expect("generator rules should be readable");
+    fs::write(&rules, format!("{rules_text}Prefer direct code.\n"))
+        .expect("generator rules should be changeable before replacement");
+    let reopened = cott(&project.path, &["emit", "python"]);
+    assert!(
+        reopened.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reopened.stderr)
+    );
+    let regenerated = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .args([
+            "generate",
+            "foo.bar.validate_payload",
+            "--agent",
+            "omp",
+            "--target",
+            "python",
+            "--project",
+        ])
+        .arg(&project.path)
+        .env("PATH", &path)
+        .output()
+        .expect("selected verified implementation should regenerate");
+    assert!(
+        regenerated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&regenerated.stderr)
+    );
+    let progress = String::from_utf8_lossy(&regenerated.stderr);
+    assert!(progress.contains("generate [1/1] start `foo.bar.validate_payload`"));
+    assert!(progress.contains("generate [1/1] done `foo.bar.validate_payload`"));
 }
 
 #[test]

@@ -1,4 +1,166 @@
 module real.yt_dlp
+enum InputKind:
+    Argument
+    ConfigFile
+    BatchFile
+
+enum ProxyMode:
+    Direct
+    Http
+    Socks
+
+enum AuthenticationKind:
+    Anonymous
+    Credentials
+    Netrc
+    Cookies
+    BrowserCookies
+
+enum GeoBypassMode:
+    Disabled
+    Default
+    Country
+    IpBlock
+
+enum PlaylistMode:
+    Single
+    Playlist
+    Flat
+    Reverse
+    Random
+
+enum LiveMode:
+    Default
+    FromStart
+    Wait
+
+enum FormatContainer:
+    Any
+    Video
+    Audio
+    Best
+    Worst
+
+enum SubtitleMode:
+    None
+    Manual
+    Automatic
+    All
+
+enum JsonMode:
+    Lines
+    Single
+
+enum SimulationMode:
+    Download
+    Simulate
+    SkipDownload
+    PrintOnly
+
+enum UpdatePolicy:
+    Never
+    Check
+    Apply
+    Nightly
+    Master
+
+enum LogLevel:
+    Quiet
+    Warning
+    Info
+    Debug
+
+enum ShortcutKind:
+    Search
+    SearchAll
+    Url
+
+enum CertificatePolicy:
+    Verify
+    Insecure
+
+enum ExtractorWorkaround:
+    ForceGeneric
+    NoPlaylist
+    NoCheckCertificates
+    LegacyServerConnect
+
+enum PostProcessorKind:
+    ExtractAudio
+    RemuxVideo
+    RecodeVideo
+    EmbedSubtitle
+    EmbedThumbnail
+    EmbedMetadata
+    SplitChapters
+    ConvertThumbnails
+    SponsorBlock
+    Fixup
+
+enum MediaError:
+    InvalidInput(message: Str)
+    InvalidRange
+    InvalidTemplate
+    InvalidConfig(path: Path, message: Str)
+    BatchReadFailed(path: Path, message: Str)
+    AuthenticationFailed(message: Str)
+    CookieFailure(message: Str)
+    GeoRestricted(message: Str)
+    ExtractorMissing(name: Str)
+    PluginRejected(path: Path, message: Str)
+    UnsupportedUrl
+    FormatUnavailable(selector: Str)
+    SubtitleUnavailable(language: Str)
+    ArchiveFailure(path: Path, message: Str)
+    PathFailure(path: Path, message: Str)
+    HttpStatus(status: U16)
+    NetworkFailure(message: Str)
+    OutputFailure(message: Str)
+    SizeLimit
+    RetryExhausted(attempts: U32)
+    ExternalToolMissing(name: Str)
+    PostProcessFailed(name: Str, message: Str)
+    UpdateUnavailable(message: Str)
+    InvalidShortcut(value: Str)
+    LogFailure(path: Path, message: Str)
+    CertificateFailure(message: Str)
+    WorkaroundRejected(message: Str)
+
+struct CliInput:
+    kind: InputKind
+    value: Str
+
+struct NetworkPolicy:
+    proxy_mode: ProxyMode
+    proxy: Str
+    socket_timeout_ms: U32
+    source_address: Str
+    force_ipv4: Bool
+    force_ipv6: Bool
+    geo_mode: GeoBypassMode
+    geo_country: Str
+    geo_ip_block: Str
+
+struct Authentication:
+    kind: AuthenticationKind
+    username: Str
+    password: Str
+    netrc_location: Path
+    cookie_file: Path
+    browser: Str
+    profile: Str
+
+struct ExtractorDescriptor:
+    name: Str
+    urls: List[Str]
+    enabled: Bool
+    requires_login: Bool
+
+struct PluginDescriptor:
+    name: Str
+    path: Path
+    extractor_names: List[Str]
+    post_processor_names: List[Str]
 
 struct MediaItem:
     url: Str
@@ -10,6 +172,115 @@ struct MediaItem:
 struct PlaylistRange:
     first: U64
     last: U64
+
+struct PlaylistRequest:
+    mode: PlaylistMode
+    ranges: List[PlaylistRange]
+    start: U64
+    end: U64
+    items: Str
+    reverse: Bool
+    random: Bool
+
+struct LiveRequest:
+    mode: LiveMode
+    wait_for_video_ms: U32
+    concurrent_fragments: U16
+
+struct VideoFilterRequest:
+    date_after: Str
+    date_before: Str
+    min_views: U64
+    max_views: U64
+    age_limit: U16
+    match_filter: Str
+    reject_live: Bool
+    include_ads: Bool
+
+struct ShortcutRequest:
+    kind: ShortcutKind
+    query: Str
+    limit: U16
+
+struct PresentationRequest:
+    level: LogLevel
+    progress: Bool
+    newline_progress: Bool
+    color: Bool
+    dump_pages: Bool
+    write_pages: Bool
+    log_file: Path
+
+struct WorkaroundPolicy:
+    certificate: CertificatePolicy
+    force_generic_extractor: Bool
+    legacy_server_connect: Bool
+    extractor_args: List[Str]
+
+struct FormatDescriptor:
+    id: Str
+    extension: Str
+    container: FormatContainer
+    video_height: U32
+    audio_bitrate: U32
+    file_size: U64
+    has_video: Bool
+    has_audio: Bool
+
+struct FormatRequest:
+    selector: Str
+    containers: List[FormatContainer]
+    sort_fields: List[Str]
+    merge_output_format: Str
+    min_file_size: U64
+    max_file_size: U64
+    prefer_free_formats: Bool
+
+struct SubtitleRequest:
+    mode: SubtitleMode
+    languages: List[Str]
+    formats: List[Str]
+    convert_format: Str
+    embed: Bool
+
+struct ThumbnailRequest:
+    write: Bool
+    formats: List[Str]
+    convert_format: Str
+    embed: Bool
+
+struct MetadataRequest:
+    write_info_json: Bool
+    write_description: Bool
+    write_comments: Bool
+    write_playlist_metadata: Bool
+    embed: Bool
+
+struct OutputRequest:
+    template: Str
+    home: Path
+    temp: Path
+    output: Path
+    missing_placeholder: Str
+    restrict_filenames: Bool
+    windows_filenames: Bool
+    trim_filename_bytes: U16
+
+struct ArchiveRequest:
+    path: Path
+    break_on_existing: Bool
+    force_write_archive: Bool
+
+struct FragmentPolicy:
+    concurrent_fragments: U16
+    buffer_size: U32
+    chunk_size: U32
+    rate_limit_bytes_per_second: U64
+    retries: U32
+    fragment_retries: U32
+    file_access_retries: U32
+    continue_download: Bool
+    part_files: Bool
 
 struct DownloadPlan:
     items: List[MediaItem]
@@ -27,54 +298,251 @@ struct TransferReceipt:
     bytes_written: U64
     simulated: Bool
 
-enum JsonMode:
-    Lines
-    Single
+struct ExternalToolRequest:
+    executable: Str
+    arguments: List[Str]
+    input: Path
+    output: Path
+    timeout_ms: U32
 
-enum MediaError:
-    InvalidInput(message: Str)
-    InvalidRange
-    InvalidTemplate
-    UnsupportedUrl
-    HttpStatus(status: U16)
-    NetworkFailure(message: Str)
-    OutputFailure(message: Str)
-    SizeLimit
+struct PostProcessRequest:
+    kinds: List[PostProcessorKind]
+    audio_format: Str
+    video_format: Str
+    sponsorblock_categories: List[Str]
+    external_tool: Option[ExternalToolRequest]
+
+struct UpdateRequest:
+    policy: UpdatePolicy
+    channel: Str
+    target: Path
+
+struct ExecutionRequest:
+    inputs: List[CliInput]
+    network: NetworkPolicy
+    authentication: Authentication
+    playlist: PlaylistRequest
+    live: LiveRequest
+    video_filter: VideoFilterRequest
+    shortcut: ShortcutRequest
+    formats: FormatRequest
+    subtitles: SubtitleRequest
+    thumbnails: ThumbnailRequest
+    metadata: MetadataRequest
+    output: OutputRequest
+    archive: ArchiveRequest
+    fragments: FragmentPolicy
+    post_processing: PostProcessRequest
+    simulation: SimulationMode
+    json_mode: JsonMode
+    update: UpdateRequest
+    presentation: PresentationRequest
+    workarounds: WorkaroundPolicy
+
+struct ExecutionReport:
+    selected: List[MediaItem]
+    downloads: DownloadPlan
+    rendered: Str
+    simulated: Bool
+
+fn parse_arguments(arguments: List[Str]) -> Result[List[CliInput], MediaError]:
+    ensures Result.Ok(inputs) => inputs.len <= arguments.len
+
+    error MediaError.InvalidInput
+
+    effects []
+
+fn build_shortcut_url(request: ShortcutRequest) -> Result[Str, MediaError]:
+    ensures Result.Ok(url) => url.len > 0
+
+    error MediaError.InvalidShortcut
+
+    effects []
+
+fn validate_workarounds(policy: WorkaroundPolicy) -> Result[WorkaroundPolicy, MediaError]:
+    ensures Result.Ok(valid) => valid.certificate == policy.certificate
+
+    error MediaError.CertificateFailure
+    error MediaError.WorkaroundRejected
+
+    effects []
+
+fn configure_presentation(request: PresentationRequest) -> Result[Unit, MediaError]:
+    ensures Result.Ok(configured) => configured == ()
+
+    error MediaError.LogFailure
+
+    effects [file.write]
+
+fn load_config(path: Path) -> Result[List[CliInput], MediaError]:
+    ensures Result.Ok(inputs) => inputs.len <= 100000
+
+    error MediaError.InvalidConfig
+
+    effects [file.read]
 
 fn parse_batch_urls(batch: Str, comment_prefixes: List[Str]) -> Result[List[Str], MediaError]:
-    doc """
-    Parse trimmed batch URLs while ignoring configured comment prefixes.
-    """
-
     ensures Result.Ok(urls) => urls.len <= batch.len
 
     error MediaError.InvalidInput
 
     effects []
 
+fn load_batch_urls(path: Path, comment_prefixes: List[Str]) -> Result[List[Str], MediaError]:
+    ensures Result.Ok(urls) => urls.len <= 100000
+
+    error MediaError.BatchReadFailed
+    error MediaError.InvalidInput
+
+    effects [file.read]
+
+fn resolve_inputs(inputs: List[CliInput], config: List[CliInput]) -> Result[List[Str], MediaError]:
+    ensures Result.Ok(urls) => urls.len <= inputs.len + config.len
+
+    error MediaError.InvalidInput
+
+    effects []
+
+fn validate_network(policy: NetworkPolicy) -> Result[NetworkPolicy, MediaError]:
+    ensures Result.Ok(valid) => valid.socket_timeout_ms > 0
+
+    error MediaError.InvalidInput
+
+    effects []
+
+fn resolve_authentication(request: Authentication) -> Result[Authentication, MediaError]:
+    ensures Result.Ok(authenticated) => authenticated.kind == request.kind
+
+    error MediaError.AuthenticationFailed
+    error MediaError.CookieFailure
+
+    effects [file.read]
+
+fn select_geo_route(policy: NetworkPolicy) -> Result[NetworkPolicy, MediaError]:
+    ensures Result.Ok(route) => route.proxy_mode == policy.proxy_mode
+
+    error MediaError.GeoRestricted
+
+    effects [network]
+
+fn discover_extractors() -> List[ExtractorDescriptor]:
+    effects []
+
+fn load_plugins(paths: List[Path]) -> Result[List[PluginDescriptor], MediaError]:
+    ensures Result.Ok(plugins) => plugins.len <= 100000
+
+    error MediaError.PluginRejected
+
+    effects [file.read]
+
+fn choose_extractor(
+    url: Str,
+    extractors: List[ExtractorDescriptor],
+) -> Result[ExtractorDescriptor, MediaError]:
+    ensures Result.Ok(extractor) => extractor.enabled
+
+    error MediaError.UnsupportedUrl
+    error MediaError.ExtractorMissing
+
+    effects []
+
+fn extract_media(
+    url: Str,
+    extractor: ExtractorDescriptor,
+    authentication: Authentication,
+    network: NetworkPolicy,
+) -> Result[List[MediaItem], MediaError]:
+    doc """
+    Handle every auth kind; HEAD via Request and urlopen; derive one item from final URL.
+    """
+
+    ensures Result.Ok(items) => items.len <= 100000
+
+    error MediaError.AuthenticationFailed
+    error MediaError.GeoRestricted
+    error MediaError.HttpStatus
+    error MediaError.NetworkFailure
+    error MediaError.UnsupportedUrl
+
+    effects [network]
+
 fn expand_playlist_ranges(
     items: List[MediaItem],
     ranges: List[PlaylistRange],
 ) -> Result[List[MediaItem], MediaError]:
-    doc """
-    Expand one-based inclusive playlist ranges deterministically.
-    """
-
     ensures Result.Ok(selected) => ((ranges.len == 0 and selected.len == items.len) or (ranges.len > 0 and selected.len <= items.len * ranges.len))
 
     error MediaError.InvalidRange
 
     effects []
 
-fn plan_downloads(
+fn select_playlist(
     items: List[MediaItem],
-    archive: List[Str],
-    break_on_existing: Bool,
-) -> DownloadPlan:
+    request: PlaylistRequest,
+) -> Result[List[MediaItem], MediaError]:
     doc """
-    Preserve item order while applying archive and break-on-existing policy.
+    Handle each playlist mode once; apply ranges, bounds, then requested ordering.
     """
 
+    ensures Result.Ok(selected) => selected.len <= items.len
+
+    error MediaError.InvalidRange
+    error MediaError.InvalidInput
+
+    effects [random]
+
+fn resolve_live_media(
+    items: List[MediaItem],
+    request: LiveRequest,
+) -> Result[List[MediaItem], MediaError]:
+    ensures Result.Ok(selected) => selected.len <= items.len
+
+    error MediaError.InvalidInput
+    error MediaError.RetryExhausted
+
+    effects [clock, network]
+
+fn filter_video(
+    items: List[MediaItem],
+    request: VideoFilterRequest,
+) -> Result[List[MediaItem], MediaError]:
+    ensures Result.Ok(selected) => selected.len <= items.len
+
+    error MediaError.InvalidInput
+
+    effects []
+
+fn filter_formats(
+    formats: List[FormatDescriptor],
+    request: FormatRequest,
+) -> Result[List[FormatDescriptor], MediaError]:
+    ensures Result.Ok(selected) => selected.len <= formats.len
+
+    error MediaError.FormatUnavailable
+    error MediaError.InvalidInput
+
+    effects []
+
+fn sort_formats(formats: List[FormatDescriptor], fields: List[Str]) -> List[FormatDescriptor]:
+    ensures result.len == formats.len
+
+    effects []
+
+fn select_subtitles(item: MediaItem, request: SubtitleRequest) -> Result[List[Str], MediaError]:
+    doc """
+    None returns typed List[Str]; otherwise preserve requested language order.
+    """
+
+    ensures Result.Ok(subtitles) => subtitles.len <= 100000
+
+    error MediaError.SubtitleUnavailable
+
+    effects [network]
+
+fn plan_thumbnails(item: MediaItem, request: ThumbnailRequest) -> List[Str]:
+    effects []
+
+fn plan_metadata(item: MediaItem, request: MetadataRequest) -> List[Str]:
     effects []
 
 fn render_output_path(
@@ -82,28 +550,53 @@ fn render_output_path(
     template: Str,
     missing_placeholder: Str,
 ) -> Result[Str, MediaError]:
-    doc """
-    Substitute a bounded output template with a configurable missing value.
-    """
-
     ensures Result.Ok(path) => (path.len <= template.len * (item.id.len + item.title.len + item.ext.len + missing_placeholder.len + 20))
 
     error MediaError.InvalidTemplate
 
     effects []
 
-fn render_items(items: List[MediaItem], mode: JsonMode) -> Str:
-    doc """
-    Render items as compact JSON Lines or one compact JSON array.
-    """
+fn resolve_output_path(item: MediaItem, request: OutputRequest) -> Result[Path, MediaError]:
+    ensures Result.Ok(path) => path != request.temp
+
+    error MediaError.InvalidTemplate
+    error MediaError.PathFailure
+
+    effects []
+
+fn read_download_archive(request: ArchiveRequest) -> Result[List[Str], MediaError]:
+    ensures Result.Ok(entries) => entries.len <= 100000
+
+    error MediaError.ArchiveFailure
+
+    effects [file.read]
+
+fn plan_downloads(
+    items: List[MediaItem],
+    archive: List[Str],
+    break_on_existing: Bool,
+) -> DownloadPlan:
+    effects []
+
+fn write_download_archive(path: Path, items: List[MediaItem]) -> Result[Unit, MediaError]:
+    ensures Result.Ok(saved) => saved == ()
+
+    error MediaError.ArchiveFailure
+
+    effects [file.write]
+
+fn plan_fragments(
+    request: TransferRequest,
+    policy: FragmentPolicy,
+) -> Result[List[TransferRequest], MediaError]:
+    ensures Result.Ok(fragments) => fragments.len <= 100000
+
+    error MediaError.InvalidInput
+    error MediaError.SizeLimit
 
     effects []
 
 fn transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaError]:
-    doc """
-    Simulate or atomically transfer one bounded direct HTTP(S) resource.
-    """
-
     ensures Result.Ok(receipt) => receipt.url == request.url
     ensures Result.Ok(receipt) => receipt.destination == request.destination
     ensures Result.Ok(receipt) => receipt.bytes_written <= request.max_bytes
@@ -117,3 +610,89 @@ fn transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaErro
     error MediaError.SizeLimit
 
     effects [network, file.write]
+
+fn transfer_fragments(
+    fragments: List[TransferRequest],
+    policy: FragmentPolicy,
+) -> Result[List[TransferReceipt], MediaError]:
+    ensures Result.Ok(receipts) => receipts.len == fragments.len
+
+    error MediaError.InvalidInput
+    error MediaError.HttpStatus
+    error MediaError.NetworkFailure
+    error MediaError.OutputFailure
+    error MediaError.RetryExhausted
+    error MediaError.SizeLimit
+
+    effects [clock, network, file.write]
+
+fn render_items(items: List[MediaItem], mode: JsonMode) -> Str:
+    effects []
+
+fn plan_post_processing(
+    item: MediaItem,
+    request: PostProcessRequest,
+) -> Result[List[ExternalToolRequest], MediaError]:
+    doc """
+    No kinds returns typed List[ExternalToolRequest]; otherwise preserve kind order.
+    """
+
+    ensures Result.Ok(planned) => planned.len <= request.kinds.len
+
+    error MediaError.ExternalToolMissing
+    error MediaError.InvalidInput
+
+    effects []
+
+fn run_post_processing(requests: List[ExternalToolRequest]) -> Result[Unit, MediaError]:
+    ensures Result.Ok(completed) => completed == ()
+
+    error MediaError.ExternalToolMissing
+    error MediaError.PostProcessFailed
+
+    effects [file.read, file.write]
+
+fn apply_update(request: UpdateRequest) -> Result[Unit, MediaError]:
+    ensures Result.Ok(updated) => updated == ()
+
+    error MediaError.UpdateUnavailable
+    error MediaError.NetworkFailure
+    error MediaError.OutputFailure
+
+    effects [network, file.write]
+
+fn execute(request: ExecutionRequest) -> Result[ExecutionReport, MediaError]:
+    ensures Result.Ok(report) => report.simulated == (request.simulation != SimulationMode.Download)
+
+    error MediaError.InvalidConfig
+    error MediaError.InvalidInput
+    error MediaError.AuthenticationFailed
+    error MediaError.BatchReadFailed
+    error MediaError.InvalidShortcut
+    error MediaError.CertificateFailure
+    error MediaError.WorkaroundRejected
+    error MediaError.LogFailure
+    error MediaError.InvalidRange
+    error MediaError.CookieFailure
+    error MediaError.GeoRestricted
+    error MediaError.ExtractorMissing
+    error MediaError.PluginRejected
+    error MediaError.UnsupportedUrl
+    error MediaError.FormatUnavailable
+    error MediaError.SubtitleUnavailable
+    error MediaError.InvalidTemplate
+    error MediaError.ArchiveFailure
+    error MediaError.PathFailure
+    error MediaError.HttpStatus
+    error MediaError.NetworkFailure
+    error MediaError.OutputFailure
+    error MediaError.SizeLimit
+    error MediaError.RetryExhausted
+    error MediaError.ExternalToolMissing
+    error MediaError.PostProcessFailed
+    error MediaError.UpdateUnavailable
+
+    effects [file.read, file.write, network, clock, random]
+
+fn run(arguments: List[Str]) -> Never:
+    effects [file.read, file.write, network, clock, random, process.exit]

@@ -1,15 +1,2 @@
-Implement Frogmouth as a clean-room project. NEVER inspect, copy, adapt, quote, or reuse upstream Frogmouth source. Cott contracts are the behavioral authority.
-
-Use direct deterministic code. Fully implement declared behavior; no placeholders, aliases, bypasses, dynamic imports, reflection, subprocesses, or external executables. Use only the Python standard library for implementations. Use pathlib and open for files; use urllib with declared limits for HTTP(S).
-
-Only parse_initial_location and resolve_state_path are host adapters. Put every pure or file implementation in python/_cott_impl. Textual UI and CLI adapters import generated public frogmouth facades only, never _cott_impl or cott_bindings.
-
-Location is a struct, never an enum. NEVER import or construct Location_* names. Import Location and LocationKind_*; branch on location.kind; construct Location(kind=..., target=..., fragment=...). Document(location=..., markdown=..., title=...) has no fragment. There is no LocationKind_Http; HTTP and HTTPS use LocationKind_Remote.
-
-Location.fragment is an Option: construct it only as cott_runtime.Some(value=fragment) or cott_runtime.Nothing(), NEVER as a raw str or None.
-
-Enum matching is strict and exhaustive. For LocationKind, branch explicitly on exactly LocationKind_Local, LocationKind_Remote, LocationKind_GitHub, and LocationKind_Codeberg. For StateAction, branch explicitly on exactly StateAction_AddHistory, StateAction_ToggleBookmark, StateAction_RemoveHistory, and StateAction_ClearHistory. NEVER add a trailing wildcard, default, or unreachable branch to either match. Every update_state action branch MUST return its BrowserState. StateAction_ClearHistory MUST return a state with an exact empty history and the existing bookmarks preserved.
-
-U64 limits may exceed Py_ssize_t. Do not pass them to range, islice, slice, or index APIs without a proven bound. For history_limit, iterate input and stop by comparing the produced count to the U64 value.
-
-For an empty CottList with a known element type, bind an exact annotation first, such as empty: CottList[str] = CottList(values=()). Do not rely on empty-literal inference or casts.
+Implement declared contracts directly and deterministically.
+Use only declared effects and standard-library facilities.
