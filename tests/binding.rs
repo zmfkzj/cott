@@ -14,7 +14,8 @@ use cott::manifest::ProjectConfig;
 use cott::project::{ProjectPaths, load_config_with_paths};
 use cott::provenance::{
     AgentRun, AgentStatus, GENERATION_SCHEMA_VERSION, GenerationCompatibility, GenerationRecord,
-    GenerationSnapshot, SemanticCoverage, StreamDigest,
+    GenerationSnapshot, SemanticCoverage, SourceSpan, StreamDigest, UnresolvedKind,
+    UnresolvedRecord,
 };
 use cott::python::artifact_plan::{PythonArtifactPlan, PythonCallableKind};
 
@@ -283,10 +284,45 @@ fn record_agent_provenance(fixture: &Fixture, symbol: &str, source: &PathBuf, by
             verified: false,
             project_version: fixture.config.project.version.clone(),
             compatibility: GenerationCompatibility::current(),
-            inputs: serde_json::json!({}),
-            tools: serde_json::json!({}),
+            inputs: {
+                let mut inputs = serde_json::Map::new();
+                if let Ok(bytes) = fs::read(&fixture.paths.manifest) {
+                    inputs.insert(
+                        "cott.toml".to_owned(),
+                        serde_json::Value::String(format!(
+                            "sha256:{}",
+                            cott::hash::sha256_hex(&bytes)
+                        )),
+                    );
+                }
+                if let Some(rules) = &fixture.config.generator.rules {
+                    if let Ok(bytes) = fs::read(fixture.root.join(rules)) {
+                        inputs.insert(
+                            rules.clone(),
+                            serde_json::Value::String(format!(
+                                "sha256:{}",
+                                cott::hash::sha256_hex(&bytes)
+                            )),
+                        );
+                    }
+                }
+                serde_json::Value::Object(inputs)
+            },
+            tools: {
+                let surface = fixture.plan.contract_surface();
+                let rules = fixture
+                    .config
+                    .generator
+                    .rules
+                    .as_ref()
+                    .and_then(|path| fs::read(fixture.root.join(path)).ok())
+                    .unwrap_or_default();
+                let hashes = cott::intent::fingerprints(&surface, &rules)
+                    .expect("fixture intent fingerprints");
+                serde_json::json!({ cott::intent::TOOL_KEY: cott::intent::metadata(&hashes) })
+            },
             ir: serde_json::json!({}),
-            contract_surface: serde_json::json!({}),
+            contract_surface: fixture.plan.contract_surface(),
             public_python_symbols: serde_json::json!({}),
             implementations: serde_json::json!([{
                 "cott_symbol": symbol,
@@ -442,6 +478,17 @@ fn reports_unresolved_canonical_planned_function() {
             .paths
             .python_source_dir
             .join("_cott_impl/api/service/missing.py")
+    );
+    assert_eq!(
+        resolution.pending_sources,
+        BTreeMap::from([(
+            resolution.unresolved[0]
+                .source
+                .strip_prefix(&fixture.root)
+                .unwrap()
+                .to_path_buf(),
+            None,
+        )])
     );
 }
 
@@ -795,6 +842,21 @@ fn unresolved_impl_methods_have_distinct_canonical_symbols_and_nested_sources() 
         resolution.unresolved[0].expected_implementation_function,
         "_cott_impl_ReaderState_read"
     );
+    assert_eq!(
+        resolution.pending_sources,
+        resolution
+            .unresolved
+            .iter()
+            .map(|binding| (
+                binding
+                    .source
+                    .strip_prefix(&fixture.root)
+                    .unwrap()
+                    .to_path_buf(),
+                None,
+            ))
+            .collect()
+    );
 }
 
 #[test]
@@ -944,6 +1006,7 @@ fn compiler_owned_default_method_uses_only_its_free_function_binding() {
     );
     assert!(resolution.unresolved.is_empty());
     assert!(resolution.stale.is_empty());
+    assert!(resolution.pending_sources.is_empty());
 }
 
 #[test]
@@ -1033,7 +1096,27 @@ fn reports_stale_nested_impl_method_sources() {
 
     let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
         .expect("unresolved methods do not make stale-source detection fail");
-    assert_eq!(resolution.stale, [stale]);
+    assert_eq!(resolution.stale.as_slice(), std::slice::from_ref(&stale));
+    assert_eq!(
+        resolution.pending_sources,
+        resolution
+            .unresolved
+            .iter()
+            .map(|binding| (
+                binding
+                    .source
+                    .strip_prefix(&fixture.root)
+                    .unwrap()
+                    .to_path_buf(),
+                None,
+            ))
+            .collect()
+    );
+    assert!(
+        !resolution
+            .pending_sources
+            .contains_key(&stale.strip_prefix(&fixture.root).unwrap().to_path_buf())
+    );
 }
 
 #[test]
@@ -2227,5 +2310,864 @@ fn import_audit_ignores_comments_and_strings_and_orders_references() {
             })
             .collect::<Vec<_>>(),
         vec!["z", "a"]
+    );
+}
+
+fn replan(fixture: &Fixture, source: &str) -> PythonArtifactPlan {
+    let parsed = parse_project([SourceFile::new(PathBuf::from("api/service.cott"), source)])
+        .expect("edited source must parse");
+    let lowered = lower(&fixture.paths.source_dir, parsed).expect("edited source must lower");
+    let ir = render(&lowered).expect("edited source must render");
+    PythonArtifactPlan::from_ir(&ir).expect("edited IR must project")
+}
+
+fn write_unit_impl(fixture: &Fixture, name: &str) -> (PathBuf, Vec<u8>) {
+    let path = fixture
+        .paths
+        .python_source_dir
+        .join(format!("_cott_impl/api/service/{name}.py"));
+    let bytes = format!("def {name}() -> object:\n    return None\n").into_bytes();
+    fs::create_dir_all(path.parent().expect("implementation has a parent")).unwrap();
+    fs::write(&path, &bytes).unwrap();
+    (path, bytes)
+}
+
+fn generation_path(fixture: &Fixture) -> PathBuf {
+    fixture
+        .paths
+        .generated_dir
+        .parent()
+        .expect("generated Python directory has a parent")
+        .join("generation.json")
+}
+
+fn load_test_record(fixture: &Fixture) -> GenerationRecord {
+    GenerationRecord::parse(&fs::read(generation_path(fixture)).expect("generation record"))
+        .expect("generation record must parse")
+}
+
+fn store_test_record(fixture: &Fixture, mut record: GenerationRecord) {
+    record
+        .current
+        .compute_generation_id()
+        .expect("test provenance identity must compute");
+    fs::write(
+        generation_path(fixture),
+        record
+            .canonical_bytes()
+            .expect("test provenance must serialize"),
+    )
+    .unwrap();
+}
+
+fn drop_recorded_intent(fixture: &Fixture) {
+    let mut record = load_test_record(fixture);
+    if let Some(tools) = record.current.tools.as_object_mut() {
+        tools.remove(cott::intent::TOOL_KEY);
+    }
+    store_test_record(fixture, record);
+}
+
+fn append_agent_provenance(fixture: &Fixture, symbol: &str, source: &PathBuf, bytes: &[u8]) {
+    let mut record = load_test_record(fixture);
+    let first = record.current.agent_runs[0].clone();
+    let mut implementation = record.current.implementations.as_array().unwrap()[0].clone();
+    let relative = source
+        .strip_prefix(&fixture.paths.python_source_dir)
+        .expect("agent source is rooted at the Python source");
+    let origin = source
+        .strip_prefix(&fixture.paths.root)
+        .expect("agent source is rooted at the fixture")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let hash = format!("sha256:{}", cott::hash::sha256_hex(bytes));
+    let runtime_module = relative
+        .with_extension("")
+        .to_string_lossy()
+        .replace('/', ".");
+    let name = symbol.rsplit('.').next().expect("callable has a name");
+    implementation["cott_symbol"] = serde_json::json!(symbol);
+    implementation["python_symbol"] = serde_json::json!(format!("{runtime_module}:{name}"));
+    implementation["source_origin"] = serde_json::json!(origin);
+    implementation["runtime_origin"] = serde_json::json!(format!(
+        "{}/{}",
+        std::path::Path::new(&fixture.config.python.generated)
+            .file_name()
+            .expect("generated root has a final component")
+            .to_string_lossy(),
+        relative.to_string_lossy().replace('\\', "/")
+    ));
+    implementation["content_hash"] = serde_json::json!(hash);
+    record
+        .current
+        .implementations
+        .as_array_mut()
+        .unwrap()
+        .push(implementation);
+    record.current.agent_runs.push(AgentRun {
+        symbol: symbol.to_owned(),
+        implementation_hash: hash,
+        ..first
+    });
+    store_test_record(fixture, record);
+}
+
+fn test_span() -> SourceSpan {
+    SourceSpan {
+        start_byte: 0,
+        end_byte: 1,
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 2,
+    }
+}
+
+#[test]
+fn doc_edit_marks_agent_source_intent_stale() {
+    let original = "module api.service\n\nfn run() -> Unit:\n    doc \"\"\"\n    Original documentation.\n    \"\"\"\n";
+    let edited = "module api.service\n\nfn run() -> Unit:\n    doc \"\"\"\n    Changed documentation.\n    \"\"\"\n";
+    let fixture = fixture(original);
+    let (path, bytes) = write_unit_impl(&fixture, "run");
+    record_agent_provenance(&fixture, "api.service.run", &path, &bytes);
+    let plan = replan(&fixture, edited);
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &plan)
+        .expect("intent-stale source stays authorized as unresolved");
+    assert!(resolution.resolved.is_empty());
+    assert_eq!(resolution.unresolved[0].cott_symbol, "api.service.run");
+    assert!(resolution.intent_changed.contains("api.service.run"));
+    assert_eq!(
+        resolution.pending_sources,
+        BTreeMap::from([(
+            path.strip_prefix(&fixture.root).unwrap().to_path_buf(),
+            Some(format!("sha256:{}", cott::hash::sha256_hex(&bytes))),
+        )])
+    );
+}
+
+#[test]
+fn unrelated_doc_edit_does_not_invalidate_agent_source() {
+    let original = r#"module api.service
+
+fn run() -> Unit:
+    doc """
+    Keep this contract.
+    """
+
+fn other() -> Unit:
+    doc """
+    Original other.
+    """
+"#;
+    let edited = r#"module api.service
+
+fn run() -> Unit:
+    doc """
+    Keep this contract.
+    """
+
+fn other() -> Unit:
+    doc """
+    Edited other.
+    """
+"#;
+    let fixture = fixture(original);
+    let (path, bytes) = write_unit_impl(&fixture, "run");
+    record_agent_provenance(&fixture, "api.service.run", &path, &bytes);
+    let plan = replan(&fixture, edited);
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &plan)
+        .expect("unrelated documentation must not invalidate run");
+    assert_eq!(resolution.resolved.len(), 1);
+    assert_eq!(resolution.resolved[0].cott_symbol, "api.service.run");
+    assert!(!resolution.intent_changed.contains("api.service.run"));
+}
+
+#[test]
+fn type_and_doc_dependency_edits_invalidate_dependents() {
+    let original = r#"module api.service
+
+struct Item:
+    value: I32
+
+fn helper() -> Item:
+    doc """
+    Build an item.
+    """
+
+fn run() -> Item:
+    doc """
+    Use helper to build the item.
+    """
+"#;
+    let type_edited = r#"module api.service
+
+struct Item:
+    value: I32
+    extra: I32
+
+fn helper() -> Item:
+    doc """
+    Build an item.
+    """
+
+fn run() -> Item:
+    doc """
+    Use helper to build the item.
+    """
+"#;
+    let helper_doc_edited = r#"module api.service
+
+struct Item:
+    value: I32
+
+fn helper() -> Item:
+    doc """
+    Build a different item.
+    """
+
+fn run() -> Item:
+    doc """
+    Use helper to build the item.
+    """
+"#;
+    let fixture = fixture(original);
+    let path = fixture
+        .paths
+        .python_source_dir
+        .join("_cott_impl/api/service/run.py");
+    let bytes =
+        b"from api.service_types import Item\n\ndef run() -> Item:\n    return Item(value=0)\n";
+    fs::create_dir_all(path.parent().expect("implementation has a parent")).unwrap();
+    fs::write(&path, bytes).unwrap();
+    record_agent_provenance(&fixture, "api.service.run", &path, bytes);
+    let type_plan = replan(&fixture, type_edited);
+    let type_resolution = resolve_implementations(&fixture.config, &fixture.paths, &type_plan)
+        .expect("type dependency edits stay unresolved");
+    assert!(type_resolution.resolved.is_empty());
+    assert!(type_resolution.intent_changed.contains("api.service.run"));
+    let helper_plan = replan(&fixture, helper_doc_edited);
+    let helper_resolution = resolve_implementations(&fixture.config, &fixture.paths, &helper_plan)
+        .expect("documented helper edits stay unresolved");
+    assert!(helper_resolution.resolved.is_empty());
+    assert!(helper_resolution.intent_changed.contains("api.service.run"));
+}
+
+#[test]
+fn scoped_unrelated_rule_is_ignored_when_intent_snapshots_exist() {
+    let source = r#"module api.service
+
+fn run() -> Unit
+fn other() -> Unit
+"#;
+    let mut fixture = fixture(source);
+    fixture.config.generator.rules = Some("GENERATOR_RULES.txt".to_owned());
+    fs::write(
+        fixture.root.join("GENERATOR_RULES.txt"),
+        "Prefer explicit returns.\n",
+    )
+    .unwrap();
+    let (run_path, run_bytes) = write_unit_impl(&fixture, "run");
+    let (other_path, other_bytes) = write_unit_impl(&fixture, "other");
+    record_agent_provenance(&fixture, "api.service.run", &run_path, &run_bytes);
+    append_agent_provenance(&fixture, "api.service.other", &other_path, &other_bytes);
+    fs::write(
+        fixture.root.join("GENERATOR_RULES.txt"),
+        "Prefer explicit returns.\ncott-domain api.service.other return: extra duty for other\n",
+    )
+    .unwrap();
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("scoped unrelated rules must not fail resolution");
+    assert_eq!(resolution.resolved.len(), 1);
+    assert_eq!(resolution.resolved[0].cott_symbol, "api.service.run");
+    assert_eq!(resolution.unresolved[0].cott_symbol, "api.service.other");
+    assert!(!resolution.intent_changed.contains("api.service.run"));
+    assert!(resolution.intent_changed.contains("api.service.other"));
+}
+
+#[test]
+fn scenario_referenced_callable_scoped_rule_invalidates_dependent() {
+    let source = r#"module api.service
+
+fn helper() -> Unit
+fn run() -> Unit
+fn other() -> Unit
+
+scenario uses_helper for run:
+    call value = helper()
+"#;
+    let mut fixture = fixture(source);
+    fixture.config.generator.rules = Some("GENERATOR_RULES.txt".to_owned());
+    fs::write(
+        fixture.root.join("GENERATOR_RULES.txt"),
+        "Prefer explicit returns.\n",
+    )
+    .unwrap();
+    let (run_path, run_bytes) = write_unit_impl(&fixture, "run");
+    let (helper_path, helper_bytes) = write_unit_impl(&fixture, "helper");
+    let (other_path, other_bytes) = write_unit_impl(&fixture, "other");
+    record_agent_provenance(&fixture, "api.service.run", &run_path, &run_bytes);
+    append_agent_provenance(&fixture, "api.service.helper", &helper_path, &helper_bytes);
+    append_agent_provenance(&fixture, "api.service.other", &other_path, &other_bytes);
+    fs::write(
+        fixture.root.join("GENERATOR_RULES.txt"),
+        "Prefer explicit returns.\ncott-domain api.service.helper return: extra duty for helper\n",
+    )
+    .unwrap();
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("scenario-referenced helper rules stay authorized as unresolved");
+    let resolved = resolution
+        .resolved
+        .iter()
+        .map(|binding| binding.cott_symbol.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(resolved, ["api.service.other"]);
+    assert!(resolution.intent_changed.contains("api.service.run"));
+    assert!(resolution.intent_changed.contains("api.service.helper"));
+    assert!(!resolution.intent_changed.contains("api.service.other"));
+}
+
+#[test]
+fn global_rule_changes_invalidate_agent_sources() {
+    let source = r#"module api.service
+
+fn run() -> Unit
+fn other() -> Unit
+"#;
+    let mut fixture = fixture(source);
+    fixture.config.generator.rules = Some("GENERATOR_RULES.txt".to_owned());
+    fs::write(
+        fixture.root.join("GENERATOR_RULES.txt"),
+        "Prefer explicit returns.\n",
+    )
+    .unwrap();
+    let (run_path, run_bytes) = write_unit_impl(&fixture, "run");
+    let (other_path, other_bytes) = write_unit_impl(&fixture, "other");
+    record_agent_provenance(&fixture, "api.service.run", &run_path, &run_bytes);
+    append_agent_provenance(&fixture, "api.service.other", &other_path, &other_bytes);
+    fs::write(
+        fixture.root.join("GENERATOR_RULES.txt"),
+        "Prefer explicit returns always.\n",
+    )
+    .unwrap();
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("global rule changes keep authorized sources unresolved");
+    assert!(resolution.resolved.is_empty());
+    assert!(resolution.intent_changed.contains("api.service.run"));
+    assert!(resolution.intent_changed.contains("api.service.other"));
+}
+
+#[test]
+fn pending_agent_source_survives_record_update() {
+    let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    let (path, bytes) = write_unit_impl(&fixture, "run");
+    record_agent_provenance(&fixture, "api.service.run", &path, &bytes);
+    let mut record = load_test_record(&fixture);
+    record.current.implementations = serde_json::json!([]);
+    record.current.unresolved = vec![UnresolvedRecord {
+        cott_symbol: "api.service.run".to_owned(),
+        kind: UnresolvedKind::Function,
+        callable_kind: "sync".to_owned(),
+        span: test_span(),
+    }];
+    record.current.ir = serde_json::json!({"api/service.cott": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"});
+    store_test_record(&fixture, record);
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("pending source remains unresolved");
+    assert!(resolution.resolved.is_empty());
+    assert_eq!(resolution.unresolved[0].cott_symbol, "api.service.run");
+    assert!(resolution.intent_changed.is_empty());
+    assert_eq!(
+        resolution.pending_sources,
+        BTreeMap::from([(
+            path.strip_prefix(&fixture.root).unwrap().to_path_buf(),
+            Some(format!("sha256:{}", cott::hash::sha256_hex(&bytes))),
+        )])
+    );
+}
+
+#[test]
+fn tampered_agent_source_is_rejected() {
+    let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    let (path, bytes) = write_unit_impl(&fixture, "run");
+    record_agent_provenance(&fixture, "api.service.run", &path, &bytes);
+    fs::write(&path, b"def run() -> object:\n    return 1\n").unwrap();
+    let diagnostics = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect_err("tampered source must not resolve");
+    assert!(diagnostics[0].message.contains("matching agent provenance"));
+}
+
+#[test]
+fn manifest_owned_selection_never_becomes_agent_work() {
+    let original =
+        "module api.service\n\nfn run() -> Unit:\n    doc \"\"\"\n    Original.\n    \"\"\"\n";
+    let edited =
+        "module api.service\n\nfn run() -> Unit:\n    doc \"\"\"\n    Changed.\n    \"\"\"\n";
+    let mut fixture = fixture(original);
+    fixture.config.python.implementations.insert(
+        "api.service.run".to_owned(),
+        "cott_bindings.api.service.run:run".to_owned(),
+    );
+    let path = fixture
+        .paths
+        .python_source_dir
+        .join("cott_bindings/api/service/run.py");
+    fs::create_dir_all(path.parent().expect("binding has parent")).unwrap();
+    fs::write(&path, b"def run() -> object:\n    return None\n").unwrap();
+    let plan = replan(&fixture, edited);
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &plan)
+        .expect("manifest bindings stay resolved across intent changes");
+    assert_eq!(resolution.resolved.len(), 1);
+    assert_eq!(
+        resolution.resolved[0].owner,
+        cott::binding::BindingOwner::Manifest
+    );
+    assert!(resolution.unresolved.is_empty());
+    assert!(resolution.intent_changed.is_empty());
+    assert!(resolution.pending_sources.is_empty());
+}
+
+#[test]
+fn malformed_intent_metadata_is_rejected() {
+    let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    let (path, bytes) = write_unit_impl(&fixture, "run");
+    record_agent_provenance(&fixture, "api.service.run", &path, &bytes);
+    let mut record = load_test_record(&fixture);
+    record.current.tools =
+        serde_json::json!({ cott::intent::TOOL_KEY: { "version": 2, "hashes": {} } });
+    record
+        .current
+        .compute_generation_id()
+        .expect("malformed intent still hashes");
+    fs::write(
+        generation_path(&fixture),
+        serde_json::to_vec(&record).expect("record serializes"),
+    )
+    .unwrap();
+    let diagnostics = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect_err("malformed cott_intent must fail provenance parse");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("cott_intent"))
+    );
+}
+
+#[test]
+fn metadata_absent_same_v7_record_reuses_unchanged_inputs() {
+    let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    let (path, bytes) = write_unit_impl(&fixture, "run");
+    record_agent_provenance(&fixture, "api.service.run", &path, &bytes);
+    drop_recorded_intent(&fixture);
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("unchanged same-v7 records reuse without cott_intent");
+    assert_eq!(resolution.resolved.len(), 1);
+    assert_eq!(resolution.resolved[0].cott_symbol, "api.service.run");
+    assert!(resolution.intent_changed.is_empty());
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+}
+
+#[test]
+fn metadata_absent_missing_input_evidence_invalidates_agent_source() {
+    let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    let (path, bytes) = write_unit_impl(&fixture, "run");
+    record_agent_provenance(&fixture, "api.service.run", &path, &bytes);
+    let mut record = load_test_record(&fixture);
+    if let Some(tools) = record.current.tools.as_object_mut() {
+        tools.remove(cott::intent::TOOL_KEY);
+    }
+    record.current.inputs = serde_json::json!({});
+    store_test_record(&fixture, record);
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("missing input evidence keeps authorized sources unresolved");
+    assert!(resolution.resolved.is_empty());
+    assert_eq!(resolution.unresolved[0].cott_symbol, "api.service.run");
+    assert!(resolution.intent_changed.contains("api.service.run"));
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+}
+
+#[test]
+fn metadata_absent_rules_deletion_invalidates_agent_source() {
+    let mut fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    let manifest = fs::read_to_string(&fixture.paths.manifest).unwrap();
+    fs::write(
+        &fixture.paths.manifest,
+        format!("{manifest}\n[generator]\nrules = \"GENERATOR_RULES.txt\"\n"),
+    )
+    .unwrap();
+    fixture.config.generator.rules = Some("GENERATOR_RULES.txt".to_owned());
+    fs::write(
+        fixture.root.join("GENERATOR_RULES.txt"),
+        "Prefer explicit returns.\n",
+    )
+    .unwrap();
+    let (path, bytes) = write_unit_impl(&fixture, "run");
+    record_agent_provenance(&fixture, "api.service.run", &path, &bytes);
+    drop_recorded_intent(&fixture);
+    fs::write(&fixture.paths.manifest, manifest).unwrap();
+    fixture.config.generator.rules = None;
+    let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
+        .expect("deleted generator rules keep authorized sources unresolved");
+    assert!(resolution.resolved.is_empty());
+    assert_eq!(resolution.unresolved[0].cott_symbol, "api.service.run");
+    assert!(resolution.intent_changed.contains("api.service.run"));
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+}
+
+#[test]
+fn rule_text_named_dependency_edits_invalidate_dependents() {
+    let original = r#"module api.service
+
+struct Item:
+    value: I32
+
+fn helper() -> Item:
+    doc """
+    Build an item.
+    """
+
+fn run() -> Unit
+
+fn other() -> Unit
+"#;
+    let helper_doc_edited = r#"module api.service
+
+struct Item:
+    value: I32
+
+fn helper() -> Item:
+    doc """
+    Build a different item.
+    """
+
+fn run() -> Unit
+
+fn other() -> Unit
+"#;
+    let type_edited = r#"module api.service
+
+struct Item:
+    value: I32
+    extra: I32
+
+fn helper() -> Item:
+    doc """
+    Build an item.
+    """
+
+fn run() -> Unit
+
+fn other() -> Unit
+"#;
+    let mut fixture = fixture(original);
+    fixture.config.generator.rules = Some("GENERATOR_RULES.txt".to_owned());
+    fs::write(
+        fixture.root.join("GENERATOR_RULES.txt"),
+        "Prefer explicit returns.\ncott-domain api.service.run return: helper yields Item\ncott-domain api.service.other return: extra duty for other\n",
+    )
+    .unwrap();
+    let (run_path, run_bytes) = write_unit_impl(&fixture, "run");
+    let (helper_path, helper_bytes) = write_unit_impl(&fixture, "helper");
+    let (other_path, other_bytes) = write_unit_impl(&fixture, "other");
+    record_agent_provenance(&fixture, "api.service.run", &run_path, &run_bytes);
+    append_agent_provenance(&fixture, "api.service.helper", &helper_path, &helper_bytes);
+    append_agent_provenance(&fixture, "api.service.other", &other_path, &other_bytes);
+    let helper_plan = replan(&fixture, helper_doc_edited);
+    let helper_resolution = resolve_implementations(&fixture.config, &fixture.paths, &helper_plan)
+        .expect("rule-named helper edits stay unresolved");
+    let helper_resolved = helper_resolution
+        .resolved
+        .iter()
+        .map(|binding| binding.cott_symbol.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(helper_resolved, ["api.service.other"]);
+    assert!(helper_resolution.intent_changed.contains("api.service.run"));
+    assert!(
+        helper_resolution
+            .intent_changed
+            .contains("api.service.helper")
+    );
+    assert!(
+        !helper_resolution
+            .intent_changed
+            .contains("api.service.other")
+    );
+    let type_plan = replan(&fixture, type_edited);
+    let type_resolution = resolve_implementations(&fixture.config, &fixture.paths, &type_plan)
+        .expect("rule-named type edits stay unresolved");
+    let type_resolved = type_resolution
+        .resolved
+        .iter()
+        .map(|binding| binding.cott_symbol.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(type_resolved, ["api.service.other"]);
+    assert!(type_resolution.intent_changed.contains("api.service.run"));
+    assert!(
+        type_resolution
+            .intent_changed
+            .contains("api.service.helper")
+    );
+    assert!(!type_resolution.intent_changed.contains("api.service.other"));
+}
+
+#[test]
+fn contract_constant_edits_invalidate_dependents() {
+    let original = r#"module api.service
+
+doc """Cap the selected result."""
+const LIMIT: I32 = 4
+
+doc """Unrelated noise constant."""
+const NOISE: I32 = 1
+
+fn run() -> I32:
+    ensures result <= LIMIT
+
+fn other() -> Unit
+"#;
+    let limit_value_edited = r#"module api.service
+
+doc """Cap the selected result."""
+const LIMIT: I32 = 8
+
+doc """Unrelated noise constant."""
+const NOISE: I32 = 1
+
+fn run() -> I32:
+    ensures result <= LIMIT
+
+fn other() -> Unit
+"#;
+    let limit_doc_edited = r#"module api.service
+
+doc """Changed limit documentation."""
+const LIMIT: I32 = 4
+
+doc """Unrelated noise constant."""
+const NOISE: I32 = 1
+
+fn run() -> I32:
+    ensures result <= LIMIT
+
+fn other() -> Unit
+"#;
+    let noise_edited = r#"module api.service
+
+doc """Cap the selected result."""
+const LIMIT: I32 = 4
+
+doc """Changed noise documentation."""
+const NOISE: I32 = 9
+
+fn run() -> I32:
+    ensures result <= LIMIT
+
+fn other() -> Unit
+"#;
+    let fixture = fixture(original);
+    let (run_path, run_bytes) = write_unit_impl(&fixture, "run");
+    let (other_path, other_bytes) = write_unit_impl(&fixture, "other");
+    record_agent_provenance(&fixture, "api.service.run", &run_path, &run_bytes);
+    append_agent_provenance(&fixture, "api.service.other", &other_path, &other_bytes);
+    let limit_value_plan = replan(&fixture, limit_value_edited);
+    let limit_value_resolution =
+        resolve_implementations(&fixture.config, &fixture.paths, &limit_value_plan)
+            .expect("LIMIT value edits stay unresolved");
+    let limit_value_resolved = limit_value_resolution
+        .resolved
+        .iter()
+        .map(|binding| binding.cott_symbol.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(limit_value_resolved, ["api.service.other"]);
+    assert!(
+        limit_value_resolution
+            .intent_changed
+            .contains("api.service.run")
+    );
+    assert!(
+        !limit_value_resolution
+            .intent_changed
+            .contains("api.service.other")
+    );
+    let limit_doc_plan = replan(&fixture, limit_doc_edited);
+    let limit_doc_resolution =
+        resolve_implementations(&fixture.config, &fixture.paths, &limit_doc_plan)
+            .expect("LIMIT documentation edits stay unresolved");
+    let limit_doc_resolved = limit_doc_resolution
+        .resolved
+        .iter()
+        .map(|binding| binding.cott_symbol.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(limit_doc_resolved, ["api.service.other"]);
+    assert!(
+        limit_doc_resolution
+            .intent_changed
+            .contains("api.service.run")
+    );
+    assert!(
+        !limit_doc_resolution
+            .intent_changed
+            .contains("api.service.other")
+    );
+    let noise_plan = replan(&fixture, noise_edited);
+    let noise_resolution = resolve_implementations(&fixture.config, &fixture.paths, &noise_plan)
+        .expect("unrelated constant edits stay resolved");
+    let noise_resolved = noise_resolution
+        .resolved
+        .iter()
+        .map(|binding| binding.cott_symbol.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(noise_resolved.len(), 2);
+    assert!(noise_resolved.contains(&"api.service.run"));
+    assert!(noise_resolved.contains(&"api.service.other"));
+    assert!(!noise_resolution.intent_changed.contains("api.service.run"));
+    assert!(
+        !noise_resolution
+            .intent_changed
+            .contains("api.service.other")
+    );
+}
+
+#[test]
+fn applied_rule_doc_edits_invalidate_dependents() {
+    let original = r#"module api.service
+
+rule Base:
+    doc """Require a boolean gate."""
+    requires true
+
+rule Child(Base):
+    doc """Inherit parent obligations."""
+    override requires false
+
+rule Unrelated:
+    doc """Ignore this extra rule."""
+    requires true
+
+fn run() -> Unit:
+    doc """
+    Return a bounded value.
+    """
+    rule Child
+
+fn other() -> Unit
+"#;
+    let child_doc_edited = r#"module api.service
+
+rule Base:
+    doc """Require a boolean gate."""
+    requires true
+
+rule Child(Base):
+    doc """Changed child documentation."""
+    override requires false
+
+rule Unrelated:
+    doc """Ignore this extra rule."""
+    requires true
+
+fn run() -> Unit:
+    doc """
+    Return a bounded value.
+    """
+    rule Child
+
+fn other() -> Unit
+"#;
+    let base_doc_edited = r#"module api.service
+
+rule Base:
+    doc """Changed base documentation."""
+    requires true
+
+rule Child(Base):
+    doc """Inherit parent obligations."""
+    override requires false
+
+rule Unrelated:
+    doc """Ignore this extra rule."""
+    requires true
+
+fn run() -> Unit:
+    doc """
+    Return a bounded value.
+    """
+    rule Child
+
+fn other() -> Unit
+"#;
+    let unrelated_doc_edited = r#"module api.service
+
+rule Base:
+    doc """Require a boolean gate."""
+    requires true
+
+rule Child(Base):
+    doc """Inherit parent obligations."""
+    override requires false
+
+rule Unrelated:
+    doc """Changed unrelated documentation."""
+    requires true
+
+fn run() -> Unit:
+    doc """
+    Return a bounded value.
+    """
+    rule Child
+
+fn other() -> Unit
+"#;
+    let fixture = fixture(original);
+    let (run_path, run_bytes) = write_unit_impl(&fixture, "run");
+    let (other_path, other_bytes) = write_unit_impl(&fixture, "other");
+    record_agent_provenance(&fixture, "api.service.run", &run_path, &run_bytes);
+    append_agent_provenance(&fixture, "api.service.other", &other_path, &other_bytes);
+    let child_plan = replan(&fixture, child_doc_edited);
+    let child_resolution = resolve_implementations(&fixture.config, &fixture.paths, &child_plan)
+        .expect("applied Child documentation edits stay unresolved");
+    let child_resolved = child_resolution
+        .resolved
+        .iter()
+        .map(|binding| binding.cott_symbol.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(child_resolved, ["api.service.other"]);
+    assert!(child_resolution.intent_changed.contains("api.service.run"));
+    assert!(
+        !child_resolution
+            .intent_changed
+            .contains("api.service.other")
+    );
+    let base_plan = replan(&fixture, base_doc_edited);
+    let base_resolution = resolve_implementations(&fixture.config, &fixture.paths, &base_plan)
+        .expect("applied Base documentation edits stay unresolved");
+    let base_resolved = base_resolution
+        .resolved
+        .iter()
+        .map(|binding| binding.cott_symbol.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(base_resolved, ["api.service.other"]);
+    assert!(base_resolution.intent_changed.contains("api.service.run"));
+    assert!(!base_resolution.intent_changed.contains("api.service.other"));
+    let unrelated_plan = replan(&fixture, unrelated_doc_edited);
+    let unrelated_resolution =
+        resolve_implementations(&fixture.config, &fixture.paths, &unrelated_plan)
+            .expect("unrelated rule documentation stays resolved");
+    let unrelated_resolved = unrelated_resolution
+        .resolved
+        .iter()
+        .map(|binding| binding.cott_symbol.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(unrelated_resolved.len(), 2);
+    assert!(unrelated_resolved.contains(&"api.service.run"));
+    assert!(unrelated_resolved.contains(&"api.service.other"));
+    assert!(
+        !unrelated_resolution
+            .intent_changed
+            .contains("api.service.run")
+    );
+    assert!(
+        !unrelated_resolution
+            .intent_changed
+            .contains("api.service.other")
     );
 }

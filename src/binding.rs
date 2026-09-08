@@ -5,6 +5,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use crate::hash::sha256_hex;
+use crate::intent;
 use crate::manifest::ProjectConfig;
 use crate::project::ProjectPaths;
 use crate::provenance::GenerationRecord;
@@ -584,6 +585,8 @@ pub struct ImplementationResolution {
     pub resolved: Vec<ResolvedBinding>,
     pub unresolved: Vec<UnresolvedBinding>,
     pub stale: Vec<PathBuf>,
+    pub intent_changed: BTreeSet<String>,
+    pub pending_sources: BTreeMap<PathBuf, Option<String>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -708,21 +711,68 @@ pub fn resolve_implementations(
             }]);
         }
     };
-    let recorded_agents = match recorded_agent_sources(paths) {
-        Ok(recorded) => recorded,
+    let generation_path = paths
+        .generated_dir
+        .parent()
+        .unwrap_or(&paths.generated_dir)
+        .join("generation.json");
+    let record = match load_generation_record(paths) {
+        Ok(record) => record,
         Err(message) => {
             return Err(vec![BindingDiagnostic {
-                path: paths
-                    .generated_dir
-                    .parent()
-                    .unwrap_or(&paths.generated_dir)
-                    .join("generation.json"),
+                path: generation_path,
                 message,
             }]);
         }
     };
+    let recorded_agents = record
+        .as_ref()
+        .map(recorded_agent_sources)
+        .unwrap_or_default();
+    let pending_runs = record.as_ref().map(pending_agent_runs).unwrap_or_default();
+    let unresolved_symbols = record
+        .as_ref()
+        .map(|record| {
+            record
+                .current
+                .unresolved
+                .iter()
+                .map(|unresolved| unresolved.cott_symbol.clone())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let (rules, rules_path) = match load_generator_rules(config, paths) {
+        Ok(rules) => rules,
+        Err((path, message)) => {
+            return Err(vec![BindingDiagnostic { path, message }]);
+        }
+    };
+    let current_hashes = match intent::fingerprints(&plan.contract_surface(), &rules) {
+        Ok(hashes) => hashes,
+        Err(message) => {
+            return Err(vec![BindingDiagnostic {
+                path: rules_path,
+                message,
+            }]);
+        }
+    };
+    let (baseline_hashes, invalidate_all) = match &record {
+        None => (BTreeMap::new(), false),
+        Some(record) => match recorded_intent_baseline(record, config, paths, &rules) {
+            Ok(Some(hashes)) => (hashes, false),
+            Ok(None) => (BTreeMap::new(), true),
+            Err(message) => {
+                return Err(vec![BindingDiagnostic {
+                    path: generation_path,
+                    message,
+                }]);
+            }
+        },
+    };
     let mut resolved = Vec::new();
     let mut unresolved = Vec::new();
+    let mut intent_changed = BTreeSet::new();
+    let mut pending_sources = BTreeMap::new();
     let mut expected_agent_files = BTreeSet::new();
     for (symbol, callable) in callables {
         if is_compiler_owned_selected_method(&callable) {
@@ -778,19 +828,61 @@ pub fn resolve_implementations(
                 .strip_prefix(&paths.root)
                 .ok()
                 .map(|path| path.to_string_lossy().replace('\\', "/"));
-            let content_hash = fs::read(&agent_source)
+            let Some(content_hash) = fs::read(&agent_source)
                 .ok()
-                .map(|bytes| format!("sha256:{}", sha256_hex(&bytes)));
-            if !recorded_agents.get(&symbol).is_some_and(|(path, hash)| {
-                source_origin.as_deref() == Some(path.as_str())
-                    && content_hash.as_deref() == Some(hash.as_str())
-            }) {
+                .map(|bytes| format!("sha256:{}", sha256_hex(&bytes)))
+            else {
                 diagnostics.push(BindingDiagnostic {
-                        path: agent_source,
-                        message: format!(
-                            "durable implementation `{symbol}` is neither manifest-bound nor backed by matching agent provenance"
-                        ),
-                    });
+                    path: agent_source,
+                    message: format!(
+                        "durable implementation `{symbol}` is neither manifest-bound nor backed by matching agent provenance"
+                    ),
+                });
+                continue;
+            };
+            let recorded_ok = recorded_agents.get(&symbol).is_some_and(|(path, hash)| {
+                source_origin.as_deref() == Some(path.as_str()) && content_hash == *hash
+            });
+            let pending_ok = unresolved_symbols.contains(&symbol)
+                && pending_runs
+                    .get(&symbol)
+                    .is_some_and(|hashes| hashes.contains(&content_hash));
+            if !recorded_ok && !pending_ok {
+                diagnostics.push(BindingDiagnostic {
+                    path: agent_source,
+                    message: format!(
+                        "durable implementation `{symbol}` is neither manifest-bound nor backed by matching agent provenance"
+                    ),
+                });
+                continue;
+            }
+            let is_pending = unresolved_symbols.contains(&symbol);
+            let intent_stale = invalidate_all
+                || match (current_hashes.get(&symbol), baseline_hashes.get(&symbol)) {
+                    (Some(current), Some(baseline)) => current != baseline,
+                    _ => false,
+                };
+            if is_pending || intent_stale {
+                if intent_stale {
+                    intent_changed.insert(symbol.clone());
+                }
+                match project_relative_source(&paths.root, &agent_source) {
+                    Ok(relative) => {
+                        pending_sources.insert(relative, Some(content_hash));
+                    }
+                    Err(diagnostic) => {
+                        diagnostics.push(diagnostic);
+                        continue;
+                    }
+                }
+                unresolved.push(UnresolvedBinding {
+                    module: callable.module.clone(),
+                    function: callable.name.clone(),
+                    cott_symbol: symbol,
+                    kind: callable.kind.clone(),
+                    expected_implementation_function,
+                    source: agent_source,
+                });
                 continue;
             }
             (
@@ -800,6 +892,15 @@ pub fn resolve_implementations(
                 BindingOwner::Agent,
             )
         } else {
+            match project_relative_source(&paths.root, &agent_source) {
+                Ok(relative) => {
+                    pending_sources.insert(relative, None);
+                }
+                Err(diagnostic) => {
+                    diagnostics.push(diagnostic);
+                    continue;
+                }
+            }
             unresolved.push(UnresolvedBinding {
                 module: callable.module.clone(),
                 function: callable.name.clone(),
@@ -854,26 +955,50 @@ pub fn resolve_implementations(
             resolved,
             unresolved,
             stale,
+            intent_changed,
+            pending_sources,
         })
     } else {
         Err(diagnostics)
     }
 }
-fn recorded_agent_sources(
-    paths: &ProjectPaths,
-) -> Result<BTreeMap<String, (String, String)>, String> {
+
+fn project_relative_source(root: &Path, source: &Path) -> Result<PathBuf, BindingDiagnostic> {
+    source
+        .strip_prefix(root)
+        .ok()
+        .filter(|relative| {
+            !relative.as_os_str().is_empty()
+                && relative.to_str().is_some()
+                && relative
+                    .components()
+                    .all(|component| matches!(component, std::path::Component::Normal(_)))
+        })
+        .map(Path::to_path_buf)
+        .ok_or_else(|| BindingDiagnostic {
+            path: source.to_path_buf(),
+            message: format!(
+                "implementation path escaped project root: {}",
+                source.display()
+            ),
+        })
+}
+fn load_generation_record(paths: &ProjectPaths) -> Result<Option<GenerationRecord>, String> {
     let generation = paths
         .generated_dir
         .parent()
         .unwrap_or(&paths.generated_dir)
         .join("generation.json");
-    let bytes = match fs::read(&generation) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(error) => return Err(format!("read generation provenance: {error}")),
-    };
-    let record = GenerationRecord::parse(&bytes)
-        .map_err(|error| format!("invalid generation provenance: {error}"))?;
+    match fs::read(&generation) {
+        Ok(bytes) => GenerationRecord::parse(&bytes)
+            .map(Some)
+            .map_err(|error| format!("invalid generation provenance: {error}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("read generation provenance: {error}")),
+    }
+}
+
+fn recorded_agent_sources(record: &GenerationRecord) -> BTreeMap<String, (String, String)> {
     let runs = record
         .current
         .agent_runs
@@ -887,7 +1012,7 @@ fn recorded_agent_sources(
             )
         })
         .collect::<BTreeSet<_>>();
-    Ok(record
+    record
         .current
         .implementations
         .as_array()
@@ -908,7 +1033,91 @@ fn recorded_agent_sources(
             runs.contains(&(symbol, bare_hash))
                 .then(|| (symbol.to_owned(), (path.to_owned(), hash.to_owned())))
         })
-        .collect())
+        .collect()
+}
+
+fn pending_agent_runs(record: &GenerationRecord) -> BTreeMap<String, BTreeSet<String>> {
+    let unresolved = record
+        .current
+        .unresolved
+        .iter()
+        .map(|record| record.cott_symbol.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut runs: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for run in &record.current.agent_runs {
+        if unresolved.contains(run.symbol.as_str()) {
+            runs.entry(run.symbol.clone())
+                .or_default()
+                .insert(run.implementation_hash.clone());
+        }
+    }
+    runs
+}
+
+fn load_generator_rules(
+    config: &ProjectConfig,
+    paths: &ProjectPaths,
+) -> Result<(Vec<u8>, PathBuf), (PathBuf, String)> {
+    match &config.generator.rules {
+        Some(relative) => {
+            let path = paths.root.join(relative);
+            match fs::read(&path) {
+                Ok(bytes) => Ok((bytes, path)),
+                Err(error) => Err((path, format!("read generator rules: {error}"))),
+            }
+        }
+        None => Ok((Vec::new(), paths.manifest.clone())),
+    }
+}
+
+pub(crate) fn recorded_intent_baseline(
+    record: &GenerationRecord,
+    config: &ProjectConfig,
+    paths: &ProjectPaths,
+    rules: &[u8],
+) -> Result<Option<BTreeMap<String, String>>, String> {
+    match intent::recorded_fingerprints(&record.current.tools) {
+        Ok(Some(hashes)) => Ok(Some(hashes)),
+        Ok(None) => {
+            if rules_input_mismatch(record, config, paths, rules) {
+                Ok(None)
+            } else {
+                intent::fingerprints(&record.current.contract_surface, rules).map(Some)
+            }
+        }
+        Err(message) => Err(message),
+    }
+}
+
+fn rules_input_mismatch(
+    record: &GenerationRecord,
+    config: &ProjectConfig,
+    paths: &ProjectPaths,
+    rules: &[u8],
+) -> bool {
+    let manifest = match fs::read(&paths.manifest) {
+        Ok(bytes) => format!("sha256:{}", sha256_hex(&bytes)),
+        Err(_) => return true,
+    };
+    if record
+        .current
+        .inputs
+        .get("cott.toml")
+        .and_then(serde_json::Value::as_str)
+        != Some(manifest.as_str())
+    {
+        return true;
+    }
+    let Some(relative) = &config.generator.rules else {
+        return false;
+    };
+    let current = format!("sha256:{}", sha256_hex(rules));
+    record
+        .current
+        .inputs
+        .get(relative)
+        .and_then(serde_json::Value::as_str)
+        != Some(current.as_str())
 }
 
 fn manifest_target(

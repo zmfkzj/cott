@@ -1,8 +1,14 @@
 # cott
 
-`cott`는 선언과 계약을 우선하는 DSL용 Rust 컴파일러다. 실행 본문이 없는 `.cott` module은
-공개 type, function, contract, effect, scenario, error를 선언한다. Python은 그 선언의 검증된
-projection이며 두 번째 계약 원본이 아니다.
+`cott`는 typed intent와 prompt를 작성하는 language-like 컴파일러다. 실행 본문이 없는 `.cott`
+module은 공개 type, function, contract, effect, scenario, error를 선언한다. 그 선언이 작성된
+intent이며, Python은 검증된 projection이지 두 번째 계약 원본이 아니다. runtime은 generated
+facade를 load하며 authored `.cott`를 live로 읽지 않는다.
+
+Cott는 그 선언을 고정하고, scoped generation prompt를 렌더하며, intent fingerprint를 기록하고,
+구현 conformance, artifact identity, 관찰된 evidence를 검사한다. intent를 완전히 형식화하지
+않으며, 통과한 검사는 구현 전반의 정확성 증명이 아니다. 제품은 typed authoring과 evidence이며
+속도 주장이 아니다.
 
 `architecture.md`는 구현된 v1.0 언어 계약의 규범 문서다. 닫힌 호환성 identity는 package `1.0.0`,
 Canonical IR schema `8`, generation schema/domain `7` (`cott.generation.v7`), Python runtime ABI
@@ -17,8 +23,9 @@ reader를 제공하지 않는다.
 
 Cott는 선언을 resolve·type-check하고 Canonical IR로 lower한 뒤 target을 projection하며, 실제로
 얻은 evidence만 기록한다. 잘못된 syntax, name, type, constant, tag, manifest, artifact identity는
-오류다. 유효한 runtime capability가 없다고 결과를 만들어 내지 않는다. 관찰할 수 없으면
-verification은 `unobserved`를 기록한다.
+오류다. 유효한 runtime capability가 없다고 결과를 만들어 내지 않는다. 실행 관찰을 할 수 없으면
+verification은 `unobserved`를 기록한다. 지원되지 않거나 proof budget이 소진된 bounded proof는
+`unknown`이며 `unobserved`나 trust가 아니다.
 
 Evidence는 다음 중 하나다.
 
@@ -28,6 +35,7 @@ Evidence는 다음 중 하나다.
 | runtime check | 설정된 production boundary가 검사를 실행했다. |
 | test observation | 허용된 유효 case가 실행되어 contract point를 관찰했다. |
 | unobserved | 허용된 runtime 또는 test observation이 없었다. |
+| unknown | Bounded static proof가 지원되지 않거나 proof budget이 소진되었다. |
 | trust declaration | Cott가 일반적으로 증명하지 않은 채 선언을 받아들였다. |
 
 Struct invariant는 canonical constructor 계약의 일부다. Scenario는 public facade와 닫힌
@@ -36,6 +44,46 @@ compiler-owned Linux bubblewrap isolated-loopback sandbox가 필요하다. 격�
 없으면 unsandboxed 또는 external-network fallback이 아니라 `unobserved`다. Semantic coverage는
 Canonical IR clause inventory와 runner evidence를 join하며, manifest coverage rule은 artifact
 certification을 바꾸지 않고 선택한 clause만 gate할 수 있다.
+
+`doc`는 실행되지 않는 metadata이며 conformance를 판정하지 않는다. `doc`만 바뀐 contract diff는
+`DOCUMENTATION`이며, 그 label이 regeneration 신호가 아니다. `doc`, 적용된 rule과 그 base, 계약 상수, 참조된 type, incoming
+scenario, retained generator rule 식별자 변경은 해당 callable의 intent fingerprint를 갱신하고 agent regeneration을 큐에 넣을 수
+있다. 관찰된 clause가 요구사항 완전성을 증명하지 않는다. `verified`는 해당 snapshot의 artifact,
+type, runtime, proof, runner evidence 인증이다. 모든 semantic clause가 관찰되었거나 coverage
+policy가 통과했음을 뜻하지 않는다. coverage gate는 선택한 rule이 있을 때만 동작하고, 선택한
+rule이 없으면 gate가 없다. 외부 effect와 일부 boundary는 trust declaration이다. proof와 sampling은
+bounded다. 지원되지 않거나 proof budget이 소진된 bounded proof는 `unknown`이다. 실행 관찰을 할
+수 없으면 capability에 따라 `unobserved` 또는 trust다. 어느 쪽도 성공으로 위장하지 않는다.
+
+같은 작업의 유효한 baseline은 typed Python과 독립 테스트다. 안정적인 public facade와
+provenance/evidence 경계가 필요할 때 Cott 비용을 감수한다. 일차 비교는 같은 AI model이
+Cott를 통해 생성하는 경우와 Python을 직접 생성하는 경우다. 사람 작성·검토 비용은 그
+비교가 아니며 합성하지 않는다.
+
+`benchmarks/contract_value.py`는 이미 생성된 artifact의 mutation·runtime 비용 실험이다.
+generation 또는 productivity 증거가 아니다. 실제 AI generation 비교는
+`benchmarks/ai_generation.py`다. 두 arm은 같은 artifact-pipeline 작업과 숨겨진 독립
+3130-case corpus를 대상으로, 깨끗한 구현과 고정 model/config에서 시작한다. trial마다
+Cott `generate` workflow 하나(native per-callable retry 포함)와 direct generation
+invocation 하나를 실행하며 jobs는 최대 3이다. generation wall time과 verify/acceptance는
+분리한다. Cott native provenance는 duration과 stream digest만 제공하고 token usage는
+없으며 추론하지 않는다. 이 비교는 한 작업의 3 pair다. direct는 trial당 invocation 하나,
+Cott는 native per-callable retry다. 두 arm은 같은 model과 toolset을 쓴다.
+
+기록된 trial 숫자는 그 run에 저장된 compiler hash에 묶인 역사적 artifact다. 현재 prompt renderer의
+성능 주장이 아니다.
+
+독립 pipeline acceptance corpus는 `cott verify`의 일부가 아니며 canonical evidence source나
+compiler certification이 아니다. 공유 case는
+`examples/complex/artifact-pipeline/check_semantics.py`에 있다. 전제: 아래 예제 workflow로
+project environment를 uv sync하고, 설치된 인증된 OMP와 실제 target environment가 있어야
+한다. 그다음 실행한다.
+
+```bash
+examples/complex/artifact-pipeline/.venv/bin/python examples/complex/artifact-pipeline/check_semantics.py
+examples/complex/artifact-pipeline/.venv/bin/python benchmarks/contract_value.py --cott cott --repeat 3 --output benchmarks/contract-value-results.json
+examples/complex/artifact-pipeline/.venv/bin/python benchmarks/ai_generation.py --cott target/debug/cott --repeat 3 --jobs 3 --output benchmarks/ai-generation-results.json
+```
 
 ## 예제 workflow
 
@@ -54,10 +102,39 @@ cott generate --agent claude --target python --project "$project"
 cott verify --project "$project"
 ```
 
+프롬프트는 해당 함수의 프로젝트와 fully qualified name으로 확인한다. 예를 들면:
+
+```bash
+cott prompt curriculum.artifact_pipeline.plan_pipeline --project examples/complex/artifact-pipeline
+cott prompt curriculum.artifact_pipeline.plan_pipeline --project examples/complex/artifact-pipeline --format json
+```
+
+`cott prompt <fully.qualified.callable> [--project DIR] [--format json]`는 초기 generation prompt를
+검사한다. provider, Python, type checker를 호출하지 않고 journal을 publish하거나 recover하지 않는다.
+human mode는 prompt bytes를 쓰고 JSON은
+`{symbol,intent_hash,prompt_hash,generation_required,context,prompt}`다. `prompt`는 그 초기 bytes와
+같고 `prompt_hash`는 초기 prompt만 hash한다. retry는 실제 validation feedback을 뒤에 붙인다.
+prompt의 write path는 relative `implementation.py`다. inspection은 project lock과 lock metadata를
+허용하며 pending journal은 recovery 없이 거부한다. `context`는 scoped transitive declaration
+집합이다. explicit identifier 참조, `constant_ref`, `cott.applied_rule`과 그 base, 관련 incoming scenario, 전역 rule prose와 선택 callable의
+`cott-domain` 줄만 포함한다. prompt 섹션은 authority, current intent, formal declarations, project
+rules, reference implementations, output rules, optional feedback다. rule과 reference prose는
+source를 override하지 않으며 충돌은 NLP로 증명하지 않고 표면에 남긴다.
+
 `emit python`은 agent를 호출하지 않는다. compiler-owned output을 갱신하고 unresolved callable을
-기록한다. `generate`는 eligible unresolved callable에 대해서만 선택한 agent를 호출하며, selected
-binding과 accepted durable implementation은 재사용한다. `verify`는 source contract를 편집하지
-않고 managed target을 다시 만들고 evidence와 provenance를 certify한다.
+기록하며 그 callable은 public facade에서 생략한다. `emit ir`은 IR scope와 `generation.json`만 갱신하고
+non-IR managed hash는 기존 신뢰 값을 유지하므로 IR-only emission은 무관한 디스크 편집을 신뢰한 것으로 처리하지 않는다. authentic `AgentRun` provenance가 있는 pending
+unresolved agent source는 emit과 checkpoint를 반복해도 `generate`가 재생성할 때까지 소유권을
+유지한다. manifest-owned binding은 intent regeneration에서 제외한다. 기록된 path·content hash와
+다른 tampered agent file은 거부한다. `generate`는 eligible unresolved callable에 대해서만 선택한
+agent를 호출하며, selected binding과 accepted durable implementation은 intent fingerprint가 바뀌지
+않으면 재사용한다. 한 generate 호출에서 미리보기로 제시한 초기 prompt snapshot은 고정되며, 이후 수락한 wave candidate는 validation에만 쓰인다. `verify`는 source contract를 편집하지 않고 managed target을 다시 만들고
+evidence와 provenance를 certify한다. pending unresolved를 거부하며 현재 facade에 없는 옛 managed
+implementation을 export하지 않는다. `current`는 마지막 emit epoch이고 `last_verified`는 인증된
+역사 baseline이다. 이미 배포된 snapshot은 `emit` 또는 `generate` 전까지 옛 계약을 유지한다.
+runtime은 authored `.cott`를 live로 읽지 않는다. `tools.cott_intent`가 없는 same-v7 record는 기록된
+`contract_surface`에서 fingerprint를 derive한다. 부재를 fresh로 보지 않으며 manifest나 rule input
+증거가 없으면 보수적으로 invalidate한다.
 
 `generate --agent`는 `codex`, `claude`, `omp` 세 direct adapter를 받는다. `claude`는 official
 native Claude Code `>=2.1.89`를 직접 호출하며, OMP가 Claude model을 선택한 실행은 여전히

@@ -2,9 +2,10 @@
 
 ## Project Overview
 
-`cott` is a Rust 2024 compiler for a static, declaration- and contract-first DSL. A bodyless
+`cott` is a Rust 2024 compiler for language-like typed intent and prompt authoring. A bodyless
 `.cott` module is the public contract source. Python bindings or accepted agent implementations are
-checked projections; generated Python facades are the only public import path.
+checked projections; generated Python facades are the only public import path. Runtime does not
+read authored `.cott` live.
 
 `architecture.md` is the authoritative implemented v1.0 contract: package `1.0.0`, Canonical IR
 schema `8`, generation schema/domain `7` (`cott.generation.v7`), runtime ABI `7`, contract-test
@@ -15,22 +16,26 @@ profile, unsandboxed fixture fallback, or second source of truth.
 ## Architecture & Data Flow
 
 ```text
-cott check / fmt / emit / generate / verify / diff
+cott check / fmt / emit / generate / prompt / verify / diff
   → closed manifest + symlink-safe source discovery
   → lossless CST → AST → complete HIR → canonical IR
-  → binding or scoped agent implementation validation
+  → intent fingerprints + binding or scoped agent implementation validation
   → deterministic Python, stub, test, and provenance plan
-  → journaled publish, exact verification, or semantic diff
+  → prompt inspection, or journaled publish, exact verification, or semantic diff
 ```
 
 - `src/manifest.rs` and `src/project.rs` own the closed manifest, paths, and source discovery.
 - `src/syntax.rs`, `src/lexer.rs`, `src/parser.rs`, `src/ast.rs`, `src/hir.rs`, and `src/formatter.rs`
   implement the source pipeline; `src/ir.rs` renders and validates canonical JSON.
-- `src/binding.rs` resolves manifest and durable agent implementations with byte identity.
+- `src/intent.rs` fingerprints scoped declaration context (`doc`, applied rules and bases, contract
+  constants, types, incoming scenarios, retained generator-rule identifiers) as `tools.cott_intent` version 1 hashes under unchanged generation-7 identity.
+- `src/binding.rs` resolves manifest and durable agent implementations with byte identity, pending
+  unresolved source ownership, same-v7 baseline derivation, and tamper checks.
 - `src/python_emit.rs`, `src/python_runtime.rs`, `src/python_verify.rs`, and
   `src/contract_test.rs` own the Python ABI and verification pipeline.
-- `src/agent.rs`, `src/sandbox.rs`, `src/transaction.rs`, and `src/cli.rs` own external execution,
-  containment, crash-safe publication, command grammar, and exit codes.
+- `src/agent.rs`, `src/sandbox.rs`, `src/transaction.rs`, and `src/cli.rs` own prompt rendering,
+  external execution, containment, crash-safe publication, inspection lock, command grammar, and
+  exit codes.
 - Generated artifact paths are compiler-owned. Do not hand-edit `generated/`; change the contract or
   the selected implementation source, then use the command that owns the managed output.
 
@@ -78,15 +83,37 @@ cott check [<source.cott>] [--project <dir>] [--format json]
 cott fmt [--check] [--project <dir>] [--format json]
 cott emit ir|python [--project <dir>] [--format json]
 cott generate [<fully.qualified.function>] --agent codex|claude|omp --target python [-j <jobs>] [--project <dir>] [--format json]
+cott prompt <fully.qualified.callable> [--project <dir>] [--format json]
 cott verify [--project <dir>] [--format json]
 cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]
 cott lsp
 ```
 
 `emit` and `generate` publish through the project transaction and leave `current.verified = false`.
-`emit python` never invokes an agent. `generate` invokes the selected agent only for eligible
-unresolved callables. `verify` rebuilds and checks the complete target without a cache, then updates
-provenance and applies any selected semantic-coverage gate.
+`emit python` never invokes an agent. Unresolved callables are omitted from the public facade.
+`emit ir` rewrites only IR scope and `generation.json`; non-IR managed hashes stay trusted recorded
+values and cannot bless unrelated on-disk edits. Pending unresolved agent sources with authentic `AgentRun` provenance keep the old source across
+repeated emit and checkpoint until regeneration. Manifest-owned bindings are excluded from intent
+regeneration. Same-v7 records without `tools.cott_intent` derive fingerprints from recorded
+`contract_surface`; absence is never assumed fresh, and missing manifest or rule evidence
+invalidates conservatively. Tampered agent files that do not match recorded path and hash are
+rejected. `generate` invokes the selected agent only for eligible unresolved callables.
+One generate invocation freezes the advertised initial prompt snapshot; later accepted wave
+candidates are used for validation, not that initial `prompt_hash`.
+`cott prompt` renders the same initial prompt without a provider, Python, or checker. JSON is
+`{symbol,intent_hash,prompt_hash,generation_required,context,prompt}`. `prompt_hash` covers the
+initial prompt only; retries append actual validation feedback. The write path is relative
+`implementation.py`. Inspection may hold the project lock and write lock metadata; pending journals
+are refused without recovery or publication. Normal commands recover. Context is scoped transitive
+declarations, explicit identifier references, `constant_ref`, `cott.applied_rule` links and bases, relevant incoming scenarios, and scoped `cott-domain`
+directives versus global prose. Prompt sections stay separated: authority, current intent, formal
+declarations, project rules, reference implementations, output rules, feedback. Rules and
+reference prose never override source; conflicts are surfaced, not NLP-proved. `doc` still
+invalidates intent; the diff class `DOCUMENTATION` is a separate label. `verify` rebuilds and
+checks the complete target without a cache, refuses pending unresolved work, does not export old
+managed implementations that are not in the current facade, then updates provenance and applies
+any selected semantic-coverage gate. `current` is the last emitted epoch; `last_verified` is
+history. An already deployed snapshot keeps its old contract until `emit` or `generate`.
 `generate -j` runs stable waves and reports per-callable progress. Agent or final validation
 failures checkpoint source-audited candidates as unverified, retain exit `5`, and resume unresolved
 callables on the next generate.
@@ -151,13 +178,14 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
 ## Important Files
 
 - `Cargo.toml` — Rust package metadata; `src/main.rs` is the binary bridge.
-- `src/cli.rs` — command grammar, exit-code mapping, staged publish, and exact verification.
+- `src/cli.rs` — command grammar, exit-code mapping, staged publish, prompt inspection, and exact verification.
 - `src/manifest.rs` / `src/project.rs` — manifest and path trust boundary.
 - `src/hir.rs` / `src/ir.rs` — semantic source of truth and canonical serialization.
+- `src/intent.rs` — scoped intent context and `tools.cott_intent` version 1 fingerprints, including applied-rule and constant-ref closure.
 - `src/python_emit.rs` / `src/python_runtime.rs` — target ABI and managed artifact layout.
 - `src/python_verify.rs` / `src/contract_test.rs` — checker, runtime, dependency, and contract evidence.
-- `src/agent.rs` / `src/sandbox.rs` — pinned provider adapters and containment.
-- `src/transaction.rs` / `src/cli.rs` — journaled mutation, commands, output, and exit codes.
+- `src/agent.rs` / `src/sandbox.rs` — prompt rendering, pinned provider adapters, and containment.
+- `src/transaction.rs` / `src/cli.rs` — journaled mutation, inspection lock, commands, output, and exit codes.
 
 ## Runtime/Tooling Preferences
 

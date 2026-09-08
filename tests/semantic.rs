@@ -633,12 +633,14 @@ rule StrictAssignmentRule(BaseAssignmentRule):
     delete error ParseAssignmentError.MissingEquals
     ensures Result.Ok(assignment) => assignment.value.len > 0
     error ParseAssignmentError.EmptyName
+
+fn run() -> Result[Assignment, ParseAssignmentError]:
+    rule StrictAssignmentRule
 "#,
     )]);
-
     assert_eq!(project.modules.len(), 1);
     let module = &project.modules[0];
-    assert_eq!(module.declarations.len(), 4);
+    assert_eq!(module.declarations.len(), 5);
 
     let base_rule = match &module.declarations[2] {
         HirDeclaration::Rule(r) => r,
@@ -671,6 +673,77 @@ rule StrictAssignmentRule(BaseAssignmentRule):
         panic!("expected Error clause at index 2");
     };
     assert_eq!(variant.name, "ParseAssignmentError.EmptyName");
+
+    let HirDeclaration::Function(run) = &module.declarations[4] else {
+        panic!("expected run function");
+    };
+    assert_eq!(run.contract.clauses.len(), 3);
+    assert!(run.contract.clauses.iter().any(|clause| {
+        matches!(
+            &clause.kind,
+            HirClauseKind::Error { variant, .. } if variant.name == "ParseAssignmentError.EmptyName"
+        )
+    }));
+    assert!(!run.contract.clauses.iter().any(|clause| {
+        matches!(
+            &clause.kind,
+            HirClauseKind::Error { variant, .. } if variant.name == "ParseAssignmentError.MissingEquals"
+        )
+    }));
+}
+
+#[test]
+fn applies_imported_base_rule_across_modules() {
+    let project = lower_project([
+        source(
+            "src/base.cott",
+            r#"module base
+
+enum Failure:
+    Bad
+    Empty
+
+rule Base:
+    ensures Result.Ok(value) => value.len > 0
+    error Failure.Bad
+"#,
+        ),
+        source(
+            "src/app.cott",
+            r#"module app
+use base.{Failure, Base}
+
+rule Child(Base):
+    override ensures Result.Ok(value) => value.len > 1
+    delete error Failure.Bad
+    error Failure.Empty
+
+fn run(text: Str) -> Result[Str, Failure]:
+    rule Child
+"#,
+        ),
+    ]);
+    let app = project
+        .modules
+        .iter()
+        .find(|module| module.id.segments == ["app"])
+        .expect("app module");
+    let HirDeclaration::Function(run) = &app.declarations[1] else {
+        panic!("expected run function");
+    };
+    assert_eq!(run.contract.clauses.len(), 2);
+    assert!(run.contract.clauses.iter().any(|clause| {
+        matches!(
+            &clause.kind,
+            HirClauseKind::Error { variant, .. } if variant.name == "Failure.Empty"
+        )
+    }));
+    assert!(!run.contract.clauses.iter().any(|clause| {
+        matches!(
+            &clause.kind,
+            HirClauseKind::Error { variant, .. } if variant.name == "Failure.Bad"
+        )
+    }));
 }
 
 #[test]
@@ -1967,6 +2040,9 @@ rule Selected(Base):
     override ensures Result.Ok(value) => value.len > 1
     delete error Failure.Bad
     error Failure.Empty
+
+fn checked(text: Str) -> Result[Str, Failure]:
+    rule Selected
 "#,
     )]);
     let HirDeclaration::Rule(selected) = &project.modules[0].declarations[2] else {
@@ -1992,6 +2068,33 @@ rule Selected(Base):
         )
     }));
     assert!(!selected.contract.clauses.iter().any(|clause| {
+        matches!(
+            &clause.kind,
+            HirClauseKind::Error { variant, .. } if variant.name == "Failure.Bad"
+        )
+    }));
+    let HirDeclaration::Function(checked) = &project.modules[0].declarations[3] else {
+        panic!("expected checked function");
+    };
+    assert!(checked.contract.clauses.iter().any(|clause| {
+        matches!(
+            &clause.kind,
+            HirClauseKind::Ensures {
+                guard: Some(guard),
+                ..
+            } if matches!(
+                &guard.pattern.kind,
+                HirPatternKind::Variant { symbol, .. } if symbol.name == "Result.Ok"
+            )
+        )
+    }));
+    assert!(checked.contract.clauses.iter().any(|clause| {
+        matches!(
+            &clause.kind,
+            HirClauseKind::Error { variant, .. } if variant.name == "Failure.Empty"
+        )
+    }));
+    assert!(!checked.contract.clauses.iter().any(|clause| {
         matches!(
             &clause.kind,
             HirClauseKind::Error { variant, .. } if variant.name == "Failure.Bad"
@@ -2135,4 +2238,201 @@ fn rejects_duplicate_and_incompatible_scenario_fixture_authority() {
     ] {
         assert_semantic_error_at(source_text, message, token, occurrence);
     }
+}
+
+#[test]
+fn missing_members_report_root_cause_at_name_span_without_cascade() {
+    let diagnose =
+        |source_text: &str| lower_diagnostics([source("src/acceptance.cott", source_text)]);
+    let assert_cause = |source_text: &str, member: &str, nominal: Option<&str>, causes: usize| {
+        let errors = diagnose(source_text);
+        assert_eq!(errors.len(), causes, "{errors:#?}");
+        let error = errors
+            .iter()
+            .find(|error| error.diagnostic.message.contains(&format!("`{member}`")))
+            .unwrap_or_else(|| panic!("missing member `{member}` in {errors:#?}"));
+        match nominal {
+            Some(ty) => assert!(
+                error.diagnostic.message.contains(&format!("`{ty}`")),
+                "{errors:#?}"
+            ),
+            None => assert!(
+                error.diagnostic.message.contains("non-nominal"),
+                "{errors:#?}"
+            ),
+        }
+        let start = source_text.find(member).expect("member token");
+        assert_eq!(error.diagnostic.span.start, start);
+        assert_eq!(error.diagnostic.span.end, start + member.len());
+    };
+
+    assert_cause(
+        "module acceptance\nstruct Request:\n    limit: I32\nfn check(request: Request) -> Unit:\n    requires request.limt > 0\n",
+        "limt",
+        Some("acceptance.Request"),
+        1,
+    );
+    assert_cause(
+        "module acceptance\nstruct Request:\n    limit: I32\nfn check(request: Request) -> Unit:\n    requires request.missing.next > 0\n",
+        "missing",
+        Some("acceptance.Request"),
+        1,
+    );
+    assert_cause(
+        "module acceptance\nstruct Request:\n    limit: I32\nfn check(request: Request) -> Unit:\n    requires (request).limt > 0\n",
+        "limt",
+        Some("acceptance.Request"),
+        1,
+    );
+    assert_cause(
+        "module acceptance\nstruct Request:\n    limit: I32\nfn check(request: Request) -> Unit:\n    requires request . limt . limt > 0\n",
+        "limt",
+        Some("acceptance.Request"),
+        1,
+    );
+    assert_cause(
+        "module acceptance\nstruct Request:\n    limit: I32\nfn check(request: Request) -> Unit:\n    requires request.limt + 1 > 0\n",
+        "limt",
+        Some("acceptance.Request"),
+        1,
+    );
+    assert_cause(
+        "module acceptance\nstruct Request:\n    limit: I32\nfn check(request: Request) -> Unit:\n    requires not request.limt\n",
+        "limt",
+        Some("acceptance.Request"),
+        1,
+    );
+    assert_cause(
+        "module acceptance\nstruct Request:\n    limit: I32\nfn check(count: I32) -> Unit:\n    requires count.limt > 0\n",
+        "limt",
+        None,
+        1,
+    );
+    assert_cause(
+        "module acceptance\nstruct Request:\n    limit: I32\n    invariant self.limt > 0\n",
+        "limt",
+        Some("acceptance.Request"),
+        1,
+    );
+    assert_cause(
+        "module acceptance\nstruct Item:\n    value: Str\n    invariant starts_with(self.missing, \"x\")\n",
+        "missing",
+        Some("acceptance.Item"),
+        1,
+    );
+    assert_cause(
+        "module acceptance\nstruct Holder:\n    secret: Opaque[\"invalid-field\"]\nfn check(value: Holder) -> Unit:\n    requires value.secret.limt > 0\n",
+        "limt",
+        None,
+        1,
+    );
+    assert_cause(
+        "module acceptance\nstruct Request:\n    limit: I32\nfn check(request: Request) -> Unit:\n    requires request.limt.len == 0\n",
+        "limt",
+        Some("acceptance.Request"),
+        1,
+    );
+    assert_cause(
+        "module acceptance\nrule Check:\n    requires (1).limt > 0\n",
+        "limt",
+        None,
+        1,
+    );
+    assert_cause(
+        "module acceptance\nscenario invalid:\n    assert (1).limt > 0\n",
+        "limt",
+        None,
+        1,
+    );
+
+    let independent = diagnose(
+        "module acceptance\nstruct Request:\n    limit: I32\nfn check(request: Request) -> Unit:\n    requires request.limt > 0 and request.missng > 0\n",
+    );
+    assert_eq!(independent.len(), 2, "{independent:#?}");
+    for member in ["limt", "missng"] {
+        let error = independent
+            .iter()
+            .find(|error| error.diagnostic.message.contains(member))
+            .unwrap_or_else(|| panic!("missing `{member}` in {independent:#?}"));
+        let start = "module acceptance\nstruct Request:\n    limit: I32\nfn check(request: Request) -> Unit:\n    requires request.limt > 0 and request.missng > 0\n"
+            .find(member)
+            .expect("member token");
+        assert_eq!(error.diagnostic.span.start, start);
+        assert_eq!(error.diagnostic.span.end, start + member.len());
+    }
+
+    let non_bool = diagnose(
+        "module acceptance\nstruct Request:\n    limit: I32\nfn check(request: Request) -> Unit:\n    requires request.limit\n",
+    );
+    assert_eq!(non_bool.len(), 1, "{non_bool:#?}");
+    assert!(
+        non_bool[0]
+            .diagnostic
+            .message
+            .contains("contract condition must be boolean"),
+        "{non_bool:#?}"
+    );
+
+    let error_when = diagnose(
+        r#"module acceptance
+enum Failure:
+    Bad
+struct Request:
+    limit: I32
+fn check(request: Request) -> Result[Unit, Failure]:
+    ensures Result.Ok(value) => true
+    error Failure.Bad when request.limt > 0
+"#,
+    );
+    assert_eq!(error_when.len(), 1, "{error_when:#?}");
+    assert!(
+        error_when[0].diagnostic.message.contains("limt"),
+        "{error_when:#?}"
+    );
+
+    let impl_state = diagnose(
+        r#"module acceptance
+trait Reader:
+    fn read(self) -> I32
+impl Counter for Reader:
+    state:
+        count: I32 = 0
+    invariant self.limt >= 0
+    fn read(self) -> I32:
+        ensures true
+"#,
+    );
+    assert_eq!(impl_state.len(), 1, "{impl_state:#?}");
+    assert!(
+        impl_state[0].diagnostic.message.contains("limt"),
+        "{impl_state:#?}"
+    );
+    assert!(
+        impl_state[0]
+            .diagnostic
+            .message
+            .contains("`acceptance.Counter`"),
+        "{impl_state:#?}"
+    );
+
+    let imported = lower_diagnostics([
+        source(
+            "src/other.cott",
+            "module other\nstruct Request:\n    limit: I32\n",
+        ),
+        source(
+            "src/acceptance.cott",
+            "module acceptance\nuse other.Request\nfn check(request: Request) -> Unit:\n    requires request.limt > 0\n",
+        ),
+    ]);
+    assert_eq!(imported.len(), 1, "{imported:#?}");
+    assert!(
+        imported[0].diagnostic.message.contains("`other.Request`"),
+        "{imported:#?}"
+    );
+    let start = "module acceptance\nuse other.Request\nfn check(request: Request) -> Unit:\n    requires request.limt > 0\n"
+        .find("limt")
+        .expect("member token");
+    assert_eq!(imported[0].diagnostic.span.start, start);
+    assert_eq!(imported[0].diagnostic.span.end, start + "limt".len());
 }

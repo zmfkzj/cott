@@ -1,8 +1,14 @@
 # cott
 
-`cott` is a Rust compiler for a declaration- and contract-first DSL. A bodyless `.cott`
-module declares public types, functions, contracts, effects, scenarios, and errors; Python is a
-verified projection of that declaration, not a second contract source.
+`cott` is a language-like compiler for typed intent and prompt authoring. A bodyless `.cott`
+module declares public types, functions, contracts, effects, scenarios, and errors. Those
+declarations are the authored intent; Python is a verified projection, not a second contract
+source. Runtime loads generated facades and does not read authored `.cott` live.
+
+Cott fixes those declarations, renders a scoped generation prompt, records intent fingerprints,
+and checks implementation conformance, artifact identity, and observed evidence. It does not
+completely formalize intent, and a passing check is not a general proof that an implementation
+is correct. The product is typed authoring and evidence, not a speed claim.
 
 `architecture.md` is the normative implemented v1.0 language contract. The closed compatibility identity is
 package `1.0.0`, Canonical IR schema `8`, generation schema/domain
@@ -19,7 +25,8 @@ legacy reader.
 Cott resolves and type-checks declarations, lowers Canonical IR, projects a target, and records only
 the evidence it actually obtains. Invalid syntax, names, types, constants, tags, manifests, and
 artifact identities are errors. A missing valid runtime capability does not invent a result:
-verification records `unobserved` where observation is unavailable.
+verification records `unobserved` where execution observation is unavailable. Unsupported or
+budget-exhausted bounded proof is `unknown`, not `unobserved` or trust.
 
 Evidence is one of:
 
@@ -29,6 +36,7 @@ Evidence is one of:
 | runtime check | A configured production boundary executed the check. |
 | test observation | A permitted valid case executed and observed the contract point. |
 | unobserved | No permitted runtime or test observation was available. |
+| unknown | Bounded static proof was unsupported or exhausted its proof budget. |
 | trust declaration | The declaration is accepted without general proof by Cott. |
 
 Struct invariants are part of the canonical constructor contract. Scenarios use only public facades
@@ -37,6 +45,48 @@ compiler-owned Linux bubblewrap isolated-loopback sandbox; missing or unusable i
 unobserved, never an unsandboxed or external-network fallback. Semantic coverage joins the Canonical
 IR clause inventory to runner evidence; manifest coverage rules may gate selected clauses without
 changing artifact certification.
+
+`doc` is non-executable metadata and does not decide conformance. A `doc`-only contract diff is
+`DOCUMENTATION`; that label is not the regeneration signal. Changing `doc`, a relevant rule, a
+referenced type, or an incoming scenario still updates that callable's intent fingerprint and can
+queue agent regeneration. Applied-rule identity, contract constants, and retained generator-rule
+identifiers participate in that same scoped closure. Observed clauses do not prove that requirements are complete. `verified`
+certifies artifact, type, runtime, proof, and runner evidence for that snapshot; it does not mean
+every semantic clause was observed or that a coverage policy passed. Coverage gates only selected
+rules; with no selected rules there is no gate. External effects and some boundaries remain trust
+declarations. Proof and sampling are bounded: unsupported or budget-exhausted bounded proof is
+`unknown`; unavailable execution observation is `unobserved` or trust according to the capability.
+Neither is invented success.
+
+Typed Python plus independent tests is a valid baseline for the same task. Cott is worth its cost
+when a stable public facade and a provenance/evidence boundary matter. The primary comparison is
+the same AI model generating through Cott versus generating Python directly. Human authoring and
+review costs are not that comparison and are not synthesized.
+
+`benchmarks/contract_value.py` measures mutation and runtime cost on already-generated artifacts.
+It is not generation or productivity evidence. The actual AI generation comparison is
+`benchmarks/ai_generation.py`: both arms implement the same artifact-pipeline task against a
+hidden independent 3130-case corpus, from clean implementations, with a fixed model and config.
+Each trial runs one Cott `generate` workflow (native per-callable retries included) and one
+direct generation invocation, at most `-j 3`. Generation wall time is recorded separately from
+verify and acceptance. Cott native provenance reports durations and stream digests only; token
+usage is unavailable and is not inferred. This comparison is three pairs of one task. Direct uses
+one invocation per trial; Cott uses native per-callable retry. Both arms use the same model and
+toolset.
+
+Those recorded trial numbers are historical artifacts tied to the compiler hashes stored with that
+run. They are not a performance claim for the current prompt renderer.
+
+The independent pipeline acceptance corpus is not part of `cott verify` and is not a canonical
+evidence source or compiler certification. Shared cases live in
+`examples/complex/artifact-pipeline/check_semantics.py`. Prerequisite: uv-sync project
+environments, an installed authenticated OMP, and a real target environment, then run:
+
+```bash
+examples/complex/artifact-pipeline/.venv/bin/python examples/complex/artifact-pipeline/check_semantics.py
+examples/complex/artifact-pipeline/.venv/bin/python benchmarks/contract_value.py --cott cott --repeat 3 --output benchmarks/contract-value-results.json
+examples/complex/artifact-pipeline/.venv/bin/python benchmarks/ai_generation.py --cott target/debug/cott --repeat 3 --jobs 3 --output benchmarks/ai-generation-results.json
+```
 
 ## Example workflow
 
@@ -55,10 +105,44 @@ cott generate --agent claude --target python --project "$project"
 cott verify --project "$project"
 ```
 
-`emit python` never invokes an agent. It updates compiler-owned output and records unresolved
-callables. `generate` invokes the selected agent only for eligible unresolved callables; selected
-bindings and accepted durable implementations are reused. `verify` rebuilds the managed target and
-certifies evidence and provenance without editing source contracts.
+Inspect a callable using its own project and fully qualified name, for example:
+
+```bash
+cott prompt curriculum.artifact_pipeline.plan_pipeline --project examples/complex/artifact-pipeline
+cott prompt curriculum.artifact_pipeline.plan_pipeline --project examples/complex/artifact-pipeline --format json
+```
+
+`cott prompt <fully.qualified.callable> [--project DIR] [--format json]` inspects the exact initial
+generation prompt. It does not call a provider, Python, or the type checker, and it does not
+publish or recover journals. Human mode writes the prompt bytes; JSON is
+`{symbol,intent_hash,prompt_hash,generation_required,context,prompt}`. `prompt` matches those
+initial bytes, `prompt_hash` hashes only that initial prompt, and retries later append actual
+validation feedback. The write path in the prompt is relative `implementation.py`. Inspection may
+take the project lock and write lock metadata; a pending journal is refused without recovery.
+`context` is the scoped transitive declaration set: explicit identifier references, `constant_ref`
+uses, `cott.applied_rule` links and their bases, relevant incoming scenarios, and global rule prose
+plus `cott-domain` lines for selected callables. Prompt sections are authority, current intent,
+formal declarations, project rules, reference implementations, output rules, and optional
+feedback. Rules and reference prose never override source; conflicts are surfaced, not NLP-proved.
+
+`emit python` never invokes an agent. It updates compiler-owned output, records unresolved
+callables, and omits those callables from the public facade. `emit ir` rewrites only IR scope and
+`generation.json`; non-IR managed hashes stay the trusted recorded values, so IR-only emission
+cannot bless unrelated on-disk edits. Pending unresolved agent sources with
+authentic `AgentRun` provenance stay owned across repeated emit and checkpoint until
+`generate` regenerates them. Manifest-owned bindings are excluded from intent regeneration.
+Tampered agent files that do not match recorded path and content hash are rejected. `generate`
+invokes the selected agent only for eligible unresolved callables; selected bindings and accepted
+durable implementations are reused unless their intent fingerprint changed. One generate
+invocation freezes the advertised initial prompt snapshot; later accepted wave candidates are
+used for validation and do not change that initial `prompt_hash`. `verify` rebuilds the
+managed target and certifies evidence without editing source contracts. It refuses pending
+unresolved work and does not export old managed implementations that are not in the current
+facade. `current` is the last emitted epoch; `last_verified` is historical certified baseline.
+An already deployed snapshot keeps its old contract until `emit` or `generate`; runtime does not
+read authored `.cott` live. Same-v7 records without `tools.cott_intent` derive fingerprints from
+the recorded `contract_surface`; absence is never treated as fresh, and missing manifest or rule
+input evidence invalidates conservatively.
 
 `generate --agent` accepts three direct adapters: `codex`, `claude`, and `omp`. `claude` directly
 invokes official native Claude Code `>=2.1.89`; an OMP run that selects a Claude model remains

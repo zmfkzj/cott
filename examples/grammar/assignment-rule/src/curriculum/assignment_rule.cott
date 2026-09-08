@@ -28,3 +28,5 @@ fn validate_access_code(code: Str) -> Result[Str, AccessCodeError]:
     """
 
     rule StrictAccessCodeRule
+
+    ensures Result.Ok(trimmed) => trimmed.len >= 4

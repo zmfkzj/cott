@@ -1,0 +1,1213 @@
+{
+  "binding_selection": {
+    "artifact-pipeline": {
+      "cott_symbol": "curriculum.artifact_pipeline.topologically_order_steps",
+      "durable_source": "python/_cott_impl/curriculum/artifact_pipeline/topologically_order_steps.py",
+      "function": "topologically_order_steps",
+      "manifest_table": "target.python.implementations",
+      "note": "durable source is copied to cott_bindings.measurement and unlinked; cott.toml mapping is appended when that target is absent",
+      "scope": "temporary copies only",
+      "transient_module": "cott_bindings.measurement",
+      "transient_path": "python/cott_bindings/measurement.py"
+    },
+    "toolong": {
+      "cott_symbol": "real.toolong.filter_entries",
+      "durable_source": "python/_cott_impl/real/toolong/filter_entries.py",
+      "function": "filter_entries",
+      "manifest_table": "target.python.implementations",
+      "note": "durable source is copied to cott_bindings.measurement and unlinked; cott.toml mapping is appended when that target is absent",
+      "scope": "temporary copies only",
+      "transient_module": "cott_bindings.measurement",
+      "transient_path": "python/cott_bindings/measurement.py"
+    }
+  },
+  "controls": {
+    "artifact-pipeline": {
+      "emit": {
+        "complete": true,
+        "median_seconds": 5.6068378950003535,
+        "ok": true,
+        "raw_seconds": [
+          5.338537401985377,
+          5.710220289998688,
+          5.6068378950003535
+        ],
+        "runs": [
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 5.338537401985377,
+            "stderr": "",
+            "stdout": "generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 5.710220289998688,
+            "stderr": "",
+            "stdout": "generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 5.6068378950003535,
+            "stderr": "",
+            "stdout": "generated/python\n"
+          }
+        ]
+      },
+      "semantic_coverage": {
+        "note": "cott generation semantic_coverage; not independent acceptance and not compiler proof",
+        "policy": {
+          "passed": true,
+          "selected": 0
+        },
+        "summary": {
+          "observed": 4,
+          "trust_declaration": 0,
+          "unknown": 0,
+          "unobserved": 8
+        },
+        "verified": true
+      },
+      "verify": {
+        "complete": true,
+        "median_seconds": 15.476046032970771,
+        "note": "each verify immediately follows its paired emit; not repeated verify without emit",
+        "ok": true,
+        "raw_seconds": [
+          15.294697628938593,
+          15.476046032970771,
+          15.49664519901853
+        ],
+        "runs": [
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 15.294697628938593,
+            "stderr": "",
+            "stdout": "verified generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 15.476046032970771,
+            "stderr": "",
+            "stdout": "verified generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 15.49664519901853,
+            "stderr": "",
+            "stdout": "verified generated/python\n"
+          }
+        ],
+        "timing": "post-emit"
+      }
+    },
+    "checked-add": {
+      "emit": {
+        "complete": true,
+        "median_seconds": 5.203216344001703,
+        "ok": true,
+        "raw_seconds": [
+          5.5401716670021415,
+          5.203216344001703,
+          5.188842969946563
+        ],
+        "runs": [
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 5.5401716670021415,
+            "stderr": "",
+            "stdout": "generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 5.203216344001703,
+            "stderr": "",
+            "stdout": "generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 5.188842969946563,
+            "stderr": "",
+            "stdout": "generated/python\n"
+          }
+        ]
+      },
+      "semantic_coverage": {
+        "note": "cott generation semantic_coverage; not independent acceptance and not compiler proof",
+        "policy": {
+          "passed": true,
+          "selected": 0
+        },
+        "summary": {
+          "observed": 2,
+          "trust_declaration": 0,
+          "unknown": 0,
+          "unobserved": 0
+        },
+        "verified": true
+      },
+      "verify": {
+        "complete": true,
+        "median_seconds": 14.562986604985781,
+        "note": "each verify immediately follows its paired emit; not repeated verify without emit",
+        "ok": true,
+        "raw_seconds": [
+          14.110859064036049,
+          14.562986604985781,
+          14.643779782927595
+        ],
+        "runs": [
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 14.110859064036049,
+            "stderr": "",
+            "stdout": "verified generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 14.562986604985781,
+            "stderr": "",
+            "stdout": "verified generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 14.643779782927595,
+            "stderr": "",
+            "stdout": "verified generated/python\n"
+          }
+        ],
+        "timing": "post-emit"
+      }
+    },
+    "toolong": {
+      "emit": {
+        "complete": true,
+        "median_seconds": 5.50537496607285,
+        "ok": true,
+        "raw_seconds": [
+          5.779170903027989,
+          5.50537496607285,
+          5.4515496380627155
+        ],
+        "runs": [
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 5.779170903027989,
+            "stderr": "",
+            "stdout": "generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 5.50537496607285,
+            "stderr": "",
+            "stdout": "generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 5.4515496380627155,
+            "stderr": "",
+            "stdout": "generated/python\n"
+          }
+        ]
+      },
+      "semantic_coverage": {
+        "note": "cott generation semantic_coverage; not independent acceptance and not compiler proof",
+        "policy": {
+          "passed": true,
+          "selected": 0
+        },
+        "summary": {
+          "observed": 2,
+          "trust_declaration": 5,
+          "unknown": 0,
+          "unobserved": 0
+        },
+        "verified": true
+      },
+      "verify": {
+        "complete": true,
+        "median_seconds": 16.864688654080965,
+        "note": "each verify immediately follows its paired emit; not repeated verify without emit",
+        "ok": true,
+        "raw_seconds": [
+          16.864688654080965,
+          17.091789604048245,
+          16.688293290906586
+        ],
+        "runs": [
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 16.864688654080965,
+            "stderr": "",
+            "stdout": "verified generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 17.091789604048245,
+            "stderr": "",
+            "stdout": "verified generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 16.688293290906586,
+            "stderr": "",
+            "stdout": "verified generated/python\n"
+          }
+        ],
+        "timing": "post-emit"
+      }
+    }
+  },
+  "environment": {
+    "artifact-pipeline": {
+      "basedpyright": {
+        "content_hash": "sha256:9a2e17c017e3783a276f265c15f77e49113ec4ca1e60c6bf217e4a67853fdbc1",
+        "executable": "/home/arthur/Code/cott/examples/complex/artifact-pipeline/.venv/bin/basedpyright",
+        "version": "basedpyright 1.39.9\nbased on pyright 1.1.411"
+      },
+      "cott": {
+        "content_hash": "sha256:23b8f0e2a5baac2f3c4d37b98b6f2dcab86cbe5fbf4ae19256f09ee467ea376d",
+        "executable": "/home/arthur/Code/cott/target/debug/cott",
+        "version": "cott 1.0.0"
+      },
+      "python": {
+        "content_hash": "sha256:4f43b25b39a5db0144b949fef5587aac333be2f4ae5f793a479ccb424cf7c22f",
+        "executable": "/home/arthur/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/bin/python3.14",
+        "probe": {
+          "cache_tag": "cpython-314",
+          "implementation": "cpython",
+          "machine": "x86_64",
+          "os": "linux",
+          "platform": "linux-x86_64",
+          "version": "3.14.7"
+        }
+      }
+    },
+    "checked-add": {
+      "basedpyright": {
+        "content_hash": "sha256:e45c54ef66af871b96ba75d866188642499050174aeb167d1b1bee1086c5e905",
+        "executable": "/home/arthur/Code/cott/examples/grammar/checked-add/.venv/bin/basedpyright",
+        "version": "basedpyright 1.39.9\nbased on pyright 1.1.411"
+      },
+      "cott": {
+        "content_hash": "sha256:23b8f0e2a5baac2f3c4d37b98b6f2dcab86cbe5fbf4ae19256f09ee467ea376d",
+        "executable": "/home/arthur/Code/cott/target/debug/cott",
+        "version": "cott 1.0.0"
+      },
+      "python": {
+        "content_hash": "sha256:4f43b25b39a5db0144b949fef5587aac333be2f4ae5f793a479ccb424cf7c22f",
+        "executable": "/home/arthur/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/bin/python3.14",
+        "probe": {
+          "cache_tag": "cpython-314",
+          "implementation": "cpython",
+          "machine": "x86_64",
+          "os": "linux",
+          "platform": "linux-x86_64",
+          "version": "3.14.7"
+        }
+      }
+    },
+    "toolong": {
+      "basedpyright": {
+        "content_hash": "sha256:216ee9c44d792c0fdc115abc2e7a79fc957c86de1fd8e157c8b2ee8a5fa29fad",
+        "executable": "/home/arthur/Code/cott/examples/real/toolong/.venv/bin/basedpyright",
+        "version": "basedpyright 1.39.9\nbased on pyright 1.1.411"
+      },
+      "cott": {
+        "content_hash": "sha256:23b8f0e2a5baac2f3c4d37b98b6f2dcab86cbe5fbf4ae19256f09ee467ea376d",
+        "executable": "/home/arthur/Code/cott/target/debug/cott",
+        "version": "cott 1.0.0"
+      },
+      "python": {
+        "content_hash": "sha256:255e900f44ce87c630e83b637a79435f9ae7778dd72f6e2a2f18a486e501d016",
+        "executable": "/home/arthur/.local/share/uv/python/cpython-3.14.6-linux-x86_64-gnu/bin/python3.14",
+        "probe": {
+          "cache_tag": "cpython-314",
+          "implementation": "cpython",
+          "machine": "x86_64",
+          "os": "linux",
+          "platform": "linux-x86_64",
+          "version": "3.14.6"
+        }
+      }
+    }
+  },
+  "footprint": {
+    "artifact-pipeline": {
+      "evaluation_binding": {
+        "managed": {
+          "bytes": 170098,
+          "files": 15,
+          "lines": 2275
+        },
+        "source": {
+          "bytes": 9142,
+          "files": 7,
+          "lines": 186
+        }
+      },
+      "original": {
+        "managed": {
+          "bytes": 170246,
+          "files": 15,
+          "lines": 2275
+        },
+        "source": {
+          "bytes": 8996,
+          "files": 7,
+          "lines": 183
+        }
+      }
+    },
+    "checked-add": {
+      "evaluation_binding": {
+        "managed": {
+          "bytes": 112943,
+          "files": 13,
+          "lines": 2095
+        },
+        "source": {
+          "bytes": 5386,
+          "files": 5,
+          "lines": 85
+        }
+      },
+      "original": {
+        "managed": {
+          "bytes": 112937,
+          "files": 13,
+          "lines": 2095
+        },
+        "source": {
+          "bytes": 5386,
+          "files": 5,
+          "lines": 85
+        }
+      }
+    },
+    "toolong": {
+      "evaluation_binding": {
+        "managed": {
+          "bytes": 186070,
+          "files": 21,
+          "lines": 2379
+        },
+        "source": {
+          "bytes": 17128,
+          "files": 12,
+          "lines": 360
+        }
+      },
+      "original": {
+        "managed": {
+          "bytes": 185120,
+          "files": 21,
+          "lines": 2379
+        },
+        "source": {
+          "bytes": 17020,
+          "files": 12,
+          "lines": 357
+        }
+      }
+    }
+  },
+  "identical_task": {
+    "acceptance": {
+      "median_seconds": 2.3166270159417763,
+      "note": "independent doc-semantic corpus; not semantic_coverage",
+      "payload": {
+        "cases": 3130
+      },
+      "raw_seconds": [
+        2.2898084489861503,
+        2.3180294090416282,
+        2.3166270159417763
+      ]
+    },
+    "cott_facades": {
+      "cases": 3130,
+      "median_seconds": 2.3166270159417763,
+      "note": "same shared cases and same interpreter as plain_python; public facade only",
+      "raw_seconds": [
+        2.2898084489861503,
+        2.3180294090416282,
+        2.3166270159417763
+      ]
+    },
+    "interpreter": "/home/arthur/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/bin/python3.14",
+    "plain_python": {
+      "cases": 3130,
+      "median_seconds": 0.06540657195728272,
+      "raw_seconds": [
+        0.06540657195728272,
+        0.06624194700270891,
+        0.06498342100530863
+      ]
+    },
+    "verify_only": {
+      "median_seconds": 15.476046032970771,
+      "raw_seconds": [
+        15.294697628938593,
+        15.476046032970771,
+        15.49664519901853
+      ]
+    },
+    "verify_plus_acceptance": {
+      "median_seconds": 17.7940754420124,
+      "note": "sum of cott verify and independent acceptance; not an equivalent guarantee",
+      "raw_seconds": [
+        17.584506077924743,
+        17.7940754420124,
+        17.813272214960307
+      ]
+    }
+  },
+  "identity": {
+    "scripts": {
+      "check_semantics": {
+        "content_hash": "sha256:8894eb68a8763f4e24edf69331b2a10d9ebaaa51fb2e19d43afb343673b8a3d7",
+        "path": "/home/arthur/Code/cott/examples/complex/artifact-pipeline/check_semantics.py"
+      },
+      "contract_value": {
+        "content_hash": "sha256:e63e174a58b343f673c056fde43704c54cec4df4048911481e87e6a7ed97273a",
+        "path": "/home/arthur/Code/cott/benchmarks/contract_value.py"
+      },
+      "helper": {
+        "content_hash": "sha256:0ab920fca33889a10e40ceb348bd189d9bd13b6520f2f50d687afa1f731b3748"
+      },
+      "plain_python": {
+        "content_hash": "sha256:3b348e06861236a6e0052c87d5070b40cc3800a142d5e56c7e1f526022b7a854",
+        "path": "/home/arthur/Code/cott/benchmarks/plain_python.py"
+      }
+    },
+    "sources": {
+      "evaluation_binding": {
+        "artifact-pipeline": {
+          "GENERATOR_RULES.txt": {
+            "content_hash": "sha256:107e2cf9304d78740d22b0a82e92459be58d025ef02d1232e7e2c61d4492b8e7",
+            "path": "/tmp/cott-contract-value-_0zb_uou/controls/artifact-pipeline/GENERATOR_RULES.txt"
+          },
+          "cott.toml": {
+            "content_hash": "sha256:4b33ff8b0e0725097cc2fff1d607a56fabbbe851d1512b1e84b31c9c994af211",
+            "path": "/tmp/cott-contract-value-_0zb_uou/controls/artifact-pipeline/cott.toml"
+          },
+          "python/cott_bindings/measurement.py": {
+            "content_hash": "sha256:bd63d2d9e07f1cb2d4b5180716014b3ff4deda3f0eeed2eac21fa5e38e3a2ae0",
+            "path": "/tmp/cott-contract-value-_0zb_uou/controls/artifact-pipeline/python/cott_bindings/measurement.py"
+          },
+          "python/pyproject.toml": {
+            "content_hash": "sha256:a00710a8a85eca63b21dd20ccba824cf94e53e9645b49163552ad6166b034eab",
+            "path": "/tmp/cott-contract-value-_0zb_uou/controls/artifact-pipeline/python/pyproject.toml"
+          },
+          "python/uv.lock": {
+            "content_hash": "sha256:adf746675a80654f66575ef9abb0fd4e0cce69d7c7a3f0d8071b42ba68c53518",
+            "path": "/tmp/cott-contract-value-_0zb_uou/controls/artifact-pipeline/python/uv.lock"
+          }
+        },
+        "checked-add": {
+          "cott.toml": {
+            "content_hash": "sha256:4bc65543e66fb780bfdb645b95d1351a759a789084a428c219e28a2772eb26e3",
+            "path": "/tmp/cott-contract-value-_0zb_uou/controls/checked-add/cott.toml"
+          },
+          "python/pyproject.toml": {
+            "content_hash": "sha256:c02edf79948a7fa5175191c57757b94b2d945fa815f5f97b15d6c043825c45f6",
+            "path": "/tmp/cott-contract-value-_0zb_uou/controls/checked-add/python/pyproject.toml"
+          },
+          "python/uv.lock": {
+            "content_hash": "sha256:a9ba86bc7e568e5b6e7659a43c006bccb7cc756c1833e06a3883b157b78023f9",
+            "path": "/tmp/cott-contract-value-_0zb_uou/controls/checked-add/python/uv.lock"
+          }
+        },
+        "toolong": {
+          "cott.toml": {
+            "content_hash": "sha256:e29207542462067653bae36a77c43c09e8568599f7f027f977eaa2f3f1efb9d6",
+            "path": "/tmp/cott-contract-value-_0zb_uou/controls/toolong/cott.toml"
+          },
+          "generator.rules": {
+            "content_hash": "sha256:d5e27b4d43e5b99b33634af507279fd9b2f90cd27f2635d3093edba33d60105f",
+            "path": "/tmp/cott-contract-value-_0zb_uou/controls/toolong/generator.rules"
+          },
+          "python/cott_bindings/measurement.py": {
+            "content_hash": "sha256:f12bb90139231155d801ec61e130fa01c8c0668f052abdb35136c4ad16a53571",
+            "path": "/tmp/cott-contract-value-_0zb_uou/controls/toolong/python/cott_bindings/measurement.py"
+          },
+          "python/pyproject.toml": {
+            "content_hash": "sha256:d64dac45a1b7dbeb171d070117edca385c2b3407847e7703ae48dda97a34b9d2",
+            "path": "/tmp/cott-contract-value-_0zb_uou/controls/toolong/python/pyproject.toml"
+          },
+          "python/uv.lock": {
+            "content_hash": "sha256:d1d5207c4e55237a447b039c7de60073bb46e3bb3a1595f4e73cd6b439b1c124",
+            "path": "/tmp/cott-contract-value-_0zb_uou/controls/toolong/python/uv.lock"
+          }
+        }
+      },
+      "original": {
+        "artifact-pipeline": {
+          "GENERATOR_RULES.txt": {
+            "content_hash": "sha256:107e2cf9304d78740d22b0a82e92459be58d025ef02d1232e7e2c61d4492b8e7",
+            "path": "/home/arthur/Code/cott/examples/complex/artifact-pipeline/GENERATOR_RULES.txt"
+          },
+          "cott.toml": {
+            "content_hash": "sha256:6d057ebf884673733cf3a9d546f391f22ef060a9fec0cbb220204deee243bb3a",
+            "path": "/home/arthur/Code/cott/examples/complex/artifact-pipeline/cott.toml"
+          },
+          "python/pyproject.toml": {
+            "content_hash": "sha256:a00710a8a85eca63b21dd20ccba824cf94e53e9645b49163552ad6166b034eab",
+            "path": "/home/arthur/Code/cott/examples/complex/artifact-pipeline/python/pyproject.toml"
+          },
+          "python/uv.lock": {
+            "content_hash": "sha256:adf746675a80654f66575ef9abb0fd4e0cce69d7c7a3f0d8071b42ba68c53518",
+            "path": "/home/arthur/Code/cott/examples/complex/artifact-pipeline/python/uv.lock"
+          }
+        },
+        "checked-add": {
+          "cott.toml": {
+            "content_hash": "sha256:4bc65543e66fb780bfdb645b95d1351a759a789084a428c219e28a2772eb26e3",
+            "path": "/home/arthur/Code/cott/examples/grammar/checked-add/cott.toml"
+          },
+          "python/pyproject.toml": {
+            "content_hash": "sha256:c02edf79948a7fa5175191c57757b94b2d945fa815f5f97b15d6c043825c45f6",
+            "path": "/home/arthur/Code/cott/examples/grammar/checked-add/python/pyproject.toml"
+          },
+          "python/uv.lock": {
+            "content_hash": "sha256:a9ba86bc7e568e5b6e7659a43c006bccb7cc756c1833e06a3883b157b78023f9",
+            "path": "/home/arthur/Code/cott/examples/grammar/checked-add/python/uv.lock"
+          }
+        },
+        "toolong": {
+          "cott.toml": {
+            "content_hash": "sha256:4b912c9b5803689c2290369974773e6c06e0b9b81716dc1fb95c7145e9890501",
+            "path": "/home/arthur/Code/cott/examples/real/toolong/cott.toml"
+          },
+          "generator.rules": {
+            "content_hash": "sha256:d5e27b4d43e5b99b33634af507279fd9b2f90cd27f2635d3093edba33d60105f",
+            "path": "/home/arthur/Code/cott/examples/real/toolong/generator.rules"
+          },
+          "python/pyproject.toml": {
+            "content_hash": "sha256:d64dac45a1b7dbeb171d070117edca385c2b3407847e7703ae48dda97a34b9d2",
+            "path": "/home/arthur/Code/cott/examples/real/toolong/python/pyproject.toml"
+          },
+          "python/uv.lock": {
+            "content_hash": "sha256:d1d5207c4e55237a447b039c7de60073bb46e3bb3a1595f4e73cd6b439b1c124",
+            "path": "/home/arthur/Code/cott/examples/real/toolong/python/uv.lock"
+          }
+        }
+      }
+    }
+  },
+  "limits": [
+    "Human authoring and review seconds were not observed and are null.",
+    "Independent acceptance interprets existing doc semantics; it is not cott verify, semantic_coverage, or compiler proof.",
+    "verify-only and verify+acceptance are not equivalent guarantees or costs.",
+    "Mutations edit authored implementations on temporary copies, never generated/ bytes.",
+    "Agent generate is not invoked. Pinned project .venv tools are used as-is.",
+    "Do not claim total productivity from machine timings.",
+    "Repeated verify without emit is not mutant measurement. toolong lockfile dependencies make a second verify fail; controls and maintenance use paired emit then verify."
+  ],
+  "maintenance": {
+    "cott": {
+      "authored_bytes_changed": 358,
+      "authored_lines_changed": 10,
+      "classification": "survived",
+      "copy_seconds_excluded": true,
+      "emit": {
+        "complete": true,
+        "median_seconds": 5.645949805038981,
+        "ok": true,
+        "raw_seconds": [
+          5.554919066024013,
+          5.645949805038981,
+          5.7787806609412655
+        ],
+        "runs": [
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 5.554919066024013,
+            "stderr": "",
+            "stdout": "generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 5.645949805038981,
+            "stderr": "",
+            "stdout": "generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 5.7787806609412655,
+            "stderr": "",
+            "stdout": "generated/python\n"
+          }
+        ]
+      },
+      "end_to_end": {
+        "median_seconds": 23.625873203156516,
+        "note": "derived component sum of emit, post-emit verify, and independent reverse-lex check; not a sequential workflow measurement; not equivalent to basedpyright --level error",
+        "raw_seconds": [
+          23.625873203156516,
+          23.48346044390928,
+          24.090609990991652
+        ]
+      },
+      "footprint": {
+        "managed": {
+          "bytes": 167846,
+          "files": 15,
+          "lines": 2275
+        },
+        "source": {
+          "bytes": 9126,
+          "files": 7,
+          "lines": 186
+        }
+      },
+      "human_authoring_seconds": null,
+      "human_review_seconds": null,
+      "reverse_check": {
+        "median_seconds": 2.377737427945249,
+        "ok": true,
+        "raw_seconds": [
+          2.3371895850868896,
+          2.377737427945249,
+          2.557240984053351
+        ],
+        "runs": [
+          {
+            "assertion": false,
+            "infrastructure": false,
+            "ok": true,
+            "payload": {
+              "cases": 3130
+            },
+            "returncode": 0,
+            "seconds": 2.3371895850868896,
+            "stderr": "",
+            "stdout": "{\"cases\":3130}\n"
+          },
+          {
+            "assertion": false,
+            "infrastructure": false,
+            "ok": true,
+            "payload": {
+              "cases": 3130
+            },
+            "returncode": 0,
+            "seconds": 2.377737427945249,
+            "stderr": "",
+            "stdout": "{\"cases\":3130}\n"
+          },
+          {
+            "assertion": false,
+            "infrastructure": false,
+            "ok": true,
+            "payload": {
+              "cases": 3130
+            },
+            "returncode": 0,
+            "seconds": 2.557240984053351,
+            "stderr": "",
+            "stdout": "{\"cases\":3130}\n"
+          }
+        ]
+      },
+      "verify": {
+        "complete": true,
+        "median_seconds": 15.733764552045614,
+        "note": "each verify immediately follows its paired emit; not repeated verify without emit",
+        "ok": true,
+        "raw_seconds": [
+          15.733764552045614,
+          15.45977321092505,
+          15.754588345997036
+        ],
+        "runs": [
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 15.733764552045614,
+            "stderr": "",
+            "stdout": "verified generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 15.45977321092505,
+            "stderr": "",
+            "stdout": "verified generated/python\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 15.754588345997036,
+            "stderr": "",
+            "stdout": "verified generated/python\n"
+          }
+        ],
+        "timing": "post-emit"
+      }
+    },
+    "human_authoring_seconds": null,
+    "human_review_seconds": null,
+    "plain_python": {
+      "authored_bytes_changed": 228,
+      "authored_lines_changed": 8,
+      "basedpyright": {
+        "median_seconds": 0.9725095110479742,
+        "ok": true,
+        "raw_seconds": [
+          1.012129764072597,
+          0.9725095110479742,
+          0.9677522389683872
+        ],
+        "runs": [
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 1.012129764072597,
+            "stderr": "",
+            "stdout": "0 errors, 0 warnings, 0 notes\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 0.9725095110479742,
+            "stderr": "",
+            "stdout": "0 errors, 0 warnings, 0 notes\n"
+          },
+          {
+            "infrastructure": false,
+            "ok": true,
+            "returncode": 0,
+            "seconds": 0.9677522389683872,
+            "stderr": "",
+            "stdout": "0 errors, 0 warnings, 0 notes\n"
+          }
+        ]
+      },
+      "copy_seconds_excluded": true,
+      "end_to_end": {
+        "median_seconds": 1.0541077590314671,
+        "note": "derived component sum of basedpyright --level error and independent reverse-lex check; not a sequential workflow measurement; not cott verify",
+        "raw_seconds": [
+          1.0880039340117946,
+          1.0541077590314671,
+          1.046909665921703
+        ]
+      },
+      "footprint": {
+        "managed": {
+          "bytes": 0,
+          "files": 0,
+          "lines": 0
+        },
+        "source": {
+          "bytes": 3056,
+          "files": 1,
+          "lines": 113
+        }
+      },
+      "human_authoring_seconds": null,
+      "human_review_seconds": null,
+      "reverse_check": {
+        "median_seconds": 0.07915742695331573,
+        "ok": true,
+        "raw_seconds": [
+          0.0758741699391976,
+          0.08159824798349291,
+          0.07915742695331573
+        ],
+        "runs": [
+          {
+            "assertion": false,
+            "infrastructure": false,
+            "ok": true,
+            "payload": {
+              "cases": 3130
+            },
+            "returncode": 0,
+            "seconds": 0.0758741699391976,
+            "stderr": "",
+            "stdout": "{\"cases\":3130}\n"
+          },
+          {
+            "assertion": false,
+            "infrastructure": false,
+            "ok": true,
+            "payload": {
+              "cases": 3130
+            },
+            "returncode": 0,
+            "seconds": 0.08159824798349291,
+            "stderr": "",
+            "stdout": "{\"cases\":3130}\n"
+          },
+          {
+            "assertion": false,
+            "infrastructure": false,
+            "ok": true,
+            "payload": {
+              "cases": 3130
+            },
+            "returncode": 0,
+            "seconds": 0.07915742695331573,
+            "stderr": "",
+            "stdout": "{\"cases\":3130}\n"
+          }
+        ]
+      }
+    },
+    "requirement": "reverse_lexical_tie_break",
+    "shared_expected_oracle": {
+      "authored_bytes_changed": 96,
+      "authored_lines_changed": 2,
+      "note": "actual check_semantics.py temp copy; candidate < best -> candidate > best; large-chain explicit expected unchanged; not billed to Cott or plain Python"
+    },
+    "unavailable": {
+      "human_authoring_seconds": "No operator or reviewer was present. This process applied a predetermined patch. Do not invent authoring or review time.",
+      "human_review_seconds": "No operator or reviewer was present. This process applied a predetermined patch. Do not invent authoring or review time.",
+      "protocol": "Stopwatch from the first keystroke of the reverse-lexical requirement through saving authored files, excluding clone, copy, install, and waiting on emit/verify. Record a second stopwatch for a human reviewer. Repeat the same requirement on both the Cott project and ordinary typed Python."
+    }
+  },
+  "mutants": {
+    "checked_add_return0": {
+      "category": "constant_return",
+      "certified": true,
+      "classification": "survived",
+      "emit": {
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 5.4946624300209805,
+        "stderr": "",
+        "stdout": "generated/python\n"
+      },
+      "generated_edited": false,
+      "independent_acceptance": {
+        "caught": true,
+        "got": "0",
+        "note": "curriculum.checked_add.checked_add(2, 3) via generated facade",
+        "ok": true,
+        "stderr": "",
+        "stdout": "0\n",
+        "via": "public_facade"
+      },
+      "project": "checked-add",
+      "semantic_coverage": {
+        "note": "cott generation semantic_coverage; not independent acceptance and not compiler proof",
+        "policy": {
+          "passed": true,
+          "selected": 0
+        },
+        "summary": {
+          "observed": 2,
+          "trust_declaration": 0,
+          "unknown": 0,
+          "unobserved": 0
+        },
+        "verified": true
+      },
+      "semantic_kill": false,
+      "source": "python/cott_bindings/curriculum/checked_add/checked_add.py",
+      "unmeasured": false,
+      "verify": {
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 14.8713545500068,
+        "stderr": "",
+        "stdout": "verified generated/python\n"
+      },
+      "witness": {
+        "emit_stderr": "",
+        "mutation": {
+          "new": "    return 0",
+          "old": "    return left + right"
+        },
+        "public_facade": {
+          "call": "checked_add(2, 3)",
+          "got": "0"
+        },
+        "verify_stderr": ""
+      }
+    },
+    "toolong_ignored_filter": {
+      "category": "ignored_filter",
+      "certified": true,
+      "classification": "survived",
+      "emit": {
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 5.894458307069726,
+        "stderr": "",
+        "stdout": "generated/python\n"
+      },
+      "generated_edited": false,
+      "independent_acceptance": {
+        "caught": true,
+        "got": "2",
+        "note": "real.toolong.filter_entries(LogEntry, Some(value='keep')) via generated facade",
+        "ok": true,
+        "stderr": "",
+        "stdout": "2\n",
+        "via": "public_facade"
+      },
+      "project": "toolong",
+      "semantic_coverage": {
+        "note": "cott generation semantic_coverage; not independent acceptance and not compiler proof",
+        "policy": {
+          "passed": true,
+          "selected": 0
+        },
+        "summary": {
+          "observed": 2,
+          "trust_declaration": 5,
+          "unknown": 0,
+          "unobserved": 0
+        },
+        "verified": true
+      },
+      "semantic_kill": false,
+      "source": "python/cott_bindings/measurement.py",
+      "unmeasured": false,
+      "verify": {
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 16.958775367005728,
+        "stderr": "",
+        "stdout": "verified generated/python\n"
+      },
+      "witness": {
+        "emit_stderr": "",
+        "mutation": {
+          "old": "from cott_runtime import CottList, Option, Some\nfrom real.toolong_types import LogEntry\n\n\ndef filter_entries(entries: CottList[LogEntry], contains: Option[str]) -> CottList[LogEntry]:\n    if isinstance(contains, Some):\n        needle = contains.value.casefold()\n        return CottList(values=tuple(entry for entry in entries if needle in entry.text.casefold()))\n    else:\n        return entries\n",
+          "source": "from cott_runtime import CottList, Option\nfrom real.toolong_types import LogEntry\n\n\ndef filter_entries(entries: CottList[LogEntry], contains: Option[str]) -> CottList[LogEntry]:\n    return entries\n"
+        },
+        "public_facade": {
+          "call": "len(filter_entries([keep, skip], Some(value='keep')))",
+          "got": "2"
+        },
+        "verify_stderr": ""
+      }
+    },
+    "topo_reversed_order": {
+      "category": "reversed_ordering",
+      "certified": true,
+      "classification": "survived",
+      "emit": {
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 5.572704146034084,
+        "stderr": "",
+        "stdout": "generated/python\n"
+      },
+      "generated_edited": false,
+      "independent_acceptance": {
+        "assertion": true,
+        "caught": true,
+        "note": "independent doc-semantic check via generated facades; not compiler proof",
+        "ok": false,
+        "payload": null,
+        "stderr": "Traceback (most recent call last):\n  File \"/tmp/cott-contract-value-_0zb_uou/helpers/check.py\", line 26, in <module>\n    raise AssertionError(f\"{case['name']}: expected {expected!r}, got {actual!r}\")\nAssertionError: enum2:a:,b:: expected {'ok': ['a', 'b']}, got {'ok': ['b', 'a']}\n",
+        "stdout": "",
+        "via": "public_facade_checker"
+      },
+      "project": "artifact-pipeline",
+      "semantic_coverage": {
+        "note": "cott generation semantic_coverage; not independent acceptance and not compiler proof",
+        "policy": {
+          "passed": true,
+          "selected": 0
+        },
+        "summary": {
+          "observed": 4,
+          "trust_declaration": 0,
+          "unknown": 0,
+          "unobserved": 8
+        },
+        "verified": true
+      },
+      "semantic_kill": false,
+      "source": "python/cott_bindings/measurement.py",
+      "unmeasured": false,
+      "verify": {
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 16.032523831003346,
+        "stderr": "",
+        "stdout": "verified generated/python\n"
+      },
+      "witness": {
+        "emit_stderr": "",
+        "mutation": {
+          "new": "    return Ok(value=CottList(values=list(reversed(ordered_steps))))",
+          "old": "    return Ok(value=CottList(values=ordered_steps))"
+        },
+        "public_facade": {
+          "stderr": "Traceback (most recent call last):\n  File \"/tmp/cott-contract-value-_0zb_uou/helpers/check.py\", line 26, in <module>\n    raise AssertionError(f\"{case['name']}: expected {expected!r}, got {actual!r}\")\nAssertionError: enum2:a:,b:: expected {'ok': ['a', 'b']}, got {'ok': ['b', 'a']}\n",
+          "stdout": ""
+        },
+        "verify_stderr": ""
+      }
+    },
+    "topo_unconditional_cycle": {
+      "category": "unconditional_error",
+      "certified": true,
+      "classification": "survived",
+      "emit": {
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 5.5641593099571764,
+        "stderr": "",
+        "stdout": "generated/python\n"
+      },
+      "generated_edited": false,
+      "independent_acceptance": {
+        "assertion": true,
+        "caught": true,
+        "note": "independent doc-semantic check via generated facades; not compiler proof",
+        "ok": false,
+        "payload": null,
+        "stderr": "Traceback (most recent call last):\n  File \"/tmp/cott-contract-value-_0zb_uou/helpers/check.py\", line 26, in <module>\n    raise AssertionError(f\"{case['name']}: expected {expected!r}, got {actual!r}\")\nAssertionError: enum0:: expected {'ok': []}, got {'error': 'Cycle'}\n",
+        "stdout": "",
+        "via": "public_facade_checker"
+      },
+      "project": "artifact-pipeline",
+      "semantic_coverage": {
+        "note": "cott generation semantic_coverage; not independent acceptance and not compiler proof",
+        "policy": {
+          "passed": true,
+          "selected": 0
+        },
+        "summary": {
+          "observed": 2,
+          "trust_declaration": 0,
+          "unknown": 0,
+          "unobserved": 10
+        },
+        "verified": true
+      },
+      "semantic_kill": false,
+      "source": "python/cott_bindings/measurement.py",
+      "unmeasured": false,
+      "verify": {
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 15.82605525793042,
+        "stderr": "",
+        "stdout": "verified generated/python\n"
+      },
+      "witness": {
+        "emit_stderr": "",
+        "mutation": {
+          "old": "from heapq import heapify, heappop, heappush\n\nfrom cott_runtime import CottList, Err, Ok, Result\nfrom curriculum.artifact_pipeline_types import ArtifactPipelineError, ArtifactPipelineError_BlankStepName, ArtifactPipelineError_Cycle, ArtifactPipelineError_DuplicateStep, ArtifactPipelineError_SelfDependency, ArtifactPipelineError_UnknownDependency, BuildStep\n\n\ndef topologically_order_steps(steps: CottList[BuildStep]) -> Result[CottList[str], ArtifactPipelineError]:\n    for step in steps:\n        if step.name.strip() == \"\":\n            return Err(error=ArtifactPipelineError_BlankStepName())\n\n    names: set[str] = set()\n    for step in steps:\n        if step.name in names:\n            return Err(error=ArtifactPipelineError_DuplicateStep())\n        names.add(step.name)\n\n    for step in steps:\n        for dependency in step.needs:\n            if dependency not in names:\n                return Err(error=ArtifactPipelineError_UnknownDependency())\n\n    for step in steps:\n        if step.name in step.needs:\n            return Err(error=ArtifactPipelineError_SelfDependency())\n\n    indegree: dict[str, int] = {}\n    dependents: dict[str, list[str]] = {}\n    for step in steps:\n        indegree[step.name] = len(step.needs)\n        dependents[step.name] = []\n    for step in steps:\n        for dependency in step.needs:\n            dependents[dependency].append(step.name)\n\n    ready: list[str] = [name for name in names if indegree[name] == 0]\n    heapify(ready)\n    ordered_steps: list[str] = []\n    while ready:\n        name = heappop(ready)\n        ordered_steps.append(name)\n        for dependent in dependents[name]:\n            indegree[dependent] -= 1\n            if indegree[dependent] == 0:\n                heappush(ready, dependent)\n\n    if len(ordered_steps) != len(steps):\n        return Err(error=ArtifactPipelineError_Cycle())\n    return Ok(value=CottList(values=ordered_steps))\n",
+          "source": "from cott_runtime import CottList, Err, Result\nfrom curriculum.artifact_pipeline_types import ArtifactPipelineError, ArtifactPipelineError_Cycle, BuildStep\n\n\ndef topologically_order_steps(steps: CottList[BuildStep]) -> Result[CottList[str], ArtifactPipelineError]:\n    return Err(error=ArtifactPipelineError_Cycle())\n"
+        },
+        "public_facade": {
+          "stderr": "Traceback (most recent call last):\n  File \"/tmp/cott-contract-value-_0zb_uou/helpers/check.py\", line 26, in <module>\n    raise AssertionError(f\"{case['name']}: expected {expected!r}, got {actual!r}\")\nAssertionError: enum0:: expected {'ok': []}, got {'error': 'Cycle'}\n",
+          "stdout": ""
+        },
+        "verify_stderr": ""
+      }
+    }
+  },
+  "rejection_counts": {
+    "audit": 0,
+    "infrastructure": 0,
+    "other": 0,
+    "provenance": 0,
+    "semantic_kills": 0,
+    "semantic_reject": 0,
+    "survived": 4,
+    "type": 0,
+    "unmeasured": 0,
+    "valid_mutants": 4
+  },
+  "repeat_verify_without_emit": {
+    "emit": {
+      "infrastructure": false,
+      "ok": true,
+      "returncode": 0,
+      "seconds": 5.4515496380627155,
+      "stderr": "",
+      "stdout": "generated/python\n"
+    },
+    "known_compiler_defect": true,
+    "note": "Existing compiler behavior, not a mutant kill: toolong selects lockfile=python/uv.lock so emit records lock inventory in generation.json dependencies; verify then writes dependencies=[] because no imported external deps. comparable_snapshot includes dependencies, so a second verify without emit fails. Measurement uses independent emit then verify cycles instead of repeat-verify.",
+    "project": "toolong",
+    "reverify": {
+      "infrastructure": false,
+      "ok": false,
+      "returncode": 4,
+      "seconds": 5.621784051065333,
+      "stderr": "error: generation record does not describe the current compiler inputs\n",
+      "stdout": ""
+    },
+    "verify": {
+      "infrastructure": false,
+      "ok": true,
+      "returncode": 0,
+      "seconds": 16.688293290906586,
+      "stderr": "",
+      "stdout": "verified generated/python\n"
+    }
+  },
+  "sample_size": 3,
+  "unavailable": {
+    "human_authoring_seconds": "No operator or reviewer was present. This process applied a predetermined patch. Do not invent authoring or review time.",
+    "human_review_seconds": "No operator or reviewer was present. This process applied a predetermined patch. Do not invent authoring or review time.",
+    "protocol": "Stopwatch from the first keystroke of the reverse-lexical requirement through saving authored files, excluding clone, copy, install, and waiting on emit/verify. Record a second stopwatch for a human reviewer. Repeat the same requirement on both the Cott project and ordinary typed Python."
+  }
+}

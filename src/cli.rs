@@ -17,10 +17,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub use crate::agent::AgentKind;
 use crate::agent::{
     AgentRunCandidate, ShadowFacet, adapter, parse_domain_rules, render_prompt, run_agent,
-    scan_doc_candidates,
+    scan_doc_candidates, selected_implementation_kind,
 };
 use crate::binding::{
-    PythonFileRole, ResolvedBinding, audit_facade_file, factory_concrete_imports,
+    PythonFileRole, ResolvedBinding, audit_facade_file, recorded_intent_baseline,
     resolve_implementations, validate_candidate,
 };
 use crate::compiler::{ProjectDiagnostic, parse_project};
@@ -29,6 +29,7 @@ use crate::diagnostics::{
 };
 use crate::hash::sha256_hex;
 use crate::hir::lower_with_effects;
+use crate::intent;
 use crate::ir::render;
 use crate::manifest::{ApiVersion, parse_api_version};
 use crate::project::{
@@ -37,15 +38,15 @@ use crate::project::{
 use crate::provenance::{
     AgentRun, AgentStatus, ClauseCoverage, CoveragePolicyResult, CoverageStatus, CoverageSummary,
     CoverageViolation, GenerationRecord, SemanticCoverage, SourceSpan as ProvenanceSpan,
-    StreamDigest, compare_implementation_identities,
+    StreamDigest, UnresolvedKind, UnresolvedRecord, compare_implementation_identities,
 };
 use crate::python::artifact_plan::{PythonArtifactPlan, PythonCallable, PythonCallableKind};
 use crate::python_emit::{Emission, EmitDiagnostic, emit};
 use crate::python_verify::verify_python;
-use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession};
+use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession, TransactionError};
 use crate::version::{is_at_least, parse_version};
 
-const USAGE: &str = "Cott compiles contracts into verifiable Python.\n\nUsage:\n  cott init <path> [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python [-j <jobs>] [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
+const USAGE: &str = "Cott compiles contracts into verifiable Python.\n\nUsage:\n  cott init <path> [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
 
 #[cfg(test)]
 thread_local! {
@@ -107,6 +108,21 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
         }) = parse_command(&arguments)
     {
         return diff_project(project, baseline, exit_code, OutputFormat::Json);
+    }
+    if !version_requested
+        && arguments.first().is_some_and(|command| command == "prompt")
+        && arguments
+            .windows(2)
+            .filter(|pair| pair[0] == "--format" && pair[1] == "json")
+            .count()
+            == 1
+        && let Ok(Command::Prompt {
+            symbol,
+            project,
+            format: OutputFormat::Json,
+        }) = parse_command(&arguments)
+    {
+        return prompt_project(project, symbol, OutputFormat::Json);
     }
     let json_formats = arguments
         .windows(2)
@@ -185,6 +201,11 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
             project,
             ..
         }) => generate_project(project, symbol, agent, jobs),
+        Ok(Command::Prompt {
+            symbol,
+            project,
+            format,
+        }) => prompt_project(project, symbol, format),
         Ok(Command::Diff {
             baseline,
             exit_code,
@@ -396,6 +417,11 @@ pub enum Command {
         project: Option<PathBuf>,
         format: OutputFormat,
     },
+    Prompt {
+        symbol: String,
+        project: Option<PathBuf>,
+        format: OutputFormat,
+    },
     Verify {
         project: Option<PathBuf>,
         format: OutputFormat,
@@ -428,6 +454,7 @@ pub fn parse_command(arguments: &[OsString]) -> Result<Command, &'static str> {
         "fmt" => parse_fmt(values),
         "emit" => parse_emit(values),
         "generate" => parse_generate(values),
+        "prompt" => parse_prompt(values),
         "lsp" if values.is_empty() => Ok(Command::Lsp),
         "lsp" => Err("`lsp` does not accept options or operands"),
         "verify" => {
@@ -665,6 +692,45 @@ fn parse_generate(values: &[OsString]) -> Result<Command, &'static str> {
         symbol,
         agent,
         jobs: jobs.unwrap_or(1),
+        project: options.project,
+        format: options.format,
+    })
+}
+
+fn parse_prompt(values: &[OsString]) -> Result<Command, &'static str> {
+    let mut symbol = None;
+    let mut options = ExistingOptions::default();
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].to_str() {
+            Some("--project") if options.project.is_none() => {
+                index += 1;
+                options.project = Some(PathBuf::from(
+                    values
+                        .get(index)
+                        .filter(|value| !value.is_empty())
+                        .ok_or("`--project` requires a directory")?,
+                ));
+            }
+            Some("--format") if options.format == OutputFormat::Human => {
+                index += 1;
+                if values.get(index).and_then(|value| value.to_str()) != Some("json") {
+                    return Err("`--format` requires `json`");
+                }
+                options.format = OutputFormat::Json;
+            }
+            Some(value) if !value.starts_with('-') && symbol.is_none() => {
+                symbol = Some(value.to_owned())
+            }
+            _ => return Err("unexpected or duplicate option"),
+        }
+        index += 1;
+    }
+    let Some(symbol) = symbol else {
+        return Err("`prompt` requires a fully qualified callable");
+    };
+    Ok(Command::Prompt {
+        symbol,
         project: options.project,
         format: options.format,
     })
@@ -966,13 +1032,14 @@ fn plan_with_session(session: ProjectSession) -> Result<PlannedProject, i32> {
     }
     let bindings = resolution.resolved;
     add_binding_input_hashes(&paths, &bindings, &mut input_hashes);
-    let input_snapshot = match capture_expected_inputs(&paths, &input_hashes, []) {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            eprintln!("error: {error}");
-            return Err(6);
-        }
-    };
+    let input_snapshot =
+        match capture_resolution_inputs(&paths.root, &input_hashes, &resolution.pending_sources) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return Err(6);
+            }
+        };
     let mut emission = match emit(&config, &plan, &ir, &bindings) {
         Ok(emission) => emission,
         Err(diagnostics) => {
@@ -980,9 +1047,7 @@ fn plan_with_session(session: ProjectSession) -> Result<PlannedProject, i32> {
             return Err(4);
         }
     };
-    if let Err(message) =
-        enrich_generation_record(&paths, &config.project.version, input_hashes, &mut emission)
-    {
+    if let Err(message) = enrich_generation_record(&paths, &config, input_hashes, &mut emission) {
         eprintln!("error: {message}");
         return Err(4);
     }
@@ -1067,9 +1132,384 @@ fn capture_expected_inputs(
     )
 }
 
+fn capture_resolution_inputs(
+    root: &Path,
+    hashes: &BTreeMap<String, String>,
+    pending_sources: &BTreeMap<PathBuf, Option<String>>,
+) -> Result<InputSnapshot, TransactionError> {
+    let mut expected = hashes.clone();
+    for (path, hash) in pending_sources {
+        if let Some(hash) = hash {
+            expected.insert(path.to_string_lossy().replace('\\', "/"), hash.clone());
+        }
+    }
+    let snapshot = InputSnapshot::capture_expected(
+        root,
+        expected
+            .iter()
+            .map(|(path, hash)| (PathBuf::from(path), hash.clone())),
+        pending_sources.keys().cloned(),
+    )?;
+    for (path, hash) in pending_sources {
+        if hash.is_none() && snapshot.files.get(path).is_some_and(Option::is_some) {
+            return Err(TransactionError::SnapshotDrift(path.clone()));
+        }
+    }
+    Ok(snapshot)
+}
+
+fn configured_rule_bytes(
+    config: &crate::manifest::ProjectConfig,
+    paths: &ProjectPaths,
+) -> Result<Vec<u8>, String> {
+    match &config.generator.rules {
+        Some(relative) => fs::read(paths.root.join(relative)).map_err(|error| {
+            format!(
+                "failed to read generator rules {}: {error}",
+                paths.root.join(relative).display()
+            )
+        }),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn render_generation_prompt(
+    plan: &PythonArtifactPlan,
+    callable: &PythonCallable,
+    rules: &[u8],
+    references: &[ResolvedBinding],
+    external_types: &BTreeMap<String, String>,
+    existing: Option<&[u8]>,
+    feedback: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    let context = intent::context(&plan.contract_surface(), &callable.cott_symbol, rules)?;
+    render_prompt(
+        callable,
+        &context,
+        references,
+        external_types,
+        existing,
+        feedback,
+        Path::new("implementation.py"),
+    )
+}
+
+fn pending_implementation(
+    root: &Path,
+    source: &Path,
+    pending_sources: &BTreeMap<PathBuf, Option<String>>,
+) -> Result<Option<Vec<u8>>, String> {
+    let Ok(relative) = source.strip_prefix(root) else {
+        return Err(format!(
+            "implementation path is not project-relative: {}",
+            display_path(root, source)
+        ));
+    };
+    match pending_sources.get(relative) {
+        Some(Some(expected)) => {
+            let bytes = fs::read(source).map_err(|error| {
+                format!(
+                    "failed to read pending implementation {}: {error}",
+                    display_path(root, source)
+                )
+            })?;
+            if format!("sha256:{}", sha256_hex(&bytes)) != *expected {
+                return Err(format!(
+                    "pending implementation {} changed before generation",
+                    display_path(root, source)
+                ));
+            }
+            Ok(Some(bytes))
+        }
+        Some(None) | None => Ok(None),
+    }
+}
+
+fn prompt_fail(format: OutputFormat, code: i32, message: impl AsRef<str>) -> i32 {
+    let message = message.as_ref();
+    match format {
+        OutputFormat::Human => {
+            eprintln!("error: {message}");
+            code
+        }
+        OutputFormat::Json => write_prompt_json_errors(code, [message]),
+    }
+}
+
+fn write_prompt_json_errors<I, S>(code: i32, messages: I) -> i32
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let error_code = match code {
+        2 => code::CLI_USAGE,
+        3 => code::SYNTAX,
+        4 => code::PYTHON,
+        5 => code::AGENT,
+        6 => code::FILESYSTEM,
+        1 => code::INTERNAL,
+        _ => code::CONTRACT,
+    };
+    let diagnostics = messages
+        .into_iter()
+        .enumerate()
+        .map(|(source_order, message)| {
+            let mut diagnostic = Diagnostic::error(error_code, message.as_ref(), Span::new(0, 0));
+            diagnostic.source_order = source_order;
+            diagnostic
+        })
+        .collect();
+    let bytes = DiagnosticReport { diagnostics }
+        .canonical_json(&SourceMap::default())
+        .expect("diagnostic report is serializable");
+    let _ = std::io::stdout().write_all(&bytes);
+    code
+}
+
+fn prompt_source_fail(
+    format: OutputFormat,
+    paths: &ProjectPaths,
+    diagnostics: &[ProjectDiagnostic],
+) -> i32 {
+    match format {
+        OutputFormat::Human => {
+            print_project_diagnostics(diagnostics);
+            3
+        }
+        OutputFormat::Json => {
+            let mut sources = SourceMap::default();
+            let mut source_ids = BTreeMap::new();
+            let mut report = Vec::new();
+            for (source_order, diagnostic) in diagnostics.iter().enumerate() {
+                let mut item = diagnostic.diagnostic.clone();
+                item.source_order = source_order;
+                let absolute = if diagnostic.path.is_absolute() {
+                    diagnostic.path.clone()
+                } else {
+                    paths.source_dir.join(&diagnostic.path)
+                };
+                if let Ok(bytes) = fs::read(&absolute) {
+                    let source_path = absolute
+                        .strip_prefix(&paths.root)
+                        .unwrap_or(&absolute)
+                        .to_path_buf();
+                    let file = *source_ids
+                        .entry(source_path.clone())
+                        .or_insert_with(|| sources.add(source_path, bytes));
+                    item.source_span = Some(SourceSpan {
+                        file,
+                        start_byte: item.span.start,
+                        end_byte: item.span.end,
+                    });
+                }
+                report.push(item);
+            }
+            let bytes = DiagnosticReport {
+                diagnostics: report,
+            }
+            .canonical_json(&sources)
+            .expect("diagnostic report is serializable");
+            let _ = std::io::stdout().write_all(&bytes);
+            3
+        }
+    }
+}
+
+fn prompt_project(project_argument: Option<PathBuf>, symbol: String, format: OutputFormat) -> i32 {
+    let root = match project_argument {
+        Some(root) => root,
+        None => match std::env::current_dir() {
+            Ok(root) => root,
+            Err(_) => {
+                return prompt_fail(format, 2, "failed to determine current directory");
+            }
+        },
+    };
+    let session = match ProjectSession::acquire_for_inspection(&root) {
+        Ok(session) => session,
+        Err(error) => return prompt_fail(format, 6, error.to_string()),
+    };
+    let root = session.root().to_path_buf();
+    let (config, paths) = match load_config_with_paths(&root) {
+        Ok(config) => config,
+        Err(error) => return prompt_fail(format, 2, error.to_string()),
+    };
+    if let Err(diagnostics) = audit_authored_python(&paths) {
+        return match format {
+            OutputFormat::Human => {
+                for diagnostic in &diagnostics {
+                    eprintln!("error: {diagnostic}");
+                }
+                4
+            }
+            OutputFormat::Json => write_prompt_json_errors(4, diagnostics),
+        };
+    }
+    let sources = match discover_sources_from_paths(&paths) {
+        Ok(sources) => sources,
+        Err(error) => return prompt_fail(format, 2, error.to_string()),
+    };
+    let parsed = match parse_project(sources) {
+        Ok(parsed) => parsed,
+        Err(diagnostics) => return prompt_source_fail(format, &paths, &diagnostics),
+    };
+    let custom_effects = config.effects.keys().cloned().collect();
+    let hir = match lower_with_effects(&paths.source_dir, parsed, &custom_effects) {
+        Ok(hir) => hir,
+        Err(diagnostics) => return prompt_source_fail(format, &paths, &diagnostics),
+    };
+    let ir = match render(&hir) {
+        Ok(ir) => ir,
+        Err(error) => return prompt_fail(format, 1, error),
+    };
+    match shadow_warnings(&config, &paths, &ir) {
+        Ok(warnings) => {
+            for warning in warnings {
+                eprintln!("warning: {warning}");
+            }
+        }
+        Err(error) => return prompt_fail(format, 3, error),
+    }
+    let plan = match PythonArtifactPlan::from_ir(&ir) {
+        Ok(plan) => plan,
+        Err(error) => return prompt_fail(format, 1, error.to_string()),
+    };
+    let resolution = match resolve_implementations(&config, &paths, &plan) {
+        Ok(resolution) => resolution,
+        Err(diagnostics) => {
+            return match format {
+                OutputFormat::Human => {
+                    print_binding_diagnostics(&paths, diagnostics);
+                    4
+                }
+                OutputFormat::Json => write_prompt_json_errors(
+                    4,
+                    diagnostics.iter().map(|diagnostic| {
+                        format!(
+                            "{}: {}",
+                            display_path(&paths.root, &diagnostic.path),
+                            diagnostic.message
+                        )
+                    }),
+                ),
+            };
+        }
+    };
+    let callables = plan
+        .callables()
+        .into_iter()
+        .map(|callable| (callable.cott_symbol.clone(), callable))
+        .collect::<BTreeMap<String, PythonCallable>>();
+    let Some(callable) = callables.get(&symbol) else {
+        return prompt_fail(format, 2, format!("unknown callable `{symbol}`"));
+    };
+    if let Some(kind) = selected_implementation_kind(callable) {
+        return prompt_fail(
+            format,
+            2,
+            format!(
+                "compiler-owned {kind} implementation method `{}` must not be sent to an agent",
+                callable.cott_symbol
+            ),
+        );
+    }
+    let generation_required = resolution
+        .unresolved
+        .iter()
+        .any(|binding| binding.cott_symbol == symbol);
+    let existing = match resolution
+        .unresolved
+        .iter()
+        .find(|binding| binding.cott_symbol == symbol)
+    {
+        Some(binding) => {
+            match pending_implementation(&paths.root, &binding.source, &resolution.pending_sources)
+            {
+                Ok(existing) => existing,
+                Err(error) => return prompt_fail(format, 6, error),
+            }
+        }
+        None => None,
+    };
+    let rules = match configured_rule_bytes(&config, &paths) {
+        Ok(rules) => rules,
+        Err(error) => return prompt_fail(format, 4, error),
+    };
+    let context = match intent::context(&plan.contract_surface(), &symbol, &rules) {
+        Ok(context) => context,
+        Err(error) => {
+            let code = if error.starts_with("unknown callable") {
+                2
+            } else {
+                4
+            };
+            return prompt_fail(format, code, error);
+        }
+    };
+    let prompt = match render_generation_prompt(
+        &plan,
+        callable,
+        &rules,
+        &resolution.resolved,
+        &config.python.external_types,
+        existing.as_deref(),
+        None,
+    ) {
+        Ok(prompt) => prompt,
+        Err(error) => {
+            let code =
+                if error.starts_with("compiler-owned") || error.starts_with("unknown callable") {
+                    2
+                } else {
+                    4
+                };
+            return prompt_fail(format, code, error);
+        }
+    };
+    let intent_hash = match intent::fingerprint_context(&context) {
+        Ok(hash) => hash,
+        Err(error) => return prompt_fail(format, 1, error),
+    };
+    let prompt_hash = format!("sha256:{}", sha256_hex(&prompt));
+    match format {
+        OutputFormat::Human => {
+            let _ = std::io::stdout().write_all(&prompt);
+            0
+        }
+        OutputFormat::Json => {
+            let prompt_text = String::from_utf8(prompt).expect("agent prompt is UTF-8");
+            let report = serde_json::json!({
+                "symbol": symbol,
+                "intent_hash": intent_hash,
+                "prompt_hash": prompt_hash,
+                "generation_required": generation_required,
+                "context": context,
+                "prompt": prompt_text,
+            });
+            serde_json::to_writer(std::io::stdout(), &report)
+                .expect("prompt report is serializable");
+            println!();
+            0
+        }
+    }
+}
+
+fn attach_intent_tool(
+    tools: &mut serde_json::Value,
+    surface: &serde_json::Value,
+    rules: &[u8],
+) -> Result<(), String> {
+    let hashes = intent::fingerprints(surface, rules)?;
+    tools
+        .as_object_mut()
+        .ok_or_else(|| "planned generation tools are not an object".to_owned())?
+        .insert(intent::TOOL_KEY.to_owned(), intent::metadata(&hashes));
+    Ok(())
+}
+
 fn enrich_generation_record(
     paths: &ProjectPaths,
-    project_version: &str,
+    config: &crate::manifest::ProjectConfig,
     inputs: BTreeMap<String, String>,
     emission: &mut Emission,
 ) -> Result<(), String> {
@@ -1079,7 +1519,7 @@ fn enrich_generation_record(
         .ok_or_else(|| "emission omitted generation.json".to_owned())?;
     let mut record = GenerationRecord::parse(bytes)
         .map_err(|error| format!("invalid planned generation record: {error}"))?;
-    record.current.project_version = project_version.to_owned();
+    record.current.project_version = config.project.version.clone();
     record.current.compatibility = crate::provenance::GenerationCompatibility::current();
     let mut dependencies = dependency_records(paths)?;
     let existing_path = artifact_root_for_paths(paths)?.join("generation.json");
@@ -1113,33 +1553,18 @@ fn enrich_generation_record(
             .current
             .agent_runs
             .into_iter()
-            .filter(|run| {
-                record
-                    .current
-                    .implementations
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .any(|implementation| {
-                        implementation
-                            .get("cott_symbol")
-                            .and_then(serde_json::Value::as_str)
-                            == Some(run.symbol.as_str())
-                            && implementation
-                                .get("content_hash")
-                                .and_then(serde_json::Value::as_str)
-                                .is_some_and(|hash| {
-                                    hash == run.implementation_hash
-                                        || hash.strip_prefix("sha256:")
-                                            == Some(run.implementation_hash.as_str())
-                                })
-                    })
-            })
+            .filter(|run| agent_run_applies(&record, run))
             .collect();
     }
     record.current.inputs =
         serde_json::to_value(inputs).map_err(|error| format!("serialize input hashes: {error}"))?;
     record.current.dependencies = dependencies;
+    let rules = configured_rule_bytes(config, paths)?;
+    attach_intent_tool(
+        &mut record.current.tools,
+        &record.current.contract_surface,
+        &rules,
+    )?;
     record.current.compute_generation_id()?;
     emission
         .files
@@ -1261,6 +1686,7 @@ fn dependency_records(paths: &ProjectPaths) -> Result<serde_json::Value, String>
 
 fn verified_baseline_guard(
     paths: &ProjectPaths,
+    config: &crate::manifest::ProjectConfig,
     inputs: &BTreeMap<String, String>,
     allowed_missing: &[PathBuf],
 ) -> Result<(), String> {
@@ -1281,39 +1707,33 @@ fn verified_baseline_guard(
             generation.display()
         )
     })?;
-    let Some(baseline) = record.last_verified else {
-        return Ok(());
-    };
-    let baseline_inputs = baseline
-        .inputs
-        .as_object()
-        .ok_or("verified baseline inputs are not an object")?;
     let allowed_missing = allowed_missing
         .iter()
         .map(|path| path.to_string_lossy().replace('\\', "/"))
         .collect::<BTreeSet<_>>();
-    let replacing_verified = baseline_inputs
-        .keys()
-        .any(|path| !inputs.contains_key(path) && allowed_missing.contains(path));
-    if replacing_verified {
-        return Ok(());
+    let rules = config.generator.rules.as_deref();
+    let intentional_contract = |path: &str| path.ends_with(".cott") || rules == Some(path);
+    let ignorable = |path: &str| allowed_missing.contains(path) || intentional_contract(path);
+    if let Some(epoch_inputs) = record.current.inputs.as_object() {
+        let changed_inputs = epoch_inputs.iter().any(|(path, hash)| {
+            if ignorable(path) {
+                return false;
+            }
+            inputs
+                .get(path)
+                .map(String::as_str)
+                .is_some_and(|current| current != hash)
+                || !inputs.contains_key(path)
+        }) || inputs
+            .keys()
+            .any(|path| !ignorable(path) && !epoch_inputs.contains_key(path));
+        if changed_inputs {
+            return Err(
+                "emitted inputs changed; run `cott emit python` before generation".to_owned(),
+            );
+        }
     }
-    let changed_inputs = baseline_inputs.iter().any(|(path, hash)| {
-        inputs
-            .get(path)
-            .map(String::as_str)
-            .is_some_and(|current| current != hash)
-            || (!inputs.contains_key(path) && !allowed_missing.contains(path))
-    }) || inputs
-        .keys()
-        .any(|path| !baseline_inputs.contains_key(path));
-    if changed_inputs {
-        return Err(
-            "verified baseline inputs changed; run `cott emit python` and `cott verify` before generation"
-                .to_owned(),
-        );
-    }
-    for (relative, expected) in &baseline.managed_files {
+    for (relative, expected) in &record.current.managed_files {
         let bytes = fs::read(paths.root.join(relative))
             .map_err(|_| format!("verified baseline managed file is missing: {relative}"))?;
         if expected != &format!("sha256:{}", sha256_hex(&bytes)) {
@@ -1388,6 +1808,132 @@ fn add_agent_runs(
         .insert(PathBuf::from("generation.json"), record.canonical_bytes()?);
     Ok(())
 }
+
+fn agent_run_applies(record: &GenerationRecord, run: &AgentRun) -> bool {
+    record
+        .current
+        .unresolved
+        .iter()
+        .any(|pending| pending.cott_symbol == run.symbol)
+        || record
+            .current
+            .implementations
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|implementation| {
+                implementation
+                    .get("cott_symbol")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(run.symbol.as_str())
+                    && implementation
+                        .get("content_hash")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|hash| {
+                            hash == run.implementation_hash
+                                || hash.strip_prefix("sha256:")
+                                    == Some(run.implementation_hash.as_str())
+                        })
+            })
+}
+
+fn implementation_matches_unresolved(
+    implementation: &serde_json::Value,
+    unresolved: &UnresolvedRecord,
+) -> bool {
+    let kind = match unresolved.kind {
+        UnresolvedKind::Function => "function",
+        UnresolvedKind::AsyncFunction => "async_function",
+        UnresolvedKind::ImplMethod => "impl_method",
+        UnresolvedKind::AsyncImplMethod => "async_impl_method",
+    };
+    implementation
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        == Some(kind)
+        && implementation
+            .get("callable_kind")
+            .and_then(serde_json::Value::as_str)
+            == Some(unresolved.callable_kind.as_str())
+}
+
+fn carry_trusted_python_state(
+    record: &mut GenerationRecord,
+    trusted: &GenerationRecord,
+    config: &crate::manifest::ProjectConfig,
+    paths: &ProjectPaths,
+) -> Result<(), String> {
+    let rules = configured_rule_bytes(config, paths)?;
+    let current_intent = intent::recorded_fingerprints(&record.current.tools)?.unwrap_or_default();
+    let baseline = recorded_intent_baseline(trusted, config, paths, &rules)?;
+    let previous_pending = trusted
+        .current
+        .unresolved
+        .iter()
+        .map(|record| record.cott_symbol.as_str())
+        .collect::<BTreeSet<_>>();
+    let previous_implementations = trusted
+        .current
+        .implementations
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|implementation| {
+            Some((
+                implementation.get("cott_symbol")?.as_str()?.to_owned(),
+                implementation.clone(),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut implementations = Vec::new();
+    let mut unresolved = Vec::new();
+    for pending in std::mem::take(&mut record.current.unresolved) {
+        let symbol = pending.cott_symbol.clone();
+        let intent_matches = baseline
+            .as_ref()
+            .and_then(|baseline| baseline.get(&symbol))
+            .zip(current_intent.get(&symbol))
+            .is_some_and(|(previous, current)| previous == current);
+        match previous_implementations.get(&symbol) {
+            Some(implementation)
+                if !previous_pending.contains(symbol.as_str())
+                    && intent_matches
+                    && implementation_matches_unresolved(implementation, &pending) =>
+            {
+                if let (Some(path), Some(inputs)) = (
+                    implementation
+                        .get("source_origin")
+                        .and_then(serde_json::Value::as_str),
+                    record.current.inputs.as_object_mut(),
+                ) {
+                    if let Some(hash) = trusted.current.inputs.get(path).cloned() {
+                        inputs.insert(path.to_owned(), hash);
+                    }
+                }
+                implementations.push(implementation.clone());
+            }
+            _ => unresolved.push(pending),
+        }
+    }
+    implementations.sort_by(|left, right| {
+        left.get("cott_symbol")
+            .and_then(serde_json::Value::as_str)
+            .cmp(&right.get("cott_symbol").and_then(serde_json::Value::as_str))
+    });
+    unresolved.sort_by(|left, right| left.cott_symbol.cmp(&right.cott_symbol));
+    record.current.implementations = serde_json::Value::Array(implementations);
+    record.current.unresolved = unresolved;
+    record.current.agent_runs = std::mem::take(&mut record.current.agent_runs)
+        .into_iter()
+        .filter(|run| agent_run_applies(record, run))
+        .collect();
+    record
+        .current
+        .agent_runs
+        .sort_by(|left, right| left.symbol.cmp(&right.symbol));
+    Ok(())
+}
+
 fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
     let Ok(root) = project_root(project_argument) else {
         return 2;
@@ -1463,9 +2009,7 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
             return 6;
         }
     };
-    if let Err(error) =
-        enrich_generation_record(&paths, &config.project.version, input_hashes, &mut emission)
-    {
+    if let Err(error) = enrich_generation_record(&paths, &config, input_hashes, &mut emission) {
         eprintln!("error: {error}");
         return 4;
     }
@@ -1512,24 +2056,92 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
             return 1;
         }
     };
-    let mut managed_files = actual
-        .iter()
-        .filter(|(path, _)| path.as_path() != Path::new("generation.json"))
-        .map(|(path, bytes)| {
-            (
-                relative_root
+    let trusted = match actual.get(Path::new("generation.json")) {
+        Some(bytes) => match GenerationRecord::parse(bytes) {
+            Ok(record) => Some(record),
+            Err(error) => {
+                eprintln!("error: invalid existing generation record: {error}");
+                return 4;
+            }
+        },
+        None => None,
+    };
+    let mut managed_files = BTreeMap::new();
+    match &trusted {
+        None => {
+            for path in actual.keys() {
+                if path.as_path() == Path::new("generation.json") || path.starts_with("ir") {
+                    continue;
+                }
+                eprintln!(
+                    "error: no trusted generation record for existing managed artifact: {}",
+                    relative_root.join(path).display()
+                );
+                return 4;
+            }
+        }
+        Some(trusted) => {
+            for (relative, expected) in &trusted.current.managed_files {
+                if Path::new(relative)
+                    .strip_prefix(relative_root)
+                    .is_ok_and(|path| path.starts_with("ir"))
+                {
+                    continue;
+                }
+                let on_disk = match Path::new(relative).strip_prefix(relative_root) {
+                    Ok(path) => actual.get(path).map(Vec::as_slice),
+                    Err(_) => None,
+                };
+                let matches = |bytes: &[u8]| expected == &format!("sha256:{}", sha256_hex(bytes));
+                let trusted_bytes = if let Some(bytes) = on_disk {
+                    Some(matches(bytes))
+                } else {
+                    fs::read(paths.root.join(relative))
+                        .ok()
+                        .map(|bytes| matches(&bytes))
+                };
+                match trusted_bytes {
+                    Some(true) => {
+                        managed_files.insert(relative.clone(), expected.clone());
+                    }
+                    Some(false) => {
+                        eprintln!("error: managed file changed: {relative}");
+                        return 4;
+                    }
+                    None => {
+                        eprintln!("error: managed file is missing: {relative}");
+                        return 4;
+                    }
+                }
+            }
+            for path in actual.keys() {
+                if path.as_path() == Path::new("generation.json") || path.starts_with("ir") {
+                    continue;
+                }
+                let relative = relative_root
                     .join(path)
                     .to_string_lossy()
-                    .replace('\\', "/"),
-                format!("sha256:{}", sha256_hex(bytes)),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    managed_files.retain(|path, _| {
-        !Path::new(path)
-            .strip_prefix(relative_root)
-            .is_ok_and(|relative| relative.starts_with("ir"))
-    });
+                    .replace('\\', "/");
+                if !managed_files.contains_key(&relative) {
+                    eprintln!("error: unexpected managed artifact: {relative}");
+                    return 4;
+                }
+            }
+        }
+    }
+    let non_ir_snapshot = match InputSnapshot::capture_expected(
+        &paths.root,
+        managed_files
+            .iter()
+            .map(|(path, hash)| (PathBuf::from(path), hash.clone())),
+        [],
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 6;
+        }
+    };
     for (path, bytes) in &expected_ir {
         managed_files.insert(
             relative_root
@@ -1542,6 +2154,12 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
     record.current.managed_files = managed_files;
     record.current.verified = false;
     record.current.verification = serde_json::Value::Null;
+    if let Some(trusted) = &trusted {
+        if let Err(error) = carry_trusted_python_state(&mut record, trusted, &config, &paths) {
+            eprintln!("error: {error}");
+            return 4;
+        }
+    }
     if let Err(error) = record.current.compute_generation_id() {
         eprintln!("error: compute IR generation identity: {error}");
         return 1;
@@ -1590,6 +2208,7 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
         }
     };
     let mut snapshot = input_snapshot;
+    snapshot.merge_missing(non_ir_snapshot);
     snapshot.merge_missing(output_snapshot);
     match session.apply(&snapshot, &changes) {
         Ok(()) => 0,
@@ -1725,8 +2344,14 @@ fn generate_project(
         .map(|callable| (callable.cott_symbol.clone(), callable))
         .collect::<BTreeMap<String, PythonCallable>>();
     let requested = symbol.as_deref();
-    let mut unresolved = resolution
-        .unresolved
+    let intent_changed = resolution.intent_changed;
+    let pending_paths = resolution
+        .pending_sources
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    let pending = resolution.unresolved;
+    let mut unresolved = pending
         .into_iter()
         .filter(|binding| requested.is_none_or(|symbol| symbol == binding.cott_symbol))
         .collect::<Vec<_>>();
@@ -1735,34 +2360,27 @@ fn generate_project(
             eprintln!("error: unknown callable `{symbol}`");
             return 2;
         }
+        if intent_changed.contains(symbol)
+            && !unresolved
+                .iter()
+                .any(|binding| binding.cott_symbol == symbol)
+        {
+            eprintln!("error: intent-stale callable `{symbol}` is not queued for generation");
+            return 4;
+        }
+    } else if let Some(symbol) = intent_changed.iter().find(|symbol| {
+        !unresolved
+            .iter()
+            .any(|binding| binding.cott_symbol == **symbol)
+    }) {
+        eprintln!("error: intent-stale callable `{symbol}` is not queued for generation");
+        return 4;
     }
     unresolved.sort_by(|left, right| left.cott_symbol.cmp(&right.cott_symbol));
     let mut bindings = resolution.resolved;
     add_binding_input_hashes(&paths, &bindings, &mut input_hashes);
-    let candidate_paths = match unresolved
-        .iter()
-        .map(|binding| {
-            binding
-                .source
-                .strip_prefix(&paths.root)
-                .map(Path::to_path_buf)
-                .map_err(|_| {
-                    format!(
-                        "implementation path escaped project root: {}",
-                        binding.source.display()
-                    )
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(paths) => paths,
-        Err(error) => {
-            eprintln!("error: {error}");
-            return 6;
-        }
-    };
     let input_snapshot =
-        match capture_expected_inputs(&paths, &input_hashes, candidate_paths.clone()) {
+        match capture_resolution_inputs(&paths.root, &input_hashes, &resolution.pending_sources) {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 eprintln!("error: {error}");
@@ -1783,7 +2401,8 @@ fn generate_project(
             eprintln!("error: unresolved selected callable requires `--agent codex|claude|omp`");
             return 2;
         };
-        if let Err(error) = verified_baseline_guard(&paths, &input_hashes, &candidate_paths) {
+        if let Err(error) = verified_baseline_guard(&paths, &config, &input_hashes, &pending_paths)
+        {
             eprintln!("error: {error}");
             return 4;
         }
@@ -1794,6 +2413,13 @@ fn generate_project(
                 return 5;
             }
         };
+        let rules = match configured_rule_bytes(&config, &paths) {
+            Ok(rules) => rules,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return 4;
+            }
+        };
         let generate_candidate =
             |unresolved_binding: &crate::binding::UnresolvedBinding,
              bindings: &[ResolvedBinding]|
@@ -1801,6 +2427,14 @@ fn generate_project(
                 let callable = callables
                     .get(&unresolved_binding.cott_symbol)
                     .expect("resolution callable was selected from the artifact plan");
+                let existing = match pending_implementation(
+                    &paths.root,
+                    &unresolved_binding.source,
+                    &resolution.pending_sources,
+                ) {
+                    Ok(existing) => existing,
+                    Err(error) => return Err((6, error)),
+                };
                 let temporary = match agent_workspace() {
                     Ok(paths) => paths,
                     Err(error) => {
@@ -1808,177 +2442,88 @@ fn generate_project(
                     }
                 };
                 let target = temporary.workspace.join("implementation.py");
-                let module_ir = match ir
-                    .modules
-                    .iter()
-                    .find(|module| module.module.as_string() == callable.module)
-                {
-                    Some(module) => module.bytes.clone(),
-                    None => {
-                        let _ = fs::remove_dir_all(&temporary.root);
-                        return Err((1, "selected callable has no canonical IR module".to_owned()));
-                    }
-                };
                 let fully_qualified = callable.cott_symbol.clone();
                 let position = generation_positions[&fully_qualified];
                 eprintln!("generate [{position}/{generation_total}] start `{fully_qualified}`");
-                let bound_symbols = bindings
-                    .iter()
-                    .filter(|binding| {
-                        matches!(
-                            &binding.kind,
-                            PythonCallableKind::Function | PythonCallableKind::AsyncFunction
-                        )
-                    })
-                    .map(|binding| format!("from {} import {}", binding.module, binding.function))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let binding_context = bindings
-                    .iter()
-                    .map(|binding| {
-                        format!(
-                            "# {}\n{}",
-                            binding.source.display(),
-                            String::from_utf8_lossy(&binding.bytes)
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let mut target_rules = match &callable.kind {
-                    PythonCallableKind::Function | PythonCallableKind::AsyncFunction => format!(
-                        "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, UNIT, Some, Nothing, CottList, CottSet, FrozenMap, CottArray, and CottBuffer from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict; native `tuple[...]` annotations and `(a, b)` values are required for Cott Tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use normal Python arithmetic and comparisons, not `.value`, constructors, casts, or `isinstance`. `Unit` is the annotation and `UNIT` is its only value; return `Ok(value=UNIT)` for Result[Unit, E]. For Option annotations use the top-level `Some(value=...)` and `Nothing()` variants, never `Option.Some` or `Option.Nothing`; narrow an Option with structural `match` before reading a Some payload. Boolean comparison expressions have type bool; do not wrap them in a nonexistent `Bool`. Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={{}}), CottArray(values=xs), and CottBuffer(data=xs); Cott Tuple uses native `tuple[...]` annotations and `(a, b)` values. For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err, raise, catch, or inspect Result. Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `{0}_types` module, never `<Enum>.<Variant>`. `typing.cast` MAY be used only from a concrete external SDK return to its declared external projection when upstream stubs are incompatible; never cast Cott-owned values. Do not use classes, mutable module state, `Any`, `isinstance`, `type(...)`, dynamic imports, reflection, exception handling, `exec`, `eval`, `globals`, or `locals`. For other modules import public generated symbols only through `from {0} import name` and generated value types only through `from {0}_types import Type`. Do not import concrete facade classes from generated type modules.",
-                        callable.module
-                    ),
-                    PythonCallableKind::ImplMethod { concrete }
-                    | PythonCallableKind::AsyncImplMethod { concrete } => format!(
-                        "CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline. The canonical function's leading `self` annotation must be `{concrete}`. Preserve every declared ABI annotation exactly: import I8/I16/I32/I64/U8/U16/U32/U64/F32/F64, Result, Option, Unit, UNIT, Some, Nothing, CottList, CottSet, FrozenMap, CottArray, and CottBuffer from cott_runtime as required; never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict; native `tuple[...]` annotations and `(a, b)` values are required for Cott Tuple, never import a nonexistent `List`, and never spell Result as an Ok/Err union. Numeric ABI aliases are plain int/float at runtime: use ordinary arithmetic and comparisons and return the result directly, never call or construct a numeric alias. The compiler owns the public concrete facade; define only the private implementation function and never define a class or public method.",
-                    ),
-                };
-                if matches!(
-                    &callable.kind,
-                    PythonCallableKind::AsyncFunction | PythonCallableKind::AsyncImplMethod { .. }
-                ) {
-                    target_rules.push_str(
-                    "\nThe canonical function MUST be an exact undecorated top-level `async def`; private helpers remain synchronous. Await every exact async Cott facade call and never await a synchronous Cott facade. Detached task APIs (`create_task`, `ensure_future`, `Task`, and loop task creation) are forbidden; only direct awaited `asyncio.gather(...)` and `async with asyncio.TaskGroup() as <name>` are allowed.\n",
-                );
-                }
-                target_rules.push_str(
-                "\nExact generated Cott facade modules MAY be imported directly or from their parent package, with an optional alias, for module-qualified access. Import generated value types for annotations through `from module_types import Type`, and do not import any other project-local module.\n",
-            );
-                let factory_imports = factory_concrete_imports(&plan, callable)
-                    .into_iter()
-                    .flat_map(|(module, concretes)| {
-                        concretes
-                            .into_iter()
-                            .map(move |concrete| format!("from {module} import {concrete}"))
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if !factory_imports.is_empty() {
-                    target_rules.push_str(
-                    "\nFactory annotations require these exact concrete public-facade imports; do not substitute them or import from `*_types`:\n",
-                );
-                    target_rules.push_str(&factory_imports);
-                    target_rules.push('\n');
-                    target_rules.push_str(
-                    "Use each listed `from module import Concrete` line for annotations. The same exact generated facade may also be imported under the general module-import rule when its class object is needed.\n",
-                );
-                }
-                let project_rules = config
-                    .generator
-                    .rules
-                    .as_ref()
-                    .map(|path| fs::read(paths.root.join(path)))
-                    .transpose()
-                    .map_err(|error| error.to_string());
-                let result = project_rules.and_then(|project_rules| {
-                let prompt = render_prompt(
-                    callable,
-                    &module_ir,
-                    &binding_context,
-                    &target_rules,
-                    &config.python.external_types,
-                    &bound_symbols,
-                    None,
-                    project_rules.as_deref(),
-                    &target,
-                )?;
-                let mut candidate = run_agent(
-                    agent,
-                    executable.clone(),
-                    &temporary.workspace,
-                    &temporary.scratch,
-                    &target,
-                    prompt,
-                    config.generator.timeout_seconds,
-                )?;
-                eprintln!(
-                    "generate [{position}/{generation_total}] validate `{fully_qualified}`"
-                );
-                let mut retry_rules = project_rules.unwrap_or_default();
-                for attempt in 0..=2 {
-                    match validate_candidate(
-                        &config,
-                        &paths,
+                let result = (|| {
+                    let prompt = render_generation_prompt(
                         &plan,
-                        &fully_qualified,
-                        &candidate.implementation,
-                    ) {
-                        Ok(()) => {
-                            eprintln!(
-                                "generate [{position}/{generation_total}] done `{fully_qualified}`"
-                            );
-                            return Ok(candidate);
-                        }
-                        Err(validation_error) if attempt == 2 => return Err(validation_error),
-                        Err(validation_error) => {
-                            eprintln!(
-                                "generate [{position}/{generation_total}] retry {}/2 `{fully_qualified}`",
-                                attempt + 1
-                            );
-                            if !retry_rules.is_empty() && !retry_rules.ends_with(b"\n") {
-                                retry_rules.push(b'\n');
+                        callable,
+                        &rules,
+                        bindings,
+                        &config.python.external_types,
+                        existing.as_deref(),
+                        None,
+                    )?;
+                    let mut candidate = run_agent(
+                        agent,
+                        executable.clone(),
+                        &temporary.workspace,
+                        &temporary.scratch,
+                        &target,
+                        prompt,
+                        config.generator.timeout_seconds,
+                    )?;
+                    eprintln!(
+                        "generate [{position}/{generation_total}] validate `{fully_qualified}`"
+                    );
+                    let mut feedback = String::new();
+                    for attempt in 0..=2 {
+                        match validate_candidate(
+                            &config,
+                            &paths,
+                            &plan,
+                            &fully_qualified,
+                            &candidate.implementation,
+                        ) {
+                            Ok(()) => {
+                                eprintln!(
+                                    "generate [{position}/{generation_total}] done `{fully_qualified}`"
+                                );
+                                return Ok(candidate);
                             }
-                            retry_rules.extend_from_slice(
-                                format!(
-                                    "VALIDATION FAILURE\n{validation_error}\nFix the existing implementation and change nothing outside the target file.\n"
-                                )
-                                .as_bytes(),
-                            );
-                            let retry_prompt = render_prompt(
-                                callable,
-                                &module_ir,
-                                &binding_context,
-                                &target_rules,
-                                &config.python.external_types,
-                                &bound_symbols,
-                                Some(&candidate.implementation),
-                                Some(&retry_rules),
-                                &target,
-                            )?;
-                            fs::remove_file(&target).map_err(|error| {
-                                format!(
-                                    "reset isolated agent target {}: {error}",
-                                    target.display()
-                                )
-                            })?;
-                            candidate = run_agent(
-                                agent,
-                                executable.clone(),
-                                &temporary.workspace,
-                                &temporary.scratch,
-                                &target,
-                                retry_prompt,
-                                config.generator.timeout_seconds,
-                            )?;
-                            eprintln!(
-                                "generate [{position}/{generation_total}] validate `{fully_qualified}`"
-                            );
+                            Err(validation_error) if attempt == 2 => return Err(validation_error),
+                            Err(validation_error) => {
+                                eprintln!(
+                                    "generate [{position}/{generation_total}] retry {}/2 `{fully_qualified}`",
+                                    attempt + 1
+                                );
+                                if !feedback.is_empty() {
+                                    feedback.push('\n');
+                                }
+                                feedback.push_str(&validation_error);
+                                let retry_prompt = render_generation_prompt(
+                                    &plan,
+                                    callable,
+                                    &rules,
+                                    bindings,
+                                    &config.python.external_types,
+                                    Some(&candidate.implementation),
+                                    Some(feedback.as_str()),
+                                )?;
+                                fs::remove_file(&target).map_err(|error| {
+                                    format!(
+                                        "reset isolated agent target {}: {error}",
+                                        target.display()
+                                    )
+                                })?;
+                                candidate = run_agent(
+                                    agent,
+                                    executable.clone(),
+                                    &temporary.workspace,
+                                    &temporary.scratch,
+                                    &target,
+                                    retry_prompt,
+                                    config.generator.timeout_seconds,
+                                )?;
+                                eprintln!(
+                                    "generate [{position}/{generation_total}] validate `{fully_qualified}`"
+                                );
+                            }
                         }
                     }
-                }
-                unreachable!()
-            });
+                    unreachable!()
+                })();
                 let _ = fs::remove_dir_all(&temporary.root);
                 result
                     .map(|candidate| (callable.clone(), candidate))
@@ -2036,17 +2581,18 @@ fn generate_project(
                     bytes,
                 });
             };
+        let prompt_refs = bindings.len();
         if jobs == 1 {
             for unresolved_binding in unresolved {
-                let (callable, candidate) = match generate_candidate(&unresolved_binding, &bindings)
-                {
-                    Ok(candidate) => candidate,
-                    Err((code, error)) => {
-                        eprintln!("error: {error}");
-                        generation_failure = Some(code);
-                        break;
-                    }
-                };
+                let (callable, candidate) =
+                    match generate_candidate(&unresolved_binding, &bindings[..prompt_refs]) {
+                        Ok(candidate) => candidate,
+                        Err((code, error)) => {
+                            eprintln!("error: {error}");
+                            generation_failure = Some(code);
+                            break;
+                        }
+                    };
                 merge_candidate(
                     unresolved_binding,
                     callable,
@@ -2058,12 +2604,10 @@ fn generate_project(
             }
         } else {
             for wave in unresolved.chunks(jobs) {
-                let pre_wave_bindings = bindings.clone();
                 let generated = run_scoped_wave(
                     wave,
                     |unresolved_binding| {
-                        let binding_context = pre_wave_bindings.clone();
-                        generate_candidate(unresolved_binding, &binding_context).map(
+                        generate_candidate(unresolved_binding, &bindings[..prompt_refs]).map(
                             |(callable, candidate)| {
                                 (unresolved_binding.clone(), callable, candidate)
                             },
@@ -2104,9 +2648,7 @@ fn generate_project(
             return 4;
         }
     };
-    if let Err(message) =
-        enrich_generation_record(&paths, &config.project.version, input_hashes, &mut emission)
-    {
+    if let Err(message) = enrich_generation_record(&paths, &config, input_hashes, &mut emission) {
         eprintln!("error: {message}");
         return 4;
     }
@@ -4181,7 +4723,16 @@ fn verify(plan: &PlannedProject) -> Result<(), Vec<String>> {
         .map_err(|message| vec![message])?;
     let policy = coverage.policy.clone();
     let mut record = expected_record;
+    let intent = record.current.tools.get(intent::TOOL_KEY).cloned();
     record.current.tools = evidence.tools;
+    if let Some(intent) = intent {
+        record
+            .current
+            .tools
+            .as_object_mut()
+            .ok_or_else(|| vec!["verification tools are not an object".to_owned()])?
+            .insert(intent::TOOL_KEY.to_owned(), intent);
+    }
     record.current.dependencies = evidence.dependencies;
     record.current.verified = true;
     record.current.verification = verification;
@@ -4617,6 +5168,91 @@ fn scoped_wave_limits_concurrency_and_preserves_input_order() {
     assert_eq!(maximum.load(Ordering::SeqCst), items.len());
     assert_eq!(in_flight.load(Ordering::SeqCst), 0);
     assert!(results[0].1 > results[4].1);
+}
+
+#[cfg(test)]
+#[test]
+fn pending_capture_rejects_late_source_edits() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct TempRoot(PathBuf);
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let root = TempRoot(std::env::temp_dir().join(format!(
+        "cott-pending-capture-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )));
+    fs::create_dir_all(root.0.join("python")).expect("temp project");
+    let stable = PathBuf::from("cott.toml");
+    let authenticated = PathBuf::from("python/selected.py");
+    let unselected = PathBuf::from("python/unselected.py");
+    let missing = PathBuf::from("python/missing.py");
+    let stable_bytes = b"[project]\n";
+    let source_bytes = b"def run() -> int:\n    return 1\n";
+    fs::write(root.0.join(&stable), stable_bytes).expect("stable input");
+    fs::write(root.0.join(&authenticated), source_bytes).expect("authenticated pending");
+    fs::write(root.0.join(&unselected), source_bytes).expect("unselected pending");
+    let hash = |bytes: &[u8]| format!("sha256:{}", sha256_hex(bytes));
+    let hashes = BTreeMap::from([("cott.toml".to_owned(), hash(stable_bytes))]);
+    let pending = BTreeMap::from([
+        (authenticated.clone(), Some(hash(source_bytes))),
+        (unselected.clone(), Some(hash(source_bytes))),
+        (missing.clone(), None),
+    ]);
+
+    let snapshot = capture_resolution_inputs(&root.0, &hashes, &pending)
+        .expect("unchanged pending sources should capture");
+    assert!(
+        snapshot
+            .files
+            .get(&authenticated)
+            .is_some_and(Option::is_some),
+        "authenticated pending source must stay in the snapshot"
+    );
+    assert!(
+        snapshot.files.get(&unselected).is_some_and(Option::is_some),
+        "unselected pending source must stay in the snapshot"
+    );
+    assert!(
+        snapshot.files.get(&missing).is_some_and(Option::is_none),
+        "expected-missing pending source must stay absent"
+    );
+    assert!(
+        snapshot.files.get(&stable).is_some_and(Option::is_some),
+        "resolved expected inputs must stay in the snapshot"
+    );
+
+    fs::write(root.0.join(&authenticated), b"changed\n").expect("tamper selected");
+    let error = capture_resolution_inputs(&root.0, &hashes, &pending)
+        .expect_err("changed authenticated pending source is drift");
+    assert!(
+        matches!(&error, TransactionError::SnapshotDrift(path) if path == &authenticated),
+        "{error}"
+    );
+    fs::write(root.0.join(&authenticated), source_bytes).expect("restore selected");
+
+    fs::write(root.0.join(&unselected), b"changed\n").expect("tamper unselected");
+    let error = capture_resolution_inputs(&root.0, &hashes, &pending)
+        .expect_err("changed unselected pending source is drift");
+    assert!(
+        matches!(&error, TransactionError::SnapshotDrift(path) if path == &unselected),
+        "{error}"
+    );
+    fs::write(root.0.join(&unselected), source_bytes).expect("restore unselected");
+
+    fs::write(root.0.join(&missing), source_bytes).expect("create missing");
+    let error = capture_resolution_inputs(&root.0, &hashes, &pending)
+        .expect_err("created expected-missing pending source is drift");
+    assert!(
+        matches!(&error, TransactionError::SnapshotDrift(path) if path == &missing),
+        "{error}"
+    );
 }
 
 #[cfg(test)]

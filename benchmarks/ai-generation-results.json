@@ -1,0 +1,943 @@
+{
+  "task": "artifact-pipeline",
+  "model": "openai-codex/gpt-5.6-sol",
+  "thinking": "high",
+  "provider": "openai-codex",
+  "model_name": "gpt-5.6-sol",
+  "sample_size": 3,
+  "jobs": 3,
+  "caveats": [
+    "One task (artifact-pipeline); N paired trials is not a broad capability claim.",
+    "Direct is one OMP invocation; Cott may natively retry each callable up to 2 times.",
+    "Same model, thinking, and OMP tools (read,grep,glob,edit,write).",
+    "Generation walltime is separate from postverify and independent semantic acceptance.",
+    "Cott token usage is unavailable from native provenance; direct cost is estimated not billing."
+  ],
+  "model_settings": {
+    "modelRoles": {
+      "default": "openai-codex/gpt-5.6-sol:high"
+    },
+    "defaultThinkingLevel": "high",
+    "retry.modelFallback": false
+  },
+  "identity": {
+    "scripts": {
+      "ai_generation": {
+        "path": "/home/arthur/Code/cott/benchmarks/ai_generation.py",
+        "content_hash": "sha256:a2b18bfb644e87efee9ab8db60b5b52a6a4808f4d2d11320d732a4d4e0633eef"
+      },
+      "ai_generation_protocol": {
+        "path": "/home/arthur/Code/cott/benchmarks/ai_generation_protocol.py",
+        "content_hash": "sha256:05567047b9835b8b0874d7845ad23b64a649d19acb89aa74abed9e1bb5b33ba8"
+      },
+      "check_semantics": {
+        "path": "/home/arthur/Code/cott/examples/complex/artifact-pipeline/check_semantics.py",
+        "content_hash": "sha256:8894eb68a8763f4e24edf69331b2a10d9ebaaa51fb2e19d43afb343673b8a3d7"
+      }
+    },
+    "cott": {
+      "executable": "/home/arthur/Code/cott/target/debug/cott",
+      "content_hash": "sha256:23b8f0e2a5baac2f3c4d37b98b6f2dcab86cbe5fbf4ae19256f09ee467ea376d"
+    }
+  },
+  "summary": {
+    "cott": {
+      "trials": 3,
+      "generation_ok": 3,
+      "generation_fraction": 1.0,
+      "postverify_ok": 3,
+      "postverify_fraction": 1.0,
+      "semantic_ok": 3,
+      "semantic_fraction": 1.0,
+      "end_to_end_ok": 3,
+      "end_to_end_fraction": 1.0,
+      "generation_seconds": {
+        "samples": [
+          111.37500447500497,
+          178.490943395067,
+          81.41206485091243
+        ],
+        "median": 111.37500447500497,
+        "success_samples": [
+          111.37500447500497,
+          178.490943395067,
+          81.41206485091243
+        ],
+        "success_median": 111.37500447500497,
+        "failure_samples": [],
+        "failure_median": null
+      },
+      "postverify_seconds": {
+        "samples": [
+          15.23426130390726,
+          15.184370644041337,
+          15.287407684954815
+        ],
+        "median": 15.23426130390726,
+        "success_samples": [
+          15.23426130390726,
+          15.184370644041337,
+          15.287407684954815
+        ],
+        "success_median": 15.23426130390726,
+        "failure_samples": [],
+        "failure_median": null
+      },
+      "semantic_seconds": {
+        "samples": [
+          6.947706265025772,
+          6.967758914921433,
+          7.024749797070399
+        ],
+        "median": 6.967758914921433,
+        "success_samples": [
+          6.947706265025772,
+          6.967758914921433,
+          7.024749797070399
+        ],
+        "success_median": 6.967758914921433,
+        "failure_samples": [],
+        "failure_median": null
+      }
+    },
+    "direct": {
+      "trials": 3,
+      "generation_ok": 3,
+      "generation_fraction": 1.0,
+      "postverify_ok": 3,
+      "postverify_fraction": 1.0,
+      "semantic_ok": 3,
+      "semantic_fraction": 1.0,
+      "end_to_end_ok": 3,
+      "end_to_end_fraction": 1.0,
+      "generation_seconds": {
+        "samples": [
+          57.72011656395625,
+          47.90670268400572,
+          51.66683001292404
+        ],
+        "median": 51.66683001292404,
+        "success_samples": [
+          57.72011656395625,
+          47.90670268400572,
+          51.66683001292404
+        ],
+        "success_median": 51.66683001292404,
+        "failure_samples": [],
+        "failure_median": null
+      },
+      "postverify_seconds": {
+        "samples": [
+          0.8114990460453555,
+          0.8171023270115256,
+          0.8022097100038081
+        ],
+        "median": 0.8114990460453555,
+        "success_samples": [
+          0.8114990460453555,
+          0.8171023270115256,
+          0.8022097100038081
+        ],
+        "success_median": 0.8114990460453555,
+        "failure_samples": [],
+        "failure_median": null
+      },
+      "semantic_seconds": {
+        "samples": [
+          0.13086330599617213,
+          0.1312902820063755,
+          0.13188964105211198
+        ],
+        "median": 0.1312902820063755,
+        "success_samples": [
+          0.13086330599617213,
+          0.1312902820063755,
+          0.13188964105211198
+        ],
+        "success_median": 0.1312902820063755,
+        "failure_samples": [],
+        "failure_median": null
+      }
+    }
+  },
+  "trials": [
+    {
+      "index": 0,
+      "order": [
+        "cott",
+        "direct"
+      ],
+      "arms": {
+        "cott": {
+          "arm": "cott",
+          "generation": {
+            "ok": true,
+            "returncode": 0,
+            "seconds": 111.37500447500497,
+            "timed_out": false,
+            "infrastructure": false,
+            "stdout": "",
+            "stderr": "generate [2/2] start `curriculum.artifact_pipeline.topologically_order_steps`\ngenerate [1/2] start `curriculum.artifact_pipeline.plan_pipeline`\ngenerate [1/2] validate `curriculum.artifact_pipeline.plan_pipeline`\ngenerate [1/2] done `curriculum.artifact_pipeline.plan_pipeline`\ngenerate [2/2] validate `curriculum.artifact_pipeline.topologically_order_steps`\ngenerate [2/2] done `curriculum.artifact_pipeline.topologically_order_steps`\n",
+            "argv": [
+              "/home/arthur/Code/cott/target/debug/cott",
+              "generate",
+              "--agent",
+              "omp",
+              "--target",
+              "python",
+              "-j",
+              "3",
+              "--project",
+              "/tmp/cott-ai-gen-zx331t7l/t0-cott"
+            ]
+          },
+          "postverify": {
+            "ok": true,
+            "returncode": 0,
+            "seconds": 15.23426130390726,
+            "timed_out": false,
+            "infrastructure": false,
+            "stdout": "verified generated/python\n",
+            "stderr": "",
+            "argv": [
+              "/home/arthur/Code/cott/target/debug/cott",
+              "verify",
+              "--project",
+              "/tmp/cott-ai-gen-zx331t7l/t0-cott"
+            ]
+          },
+          "semantic": {
+            "ok": true,
+            "counts": {
+              "topologically_order_steps": 3130,
+              "plan_pipeline": 3130
+            },
+            "seconds": 6.947706265025772,
+            "error": null
+          },
+          "generation_ok": true,
+          "postverify_ok": true,
+          "semantic_ok": true,
+          "end_to_end_ok": true,
+          "generation_seconds": 111.37500447500497,
+          "postverify_seconds": 15.23426130390726,
+          "semantic_seconds": 6.947706265025772,
+          "agent_runs": [
+            {
+              "symbol": "curriculum.artifact_pipeline.plan_pipeline",
+              "duration_ms": 50802,
+              "status": {
+                "cancelled": false,
+                "exit_code": 0,
+                "signal": null,
+                "timed_out": false
+              },
+              "stdout": {
+                "bytes": 366,
+                "sha256": "sha256:86f652ab1ea541d4f9a207916a6d9fbcec143ad72df6a27fba3d0db753f8633b",
+                "truncated": false
+              },
+              "stderr": {
+                "bytes": 11,
+                "sha256": "sha256:dfef4c342f986ab93a9e0bb90f2d88c3bf25b2455853253d31ef95c1c55192a7",
+                "truncated": false
+              },
+              "adapter": "omp",
+              "adapter_version": "18.1.11",
+              "prompt_hash": "sha256:a9fb3cbf32648e7a7ce75f4d8c0ac2517030d6f333b918cf790fbd744f98f645",
+              "implementation_hash": "sha256:05dca17ef603688a70748b741cd012cef140c1e9528cba7b1ff50db75ff5fb99",
+              "argv_template": [
+                "-p",
+                "--cwd",
+                "<workspace>",
+                "--no-session",
+                "--no-rules",
+                "--no-skills",
+                "--no-extensions",
+                "--no-lsp",
+                "--no-pty",
+                "--no-title",
+                "--tools",
+                "read,grep,glob,edit,write",
+                "--approval-mode",
+                "yolo",
+                "--max-time",
+                "<seconds>s",
+                "--config",
+                "<overlay>",
+                "@<prompt-file>"
+              ],
+              "executable": "/home/arthur/.local/bin/omp",
+              "executable_hash": "sha256:2b2c785bbbafd3b43fb6096e4ae63a0342c4d8069de2f875a9b76ea9947c2383"
+            },
+            {
+              "symbol": "curriculum.artifact_pipeline.topologically_order_steps",
+              "duration_ms": 95388,
+              "status": {
+                "cancelled": false,
+                "exit_code": 0,
+                "signal": null,
+                "timed_out": false
+              },
+              "stdout": {
+                "bytes": 606,
+                "sha256": "sha256:a6f89c4ecf3f8cda675593b81f3ce0c11ffcb74c03a519111aeb537d4d37daad",
+                "truncated": false
+              },
+              "stderr": {
+                "bytes": 11,
+                "sha256": "sha256:dfef4c342f986ab93a9e0bb90f2d88c3bf25b2455853253d31ef95c1c55192a7",
+                "truncated": false
+              },
+              "adapter": "omp",
+              "adapter_version": "18.1.11",
+              "prompt_hash": "sha256:17804dbc4f8a741602bae1d7b94ff2b0c29ec321e655c4fc5c92d87ba6ce4d5d",
+              "implementation_hash": "sha256:b96a52190cdcae89777a4d715162b130b9e12672c7b6b07447e712f3f32d8687",
+              "argv_template": [
+                "-p",
+                "--cwd",
+                "<workspace>",
+                "--no-session",
+                "--no-rules",
+                "--no-skills",
+                "--no-extensions",
+                "--no-lsp",
+                "--no-pty",
+                "--no-title",
+                "--tools",
+                "read,grep,glob,edit,write",
+                "--approval-mode",
+                "yolo",
+                "--max-time",
+                "<seconds>s",
+                "--config",
+                "<overlay>",
+                "@<prompt-file>"
+              ],
+              "executable": "/home/arthur/.local/bin/omp",
+              "executable_hash": "sha256:2b2c785bbbafd3b43fb6096e4ae63a0342c4d8069de2f875a9b76ea9947c2383"
+            }
+          ],
+          "retries": {
+            "events": [],
+            "count": 0,
+            "limit_per_callable": 2,
+            "label": "native generate [i/n] retry k/2 `symbol` (max 2 retries / 3 attempts)"
+          },
+          "usage": {
+            "input": null,
+            "output": null,
+            "cacheRead": null,
+            "cacheWrite": null,
+            "totalTokens": null,
+            "cost_estimated": null,
+            "reason": "Cott native OMP adapter provenance records durations and stream digests only; token usage is not retained and is not inferred from characters or direct-arm usage"
+          }
+        },
+        "direct": {
+          "arm": "direct",
+          "generation": {
+            "ok": true,
+            "returncode": 0,
+            "seconds": 57.72011656395625,
+            "timed_out": false,
+            "infrastructure": false,
+            "stdout": "{\"type\":\"session\",\"version\":3,\"id\":\"01a0776f-41c0-76a8-850b-69d6a3dedb1c\",\"timestamp\":\"2026-09-06T15:56:15.168Z\",\"cwd\":\"/tmp/cott-ai-gen-zx331t7l/t0-direct\"}\n{\"type\":\"agent_start\"}\n{\"type\":\"turn_start\"}\n{\"type\":\"message_start\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"<file name=\\\"/tmp/cott-ai-gen-zx331t7l/t0-direct-prompt.txt\\\">\\nWrite only a complete stdlib pipeline.py. No tests, extras, or other files.\\nRequired public ABI with typing.TypedDict / Literal / union annotations:\\n  ErrorName = Literal['BlankStepName','DuplicateStep','UnknownDependency','SelfDependency','Cycle']\\n  class Step(TypedDict): name: str; needs: list[str]\\n  class Pipeline(TypedDict): steps: list[Step]\\n  def topologically_order_steps(steps: list[Step]) -> OrderResult\\n  def plan_pipeline(pipeline: Pipeline) -> PlanResult\\n  OrderResult is {'ok': list[str]} | {'error': ErrorName}\\n  PlanResult is {'ok': {'ordered_steps': list[str]}} | {'error': ErrorName}\\nReturn those tagged dicts for business outcomes; do not raise them.\\nDo not emit Cott runtime types or evaluation adapters.\\nValidate and order build steps. Same business rules for both public functions.\\n\\nNames are case-sensitive and otherwise unmodified. A name is blank iff\\nname.strip()==''. Whitespace-only names are blank; do not strip non-blank names.\\n\\nEach step's needs is a set: duplicate dependency strings are ignored.\\n\\nError precedence (first match wins): BlankStepName, DuplicateStep,\\nUnknownDependency, SelfDependency, Cycle.\\n- BlankStepName: any step name is blank.\\n- DuplicateStep: two steps share the same name.\\n- UnknownDependency: a need is not equal to any step name.\\n- SelfDependency: a step lists its own name in needs.\\n- Cycle: no valid total order remains.\\n\\nEmpty input succeeds with an empty order. Success returns every step name\\nexactly once.\\n\\nDeterministic order: repeatedly emit the lexicographically smallest name among\\ncurrently ready steps (all needs already emitted). Newly ready steps join the\\nready set immediately and compete by the same lexical rule.\\n\\nplan_pipeline must call public topologically_order_steps on the pipeline steps\\nand propagate that error unchanged; on success wrap the order as ordered_steps.\\n</file>\\n\"}],\"attribution\":\"user\",\"timestamp\":1788710175346}}\n{\"type\":\"message_end\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"<file name=\\\"/tmp/cott-ai-gen-zx331t7l/t0-direct-prompt.txt\\\">\\nWrite only a complete stdlib pipeline.py. No tests, extras, or other files.\\nRequired public ABI with typing.TypedDict / Literal / union annotations:\\n  ErrorName = Literal['BlankStepName','DuplicateStep','UnknownDependency','SelfDependency','Cycle']\\n  class Step(TypedDict): name: str; needs: list[str]\\n  class Pipeline(TypedDict): steps: list[Step]\\n  def topologically_order_steps(steps: list[Step]) -> OrderResult\\n  def plan_pipeline(pipeline: Pipeline) -> PlanResult\\n  OrderResult is {'ok': list[str]} | {'error': ErrorName}\\n  PlanResult is {'ok': {'ordered_steps': list[str]}} | {'error': ErrorName}\\nReturn those tagged dicts for business outcomes; do not raise them.\\nDo not emit Cott runtime types or evaluation adapters.\\nValidate and order build steps. Same business rules for both public functions.\\n\\nNames are case-sensitive and otherwise unmodified. A name is blank iff\\nname.strip()==''. Whitespace-only names are blank; do not strip non-blank names.\\n\\nEach step's needs is a set: duplicate dependency strings are ignored.\\n\\nError precedence (first match wins): BlankStepName, DuplicateStep,\\nUnknownDependency, SelfDependency, Cycle.\\n- BlankStepName: any step name is blank.\\n- DuplicateStep: two steps share the same name.\\n- UnknownDependency: a need is not equal to any step name.\\n- SelfDependency: a step lists its own name in needs.\\n- Cycle: no valid total order remains.\\n\\nEmpty input succeeds with an empty order. Success returns every step name\\nexactly once.\\n\\nDeterministic order: repeatedly emit the lexicographically ...",
+            "stderr": "",
+            "argv": [
+              "/home/arthur/.local/bin/omp",
+              "-p",
+              "--mode",
+              "json",
+              "--cwd",
+              "/tmp/cott-ai-gen-zx331t7l/t0-direct",
+              "--no-session",
+              "--no-rules",
+              "--no-skills",
+              "--no-extensions",
+              "--no-lsp",
+              "--no-pty",
+              "--no-title",
+              "--tools",
+              "read,grep,glob,edit,write",
+              "--approval-mode",
+              "yolo",
+              "--max-time",
+              "900s",
+              "--config",
+              "/tmp/cott-ai-gen-zx331t7l/t0-overlay.yaml",
+              "@/tmp/cott-ai-gen-zx331t7l/t0-direct-prompt.txt"
+            ]
+          },
+          "postverify": {
+            "ok": true,
+            "returncode": 0,
+            "seconds": 0.8114990460453555,
+            "timed_out": false,
+            "infrastructure": false,
+            "stdout": "0 errors, 0 warnings, 0 notes\n",
+            "stderr": "",
+            "argv": [
+              "/home/arthur/Code/cott/examples/complex/artifact-pipeline/.venv/bin/basedpyright",
+              "--level",
+              "error",
+              "/tmp/cott-ai-gen-zx331t7l/t0-direct/pipeline.py"
+            ]
+          },
+          "semantic": {
+            "ok": true,
+            "counts": {
+              "topologically_order_steps": 3130,
+              "plan_pipeline": 3130
+            },
+            "seconds": 0.13086330599617213,
+            "error": null
+          },
+          "generation_ok": true,
+          "postverify_ok": true,
+          "semantic_ok": true,
+          "end_to_end_ok": true,
+          "generation_seconds": 57.72011656395625,
+          "postverify_seconds": 0.8114990460453555,
+          "semantic_seconds": 0.13086330599617213,
+          "agent_runs": null,
+          "retries": null,
+          "usage": {
+            "ok": true,
+            "input": 16976,
+            "output": 2047,
+            "cacheRead": 23680,
+            "cacheWrite": 0,
+            "totalTokens": 42703,
+            "cost_estimated": 0.118316,
+            "cost_note": "priced cost estimated not billing",
+            "provider": "openai-codex",
+            "model": "gpt-5.6-sol",
+            "message_end_count": 5,
+            "reason": null,
+            "evidence": null
+          }
+        }
+      }
+    },
+    {
+      "index": 1,
+      "order": [
+        "direct",
+        "cott"
+      ],
+      "arms": {
+        "direct": {
+          "arm": "direct",
+          "generation": {
+            "ok": true,
+            "returncode": 0,
+            "seconds": 47.90670268400572,
+            "timed_out": false,
+            "infrastructure": false,
+            "stdout": "{\"type\":\"session\",\"version\":3,\"id\":\"01a07770-26f7-737a-80e4-3f8d5c548397\",\"timestamp\":\"2026-09-06T15:57:13.847Z\",\"cwd\":\"/tmp/cott-ai-gen-zx331t7l/t1-direct\"}\n{\"type\":\"agent_start\"}\n{\"type\":\"turn_start\"}\n{\"type\":\"message_start\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"<file name=\\\"/tmp/cott-ai-gen-zx331t7l/t1-direct-prompt.txt\\\">\\nWrite only a complete stdlib pipeline.py. No tests, extras, or other files.\\nRequired public ABI with typing.TypedDict / Literal / union annotations:\\n  ErrorName = Literal['BlankStepName','DuplicateStep','UnknownDependency','SelfDependency','Cycle']\\n  class Step(TypedDict): name: str; needs: list[str]\\n  class Pipeline(TypedDict): steps: list[Step]\\n  def topologically_order_steps(steps: list[Step]) -> OrderResult\\n  def plan_pipeline(pipeline: Pipeline) -> PlanResult\\n  OrderResult is {'ok': list[str]} | {'error': ErrorName}\\n  PlanResult is {'ok': {'ordered_steps': list[str]}} | {'error': ErrorName}\\nReturn those tagged dicts for business outcomes; do not raise them.\\nDo not emit Cott runtime types or evaluation adapters.\\nValidate and order build steps. Same business rules for both public functions.\\n\\nNames are case-sensitive and otherwise unmodified. A name is blank iff\\nname.strip()==''. Whitespace-only names are blank; do not strip non-blank names.\\n\\nEach step's needs is a set: duplicate dependency strings are ignored.\\n\\nError precedence (first match wins): BlankStepName, DuplicateStep,\\nUnknownDependency, SelfDependency, Cycle.\\n- BlankStepName: any step name is blank.\\n- DuplicateStep: two steps share the same name.\\n- UnknownDependency: a need is not equal to any step name.\\n- SelfDependency: a step lists its own name in needs.\\n- Cycle: no valid total order remains.\\n\\nEmpty input succeeds with an empty order. Success returns every step name\\nexactly once.\\n\\nDeterministic order: repeatedly emit the lexicographically smallest name among\\ncurrently ready steps (all needs already emitted). Newly ready steps join the\\nready set immediately and compete by the same lexical rule.\\n\\nplan_pipeline must call public topologically_order_steps on the pipeline steps\\nand propagate that error unchanged; on success wrap the order as ordered_steps.\\n</file>\\n\"}],\"attribution\":\"user\",\"timestamp\":1788710234019}}\n{\"type\":\"message_end\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"<file name=\\\"/tmp/cott-ai-gen-zx331t7l/t1-direct-prompt.txt\\\">\\nWrite only a complete stdlib pipeline.py. No tests, extras, or other files.\\nRequired public ABI with typing.TypedDict / Literal / union annotations:\\n  ErrorName = Literal['BlankStepName','DuplicateStep','UnknownDependency','SelfDependency','Cycle']\\n  class Step(TypedDict): name: str; needs: list[str]\\n  class Pipeline(TypedDict): steps: list[Step]\\n  def topologically_order_steps(steps: list[Step]) -> OrderResult\\n  def plan_pipeline(pipeline: Pipeline) -> PlanResult\\n  OrderResult is {'ok': list[str]} | {'error': ErrorName}\\n  PlanResult is {'ok': {'ordered_steps': list[str]}} | {'error': ErrorName}\\nReturn those tagged dicts for business outcomes; do not raise them.\\nDo not emit Cott runtime types or evaluation adapters.\\nValidate and order build steps. Same business rules for both public functions.\\n\\nNames are case-sensitive and otherwise unmodified. A name is blank iff\\nname.strip()==''. Whitespace-only names are blank; do not strip non-blank names.\\n\\nEach step's needs is a set: duplicate dependency strings are ignored.\\n\\nError precedence (first match wins): BlankStepName, DuplicateStep,\\nUnknownDependency, SelfDependency, Cycle.\\n- BlankStepName: any step name is blank.\\n- DuplicateStep: two steps share the same name.\\n- UnknownDependency: a need is not equal to any step name.\\n- SelfDependency: a step lists its own name in needs.\\n- Cycle: no valid total order remains.\\n\\nEmpty input succeeds with an empty order. Success returns every step name\\nexactly once.\\n\\nDeterministic order: repeatedly emit the lexicographically ...",
+            "stderr": "",
+            "argv": [
+              "/home/arthur/.local/bin/omp",
+              "-p",
+              "--mode",
+              "json",
+              "--cwd",
+              "/tmp/cott-ai-gen-zx331t7l/t1-direct",
+              "--no-session",
+              "--no-rules",
+              "--no-skills",
+              "--no-extensions",
+              "--no-lsp",
+              "--no-pty",
+              "--no-title",
+              "--tools",
+              "read,grep,glob,edit,write",
+              "--approval-mode",
+              "yolo",
+              "--max-time",
+              "900s",
+              "--config",
+              "/tmp/cott-ai-gen-zx331t7l/t1-overlay.yaml",
+              "@/tmp/cott-ai-gen-zx331t7l/t1-direct-prompt.txt"
+            ]
+          },
+          "postverify": {
+            "ok": true,
+            "returncode": 0,
+            "seconds": 0.8171023270115256,
+            "timed_out": false,
+            "infrastructure": false,
+            "stdout": "0 errors, 0 warnings, 0 notes\n",
+            "stderr": "",
+            "argv": [
+              "/home/arthur/Code/cott/examples/complex/artifact-pipeline/.venv/bin/basedpyright",
+              "--level",
+              "error",
+              "/tmp/cott-ai-gen-zx331t7l/t1-direct/pipeline.py"
+            ]
+          },
+          "semantic": {
+            "ok": true,
+            "counts": {
+              "topologically_order_steps": 3130,
+              "plan_pipeline": 3130
+            },
+            "seconds": 0.1312902820063755,
+            "error": null
+          },
+          "generation_ok": true,
+          "postverify_ok": true,
+          "semantic_ok": true,
+          "end_to_end_ok": true,
+          "generation_seconds": 47.90670268400572,
+          "postverify_seconds": 0.8171023270115256,
+          "semantic_seconds": 0.1312902820063755,
+          "agent_runs": null,
+          "retries": null,
+          "usage": {
+            "ok": true,
+            "input": 17931,
+            "output": 1637,
+            "cacheRead": 22528,
+            "cacheWrite": 0,
+            "totalTokens": 42096,
+            "cost_estimated": 0.1134752,
+            "cost_note": "priced cost estimated not billing",
+            "provider": "openai-codex",
+            "model": "gpt-5.6-sol",
+            "message_end_count": 5,
+            "reason": null,
+            "evidence": null
+          }
+        },
+        "cott": {
+          "arm": "cott",
+          "generation": {
+            "ok": true,
+            "returncode": 0,
+            "seconds": 178.490943395067,
+            "timed_out": false,
+            "infrastructure": false,
+            "stdout": "",
+            "stderr": "generate [1/2] start `curriculum.artifact_pipeline.plan_pipeline`\ngenerate [2/2] start `curriculum.artifact_pipeline.topologically_order_steps`\ngenerate [1/2] validate `curriculum.artifact_pipeline.plan_pipeline`\ngenerate [1/2] done `curriculum.artifact_pipeline.plan_pipeline`\ngenerate [2/2] validate `curriculum.artifact_pipeline.topologically_order_steps`\ngenerate [2/2] done `curriculum.artifact_pipeline.topologically_order_steps`\n",
+            "argv": [
+              "/home/arthur/Code/cott/target/debug/cott",
+              "generate",
+              "--agent",
+              "omp",
+              "--target",
+              "python",
+              "-j",
+              "3",
+              "--project",
+              "/tmp/cott-ai-gen-zx331t7l/t1-cott"
+            ]
+          },
+          "postverify": {
+            "ok": true,
+            "returncode": 0,
+            "seconds": 15.184370644041337,
+            "timed_out": false,
+            "infrastructure": false,
+            "stdout": "verified generated/python\n",
+            "stderr": "",
+            "argv": [
+              "/home/arthur/Code/cott/target/debug/cott",
+              "verify",
+              "--project",
+              "/tmp/cott-ai-gen-zx331t7l/t1-cott"
+            ]
+          },
+          "semantic": {
+            "ok": true,
+            "counts": {
+              "topologically_order_steps": 3130,
+              "plan_pipeline": 3130
+            },
+            "seconds": 6.967758914921433,
+            "error": null
+          },
+          "generation_ok": true,
+          "postverify_ok": true,
+          "semantic_ok": true,
+          "end_to_end_ok": true,
+          "generation_seconds": 178.490943395067,
+          "postverify_seconds": 15.184370644041337,
+          "semantic_seconds": 6.967758914921433,
+          "agent_runs": [
+            {
+              "symbol": "curriculum.artifact_pipeline.plan_pipeline",
+              "duration_ms": 51678,
+              "status": {
+                "cancelled": false,
+                "exit_code": 0,
+                "signal": null,
+                "timed_out": false
+              },
+              "stdout": {
+                "bytes": 436,
+                "sha256": "sha256:1c0b1a6acf31b292d1b87d764709fa83129f00805514cebaa53044f0e91e278a",
+                "truncated": false
+              },
+              "stderr": {
+                "bytes": 11,
+                "sha256": "sha256:dfef4c342f986ab93a9e0bb90f2d88c3bf25b2455853253d31ef95c1c55192a7",
+                "truncated": false
+              },
+              "adapter": "omp",
+              "adapter_version": "18.1.11",
+              "prompt_hash": "sha256:b0dd96c9a2f1dad5df05042b122d592cf2176b386a61c9b79af943f1b0647468",
+              "implementation_hash": "sha256:e8a7ab87c45f0842b4575f513338093348f9b69db13e8e52431f3c3a7c06cfb7",
+              "argv_template": [
+                "-p",
+                "--cwd",
+                "<workspace>",
+                "--no-session",
+                "--no-rules",
+                "--no-skills",
+                "--no-extensions",
+                "--no-lsp",
+                "--no-pty",
+                "--no-title",
+                "--tools",
+                "read,grep,glob,edit,write",
+                "--approval-mode",
+                "yolo",
+                "--max-time",
+                "<seconds>s",
+                "--config",
+                "<overlay>",
+                "@<prompt-file>"
+              ],
+              "executable": "/home/arthur/.local/bin/omp",
+              "executable_hash": "sha256:2b2c785bbbafd3b43fb6096e4ae63a0342c4d8069de2f875a9b76ea9947c2383"
+            },
+            {
+              "symbol": "curriculum.artifact_pipeline.topologically_order_steps",
+              "duration_ms": 162591,
+              "status": {
+                "cancelled": false,
+                "exit_code": 0,
+                "signal": null,
+                "timed_out": false
+              },
+              "stdout": {
+                "bytes": 580,
+                "sha256": "sha256:8b4e3871f1459e250f8890926e6979db3c1cc17d922ed63644ac455991632590",
+                "truncated": false
+              },
+              "stderr": {
+                "bytes": 11,
+                "sha256": "sha256:dfef4c342f986ab93a9e0bb90f2d88c3bf25b2455853253d31ef95c1c55192a7",
+                "truncated": false
+              },
+              "adapter": "omp",
+              "adapter_version": "18.1.11",
+              "prompt_hash": "sha256:843a9e2cfe81d47873a92a94e010f78083a6651ef1efa6b4be46b578023f069a",
+              "implementation_hash": "sha256:86dcedea8f6515ae87256bfd0aa14e17a7924c3c4f66ae040934c81729402a32",
+              "argv_template": [
+                "-p",
+                "--cwd",
+                "<workspace>",
+                "--no-session",
+                "--no-rules",
+                "--no-skills",
+                "--no-extensions",
+                "--no-lsp",
+                "--no-pty",
+                "--no-title",
+                "--tools",
+                "read,grep,glob,edit,write",
+                "--approval-mode",
+                "yolo",
+                "--max-time",
+                "<seconds>s",
+                "--config",
+                "<overlay>",
+                "@<prompt-file>"
+              ],
+              "executable": "/home/arthur/.local/bin/omp",
+              "executable_hash": "sha256:2b2c785bbbafd3b43fb6096e4ae63a0342c4d8069de2f875a9b76ea9947c2383"
+            }
+          ],
+          "retries": {
+            "events": [],
+            "count": 0,
+            "limit_per_callable": 2,
+            "label": "native generate [i/n] retry k/2 `symbol` (max 2 retries / 3 attempts)"
+          },
+          "usage": {
+            "input": null,
+            "output": null,
+            "cacheRead": null,
+            "cacheWrite": null,
+            "totalTokens": null,
+            "cost_estimated": null,
+            "reason": "Cott native OMP adapter provenance records durations and stream digests only; token usage is not retained and is not inferred from characters or direct-arm usage"
+          }
+        }
+      }
+    },
+    {
+      "index": 2,
+      "order": [
+        "cott",
+        "direct"
+      ],
+      "arms": {
+        "cott": {
+          "arm": "cott",
+          "generation": {
+            "ok": true,
+            "returncode": 0,
+            "seconds": 81.41206485091243,
+            "timed_out": false,
+            "infrastructure": false,
+            "stdout": "",
+            "stderr": "generate [2/2] start `curriculum.artifact_pipeline.topologically_order_steps`\ngenerate [1/2] start `curriculum.artifact_pipeline.plan_pipeline`\ngenerate [1/2] validate `curriculum.artifact_pipeline.plan_pipeline`\ngenerate [1/2] done `curriculum.artifact_pipeline.plan_pipeline`\ngenerate [2/2] validate `curriculum.artifact_pipeline.topologically_order_steps`\ngenerate [2/2] done `curriculum.artifact_pipeline.topologically_order_steps`\n",
+            "argv": [
+              "/home/arthur/Code/cott/target/debug/cott",
+              "generate",
+              "--agent",
+              "omp",
+              "--target",
+              "python",
+              "-j",
+              "3",
+              "--project",
+              "/tmp/cott-ai-gen-zx331t7l/t2-cott"
+            ]
+          },
+          "postverify": {
+            "ok": true,
+            "returncode": 0,
+            "seconds": 15.287407684954815,
+            "timed_out": false,
+            "infrastructure": false,
+            "stdout": "verified generated/python\n",
+            "stderr": "",
+            "argv": [
+              "/home/arthur/Code/cott/target/debug/cott",
+              "verify",
+              "--project",
+              "/tmp/cott-ai-gen-zx331t7l/t2-cott"
+            ]
+          },
+          "semantic": {
+            "ok": true,
+            "counts": {
+              "topologically_order_steps": 3130,
+              "plan_pipeline": 3130
+            },
+            "seconds": 7.024749797070399,
+            "error": null
+          },
+          "generation_ok": true,
+          "postverify_ok": true,
+          "semantic_ok": true,
+          "end_to_end_ok": true,
+          "generation_seconds": 81.41206485091243,
+          "postverify_seconds": 15.287407684954815,
+          "semantic_seconds": 7.024749797070399,
+          "agent_runs": [
+            {
+              "symbol": "curriculum.artifact_pipeline.plan_pipeline",
+              "duration_ms": 42116,
+              "status": {
+                "cancelled": false,
+                "exit_code": 0,
+                "signal": null,
+                "timed_out": false
+              },
+              "stdout": {
+                "bytes": 396,
+                "sha256": "sha256:2104c681727320aee0c5e188193c5f2b68185a49fea02076a8d307fb838ba1ff",
+                "truncated": false
+              },
+              "stderr": {
+                "bytes": 11,
+                "sha256": "sha256:dfef4c342f986ab93a9e0bb90f2d88c3bf25b2455853253d31ef95c1c55192a7",
+                "truncated": false
+              },
+              "adapter": "omp",
+              "adapter_version": "18.1.11",
+              "prompt_hash": "sha256:6f78c94e459fba02903059bb2f6529bfc2364469323fa84a7ee4d8c7876cc17a",
+              "implementation_hash": "sha256:ace7de011d4c4715bf8c8115091c681ded8b644ce2dadc91315b100cab6b4016",
+              "argv_template": [
+                "-p",
+                "--cwd",
+                "<workspace>",
+                "--no-session",
+                "--no-rules",
+                "--no-skills",
+                "--no-extensions",
+                "--no-lsp",
+                "--no-pty",
+                "--no-title",
+                "--tools",
+                "read,grep,glob,edit,write",
+                "--approval-mode",
+                "yolo",
+                "--max-time",
+                "<seconds>s",
+                "--config",
+                "<overlay>",
+                "@<prompt-file>"
+              ],
+              "executable": "/home/arthur/.local/bin/omp",
+              "executable_hash": "sha256:2b2c785bbbafd3b43fb6096e4ae63a0342c4d8069de2f875a9b76ea9947c2383"
+            },
+            {
+              "symbol": "curriculum.artifact_pipeline.topologically_order_steps",
+              "duration_ms": 65473,
+              "status": {
+                "cancelled": false,
+                "exit_code": 0,
+                "signal": null,
+                "timed_out": false
+              },
+              "stdout": {
+                "bytes": 532,
+                "sha256": "sha256:ac34044ce1e343e2da698193867d461aeb921a369195fb38500fa9b83dff68ba",
+                "truncated": false
+              },
+              "stderr": {
+                "bytes": 11,
+                "sha256": "sha256:dfef4c342f986ab93a9e0bb90f2d88c3bf25b2455853253d31ef95c1c55192a7",
+                "truncated": false
+              },
+              "adapter": "omp",
+              "adapter_version": "18.1.11",
+              "prompt_hash": "sha256:dc44c8f6f9f6d03d1791ad5c86d331df0dcac6f0aeb8b7c58810a2abb6d97e90",
+              "implementation_hash": "sha256:decfcc991b44612438d2dd88843419f7378c39d6859b3f69a447fbecc9e9b831",
+              "argv_template": [
+                "-p",
+                "--cwd",
+                "<workspace>",
+                "--no-session",
+                "--no-rules",
+                "--no-skills",
+                "--no-extensions",
+                "--no-lsp",
+                "--no-pty",
+                "--no-title",
+                "--tools",
+                "read,grep,glob,edit,write",
+                "--approval-mode",
+                "yolo",
+                "--max-time",
+                "<seconds>s",
+                "--config",
+                "<overlay>",
+                "@<prompt-file>"
+              ],
+              "executable": "/home/arthur/.local/bin/omp",
+              "executable_hash": "sha256:2b2c785bbbafd3b43fb6096e4ae63a0342c4d8069de2f875a9b76ea9947c2383"
+            }
+          ],
+          "retries": {
+            "events": [],
+            "count": 0,
+            "limit_per_callable": 2,
+            "label": "native generate [i/n] retry k/2 `symbol` (max 2 retries / 3 attempts)"
+          },
+          "usage": {
+            "input": null,
+            "output": null,
+            "cacheRead": null,
+            "cacheWrite": null,
+            "totalTokens": null,
+            "cost_estimated": null,
+            "reason": "Cott native OMP adapter provenance records durations and stream digests only; token usage is not retained and is not inferred from characters or direct-arm usage"
+          }
+        },
+        "direct": {
+          "arm": "direct",
+          "generation": {
+            "ok": true,
+            "returncode": 0,
+            "seconds": 51.66683001292404,
+            "timed_out": false,
+            "infrastructure": false,
+            "stdout": "{\"type\":\"session\",\"version\":3,\"id\":\"01a07775-8d80-77f4-ba51-55465d9599f6\",\"timestamp\":\"2026-09-06T16:03:07.776Z\",\"cwd\":\"/tmp/cott-ai-gen-zx331t7l/t2-direct\"}\n{\"type\":\"agent_start\"}\n{\"type\":\"turn_start\"}\n{\"type\":\"message_start\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"<file name=\\\"/tmp/cott-ai-gen-zx331t7l/t2-direct-prompt.txt\\\">\\nWrite only a complete stdlib pipeline.py. No tests, extras, or other files.\\nRequired public ABI with typing.TypedDict / Literal / union annotations:\\n  ErrorName = Literal['BlankStepName','DuplicateStep','UnknownDependency','SelfDependency','Cycle']\\n  class Step(TypedDict): name: str; needs: list[str]\\n  class Pipeline(TypedDict): steps: list[Step]\\n  def topologically_order_steps(steps: list[Step]) -> OrderResult\\n  def plan_pipeline(pipeline: Pipeline) -> PlanResult\\n  OrderResult is {'ok': list[str]} | {'error': ErrorName}\\n  PlanResult is {'ok': {'ordered_steps': list[str]}} | {'error': ErrorName}\\nReturn those tagged dicts for business outcomes; do not raise them.\\nDo not emit Cott runtime types or evaluation adapters.\\nValidate and order build steps. Same business rules for both public functions.\\n\\nNames are case-sensitive and otherwise unmodified. A name is blank iff\\nname.strip()==''. Whitespace-only names are blank; do not strip non-blank names.\\n\\nEach step's needs is a set: duplicate dependency strings are ignored.\\n\\nError precedence (first match wins): BlankStepName, DuplicateStep,\\nUnknownDependency, SelfDependency, Cycle.\\n- BlankStepName: any step name is blank.\\n- DuplicateStep: two steps share the same name.\\n- UnknownDependency: a need is not equal to any step name.\\n- SelfDependency: a step lists its own name in needs.\\n- Cycle: no valid total order remains.\\n\\nEmpty input succeeds with an empty order. Success returns every step name\\nexactly once.\\n\\nDeterministic order: repeatedly emit the lexicographically smallest name among\\ncurrently ready steps (all needs already emitted). Newly ready steps join the\\nready set immediately and compete by the same lexical rule.\\n\\nplan_pipeline must call public topologically_order_steps on the pipeline steps\\nand propagate that error unchanged; on success wrap the order as ordered_steps.\\n</file>\\n\"}],\"attribution\":\"user\",\"timestamp\":1788710587930}}\n{\"type\":\"message_end\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"<file name=\\\"/tmp/cott-ai-gen-zx331t7l/t2-direct-prompt.txt\\\">\\nWrite only a complete stdlib pipeline.py. No tests, extras, or other files.\\nRequired public ABI with typing.TypedDict / Literal / union annotations:\\n  ErrorName = Literal['BlankStepName','DuplicateStep','UnknownDependency','SelfDependency','Cycle']\\n  class Step(TypedDict): name: str; needs: list[str]\\n  class Pipeline(TypedDict): steps: list[Step]\\n  def topologically_order_steps(steps: list[Step]) -> OrderResult\\n  def plan_pipeline(pipeline: Pipeline) -> PlanResult\\n  OrderResult is {'ok': list[str]} | {'error': ErrorName}\\n  PlanResult is {'ok': {'ordered_steps': list[str]}} | {'error': ErrorName}\\nReturn those tagged dicts for business outcomes; do not raise them.\\nDo not emit Cott runtime types or evaluation adapters.\\nValidate and order build steps. Same business rules for both public functions.\\n\\nNames are case-sensitive and otherwise unmodified. A name is blank iff\\nname.strip()==''. Whitespace-only names are blank; do not strip non-blank names.\\n\\nEach step's needs is a set: duplicate dependency strings are ignored.\\n\\nError precedence (first match wins): BlankStepName, DuplicateStep,\\nUnknownDependency, SelfDependency, Cycle.\\n- BlankStepName: any step name is blank.\\n- DuplicateStep: two steps share the same name.\\n- UnknownDependency: a need is not equal to any step name.\\n- SelfDependency: a step lists its own name in needs.\\n- Cycle: no valid total order remains.\\n\\nEmpty input succeeds with an empty order. Success returns every step name\\nexactly once.\\n\\nDeterministic order: repeatedly emit the lexicographically ...",
+            "stderr": "",
+            "argv": [
+              "/home/arthur/.local/bin/omp",
+              "-p",
+              "--mode",
+              "json",
+              "--cwd",
+              "/tmp/cott-ai-gen-zx331t7l/t2-direct",
+              "--no-session",
+              "--no-rules",
+              "--no-skills",
+              "--no-extensions",
+              "--no-lsp",
+              "--no-pty",
+              "--no-title",
+              "--tools",
+              "read,grep,glob,edit,write",
+              "--approval-mode",
+              "yolo",
+              "--max-time",
+              "900s",
+              "--config",
+              "/tmp/cott-ai-gen-zx331t7l/t2-overlay.yaml",
+              "@/tmp/cott-ai-gen-zx331t7l/t2-direct-prompt.txt"
+            ]
+          },
+          "postverify": {
+            "ok": true,
+            "returncode": 0,
+            "seconds": 0.8022097100038081,
+            "timed_out": false,
+            "infrastructure": false,
+            "stdout": "0 errors, 0 warnings, 0 notes\n",
+            "stderr": "",
+            "argv": [
+              "/home/arthur/Code/cott/examples/complex/artifact-pipeline/.venv/bin/basedpyright",
+              "--level",
+              "error",
+              "/tmp/cott-ai-gen-zx331t7l/t2-direct/pipeline.py"
+            ]
+          },
+          "semantic": {
+            "ok": true,
+            "counts": {
+              "topologically_order_steps": 3130,
+              "plan_pipeline": 3130
+            },
+            "seconds": 0.13188964105211198,
+            "error": null
+          },
+          "generation_ok": true,
+          "postverify_ok": true,
+          "semantic_ok": true,
+          "end_to_end_ok": true,
+          "generation_seconds": 51.66683001292404,
+          "postverify_seconds": 0.8022097100038081,
+          "semantic_seconds": 0.13188964105211198,
+          "agent_runs": null,
+          "retries": null,
+          "usage": {
+            "ok": true,
+            "input": 14851,
+            "output": 2132,
+            "cacheRead": 6400,
+            "cacheWrite": 0,
+            "totalTokens": 23383,
+            "cost_estimated": 0.104604,
+            "cost_note": "priced cost estimated not billing",
+            "provider": "openai-codex",
+            "model": "gpt-5.6-sol",
+            "message_end_count": 3,
+            "reason": null,
+            "evidence": null
+          }
+        }
+      }
+    }
+  ],
+  "artifacts_zip": "/home/arthur/Code/cott/benchmarks/ai-generation-results.zip"
+}

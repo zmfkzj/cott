@@ -52,6 +52,7 @@ pub enum TransactionError {
     SnapshotDrift(PathBuf),
     CorruptJournal(PathBuf),
     ActiveTransaction(PathBuf),
+    RecoveryRequired(PathBuf),
     #[cfg(test)]
     InjectedFault(&'static str),
 }
@@ -82,6 +83,11 @@ impl std::fmt::Display for TransactionError {
             Self::ActiveTransaction(path) => {
                 write!(formatter, "project is locked: {}", path.display())
             }
+            Self::RecoveryRequired(path) => write!(
+                formatter,
+                "pending transaction requires recovery: {}",
+                path.display()
+            ),
             #[cfg(test)]
             Self::InjectedFault(name) => write!(formatter, "injected transaction fault: {name}"),
         }
@@ -169,6 +175,18 @@ pub struct ProjectSession {
 
 impl ProjectSession {
     pub fn acquire(root: &Path) -> Result<Self, TransactionError> {
+        let session = Self::lock(root)?;
+        recover(&session.root, &session.transactions)?;
+        Ok(session)
+    }
+
+    pub fn acquire_for_inspection(root: &Path) -> Result<Self, TransactionError> {
+        let session = Self::lock(root)?;
+        refuse_pending_transactions(&session.transactions)?;
+        Ok(session)
+    }
+
+    fn lock(root: &Path) -> Result<Self, TransactionError> {
         let root = fs::canonicalize(root).map_err(|source| TransactionError::Io {
             operation: "canonicalize project root",
             path: root.to_path_buf(),
@@ -218,7 +236,6 @@ impl ProjectSession {
                 source,
             });
         }
-        recover(&root, &transactions)?;
         Ok(Self {
             root,
             transactions,
@@ -392,6 +409,27 @@ fn journal_entry(root: &Path, operation: &Operation) -> Result<JournalEntry, Tra
         after,
         after_hash,
     })
+}
+
+fn refuse_pending_transactions(transactions: &Path) -> Result<(), TransactionError> {
+    let entries = fs::read_dir(transactions).map_err(|source| TransactionError::Io {
+        operation: "read transaction directory",
+        path: transactions.to_path_buf(),
+        source,
+    })?;
+    let mut journals =
+        entries
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|source| TransactionError::Io {
+                operation: "read transaction entry",
+                path: transactions.to_path_buf(),
+                source,
+            })?;
+    journals.sort_by_key(|entry| entry.file_name());
+    if let Some(entry) = journals.first() {
+        return Err(TransactionError::RecoveryRequired(entry.path()));
+    }
+    Ok(())
 }
 
 fn recover(root: &Path, transactions: &Path) -> Result<(), TransactionError> {
@@ -1218,5 +1256,40 @@ mod tests {
             drop(ProjectSession::acquire(temp.path()).expect("second recovery"));
             assert!(is_old(temp.path()), "rollback did not finish after {point}");
         }
+    }
+
+    #[test]
+    fn inspection_does_not_recover_a_pending_journal() {
+        let (temp, snapshot, changes) = fixture();
+        let session = ProjectSession::acquire(temp.path()).expect("session");
+        arm_fault(Some("apply.generation.rename"));
+        assert!(session.apply(&snapshot, &changes).is_err());
+        drop(session);
+        arm_fault(None);
+        assert!(is_new(temp.path()));
+        let transactions = temp.path().join(".cott/transactions");
+        let mut pending = fs::read_dir(&transactions)
+            .expect("transactions")
+            .map(|entry| entry.expect("entry").path())
+            .collect::<Vec<_>>();
+        assert_eq!(pending.len(), 1);
+        let pending = pending.pop().expect("pending journal");
+        let journal = fs::read(pending.join("journal.json")).expect("journal");
+
+        let error = ProjectSession::acquire_for_inspection(temp.path())
+            .err()
+            .expect("inspection must refuse pending recovery");
+        assert!(
+            matches!(&error, TransactionError::RecoveryRequired(path) if path == &pending),
+            "{error}"
+        );
+        assert!(is_new(temp.path()));
+        assert_eq!(
+            fs::read(pending.join("journal.json")).expect("preserved journal"),
+            journal
+        );
+
+        drop(ProjectSession::acquire(temp.path()).expect("recovery"));
+        assert!(is_old(temp.path()));
     }
 }

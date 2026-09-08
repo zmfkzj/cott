@@ -210,6 +210,7 @@ fn global_cli_flags_have_a_stable_process_contract() {
     let help = String::from_utf8(help.stdout).expect("help should be UTF-8");
     assert!(help.contains("Cott"));
     assert!(help.contains("cott --version"));
+    assert!(help.contains("cott prompt"));
 
     let invalid = Command::new(env!("CARGO_BIN_EXE_cott"))
         .args(["--version", "extra"])
@@ -1188,65 +1189,42 @@ case "$message" in
   *) printf '%s\n' 'missing @prompt-file argument' >&2; exit 64 ;;
 esac
 case "$prompt" in
-  *'Symbol: app.run'*) ;;
-  *) printf '%s\n' 'missing prompt fragment: Symbol: app.run' "$*" >&2; exit 64 ;;
-esac
-case "$prompt" in
-  *'PYTHON EXTERNAL TYPE PROJECTIONS'*) ;;
-  *) printf '%s\n' 'missing prompt fragment: PYTHON EXTERNAL TYPE PROJECTIONS' "$*" >&2; exit 64 ;;
-esac
-case "$prompt" in
-  *'app.Widget = io:StringIO'*) ;;
-  *) printf '%s\n' 'missing prompt fragment: app.Widget = io:StringIO' "$*" >&2; exit 64 ;;
-esac
-case "$prompt" in
-  *'For other modules import public generated symbols only through `from app import name` and generated value types only through `from app_types import Type`.'*) ;;
-  *) printf '%s\n' 'missing prompt fragment: module facade/type import guidance' "$*" >&2; exit 64 ;;
-esac
-case "$prompt" in
-  *'You MAY additionally define private implementation helpers, private immutable constants, and invariant TypeVars.'*) ;;
-  *) printf '%s\n' 'missing prompt fragment: private implementation policy' "$*" >&2; exit 64 ;;
-esac
-case "$prompt" in
-  *'Each constant MUST have a single-leading-underscore name that is neither dunder nor reserved `_cott_`'*) ;;
-  *) printf '%s\n' 'missing prompt fragment: private Final constant policy' "$*" >&2; exit 64 ;;
-esac
-case "$prompt" in
-  *'Use contract containers directly: CottList(values=xs), CottSet(values=xs), FrozenMap(values={}), CottArray(values=xs), and CottBuffer(data=xs); Cott Tuple uses native `tuple[...]` annotations and `(a, b)` values.'*) ;;
-  *) printf '%s\n' 'missing prompt fragment: contract containers' "$*" >&2; exit 64 ;;
-esac
-case "$prompt" in
-  *'For Result returns import top-level Ok and Err from cott_runtime and return Ok(value=...) or Err(error=...); never use Result.Ok/Result.Err'*) ;;
-  *) printf '%s\n' 'missing prompt fragment: top-level result constructors' "$*" >&2; exit 64 ;;
-esac
-case "$prompt" in
-  *'`Unit` is the annotation and `UNIT` is its only value; return `Ok(value=UNIT)` for Result[Unit, E].'*) ;;
-  *) printf '%s\n' 'missing prompt fragment: Unit singleton ABI' "$*" >&2; exit 64 ;;
-esac
-case "$prompt" in
-  *'For Option annotations use the top-level `Some(value=...)` and `Nothing()` variants, never `Option.Some` or `Option.Nothing`; narrow an Option with structural `match` before reading a Some payload.'*) ;;
-  *) printf '%s\n' 'missing prompt fragment: Option variant ABI' "$*" >&2; exit 64 ;;
-esac
-case "$prompt" in
-  *'`typing.cast` MAY be used only from a concrete external SDK return to its declared external projection when upstream stubs are incompatible; never cast Cott-owned values.'*) ;;
-  *) printf '%s\n' 'missing prompt fragment: external projection cast policy' "$*" >&2; exit 64 ;;
-esac
-case "$prompt" in
-  *'Generated payload enum aliases have no members: import and construct top-level `<Enum>_<Variant>` from the exact `app_types` module, never `<Enum>.<Variant>`.'*) ;;
-  *) printf '%s\n' 'missing prompt fragment: top-level payload enum variants' "$*" >&2; exit 64 ;;
-esac
-case "$prompt" in
-  *'"external_types"'*) printf '%s\n' 'unexpected prompt fragment: "external_types"' "$*" >&2; exit 64 ;;
-esac
-case "$prompt" in
-  *'EXISTING IMPLEMENTATION'*'VALIDATION FAILURE'*'missing_distribution'*'Fix the existing implementation and change nothing outside the target file.'*)
+  *'VALIDATION FEEDBACK'*)
+    case "$prompt" in
+      *'missing_distribution'*) ;;
+      *) printf '%s\n' 'retry prompt omitted validation diagnostic' >&2; exit 64 ;;
+    esac
+    case "$prompt" in
+      *'import missing_distribution'*) ;;
+      *) printf '%s\n' 'retry prompt omitted previous candidate' >&2; exit 64 ;;
+    esac
+    case "$prompt" in
+      *'implementation.py'*) ;;
+      *) printf '%s\n' 'retry prompt omitted canonical write path' >&2; exit 64 ;;
+    esac
+    case "$prompt" in
+      *'app.Widget'*|*'io:StringIO'*)
+        printf '%s\n' 'retry leaked unrelated external projection' >&2
+        exit 64
+        ;;
+    esac
     printf 'from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n' > implementation.py
     ;;
-  *'EXISTING IMPLEMENTATION'*)
-    printf '%s\n' 'retry prompt omitted validation feedback' >&2
-    exit 64
-    ;;
   *)
+    case "$prompt" in
+      *'Symbol: app.run'*) ;;
+      *) printf '%s\n' 'missing prompt fragment: Symbol: app.run' "$*" >&2; exit 64 ;;
+    esac
+    case "$prompt" in
+      *'implementation.py'*) ;;
+      *) printf '%s\n' 'missing prompt fragment: canonical write path' "$*" >&2; exit 64 ;;
+    esac
+    case "$prompt" in
+      *'app.Widget'*|*'io:StringIO'*)
+        printf '%s\n' 'unrelated external projection leaked into prompt' >&2
+        exit 64
+        ;;
+    esac
     printf 'import missing_distribution\nfrom cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n' > implementation.py
     ;;
 esac
@@ -1436,7 +1414,7 @@ case "$message" in
   *) printf '%s\n' 'missing @prompt-file argument' >&2; exit 64 ;;
 esac
 case "$prompt" in
-  *'Symbol: app.run'*'Exact generated Cott facade modules MAY be imported directly or from their parent package, with an optional alias, for module-qualified access. Import generated value types for annotations through `from module_types import Type`, and do not import any other project-local module.'*'Factory annotations require these exact concrete public-facade imports; do not substitute them or import from `*_types`:'*'from api.service import ReaderState'*'Use each listed `from module import Concrete` line for annotations. The same exact generated facade may also be imported under the general module-import rule when its class object is needed.'*'`Factory[Concrete]` maps to `type[Concrete]`'*'Constructor calls MUST match `Concrete`'\''s inferred Cott init signature.'*'Validation MUST NOT construct or invoke a Factory value.'*)
+  *'Symbol: app.run'*'ReaderState'*'Factory'*)
     printf '%s\n' 'from api.service import ReaderState' 'from cott_runtime import I32' '' '' 'def run(factory: type[ReaderState]) -> I32:' '    return 7' > implementation.py
     ;;
   *) exit 64 ;;
@@ -1490,7 +1468,7 @@ case "$message" in
   *) printf '%s\n' 'missing @prompt-file argument' >&2; exit 64 ;;
 esac
 case "$prompt" in
-  *'Symbol: api.service.ReaderState.read'*'Define exactly one canonical private top-level function `_cott_impl_ReaderState_read`.'*'You MAY additionally define private implementation helpers, private immutable constants, and invariant TypeVars.'*'The compiler owns the public class `ReaderState` and binds this helper as its method;'*'Import `ReaderState` from `api.service` only for the required `self: ReaderState` annotation.'*)
+  *'Symbol: api.service.ReaderState.read'*'_cott_impl_ReaderState_read'*)
     printf '%s\n' 'from api.service import ReaderState' 'from cott_runtime import I32' '' '' 'def _cott_impl_ReaderState_read(self: ReaderState, amount: I32) -> I32:' '    return amount' > implementation.py
     ;;
   *) exit 64 ;;
@@ -1580,7 +1558,7 @@ case "$message" in
   *) printf '%s\n' 'missing @prompt-file argument' >&2; exit 64 ;;
 esac
 case "$prompt" in
-  *'Symbol: api.service.ReaderState.read'*'Factory annotations require these exact concrete public-facade imports; do not substitute them or import from `*_types`:'*'from models import FactoryConcrete'*'`Factory[Concrete]` maps to `type[Concrete]`'*)
+  *'Symbol: api.service.ReaderState.read'*'FactoryConcrete'*)
     printf '%s\n' 'from api.service import ReaderState' 'from models import FactoryConcrete' 'from cott_runtime import I32' '' '' 'def _cott_impl_ReaderState_read(self: ReaderState, factory: type[FactoryConcrete]) -> I32:' '    return self.count' > implementation.py
     ;;
   *) exit 64 ;;
@@ -1673,6 +1651,106 @@ esac
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn generate_prompt_scopes_related_helper_and_keeps_retry_off_rules() {
+    let project = intent_project();
+    fs::write(
+        project.path.join("src/app.cott"),
+        "module app\n\nfn helper() -> I32:\n    doc \"\"\"\n    Return three from helper.\n    \"\"\"\n\n    effects []\n\nfn target() -> I32:\n    doc \"\"\"\n    Call helper then return four from target.\n    \"\"\"\n\n    effects []\n\nfn unrelated() -> I32:\n    doc \"\"\"\n    Return nine from unrelated-unique-doc.\n    \"\"\"\n\n    effects []\n",
+    )
+    .expect("scoped source should be writable");
+    fs::write(
+        project.path.join("GENERATOR_RULES.txt"),
+        "Shared guidance stays.\ncott-domain app.target return: target-only duty\ncott-domain app.unrelated return: unrelated-only duty\n",
+    )
+    .expect("scoped rules should be writable");
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    write_exec(
+        &tools.join("omp"),
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
+message=
+for message; do :; done
+case "$message" in
+  @*) prompt=$(cat "${message#@}") || exit 64 ;;
+  *) printf '%s\n' 'missing @prompt-file argument' >&2; exit 64 ;;
+esac
+case "$prompt" in
+  *'VALIDATION FEEDBACK'*)
+    case "$prompt" in
+      *'missing_distribution'*) ;;
+      *) printf '%s\n' 'retry omitted diagnostic' >&2; exit 64 ;;
+    esac
+    case "$prompt" in
+      *'import missing_distribution'*) ;;
+      *) printf '%s\n' 'retry omitted previous candidate' >&2; exit 64 ;;
+    esac
+    case "$prompt" in
+      *'Shared guidance stays.'*) ;;
+      *) printf '%s\n' 'retry dropped project rules' >&2; exit 64 ;;
+    esac
+    case "$prompt" in
+      *'target-only duty'*) ;;
+      *) printf '%s\n' 'retry dropped target-scoped rule' >&2; exit 64 ;;
+    esac
+    case "$prompt" in
+      *'unrelated-only duty'*|*'unrelated-unique-doc'*)
+        printf '%s\n' 'retry leaked unrelated scope' >&2
+        exit 64
+        ;;
+    esac
+    printf 'from cott_runtime import I32\n\n\ndef target() -> I32:\n    return 4\n' > implementation.py
+    ;;
+  *'Symbol: app.target'*)
+    case "$prompt" in
+      *'implementation.py'*) ;;
+      *) printf '%s\n' 'missing canonical write path' >&2; exit 64 ;;
+    esac
+    case "$prompt" in
+      *'Call helper then return four from target.'*) ;;
+      *) printf '%s\n' 'missing current target doc' >&2; exit 64 ;;
+    esac
+    case "$prompt" in
+      *'Return three from helper.'*) ;;
+      *) printf '%s\n' 'missing related helper' >&2; exit 64 ;;
+    esac
+    case "$prompt" in
+      *'Shared guidance stays.'*) ;;
+      *) printf '%s\n' 'missing shared project rules' >&2; exit 64 ;;
+    esac
+    case "$prompt" in
+      *'target-only duty'*) ;;
+      *) printf '%s\n' 'missing target-scoped rule' >&2; exit 64 ;;
+    esac
+    case "$prompt" in
+      *'unrelated-only duty'*|*'unrelated-unique-doc'*|*'def unrelated'*)
+        printf '%s\n' 'target prompt included unrelated implementation' >&2
+        exit 64
+        ;;
+    esac
+    printf 'import missing_distribution\nfrom cott_runtime import I32\n\n\ndef target() -> I32:\n    return 4\n' > implementation.py
+    ;;
+  *)
+    printf '%s\n' 'unexpected scoped generate prompt' >&2
+    exit 64
+    ;;
+esac
+"#,
+    );
+    let generated = generate_with_omp(&project.path, &tools, &["app.target"]);
+    assert!(
+        generated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(project.path.join("python/_cott_impl/app/target.py"))
+            .expect("durable target"),
+        "from cott_runtime import I32\n\n\ndef target() -> I32:\n    return 4\n"
     );
 }
 
@@ -2799,4 +2877,1551 @@ print(json.dumps({
         "ordinary return or declared Never process.exit"
     );
     assert_eq!(report["system_exit_violation"]["actual"], "SystemExit");
+}
+
+fn write_exec(path: &Path, body: &str) {
+    fs::write(path, body).expect("write executable");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod executable");
+    }
+}
+
+fn generation_record(root: &Path) -> serde_json::Value {
+    serde_json::from_slice(
+        &fs::read(root.join("generated/generation.json")).expect("generation.json"),
+    )
+    .expect("generation JSON")
+}
+
+fn generate_with_omp(root: &Path, tools: &Path, extra: &[&str]) -> Output {
+    let path =
+        std::env::join_paths([tools, Path::new("/usr/bin"), Path::new("/bin")]).expect("PATH");
+    Command::new(env!("CARGO_BIN_EXE_cott"))
+        .arg("generate")
+        .args(extra)
+        .args(["--agent", "omp", "--target", "python", "--project"])
+        .arg(root)
+        .env("PATH", path)
+        .output()
+        .expect("cott generate should run")
+}
+
+fn intent_project() -> TempDir {
+    let temp = TempDir::new();
+    let manifest = NORMATIVE_MANIFEST
+        .split_once("\n[target.python.implementations]\n")
+        .expect("normative manifest has implementations")
+        .0;
+    fs::write(
+        temp.path.join("cott.toml"),
+        format!("{manifest}\n[generator]\nrules = \"GENERATOR_RULES.txt\"\n"),
+    )
+    .expect("manifest should be writable");
+    fs::write(
+        temp.path.join("GENERATOR_RULES.txt"),
+        "Prefer explicit returns.\ncott-domain app.primary return: primary-only duty\ncott-domain app.sibling return: sibling-only duty\n",
+    )
+    .expect("generator rules should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    fs::write(
+        temp.path.join("src/app.cott"),
+        "module app\n\nfn primary() -> I32:\n    doc \"\"\"\n    Return one for the left-to-right primary path.\n    \"\"\"\n\n    effects []\n\nfn sibling() -> I32:\n    doc \"\"\"\n    Return seven for the unchanged sibling path.\n    \"\"\"\n\n    effects []\n",
+    )
+    .expect("source should be writable");
+    write_target_metadata(&temp.path);
+    install_fake_python_tools(&temp.path);
+    temp
+}
+
+fn intent_omp_body(fail_sibling: bool) -> String {
+    intent_omp_expecting(
+        fail_sibling,
+        Some("primary-only duty"),
+        Some("sibling-only duty"),
+    )
+}
+
+fn intent_omp_expecting(
+    fail_sibling: bool,
+    primary_rule: Option<&str>,
+    sibling_rule: Option<&str>,
+) -> String {
+    let primary_require = match primary_rule {
+        Some(text) => format!(
+            "    case \"$prompt\" in\n      *'{text}'*) ;;\n      *) printf '%s\\n' 'missing expected primary rule' >&2; exit 64 ;;\n    esac\n"
+        ),
+        None => String::new(),
+    };
+    let sibling = if fail_sibling {
+        "    printf '%s\\n' 'forced sibling generation failure' >&2\n    exit 17 # FAIL_SIBLING\n"
+            .to_owned()
+    } else {
+        let sibling_require = match sibling_rule {
+            Some(text) => format!(
+                "    case \"$prompt\" in\n      *'{text}'*) ;;\n      *) printf '%s\\n' 'missing expected sibling rule' >&2; exit 64 ;;\n    esac\n"
+            ),
+            None => String::new(),
+        };
+        format!(
+            "{sibling_require}    printf 'from cott_runtime import I32\\n\\n\\ndef sibling() -> I32:\\n    return 7\\n' > implementation.py\n"
+        )
+    };
+    format!(
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
+message=
+for message; do :; done
+case "$message" in
+  @*) prompt=$(cat "${{message#@}}") || exit 64 ;;
+  *) printf '%s\n' 'missing @prompt-file argument' >&2; exit 64 ;;
+esac
+case "$prompt" in
+  *'Symbol: app.primary'*)
+    case "$prompt" in
+      *'implementation.py'*) ;;
+      *) printf '%s\n' 'missing canonical write path' >&2; exit 64 ;;
+    esac
+{primary_require}    case "$prompt" in
+      *'sibling-only duty'*|*'def sibling'*)
+        printf '%s\n' 'primary prompt included unrelated sibling' >&2
+        exit 64
+        ;;
+    esac
+    case "$prompt" in
+      *'right-to-left primary'*)
+        case "$prompt" in
+          *'return 1'*) ;;
+          *) printf '%s\n' 'missing existing lower-authority primary source' >&2; exit 64 ;;
+        esac
+        printf 'from cott_runtime import I32\n\n\ndef primary() -> I32:\n    return 2\n' > implementation.py
+        ;;
+      *)
+        printf 'from cott_runtime import I32\n\n\ndef primary() -> I32:\n    return 1\n' > implementation.py
+        ;;
+    esac
+    ;;
+  *'Symbol: app.sibling'*)
+    case "$prompt" in
+      *'primary-only duty'*|*'def primary'*)
+        printf '%s\n' 'sibling prompt included unrelated primary' >&2
+        exit 64
+        ;;
+    esac
+{sibling}    ;;
+  *)
+    printf '%s\n' 'unexpected intent agent prompt' >&2
+    exit 64
+    ;;
+esac
+"#
+    )
+}
+#[test]
+fn emit_ir_records_intent_without_python_runtime() {
+    let project = normative_project();
+    let emitted = cott(&project.path, &["emit", "ir"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let record = generation_record(&project.path);
+    assert_eq!(record["current"]["tools"]["cott_intent"]["version"], 1);
+    assert!(
+        record["current"]["tools"]["cott_intent"]["hashes"]
+            .as_object()
+            .is_some_and(|hashes| !hashes.is_empty())
+    );
+}
+
+#[test]
+fn emit_ir_does_not_bless_tampered_generated_python() {
+    let project = intent_project();
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    write_exec(&tools.join("omp"), &intent_omp_body(false));
+    let generated = generate_with_omp(&project.path, &tools, &[]);
+    assert!(
+        generated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    assert!(generation_record(&project.path)["last_verified"].is_null());
+    let generated_record = generation_record(&project.path);
+    let generated_impls = generated_record["current"]["implementations"].clone();
+    let generated_runs = generated_record["current"]["agent_runs"].clone();
+    let python = project.path.join("generated/python/app.py");
+    let python_bytes = fs::read(&python).expect("generated python");
+    let emitted = cott(&project.path, &["emit", "ir"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    assert_eq!(
+        fs::read(&python).expect("python after unverified emit ir"),
+        python_bytes
+    );
+    let ir_record = generation_record(&project.path);
+    assert_eq!(ir_record["current"]["unresolved"], serde_json::json!([]));
+    assert_eq!(ir_record["current"]["implementations"], generated_impls);
+    assert_eq!(ir_record["current"]["agent_runs"], generated_runs);
+    assert_eq!(
+        ir_record["current"]["inputs"]["python/_cott_impl/app/primary.py"],
+        generated_record["current"]["inputs"]["python/_cott_impl/app/primary.py"]
+    );
+    assert_eq!(
+        ir_record["current"]["inputs"]["python/_cott_impl/app/sibling.py"],
+        generated_record["current"]["inputs"]["python/_cott_impl/app/sibling.py"]
+    );
+    assert!(cott(&project.path, &["verify"]).status.success());
+    let verified_last = generation_record(&project.path)["last_verified"].clone();
+    assert!(verified_last.is_object());
+    let python_bytes = fs::read(&python).expect("verified python");
+    let emitted = cott(&project.path, &["emit", "ir"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    assert_eq!(
+        fs::read(&python).expect("python after verified emit ir"),
+        python_bytes
+    );
+    let after_verified_ir = generation_record(&project.path);
+    assert_eq!(after_verified_ir["last_verified"], verified_last);
+    assert_eq!(
+        after_verified_ir["current"]["unresolved"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        after_verified_ir["current"]["implementations"],
+        generated_impls
+    );
+    let record_bytes =
+        fs::read(project.path.join("generated/generation.json")).expect("ir epoch record");
+    fs::write(&python, "tampered\n").expect("generated python should be writable");
+    let blessed = cott(&project.path, &["emit", "ir"]);
+    assert_eq!(blessed.status.code(), Some(4));
+    assert!(
+        String::from_utf8_lossy(&blessed.stderr).contains("managed file changed"),
+        "{}",
+        String::from_utf8_lossy(&blessed.stderr)
+    );
+    assert_eq!(
+        fs::read(&python).expect("tampered python preserved"),
+        b"tampered\n"
+    );
+    assert_eq!(
+        fs::read(project.path.join("generated/generation.json"))
+            .expect("record after rejected emit ir"),
+        record_bytes
+    );
+    fs::remove_file(project.path.join("python/_cott_impl/app/primary.py"))
+        .expect("durable primary should be removable");
+    let rejected = generate_with_omp(&project.path, &tools, &[]);
+    assert!(
+        !rejected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+    assert_eq!(
+        fs::read(&python).expect("generate must not overwrite unblessed python"),
+        b"tampered\n"
+    );
+}
+
+#[test]
+fn emit_ir_preserves_pending_and_does_not_wash_intent_or_source_edits() {
+    let project = intent_project();
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    write_exec(&tools.join("omp"), &intent_omp_body(false));
+    let generated = generate_with_omp(&project.path, &tools, &[]);
+    assert!(
+        generated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    assert!(
+        cott(&project.path, &["verify"]).status.success(),
+        "verify after generate"
+    );
+    let verified = generation_record(&project.path);
+    let primary_intent =
+        verified["current"]["tools"]["cott_intent"]["hashes"]["app.primary"].clone();
+    let sibling_intent =
+        verified["current"]["tools"]["cott_intent"]["hashes"]["app.sibling"].clone();
+    let sibling_impl = verified["current"]["implementations"]
+        .as_array()
+        .expect("implementations")
+        .iter()
+        .find(|implementation| implementation["cott_symbol"] == "app.sibling")
+        .cloned()
+        .expect("sibling implementation");
+    let primary_run = verified["current"]["agent_runs"]
+        .as_array()
+        .expect("agent runs")
+        .iter()
+        .find(|run| run["symbol"] == "app.primary")
+        .cloned()
+        .expect("primary agent run");
+    let sibling_source = fs::read(project.path.join("python/_cott_impl/app/sibling.py"))
+        .expect("sibling implementation");
+
+    fs::write(
+        project.path.join("src/app.cott"),
+        "module app\n\nfn primary() -> I32:\n    doc \"\"\"\n    Return two for the right-to-left primary path.\n    \"\"\"\n\n    effects []\n\nfn sibling() -> I32:\n    doc \"\"\"\n    Return seven for the unchanged sibling path.\n    \"\"\"\n\n    effects []\n",
+    )
+    .expect("doc edit should be writable");
+
+    let emitted = cott(&project.path, &["emit", "ir"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let pending = generation_record(&project.path);
+    assert_eq!(
+        pending["current"]["unresolved"]
+            .as_array()
+            .expect("typed unresolved records")
+            .iter()
+            .map(|record| record["cott_symbol"]
+                .as_str()
+                .expect("canonical Cott symbol"))
+            .collect::<Vec<_>>(),
+        ["app.primary"]
+    );
+    assert_eq!(
+        pending["current"]["implementations"]
+            .as_array()
+            .expect("implementations")
+            .iter()
+            .map(|implementation| implementation["cott_symbol"].as_str().expect("symbol"))
+            .collect::<Vec<_>>(),
+        ["app.sibling"]
+    );
+    assert_eq!(
+        pending["current"]["implementations"]
+            .as_array()
+            .expect("implementations")
+            .iter()
+            .find(|implementation| implementation["cott_symbol"] == "app.sibling")
+            .expect("carried sibling"),
+        &sibling_impl
+    );
+    assert_eq!(
+        pending["current"]["agent_runs"]
+            .as_array()
+            .expect("agent runs")
+            .iter()
+            .find(|run| run["symbol"] == "app.primary")
+            .expect("pending primary keeps AgentRun")["implementation_hash"],
+        primary_run["implementation_hash"]
+    );
+    assert_ne!(
+        pending["current"]["tools"]["cott_intent"]["hashes"]["app.primary"],
+        primary_intent
+    );
+    assert_eq!(
+        pending["current"]["tools"]["cott_intent"]["hashes"]["app.sibling"],
+        sibling_intent
+    );
+    assert_eq!(pending["last_verified"], verified["last_verified"]);
+    assert_eq!(
+        fs::read(project.path.join("python/_cott_impl/app/sibling.py")).expect("sibling source"),
+        sibling_source
+    );
+
+    for command in [["emit", "ir"], ["emit", "python"]] {
+        let repeated = cott(&project.path, &command);
+        assert!(
+            repeated.status.success(),
+            "{}",
+            String::from_utf8_lossy(&repeated.stderr)
+        );
+        assert_eq!(
+            generation_record(&project.path)["current"]["unresolved"]
+                .as_array()
+                .expect("typed unresolved records")
+                .iter()
+                .map(|record| record["cott_symbol"]
+                    .as_str()
+                    .expect("canonical Cott symbol"))
+                .collect::<Vec<_>>(),
+            ["app.primary"]
+        );
+    }
+
+    let verify_pending = cott(&project.path, &["verify"]);
+    assert_eq!(verify_pending.status.code(), Some(4));
+    assert!(
+        String::from_utf8_lossy(&verify_pending.stderr).contains("unresolved implementations"),
+        "{}",
+        String::from_utf8_lossy(&verify_pending.stderr)
+    );
+
+    let sibling_hash = sibling_impl["content_hash"].clone();
+    fs::write(
+        project.path.join("python/_cott_impl/app/sibling.py"),
+        "tampered = True\n",
+    )
+    .expect("sibling source should be writable");
+    let ir_after_tamper = cott(&project.path, &["emit", "ir"]);
+    assert!(
+        ir_after_tamper.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ir_after_tamper.stderr)
+    );
+    let tampered_record = generation_record(&project.path);
+    assert_eq!(
+        tampered_record["current"]["implementations"]
+            .as_array()
+            .expect("implementations")
+            .iter()
+            .find(|implementation| implementation["cott_symbol"] == "app.sibling")
+            .expect("sibling still carried")["content_hash"],
+        sibling_hash
+    );
+    assert_eq!(
+        tampered_record["current"]["unresolved"]
+            .as_array()
+            .expect("typed unresolved records")
+            .iter()
+            .map(|record| record["cott_symbol"]
+                .as_str()
+                .expect("canonical Cott symbol"))
+            .collect::<Vec<_>>(),
+        ["app.primary"]
+    );
+    assert_eq!(
+        fs::read(project.path.join("python/_cott_impl/app/sibling.py")).expect("tampered sibling"),
+        b"tampered = True\n"
+    );
+    let rejected = cott(&project.path, &["emit", "python"]);
+    assert_eq!(rejected.status.code(), Some(4));
+    assert_eq!(
+        fs::read(project.path.join("python/_cott_impl/app/sibling.py"))
+            .expect("unblessed sibling preserved"),
+        b"tampered = True\n"
+    );
+}
+
+#[test]
+fn intent_doc_edit_queues_regeneration_without_washing_pending() {
+    let project = intent_project();
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    write_exec(&tools.join("omp"), &intent_omp_body(false));
+
+    let generated = generate_with_omp(&project.path, &tools, &[]);
+    assert!(
+        generated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let verified = cott(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let initial = generation_record(&project.path);
+    assert_eq!(initial["current"]["tools"]["cott_intent"]["version"], 1);
+    assert_eq!(initial["current"]["unresolved"], serde_json::json!([]));
+    let primary_intent =
+        initial["current"]["tools"]["cott_intent"]["hashes"]["app.primary"].clone();
+    let sibling_intent =
+        initial["current"]["tools"]["cott_intent"]["hashes"]["app.sibling"].clone();
+    let sibling_source = fs::read(project.path.join("python/_cott_impl/app/sibling.py"))
+        .expect("sibling implementation");
+    let primary_run = initial["current"]["agent_runs"]
+        .as_array()
+        .expect("agent runs")
+        .iter()
+        .find(|run| run["symbol"] == "app.primary")
+        .cloned()
+        .expect("primary agent run");
+
+    fs::write(
+        project.path.join("src/app.cott"),
+        "module app\n\nfn primary() -> I32:\n    doc \"\"\"\n    Return two for the right-to-left primary path.\n    \"\"\"\n\n    effects []\n\nfn sibling() -> I32:\n    doc \"\"\"\n    Return seven for the unchanged sibling path.\n    \"\"\"\n\n    effects []\n",
+    )
+    .expect("doc edit should be writable");
+
+    let pending = cott(&project.path, &["emit", "python"]);
+    assert!(
+        pending.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pending.stderr)
+    );
+    let repeated = cott(&project.path, &["emit", "python"]);
+    assert!(
+        repeated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&repeated.stderr)
+    );
+    let pending_record = generation_record(&project.path);
+    let unresolved = pending_record["current"]["unresolved"]
+        .as_array()
+        .expect("typed unresolved records")
+        .iter()
+        .map(|record| {
+            record["cott_symbol"]
+                .as_str()
+                .expect("canonical Cott symbol")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(unresolved, ["app.primary"]);
+    assert_eq!(
+        pending_record["current"]["implementations"]
+            .as_array()
+            .expect("implementations")
+            .iter()
+            .map(|implementation| implementation["cott_symbol"].as_str().expect("symbol"))
+            .collect::<Vec<_>>(),
+        ["app.sibling"]
+    );
+    let retained = pending_record["current"]["agent_runs"]
+        .as_array()
+        .expect("retained agent runs")
+        .iter()
+        .find(|run| run["symbol"] == "app.primary")
+        .expect("pending primary keeps AgentRun");
+    assert_eq!(
+        retained["implementation_hash"],
+        primary_run["implementation_hash"]
+    );
+    assert!(
+        fs::read_to_string(project.path.join("python/_cott_impl/app/primary.py"))
+            .expect("durable primary")
+            .contains("return 1")
+    );
+    assert_eq!(
+        fs::read(project.path.join("python/_cott_impl/app/sibling.py"))
+            .expect("sibling after emit"),
+        sibling_source
+    );
+    assert_ne!(
+        pending_record["current"]["tools"]["cott_intent"]["hashes"]["app.primary"],
+        primary_intent
+    );
+    assert_eq!(
+        pending_record["current"]["tools"]["cott_intent"]["hashes"]["app.sibling"],
+        sibling_intent
+    );
+
+    let verify_pending = cott(&project.path, &["verify"]);
+    assert_eq!(verify_pending.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&verify_pending.stderr).contains("unresolved implementations"));
+    assert_eq!(
+        generation_record(&project.path)["current"]["agent_runs"]
+            .as_array()
+            .expect("agent runs")
+            .iter()
+            .find(|run| run["symbol"] == "app.primary")
+            .expect("verify must not wash pending AgentRun")["implementation_hash"],
+        primary_run["implementation_hash"]
+    );
+
+    let regenerated = generate_with_omp(&project.path, &tools, &["app.primary"]);
+    assert!(
+        regenerated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&regenerated.stderr)
+    );
+    let progress = String::from_utf8_lossy(&regenerated.stderr);
+    assert!(progress.contains("generate [1/1] start `app.primary`"));
+    assert!(progress.contains("generate [1/1] done `app.primary`"));
+    assert!(!progress.contains("`app.sibling`"));
+    assert_eq!(
+        fs::read_to_string(project.path.join("python/_cott_impl/app/primary.py"))
+            .expect("regenerated primary"),
+        "from cott_runtime import I32\n\n\ndef primary() -> I32:\n    return 2\n"
+    );
+    assert_eq!(
+        fs::read(project.path.join("python/_cott_impl/app/sibling.py")).expect("reused sibling"),
+        sibling_source
+    );
+    let facade = fs::read_to_string(project.path.join("generated/python/app.py")).expect("facade");
+    assert!(facade.contains("right-to-left primary"));
+    assert!(!facade.contains("left-to-right primary"));
+    let regenerated_record = generation_record(&project.path);
+    assert_eq!(
+        regenerated_record["current"]["unresolved"],
+        serde_json::json!([])
+    );
+    let regenerated_run = regenerated_record["current"]["agent_runs"]
+        .as_array()
+        .expect("agent runs")
+        .iter()
+        .find(|run| run["symbol"] == "app.primary")
+        .expect("regenerated primary AgentRun");
+    assert_ne!(
+        regenerated_run["implementation_hash"],
+        primary_run["implementation_hash"]
+    );
+    assert!(
+        regenerated_record["current"]["tools"]
+            .get("cott_intent")
+            .is_some()
+    );
+}
+
+#[test]
+fn intent_rules_tamper_and_partial_checkpoint_preserve_ownership() {
+    let project = intent_project();
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    let omp = tools.join("omp");
+    write_exec(&omp, &intent_omp_body(false));
+
+    let generated = generate_with_omp(&project.path, &tools, &[]);
+    assert!(
+        generated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let verified = cott(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let verified_record = generation_record(&project.path);
+    assert!(
+        verified_record["current"]["tools"]
+            .get("cott_intent")
+            .is_some()
+    );
+    let sibling_run = verified_record["current"]["agent_runs"]
+        .as_array()
+        .expect("agent runs")
+        .iter()
+        .find(|run| run["symbol"] == "app.sibling")
+        .cloned()
+        .expect("sibling agent run");
+    let sibling_path = project.path.join("python/_cott_impl/app/sibling.py");
+    let sibling_source = fs::read(&sibling_path).expect("sibling implementation");
+    let primary_source = fs::read(project.path.join("python/_cott_impl/app/primary.py"))
+        .expect("primary implementation");
+
+    fs::write(&sibling_path, "tampered = True\n").expect("tamper sibling");
+    let tampered = cott(&project.path, &["emit", "python"]);
+    assert_eq!(tampered.status.code(), Some(4));
+    assert_eq!(
+        fs::read(&sibling_path).expect("tampered sibling preserved"),
+        b"tampered = True\n"
+    );
+    fs::write(&sibling_path, &sibling_source).expect("restore sibling");
+
+    fs::write(
+        project.path.join("GENERATOR_RULES.txt"),
+        "Prefer explicit returns.\nRegenerate after rule edits.\n",
+    )
+    .expect("rules should be writable");
+    let pending = cott(&project.path, &["emit", "python"]);
+    assert!(
+        pending.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pending.stderr)
+    );
+    let pending_record = generation_record(&project.path);
+    let unresolved = pending_record["current"]["unresolved"]
+        .as_array()
+        .expect("typed unresolved records")
+        .iter()
+        .map(|record| {
+            record["cott_symbol"]
+                .as_str()
+                .expect("canonical Cott symbol")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(unresolved, ["app.primary", "app.sibling"]);
+    assert_eq!(
+        pending_record["current"]["agent_runs"]
+            .as_array()
+            .expect("pending agent runs")
+            .iter()
+            .find(|run| run["symbol"] == "app.sibling")
+            .expect("pending sibling keeps AgentRun")["implementation_hash"],
+        sibling_run["implementation_hash"]
+    );
+
+    write_exec(
+        &omp,
+        &intent_omp_expecting(true, Some("Regenerate after rule edits."), None),
+    );
+    let partial = generate_with_omp(&project.path, &tools, &["-j", "1"]);
+    assert_eq!(
+        partial.status.code(),
+        Some(5),
+        "{}",
+        String::from_utf8_lossy(&partial.stderr)
+    );
+    let partial_progress = String::from_utf8_lossy(&partial.stderr);
+    assert!(partial_progress.contains("generate [1/2] done `app.primary`"));
+    assert!(partial_progress.contains("agent generation for `app.sibling` failed"));
+    assert_eq!(
+        fs::read(project.path.join("python/_cott_impl/app/primary.py"))
+            .expect("checkpoint primary"),
+        primary_source
+    );
+    assert_eq!(
+        fs::read(&sibling_path).expect("pending sibling source"),
+        sibling_source
+    );
+    let partial_record = generation_record(&project.path);
+    let unresolved = partial_record["current"]["unresolved"]
+        .as_array()
+        .expect("typed unresolved records")
+        .iter()
+        .map(|record| {
+            record["cott_symbol"]
+                .as_str()
+                .expect("canonical Cott symbol")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(unresolved, ["app.sibling"]);
+    assert_eq!(
+        partial_record["current"]["agent_runs"]
+            .as_array()
+            .expect("checkpoint agent runs")
+            .iter()
+            .find(|run| run["symbol"] == "app.sibling")
+            .expect("checkpoint sibling keeps AgentRun")["implementation_hash"],
+        sibling_run["implementation_hash"]
+    );
+
+    let still_pending = cott(&project.path, &["emit", "python"]);
+    assert!(
+        still_pending.status.success(),
+        "{}",
+        String::from_utf8_lossy(&still_pending.stderr)
+    );
+    assert_eq!(
+        generation_record(&project.path)["current"]["unresolved"]
+            .as_array()
+            .expect("typed unresolved records")
+            .iter()
+            .map(|record| record["cott_symbol"]
+                .as_str()
+                .expect("canonical Cott symbol"))
+            .collect::<Vec<_>>(),
+        ["app.sibling"]
+    );
+    assert_eq!(
+        fs::read(&sibling_path).expect("emit leaves pending source"),
+        sibling_source
+    );
+
+    write_exec(
+        &omp,
+        &intent_omp_expecting(
+            false,
+            Some("Regenerate after rule edits."),
+            Some("Regenerate after rule edits."),
+        ),
+    );
+    let resumed = generate_with_omp(&project.path, &tools, &["app.sibling"]);
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    let resume_progress = String::from_utf8_lossy(&resumed.stderr);
+    assert!(resume_progress.contains("generate [1/1] done `app.sibling`"));
+    assert_eq!(
+        generation_record(&project.path)["current"]["unresolved"],
+        serde_json::json!([])
+    );
+}
+
+#[test]
+fn rule_config_removal_after_verified_allows_pending_regeneration() {
+    let project = intent_project();
+    fs::write(project.path.join("AGENTS.md"), "Follow Cott.\n").expect("agents should be writable");
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    let omp = tools.join("omp");
+    write_exec(&omp, &intent_omp_body(false));
+
+    let generated = generate_with_omp(&project.path, &tools, &[]);
+    assert!(
+        generated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let verified = cott(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let verified_record = generation_record(&project.path);
+    let primary_path = project.path.join("python/_cott_impl/app/primary.py");
+    let sibling_path = project.path.join("python/_cott_impl/app/sibling.py");
+    let primary_source = fs::read(&primary_path).expect("primary implementation");
+    let sibling_source = fs::read(&sibling_path).expect("sibling implementation");
+
+    let manifest = fs::read_to_string(project.path.join("cott.toml")).expect("manifest");
+    fs::write(
+        project.path.join("cott.toml"),
+        manifest.replace("\n[generator]\nrules = \"GENERATOR_RULES.txt\"\n", "\n"),
+    )
+    .expect("manifest should drop generator rules");
+
+    let blocked = generate_with_omp(&project.path, &tools, &[]);
+    assert_eq!(blocked.status.code(), Some(4));
+    let blocked_error = String::from_utf8_lossy(&blocked.stderr);
+    assert!(blocked_error.contains("cott emit python"));
+    assert!(!blocked_error.contains("cott verify"));
+    assert_eq!(
+        fs::read(&primary_path).expect("blocked primary"),
+        primary_source
+    );
+    assert_eq!(
+        fs::read(&sibling_path).expect("blocked sibling"),
+        sibling_source
+    );
+
+    let pending = cott(&project.path, &["emit", "python"]);
+    assert!(
+        pending.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pending.stderr)
+    );
+    let pending_record = generation_record(&project.path);
+    let unresolved = pending_record["current"]["unresolved"]
+        .as_array()
+        .expect("typed unresolved records")
+        .iter()
+        .map(|record| {
+            record["cott_symbol"]
+                .as_str()
+                .expect("canonical Cott symbol")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(unresolved, ["app.primary", "app.sibling"]);
+    assert!(pending_record["last_verified"].is_object());
+    assert_eq!(
+        pending_record["last_verified"]["inputs"]["cott.toml"],
+        verified_record["current"]["inputs"]["cott.toml"]
+    );
+    assert_ne!(
+        pending_record["current"]["inputs"]["cott.toml"],
+        pending_record["last_verified"]["inputs"]["cott.toml"]
+    );
+    assert!(
+        pending_record["last_verified"]["inputs"]
+            .get("GENERATOR_RULES.txt")
+            .is_some()
+    );
+    assert!(
+        pending_record["current"]["inputs"]
+            .get("GENERATOR_RULES.txt")
+            .is_none()
+    );
+    assert_eq!(
+        fs::read(&primary_path).expect("pending primary"),
+        primary_source
+    );
+    assert_eq!(
+        fs::read(&sibling_path).expect("pending sibling"),
+        sibling_source
+    );
+
+    let repeated = cott(&project.path, &["emit", "python"]);
+    assert!(
+        repeated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&repeated.stderr)
+    );
+    assert_eq!(
+        fs::read(&primary_path).expect("repeated emit primary"),
+        primary_source
+    );
+    assert_eq!(
+        fs::read(&sibling_path).expect("repeated emit sibling"),
+        sibling_source
+    );
+
+    fs::write(&primary_path, "tampered = True\n").expect("pending primary should be writable");
+    let tampered_pending = cott(&project.path, &["emit", "python"]);
+    assert_eq!(tampered_pending.status.code(), Some(4));
+    assert_eq!(
+        fs::read(&primary_path).expect("tampered pending preserved"),
+        b"tampered = True\n"
+    );
+    fs::write(&primary_path, &primary_source).expect("restore pending primary");
+
+    let facade = project.path.join("generated/python/app.py");
+    let facade_bytes = fs::read(&facade).expect("managed facade");
+    fs::write(&facade, "tampered facade\n").expect("managed facade should be writable");
+    let tampered_managed = generate_with_omp(&project.path, &tools, &[]);
+    assert_eq!(tampered_managed.status.code(), Some(4));
+    assert!(
+        String::from_utf8_lossy(&tampered_managed.stderr)
+            .contains("verified baseline managed file changed")
+    );
+    assert_eq!(
+        fs::read(&facade).expect("tampered facade preserved"),
+        b"tampered facade\n"
+    );
+    assert_eq!(
+        fs::read(&primary_path).expect("pending primary after managed tamper"),
+        primary_source
+    );
+    fs::write(&facade, &facade_bytes).expect("restore managed facade");
+
+    fs::write(project.path.join("AGENTS.md"), "Unemitted agents edit.\n")
+        .expect("agents should be changeable");
+    let unemitted = generate_with_omp(&project.path, &tools, &[]);
+    assert_eq!(unemitted.status.code(), Some(4));
+    let unemitted_error = String::from_utf8_lossy(&unemitted.stderr);
+    assert!(unemitted_error.contains("cott emit python"));
+    assert!(!unemitted_error.contains("cott verify"));
+    assert_eq!(
+        fs::read(&primary_path).expect("pending primary after unemitted agents"),
+        primary_source
+    );
+    fs::write(project.path.join("AGENTS.md"), "Follow Cott.\n").expect("restore agents");
+    write_exec(&omp, &intent_omp_expecting(false, None, None));
+
+    let regenerated = generate_with_omp(&project.path, &tools, &[]);
+    assert!(
+        regenerated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&regenerated.stderr)
+    );
+    assert_eq!(
+        generation_record(&project.path)["current"]["unresolved"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        generation_record(&project.path)["last_verified"]["inputs"]["cott.toml"],
+        verified_record["current"]["inputs"]["cott.toml"]
+    );
+}
+
+#[test]
+fn rule_config_rename_after_verified_allows_pending_regeneration() {
+    let project = intent_project();
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    let omp = tools.join("omp");
+    write_exec(&omp, &intent_omp_body(false));
+
+    let generated = generate_with_omp(&project.path, &tools, &[]);
+    assert!(
+        generated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let verified = cott(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let primary_path = project.path.join("python/_cott_impl/app/primary.py");
+    let sibling_path = project.path.join("python/_cott_impl/app/sibling.py");
+    let primary_source = fs::read(&primary_path).expect("primary implementation");
+    let sibling_source = fs::read(&sibling_path).expect("sibling implementation");
+
+    fs::write(
+        project.path.join("AGENT_RULES.txt"),
+        "Prefer explicit returns.\nRenamed rules.\n",
+    )
+    .expect("renamed rules should be writable");
+    let manifest = fs::read_to_string(project.path.join("cott.toml")).expect("manifest");
+    fs::write(
+        project.path.join("cott.toml"),
+        manifest.replace(
+            "rules = \"GENERATOR_RULES.txt\"",
+            "rules = \"AGENT_RULES.txt\"",
+        ),
+    )
+    .expect("manifest should rename generator rules");
+    fs::remove_file(project.path.join("GENERATOR_RULES.txt"))
+        .expect("old rules should be removable");
+
+    let pending = cott(&project.path, &["emit", "python"]);
+    assert!(
+        pending.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pending.stderr)
+    );
+    let pending_record = generation_record(&project.path);
+    let unresolved = pending_record["current"]["unresolved"]
+        .as_array()
+        .expect("typed unresolved records")
+        .iter()
+        .map(|record| {
+            record["cott_symbol"]
+                .as_str()
+                .expect("canonical Cott symbol")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(unresolved, ["app.primary", "app.sibling"]);
+    assert!(
+        pending_record["current"]["inputs"]
+            .get("AGENT_RULES.txt")
+            .is_some()
+    );
+    assert!(
+        pending_record["current"]["inputs"]
+            .get("GENERATOR_RULES.txt")
+            .is_none()
+    );
+    assert_eq!(
+        fs::read(&primary_path).expect("pending primary"),
+        primary_source
+    );
+    assert_eq!(
+        fs::read(&sibling_path).expect("pending sibling"),
+        sibling_source
+    );
+    write_exec(
+        &omp,
+        &intent_omp_expecting(false, Some("Renamed rules."), Some("Renamed rules.")),
+    );
+
+    let regenerated = generate_with_omp(&project.path, &tools, &[]);
+    assert!(
+        regenerated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&regenerated.stderr)
+    );
+    assert_eq!(
+        generation_record(&project.path)["current"]["unresolved"],
+        serde_json::json!([])
+    );
+}
+
+fn authored_snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    file_snapshot(root)
+        .into_iter()
+        .filter(|(path, _)| {
+            path.components()
+                .next()
+                .is_some_and(|component| component.as_os_str() != ".cott")
+        })
+        .collect()
+}
+
+fn strip_implementations(project: &TempDir) {
+    let manifest = fs::read_to_string(project.path.join("cott.toml")).expect("manifest");
+    let manifest = manifest
+        .split_once("\n[target.python.implementations]\n")
+        .map_or(manifest.as_str(), |(base, _)| base);
+    fs::write(project.path.join("cott.toml"), format!("{manifest}\n"))
+        .expect("unresolved manifest should be writable");
+}
+
+#[test]
+fn prompt_works_without_python_checker_or_agent_and_leaves_state() {
+    let project = normative_project();
+    strip_implementations(&project);
+    assert!(!project.path.join(".venv").exists());
+    let before = authored_snapshot(&project.path);
+
+    let human = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .args(["prompt", "app.run", "--project"])
+        .arg(&project.path)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("cott prompt should run");
+    assert!(
+        human.status.success(),
+        "{}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+    assert!(human.stdout.starts_with(b"COTT_AGENT_PROMPT_V1\n"));
+
+    let json = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .args(["prompt", "--project"])
+        .arg(&project.path)
+        .args(["app.run", "--format", "json"])
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("cott prompt json should run");
+    assert!(
+        json.status.success(),
+        "{}",
+        String::from_utf8_lossy(&json.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&json.stdout).expect("prompt json should parse");
+    assert_eq!(report["symbol"], "app.run");
+    assert_eq!(report["generation_required"], true);
+    assert_ne!(report["intent_hash"], report["prompt_hash"]);
+    assert_eq!(
+        report["prompt"].as_str().expect("prompt text").as_bytes(),
+        human.stdout.as_slice()
+    );
+    assert_eq!(
+        report["prompt_hash"],
+        format!("sha256:{}", cott::hash::sha256_hex(&human.stdout))
+    );
+    assert_eq!(authored_snapshot(&project.path), before);
+}
+
+#[test]
+fn prompt_scopes_context_and_expands_inherited_rule_clauses() {
+    let project = normative_project();
+    strip_implementations(&project);
+    fs::write(
+        project.path.join("src/app.cott"),
+        r#"module app
+
+struct Assignment:
+    name: Str
+    value: Str
+
+enum ParseAssignmentError:
+    MissingEquals
+    EmptyName
+
+rule BaseAssignmentRule:
+    doc """Base assignment rule."""
+    ensures Result.Ok(assignment) => assignment.name.len > 0
+    error ParseAssignmentError.MissingEquals
+
+rule StrictAssignmentRule(BaseAssignmentRule):
+    doc """Strict assignment rule."""
+    override ensures Result.Ok(assignment) => assignment.name.len > 1
+    delete error ParseAssignmentError.MissingEquals
+    ensures Result.Ok(assignment) => assignment.value.len > 0
+    error ParseAssignmentError.EmptyName
+
+fn run() -> Result[Assignment, ParseAssignmentError]:
+    doc """
+    Parse an assignment for the target-only unique path.
+    """
+
+    rule StrictAssignmentRule
+
+fn unrelated() -> I32:
+    doc """
+    Return nine from unrelated-unique-doc.
+    """
+"#,
+    )
+    .expect("scoped source should be writable");
+    fs::write(
+        project.path.join("cott.toml"),
+        format!(
+            "{}\n[generator]\nrules = \"GENERATOR_RULES.txt\"\n",
+            fs::read_to_string(project.path.join("cott.toml")).expect("manifest")
+        ),
+    )
+    .expect("manifest should be writable");
+    fs::write(
+        project.path.join("GENERATOR_RULES.txt"),
+        "Shared guidance stays.\ncott-domain app.run return: target-only duty\ncott-domain app.unrelated return: unrelated-only duty\n",
+    )
+    .expect("generator rules should be writable");
+
+    let output = cott(&project.path, &["prompt", "app.run", "--format", "json"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("prompt json should parse");
+    let context = serde_json::to_string(&report["context"]).expect("context json");
+    let prompt = report["prompt"].as_str().expect("prompt text");
+    let run = report["context"]["declarations"]["app"]["declarations"]
+        .as_array()
+        .expect("app declarations")
+        .iter()
+        .find(|declaration| declaration["kind"] == "function" && declaration["name"] == "app.run")
+        .expect("app.run declaration");
+    let clauses = run["contract"]["clauses"]
+        .as_array()
+        .expect("app.run clauses");
+    fn field_len_threshold<'a>(clause: &'a serde_json::Value, field: &str) -> Option<&'a str> {
+        if clause["kind"] != "ensures" || clause["guard"]["pattern"]["kind"] != "result_ok" {
+            return None;
+        }
+        let expression = &clause["expression"];
+        if expression["kind"] != "comparison_chain" || expression["operators"][0] != "greater" {
+            return None;
+        }
+        let left = &expression["operands"][0];
+        let right = &expression["operands"][1];
+        (left["kind"] == "len"
+            && left["value"]["kind"] == "field"
+            && left["value"]["name"] == field
+            && right["kind"] == "literal"
+            && right["value"]["kind"] == "integer")
+            .then(|| right["value"]["value"].as_str())
+            .flatten()
+    }
+    assert_eq!(
+        clauses
+            .iter()
+            .filter_map(|clause| field_len_threshold(clause, "name"))
+            .collect::<Vec<_>>(),
+        ["1"]
+    );
+    assert_eq!(
+        clauses
+            .iter()
+            .filter_map(|clause| field_len_threshold(clause, "value"))
+            .collect::<Vec<_>>(),
+        ["0"]
+    );
+    let errors = clauses
+        .iter()
+        .filter(|clause| clause["kind"] == "error")
+        .map(|clause| clause["variant"].as_str().expect("error variant"))
+        .collect::<Vec<_>>();
+    assert_eq!(errors, ["app.ParseAssignmentError.EmptyName"]);
+    assert!(!context.contains("unrelated-unique-doc"));
+    assert!(!context.contains("unrelated-only duty"));
+    assert!(context.contains("target-only duty"));
+    assert!(context.contains("Shared guidance stays."));
+    assert!(prompt.contains("target-only duty"));
+    assert!(!prompt.contains("unrelated-only duty"));
+    assert!(!prompt.contains("unrelated-unique-doc"));
+    assert!(!prompt.contains("def unrelated"));
+}
+
+#[test]
+fn prompt_hash_matches_generate_including_doc_stale_pending() {
+    let project = project();
+    make_unresolved(&project);
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    write_exec(
+        &tools.join("omp"),
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
+printf 'from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n' > implementation.py
+"#,
+    );
+    let preview = cott(&project.path, &["prompt", "app.run", "--format", "json"]);
+    assert!(
+        preview.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    let preview_report: serde_json::Value =
+        serde_json::from_slice(&preview.stdout).expect("preview json");
+    assert_eq!(preview_report["generation_required"], true);
+    let generated = generate_with_omp(&project.path, &tools, &["app.run"]);
+    assert!(
+        generated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let generated_record = generation_record(&project.path);
+    let run = generated_record["current"]["agent_runs"]
+        .as_array()
+        .expect("agent runs")
+        .iter()
+        .find(|run| run["symbol"] == "app.run")
+        .expect("generated AgentRun");
+    assert_eq!(run["prompt_hash"], preview_report["prompt_hash"]);
+
+    let project = intent_project();
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    write_exec(&tools.join("omp"), &intent_omp_body(false));
+    let generated = generate_with_omp(&project.path, &tools, &[]);
+    assert!(
+        generated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    assert!(cott(&project.path, &["verify"]).status.success());
+    fs::write(
+        project.path.join("src/app.cott"),
+        "module app\n\nfn primary() -> I32:\n    doc \"\"\"\n    Return two for the right-to-left primary path.\n    \"\"\"\n\n    effects []\n\nfn sibling() -> I32:\n    doc \"\"\"\n    Return seven for the unchanged sibling path.\n    \"\"\"\n\n    effects []\n",
+    )
+    .expect("doc edit should be writable");
+    assert!(cott(&project.path, &["emit", "python"]).status.success());
+    let pending = fs::read(project.path.join("generated/generation.json")).expect("pending record");
+    let pending_primary =
+        fs::read(project.path.join("python/_cott_impl/app/primary.py")).expect("pending primary");
+    let preview = cott(
+        &project.path,
+        &["prompt", "app.primary", "--format", "json"],
+    );
+    assert!(
+        preview.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    assert_eq!(
+        fs::read(project.path.join("generated/generation.json")).expect("preview must not emit"),
+        pending
+    );
+    assert_eq!(
+        fs::read(project.path.join("python/_cott_impl/app/primary.py")).expect("pending primary"),
+        pending_primary
+    );
+    let preview_report: serde_json::Value =
+        serde_json::from_slice(&preview.stdout).expect("pending preview json");
+    assert_eq!(preview_report["generation_required"], true);
+    assert!(
+        preview_report["prompt"]
+            .as_str()
+            .expect("prompt text")
+            .contains("right-to-left primary")
+    );
+    let regenerated = generate_with_omp(&project.path, &tools, &["app.primary"]);
+    assert!(
+        regenerated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&regenerated.stderr)
+    );
+    let regenerated_record = generation_record(&project.path);
+    let run = regenerated_record["current"]["agent_runs"]
+        .as_array()
+        .expect("agent runs")
+        .iter()
+        .find(|run| run["symbol"] == "app.primary")
+        .expect("regenerated AgentRun");
+    assert_eq!(run["prompt_hash"], preview_report["prompt_hash"]);
+}
+
+#[test]
+fn prompt_hash_matches_generate_for_dependent_initial_refs() {
+    fn preview_hash(root: &Path, symbol: &str) -> serde_json::Value {
+        let preview = cott(root, &["prompt", symbol, "--format", "json"]);
+        assert!(
+            preview.status.success(),
+            "{}",
+            String::from_utf8_lossy(&preview.stderr)
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&preview.stdout).expect("preview json");
+        report["prompt_hash"].clone()
+    }
+
+    let omp = r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
+message=
+for message; do :; done
+case "$message" in
+  @*) prompt=$(cat "${message#@}") || exit 64 ;;
+  *) printf '%s\n' 'missing @prompt-file argument' >&2; exit 64 ;;
+esac
+case "$prompt" in
+  *'Symbol: app.helper'*)
+    printf 'from cott_runtime import I32\n\n\ndef helper() -> I32:\n    return 3\n' > implementation.py
+    ;;
+  *'Symbol: app.mid'*)
+    printf 'from cott_runtime import I32\n\n\ndef mid() -> I32:\n    return 5\n' > implementation.py
+    ;;
+  *'Symbol: app.target'*)
+    printf 'from cott_runtime import I32\n\n\ndef target() -> I32:\n    return 4\n' > implementation.py
+    ;;
+  *)
+    printf '%s\n' 'unexpected dependent agent prompt' >&2
+    exit 64
+    ;;
+esac
+"#;
+    let helper_target = "module app\n\nfn helper() -> I32:\n    doc \"\"\"\n    Return three from helper.\n    \"\"\"\n\n    effects []\n\nfn target() -> I32:\n    doc \"\"\"\n    Call helper then return four from target.\n    \"\"\"\n\n    effects []\n";
+    let helper_mid_target = "module app\n\nfn helper() -> I32:\n    doc \"\"\"\n    Return three from helper.\n    \"\"\"\n\n    effects []\n\nfn mid() -> I32:\n    doc \"\"\"\n    Return five from mid-unique-doc.\n    \"\"\"\n\n    effects []\n\nfn target() -> I32:\n    doc \"\"\"\n    Call helper then return four from target.\n    \"\"\"\n\n    effects []\n";
+    for (jobs, source, symbols) in [
+        ("1", helper_target, &["app.helper", "app.target"] as &[&str]),
+        (
+            "2",
+            helper_mid_target,
+            &["app.helper", "app.mid", "app.target"] as &[&str],
+        ),
+    ] {
+        let project = intent_project();
+        fs::write(project.path.join("src/app.cott"), source).expect("source should be writable");
+        fs::write(
+            project.path.join("GENERATOR_RULES.txt"),
+            "Prefer explicit returns.\n",
+        )
+        .expect("rules should be writable");
+        let tools = project.path.join("tools");
+        fs::create_dir(&tools).expect("tool directory");
+        write_exec(&tools.join("omp"), omp);
+        let previews = symbols
+            .iter()
+            .map(|symbol| preview_hash(&project.path, symbol))
+            .collect::<Vec<_>>();
+        let generated = generate_with_omp(&project.path, &tools, &["-j", jobs]);
+        assert!(
+            generated.status.success(),
+            "{jobs}: {}",
+            String::from_utf8_lossy(&generated.stderr)
+        );
+        let record = generation_record(&project.path);
+        let runs = record["current"]["agent_runs"]
+            .as_array()
+            .expect("agent runs");
+        for (symbol, expected) in symbols.iter().zip(&previews) {
+            let run = runs
+                .iter()
+                .find(|run| run["symbol"] == *symbol)
+                .unwrap_or_else(|| panic!("missing AgentRun for {symbol}"));
+            assert_eq!(run["prompt_hash"], *expected, "{jobs} {symbol}");
+        }
+    }
+}
+
+#[test]
+fn prompt_json_errors_are_diagnostics_not_prompt_text() {
+    let project = project();
+    let unknown = cott(
+        &project.path,
+        &["prompt", "app.missing", "--format", "json"],
+    );
+    assert_eq!(unknown.status.code(), Some(2));
+    let report: serde_json::Value =
+        serde_json::from_slice(&unknown.stdout).expect("unknown symbol reports JSON");
+    assert_eq!(report["schema_version"], 1);
+    assert!(
+        report["diagnostics"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("unknown callable `app.missing`")
+    );
+    assert!(report.get("prompt").is_none());
+    assert!(!String::from_utf8_lossy(&unknown.stdout).contains("COTT_AGENT_PROMPT_V1"));
+
+    fs::write(
+        project.path.join("src/app.cott"),
+        "module app\n\nfn run( -> I32\n",
+    )
+    .expect("invalid source should be writable");
+    let invalid = cott(&project.path, &["prompt", "app.run", "--format", "json"]);
+    assert_eq!(invalid.status.code(), Some(3));
+    let report: serde_json::Value =
+        serde_json::from_slice(&invalid.stdout).expect("invalid source reports JSON");
+    assert_eq!(report["schema_version"], 1);
+    let span = &report["diagnostics"][0]["span"];
+    assert_eq!(span["path"], "src/app.cott");
+    assert!(
+        span["end_byte"].as_u64().expect("end_byte")
+            > span["start_byte"].as_u64().expect("start_byte")
+    );
+    assert!(span["start_line"].as_u64().expect("start_line") >= 1);
+    assert!(report.get("prompt").is_none());
+
+    fs::write(project.path.join("src/app.cott"), SOURCE).expect("valid source should be restored");
+    fs::create_dir_all(project.path.join("src/nested")).expect("nested source directory");
+    fs::write(
+        project.path.join("src/nested/leaf.cott"),
+        "module nested.leaf\n\nfn run( -> I32\n",
+    )
+    .expect("nested invalid source should be writable");
+    let nested = cott(&project.path, &["prompt", "app.run", "--format", "json"]);
+    assert_eq!(nested.status.code(), Some(3));
+    let report: serde_json::Value =
+        serde_json::from_slice(&nested.stdout).expect("nested invalid source reports JSON");
+    assert_eq!(report["schema_version"], 1);
+    let span = &report["diagnostics"][0]["span"];
+    assert_eq!(span["path"], "src/nested/leaf.cott");
+    assert!(
+        span["end_byte"].as_u64().expect("end_byte")
+            > span["start_byte"].as_u64().expect("start_byte")
+    );
+    assert!(span["start_line"].as_u64().expect("start_line") >= 1);
+    assert!(report.get("prompt").is_none());
+
+    let project = method_project();
+    fs::write(
+        project.path.join("src/api/service.cott"),
+        "module api.service\n\ntrait Reader:\n    fn read(self, amount: I32) -> I32 = api.service.default_read\n    fn label(self) -> Unit\n\nfn default_read(receiver: Reader, amount: I32) -> I32\n\nimpl ReaderState for Reader:\n    fn label(self) -> Unit:\n        ensures true\n",
+    )
+    .expect("compiler-owned source should be writable");
+    let owned = cott(
+        &project.path,
+        &["prompt", "api.service.ReaderState.read", "--format", "json"],
+    );
+    assert_eq!(owned.status.code(), Some(2));
+    let report: serde_json::Value =
+        serde_json::from_slice(&owned.stdout).expect("compiler-owned reports JSON");
+    assert_eq!(report["schema_version"], 1);
+    assert!(
+        report["diagnostics"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("compiler-owned")
+    );
+    assert!(report.get("prompt").is_none());
+}
+
+#[test]
+fn prompt_inspects_resolved_manifest_function_without_generation() {
+    let project = project();
+    let before = authored_snapshot(&project.path);
+    let output = cott(&project.path, &["prompt", "app.run", "--format", "json"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("resolved prompt json");
+    assert_eq!(report["generation_required"], false);
+    assert_eq!(authored_snapshot(&project.path), before);
+}
+
+#[test]
+fn prompt_refuses_pending_transaction_without_mutating() {
+    let project = project();
+    let before = authored_snapshot(&project.path);
+    let leftover = project.path.join(".cott/transactions/pending");
+    fs::create_dir_all(&leftover).expect("pending transaction");
+    let output = cott(&project.path, &["prompt", "app.run", "--format", "json"]);
+    assert_eq!(output.status.code(), Some(6));
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("pending recovery reports JSON");
+    assert_eq!(report["schema_version"], 1);
+    assert!(
+        report["diagnostics"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("pending transaction requires recovery")
+    );
+    assert!(report.get("prompt").is_none());
+    assert!(leftover.exists(), "inspection must not recover leftover");
+    assert_eq!(authored_snapshot(&project.path), before);
+}
+
+#[test]
+fn prompt_json_reports_unavailable_current_directory() {
+    let workspace = TempDir::new();
+    let cwd = workspace.path.join("gone");
+    fs::create_dir(&cwd).expect("cwd");
+    let output = Command::new("/bin/bash")
+        .arg("-c")
+        .arg(r#"cd "$1" && rmdir "$1" && exec "$2" prompt app.run --format json"#)
+        .arg("prompt-cwd")
+        .arg(&cwd)
+        .arg(env!("CARGO_BIN_EXE_cott"))
+        .output()
+        .expect("cott prompt should run");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("missing cwd reports JSON");
+    assert_eq!(report["schema_version"], 1);
+    assert!(
+        report["diagnostics"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("failed to determine current directory")
+    );
+    assert!(report.get("prompt").is_none());
 }

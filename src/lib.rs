@@ -8,6 +8,7 @@ pub mod diagnostics;
 pub mod formatter;
 pub mod hash;
 pub mod hir;
+pub mod intent;
 pub mod ir;
 pub mod lexer;
 pub mod lsp;

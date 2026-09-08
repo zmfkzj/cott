@@ -3,11 +3,12 @@ use std::path::Path;
 use cott::compiler::{SourceFile, parse_project};
 use cott::diagnostics::Span;
 use cott::hir::{
-    HirCallableKind, HirClause, HirClauseKind, HirConstArgument, HirContract, HirDeclaration,
-    HirDoc, HirExpr, HirExprKind, HirGenericArg, HirGenericParam, HirPattern, HirPatternKind,
-    HirTrait, HirType, HirValue, HirVariance, ModuleId, PrimitiveType, SymbolId, is_assignable,
-    lower,
+    APPLIED_RULE_ANNOTATION, HirCallableKind, HirClause, HirClauseKind, HirCompareOp,
+    HirConstArgument, HirContract, HirDeclaration, HirDoc, HirExpr, HirExprKind, HirGenericArg,
+    HirGenericParam, HirPattern, HirPatternKind, HirTrait, HirType, HirValue, HirVariance,
+    ModuleId, PrimitiveType, SymbolId, is_assignable, lower,
 };
+use cott::ir::{load, render};
 
 fn span() -> Span {
     Span::new(0, 1)
@@ -1740,4 +1741,634 @@ struct BrowserState:
         panic!("expected BrowserState");
     };
     assert_eq!(state.invariants.len(), 2);
+}
+
+#[test]
+fn valid_newtype_generic_and_impl_field_accesses_lower() {
+    let parsed = parse_project([SourceFile::new(
+        "src/fields.cott",
+        r#"module fields
+
+newtype Port(U16)
+
+struct Box[T]:
+    item: T
+
+trait Reader:
+    fn read(self) -> I32
+
+impl Counter for Reader:
+    state:
+        count: I32 = 0
+    invariant self.count >= 0
+    fn read(self) -> I32:
+        ensures result == self.count
+
+fn uses(port: Port, boxed: Box[I32]) -> Unit:
+    requires port.value > 0
+    requires boxed.item > 0
+"#,
+    )])
+    .expect("field fixture should parse");
+    lower(Path::new("src"), parsed).expect("valid field accesses should lower");
+}
+
+#[test]
+fn missing_member_on_name_and_field_paths_is_one_root_cause() {
+    let source = r#"module fields
+
+struct Request:
+    limit: I32
+
+fn check(request: Request) -> Unit:
+    requires request.limt > 0
+    requires (request).missng > 0
+"#;
+    let parsed = parse_project([SourceFile::new("src/fields.cott", source)])
+        .expect("missing member fixture should parse");
+    let errors = lower(Path::new("src"), parsed).expect_err("missing members must fail");
+    assert_eq!(errors.len(), 2, "{errors:#?}");
+    for (member, ty) in [("limt", "fields.Request"), ("missng", "fields.Request")] {
+        let error = errors
+            .iter()
+            .find(|error| error.diagnostic.message.contains(member))
+            .unwrap_or_else(|| panic!("missing `{member}` in {errors:#?}"));
+        assert!(
+            error.diagnostic.message.contains(&format!("`{ty}`")),
+            "{errors:#?}"
+        );
+        let start = source.find(member).expect("member token");
+        assert_eq!(error.diagnostic.span.start, start);
+        assert_eq!(error.diagnostic.span.end, start + member.len());
+    }
+}
+
+fn ok_field_len_threshold<'a>(kind: &'a HirClauseKind, field: &str) -> Option<&'a str> {
+    let HirClauseKind::Ensures {
+        guard: Some(guard),
+        expression,
+    } = kind
+    else {
+        return None;
+    };
+    let HirPatternKind::Variant { symbol, .. } = &guard.pattern.kind else {
+        return None;
+    };
+    if symbol.name != "Result.Ok" {
+        return None;
+    }
+    let HirExprKind::ComparisonChain {
+        operands,
+        operators,
+    } = &expression.kind
+    else {
+        return None;
+    };
+    if operators.first() != Some(&HirCompareOp::Greater) || operands.len() < 2 {
+        return None;
+    }
+    let HirExprKind::Len { value } = &operands[0].kind else {
+        return None;
+    };
+    let HirExprKind::Field { name, .. } = &value.kind else {
+        return None;
+    };
+    if name != field {
+        return None;
+    }
+    let HirExprKind::Literal(HirValue::Integer(threshold)) = &operands[1].kind else {
+        return None;
+    };
+    Some(threshold.as_str())
+}
+
+#[test]
+fn function_contract_expands_inherited_overridden_and_deleted_rule_clauses() {
+    let parsed = parse_project([SourceFile::new(
+        "src/rules.cott",
+        r#"module rules
+
+struct Assignment:
+    name: Str
+    value: Str
+
+enum ParseAssignmentError:
+    MissingEquals
+    EmptyName
+
+rule BaseAssignmentRule:
+    ensures Result.Ok(assignment) => assignment.name.len > 0
+    error ParseAssignmentError.MissingEquals
+
+rule StrictAssignmentRule(BaseAssignmentRule):
+    override ensures Result.Ok(assignment) => assignment.name.len > 1
+    delete error ParseAssignmentError.MissingEquals
+    ensures Result.Ok(assignment) => assignment.value.len > 0
+    error ParseAssignmentError.EmptyName
+
+fn run() -> Result[Assignment, ParseAssignmentError]:
+    rule StrictAssignmentRule
+"#,
+    )])
+    .expect("rule fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("inherited rule should lower");
+    let HirDeclaration::Function(run) = &project.modules[0].declarations[4] else {
+        panic!("expected run function");
+    };
+    assert_eq!(
+        run.contract
+            .clauses
+            .iter()
+            .filter_map(|clause| ok_field_len_threshold(&clause.kind, "name"))
+            .collect::<Vec<_>>(),
+        ["1"]
+    );
+    assert_eq!(
+        run.contract
+            .clauses
+            .iter()
+            .filter_map(|clause| ok_field_len_threshold(&clause.kind, "value"))
+            .collect::<Vec<_>>(),
+        ["0"]
+    );
+    let errors = run
+        .contract
+        .clauses
+        .iter()
+        .filter_map(|clause| match &clause.kind {
+            HirClauseKind::Error { variant, .. } => Some(variant.name.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(errors, ["ParseAssignmentError.EmptyName"]);
+    assert_eq!(
+        run.contract
+            .clauses
+            .iter()
+            .map(|clause| clause.clause_id)
+            .collect::<Vec<_>>(),
+        [0, 1, 2]
+    );
+}
+
+#[test]
+fn forward_rule_dependency_expands_before_declaration() {
+    let parsed = parse_project([SourceFile::new(
+        "src/forward.cott",
+        r#"module forward
+
+struct Assignment:
+    name: Str
+    value: Str
+
+enum ParseAssignmentError:
+    MissingEquals
+    EmptyName
+
+fn run() -> Result[Assignment, ParseAssignmentError]:
+    rule Child
+
+rule Child(Base):
+    override ensures Result.Ok(assignment) => assignment.name.len > 1
+    delete error ParseAssignmentError.MissingEquals
+    error ParseAssignmentError.EmptyName
+
+rule Base:
+    ensures Result.Ok(assignment) => assignment.name.len > 0
+    error ParseAssignmentError.MissingEquals
+"#,
+    )])
+    .expect("forward rule fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("forward rule should lower");
+    let HirDeclaration::Function(run) = &project.modules[0].declarations[2] else {
+        panic!("expected run function");
+    };
+    assert_eq!(
+        run.contract
+            .clauses
+            .iter()
+            .filter_map(|clause| ok_field_len_threshold(&clause.kind, "name"))
+            .collect::<Vec<_>>(),
+        ["1"]
+    );
+    let errors = run
+        .contract
+        .clauses
+        .iter()
+        .filter_map(|clause| match &clause.kind {
+            HirClauseKind::Error { variant, .. } => Some(variant.name.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(errors, ["ParseAssignmentError.EmptyName"]);
+}
+
+#[test]
+fn rule_dependency_cycle_is_a_diagnostic() {
+    let parsed = parse_project([SourceFile::new(
+        "src/cycle.cott",
+        r#"module cycle
+
+rule Left(Right):
+    requires true
+
+rule Right(Left):
+    requires true
+"#,
+    )])
+    .expect("cycle fixture should parse");
+    let errors = lower(Path::new("src"), parsed).expect_err("rule cycle must fail");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.diagnostic.message.contains("rule dependency cycle")),
+        "{errors:#?}"
+    );
+}
+
+#[test]
+fn applied_rule_error_must_match_callable_result_type() {
+    let parsed = parse_project([SourceFile::new(
+        "src/mismatch.cott",
+        r#"module mismatch
+
+enum First:
+    Bad
+
+enum Second:
+    Worse
+
+rule FirstRule:
+    error First.Bad
+
+fn run(value: I32) -> Result[I32, Second]:
+    rule FirstRule
+    ensures Result.Ok(output) => output > 0
+"#,
+    )])
+    .expect("mismatch fixture should parse");
+    let errors = lower(Path::new("src"), parsed).expect_err("incompatible rule error must fail");
+    assert!(
+        errors.iter().any(|error| {
+            error
+                .diagnostic
+                .message
+                .contains("error clause variant does not belong to the Result error type")
+        }),
+        "{errors:#?}"
+    );
+}
+
+#[test]
+fn applied_rule_effects_flow_into_function_contract() {
+    let parsed = parse_project([SourceFile::new(
+        "src/rule_effects.cott",
+        r#"module rule_effects
+
+rule Networked:
+    requires true
+    effects [network]
+
+fn run() -> Unit:
+    rule Networked
+"#,
+    )])
+    .expect("effect fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("rule effects should lower");
+    let HirDeclaration::Function(run) = &project.modules[0].declarations[1] else {
+        panic!("expected run function");
+    };
+    assert_eq!(
+        run.contract
+            .effects
+            .iter()
+            .map(|effect| effect.key.as_str())
+            .collect::<Vec<_>>(),
+        ["network"]
+    );
+}
+
+#[test]
+fn expanded_rule_errors_still_require_ok_success_obligation() {
+    let parsed = parse_project([SourceFile::new(
+        "src/missing_success.cott",
+        r#"module missing_success
+
+enum Failure:
+    Bad
+
+rule OnlyErrors:
+    error Failure.Bad
+
+fn checked(value: Str) -> Result[Str, Failure]:
+    rule OnlyErrors
+"#,
+    )])
+    .expect("success obligation fixture should parse");
+    let errors = lower(Path::new("src"), parsed).expect_err("expanded errors require Ok ensures");
+    assert!(errors.iter().any(|error| {
+        error
+            .diagnostic
+            .message
+            .contains("guarded Result.Ok ensures")
+    }));
+}
+
+fn declaration<'a>(
+    project: &'a cott::hir::HirProject,
+    module: &str,
+    name: &str,
+) -> &'a HirDeclaration {
+    project
+        .modules
+        .iter()
+        .find(|item| item.id.as_string() == module)
+        .unwrap_or_else(|| panic!("missing module {module}"))
+        .declarations
+        .iter()
+        .find(|item| item.id().name == name)
+        .unwrap_or_else(|| panic!("missing {module}.{name}"))
+}
+
+#[test]
+fn unguarded_unit_result_rule_cannot_apply_to_i32() {
+    let parsed = parse_project([SourceFile::new(
+        "src/unit_result.cott",
+        r#"module unit_result
+
+rule UnitResult:
+    ensures result == ()
+
+fn run() -> I32:
+    rule UnitResult
+"#,
+    )])
+    .expect("unit result fixture should parse");
+    let errors = lower(Path::new("src"), parsed).expect_err("Unit result cannot apply to I32");
+    assert!(
+        errors.iter().any(|error| {
+            error.diagnostic.message.contains(
+                "rule clause result type is not compatible with this callable's return type",
+            )
+        }),
+        "{errors:#?}"
+    );
+}
+
+#[test]
+fn generic_base_rule_instantiates_before_application() {
+    let parsed = parse_project([SourceFile::new(
+        "src/generic_rule.cott",
+        r#"module generic_rule
+
+enum Failure:
+    Bad
+
+rule Base[T]:
+    ensures Result.Ok(T) => true
+
+rule I32Rule(Base[I32]):
+    requires true
+
+fn run() -> Result[I32, Failure]:
+    rule I32Rule
+"#,
+    )])
+    .expect("generic rule fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("instantiated generic rule should lower");
+    let HirDeclaration::Function(run) = declaration(&project, "generic_rule", "run") else {
+        panic!("expected run function");
+    };
+    let Some(HirClauseKind::Ensures {
+        guard: Some(guard), ..
+    }) = run
+        .contract
+        .clauses
+        .iter()
+        .map(|clause| &clause.kind)
+        .find(|kind| matches!(kind, HirClauseKind::Ensures { .. }))
+    else {
+        panic!("expected inherited ensures");
+    };
+    let HirPatternKind::Variant { arguments, .. } = &guard.pattern.kind else {
+        panic!("expected Result.Ok guard");
+    };
+    assert_eq!(
+        arguments.first().map(|pattern| &pattern.ty),
+        Some(&HirType::Primitive(PrimitiveType::I32))
+    );
+    assert_eq!(
+        guard.scrutinee.ty,
+        HirType::Result {
+            ok: Box::new(HirType::Primitive(PrimitiveType::I32)),
+            error: Box::new(HirType::Named {
+                symbol: SymbolId::new(ModuleId::new(vec!["generic_rule".into()]), "Failure"),
+                args: Vec::new(),
+            }),
+        }
+    );
+}
+
+#[test]
+fn delete_error_matches_full_symbol_across_modules() {
+    let parsed = parse_project([
+        SourceFile::new(
+            "src/a.cott",
+            r#"module a
+
+enum Failure:
+    Bad
+
+rule Base:
+    error Failure.Bad
+    ensures Result.Ok(value) => true
+"#,
+        ),
+        SourceFile::new(
+            "src/b.cott",
+            r#"module b
+
+enum Failure:
+    Bad
+
+rule Child(a.Base):
+    delete error Failure.Bad
+"#,
+        ),
+    ])
+    .expect("cross-module error fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("distinct Failure.Bad must not delete");
+    let HirDeclaration::Rule(child) = declaration(&project, "b", "Child") else {
+        panic!("expected Child rule");
+    };
+    let errors = child
+        .contract
+        .clauses
+        .iter()
+        .filter_map(|clause| match &clause.kind {
+            HirClauseKind::Error { variant, .. } => Some(variant.as_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(errors, ["a.Failure.Bad"]);
+}
+
+#[test]
+fn rule_effect_override_and_delete_replace_inherited_set() {
+    let parsed = parse_project([SourceFile::new(
+        "src/effect_actions.cott",
+        r#"module effect_actions
+
+rule Base:
+    requires true
+    effects [network, file.read]
+
+rule Deleted(Base):
+    delete effects [network]
+
+rule Overridden(Base):
+    override effects [file.write]
+
+fn deleted() -> Unit:
+    rule Deleted
+
+fn overridden() -> Unit:
+    rule Overridden
+"#,
+    )])
+    .expect("effect action fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("effect actions should lower");
+    let HirDeclaration::Function(deleted) = declaration(&project, "effect_actions", "deleted")
+    else {
+        panic!("expected deleted function");
+    };
+    let HirDeclaration::Function(overridden) =
+        declaration(&project, "effect_actions", "overridden")
+    else {
+        panic!("expected overridden function");
+    };
+    assert_eq!(
+        deleted
+            .contract
+            .effects
+            .iter()
+            .map(|effect| effect.key.as_str())
+            .collect::<Vec<_>>(),
+        ["file.read"]
+    );
+    assert_eq!(
+        overridden
+            .contract
+            .effects
+            .iter()
+            .map(|effect| effect.key.as_str())
+            .collect::<Vec<_>>(),
+        ["file.write"]
+    );
+}
+
+#[test]
+fn cross_module_applied_rule_spans_use_application_location() {
+    let parsed = parse_project([
+        SourceFile::new(
+            "src/a.cott",
+            r#"module a
+
+rule Marker:
+    requires true
+
+fn local() -> Unit:
+    rule Marker
+"#,
+        ),
+        SourceFile::new(
+            "src/b.cott",
+            r#"module b
+
+fn run() -> Unit:
+    rule a.Marker
+"#,
+        ),
+    ])
+    .expect("cross-module span fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("cross-module rule should lower");
+    let HirDeclaration::Rule(marker) = declaration(&project, "a", "Marker") else {
+        panic!("expected Marker rule");
+    };
+    let HirDeclaration::Function(local) = declaration(&project, "a", "local") else {
+        panic!("expected local function");
+    };
+    let HirDeclaration::Function(run) = declaration(&project, "b", "run") else {
+        panic!("expected run function");
+    };
+    assert_eq!(
+        local.contract.clauses[0].span,
+        marker.contract.clauses[0].span
+    );
+    assert_eq!(run.annotations[0].name, APPLIED_RULE_ANNOTATION);
+    assert_eq!(run.annotations[0].argument.as_deref(), Some("a.Marker"));
+    assert_eq!(run.contract.clauses[0].span, run.annotations[0].span);
+    let caller = project
+        .modules
+        .iter()
+        .find(|module| module.id.as_string() == "b")
+        .expect("caller module");
+    assert!(run.contract.clauses[0].span.end <= caller.source_bytes.len());
+    let ir = render(&project).expect("cross-module rule should render");
+    let caller_ir = ir
+        .modules
+        .iter()
+        .find(|module| module.module.as_string() == "b")
+        .expect("caller IR module");
+    let value = load(&caller_ir.bytes).expect("caller IR should load");
+    let function = value["declarations"]
+        .as_array()
+        .expect("declarations")
+        .iter()
+        .find(|declaration| declaration["name"] == "b.run")
+        .expect("run declaration");
+    assert_eq!(
+        function["contract"]["clauses"][0]["span"]["start_byte"].as_u64(),
+        Some(run.contract.clauses[0].span.start as u64)
+    );
+    assert_eq!(
+        function["contract"]["clauses"][0]["span"]["end_byte"].as_u64(),
+        Some(run.contract.clauses[0].span.end as u64)
+    );
+}
+
+#[test]
+fn applied_rule_emits_compiler_annotation_on_function_and_ir() {
+    let parsed = parse_project([SourceFile::new(
+        "src/applied.cott",
+        r#"module applied
+
+rule Marker:
+    requires true
+
+fn run() -> Unit:
+    rule Marker
+"#,
+    )])
+    .expect("applied annotation fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("applied annotation should lower");
+    let HirDeclaration::Function(run) = declaration(&project, "applied", "run") else {
+        panic!("expected run function");
+    };
+    assert_eq!(run.annotations.len(), 1);
+    assert_eq!(run.annotations[0].name, APPLIED_RULE_ANNOTATION);
+    assert_eq!(
+        run.annotations[0].argument.as_deref(),
+        Some("applied.Marker")
+    );
+    let ir = render(&project).expect("applied annotation should render");
+    let value = load(&ir.modules[0].bytes).expect("applied IR should load");
+    let function = value["declarations"]
+        .as_array()
+        .expect("declarations")
+        .iter()
+        .find(|declaration| declaration["name"] == "applied.run")
+        .expect("run declaration");
+    assert_eq!(function["annotations"][0]["name"], APPLIED_RULE_ANNOTATION);
+    assert_eq!(function["annotations"][0]["argument"], "applied.Marker");
 }

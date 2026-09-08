@@ -159,3 +159,59 @@ fn rejects_invalid_generate_jobs() {
         assert!(parse_command(&arguments.iter().map(OsString::from).collect::<Vec<_>>()).is_err());
     }
 }
+
+#[test]
+fn parses_prompt_options_surrounding_symbol() {
+    assert_eq!(
+        parse(&[
+            "prompt",
+            "--format",
+            "json",
+            "foo.bar.run",
+            "--project",
+            "demo"
+        ]),
+        Command::Prompt {
+            symbol: "foo.bar.run".to_owned(),
+            project: Some(PathBuf::from("demo")),
+            format: OutputFormat::Json
+        },
+    );
+    assert_eq!(
+        parse(&["prompt", "foo.bar.Reader.read", "--project", "demo"]),
+        Command::Prompt {
+            symbol: "foo.bar.Reader.read".to_owned(),
+            project: Some(PathBuf::from("demo")),
+            format: OutputFormat::Human
+        },
+    );
+}
+
+#[test]
+fn rejects_prompt_missing_duplicates_and_generate_flags() {
+    assert_eq!(
+        parse_command(&["prompt"].map(OsString::from)),
+        Err("`prompt` requires a fully qualified callable")
+    );
+    for arguments in [
+        &["prompt", "foo.bar.run", "foo.bar.other"][..],
+        &["prompt", "foo.bar.run", "--agent", "omp"][..],
+        &["prompt", "foo.bar.run", "--target", "python"][..],
+        &["prompt", "foo.bar.run", "-j", "3"][..],
+        &["prompt", "--project", "a", "--project", "b", "foo.bar.run"][..],
+        &[
+            "prompt",
+            "--format",
+            "json",
+            "--format",
+            "json",
+            "foo.bar.run",
+        ][..],
+        &["prompt", "foo.bar.run", "--jobs", "2"][..],
+    ] {
+        assert!(
+            parse_command(&arguments.iter().map(OsString::from).collect::<Vec<_>>()).is_err(),
+            "{arguments:?}"
+        );
+    }
+}

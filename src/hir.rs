@@ -12,6 +12,7 @@ use crate::ast::{
 };
 use crate::compiler::{ParsedProject, ProjectDiagnostic};
 use crate::diagnostics::{Diagnostic, Span};
+use crate::syntax::TokenKind;
 
 /// Canonical module identity, in source order from the root segment.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -351,6 +352,18 @@ pub struct HirAnnotation {
     pub span: Span,
     pub name: String,
     pub argument: Option<String>,
+}
+
+/// Compiler-generated applied-rule link. Source annotation names are a single
+/// identifier, so this dotted name is unspellable and not spoofable.
+pub const APPLIED_RULE_ANNOTATION: &str = "cott.applied_rule";
+
+fn applied_rule_annotation(span: Span, rule: &SymbolId) -> HirAnnotation {
+    HirAnnotation {
+        span,
+        name: APPLIED_RULE_ANNOTATION.to_owned(),
+        argument: Some(rule.as_string()),
+    }
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HirExternalType {
@@ -1225,6 +1238,7 @@ struct OwnedLower<'a> {
     resolving_aliases: HashSet<SymbolId>,
     constant_values: HashMap<SymbolId, HirValue>,
     resolving_constants: HashSet<SymbolId>,
+    resolving_rules: HashSet<SymbolId>,
     lowered_rules: HashMap<SymbolId, HirRule>,
     default_functions: HashMap<SymbolId, Option<HirVerifiedFunction>>,
 }
@@ -1340,6 +1354,7 @@ impl<'a> OwnedLower<'a> {
             constant_values: HashMap::new(),
             resolving_constants: HashSet::new(),
             resolving_aliases: HashSet::new(),
+            resolving_rules: HashSet::new(),
             lowered_rules: HashMap::new(),
             default_functions: HashMap::new(),
         };
@@ -3354,6 +3369,122 @@ fn owned_value_is_zero(value: &HirValue) -> bool {
 }
 
 impl<'a> OwnedLower<'a> {
+    fn name_token_span(&self, module: usize, range: &Span, index: usize) -> Span {
+        self.parsed.sources[module]
+            .cst
+            .tokens
+            .iter()
+            .filter(|token| {
+                token.span.start >= range.start
+                    && token.span.end <= range.end
+                    && matches!(token.kind, TokenKind::Name(_))
+            })
+            .nth(index)
+            .map(|token| token.span.clone())
+            .unwrap_or_else(|| range.clone())
+    }
+
+    fn last_name_token_span(&self, module: usize, range: &Span, name: &str) -> Span {
+        self.parsed.sources[module]
+            .cst
+            .tokens
+            .iter()
+            .rev()
+            .find(|token| {
+                token.span.start >= range.start
+                    && token.span.end <= range.end
+                    && matches!(&token.kind, TokenKind::Name(value) if value == name)
+            })
+            .map(|token| token.span.clone())
+            .unwrap_or_else(|| Span::new(range.end.saturating_sub(name.len()), range.end))
+    }
+
+    fn unknown_member_message(ty: &HirType, name: &str) -> String {
+        match ty {
+            HirType::Named { symbol, .. } => {
+                format!("unknown member `{name}` on `{}`", symbol.as_string())
+            }
+            _ => format!("unknown member `{name}` on non-nominal value"),
+        }
+    }
+
+    fn expect_boolean(
+        &mut self,
+        module: usize,
+        span: Span,
+        expression: &HirExpr,
+        before: usize,
+        message: &'static str,
+    ) {
+        if self.errors.len() == before && expression.ty != HirType::Primitive(PrimitiveType::Bool) {
+            self.error(module, span, message);
+        }
+    }
+
+    fn bind_member(
+        &mut self,
+        module: usize,
+        base: HirExpr,
+        name: &str,
+        qualified_index: Option<usize>,
+        expr_span: Span,
+        base_errored: bool,
+    ) -> HirExpr {
+        if name == "len" {
+            let valid = owned_len_allowed(&base.ty);
+            if !valid && !base_errored {
+                self.error(
+                    module,
+                    expr_span.clone(),
+                    "length is only defined for strings, bytes, lists, sets, and maps",
+                );
+            }
+            return HirExpr {
+                span: expr_span,
+                ty: if valid {
+                    HirType::Primitive(PrimitiveType::U64)
+                } else {
+                    owned_invalid_expr_type("invalid-len")
+                },
+                reference: None,
+                kind: HirExprKind::Len {
+                    value: Box::new(base),
+                },
+            };
+        }
+        if let Some(ty) = self.named_field_type(&base.ty, name) {
+            return HirExpr {
+                span: expr_span,
+                ty,
+                reference: None,
+                kind: HirExprKind::Field {
+                    base: Box::new(base),
+                    name: name.to_owned(),
+                },
+            };
+        }
+        if !base_errored {
+            let name_span = match qualified_index {
+                Some(index) => self.name_token_span(module, &expr_span, index),
+                None => self.last_name_token_span(module, &expr_span, name),
+            };
+            self.error(
+                module,
+                name_span,
+                Self::unknown_member_message(&base.ty, name),
+            );
+        }
+        HirExpr {
+            span: expr_span,
+            ty: owned_invalid_expr_type("invalid-field"),
+            reference: None,
+            kind: HirExprKind::Field {
+                base: Box::new(base),
+                name: name.to_owned(),
+            },
+        }
+    }
+
     fn expr(
         &mut self,
         module: usize,
@@ -3436,42 +3567,18 @@ impl<'a> OwnedLower<'a> {
                                 HirExprKind::ParameterRef(symbol)
                             },
                         };
-                        for field in path.segments.iter().skip(1) {
-                            if field == "len" {
-                                let valid = owned_len_allowed(&expression.ty);
-                                if !valid {
-                                    self.error(
-                                        module,
-                                        value.span.clone(),
-                                        "length is only defined for strings, bytes, lists, sets, and maps",
-                                    );
-                                }
-                                expression = HirExpr {
-                                    span: value.span.clone(),
-                                    ty: if valid {
-                                        HirType::Primitive(PrimitiveType::U64)
-                                    } else {
-                                        owned_invalid_expr_type("invalid-len")
-                                    },
-                                    reference: None,
-                                    kind: HirExprKind::Len {
-                                        value: Box::new(expression),
-                                    },
-                                };
-                            } else {
-                                let ty = self
-                                    .named_field_type(&expression.ty, field)
-                                    .unwrap_or_else(|| HirType::Opaque { tag: field.clone() });
-                                expression = HirExpr {
-                                    span: value.span.clone(),
-                                    ty,
-                                    reference: None,
-                                    kind: HirExprKind::Field {
-                                        base: Box::new(expression),
-                                        name: field.clone(),
-                                    },
-                                };
-                            }
+                        let mut base_errored = false;
+                        for (offset, field) in path.segments.iter().skip(1).enumerate() {
+                            let before = self.errors.len();
+                            expression = self.bind_member(
+                                module,
+                                expression,
+                                field,
+                                Some(offset + 1),
+                                value.span.clone(),
+                                base_errored,
+                            );
+                            base_errored |= self.errors.len() > before;
                         }
                         return expression;
                     }
@@ -3540,6 +3647,7 @@ impl<'a> OwnedLower<'a> {
                 kind,
                 arguments: source_arguments,
             } => {
+                let before = self.errors.len();
                 let arguments = source_arguments
                     .iter()
                     .enumerate()
@@ -3552,6 +3660,7 @@ impl<'a> OwnedLower<'a> {
                         .then(|| self.expr(module, argument, env))
                     })
                     .collect::<Vec<_>>();
+                let arg_errored = self.errors.len() > before;
                 let intrinsic = match kind {
                     ast::Intrinsic::StartsWith => HirIntrinsic::StartsWith,
                     ast::Intrinsic::EndsWith => HirIntrinsic::EndsWith,
@@ -3687,7 +3796,7 @@ impl<'a> OwnedLower<'a> {
                         source_arguments.len() == 2 && arguments.len() == 1 && selector.is_some()
                     }
                 };
-                if !valid {
+                if !valid && !arg_errored {
                     self.error(
                         module,
                         value.span.clone(),
@@ -3753,43 +3862,21 @@ impl<'a> OwnedLower<'a> {
                 };
             }
             ExprKind::Field { base, name } => {
+                let before = self.errors.len();
                 let base = self.expr(module, base, env);
-                if name == "len" {
-                    let valid = owned_len_allowed(&base.ty);
-                    if !valid {
-                        self.error(
-                            module,
-                            value.span.clone(),
-                            "length is only defined for strings, bytes, lists, sets, and maps",
-                        );
-                    }
-                    (
-                        HirExprKind::Len {
-                            value: Box::new(base),
-                        },
-                        if valid {
-                            HirType::Primitive(PrimitiveType::U64)
-                        } else {
-                            owned_invalid_expr_type("invalid-len")
-                        },
-                        None,
-                    )
-                } else {
-                    let ty = self
-                        .named_field_type(&base.ty, name)
-                        .unwrap_or_else(|| HirType::Opaque { tag: name.clone() });
-                    (
-                        HirExprKind::Field {
-                            base: Box::new(base),
-                            name: name.clone(),
-                        },
-                        ty,
-                        None,
-                    )
-                }
+                return self.bind_member(
+                    module,
+                    base,
+                    name,
+                    None,
+                    value.span.clone(),
+                    self.errors.len() > before,
+                );
             }
             ExprKind::Unary { op, operand } => {
+                let before = self.errors.len();
                 let operand = self.expr(module, operand, env);
+                let operand_errored = self.errors.len() > before;
                 let operand = self.transparent_expression(operand);
                 let valid = match op {
                     UnaryOp::Not => operand.ty == HirType::Primitive(PrimitiveType::Bool),
@@ -3806,7 +3893,7 @@ impl<'a> OwnedLower<'a> {
                         )
                     ),
                 };
-                if !valid {
+                if !valid && !operand_errored {
                     self.error(
                         module,
                         value.span.clone(),
@@ -3836,8 +3923,10 @@ impl<'a> OwnedLower<'a> {
                 )
             }
             ExprKind::Binary { left, op, right } => {
+                let before = self.errors.len();
                 let mut left_value = self.expr(module, left, env);
                 let mut right_value = self.expr(module, right, env);
+                let operand_errored = self.errors.len() > before;
                 let mut left_compat = self.expression_compat_type(&left_value.ty);
                 let mut right_compat = self.expression_compat_type(&right_value.ty);
                 if owned_numeric_literal_expression(left)
@@ -3863,7 +3952,7 @@ impl<'a> OwnedLower<'a> {
                     && self
                         .eval_hir_constant(&right_value, None)
                         .is_some_and(|value| owned_value_is_zero(&value));
-                if zero_divisor {
+                if zero_divisor && !operand_errored {
                     self.error(
                         module,
                         right.span.clone(),
@@ -3901,7 +3990,7 @@ impl<'a> OwnedLower<'a> {
                         }
                         _ => owned_is_numeric(&left_compat) && left_compat == right_compat,
                     };
-                if !valid && !zero_divisor {
+                if !valid && !zero_divisor && !operand_errored {
                     self.error(
                         module,
                         value.span.clone(),
@@ -3944,10 +4033,12 @@ impl<'a> OwnedLower<'a> {
                 let raw_operands = std::iter::once(first.as_ref())
                     .chain(rest.iter().map(|(_, expression)| expression))
                     .collect::<Vec<_>>();
+                let before = self.errors.len();
                 let mut operands = raw_operands
                     .iter()
                     .map(|expression| self.expr(module, expression, env))
                     .collect::<Vec<_>>();
+                let operand_errored = self.errors.len() > before;
                 let initial_compat = operands
                     .iter()
                     .map(|operand| self.expression_compat_type(&operand.ty))
@@ -3999,7 +4090,7 @@ impl<'a> OwnedLower<'a> {
                         valid = false;
                     }
                 }
-                if !valid {
+                if !valid && !operand_errored {
                     self.error(
                         module,
                         value.span.clone(),
@@ -4261,9 +4352,10 @@ impl<'a> OwnedLower<'a> {
         return_type: &HirType,
         old_fields: Option<&HashMap<String, (SymbolId, HirType, bool)>>,
         allow_result: bool,
-    ) -> (HirContract, Option<HirDoc>) {
+    ) -> (HirContract, Option<HirDoc>, Vec<HirAnnotation>) {
         let mut contract = HirContract::default();
         let mut doc = None;
+        let mut applied = Vec::new();
         for (clause_id, clause) in clauses.iter().enumerate() {
             match &clause.kind {
                 ClauseKind::Documentation(value) => {
@@ -4283,17 +4375,15 @@ impl<'a> OwnedLower<'a> {
                                 name.span.clone(),
                                 format!("`{}` is not a rule", name.segments.join(".")),
                             );
-                        } else if let Some(rule) = self.lowered_rules.get(&rule_sym) {
-                            for clause in &rule.contract.clauses {
-                                contract.clauses.push(HirClause {
-                                    clause_id: contract.clauses.len() as u32,
-                                    span: clause.span.clone(),
-                                    kind: clause.kind.clone(),
-                                });
-                            }
-                            for effect in &rule.contract.effects {
-                                contract.effects.push(effect.clone());
-                            }
+                        } else if let Some(rule) = self.resolved_rule(&rule_sym) {
+                            applied.push(applied_rule_annotation(clause.span.clone(), &rule.id));
+                            self.apply_resolved_rule(
+                                module,
+                                clause.span.clone(),
+                                &rule,
+                                &mut contract,
+                                return_type,
+                            );
                         }
                     }
                 }
@@ -4305,14 +4395,15 @@ impl<'a> OwnedLower<'a> {
                         }
                         None => (None, env.clone()),
                     };
+                    let before = self.errors.len();
                     let expression = self.expr(module, condition, &clause_env);
-                    if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
-                        self.error(
-                            module,
-                            condition.span.clone(),
-                            "contract condition must be boolean",
-                        );
-                    }
+                    self.expect_boolean(
+                        module,
+                        condition.span.clone(),
+                        &expression,
+                        before,
+                        "contract condition must be boolean",
+                    );
                     contract.clauses.push(HirClause {
                         clause_id: clause_id as u32,
                         span: clause.span.clone(),
@@ -4344,14 +4435,15 @@ impl<'a> OwnedLower<'a> {
                     if guard.is_some() {
                         clause_env.remove("result");
                     }
+                    let before = self.errors.len();
                     let expression = self.expr(module, condition, &clause_env);
-                    if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
-                        self.error(
-                            module,
-                            condition.span.clone(),
-                            "contract condition must be boolean",
-                        );
-                    }
+                    self.expect_boolean(
+                        module,
+                        condition.span.clone(),
+                        &expression,
+                        before,
+                        "contract condition must be boolean",
+                    );
                     contract.clauses.push(HirClause {
                         clause_id: clause_id as u32,
                         span: clause.span.clone(),
@@ -4388,14 +4480,15 @@ impl<'a> OwnedLower<'a> {
                         None => (None, env.clone()),
                     };
                     let when = when.as_ref().map(|value| {
+                        let before = self.errors.len();
                         let expression = self.expr(module, value, &clause_env);
-                        if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
-                            self.error(
-                                module,
-                                value.span.clone(),
-                                "contract condition must be boolean",
-                            );
-                        }
+                        self.expect_boolean(
+                            module,
+                            value.span.clone(),
+                            &expression,
+                            before,
+                            "contract condition must be boolean",
+                        );
                         expression
                     });
                     if let Some((variant, _)) = resolved.filter(|_| valid_return) {
@@ -4423,7 +4516,27 @@ impl<'a> OwnedLower<'a> {
                 }
             }
         }
-        (contract, doc)
+        if !applied.is_empty() {
+            for (idx, clause) in contract.clauses.iter_mut().enumerate() {
+                clause.clause_id = idx as u32;
+            }
+            let mut priority = 0u32;
+            for clause in &mut contract.clauses {
+                if let HirClauseKind::Error {
+                    priority: slot,
+                    when,
+                    guard,
+                    ..
+                } = &mut clause.kind
+                {
+                    if when.is_some() || guard.is_some() {
+                        *slot = Some(priority);
+                        priority += 1;
+                    }
+                }
+            }
+        }
+        (contract, doc, applied)
     }
 
     fn pattern_argument_types(
@@ -5058,6 +5171,496 @@ impl<'a> OwnedLower<'a> {
             })
     }
 
+    fn resolved_rule(&mut self, symbol: &SymbolId) -> Option<HirRule> {
+        if let Some(rule) = self.lowered_rules.get(symbol) {
+            return Some(rule.clone());
+        }
+        let module = self
+            .modules
+            .iter()
+            .position(|candidate| candidate == &symbol.module)?;
+        let (order, declaration) = self.parsed.sources[module]
+            .syntax
+            .declarations
+            .iter()
+            .enumerate()
+            .find_map(|(order, declaration)| match declaration {
+                Declaration::Rule(value) if value.name == symbol.name => {
+                    Some((order, value.clone()))
+                }
+                _ => None,
+            })?;
+        if !self.resolving_rules.insert(symbol.clone()) {
+            self.error(
+                module,
+                declaration.span.clone(),
+                format!("rule dependency cycle through `{}`", symbol.as_string()),
+            );
+            return None;
+        }
+        let rule = self.lower_rule(module, &declaration, order);
+        self.resolving_rules.remove(symbol);
+        self.lowered_rules.insert(symbol.clone(), rule.clone());
+        Some(rule)
+    }
+
+    fn apply_resolved_rule(
+        &mut self,
+        module: usize,
+        span: Span,
+        rule: &HirRule,
+        contract: &mut HirContract,
+        return_type: &HirType,
+    ) {
+        let rebase = rule.id.module != self.modules[module];
+        for clause in &rule.contract.clauses {
+            if !self.rule_clause_compatible(module, &span, &clause.kind, return_type) {
+                continue;
+            }
+            let mut clause = clause.clone();
+            apply_clause_rewrite(&mut clause, rebase.then_some(&span), None);
+            rebind_clause_result(&mut clause.kind, return_type);
+            clause.clause_id = contract.clauses.len() as u32;
+            contract.clauses.push(clause);
+        }
+        for effect in &rule.contract.effects {
+            contract.effects.push(HirEffect {
+                span: if rebase {
+                    span.clone()
+                } else {
+                    effect.span.clone()
+                },
+                key: effect.key.clone(),
+                source_order: contract.effects.len(),
+            });
+        }
+    }
+
+    fn rule_clause_compatible(
+        &mut self,
+        module: usize,
+        span: &Span,
+        kind: &HirClauseKind,
+        return_type: &HirType,
+    ) -> bool {
+        match kind {
+            HirClauseKind::Error { variant, .. } => match return_type {
+                HirType::Result { error, .. } => {
+                    let owner = rule_error_owner(variant);
+                    let belongs = matches!(
+                        error.as_ref(),
+                        HirType::Named { symbol, .. } if *symbol == owner
+                    );
+                    if !belongs {
+                        self.error(
+                            module,
+                            span.clone(),
+                            "error clause variant does not belong to the Result error type",
+                        );
+                    }
+                    belongs
+                }
+                _ => {
+                    self.error(
+                        module,
+                        span.clone(),
+                        "error clauses require a Result return type",
+                    );
+                    false
+                }
+            },
+            HirClauseKind::Ensures { guard, expression }
+            | HirClauseKind::Requires { guard, expression } => {
+                if let Some(guard) = guard {
+                    self.rule_guard_compatible(module, span, guard, return_type)
+                } else if result_ref_incompatible(expression, return_type) {
+                    self.error(
+                        module,
+                        span.clone(),
+                        "rule clause result type is not compatible with this callable's return type",
+                    );
+                    false
+                } else {
+                    true
+                }
+            }
+            _ => true,
+        }
+    }
+
+    fn rule_guard_compatible(
+        &mut self,
+        module: usize,
+        span: &Span,
+        guard: &HirMatchGuard,
+        return_type: &HirType,
+    ) -> bool {
+        let HirPatternKind::Variant { symbol, arguments } = &guard.pattern.kind else {
+            return true;
+        };
+        if symbol.name != "Result.Ok" && symbol.name != "Result.Err" {
+            return true;
+        }
+        let HirType::Result { ok, error } = return_type else {
+            self.error(
+                module,
+                span.clone(),
+                "rule clause guard is not compatible with this callable's return type",
+            );
+            return false;
+        };
+        let expected = if symbol.name == "Result.Ok" {
+            ok.as_ref()
+        } else {
+            error.as_ref()
+        };
+        match arguments.first() {
+            Some(pattern) if pattern.ty != *expected => {
+                self.error(
+                    module,
+                    span.clone(),
+                    "rule clause guard is not compatible with this callable's return type",
+                );
+                false
+            }
+            _ => true,
+        }
+    }
+
+    fn lower_rule(&mut self, module: usize, value: &ast::RuleDecl, order: usize) -> HirRule {
+        let id = SymbolId::new(self.modules[module].clone(), value.name.clone());
+        let generic_scope = GenericScope::from_declared(&value.generics);
+        let (base_symbol, base_type) = if let Some(base_ty) = &value.base {
+            let hir_base_type = self.ty(module, base_ty, &generic_scope);
+            let base_sym = self.resolve(module, &base_ty.path, &base_ty.span);
+            if let Some(sym) = &base_sym {
+                if !matches!(self.declarations.get(sym), Some(OwnedDeclKind::Rule { .. })) {
+                    self.error(
+                        module,
+                        base_ty.span.clone(),
+                        format!("base `{}` is not a rule", base_ty.path.segments.join(".")),
+                    );
+                }
+            }
+            (base_sym, Some(hir_base_type))
+        } else {
+            (None, None)
+        };
+
+        let generics = self.generics(module, &value.generics);
+        let mut declared_clauses = Vec::new();
+        let mut declared_effect_ops: Vec<(HirRuleClauseAction, Vec<HirEffect>)> = Vec::new();
+        let mut applied = Vec::new();
+        let mut doc = value.doc.as_ref().map(|v| HirDoc {
+            span: v.span.clone(),
+            text: v.text.clone(),
+        });
+
+        for (clause_id, clause) in value.clauses.iter().enumerate() {
+            let action = match clause.action {
+                ast::RuleClauseAction::Add => HirRuleClauseAction::Add,
+                ast::RuleClauseAction::Override => HirRuleClauseAction::Override,
+                ast::RuleClauseAction::Delete => HirRuleClauseAction::Delete,
+            };
+            match &clause.kind {
+                ClauseKind::Documentation(v) => {
+                    if doc.is_none() {
+                        doc = Some(HirDoc {
+                            span: v.span.clone(),
+                            text: v.text.clone(),
+                        });
+                    }
+                }
+                ClauseKind::Rule { name } => {
+                    if let Some(rule_sym) = self.resolve(module, name, &name.span) {
+                        if !matches!(
+                            self.declarations.get(&rule_sym),
+                            Some(OwnedDeclKind::Rule { .. })
+                        ) {
+                            self.error(
+                                module,
+                                name.span.clone(),
+                                format!("`{}` is not a rule", name.segments.join(".")),
+                            );
+                        } else if let Some(rule) = self.resolved_rule(&rule_sym) {
+                            applied.push(applied_rule_annotation(clause.span.clone(), &rule.id));
+                            let rebase = rule.id.module != self.modules[module];
+                            for nested in &rule.contract.clauses {
+                                let mut nested = nested.clone();
+                                apply_clause_rewrite(
+                                    &mut nested,
+                                    rebase.then_some(&clause.span),
+                                    None,
+                                );
+                                declared_clauses.push(HirRuleClause {
+                                    clause_id: clause_id as u32,
+                                    span: nested.span,
+                                    action,
+                                    kind: nested.kind,
+                                });
+                            }
+                            let mut nested_effects = rule.contract.effects.clone();
+                            if rebase {
+                                for effect in &mut nested_effects {
+                                    effect.span = clause.span.clone();
+                                }
+                            }
+                            if action != HirRuleClauseAction::Add || !nested_effects.is_empty() {
+                                declared_effect_ops.push((action, nested_effects));
+                            }
+                        }
+                    }
+                }
+                ClauseKind::Requires { guard, condition } => {
+                    let env = HashMap::new();
+                    let (guard, env) = match guard {
+                        Some(guard) => {
+                            let (guard, env) = self.match_guard(module, guard, &env);
+                            (Some(guard), env)
+                        }
+                        None => (None, env),
+                    };
+                    let before = self.errors.len();
+                    let expression = self.expr(module, condition, &env);
+                    self.expect_boolean(
+                        module,
+                        condition.span.clone(),
+                        &expression,
+                        before,
+                        "contract condition must be boolean",
+                    );
+                    declared_clauses.push(HirRuleClause {
+                        clause_id: clause_id as u32,
+                        span: clause.span.clone(),
+                        action,
+                        kind: HirClauseKind::Requires { guard, expression },
+                    });
+                }
+                ClauseKind::Ensures { guard, condition } => {
+                    let mut env = HashMap::new();
+                    let result_type = guard
+                        .as_ref()
+                        .filter(|guard| {
+                            matches!(
+                                &guard.scrutinee.kind,
+                                ExprKind::Name(path) if path.segments.as_slice() == ["result"]
+                            )
+                        })
+                        .map(|guard| {
+                            self.infer_rule_pattern_type(
+                                module,
+                                &guard.pattern,
+                                &generic_scope.types,
+                            )
+                        })
+                        .unwrap_or(HirType::Primitive(PrimitiveType::Unit));
+                    env.insert(
+                        "result".to_owned(),
+                        (
+                            SymbolId::new(self.modules[module].clone(), "result"),
+                            result_type,
+                            false,
+                        ),
+                    );
+                    let (guard, env) = match guard {
+                        Some(guard) => {
+                            let (guard, env) = self.match_guard(module, guard, &env);
+                            (Some(guard), env)
+                        }
+                        None => (None, env),
+                    };
+                    let before = self.errors.len();
+                    let expression = self.expr(module, condition, &env);
+                    self.expect_boolean(
+                        module,
+                        condition.span.clone(),
+                        &expression,
+                        before,
+                        "contract condition must be boolean",
+                    );
+                    declared_clauses.push(HirRuleClause {
+                        clause_id: clause_id as u32,
+                        span: clause.span.clone(),
+                        action,
+                        kind: HirClauseKind::Ensures { guard, expression },
+                    });
+                }
+                ClauseKind::Error { error, guard, when } => {
+                    let resolved = self.error_variant(module, error);
+                    let env = HashMap::new();
+                    let (guard, env) = match guard {
+                        Some(guard) => {
+                            let (guard, env) = self.match_guard(module, guard, &env);
+                            (Some(guard), env)
+                        }
+                        None => (None, env),
+                    };
+                    let when = when.as_ref().map(|value| {
+                        let before = self.errors.len();
+                        let expression = self.expr(module, value, &env);
+                        self.expect_boolean(
+                            module,
+                            value.span.clone(),
+                            &expression,
+                            before,
+                            "contract condition must be boolean",
+                        );
+                        expression
+                    });
+                    let variant = resolved.map(|(v, _)| v).unwrap_or_else(|| {
+                        self.resolve(module, error, &error.span).unwrap_or_else(|| {
+                            SymbolId::new(self.modules[module].clone(), error.segments.join("."))
+                        })
+                    });
+                    declared_clauses.push(HirRuleClause {
+                        clause_id: clause_id as u32,
+                        span: clause.span.clone(),
+                        action,
+                        kind: HirClauseKind::Error {
+                            variant,
+                            priority: None,
+                            guard,
+                            when,
+                        },
+                    });
+                }
+                ClauseKind::Modifies { .. } | ClauseKind::Transitions { .. } => {}
+                ClauseKind::Effects { effects } => {
+                    declared_effect_ops.push((
+                        action,
+                        effects
+                            .iter()
+                            .map(|effect| HirEffect {
+                                span: effect.span.clone(),
+                                key: effect.segments.join("."),
+                                source_order: 0,
+                            })
+                            .collect(),
+                    ));
+                }
+            }
+        }
+
+        let mut resolved_clauses: Vec<HirClause> = Vec::new();
+        let mut effects = Vec::new();
+        let inherit_span = value
+            .base
+            .as_ref()
+            .map(|base| base.span.clone())
+            .unwrap_or_else(|| value.span.clone());
+        if let Some(base_sym) = &base_symbol {
+            if let Some(base_rule) = self.resolved_rule(base_sym) {
+                let substitutions = match &base_type {
+                    Some(HirType::Named { args, .. }) => {
+                        trait_substitutions(&base_rule.generics, args)
+                    }
+                    _ => HashMap::new(),
+                };
+                let rebase = base_rule.id.module != self.modules[module];
+                for mut clause in base_rule.contract.clauses {
+                    apply_clause_rewrite(
+                        &mut clause,
+                        rebase.then_some(&inherit_span),
+                        Some(&substitutions),
+                    );
+                    resolved_clauses.push(clause);
+                }
+                effects = base_rule.contract.effects;
+                if rebase {
+                    for effect in &mut effects {
+                        effect.span = inherit_span.clone();
+                    }
+                }
+            }
+        }
+        for (action, specified) in declared_effect_ops {
+            match action {
+                HirRuleClauseAction::Add => {
+                    for effect in specified {
+                        if effects.iter().all(|existing| existing.key != effect.key) {
+                            effects.push(effect);
+                        }
+                    }
+                }
+                HirRuleClauseAction::Override => effects = specified,
+                HirRuleClauseAction::Delete => {
+                    let keys = specified
+                        .into_iter()
+                        .map(|effect| effect.key)
+                        .collect::<HashSet<_>>();
+                    effects.retain(|effect| !keys.contains(&effect.key));
+                }
+            }
+        }
+        for (source_order, effect) in effects.iter_mut().enumerate() {
+            effect.source_order = source_order;
+        }
+
+        for declared in &declared_clauses {
+            match declared.action {
+                HirRuleClauseAction::Add => {
+                    resolved_clauses.push(HirClause {
+                        clause_id: resolved_clauses.len() as u32,
+                        span: declared.span.clone(),
+                        kind: declared.kind.clone(),
+                    });
+                }
+                HirRuleClauseAction::Override => {
+                    let mut matched = false;
+                    for target in resolved_clauses.iter_mut() {
+                        if clauses_match(&target.kind, &declared.kind) {
+                            target.kind = declared.kind.clone();
+                            target.span = declared.span.clone();
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if !matched {
+                        resolved_clauses.push(HirClause {
+                            clause_id: resolved_clauses.len() as u32,
+                            span: declared.span.clone(),
+                            kind: declared.kind.clone(),
+                        });
+                    }
+                }
+                HirRuleClauseAction::Delete => {
+                    resolved_clauses.retain(|target| !clauses_match(&target.kind, &declared.kind));
+                }
+            }
+        }
+
+        for (idx, clause) in resolved_clauses.iter_mut().enumerate() {
+            clause.clause_id = idx as u32;
+        }
+
+        let mut annotations = value
+            .annotations
+            .iter()
+            .map(|annotation| HirAnnotation {
+                span: annotation.span.clone(),
+                name: annotation.name.clone(),
+                argument: annotation.argument.clone(),
+            })
+            .collect::<Vec<_>>();
+        annotations.extend(applied);
+        HirRule {
+            id,
+            span: value.span.clone(),
+            annotations,
+            doc,
+            generics,
+            base: base_symbol,
+            base_type,
+            declared_clauses,
+            contract: HirContract {
+                clauses: resolved_clauses,
+                effects,
+            },
+            public: true,
+            source_order: order,
+        }
+    }
+
     fn declaration(
         &mut self,
         module: usize,
@@ -5183,14 +5786,15 @@ impl<'a> OwnedLower<'a> {
                             }
                             None => (None, env.clone()),
                         };
+                        let before = self.errors.len();
                         let expression = self.expr(module, &invariant.condition, &clause_env);
-                        if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
-                            self.error(
-                                module,
-                                invariant.condition.span.clone(),
-                                "struct invariant condition must be boolean",
-                            );
-                        }
+                        self.expect_boolean(
+                            module,
+                            invariant.condition.span.clone(),
+                            &expression,
+                            before,
+                            "struct invariant condition must be boolean",
+                        );
                         HirStructInvariant {
                             clause_id: clause_id as u32,
                             span: invariant.span.clone(),
@@ -5493,14 +6097,15 @@ impl<'a> OwnedLower<'a> {
                             }
                             None => (None, self_env.clone()),
                         };
+                        let before = self.errors.len();
                         let expression = self.expr(module, &invariant.condition, &clause_env);
-                        if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
-                            self.error(
-                                module,
-                                invariant.condition.span.clone(),
-                                "contract condition must be boolean",
-                            );
-                        }
+                        self.expect_boolean(
+                            module,
+                            invariant.condition.span.clone(),
+                            &expression,
+                            before,
+                            "contract condition must be boolean",
+                        );
                         HirImplInvariant {
                             clause_id: clause_id as u32,
                             span: invariant.span.clone(),
@@ -5509,6 +6114,7 @@ impl<'a> OwnedLower<'a> {
                         }
                     })
                     .collect();
+                let mut applied_rules = Vec::new();
                 let initializer = value.initializer.as_ref().map(|init| {
                     let mut env = HashMap::new();
                     let parameters = init
@@ -5565,7 +6171,7 @@ impl<'a> OwnedLower<'a> {
                     }
                     let mut ensures_env = env.clone();
                     ensures_env.extend(self_env.clone());
-                    let (contract, doc) = self.contract(
+                    let (contract, doc, applied) = self.contract(
                         module,
                         &init.clauses,
                         &ensures_env,
@@ -5573,6 +6179,7 @@ impl<'a> OwnedLower<'a> {
                         None,
                         false,
                     );
+                    applied_rules.extend(applied);
                     HirImplInitializer {
                         span: init.span.clone(),
                         parameters,
@@ -5747,7 +6354,7 @@ impl<'a> OwnedLower<'a> {
                                 )
                             })
                             .collect::<HashMap<_, _>>();
-                        let (contract, doc) = self.contract(
+                        let (contract, doc, applied) = self.contract(
                             module,
                             &method.clauses,
                             &env,
@@ -5755,6 +6362,7 @@ impl<'a> OwnedLower<'a> {
                             Some(&old_fields),
                             true,
                         );
+                        applied_rules.extend(applied);
                         let mut modifies = Vec::new();
                         for clause in &method.clauses {
                             if let ClauseKind::Modifies { fields } = &clause.kind {
@@ -5839,10 +6447,12 @@ impl<'a> OwnedLower<'a> {
                     })
                     .collect::<Vec<_>>();
                 let selected_methods = Vec::new();
+                let mut annotations = lower_annotations(&value.annotations);
+                annotations.extend(applied_rules);
                 HirDeclaration::Impl(HirImpl {
                     id,
                     span: value.span.clone(),
-                    annotations: lower_annotations(&value.annotations),
+                    annotations,
                     traits,
                     state,
                     invariants,
@@ -6119,252 +6729,22 @@ impl<'a> OwnedLower<'a> {
             }
             Declaration::Rule(value) => {
                 let id = id_for(&value.name);
-                let generic_scope = GenericScope::from_declared(&value.generics);
-                let (base_symbol, base_type) = if let Some(base_ty) = &value.base {
-                    let hir_base_type = self.ty(module, base_ty, &generic_scope);
-                    let base_sym = self.resolve(module, &base_ty.path, &base_ty.span);
-                    if let Some(ref sym) = base_sym {
-                        if !matches!(self.declarations.get(sym), Some(OwnedDeclKind::Rule { .. })) {
-                            self.error(
-                                module,
-                                base_ty.span.clone(),
-                                format!("base `{}` is not a rule", base_ty.path.segments.join(".")),
-                            );
-                        }
-                    }
-                    (base_sym, Some(hir_base_type))
-                } else {
-                    (None, None)
-                };
-
-                let generics = self.generics(module, &value.generics);
-
-                let mut declared_clauses = Vec::new();
-                let mut doc = value.doc.as_ref().map(|v| HirDoc {
-                    span: v.span.clone(),
-                    text: v.text.clone(),
-                });
-
-                for (clause_id, clause) in value.clauses.iter().enumerate() {
-                    let action = match clause.action {
-                        ast::RuleClauseAction::Add => HirRuleClauseAction::Add,
-                        ast::RuleClauseAction::Override => HirRuleClauseAction::Override,
-                        ast::RuleClauseAction::Delete => HirRuleClauseAction::Delete,
-                    };
-                    match &clause.kind {
-                        ClauseKind::Documentation(v) => {
-                            if doc.is_none() {
-                                doc = Some(HirDoc {
-                                    span: v.span.clone(),
-                                    text: v.text.clone(),
-                                });
-                            }
-                        }
-                        ClauseKind::Rule { name } => {
-                            if let Some(rule_sym) = self.resolve(module, name, &name.span) {
-                                if !matches!(
-                                    self.declarations.get(&rule_sym),
-                                    Some(OwnedDeclKind::Rule { .. })
-                                ) {
-                                    self.error(
-                                        module,
-                                        name.span.clone(),
-                                        format!("`{}` is not a rule", name.segments.join(".")),
-                                    );
-                                } else if let Some(rule) = self.lowered_rules.get(&rule_sym) {
-                                    for clause in &rule.contract.clauses {
-                                        declared_clauses.push(HirRuleClause {
-                                            clause_id: clause_id as u32,
-                                            span: clause.span.clone(),
-                                            action,
-                                            kind: clause.kind.clone(),
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                        ClauseKind::Requires { guard, condition } => {
-                            let env = HashMap::new();
-                            let (guard, env) = match guard {
-                                Some(guard) => {
-                                    let (guard, env) = self.match_guard(module, guard, &env);
-                                    (Some(guard), env)
-                                }
-                                None => (None, env),
-                            };
-                            let expression = self.expr(module, condition, &env);
-                            if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
-                                self.error(
-                                    module,
-                                    condition.span.clone(),
-                                    "contract condition must be boolean",
-                                );
-                            }
-                            declared_clauses.push(HirRuleClause {
-                                clause_id: clause_id as u32,
-                                span: clause.span.clone(),
-                                action,
-                                kind: HirClauseKind::Requires { guard, expression },
-                            });
-                        }
-                        ClauseKind::Ensures { guard, condition } => {
-                            let mut env = HashMap::new();
-                            let result_type = guard
-                                .as_ref()
-                                .filter(|guard| {
-                                    matches!(
-                                        &guard.scrutinee.kind,
-                                        ExprKind::Name(path) if path.segments.as_slice() == ["result"]
-                                    )
-                                })
-                                .map(|guard| {
-                                    self.infer_rule_pattern_type(
-                                        module,
-                                        &guard.pattern,
-                                        &generic_scope.types,
-                                    )
-                                })
-                                .unwrap_or(HirType::Primitive(PrimitiveType::Unit));
-                            env.insert(
-                                "result".to_owned(),
-                                (
-                                    SymbolId::new(self.modules[module].clone(), "result"),
-                                    result_type,
-                                    false,
-                                ),
-                            );
-                            let (guard, env) = match guard {
-                                Some(guard) => {
-                                    let (guard, env) = self.match_guard(module, guard, &env);
-                                    (Some(guard), env)
-                                }
-                                None => (None, env),
-                            };
-                            let expression = self.expr(module, condition, &env);
-                            if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
-                                self.error(
-                                    module,
-                                    condition.span.clone(),
-                                    "contract condition must be boolean",
-                                );
-                            }
-                            declared_clauses.push(HirRuleClause {
-                                clause_id: clause_id as u32,
-                                span: clause.span.clone(),
-                                action,
-                                kind: HirClauseKind::Ensures { guard, expression },
-                            });
-                        }
-                        ClauseKind::Error { error, guard, when } => {
-                            let resolved = self.error_variant(module, error);
-                            let env = HashMap::new();
-                            let (guard, env) = match guard {
-                                Some(guard) => {
-                                    let (guard, env) = self.match_guard(module, guard, &env);
-                                    (Some(guard), env)
-                                }
-                                None => (None, env),
-                            };
-                            let when = when.as_ref().map(|value| {
-                                let expression = self.expr(module, value, &env);
-                                if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
-                                    self.error(
-                                        module,
-                                        value.span.clone(),
-                                        "contract condition must be boolean",
-                                    );
-                                }
-                                expression
-                            });
-                            let variant = resolved.map(|(v, _)| v).unwrap_or_else(|| {
-                                self.resolve(module, error, &error.span).unwrap_or_else(|| {
-                                    SymbolId::new(
-                                        self.modules[module].clone(),
-                                        error.segments.join("."),
-                                    )
-                                })
-                            });
-                            declared_clauses.push(HirRuleClause {
-                                clause_id: clause_id as u32,
-                                span: clause.span.clone(),
-                                action,
-                                kind: HirClauseKind::Error {
-                                    variant,
-                                    priority: None,
-                                    guard,
-                                    when,
-                                },
-                            });
-                        }
-                        ClauseKind::Modifies { .. } | ClauseKind::Transitions { .. } => {}
-                        ClauseKind::Effects { .. } => {}
-                    }
-                }
-
-                let mut resolved_clauses: Vec<HirClause> = Vec::new();
-                if let Some(ref base_sym) = base_symbol {
-                    if let Some(base_rule) = self.lowered_rules.get(base_sym) {
-                        resolved_clauses = base_rule.contract.clauses.clone();
-                    }
-                }
-
-                for declared in &declared_clauses {
-                    match declared.action {
-                        HirRuleClauseAction::Add => {
-                            resolved_clauses.push(HirClause {
-                                clause_id: resolved_clauses.len() as u32,
-                                span: declared.span.clone(),
-                                kind: declared.kind.clone(),
-                            });
-                        }
-                        HirRuleClauseAction::Override => {
-                            let mut matched = false;
-                            for target in resolved_clauses.iter_mut() {
-                                if clauses_match(&target.kind, &declared.kind) {
-                                    target.kind = declared.kind.clone();
-                                    target.span = declared.span.clone();
-                                    matched = true;
-                                    break;
-                                }
-                            }
-                            if !matched {
-                                resolved_clauses.push(HirClause {
-                                    clause_id: resolved_clauses.len() as u32,
-                                    span: declared.span.clone(),
-                                    kind: declared.kind.clone(),
-                                });
-                            }
-                        }
-                        HirRuleClauseAction::Delete => {
-                            resolved_clauses
-                                .retain(|target| !clauses_match(&target.kind, &declared.kind));
-                        }
-                    }
-                }
-
-                for (idx, clause) in resolved_clauses.iter_mut().enumerate() {
-                    clause.clause_id = idx as u32;
-                }
-
-                let contract = HirContract {
-                    clauses: resolved_clauses,
-                    effects: Vec::new(),
-                };
-
-                let hir_rule = HirRule {
-                    id: id.clone(),
+                HirDeclaration::Rule(self.resolved_rule(&id).unwrap_or_else(|| HirRule {
+                    id,
                     span: value.span.clone(),
                     annotations: lower_annotations(&value.annotations),
-                    doc,
-                    generics,
-                    base: base_symbol,
-                    base_type,
-                    declared_clauses,
-                    contract,
+                    doc: value.doc.as_ref().map(|v| HirDoc {
+                        span: v.span.clone(),
+                        text: v.text.clone(),
+                    }),
+                    generics: Vec::new(),
+                    base: None,
+                    base_type: None,
+                    declared_clauses: Vec::new(),
+                    contract: HirContract::default(),
                     public: true,
                     source_order: order,
-                };
-                HirDeclaration::Rule(hir_rule)
+                }))
             }
             Declaration::Function(value) => {
                 let scope = GenericScope::from_declared(&value.generics);
@@ -6404,12 +6784,14 @@ impl<'a> OwnedLower<'a> {
                     FunctionBody::Clauses { clauses, .. } => clauses,
                     FunctionBody::Signature { .. } => &[],
                 };
-                let (contract, doc) =
+                let (contract, doc, applied) =
                     self.contract(module, clauses, &env, &return_type, None, true);
+                let mut annotations = lower_annotations(&value.annotations);
+                annotations.extend(applied);
                 HirDeclaration::Function(HirFunction {
                     id,
                     span: value.span.clone(),
-                    annotations: lower_annotations(&value.annotations),
+                    annotations,
                     doc,
                     generics: self.generics(module, &value.generics),
                     parameters,
@@ -6832,14 +7214,15 @@ impl<'a> OwnedLower<'a> {
                             });
                         }
                         ast::ScenarioStep::Assert { span, expression } => {
+                            let before = self.errors.len();
                             let expression = self.expr(module, expression, &env);
-                            if expression.ty != HirType::Primitive(PrimitiveType::Bool) {
-                                self.error(
-                                    module,
-                                    span.clone(),
-                                    "scenario assertion must be boolean",
-                                );
-                            }
+                            self.expect_boolean(
+                                module,
+                                span.clone(),
+                                &expression,
+                                before,
+                                "scenario assertion must be boolean",
+                            );
                             steps.push(HirScenarioStep::Assert {
                                 step_id,
                                 span: span.clone(),
@@ -7269,6 +7652,13 @@ fn resource_reachable(initial: &SymbolId, edges: &[HirResourceEdge]) -> BTreeSet
     reachable
 }
 
+fn rule_error_owner(variant: &SymbolId) -> SymbolId {
+    match variant.name.rsplit_once('.') {
+        Some((owner, _)) => SymbolId::new(variant.module.clone(), owner.to_owned()),
+        None => variant.clone(),
+    }
+}
+
 fn clauses_match(a: &HirClauseKind, b: &HirClauseKind) -> bool {
     match (a, b) {
         (
@@ -7290,10 +7680,7 @@ fn clauses_match(a: &HirClauseKind, b: &HirClauseKind) -> bool {
                 guard: guard_b,
                 ..
             },
-        ) => {
-            (var_a == var_b || var_a.name == var_b.name)
-                && guards_match(guard_a.as_ref(), guard_b.as_ref())
-        }
+        ) => var_a == var_b && guards_match(guard_a.as_ref(), guard_b.as_ref()),
         _ => false,
     }
 }
@@ -7323,7 +7710,7 @@ fn patterns_match(a: &HirPattern, b: &HirPattern) -> bool {
                 arguments: args_b,
             },
         ) => {
-            (sym_a == sym_b || sym_a.name == sym_b.name)
+            sym_a == sym_b
                 && args_a.len() == args_b.len()
                 && args_a
                     .iter()
@@ -7449,6 +7836,184 @@ fn substitute_const_argument(
             ty,
         },
         value => value,
+    }
+}
+
+fn walk_expr_mut(expr: &mut HirExpr, visit: &mut impl FnMut(&mut HirExpr)) {
+    visit(expr);
+    match &mut expr.kind {
+        HirExprKind::Field { base, .. }
+        | HirExprKind::Len { value: base }
+        | HirExprKind::Unary { operand: base, .. } => walk_expr_mut(base, visit),
+        HirExprKind::Binary { left, right, .. } => {
+            walk_expr_mut(left, visit);
+            walk_expr_mut(right, visit);
+        }
+        HirExprKind::Intrinsic { arguments, .. } => {
+            for argument in arguments {
+                walk_expr_mut(argument, visit);
+            }
+        }
+        HirExprKind::ComparisonChain { operands, .. } => {
+            for operand in operands {
+                walk_expr_mut(operand, visit);
+            }
+        }
+        HirExprKind::Literal(_)
+        | HirExprKind::ParameterRef(_)
+        | HirExprKind::BindingRef(_)
+        | HirExprKind::SelfRef
+        | HirExprKind::ResultRef
+        | HirExprKind::ConstantRef(_)
+        | HirExprKind::EnumSingletonRef(_)
+        | HirExprKind::OldStateField { .. }
+        | HirExprKind::FixturePath { .. }
+        | HirExprKind::FixtureUrl { .. } => {}
+    }
+}
+
+fn walk_pattern_mut(pattern: &mut HirPattern, visit: &mut impl FnMut(&mut HirPattern)) {
+    visit(pattern);
+    if let HirPatternKind::Variant { arguments, .. } = &mut pattern.kind {
+        for argument in arguments {
+            walk_pattern_mut(argument, visit);
+        }
+    }
+}
+
+fn rewrite_expr(
+    expr: &mut HirExpr,
+    span: Option<&Span>,
+    substitutions: Option<&HashMap<String, HirGenericArg>>,
+) {
+    walk_expr_mut(expr, &mut |expr| {
+        if let Some(span) = span {
+            expr.span = span.clone();
+        }
+        if let Some(substitutions) = substitutions {
+            expr.ty = substitute_hir_type(expr.ty.clone(), substitutions);
+        }
+    });
+}
+
+fn rewrite_pattern(
+    pattern: &mut HirPattern,
+    span: Option<&Span>,
+    substitutions: Option<&HashMap<String, HirGenericArg>>,
+) {
+    walk_pattern_mut(pattern, &mut |pattern| {
+        if let Some(span) = span {
+            pattern.span = span.clone();
+        }
+        if let Some(substitutions) = substitutions {
+            pattern.ty = substitute_hir_type(pattern.ty.clone(), substitutions);
+        }
+    });
+}
+
+fn rewrite_guard(
+    guard: &mut HirMatchGuard,
+    span: Option<&Span>,
+    substitutions: Option<&HashMap<String, HirGenericArg>>,
+) {
+    if let Some(span) = span {
+        guard.span = span.clone();
+    }
+    rewrite_expr(&mut guard.scrutinee, span, substitutions);
+    rewrite_pattern(&mut guard.pattern, span, substitutions);
+}
+
+fn apply_kind_rewrite(
+    kind: &mut HirClauseKind,
+    span: Option<&Span>,
+    substitutions: Option<&HashMap<String, HirGenericArg>>,
+) {
+    match kind {
+        HirClauseKind::Requires { guard, expression }
+        | HirClauseKind::Ensures { guard, expression } => {
+            if let Some(guard) = guard {
+                rewrite_guard(guard, span, substitutions);
+            }
+            rewrite_expr(expression, span, substitutions);
+        }
+        HirClauseKind::Error { guard, when, .. } => {
+            if let Some(guard) = guard {
+                rewrite_guard(guard, span, substitutions);
+            }
+            if let Some(when) = when {
+                rewrite_expr(when, span, substitutions);
+            }
+        }
+        HirClauseKind::Modifies { .. } => {}
+    }
+}
+
+fn apply_clause_rewrite(
+    clause: &mut HirClause,
+    span: Option<&Span>,
+    substitutions: Option<&HashMap<String, HirGenericArg>>,
+) {
+    if let Some(span) = span {
+        clause.span = span.clone();
+    }
+    apply_kind_rewrite(&mut clause.kind, span, substitutions);
+}
+
+fn result_ref_incompatible(expr: &HirExpr, return_type: &HirType) -> bool {
+    if matches!(expr.kind, HirExprKind::ResultRef) && expr.ty != *return_type {
+        return true;
+    }
+    match &expr.kind {
+        HirExprKind::Field { base, .. }
+        | HirExprKind::Len { value: base }
+        | HirExprKind::Unary { operand: base, .. } => result_ref_incompatible(base, return_type),
+        HirExprKind::Binary { left, right, .. } => {
+            result_ref_incompatible(left, return_type)
+                || result_ref_incompatible(right, return_type)
+        }
+        HirExprKind::Intrinsic { arguments, .. } => arguments
+            .iter()
+            .any(|argument| result_ref_incompatible(argument, return_type)),
+        HirExprKind::ComparisonChain { operands, .. } => operands
+            .iter()
+            .any(|operand| result_ref_incompatible(operand, return_type)),
+        _ => false,
+    }
+}
+
+fn rebind_result_expr(expr: &mut HirExpr, return_type: &HirType) {
+    walk_expr_mut(expr, &mut |expr| {
+        if matches!(expr.kind, HirExprKind::ResultRef) {
+            expr.ty = return_type.clone();
+        }
+    });
+}
+
+fn rebind_clause_result(kind: &mut HirClauseKind, return_type: &HirType) {
+    match kind {
+        HirClauseKind::Requires { guard, expression }
+        | HirClauseKind::Ensures { guard, expression } => {
+            rebind_result_expr(expression, return_type);
+            if let Some(guard) = guard {
+                rebind_result_expr(&mut guard.scrutinee, return_type);
+                if matches!(
+                    &guard.pattern.kind,
+                    HirPatternKind::Variant { symbol, .. }
+                        if symbol.name == "Result.Ok" || symbol.name == "Result.Err"
+                ) {
+                    guard.pattern.ty = return_type.clone();
+                }
+            }
+        }
+        HirClauseKind::Error { guard, when, .. } => {
+            if let Some(guard) = guard {
+                rebind_result_expr(&mut guard.scrutinee, return_type);
+            }
+            if let Some(when) = when {
+                rebind_result_expr(when, return_type);
+            }
+        }
+        HirClauseKind::Modifies { .. } => {}
     }
 }
 

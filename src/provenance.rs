@@ -382,6 +382,7 @@ fn validate_snapshot_identity(snapshot: &GenerationSnapshot) -> Result<(), Strin
     validate_unresolved_records(&snapshot.unresolved)?;
     validate_implementation_records(&snapshot.implementations)?;
     validate_semantic_coverage(&snapshot.semantic_coverage)?;
+    crate::intent::recorded_fingerprints(&snapshot.tools)?;
     let mut expected = snapshot.clone();
     expected.compute_generation_id()?;
     if expected.generation_id == snapshot.generation_id {

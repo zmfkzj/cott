@@ -1364,3 +1364,86 @@ fn fastapi_hello_projects_external_request_through_testclient_when_available() {
         serde_json::json!({"message": "Hello World", "method": "GET"})
     );
 }
+
+#[test]
+fn artifact_pipeline_public_facades_match_independent_semantic_corpus() {
+    let usable_python = Command::new("python3")
+        .args([
+            "-c",
+            "import sys; raise SystemExit(sys.version_info < (3, 10))",
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !usable_python {
+        return;
+    }
+
+    let project = copied_project("complex/artifact-pipeline");
+    let generation = retarget_generation_to_host_python(&project.path);
+    let checker = project.path.join("check_semantics.py");
+    let output = Command::new("python3")
+        .arg(&checker)
+        .arg("--project")
+        .arg(&project.path)
+        .output()
+        .expect("artifact-pipeline semantic checker should run");
+    let mutants = Command::new("python3")
+        .args([
+            "-c",
+            concat!(
+                "import importlib.util, sys\n",
+                "path = sys.argv[1]\n",
+                "spec = importlib.util.spec_from_file_location('check_semantics', path)\n",
+                "mod = importlib.util.module_from_spec(spec)\n",
+                "spec.loader.exec_module(mod)\n",
+                "def always_error(steps):\n",
+                "    return {'error': 'Cycle'}\n",
+                "def reversed_order(steps):\n",
+                "    expected = mod.expected_order(steps)\n",
+                "    if 'ok' in expected:\n",
+                "        return {'ok': list(reversed(expected['ok']))}\n",
+                "    return expected\n",
+                "rejected = []\n",
+                "for name, fn in [('always_error', always_error), ('reversed_order', reversed_order)]:\n",
+                "    try:\n",
+                "        mod.check(fn)\n",
+                "    except AssertionError:\n",
+                "        rejected.append(name)\n",
+                "    else:\n",
+                "        raise SystemExit('corpus accepted ' + name)\n",
+                "print(','.join(rejected))\n",
+            ),
+            checker.to_str().expect("checker path should be UTF-8"),
+        ])
+        .output()
+        .expect("semantic corpus mutant rejection should run");
+    fs::write(project.path.join("generated/generation.json"), generation)
+        .expect("restore verified generation record");
+    assert!(
+        output.status.success(),
+        "artifact-pipeline semantic corpus failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let counts: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("semantic checker stdout should be JSON");
+    assert_eq!(
+        counts["topologically_order_steps"], counts["plan_pipeline"],
+        "public facades must agree on corpus size"
+    );
+    assert!(
+        counts["topologically_order_steps"]
+            .as_u64()
+            .is_some_and(|count| count > 0),
+        "semantic corpus must be non-empty"
+    );
+    assert!(
+        mutants.status.success(),
+        "mutant rejection failed: {}",
+        String::from_utf8_lossy(&mutants.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(mutants.stdout).expect("mutant stdout must be UTF-8"),
+        "always_error,reversed_order\n",
+        "corpus must reject reversed and always-error evaluators"
+    );
+}
