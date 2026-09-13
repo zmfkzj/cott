@@ -1981,6 +1981,49 @@ cott verify
 
 `cott verify`는 result cache를 사용하지 않고 현재 contract·manifest·lock·implementation input에서 expected IR·Python·stub·docs·test artifact를 staging에 다시 만든 뒤 실제 managed file 집합과 byte-for-byte 비교한다. unresolved pending이 있으면 실패한다. 현재 facade에 없는 옛 managed implementation은 export하지 않는다. input drift는 새 검증 대상으로 허용하지만 missing·extra·hand-edited managed file은 hard failure이며 `cott emit` 또는 `cott generate`로 먼저 갱신해야 한다. verify는 source와 managed file을 고치지 않고, 시작 snapshot이 실행 중 달라져도 실패한다. artifact verification이 성공하면 `generation.json`만 journal transaction으로 갱신해 same snapshot의 `current.verified=true`, complete evidence/`semantic_coverage`, `last_verified`를 먼저 publish한다. 이후 selected coverage policy 위반은 이 certified record를 되돌리지 않고 exit `8`로 gate만 실패시킨다.
 
+### 18.7.1 실행용 배포
+
+```bash
+cott deploy [--output <dir>] [--project <dir>] [--format json]
+```
+
+`deploy`는 현재 verified generation snapshot의 실행용 directory package를 만든다. 기본 출력은
+`<project>/dist/<project.name>-<project.version>/`이며, 상대 `--output`은 호출한 working directory
+기준이다. 기존 target은 비어 있어도 덮어쓰지 않는다. project 입력·managed artifact·`.cott`·`.venv`
+안의 출력과 symlink parent/target은 거부한다. project lock을 획득하고 기존 journal을 정상 recovery한
+뒤 입력을 읽으며, source·managed artifact·generation record를 갱신하거나 agent·Python·checker를
+호출하지 않는다.
+
+gate는 closed generation schema/identity와 현재 compiler/runtime package version, project version,
+`current.verified`, empty unresolved, passed semantic-coverage policy다. source inventory를 다시
+발견하여 manifest·rules·target metadata·lock·선택 implementation을 포함한 기록된 input hash와
+비교하고, 전체 managed inventory와 실제 bytes를 확인한다. 대상 regular file과 parent는 symlink와
+hardlink를 허용하지 않는다. 읽은 input snapshot을 publication 직전에 다시 비교한다.
+
+배포 payload는 `python/` 아래 managed `.py` facade·type·runtime·implementation과 authored runtime
+Python adapter, byte-identical `generation.json`, exact recorded CPython patch의 `.python-version`,
+production `requirements.txt`다. authored adapter는 기존 facade-only AST audit를 적용한다.
+recorded `source_origin`에서 derive한 private implementation top-level package와 `_cott_impl`/
+`cott_bindings`, hidden/dev/test directory, `conftest.py`, `test_*.py`, `*_test.py`, cache는 adapter에서
+제외한다. authored package가 generated package를 가리면 실패한다. `.cott` source, `cott.toml`, IR,
+stub, strategy/test artifact, typing marker, authored private copy와 원래 `generated/` 경로는 배포하지
+않으며 non-Python application resource를 추론하지 않는다. 실제 생성 Python code와 기존 runtime
+provenance record는 필요한 실행물이며 ABI/schema 변경이나 loader 우회 없이 보존한다.
+
+production dependency가 있으면 uv `>=0.12.3`의 bounded subprocess로 target metadata와 configured
+lock의 private scratch copy를 `export --frozen --offline --no-default-groups --no-dev
+--no-emit-project --no-editable --no-header --no-annotate --no-config --no-cache
+--no-python-downloads --format requirements.txt`로 export한다. package/version/marker와 artifact
+hash를 보존하고 local/editable/VCS requirement는 거부한다. recorded installed runtime dependency가
+production export에 없으면 실패한다. dependency-free project는 uv를 호출하지 않는다.
+interpreter와 external distribution 자체는 bundle에 복사하지 않으며 destination이 기록된 CPython
+patch·OS·architecture 및 dependency identity를 만족해야 한다.
+
+private sibling staging에 payload를 쓰고 fsync한 뒤 기존 init의 atomic no-replace rename으로
+directory 전체를 publish한다. 실패한 staging은 제거하며 기존 output을 지우거나 수정하지 않는다.
+성공하면 output path 한 줄과 exit `0`, CLI/manifest 오류는 `2`, snapshot/dependency gate 오류는
+`4`, lock/output/publication 오류는 `6`이다. JSON은 기존 diagnostics schema v1 envelope를 사용한다.
+
 ### 18.8 변경점 확인
 
 ```bash

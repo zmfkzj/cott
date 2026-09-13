@@ -4,6 +4,7 @@ pub mod binding;
 pub mod cli;
 pub mod compiler;
 pub mod contract_test;
+mod deploy;
 pub mod diagnostics;
 pub mod formatter;
 pub mod hash;

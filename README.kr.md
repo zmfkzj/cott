@@ -152,6 +152,34 @@ result다. authoring shortcut이 아니다. `.venv/`, `.cott/`, `__pycache__/`�
 code는 generated Cott facade만 import한다. `_cott_impl`과 `cott_bindings`는 public import path가
 아니다.
 
+## 실행용 배포 패키지
+
+`cott deploy [--output <dir>] [--project <dir>] [--format json]`는 검증된 현재 snapshot을
+새 디렉터리에 패키징한다. 기본 출력은 `<project>/dist/<이름>-<버전>/`이며, 상대 `--output`은
+명령을 실행한 작업 디렉터리 기준이다. 기존 출력은 덮어쓰지 않고 원본과 생성물도 수정하지 않는다.
+
+```bash
+cott deploy --project examples/grammar/checked-add --output dist/checked-add
+cd dist/checked-add
+uv venv
+uv pip install --require-hashes -r requirements.txt
+PYTHONPATH=python .venv/bin/python -c 'from curriculum.checked_add import checked_add; print(checked_add(1, 2))'
+```
+
+패키지는 공개 facade·타입·`cott_runtime`·선택된 구현 복사본·작성한 Python 어댑터가 있는
+`python/`, 원본 bytes 그대로인 `generation.json`, 정확한 target patch를 담은 `.python-version`,
+hash로 고정된 production `requirements.txt`만 포함한다. Cott 실행 파일, `.cott` 원본,
+`cott.toml`, `generated/` 디렉터리, IR, 스텁, 테스트, 작성용 private 구현 복사본,
+개발 디렉터리, 가상환경과 캐시는 제외한다. 실행에 필요한 생성 Python 코드는 삭제하지 않고
+옮긴다. 기존 무결성 검사를 위해 `cott_runtime`과 `generation.json`은 유지한다.
+Python 이외의 애플리케이션 리소스는 추측해서 복사하지 않는다.
+
+현재 snapshot이 verified이고 미구현 항목이 없으며 선택한 coverage policy를 통과해야 한다.
+입력과 managed file의 실제 bytes가 기록과 달라도 거부한다. 생성이나 재검증은 호출하지 않는다.
+의존성이 있으면 uv `>=0.12.3`으로 frozen lock을 offline export하며 개발/default dependency
+group은 제외한다. 의존성이 없으면 패키징 시 uv도 필요 없다. 배포 환경에는 기록된 것과 같은
+CPython patch·OS·architecture 및 third-party 의존성을 별도로 준비한다. Cott는 필요 없다.
+
 ## 축소된 예제 index
 
 유지되는 inventory는 26개 project다. grammar lesson 6개, simple lesson 3개, complex curriculum

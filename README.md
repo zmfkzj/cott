@@ -160,6 +160,36 @@ compiler results. They are not an authoring shortcut. `.venv/`, `.cott/`, and `_
 transient. Public code imports generated Cott facades only; neither `_cott_impl` nor
 `cott_bindings` is a public import path.
 
+## Runtime deployment
+
+`cott deploy [--output <dir>] [--project <dir>] [--format json]` packages the verified
+current snapshot into a new directory. The default is `<project>/dist/<name>-<version>/`;
+a relative `--output` is relative to the invoking working directory. Existing output is
+never overwritten. Source and generated files are not rewritten.
+
+```bash
+cott deploy --project examples/grammar/checked-add --output dist/checked-add
+cd dist/checked-add
+uv venv
+uv pip install --require-hashes -r requirements.txt
+PYTHONPATH=python .venv/bin/python -c 'from curriculum.checked_add import checked_add; print(checked_add(1, 2))'
+```
+
+The bundle contains `python/` with public facades, types, `cott_runtime`, selected implementation
+copies and authored Python adapters; unchanged `generation.json`; the exact target `.python-version`;
+and hash-pinned production `requirements.txt`. Cott itself, `.cott` sources, `cott.toml`, the
+`generated/` directory, IR, stubs, tests, private authoring copies, development directories,
+virtual environments and caches are excluded. Runtime Python code is relocated, not removed:
+`cott_runtime` and `generation.json` remain necessary for the existing provenance loader.
+Non-Python application resources are not inferred or copied.
+
+Deployment requires a verified, fully resolved snapshot with a passing selected coverage policy,
+unchanged compiler inputs and exact managed bytes. It does not generate or re-verify code.
+Runtime dependencies are exported offline from the frozen lock with uv `>=0.12.3`, excluding
+development/default dependency groups; dependency-free projects need no uv during packaging.
+Python and third-party distributions are installed separately on the destination, which must
+match the recorded CPython patch, OS and architecture. No Cott executable is needed there.
+
 ## Reduced example index
 
 The maintained inventory has 26 projects: six grammar lessons, three simple lessons, one complex

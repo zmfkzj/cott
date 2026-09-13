@@ -46,7 +46,7 @@ use crate::python_verify::verify_python;
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession, TransactionError};
 use crate::version::{is_at_least, parse_version};
 
-const USAGE: &str = "Cott compiles contracts into verifiable Python.\n\nUsage:\n  cott init <path> [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
+const USAGE: &str = "Cott compiles contracts into verifiable Python.\n\nUsage:\n  cott init <path> [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
 
 #[cfg(test)]
 thread_local! {
@@ -206,6 +206,9 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
             project,
             format,
         }) => prompt_project(project, symbol, format),
+        Ok(Command::Deploy {
+            output, project, ..
+        }) => deploy_project(project, output),
         Ok(Command::Diff {
             baseline,
             exit_code,
@@ -426,6 +429,11 @@ pub enum Command {
         project: Option<PathBuf>,
         format: OutputFormat,
     },
+    Deploy {
+        output: Option<PathBuf>,
+        project: Option<PathBuf>,
+        format: OutputFormat,
+    },
     Diff {
         baseline: Option<PathBuf>,
         exit_code: bool,
@@ -464,6 +472,7 @@ pub fn parse_command(arguments: &[OsString]) -> Result<Command, &'static str> {
                 format: options.format,
             })
         }
+        "deploy" => parse_deploy(values),
         "diff" => parse_diff(values),
         _ => Err("unsupported command"),
     }
@@ -734,6 +743,495 @@ fn parse_prompt(values: &[OsString]) -> Result<Command, &'static str> {
         project: options.project,
         format: options.format,
     })
+}
+
+fn parse_deploy(values: &[OsString]) -> Result<Command, &'static str> {
+    let mut output = None;
+    let mut retained = Vec::new();
+    let mut index = 0;
+    while index < values.len() {
+        if values[index] == "--output" {
+            if output.is_some() {
+                return Err("duplicate option");
+            }
+            index += 1;
+            output = Some(PathBuf::from(
+                values
+                    .get(index)
+                    .filter(|value| {
+                        !value.is_empty() && !value.as_encoded_bytes().starts_with(b"-")
+                    })
+                    .ok_or("`--output` requires a directory")?,
+            ));
+        } else {
+            retained.push(values[index].clone());
+        }
+        index += 1;
+    }
+    let options = ExistingOptions::parse(&retained)?;
+    Ok(Command::Deploy {
+        output,
+        project: options.project,
+        format: options.format,
+    })
+}
+
+fn deploy_project(project_argument: Option<PathBuf>, output: Option<PathBuf>) -> i32 {
+    let Ok(root) = project_root(project_argument) else {
+        return 2;
+    };
+    let session = match ProjectSession::acquire(&root) {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 6;
+        }
+    };
+    let (config, paths) = match load_config_with_paths(session.root()) {
+        Ok(project) => project,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 2;
+        }
+    };
+    let target = match output {
+        Some(path) if path.is_absolute() => path,
+        Some(path) => match std::env::current_dir() {
+            Ok(cwd) => cwd.join(path),
+            Err(error) => {
+                eprintln!("error: determine deployment directory: {error}");
+                return 6;
+            }
+        },
+        None => paths.root.join("dist").join(format!(
+            "{}-{}",
+            config.project.name, config.project.version
+        )),
+    };
+    if let Err(error) = deployment_target(&paths, &target) {
+        eprintln!("error: {error}");
+        return 6;
+    }
+    let (files, snapshot) = match deployment_files(&config, &paths) {
+        Ok(plan) => plan,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 4;
+        }
+    };
+    match publish_deployment(&paths, &target, &files, &snapshot) {
+        Ok(()) => {
+            println!("{}", display_path(&paths.root, &target));
+            0
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
+            6
+        }
+    }
+}
+
+fn deployment_files(
+    config: &crate::manifest::ProjectConfig,
+    paths: &ProjectPaths,
+) -> Result<(BTreeMap<PathBuf, Vec<u8>>, InputSnapshot), String> {
+    let artifact_root = artifact_root_for_paths(paths)?;
+    let prefix = artifact_root
+        .strip_prefix(&paths.root)
+        .map_err(|error| error.to_string())?;
+    let generation = prefix.join("generation.json");
+    let initial = InputSnapshot::capture(&paths.root, [generation.clone()])
+        .map_err(|error| error.to_string())?;
+    let bytes = fs::read(paths.root.join(&generation)).map_err(|error| {
+        format!("read generation record (run `cott emit python` and `cott verify` first): {error}")
+    })?;
+    let record = GenerationRecord::parse(&bytes)?;
+    if !record.current.verified {
+        return Err(
+            "deployment requires a verified current snapshot; run `cott verify`".to_owned(),
+        );
+    }
+    if !record.current.unresolved.is_empty() {
+        return Err("deployment refuses unresolved implementations".to_owned());
+    }
+    if !record.current.semantic_coverage.policy.passed {
+        return Err("deployment refuses a failed semantic coverage policy".to_owned());
+    }
+    if record.current.project_version != config.project.version
+        || record.current.tools["compiler"]["version"] != env!("CARGO_PKG_VERSION")
+        || record.current.tools["runtime"]["version"] != env!("CARGO_PKG_VERSION")
+    {
+        return Err(
+            "deployment snapshot is stale; emit and verify with the current compiler".to_owned(),
+        );
+    }
+    let sources = discover_sources_from_paths(paths).map_err(|error| error.to_string())?;
+    let mut inputs = collect_input_hashes(config, paths, &sources)?;
+    for implementation in record
+        .current
+        .implementations
+        .as_array()
+        .ok_or("invalid implementations")?
+    {
+        let source = PathBuf::from(
+            implementation["source_origin"]
+                .as_str()
+                .ok_or("missing implementation source")?,
+        );
+        if !safe_relative_path(&source)
+            || !paths
+                .root
+                .join(&source)
+                .starts_with(&paths.python_source_dir)
+        {
+            return Err(format!(
+                "unsafe implementation source: {}",
+                source.display()
+            ));
+        }
+        InputSnapshot::capture(&paths.root, [source.clone()]).map_err(|error| error.to_string())?;
+        let source_bytes = fs::read(paths.root.join(&source))
+            .map_err(|error| format!("read {}: {error}", source.display()))?;
+        inputs.insert(
+            source.to_string_lossy().into_owned(),
+            format!("sha256:{}", sha256_hex(&source_bytes)),
+        );
+    }
+    if serde_json::to_value(&inputs).map_err(|error| error.to_string())? != record.current.inputs {
+        return Err(
+            "deployment inputs changed; emit and verify the current project first".to_owned(),
+        );
+    }
+    let mut expected = inputs
+        .into_iter()
+        .map(|(path, hash)| (PathBuf::from(path), hash))
+        .collect::<BTreeMap<_, _>>();
+    for (path, hash) in &record.current.managed_files {
+        let path = PathBuf::from(path);
+        if !safe_relative_path(&path) || !path.starts_with(prefix) || path == generation {
+            return Err(format!("unsafe managed artifact: {}", path.display()));
+        }
+        expected.insert(path, hash.clone());
+    }
+    expected.insert(generation.clone(), format!("sha256:{}", sha256_hex(&bytes)));
+    let captured = InputSnapshot::capture_expected(&paths.root, expected.clone(), [])
+        .map_err(|error| error.to_string())?;
+    if captured.files.get(&generation) != initial.files.get(&generation) {
+        return Err("generation record changed during deployment".to_owned());
+    }
+    let mut files = BTreeMap::new();
+    let actual = collect_tree(&artifact_root)?;
+    for (path, bytes) in actual {
+        if path == Path::new("generation.json") {
+            continue;
+        }
+        let original = prefix.join(&path).to_string_lossy().into_owned();
+        if record.current.managed_files.get(&original)
+            != Some(&format!("sha256:{}", sha256_hex(&bytes)))
+        {
+            return Err(format!(
+                "unexpected or modified managed artifact: {original}"
+            ));
+        }
+        if path.starts_with("python") && path.extension().is_some_and(|ext| ext == "py") {
+            files.insert(path, bytes);
+        }
+    }
+    if !files.contains_key(Path::new("python/cott_runtime/__init__.py")) {
+        return Err("deployment is missing the generated Python runtime".to_owned());
+    }
+    let generated_packages = files
+        .keys()
+        .filter_map(|path| {
+            path.strip_prefix("python")
+                .ok()?
+                .components()
+                .next()
+                .map(|top| PathBuf::from(top.as_os_str()).with_extension(""))
+        })
+        .collect::<BTreeSet<_>>();
+    for (path, bytes) in crate::deploy::adapter_files(paths, &record)? {
+        let relative = path
+            .strip_prefix("python")
+            .map_err(|error| error.to_string())?;
+        let source = paths.python_source_dir.join(relative);
+        let source = source
+            .strip_prefix(&paths.root)
+            .map_err(|error| error.to_string())?;
+        expected.insert(
+            source.to_path_buf(),
+            format!("sha256:{}", sha256_hex(&bytes)),
+        );
+        // A distinct authored top-level package must not shadow a generated package.
+        let top = relative.components().next().ok_or("empty adapter path")?;
+        if generated_packages.contains(&PathBuf::from(top.as_os_str()).with_extension("")) {
+            return Err(format!(
+                "deployment adapter collides with generated package: {}",
+                path.display()
+            ));
+        }
+        files.insert(path, bytes);
+    }
+    let version = record.current.tools["python"]["version"]
+        .as_str()
+        .ok_or("missing target Python version")?;
+    if !supports_python_version(version) || version.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        return Err("invalid deployment Python version".to_owned());
+    }
+    files.insert(
+        PathBuf::from(".python-version"),
+        format!("{version}\n").into_bytes(),
+    );
+    let requirements = deployment_requirements(paths)?;
+    let requirement_text = std::str::from_utf8(&requirements).map_err(|error| error.to_string())?;
+    let exported = requirement_text
+        .lines()
+        .filter_map(|line| {
+            let (name, rest) = line.split_once("==")?;
+            let version = rest.split([';', ' ', '\\']).next()?;
+            Some((name, version))
+        })
+        .collect::<BTreeSet<_>>();
+    for dependency in record
+        .current
+        .dependencies
+        .as_array()
+        .ok_or("invalid dependency records")?
+    {
+        if dependency.get("installed").is_none() {
+            continue;
+        }
+        let name = dependency["name"]
+            .as_str()
+            .ok_or("missing dependency name")?;
+        let version = dependency["version"]
+            .as_str()
+            .ok_or("missing dependency version")?;
+        if !exported.contains(&(name, version)) {
+            return Err(format!(
+                "runtime dependency {name}=={version} is absent from production dependencies"
+            ));
+        }
+    }
+    files.insert(PathBuf::from("requirements.txt"), requirements);
+    files.insert(PathBuf::from("generation.json"), bytes);
+    let snapshot = InputSnapshot::capture_expected(&paths.root, expected, [])
+        .map_err(|error| error.to_string())?;
+    for (path, before) in captured.files {
+        if snapshot.files.get(&path) != Some(&before) {
+            return Err(format!("deployment input changed: {}", path.display()));
+        }
+    }
+    Ok((files, snapshot))
+}
+
+fn deployment_requirements(paths: &ProjectPaths) -> Result<Vec<u8>, String> {
+    let metadata = fs::read(paths.python_source_dir.join("pyproject.toml"))
+        .map_err(|error| format!("read deployment dependencies: {error}"))?;
+    let project: toml::Value =
+        toml::from_str(std::str::from_utf8(&metadata).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    if project["project"]["dependencies"]
+        .as_array()
+        .is_some_and(Vec::is_empty)
+    {
+        return Ok(Vec::new());
+    }
+    let lock = paths
+        .lockfile
+        .as_ref()
+        .ok_or("deployment dependencies require a lockfile")?;
+    let lock = fs::read(lock).map_err(|error| format!("read deployment lockfile: {error}"))?;
+    let uv = resolve_executable("uv")?;
+    let environment = uv_environment(&uv)?;
+    let version = run_clean(
+        &uv,
+        &["--version"],
+        &paths.root,
+        &environment,
+        Duration::from_secs(30),
+    )?;
+    if version.status != Some(0)
+        || !supports_uv_version(String::from_utf8_lossy(&version.stdout).trim())
+    {
+        return Err("deployment dependency export requires uv >=0.12.3".to_owned());
+    }
+    // Export a frozen copy: never let uv discover a parent workspace or mutate the project.
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let scratch =
+        std::env::temp_dir().join(format!("cott-deploy-deps-{}-{nonce}", std::process::id()));
+    DirBuilder::new()
+        .mode(0o700)
+        .create(&scratch)
+        .map_err(|error| format!("create dependency export workspace: {error}"))?;
+    let result = (|| {
+        write_private(&scratch.join("pyproject.toml"), &metadata)?;
+        write_private(&scratch.join("uv.lock"), &lock)?;
+        let output = run_clean(
+            &uv,
+            &[
+                "export",
+                "--frozen",
+                "--offline",
+                "--no-default-groups",
+                "--no-dev",
+                "--no-emit-project",
+                "--no-editable",
+                "--no-header",
+                "--no-annotate",
+                "--no-config",
+                "--no-cache",
+                "--no-python-downloads",
+                "--format",
+                "requirements.txt",
+            ],
+            &scratch,
+            &environment,
+            Duration::from_secs(30),
+        )?;
+        if output.status != Some(0) {
+            return Err(format!(
+                "export deployment dependencies: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        let requirements =
+            std::str::from_utf8(&output.stdout).map_err(|error| error.to_string())?;
+        // Local/editable/VCS requirements would silently depend on the authoring machine.
+        for line in requirements
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            if !line.starts_with("--hash=sha256:")
+                && !line.split_once("==").is_some_and(|(name, _)| {
+                    !name.is_empty()
+                        && name.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                        })
+                })
+            {
+                return Err("deployment requires locked registry dependencies, not local/editable/VCS sources".to_owned());
+            }
+        }
+        Ok(output.stdout)
+    })();
+    fs::remove_dir_all(&scratch)
+        .map_err(|error| format!("remove dependency export workspace: {error}"))?;
+    result
+}
+
+fn deployment_target(paths: &ProjectPaths, target: &Path) -> Result<(), String> {
+    if !target.is_absolute()
+        || target
+            .components()
+            .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
+        || target.file_name().is_none()
+    {
+        return Err(
+            "deployment output must be a normalized directory path without `.` or `..`".to_owned(),
+        );
+    }
+    let artifacts = artifact_root_for_paths(paths)?;
+    if paths.root.starts_with(target)
+        || [
+            &paths.source_dir,
+            &paths.python_source_dir,
+            &artifacts,
+            &paths.stubs_dir,
+            &paths.root.join(".cott"),
+            &paths.root.join(".venv"),
+        ]
+        .iter()
+        .any(|source| target.starts_with(source))
+    {
+        return Err("deployment output overlaps project inputs or managed artifacts".to_owned());
+    }
+    for ancestor in target.ancestors() {
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata)
+                if ancestor == target
+                    || !metadata.is_dir()
+                    || metadata.file_type().is_symlink() =>
+            {
+                return Err(format!(
+                    "deployment output exists or has an unsafe parent: {}",
+                    ancestor.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "inspect deployment output {}: {error}",
+                    ancestor.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn publish_deployment(
+    paths: &ProjectPaths,
+    target: &Path,
+    files: &BTreeMap<PathBuf, Vec<u8>>,
+    snapshot: &InputSnapshot,
+) -> Result<(), String> {
+    deployment_target(paths, target)?;
+    let parent = target.parent().ok_or("deployment output has no parent")?;
+    fs::create_dir_all(parent).map_err(|error| format!("create deployment parent: {error}"))?;
+    deployment_target(paths, target)?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let temporary = parent.join(format!(".cott-deploy-{}-{nonce}", std::process::id()));
+    DirBuilder::new()
+        .mode(0o700)
+        .create(&temporary)
+        .map_err(|error| format!("create deployment staging: {error}"))?;
+    let result = (|| {
+        for (relative, bytes) in files {
+            if !safe_relative_path(relative) {
+                return Err(format!("unsafe deployment member: {}", relative.display()));
+            }
+            let path = temporary.join(relative);
+            fs::create_dir_all(path.parent().ok_or("deployment member has no parent")?)
+                .map_err(|error| format!("create deployment package: {error}"))?;
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o644)
+                .open(&path)
+                .map_err(|error| format!("create deployment file {}: {error}", path.display()))?;
+            file.write_all(bytes)
+                .and_then(|_| file.sync_all())
+                .map_err(|error| format!("write deployment file {}: {error}", path.display()))?;
+        }
+        let current = InputSnapshot::capture(&paths.root, snapshot.files.keys().cloned())
+            .map_err(|error| error.to_string())?;
+        if &current != snapshot {
+            return Err("project changed while packaging deployment".to_owned());
+        }
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o755))
+            .map_err(|error| format!("set deployment directory permissions: {error}"))?;
+        sync_tree(&temporary)?;
+        deployment_target(paths, target)?;
+        rename_noreplace(&temporary, target)?;
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| format!("sync deployment parent: {error}"))
+    })();
+    if temporary.exists() {
+        fs::remove_dir_all(&temporary)
+            .map_err(|error| format!("remove deployment staging: {error}"))?;
+    }
+    result
 }
 
 fn parse_diff(values: &[OsString]) -> Result<Command, &'static str> {

@@ -36,6 +36,8 @@ cott check / fmt / emit / generate / prompt / verify / diff
 - `src/agent.rs`, `src/sandbox.rs`, `src/transaction.rs`, and `src/cli.rs` own prompt rendering,
   external execution, containment, crash-safe publication, inspection lock, command grammar, and
   exit codes.
+- `src/deploy.rs` selects authored runtime adapters; `src/cli.rs` gates and atomically publishes
+  runtime-only deployment directories without rewriting the generated snapshot.
 - Generated artifact paths are compiler-owned. Do not hand-edit `generated/`; change the contract or
   the selected implementation source, then use the command that owns the managed output.
 
@@ -85,9 +87,20 @@ cott emit ir|python [--project <dir>] [--format json]
 cott generate [<fully.qualified.function>] --agent codex|claude|omp --target python [-j <jobs>] [--project <dir>] [--format json]
 cott prompt <fully.qualified.callable> [--project <dir>] [--format json]
 cott verify [--project <dir>] [--format json]
+cott deploy [--output <dir>] [--project <dir>] [--format json]
 cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]
 cott lsp
 ```
+
+`deploy` packages a verified, fully resolved snapshot with passing coverage policy and unchanged
+input/managed bytes into `<project>/dist/<name>-<version>/` or `--output` (relative to the calling
+working directory). Existing output is never overwritten. It preserves runtime Python code under
+`python/`, authored runtime adapters, unchanged `generation.json`, exact `.python-version`, and
+hash-pinned production `requirements.txt`; it excludes source contracts, original `generated/`
+layout, IR, stubs, tests, authoring implementation copies and caches. The runtime and provenance
+record remain required. Dependencies export offline from the frozen lock with uv, excluding dev
+and default groups; the destination installs Python and external dependencies separately.
+Non-Python application resources are not inferred. No agent, Python or checker is called by deploy.
 
 `emit` and `generate` publish through the project transaction and leave `current.verified = false`.
 `emit python` never invokes an agent. Unresolved callables are omitted from the public facade.
