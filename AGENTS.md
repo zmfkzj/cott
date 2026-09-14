@@ -3,7 +3,7 @@
 ## Project Overview
 
 `cott` is a Rust 2024 compiler for language-like typed intent and prompt authoring. A bodyless
-`.cott` module is the public contract source. Python and Kotlin bindings or accepted agent
+`.cott` module is the public contract source. Python, Kotlin, and Dart bindings or accepted agent
 implementations are checked projections; generated target facades are the only public import path.
 Runtime code does not read authored `.cott` live.
 
@@ -11,9 +11,10 @@ Runtime code does not read authored `.cott` live.
 package `1.0.0`, Canonical IR schema `8`, generation schema/domain `7`
 (`cott.generation.v7`), runtime ABI `7`, contract-test strategy schema `5`, and diagnostics schema
 `1`. Kotlin shares package `1.0.0` and Canonical IR `8` but has separate closed generation schema
-`1`, domain `cott.kotlin.generation.v1`, and runtime ABI `1`. Never put Kotlin truth in
-Python-named fields or accept one backend's record in the other. Do not add legacy readers, partial
-profiles, unsandboxed fallbacks, or a second source of truth. When documentation and implementation
+`1`, domain `cott.kotlin.generation.v1`, and runtime ABI `1`. Dart independently uses generation
+schema `1`, domain `cott.dart.generation.v1`, runtime ABI `1`, package `1.0.0` and Canonical IR `8`.
+Never put one backend's truth in another backend's fields or accept its record. Do not add legacy
+readers, partial profiles, unsandboxed fallbacks, or a second source of truth. When documentation and implementation
 source disagree, the source files and closed schema validators are authoritative; update the docs
 rather than preserving a contradictory convention.
 
@@ -21,7 +22,7 @@ rather than preserving a contradictory convention.
 
 ```text
 cott check / fmt / emit / generate / prompt / verify / diff / deploy
-  → exactly one closed Python or Kotlin target + symlink-safe source discovery
+  → exactly one closed Python, Kotlin, or Dart target + symlink-safe source discovery
   → lossless CST → AST → complete HIR → Canonical IR
   → intent fingerprints + target binding or scoped agent implementation validation
   → deterministic target facade/runtime/provenance plan
@@ -40,6 +41,9 @@ cott check / fmt / emit / generate / prompt / verify / diff / deploy
 - `src/kotlin/{binding,emit,runtime,provenance,pipeline,verify,runner,prompt,generation}.rs` own the
   distinct Kotlin generation-1/runtime-1 module pipeline. Do not reuse Python record fields or
   weaken either validator.
+- `src/dart/{binding,emit,types,expressions,runtime,provenance,pipeline,dependencies,verify,runner,prompt,generation}.rs`
+  own the independent Dart generation-1/runtime-1 package backend. `src/sandbox/landlock.rs` applies
+  Dart runtime filesystem confinement before VM threads; do not move it into already-threaded Dart code.
 - `src/agent.rs`, `src/sandbox.rs`, `src/transaction.rs`, and `src/cli.rs` own external execution,
   containment, crash-safe publication, inspection lock, target dispatch, command grammar, and exit
   codes.
@@ -63,22 +67,27 @@ cott check / fmt / emit / generate / prompt / verify / diff / deploy
 | `examples/modular/order-management/` | Python multi-module facade composition |
 | `examples/integrations/fastapi-hello/` | Python FastAPI external-type projection |
 | `examples/integrations/android-counter/` | Kotlin/JVM Cott module plus standard Gradle-owned Android consumer |
+| `examples/kotlin/` | Nineteen Kotlin grammar, composition, feature and modular lessons/fixtures |
+| `examples/integrations/flutter-counter/` | Dart Cott package plus standard Flutter Android/web consumer |
 | `examples/real/` | Six independent Python real-world generation-first projects |
 | `examples/**/src/**/*.cott` | Authoritative example contracts |
 | `examples/**/python/cott_bindings/**/*.py` | Selected Python binding sources |
 | `examples/**/python/_cott_impl/**/*.py` | Durable accepted Python agent implementation sources |
 | `examples/**/kotlin/cott_bindings/**/*.kt` | Selected Kotlin binding sources |
 | `examples/**/kotlin/cott_impl/**/*.kt` | Durable accepted Kotlin agent implementation sources |
+| `examples/**/dart/cott_bindings/**/*.dart` | Selected private Dart binding sources |
+| `examples/**/dart/cott_impl/**/*.dart` | Durable accepted Dart agent implementation sources |
 | `architecture.md` | Normative implemented v1.0 contract |
 
-The maintained inventory is 26 Python projects plus one Kotlin/Android project. The Python set is
+The authored inventory contains 26 Python projects, 20 Kotlin projects and one Dart/Flutter project. The Python set is
 grammar 6, simple 3, complex curriculum 1, `process-bar` fixture 1, features 7, modular 1, FastAPI
 integration 1, and real-world 6 (`yt-dlp`, `harlequin`, `pgcli`, `posting`, `toolong`,
-`frogmouth`). `integrations/android-counter` is the Kotlin/JVM module and Android consumer. Every
-project has `cott.toml` and `src/`; its output and implementation layout follows its one selected
+`frogmouth`). `examples/kotlin/` contains 19 Kotlin lessons/fixtures; `integrations/android-counter`
+adds the Kotlin/JVM module and Android consumer. `integrations/flutter-counter` is the Dart module
+and standard Flutter consumer. Every project has `cott.toml` and `src/`; its output and implementation layout follows its one selected
 target and generation record. Committed `generated/` and agent-owned implementation content are
-compiler results. Never treat `.venv/`, `.cott/`, `.gradle/`, `build/`, or `__pycache__/` as managed
-project content.
+compiler results. Never treat `.venv/`, `.cott/`, `.gradle/`, `.dart_tool/`, `build/`, Flutter's
+`cott_module/` deployment, or `__pycache__/` as managed project content.
 
 ## Development Commands
 
@@ -93,11 +102,11 @@ cargo run -- emit ir --project examples/grammar/checked-add
 The implemented command forms are:
 
 ```text
-cott init <path> [--target python|kotlin] [--name <name>] [--no-sync] [--format json]
+cott init <path> [--target python|kotlin|dart] [--name <name>] [--no-sync] [--format json]
 cott check [<source.cott>] [--project <dir>] [--format json]
 cott fmt [--check] [--project <dir>] [--format json]
-cott emit ir|python|kotlin [--project <dir>] [--format json]
-cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin [-j <jobs>] [--project <dir>] [--format json]
+cott emit ir|python|kotlin|dart [--project <dir>] [--format json]
+cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]
 cott prompt <fully.qualified.callable> [--project <dir>] [--format json]
 cott verify [--project <dir>] [--format json]
 cott deploy [--output <dir>] [--project <dir>] [--format json]
@@ -112,7 +121,9 @@ under `python/`, authored adapters, unchanged `generation.json`, exact `.python-
 hash-pinned production `requirements.txt`. Kotlin deployment preserves `cott-module.jar`, unchanged
 `generation.json`, `dependencies.json`, compiler-bundled coroutine `1.8.0`, and verified runtime
 `classpath` JARs under `runtime-libs/`; Kotlin stdlib is recorded as required and provided by
-Kotlin/Gradle, while `compile_only` JARs are excluded. Both targets exclude contracts, the original
+Kotlin/Gradle, while `compile_only` JARs are excluded. Dart deployment preserves portable `lib/`,
+compiler-owned pubspec, unchanged generation/dependency records and the authenticated runtime
+vendor closure, not native kernel or runner output. All targets exclude contracts, the original
 generated layout, tests, authoring implementation copies, and caches. Deploy never generates,
 re-verifies, runs an agent, or infers application resources.
 
@@ -123,15 +134,15 @@ scope and `generation.json`; non-IR managed hashes stay trusted recorded values 
 unrelated on-disk edits. Pending unresolved agent sources with authentic `AgentRun` provenance keep
 their old bytes across repeated emit and checkpoint until regeneration. Manifest-owned bindings
 are excluded from intent regeneration. Same-v7 fallback derivation applies only to Python records;
-Kotlin remains closed generation schema 1. Missing manifest/rule evidence and source/path/hash
+Kotlin and Dart remain separate closed generation schema 1 targets. Missing manifest/rule evidence and source/path/hash
 drift invalidate conservatively. `generate` invokes the selected agent only for eligible unresolved
 callables and freezes all advertised initial prompts before accepting any wave candidate.
 
 `cott prompt` renders that same initial snapshot without a provider or target compiler/checker.
 JSON is `{symbol,intent_hash,prompt_hash,generation_required,context,prompt}`; `prompt_hash` covers
-only the initial bytes. The requested write path is `implementation.py` for Python and
-`implementation.kt` for Kotlin. Context is the scoped transitive declaration closure, including
-explicit references, `constant_ref`, applied rules/bases, relevant scenarios, and scoped
+only the initial bytes. The requested write path is `implementation.py` for Python,
+`implementation.kt` for Kotlin and `implementation.dart` for Dart. Context is the scoped transitive
+declaration closure, including explicit references, `constant_ref`, applied rules/bases, relevant scenarios, and scoped
 `cott-domain` directives. Prompt sections stay separated: authority, current intent, formal
 declarations, project rules, references, target output rules, and feedback. Formal source is
 authoritative; rules and references never override it.
@@ -140,7 +151,7 @@ authoritative; rules and references never override it.
 work, and publishes certification only after real target verification. Kotlin verify uses
 kotlinc `>=2.2.10`, JDK `>=17`, JVM target 17, compiler-distribution stdlib and coroutine `1.8.0`,
 then compiles `library/cott-module.jar` and executes the bounded runner in the existing sandbox.
-For Kotlin, `current.verified = true` requires `current == last_verified`. Emit, generate, and
+For Kotlin and Dart, `current.verified = true` requires `current == last_verified`. Emit, generate, and
 actual format edits retain history but invalidate current certification. An already deployed
 snapshot keeps its old contract until a later deployment.
 
@@ -232,6 +243,40 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
   signing, installation, and device lifecycle. Do not claim Cott scaffolds an Android app or runs
   Python on-device.
 
+### Dart Implementations and Flutter Boundary
+
+- Dart SDK is `>=3.13.3,<4.0.0`. A Dart project name is its lowercase snake_case package name.
+  `[target.dart]` owns source/generated/sdk/runtime_validation, optional paired pubspec/lockfile,
+  private implementation selectors and external type projections. Exactly one target is selected.
+- A manifest implementation is `source-relative/file.dart:_privateFunction`; accepted agents use
+  `<target.dart.source>/cott_impl/<module>/<function>.dart` and the exact signature from `cott prompt`.
+  Compiler-owned private names use `_cott_`; only exact declared witness/function identifiers are
+  accepted. Original source hashes are distinct from transformed managed private-part hashes.
+- Public consumers import `package:<name>/modules/<module>.dart`. Implementations are Dart-library
+  private parts; stateful methods share their owner-private library. Do not expose raw state/seals,
+  public unchecked setters, or private implementation import paths.
+- I64/U64 use `BigInt`; small integer bounds and F32 rounding remain exact. Generic/associated
+  distinctions use explicit `CottType<T>` witnesses and checked variance views; consts use
+  `CottConst`. Never substitute `Any`, Dart covariance, or runtimeType text for canonical evidence.
+- Cancellation is cooperative. Structured tasks and exact live guard/mutation leases are explicit;
+  inherited Zone data never grants task ownership and arbitrary Futures are not preempted.
+- Freeze manifest, rules, Cott/Dart sources and pub metadata once. Missing authentic agent source
+  stays unresolved; moved/tampered/unrecorded source fails. Pending successful-provider source may
+  remain for repair, but emit/generate never certify or refresh stale intent by syntax alone.
+- Verify uses real offline Dart pub/analyzer/kernel tools and authenticated facade evidence.
+  Linux bubblewrap and Landlock ABI >=3 are required; Landlock is installed before all VM threads.
+  The evidence key is a fresh stdin-only secret, never source/argv/env/metadata.
+- Hosted dependencies require locked original archives in
+  `PUB_CACHE/hosted-archives/<registry-key>/<name>-<version>.tar.gz`. Check compressed SHA256,
+  safe bounded members and exact extracted bytes; mutable cache hash sidecars are not authority.
+  Verification never silently downloads missing archives. Frozen path dependencies stay in-project.
+- Deploy portable `lib/`, compiler-owned pubspec, unchanged generation record/dependency metadata
+  and exact runtime vendor closure, not kernel/runner/SDK/contracts/caches or inferred app assets.
+  Flutter owns UI, plugins, platform resources, APK/AAB and web compilation.
+- `examples/integrations/flutter-counter` uses Flutter 3.47.4/Dart 3.13.3; its standard Android
+  scaffold uses SDK 36, AGP 9.1.0, Kotlin 2.4.0 and Gradle 9.3.1 with a distribution SHA256 pin.
+  Its `tool/setup.dart` refuses existing deployment output and invokes real emit/verify/deploy.
+
 ## Important Files
 
 - `Cargo.toml` — Rust package metadata; `src/main.rs` is the binary bridge.
@@ -252,6 +297,8 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
   operations use uv `>=0.12.3`.
 - The Kotlin target is kotlinc `>=2.2.10`, JDK `>=17`, JVM 17, compiler-matched stdlib, and the
   exact compiler-distribution `kotlinx-coroutines-core-jvm` `1.8.0`.
+- Dart native regressions use `COTT_DART` as an absolute SDK executable path. The portable generated
+  Dart runtime is standard-library-only; pinned crypto sources are compiler-only runner support.
 - Python generated runtime code is standard-library-only. Kotlin generated runtime code additionally
   requires the recorded coroutine JAR. Project dependencies remain target-manifest inputs.
 
@@ -263,6 +310,9 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
 - Python verification tests use explicit fake pinned tool wrappers where a real CPython 3.14.6
   environment is unavailable. Kotlin verification tests use controlled Kotlin/JDK toolchains; real
   Android integration remains a standard Gradle consumer check, distinct from Cott module verify.
-- Do not copy or assert transient `.venv/`, `.cott/`, `.gradle/`, `build/`, or `__pycache__/`
+- Dart native tests are explicitly COTT_DART-gated; execute ignored runtime, native consumer,
+  verifier, scenario and dependency tests with the real SDK. Flutter browser/APK verification is
+  distinct from Cott module certification.
+- Do not copy or assert transient `.venv/`, `.cott/`, `.gradle/`, `.dart_tool/`, `build/`, or `__pycache__/`
   content. Managed example output changes only when the requested work includes the compiler-owned
   result.

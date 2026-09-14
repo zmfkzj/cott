@@ -1,9 +1,9 @@
 use std::ffi::OsStr;
 use std::fmt;
-use std::fs;
-use std::io;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Read};
 #[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 
 /// Trusted filesystem paths derived from the normative project configuration.
@@ -31,6 +31,19 @@ pub struct KotlinPaths {
     pub compile_only: Vec<PathBuf>,
 }
 
+/// Trusted filesystem paths for a Dart target.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DartPaths {
+    pub root: PathBuf,
+    pub manifest: PathBuf,
+    pub source_dir: PathBuf,
+    pub dart_source_dir: PathBuf,
+    pub generated_dir: PathBuf,
+    pub artifact_root: PathBuf,
+    pub pubspec: Option<PathBuf>,
+    pub lockfile: Option<PathBuf>,
+}
+
 /// A UTF-8 Python source safely discovered beneath a project-owned tree.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PythonSourceFile {
@@ -45,6 +58,13 @@ pub struct PythonSourceFile {
 pub struct KotlinSourceFile {
     /// Lexical path relative to the scanned tree.
     pub path: PathBuf,
+    pub disk_path: PathBuf,
+    pub source: String,
+}
+
+/// A UTF-8 Dart source safely discovered beneath a project-owned tree.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DartSourceFile {
     pub disk_path: PathBuf,
     pub source: String,
 }
@@ -133,6 +153,16 @@ pub fn load_kotlin_config_with_paths(
     Ok((config, paths, bytes))
 }
 
+/// Loads a Dart manifest, derives its trusted filesystem paths, and returns
+/// the exact UTF-8 manifest text consumed by the parser.
+pub fn load_dart_config_with_paths(
+    root: &Path,
+) -> Result<(crate::manifest::DartProjectConfig, DartPaths, String), ProjectError> {
+    let (root, manifest, bytes, config) = read_dart_config(root)?;
+    let paths = derive_dart_paths(&root, &manifest, &config)?;
+    Ok((config, paths, bytes))
+}
+
 /// Reads the normative manifest through the project trust boundary and returns
 /// its one selected target without deriving target-specific paths.
 pub fn load_target_language(root: &Path) -> Result<crate::manifest::TargetLanguage, ProjectError> {
@@ -182,6 +212,19 @@ fn read_kotlin_config(
                 message: error.message,
             }
         })?;
+    Ok((root, manifest, bytes, config))
+}
+
+fn read_dart_config(
+    root: &Path,
+) -> Result<(PathBuf, PathBuf, String, crate::manifest::DartProjectConfig), ProjectError> {
+    let (root, manifest, bytes) = read_manifest(root)?;
+    let config = crate::manifest::DartProjectConfig::parse(&manifest, &bytes).map_err(|error| {
+        ProjectError::InvalidManifest {
+            path: manifest.clone(),
+            message: error.message,
+        }
+    })?;
     Ok((root, manifest, bytes, config))
 }
 
@@ -386,6 +429,64 @@ fn derive_kotlin_paths(
     })
 }
 
+fn derive_dart_paths(
+    root: &Path,
+    manifest: &Path,
+    config: &crate::manifest::DartProjectConfig,
+) -> Result<DartPaths, ProjectError> {
+    let source = configured_path("project.source", &config.project.source)?;
+    let dart_source = configured_path("target.dart.source", &config.dart.source)?;
+    let generated = configured_path("target.dart.generated", &config.dart.generated)?;
+    let artifact_root = generated
+        .parent()
+        .ok_or(ProjectError::InvalidProject {
+            message: "Dart generated path has no artifact root",
+        })?
+        .to_path_buf();
+    let pubspec = config
+        .dart
+        .pubspec
+        .as_deref()
+        .map(|value| configured_path("target.dart.pubspec", value).map(|path| root.join(path)))
+        .transpose()?;
+    let lockfile = config
+        .dart
+        .lockfile
+        .as_deref()
+        .map(|value| configured_path("target.dart.lockfile", value).map(|path| root.join(path)))
+        .transpose()?;
+
+    let source_dir = root.join(source);
+    let dart_source_dir = root.join(dart_source);
+    let generated_dir = root.join(generated);
+    let artifact_root = root.join(artifact_root);
+
+    ensure_required_directory(&source_dir, "source path is not a directory")?;
+    ensure_required_directory(&dart_source_dir, "Dart source path is not a directory")?;
+    ensure_directory_if_present(&artifact_root, "artifact root is not a directory")?;
+    ensure_directory_if_present(&generated_dir, "generated directory")?;
+    if let Some(path) = &pubspec {
+        ensure_regular_input(path, "Dart pubspec must be a regular single-link file")?;
+    }
+    if let Some(path) = &lockfile {
+        ensure_regular_input(path, "Dart lockfile must be a regular single-link file")?;
+    }
+    if let Some(rules) = &config.generator.rules {
+        ensure_regular_input(&root.join(rules), "generator rules")?;
+    }
+
+    Ok(DartPaths {
+        root: root.to_path_buf(),
+        manifest: manifest.to_path_buf(),
+        source_dir,
+        dart_source_dir,
+        generated_dir,
+        artifact_root,
+        pubspec,
+        lockfile,
+    })
+}
+
 fn configured_path(field: &'static str, value: &str) -> Result<PathBuf, ProjectError> {
     crate::manifest::normalized_relative_path(value).map_err(|message| ProjectError::InvalidPath {
         field,
@@ -406,6 +507,52 @@ pub fn discover_kotlin_contract_sources(
     paths: &KotlinPaths,
 ) -> Result<Vec<crate::compiler::SourceFile>, ProjectError> {
     discover_sources_at(&paths.root, &paths.source_dir)
+}
+
+/// Reads all regular `.cott` files for a Dart target through the strict source
+/// trust boundary used by Dart generation.
+pub fn discover_dart_contract_sources(
+    paths: &DartPaths,
+) -> Result<Vec<crate::compiler::SourceFile>, ProjectError> {
+    if !paths.root.is_absolute() || !paths.source_dir.is_absolute() {
+        return Err(ProjectError::InvalidProject {
+            message: "project paths must be absolute",
+        });
+    }
+    ensure_no_symlinks(&paths.root)?;
+    ensure_no_symlinks(&paths.source_dir)?;
+    let metadata = fs::symlink_metadata(&paths.source_dir).map_err(|source| ProjectError::Io {
+        operation: "stat Dart contract source directory",
+        path: paths.source_dir.clone(),
+        source,
+    })?;
+    if !metadata.is_dir() {
+        return Err(ProjectError::InvalidProject {
+            message: "source path is not a directory",
+        });
+    }
+
+    let mut files = Vec::new();
+    collect_dart_contract_source_paths(&paths.source_dir, &paths.source_dir, &mut files)?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    if files.is_empty() {
+        return Err(ProjectError::NoSources {
+            path: paths.source_dir.clone(),
+        });
+    }
+    files
+        .into_iter()
+        .map(|(relative, disk_path)| {
+            let text = read_trusted_utf8(
+                &disk_path,
+                "open Dart contract source",
+                "Dart contract source files must be regular single-link files",
+                "Dart contract source is not UTF-8",
+                "Dart contract source changed while being read",
+            )?;
+            Ok(crate::compiler::SourceFile::new(relative, text))
+        })
+        .collect()
 }
 
 fn discover_sources_at(
@@ -448,6 +595,61 @@ fn discover_sources_at(
             Ok(crate::compiler::SourceFile::new(path, text))
         })
         .collect()
+}
+
+fn collect_dart_contract_source_paths(
+    root: &Path,
+    directory: &Path,
+    files: &mut Vec<(PathBuf, PathBuf)>,
+) -> Result<(), ProjectError> {
+    let mut entries = fs::read_dir(directory)
+        .map_err(|source| ProjectError::Io {
+            operation: "read Dart contract source directory",
+            path: directory.to_path_buf(),
+            source,
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| ProjectError::Io {
+            operation: "read Dart contract source directory entry",
+            path: directory.to_path_buf(),
+            source,
+        })?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        if is_dart_cache_name(&entry.file_name()) {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|source| ProjectError::Io {
+            operation: "stat Dart contract source entry",
+            path: path.clone(),
+            source,
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(ProjectError::Symlink { path });
+        }
+        if metadata.is_dir() {
+            collect_dart_contract_source_paths(root, &path, files)?;
+            continue;
+        }
+        if path.extension() != Some(OsStr::new("cott")) {
+            continue;
+        }
+        if !regular_single_link(&metadata) {
+            return Err(ProjectError::InvalidProject {
+                message: "Dart contract source files must be regular single-link files",
+            });
+        }
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| ProjectError::InvalidProject {
+                message: "Dart contract source path is outside scanned tree",
+            })?
+            .to_path_buf();
+        files.push((relative, path));
+    }
+    Ok(())
 }
 /// Reads every Python source in a project-owned tree after rejecting unsafe
 /// links and package metadata. Returned paths are lexical and stable.
@@ -675,6 +877,180 @@ fn collect_kotlin_sources(
         });
     }
     Ok(())
+}
+
+/// Reads every Dart source in a project-owned tree after rejecting unsafe
+/// links and files. Tool and build caches are outside the authored tree.
+pub fn discover_dart_sources(root: &Path) -> Result<Vec<DartSourceFile>, ProjectError> {
+    ensure_no_symlinks(root)?;
+    let metadata = fs::symlink_metadata(root).map_err(|source| ProjectError::Io {
+        operation: "stat Dart source directory",
+        path: root.to_path_buf(),
+        source,
+    })?;
+    if !metadata.is_dir() {
+        return Err(ProjectError::InvalidProject {
+            message: "Dart source path is not a directory",
+        });
+    }
+
+    let mut files = Vec::new();
+    collect_dart_sources(root, &mut files)?;
+    files.sort_by(|left, right| left.disk_path.cmp(&right.disk_path));
+    Ok(files)
+}
+
+fn collect_dart_sources(
+    directory: &Path,
+    files: &mut Vec<DartSourceFile>,
+) -> Result<(), ProjectError> {
+    let mut entries = fs::read_dir(directory)
+        .map_err(|source| ProjectError::Io {
+            operation: "read Dart source directory",
+            path: directory.to_path_buf(),
+            source,
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| ProjectError::Io {
+            operation: "read Dart source directory entry",
+            path: directory.to_path_buf(),
+            source,
+        })?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        if is_dart_cache_name(&entry.file_name()) {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|source| ProjectError::Io {
+            operation: "stat Dart source entry",
+            path: path.clone(),
+            source,
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(ProjectError::Symlink { path });
+        }
+        if metadata.is_dir() {
+            collect_dart_sources(&path, files)?;
+            continue;
+        }
+        if path.extension() != Some(OsStr::new("dart")) {
+            continue;
+        }
+        if !regular_single_link(&metadata) {
+            return Err(ProjectError::InvalidProject {
+                message: "Dart source files must be regular single-link files",
+            });
+        }
+        let source = read_trusted_utf8(
+            &path,
+            "open Dart source",
+            "Dart source files must be regular single-link files",
+            "Dart source is not UTF-8",
+            "Dart source changed while being read",
+        )?;
+        files.push(DartSourceFile {
+            disk_path: path,
+            source,
+        });
+    }
+    Ok(())
+}
+
+fn is_dart_cache_name(name: &OsStr) -> bool {
+    matches!(
+        name.to_str(),
+        Some(
+            ".dart_tool"
+                | ".pub-cache"
+                | ".flutter-plugins"
+                | ".flutter-plugins-dependencies"
+                | "build"
+                | ".cott"
+        )
+    )
+}
+
+fn regular_single_link(metadata: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        metadata.is_file() && metadata.nlink() == 1
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.is_file()
+    }
+}
+
+fn read_trusted_utf8(
+    path: &Path,
+    open_operation: &'static str,
+    invalid_file: &'static str,
+    invalid_utf8: &'static str,
+    changed: &'static str,
+) -> Result<String, ProjectError> {
+    ensure_no_symlinks(path)?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    let mut file = options.open(path).map_err(|source| ProjectError::Io {
+        operation: open_operation,
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let opened = file.metadata().map_err(|source| ProjectError::Io {
+        operation: "stat opened source",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !regular_single_link(&opened) {
+        return Err(ProjectError::InvalidProject {
+            message: invalid_file,
+        });
+    }
+
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|source| ProjectError::Io {
+            operation: "read opened source",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let opened_after = file.metadata().map_err(|source| ProjectError::Io {
+        operation: "re-stat opened source",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    ensure_no_symlinks(path)?;
+    let path_after = fs::symlink_metadata(path).map_err(|source| ProjectError::Io {
+        operation: "re-stat source path",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    #[cfg(unix)]
+    let stable = regular_single_link(&opened_after)
+        && regular_single_link(&path_after)
+        && opened.dev() == opened_after.dev()
+        && opened.ino() == opened_after.ino()
+        && opened.len() == opened_after.len()
+        && opened.mtime() == opened_after.mtime()
+        && opened.mtime_nsec() == opened_after.mtime_nsec()
+        && opened.dev() == path_after.dev()
+        && opened.ino() == path_after.ino()
+        && opened_after.len() == bytes.len() as u64;
+    #[cfg(not(unix))]
+    let stable = regular_single_link(&opened_after)
+        && regular_single_link(&path_after)
+        && opened.len() == opened_after.len()
+        && opened_after.len() == bytes.len() as u64;
+    if !stable {
+        return Err(ProjectError::InvalidProject { message: changed });
+    }
+    String::from_utf8(bytes).map_err(|_| ProjectError::InvalidProject {
+        message: invalid_utf8,
+    })
 }
 
 fn collect_sources(

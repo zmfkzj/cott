@@ -423,6 +423,19 @@ fn discover_project(path: &Path) -> Option<DiscoveredProject> {
                     sources,
                 })
             }
+            crate::manifest::TargetLanguage::Dart => {
+                let (config, paths, _) = crate::project::load_dart_config_with_paths(root).ok()?;
+                let sources = match crate::project::discover_dart_contract_sources(&paths) {
+                    Ok(sources) => sources,
+                    Err(crate::project::ProjectError::NoSources { .. }) => Vec::new(),
+                    Err(_) => return None,
+                };
+                Some(DiscoveredProject {
+                    source_dir: paths.source_dir,
+                    effects: config.effects.into_keys().collect(),
+                    sources,
+                })
+            }
         }
     })
 }
@@ -1110,6 +1123,52 @@ mod tests {
         fs::write(
             root.join("cott.toml"),
             "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nsource = \"src\"\n\n[target.kotlin]\nsource = \"kotlin\"\ngenerated = \"generated/kotlin\"\nruntime_validation = \"boundary\"\n\n[effects]\n\"engine.compute\" = true\n",
+        )
+        .unwrap();
+        fs::write(
+            source_dir.join("types.cott"),
+            "module demo.types\n\nstruct Widget:\n    value: I32\n",
+        )
+        .unwrap();
+        let main_path = source_dir.join("main.cott");
+        fs::write(&main_path, "module demo.main\n\nfn stale() -> Unit\n").unwrap();
+        let main = "module demo.main\n\nuse demo.types.{Widget}\n\nfn compute(value: Widget) -> Unit:\n    effects [engine.compute]\n";
+        let documents = vec![(Url::from_file_path(&main_path).unwrap(), main.to_owned())];
+
+        let analysis = analyze_documents(&documents);
+
+        assert_eq!(analysis.root, root.join("src"));
+        assert!(analysis.diagnostics.values().all(Vec::is_empty));
+        assert!(
+            analysis
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "Widget")
+        );
+        assert!(
+            analysis
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "compute")
+        );
+        assert!(analysis.symbols.iter().all(|symbol| symbol.name != "stale"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn analyzes_complete_dart_projects_with_unsaved_sources_and_effects_without_sdk() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("cott-lsp-dart-{}-{nonce}", std::process::id()));
+        let source_dir = root.join("src/demo");
+        fs::create_dir_all(&source_dir).unwrap();
+        fs::create_dir_all(root.join("dart")).unwrap();
+        fs::write(
+            root.join("cott.toml"),
+            "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nsource = \"src\"\n\n[target.dart]\nsource = \"dart\"\ngenerated = \"generated/dart\"\nsdk = \"definitely-missing-dart-sdk\"\nruntime_validation = \"boundary\"\n\n[effects]\n\"engine.compute\" = true\n",
         )
         .unwrap();
         fs::write(

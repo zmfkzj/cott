@@ -1,0 +1,14 @@
+[project]
+name = "flutter_counter"
+version = "0.1.0"
+source = "src"
+
+[target.dart]
+source = "dart"
+generated = "generated/dart"
+sdk = "dart"
+runtime_validation = "boundary"
+
+[target.dart.implementations]
+"example.counter.increment" = "cott_bindings/counter/increment.dart:_increment"
+"example.counter.decrement" = "cott_bindings/counter/decrement.dart:_decrement"

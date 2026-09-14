@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use cott::project::{
-    discover_kotlin_contract_sources, discover_kotlin_sources, discover_python_sources,
-    discover_sources_from_paths, load_config_with_paths, load_kotlin_config_with_paths,
+    discover_dart_contract_sources, discover_dart_sources, discover_kotlin_contract_sources,
+    discover_kotlin_sources, discover_python_sources, discover_sources_from_paths,
+    load_config_with_paths, load_dart_config_with_paths, load_kotlin_config_with_paths,
 };
 #[cfg(unix)]
 use std::ffi::CString;
@@ -72,6 +73,26 @@ classpath = ["libs/runtime.jar"]
 compile_only = ["libs/android.jar"]
 "#;
 
+const DART_MANIFEST: &str = r#"
+[project]
+name = "demo_app"
+version = "0.1.0"
+source = "src"
+
+[target.dart]
+source = "dart-src"
+generated = "generated/dart"
+runtime_validation = "boundary"
+pubspec = "dart-package/pubspec.yaml"
+lockfile = "dart-package/pubspec.lock"
+
+[target.dart.implementations]
+"demo.fetch" = "impl/fetch.dart:_fetch"
+
+[target.dart.external_types]
+"demo.Instant" = "dart:core#DateTime"
+"#;
+
 fn manifest(root: &Path, contents: &str) {
     fs::write(root.join("cott.toml"), contents).expect("manifest should be writable");
 }
@@ -102,6 +123,25 @@ fn valid_kotlin_project() -> TempDir {
     fs::create_dir_all(temp.path.join("libs")).expect("classpath directory");
     fs::write(temp.path.join("libs/runtime.jar"), b"runtime").expect("runtime classpath");
     fs::write(temp.path.join("libs/android.jar"), b"android").expect("compile-only classpath");
+    temp
+}
+
+fn valid_dart_project() -> TempDir {
+    let temp = TempDir::new();
+    manifest(&temp.path, DART_MANIFEST);
+    fs::create_dir_all(temp.path.join("src")).expect("source directory");
+    fs::create_dir_all(temp.path.join("dart-src")).expect("Dart source directory");
+    fs::create_dir_all(temp.path.join("dart-package")).expect("Dart metadata directory");
+    fs::write(
+        temp.path.join("dart-package/pubspec.yaml"),
+        "name: demo_app\nversion: 0.1.0\n",
+    )
+    .expect("Dart pubspec");
+    fs::write(
+        temp.path.join("dart-package/pubspec.lock"),
+        "packages: {}\n",
+    )
+    .expect("Dart lockfile");
     temp
 }
 
@@ -513,5 +553,220 @@ fn rejects_unsafe_kotlin_sources_and_classpath_inputs() {
         fs::hard_link(kotlin.join("safe.kt"), kotlin.join("hard-linked.kt"))
             .expect("Kotlin hard link");
         assert!(discover_kotlin_sources(&kotlin).is_err());
+    }
+}
+
+#[test]
+fn loads_dart_paths_frozen_manifest_and_deterministic_sources() {
+    let temp = valid_dart_project();
+    fs::create_dir_all(temp.path.join("src/demo")).expect("Cott source directory");
+    fs::write(temp.path.join("src/demo/z.cott"), "module demo.z\n").expect("Cott source");
+    fs::write(temp.path.join("src/demo/a.cott"), "module demo.a\n").expect("Cott source");
+    for cache in [".dart_tool", "build"] {
+        fs::create_dir_all(temp.path.join("src").join(cache)).expect("contract cache directory");
+        fs::write(
+            temp.path.join("src").join(cache).join("ignored.cott"),
+            [0xff],
+        )
+        .expect("ignored cached contract source");
+    }
+    fs::create_dir_all(temp.path.join("dart-src/impl")).expect("Dart implementation directory");
+    fs::write(temp.path.join("dart-src/impl/z.dart"), "int _z() => 1;\n").expect("Dart source");
+    fs::write(temp.path.join("dart-src/impl/a.dart"), "int _a() => 2;\n").expect("Dart source");
+    for cache in [
+        ".dart_tool",
+        ".pub-cache",
+        ".flutter-plugins",
+        ".flutter-plugins-dependencies",
+        "build",
+        ".cott",
+    ] {
+        fs::create_dir_all(temp.path.join("dart-src").join(cache)).expect("Dart cache directory");
+        fs::write(
+            temp.path.join("dart-src").join(cache).join("ignored.dart"),
+            [0xff],
+        )
+        .expect("ignored cache source");
+    }
+
+    let (config, paths, consumed) =
+        load_dart_config_with_paths(&temp.path).expect("Dart-only manifest should load");
+    assert_eq!(config.project.name, "demo_app");
+    assert_eq!(paths.root, temp.path);
+    assert_eq!(paths.manifest, temp.path.join("cott.toml"));
+    assert_eq!(paths.source_dir, temp.path.join("src"));
+    assert_eq!(paths.dart_source_dir, temp.path.join("dart-src"));
+    assert_eq!(paths.generated_dir, temp.path.join("generated/dart"));
+    assert_eq!(paths.artifact_root, temp.path.join("generated"));
+    assert_eq!(
+        paths.pubspec,
+        Some(temp.path.join("dart-package/pubspec.yaml"))
+    );
+    assert_eq!(
+        paths.lockfile,
+        Some(temp.path.join("dart-package/pubspec.lock"))
+    );
+    assert_eq!(consumed, DART_MANIFEST);
+    manifest(&temp.path, "[project]\nname = \"changed\"\n");
+    assert_eq!(
+        consumed, DART_MANIFEST,
+        "the loader must return the exact frozen manifest text it parsed"
+    );
+
+    let contracts =
+        discover_dart_contract_sources(&paths).expect("Dart contract sources should load");
+    assert_eq!(
+        contracts
+            .iter()
+            .map(|source| source.path.clone())
+            .collect::<Vec<_>>(),
+        [PathBuf::from("demo/a.cott"), PathBuf::from("demo/z.cott"),]
+    );
+    assert_eq!(contracts[0].text, "module demo.a\n");
+
+    let dart = discover_dart_sources(&paths.dart_source_dir).expect("Dart sources should load");
+    assert_eq!(
+        dart.iter()
+            .map(|source| {
+                source
+                    .disk_path
+                    .strip_prefix(&paths.dart_source_dir)
+                    .expect("source must stay under Dart root")
+                    .to_path_buf()
+            })
+            .collect::<Vec<_>>(),
+        [PathBuf::from("impl/a.dart"), PathBuf::from("impl/z.dart"),]
+    );
+    assert_eq!(dart[0].source, "int _a() => 2;\n");
+}
+
+#[test]
+fn loads_dart_without_authored_pub_metadata() {
+    let temp = valid_dart_project();
+    let manifest_source = DART_MANIFEST.replace(
+        "pubspec = \"dart-package/pubspec.yaml\"\nlockfile = \"dart-package/pubspec.lock\"\n",
+        "",
+    );
+    manifest(&temp.path, &manifest_source);
+    fs::remove_dir_all(temp.path.join("dart-package")).expect("remove optional Dart metadata");
+
+    let (_, paths, consumed) =
+        load_dart_config_with_paths(&temp.path).expect("stdlib-only Dart manifest should load");
+    assert!(paths.pubspec.is_none());
+    assert!(paths.lockfile.is_none());
+    assert_eq!(consumed, manifest_source);
+}
+
+#[test]
+fn keeps_selected_target_loaders_isolated() {
+    let dart = valid_dart_project();
+    assert!(load_config_with_paths(&dart.path).is_err());
+    assert!(load_kotlin_config_with_paths(&dart.path).is_err());
+
+    let python = valid_project();
+    assert!(load_dart_config_with_paths(&python.path).is_err());
+
+    let kotlin = valid_kotlin_project();
+    assert!(load_dart_config_with_paths(&kotlin.path).is_err());
+}
+
+#[test]
+fn rejects_unsafe_dart_metadata_inputs() {
+    let temp = valid_dart_project();
+    let pubspec = temp.path.join("dart-package/pubspec.yaml");
+    let lockfile = temp.path.join("dart-package/pubspec.lock");
+    #[cfg(unix)]
+    {
+        let manifest_copy = temp.path.join("cott-copy.toml");
+        fs::hard_link(temp.path.join("cott.toml"), &manifest_copy).expect("manifest hard link");
+        assert!(load_dart_config_with_paths(&temp.path).is_err());
+        fs::remove_file(manifest_copy).expect("remove manifest hard link");
+    }
+
+    fs::remove_file(&lockfile).expect("remove Dart lockfile");
+    fs::create_dir(&lockfile).expect("replace lockfile with directory");
+    assert!(load_dart_config_with_paths(&temp.path).is_err());
+    fs::remove_dir(&lockfile).expect("remove lockfile directory");
+    fs::write(&lockfile, "packages: {}\n").expect("restore Dart lockfile");
+
+    fs::remove_file(&pubspec).expect("remove Dart pubspec");
+    if symlink_file(&pubspec, &lockfile).is_ok() {
+        assert!(load_dart_config_with_paths(&temp.path).is_err());
+        fs::remove_file(&pubspec).expect("remove pubspec symlink");
+    }
+    fs::write(&pubspec, "name: demo_app\nversion: 0.1.0\n").expect("restore Dart pubspec");
+
+    #[cfg(unix)]
+    {
+        fs::hard_link(&pubspec, temp.path.join("dart-package/pubspec-copy.yaml"))
+            .expect("Dart pubspec hard link");
+        assert!(load_dart_config_with_paths(&temp.path).is_err());
+    }
+}
+
+#[test]
+fn rejects_unsafe_dart_and_contract_source_entries() {
+    let temp = valid_dart_project();
+    fs::create_dir_all(temp.path.join("src/demo")).expect("Cott source directory");
+    fs::write(temp.path.join("src/demo/api.cott"), "module demo.api\n").expect("Cott source");
+    fs::write(temp.path.join("dart-src/safe.dart"), "int _safe() => 1;\n").expect("Dart source");
+    let (_, paths, _) =
+        load_dart_config_with_paths(&temp.path).expect("Dart-only manifest should load");
+
+    fs::write(temp.path.join("dart-src/bad.dart"), [0xff]).expect("invalid Dart source");
+    assert!(discover_dart_sources(&paths.dart_source_dir).is_err());
+    fs::remove_file(temp.path.join("dart-src/bad.dart")).expect("remove invalid Dart source");
+
+    if symlink_file(
+        &temp.path.join("dart-src/linked.dart"),
+        &temp.path.join("dart-src/safe.dart"),
+    )
+    .is_ok()
+    {
+        assert!(discover_dart_sources(&paths.dart_source_dir).is_err());
+        fs::remove_file(temp.path.join("dart-src/linked.dart")).expect("remove Dart symlink");
+    }
+    if symlink_file(
+        &temp.path.join("src/demo/linked.cott"),
+        &temp.path.join("src/demo/api.cott"),
+    )
+    .is_ok()
+    {
+        assert!(discover_dart_contract_sources(&paths).is_err());
+        fs::remove_file(temp.path.join("src/demo/linked.cott")).expect("remove Cott symlink");
+    }
+
+    #[cfg(unix)]
+    {
+        fs::hard_link(
+            temp.path.join("dart-src/safe.dart"),
+            temp.path.join("dart-src/hard-linked.dart"),
+        )
+        .expect("Dart source hard link");
+        assert!(discover_dart_sources(&paths.dart_source_dir).is_err());
+        fs::remove_file(temp.path.join("dart-src/hard-linked.dart"))
+            .expect("remove Dart hard link");
+
+        fs::hard_link(
+            temp.path.join("src/demo/api.cott"),
+            temp.path.join("src/demo/hard-linked.cott"),
+        )
+        .expect("Cott source hard link");
+        assert!(discover_dart_contract_sources(&paths).is_err());
+        fs::remove_file(temp.path.join("src/demo/hard-linked.cott"))
+            .expect("remove Cott hard link");
+
+        let dart_fifo = temp.path.join("dart-src/pipe.dart");
+        let dart_fifo = CString::new(dart_fifo.as_os_str().as_bytes())
+            .expect("temporary FIFO path should not contain NUL");
+        assert_eq!(unsafe { libc::mkfifo(dart_fifo.as_ptr(), 0o600) }, 0);
+        assert!(discover_dart_sources(&paths.dart_source_dir).is_err());
+        fs::remove_file(temp.path.join("dart-src/pipe.dart")).expect("remove Dart FIFO");
+
+        let cott_fifo = temp.path.join("src/demo/pipe.cott");
+        let cott_fifo = CString::new(cott_fifo.as_os_str().as_bytes())
+            .expect("temporary FIFO path should not contain NUL");
+        assert_eq!(unsafe { libc::mkfifo(cott_fifo.as_ptr(), 0o600) }, 0);
+        assert!(discover_dart_contract_sources(&paths).is_err());
     }
 }

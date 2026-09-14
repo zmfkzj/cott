@@ -1,0 +1,16 @@
+.cott/
+generated/
+
+flutter/.dart_tool/
+flutter/.flutter-plugins
+flutter/.flutter-plugins-dependencies
+flutter/.packages
+flutter/build/
+flutter/coverage/
+flutter/cott_module/
+flutter/android/.gradle/
+flutter/android/captures/
+flutter/android/local.properties
+
+.idea/
+*.iml

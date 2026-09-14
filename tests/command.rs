@@ -97,7 +97,7 @@ fn parses_generate_jobs() {
 }
 
 #[test]
-fn parses_closed_python_and_kotlin_targets() {
+fn parses_closed_backend_targets() {
     assert_eq!(
         parse(&["init", "demo"]),
         Command::Init {
@@ -152,6 +152,63 @@ fn parses_closed_python_and_kotlin_targets() {
             format: OutputFormat::Human,
         }
     );
+    assert_eq!(
+        parse(&[
+            "init",
+            "--target",
+            "dart",
+            "--format",
+            "json",
+            "dart_demo",
+            "--no-sync",
+        ]),
+        Command::Init {
+            path: PathBuf::from("dart_demo"),
+            target: TargetLanguage::Dart,
+            name: None,
+            no_sync: true,
+            format: OutputFormat::Json,
+        }
+    );
+    assert_eq!(
+        parse(&["emit", "dart", "--project", "dart_demo"]),
+        Command::Emit {
+            target: EmitTarget::Dart,
+            project: Some(PathBuf::from("dart_demo")),
+            format: OutputFormat::Human,
+        }
+    );
+    assert_eq!(
+        parse(&[
+            "generate",
+            "foo.bar.run",
+            "--target",
+            "dart",
+            "--agent",
+            "omp"
+        ]),
+        Command::Generate {
+            symbol: Some("foo.bar.run".to_owned()),
+            target: TargetLanguage::Dart,
+            agent: Some(AgentKind::Omp),
+            jobs: 1,
+            project: None,
+            format: OutputFormat::Human,
+        }
+    );
+}
+
+#[test]
+fn help_advertises_the_complete_closed_target_grammar() {
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cott"))
+        .arg("--help")
+        .output()
+        .expect("cott should print help");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(help.contains("--target python|kotlin|dart"));
+    assert!(help.contains("emit ir|python|kotlin|dart"));
 }
 
 #[test]
@@ -239,6 +296,53 @@ fn prompt_and_diff_target_selection_errors_remain_json() {
 }
 
 #[test]
+fn dart_prompt_and_diff_failures_remain_json() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "cott-command-dart-special-json-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("dart")).unwrap();
+    fs::write(
+        root.join("cott.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nsource = \"src\"\n\n[target.dart]\nsource = \"dart\"\ngenerated = \"generated/dart\"\nsdk = \"definitely-missing-dart-sdk\"\nruntime_validation = \"boundary\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/demo.cott"),
+        "module demo\n\nfn pending() -> Unit\n",
+    )
+    .unwrap();
+
+    let prompt = ProcessCommand::new(env!("CARGO_BIN_EXE_cott"))
+        .args(["prompt", "demo.missing", "--project"])
+        .arg(&root)
+        .args(["--format", "json"])
+        .output()
+        .expect("cott should report an unknown Dart prompt symbol");
+    let diff = ProcessCommand::new(env!("CARGO_BIN_EXE_cott"))
+        .args(["diff", "--project"])
+        .arg(&root)
+        .args(["--format", "json"])
+        .output()
+        .expect("cott should report a missing Dart diff snapshot");
+
+    for output in [prompt, diff] {
+        assert!(!output.status.success());
+        assert!(output.stderr.is_empty());
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("Dart failure should report JSON");
+        assert_eq!(report["schema_version"], 1);
+        assert_eq!(report["diagnostics"][0]["severity"], "error");
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn rejects_duplicate_or_invalid_options() {
     assert!(
         parse_command(&["verify", "--project", "a", "--project", "b"].map(OsString::from)).is_err()
@@ -247,7 +351,7 @@ fn rejects_duplicate_or_invalid_options() {
     assert!(parse_command(&["generate", "--target", "rust"].map(OsString::from)).is_err());
     assert_eq!(
         parse_command(&["generate", "--agent", "omp"].map(OsString::from)),
-        Err("`generate` requires `--target python|kotlin`")
+        Err("`generate` requires `--target python|kotlin|dart`")
     );
     for arguments in [
         &["init", "demo", "--target", "python", "--target", "kotlin"][..],
@@ -282,8 +386,10 @@ fn rejects_explicit_target_mismatch_before_backend_dispatch() {
     ));
     let kotlin = root.join("kotlin");
     let python = root.join("python");
+    let dart = root.join("dart");
     fs::create_dir_all(&kotlin).unwrap();
     fs::create_dir_all(&python).unwrap();
+    fs::create_dir_all(&dart).unwrap();
     fs::write(
         kotlin.join("cott.toml"),
         "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nsource = \"src\"\n\n[target.kotlin]\nsource = \"kotlin\"\ngenerated = \"generated/kotlin\"\nruntime_validation = \"boundary\"\n",
@@ -292,6 +398,11 @@ fn rejects_explicit_target_mismatch_before_backend_dispatch() {
     fs::write(
         python.join("cott.toml"),
         "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nsource = \"src\"\n\n[target.python]\nsource = \"python\"\ngenerated = \"generated/python\"\nstubs = \"generated/stubs\"\ninterpreter = \".venv/bin/python\"\ntype_checker = \".venv/bin/basedpyright\"\nruntime_validation = \"boundary\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dart.join("cott.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nsource = \"src\"\n\n[target.dart]\nsource = \"dart\"\ngenerated = \"generated/dart\"\nruntime_validation = \"boundary\"\n",
     )
     .unwrap();
 
@@ -311,6 +422,24 @@ fn rejects_explicit_target_mismatch_before_backend_dispatch() {
     assert!(
         String::from_utf8_lossy(&generate.stderr)
             .contains("requested target `python` does not match project target `kotlin`")
+    );
+
+    let dart_generate = ProcessCommand::new(env!("CARGO_BIN_EXE_cott"))
+        .args([
+            "generate",
+            "--target",
+            "python",
+            "--agent",
+            "omp",
+            "--project",
+        ])
+        .arg(&dart)
+        .output()
+        .expect("cott should reject the Dart target mismatch");
+    assert_eq!(dart_generate.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&dart_generate.stderr)
+            .contains("requested target `python` does not match project target `dart`")
     );
 
     let emit = ProcessCommand::new(env!("CARGO_BIN_EXE_cott"))
@@ -364,6 +493,87 @@ fn reports_kotlin_validation_failures_with_kotlin_diagnostics() {
             .as_str()
             .is_some_and(|message| message.contains("unresolved Kotlin implementations"))
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn dart_source_only_commands_do_not_require_an_sdk_or_provider() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "cott-command-dart-source-only-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("dart")).unwrap();
+    fs::write(
+        root.join("cott.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nsource = \"src\"\n\n[target.dart]\nsource = \"dart\"\ngenerated = \"generated/dart\"\nsdk = \"definitely-missing-dart-sdk\"\nruntime_validation = \"boundary\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/demo.cott"),
+        "module demo\n\nfn unresolved() -> Unit\n",
+    )
+    .unwrap();
+
+    for arguments in [
+        &["check", "--project"][..],
+        &["fmt", "--check", "--project"][..],
+        &["prompt", "demo.unresolved", "--project"][..],
+    ] {
+        let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cott"))
+            .args(arguments)
+            .arg(&root)
+            .output()
+            .expect("cott should run a Dart source-only command");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn reports_dart_validation_failures_with_dart_diagnostics() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "cott-command-dart-json-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("dart")).unwrap();
+    fs::write(
+        root.join("cott.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nsource = \"src\"\n\n[target.dart]\nsource = \"dart\"\ngenerated = \"generated/dart\"\nsdk = \"definitely-missing-dart-sdk\"\nruntime_validation = \"boundary\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/demo.cott"),
+        "module demo\n\nfn unresolved() -> Unit\n",
+    )
+    .unwrap();
+
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cott"))
+        .args(["verify", "--project"])
+        .arg(&root)
+        .args(["--format", "json"])
+        .output()
+        .expect("cott should report Dart verification failure");
+    assert_eq!(output.status.code(), Some(4));
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("Dart diagnostics should be JSON");
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["diagnostics"][0]["code"], "COTT-D201");
     fs::remove_dir_all(root).unwrap();
 }
 

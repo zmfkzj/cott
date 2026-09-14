@@ -2,7 +2,7 @@
 
 `cott`는 typed intent와 prompt를 작성하는 language-like 컴파일러다. 실행 본문이 없는 `.cott`
 module은 공개 type, function, contract, effect, scenario, error를 선언한다. 그 선언이 작성된
-intent이며, Python과 Kotlin/JVM은 검증된 projection이지 두 번째 계약 원본이 아니다. runtime
+intent이며, Python·Kotlin/JVM·Dart는 검증된 projection이지 두 번째 계약 원본이 아니다. runtime
 code는 generated public facade를 사용하며 authored `.cott`를 live로 읽지 않는다.
 
 Cott는 그 선언을 고정하고, scoped generation prompt를 렌더하며, intent fingerprint를 기록하고,
@@ -17,6 +17,8 @@ schema `1`로 그대로 유지된다. Kotlin은 같은 package와 Canonical IR�
 generation schema `1`, domain `cott.kotlin.generation.v1`, runtime ABI `1`을 사용하며
 Python-only field에 Kotlin truth를 저장하지 않는다. reader와 runtime은 다른 backend의 record와
 identity를 거부한다.
+Dart는 별도의 generation schema `1`, domain `cott.dart.generation.v1`, runtime ABI `1`을
+사용한다. 생성된 Dart package를 Flutter가 직접 소비하며 Kotlin bridge는 필요 없다.
 
 이 문서와 repository source가 다르면 source file과 closed schema validator가 authority다.
 Contradictory compatibility path를 만들지 말고 문서를 implementation에 맞게 고친다.
@@ -110,8 +112,8 @@ cott verify --project "$project"
 
 ### Kotlin/JVM module workflow
 
-Manifest는 `[target.python]` 또는 `[target.kotlin]` 중 정확히 하나만 선택하며 둘을 함께 둘 수
-없다. Kotlin table은 닫혀 있다. `source`, `generated`, `runtime_validation`은 필수이고
+Manifest는 `[target.python]`, `[target.kotlin]`, `[target.dart]` 중 정확히 하나만 선택한다.
+Kotlin table은 닫혀 있다. `source`, `generated`, `runtime_validation`은 필수이고
 `compiler = "kotlinc"`, `java = "java"`, `jvm_target = 17`은 해당 default다. JVM 17만
 허용한다. `classpath`는 runtime JAR, `compile_only`는 Android SDK `android.jar` 같은
 compile-time JAR 목록이다. 두 목록 모두 hash된 compiler input이지만 배포에는 `classpath`만
@@ -176,6 +178,91 @@ callable과 소유권이 확인된 intent-stale agent source는 unresolved로 �
 Public consumer는 generated Cott module package만 import하며 `cott_bindings`나 `cott_impl`을 import하지
 않는다.
 
+### Dart module과 Flutter workflow
+
+Dart SDK는 `>=3.13.3,<4.0.0`이고 `project.name`은 lowercase snake_case Dart package name이다.
+Cott는 module을 소유하며 Flutter는 widget, plugin, application resource와 platform build를
+소유한다. `cott init --target dart`는 Dart Cott module만 만들며 Flutter app을 scaffold하지 않는다.
+
+```toml
+[project]
+name = "flutter_counter"
+version = "0.1.0"
+source = "src"
+
+[target.dart]
+source = "dart"
+generated = "generated/dart"
+sdk = "dart"
+runtime_validation = "boundary"
+
+[target.dart.implementations]
+"example.counter.increment" = "cott_bindings/counter/increment.dart:_increment"
+```
+
+```bash
+cott init path/to/module --target dart --name example_module
+# init은 빈 module을 만든다. 먼저 src/example_module/main.cott에 callable을 선언한다.
+# 예: fn main() -> Unit
+cott check --project path/to/module
+cott emit dart --project path/to/module
+cott prompt example_module.main.main --project path/to/module
+cott generate --agent omp --target dart --project path/to/module
+cott verify --project path/to/module
+cott diff --project path/to/module
+cott deploy --project path/to/module --output dist/example_module
+```
+
+`emit dart`와 `generate --target dart`는 항상 unverified snapshot을 publish한다. 오직 `verify`가
+실제 Dart analyzer, kernel compiler와 인증된 bounded runner를 실행하고
+`current == last_verified`를 인증한다. 작성된 private implementation은 compiler-owned Dart
+part가 된다. Public caller는 implementation file 대신
+`package:<name>/modules/<module path>.dart`를 import한다. Stateful method와 private state는
+같은 owner-private library에 두어 guard 내부를 공개하지 않는다.
+
+Runtime은 I64/U64를 `BigInt`로 보존하고 fixed-width 범위, F32 rounding, Unicode, immutable
+value와 protocol lifecycle을 검사한다. Dart type만으로 구별할 수 없는 Cott generic 관계는
+명시적인 `CottType<T>` witness와 checked view로 검사하며 Dart covariance를 그대로 신뢰하지
+않는다. Const generic은 `CottConst` witness를 쓴다. Cancellation은 cooperative이고 guard
+ownership은 명시적이다. 임의의 `Future`를 강제로 중단했다고 주장하지 않는다.
+
+Verify host에는 Linux bubblewrap과 Landlock ABI `>=3`이 필요하다. Dart VM thread 생성 전에
+filesystem policy를 적용해 process memory 접근을 거부하면서 VM의 `/proc/self/maps`와
+허용된 scratch I/O는 유지한다. Runner event는 stdin으로만 받은 일회성 key로 HMAC-SHA256
+인증하며 candidate stdout으로 snapshot을 인증할 수 없다.
+
+외부 의존성이 있으면 `target.dart.pubspec`과 `target.dart.lockfile`을 함께 지정한다.
+예: implementation source와 분리된 `dart_package/pubspec.yaml`, `dart_package/pubspec.lock`.
+Name/version은 Cott project와 같아야 한다. Verify는 offline으로 정확한 production closure를
+사용하고 override나 새 solver 선택을 허용하지 않는다. Hosted package는 원본 archive도
+`$PUB_CACHE/hosted-archives/<registry-cache-key>/<name>-<version>.tar.gz`에 필요하다.
+Registry의 `archive_url`에서 명시적으로 준비한 archive의 SHA-256을 lock과 대조하고,
+그 내용과 extracted cache bytes를 비교한다. 수정 가능한 pub cache와 hash sidecar만으로는
+인증하지 않는다. Archive가 없으면 필요한 경로를 진단하며 verify가 몰래 다운로드하지 않는다.
+
+실행 가능한 Flutter consumer는 `examples/integrations/flutter-counter`다.
+
+```bash
+cd examples/integrations/flutter-counter
+COTT_BIN=/absolute/path/to/cott FLUTTER_BIN=/absolute/path/to/flutter dart tool/setup.dart
+cd flutter
+flutter analyze --no-pub
+flutter build web --release --no-pub --no-web-resources-cdn
+flutter build apk --debug --no-pub
+```
+
+Setup은 module을 emit·verify한 뒤 `flutter/cott_module`에 deploy하고 Flutter의 `pub get`을
+실행한다. 기존 deployment는 덮어쓰지 않는다. App은 path dependency를 통해
+`package:flutter_counter/modules/example/counter.dart`만 import한다. Dart 배포에는 `lib/`,
+compiler-owned `pubspec.yaml`, 원본 `generation.json`, `dependencies.json`과 검증된 runtime
+vendor package가 들어간다. Kernel 검증 산출물, 계약, authoring copy, SDK, runner support와 cache는
+제외하며 Flutter가 이 portable source를 선택한 platform용으로 compile한다.
+Flutter `3.47.4`와 bundled Dart `3.13.3`의 analyzer, release web build, debug Android APK build가
+통과했다. Browser에서 `0 → 1 → 0` 및 `0..100` 양쪽 경계를 확인했고 Cott module의 여섯 clause
+모두 observed로 기록되었다. APK build 성공을 device 실행 증거로 간주하지 않는다.
+
+### Prompt 검사와 snapshot lifecycle
+
 프롬프트는 해당 함수의 프로젝트와 fully qualified name으로 확인한다. 예를 들면:
 
 ```bash
@@ -188,7 +275,7 @@ prompt를 검사한다. provider 또는 target compiler/checker를 호출하지 
 recover하지 않는다. human mode는 prompt bytes를 쓰고 JSON은
 `{symbol,intent_hash,prompt_hash,generation_required,context,prompt}`다. `prompt`는 그 초기
 bytes와 같고 `prompt_hash`는 초기 prompt만 hash한다. retry는 실제 validation feedback을 뒤에
-붙인다. 요청 write path는 Python의 `implementation.py` 또는 Kotlin의 `implementation.kt`다.
+붙인다. 요청 write path는 Python의 `implementation.py`, Kotlin의 `implementation.kt`, Dart의 `implementation.dart`다.
 inspection은 project lock과 lock metadata를 허용하며 pending journal은 recovery 없이 거부한다.
 `context`는 scoped transitive declaration 집합이다. explicit identifier 참조, `constant_ref`,
 `cott.applied_rule`과 그 base, 관련 incoming scenario, 전역 rule prose와 선택 callable의
@@ -299,10 +386,11 @@ assembly, signing, installation과 device lifecycle을 소유한다. Cott는 And
 
 ## 축소된 예제 index
 
-유지되는 inventory는 Python project 26개와 Kotlin/Android project 1개다. grammar lesson 6개,
-simple lesson 3개, complex curriculum project 1개, 별도 `process-bar` full-generation fixture,
-focused feature 7개, modular project 1개, FastAPI integration 1개, real-world generation-first
-project 6개와 Android counter module/consumer integration으로 구성된다.
+작성된 inventory는 Python project 26개, Kotlin project 20개, Dart/Flutter project 1개다.
+Python set은 grammar 6개, simple 3개, complex curriculum 1개, 별도 `process-bar` fixture,
+feature 7개, modular 1개, FastAPI integration 1개, real-world 6개다. `examples/kotlin/`의
+19개 Kotlin lesson/fixture와 `integrations/android-counter`가 Kotlin set을 구성하며,
+`integrations/flutter-counter`가 Dart module과 standard Flutter consumer다.
 
 ### Grammar — 6
 

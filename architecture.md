@@ -8,21 +8,25 @@
 
 ## 1.0 릴리스 호환성
 
-이 문서는 구현된 v1.0 언어와 Python 및 Kotlin/JVM backend를 규정한다. package version은
+이 문서는 구현된 v1.0 언어와 Python, Kotlin/JVM, Dart backend를 규정한다. package version은
 `1.0.0`이다. Python은 CPython `>=3.14.6,<3.15`, BasedPyright `>=1.39.9`, uv
 `>=0.12.3`를 사용한다. Kotlin은 kotlinc-jvm `>=2.2.10`, JDK `>=17`, 고정 JVM target
 `17`, compiler distribution과 일치하는 Kotlin stdlib 및
 `kotlinx-coroutines-core-jvm` `1.8.0`을 사용한다. Codex CLI `>=0.147.0`, Claude Code CLI
 `>=2.1.89`, OMP `>=17.2.12`를 지원한다. 각 실제 tool/runtime dependency의 full version과
 content hash는 target provenance에 기록한다.
+Dart target은 SDK `>=3.13.3,<4.0.0`을 사용하고 portable package를 Flutter가 직접 소비한다.
+Dart runtime 검증 host에는 Linux bubblewrap과 Landlock ABI `>=3`이 필요하다.
 
-Canonical IR schema는 두 backend 모두 **v8**이고 diagnostics schema는 **v1**이다. Python의
+Canonical IR schema는 세 backend 모두 **v8**이고 diagnostics schema는 **v1**이다. Python의
 닫힌 compatibility identity는 generation schema/domain **v7**/`cott.generation.v7`, runtime
 ABI **7**, contract-test strategy schema **v5**로 그대로 유지한다. Kotlin은 별도의 닫힌
 generation schema **v1**, domain `cott.kotlin.generation.v1`, runtime ABI **1**을 사용하며
 Python의 `public_python_symbols`·`python_symbol` 같은 field를 재사용하지 않는다. 각 reader와
 runtime은 다른 backend 또는 다른 version의 record를 거부한다. `[project].version`은 compiler
 version이 아니라 공개 API version이고 예제 project는 `0.1.0`을 유지한다.
+Dart는 독립 generation schema **v1**, domain `cott.dart.generation.v1`, runtime ABI **1**을
+사용하며 Python/Kotlin record나 target-specific field를 재사용하지 않는다.
 
 구현된 v0.8 `.cott` source는 v1.0에서도 의미를 바꾸지 않고 유효하다. source compatibility는
 serialized artifact compatibility가 아니다. 생성 target의 public ABI는 facade signature,
@@ -51,7 +55,7 @@ cott의 역할은 다음 세 가지로 제한한다.
 2. 구현이 지켜야 할 계약과 typed intent를 선언한다.
 3. scoped prompt를 렌더하고, 생성되거나 binding된 코드가 선언된 계약과 일치하는지 검증한다.
 
-각 project manifest는 Python 또는 Kotlin 중 정확히 하나를 선택하고 `cott init`의 default는
+각 project manifest는 Python, Kotlin, Dart 중 정확히 하나를 선택하고 `cott init`의 default는
 Python이다. Cott의 우선순위는 선언을 고정하고, scoped generation prompt와 intent fingerprint를
 렌더·기록하며, 그 선언을 선택 target ABI로 결정적으로 투영하고, 구현 conformance·artifact
 identity·실제로 확보한 evidence만 검사·기록하는 것이다. 선언은 intent의 완전한 형식화가 아니고,
@@ -75,7 +79,7 @@ identity·실제로 확보한 evidence만 검사·기록하는 것이다. 선언
     ↓
 intent fingerprint와 scoped target prompt 렌더
     ↓
-선택한 Python 또는 Kotlin target projection과 기존 구현 binding 해석
+선택한 Python, Kotlin 또는 Dart target projection과 기존 구현 binding 해석
     ↓
 미구현 callable이 있으면 사용자가 지정한 agent 호출
     ↓
@@ -154,9 +158,9 @@ def process_bar(data: InputPayload, threshold: float) -> OutputPayload:
 
 `.cott` 파일이 프로그램의 공개 구조와 계약의 원본이다.
 
-Python 또는 Kotlin 구현은 agent가 생성하거나 existing project function에 명시적으로 binding할
-수 있다. 선언된 external type은 semantic Cott identity이고 선택 backend가
-`[target.python.external_types]` 또는 `[target.kotlin.external_types]` projection으로 해석한다.
+Python, Kotlin, Dart 구현은 agent가 생성하거나 existing project function에 명시적으로 binding할
+수 있다. 선언된 external type은 semantic Cott identity이고 선택 backend의
+`target.<language>.external_types` projection으로 해석한다.
 API 계약이 다를 때만 project-local typed adapter가 이를 맞춘다. test code, 문서와 agent 구현
 지시는 모두 Cott 선언과 Canonical IR에서 파생된다.
 
@@ -252,8 +256,8 @@ v1.0에서도 다음 기능은 구현하지 않는다.
 * `.cott` execution body, parameter default, generic overload
 * Cott 밖 target call graph/effect inference, mutable Cott container state, arbitrary `old()`
 * automatic refactoring/adapter/exception conversion
-* 한 project에서 Python과 Kotlin을 동시에 선택하는 manifest, Python/Kotlin 외 추가 backend의
-  부분 구현, Cott-owned Android app/UI/Manifest/resource/APK/AAB/signing lifecycle, full IDE
+* 한 project에서 여러 target을 동시에 선택하는 manifest, 지원하지 않는 partial backend,
+  Cott-owned Android/Flutter app·UI·Manifest·resource·APK/AAB·signing lifecycle, full IDE
   plugin, multi-project Python environment, external struct/enum direct binding
 * dependency resolver/package manager, live reader transaction snapshot isolation, installed wheel whole-origin verification
 * SMT 또는 무제한 정리 증명
@@ -800,13 +804,14 @@ target and selected slot must match callable kind exactly. async callable return
 `Iterator`, `Generator` or `Never`; `AsyncIterator[T]` and `AsyncGenerator[Y, S]` model an explicit
 async lifecycle protocol instead of a native async-generator implementation function. Canonical IR,
 provenance, facade, binding signature and contract runner preserve `sync`/`async` callable kind.
-Python facade는 implementation coroutine을 직접 await하고 Kotlin facade는 exact `suspend`
-callable을 사용한다. sync compatibility wrapper, thread bridge 또는 nested event loop는 없다. kind
-change는 breaking이다.
+Python facade는 implementation coroutine을 직접 await하고 Kotlin은 exact `suspend`, Dart는
+`Future<T>` callable을 사용한다. Dart cancellation은 명시적 cooperative scope이며 임의 Future
+preemption을 주장하지 않는다. Sync compatibility wrapper, thread bridge, nested event loop는
+없고 callable kind 변경은 breaking이다.
 
 함수 오버로딩과 parameter default는 금지한다. 호출 option은 default field가 있는 struct로
-묶는다. Python parameter는 positional-or-keyword로, Kotlin parameter는 named Kotlin signature로
-emit한다. 같은 module 안에서 function 이름은 유일하다.
+묶는다. Python parameter는 positional-or-keyword로, Kotlin은 Kotlin signature로, Dart는
+target-private helper와 public Dart signature로 emit한다. Module 내 function 이름은 유일하다.
 
 ---
 
@@ -1326,7 +1331,7 @@ normative schema는 repository의 `schemas/canonical-ir.schema.json` (v8), `sche
 
 IR은 다음 목적으로 사용한다.
 
-* Python facade·`.pyi`와 Kotlin facade/runtime source 생성
+* Python facade·`.pyi`, Kotlin facade/runtime, Dart package facade/runtime source 생성
 * target별 agent prompt 생성
 * 문서와 deterministic test strategy 생성
 * semantic contract·public target API 변경점 비교
@@ -1341,9 +1346,9 @@ IR은 다음 목적으로 사용한다.
 항상 canonical `constant_ref` node와 symbol identity를 보존하며 Canonical IR이나
 `contract_surface`에서 값으로 inline하지 않는다. intent selector는 `constant_ref`와 nested
 `kind: constant`를 같은 종속성 닫힘에 포함한다. target 최적화는 이 단계 뒤에만 값을 inline할 수
-있다. Python `public_python_symbols(IR)`과 Kotlin `public_symbols`는 각각 전체 공개 declaration의
-결정적 target symbol 집합을 기록하고 compiler-synthesized support name은 제외한다. Kotlin record가
-Python-named projection field를 재사용하지 않는다.
+있다. Python `public_python_symbols(IR)`과 Kotlin/Dart `public_symbols`는 전체 공개 declaration의
+결정적 target symbol 집합을 기록하며 compiler-synthesized support name은 제외한다.
+Target record 간에 다른 backend의 projection field를 재사용하지 않는다.
 
 기존 구현의 import 경로는 대상 언어에 종속되므로 Canonical IR에 포함하지 않는다. 대상 emitter와 verifier가 manifest binding을 IR과 함께 해석한다.
 
@@ -1761,7 +1766,7 @@ verify는 모든 evidence를 먼저 finalize하고 `current.verified=true`, clos
 
 ### 16.10 유지 example generation-first policy
 
-유지 inventory는 Python project 26개와 Kotlin/Android project 1개다. Python set은 grammar
+작성된 inventory는 Python project 26개, Kotlin project 20개, Dart/Flutter project 1개다. Python set은 grammar
 6개(`checked-add`, `assignment-rule`, `cta-row`, `fractional-range-values`, `portfolio-cost`,
 `stock-record`), simple 3개(`alphabetical-file-groups`, `calculator`, `decimal-binary`), 순수
 complex curriculum `artifact-pipeline`, 별도 full-generation fixture `process-bar`, focused
@@ -1769,8 +1774,9 @@ feature 7개(`declarations-generics`, `contracts-evidence`, `boundary-protocols`
 `json-transform`, `effects-selection`, `workflow-scenario`), multi-module `order-management`,
 FastAPI external projection `fastapi-hello`, real-world generation-first 6개(`real/yt-dlp`,
 `real/harlequin`, `real/pgcli`, `real/posting`, `real/toolong`, `real/frogmouth`)다.
-`integrations/android-counter`는 Kotlin/JVM Cott module과 standard Android consumer로 구성된
-별도 project다. `process-bar`는 curriculum count에 넣지 않는다.
+`examples/kotlin/`에는 19개 Kotlin lesson/fixture가 있고 `integrations/android-counter`는
+Kotlin/JVM module과 standard Android consumer다. `integrations/flutter-counter`는 Dart module과
+standard Flutter consumer다. `process-bar`는 curriculum count에 넣지 않는다.
 
 유지되는 curriculum module의 source order는 type 선언, 작은 domain leaf function, 더 큰 composition function, domain-named final operation 순서다. 의미 있는 경계만 stage로 공개한다. grammar lesson은 의도적으로 leaf 하나일 수 있고 simple·complex lesson도 domain responsibility가 독립적인 경우에만 stage를 추가한다. `artifact-pipeline`은 순수 topological artifact-plan composition이고, `process-bar`는 `foo.bar` 전체의 unresolved-to-agent-generation 전환을 집중적으로 보이는 fixture다.
 
@@ -1780,8 +1786,8 @@ real project는 각자 독립 generation-first example이며 project API version
 
 `checked-add`는 manifest binding syntax를 집중적으로 가르치는 lesson이다. 구현 선택은 항상 각 project의 `[target.python.implementations]`과 generation record가 정한다. Binding은 compatible project-local implementation을 선택할 뿐 Cott contract를 정의하지 않으며, example마다 binding 또는 agent implementation을 임의로 일반화해서는 안 된다. checkout에 commit된 `generated/`는 compiler-owned result이고, agent-owned free-function `python/_cott_impl/<cott module>/<function>.py` 및 impl-method `python/_cott_impl/<cott module>/<Concrete>/<method>.py`는 matching `agent_runs` provenance가 있는 실제 `cott generate --agent <agent> --target python` 성공 결과다. `.venv/`, `.cott/`, `__pycache__/`는 transient이며 managed artifact나 evidence가 아니다.
 
-`cott emit python`은 Python, `cott emit kotlin`은 Kotlin compiler-owned output과 unresolved
-metadata만 materialize하며 agent나 target compiler를 호출하지 않는다. `cott generate`는 선택
+`cott emit python|kotlin|dart`는 선택 target의 compiler-owned output과 unresolved metadata만
+materialize하며 agent나 target compiler를 호출하지 않는다. `cott generate`는 선택
 target의 eligible unresolved callable에만 durable source를 생성한다. 필요한 implementation
 selection과 managed artifact가 모두 일치해야 explicit `cott verify`가 certify한다. 유지되는
 Python example은 generic `run` function, forwarding alias, direct
@@ -1800,8 +1806,8 @@ unresolved callable만 재개한다. 성공한 generate도 certification이 아�
 
 ### 16A.1 닫힌 manifest와 source ownership
 
-한 manifest는 `[target.python]` 또는 `[target.kotlin]` 중 정확히 하나만 가진다. 둘 다 없거나
-둘 다 있으면 configuration error이고 target mismatch는 provider나 compiler 실행 전에 거부한다.
+한 manifest는 `[target.python]`, `[target.kotlin]`, `[target.dart]` 중 정확히 하나만 가진다.
+선택이 없거나 복수이면 configuration error이고 target mismatch는 tool 실행 전에 거부한다.
 Kotlin table의 실제 field는 다음과 같다.
 
 ```toml
@@ -1994,6 +2000,155 @@ Cott가 소유하는 범위는 Cott module compile/verify/deploy다. Standard Gr
 `AndroidManifest.xml`, resource, application dependency graph, DEX, APK/AAB assembly, signing,
 installation과 device lifecycle을 소유한다. Android device에서 Python을 실행하는 경로는 없다.
 
+## 16B. Dart package와 Flutter consumer
+
+### 16B.1 닫힌 target과 라이브러리 경계
+
+Dart는 package `1.0.0`, Canonical IR `8`, generation schema `1`, domain
+`cott.dart.generation.v1`, runtime ABI `1`을 사용한다. `DartGenerationRecord`는 별도의 closed
+validator를 통과하며 Python/Kotlin record를 baseline이나 runtime identity로 받지 않는다.
+
+```toml
+[project]
+name = "flutter_counter"
+version = "0.1.0"
+source = "src"
+
+[target.dart]
+source = "dart"
+generated = "generated/dart"
+sdk = "dart"
+runtime_validation = "boundary"
+# 의존성이 있는 module만 함께 지정한다.
+# pubspec = "dart_package/pubspec.yaml"
+# lockfile = "dart_package/pubspec.lock"
+
+[target.dart.implementations]
+"example.counter.increment" = "cott_bindings/counter/increment.dart:_increment"
+
+[target.dart.external_types]
+"example.counter.Moment" = "dart:core#DateTime"
+```
+
+Project name은 Dart package의 lowercase snake_case identifier다. `source`, `generated`,
+`runtime_validation`은 필수이고 `sdk` default는 `dart`다. Output은 `<artifact-root>/dart`다.
+Optional pubspec/lockfile은 함께 지정하는 normalized project-relative metadata이며
+implementation source, output, rule 및 reserved cache 경계와 충돌할 수 없다.
+
+Manifest binding은 `<target.dart.source>/<relative.dart>:<private function>`을 선택한다.
+Agent는 `cott_impl/<module>/<function>.dart`에 exact prompt signature를 작성하며 method는
+concrete owner path를 포함한다. Top-level private function과 허용된 typed private helper만
+작성하고 library/part/export directive나 public replacement facade는 작성하지 않는다.
+Tree-sitter AST가 signature, import prefix, callable reference, helper reachability, explicit
+witness, owner/path/hash/intent를 검사한다. Compiler-private identifier는 `_cott_` namespace이며
+exact canonical function/witness 외 접근, computed receiver를 통한 control 접근도 거부한다.
+
+작성된 source에서 import와 body를 AST 범위로 분리하고 compiler가 `part of`를 넣는다.
+Authored source hash와 managed part hash는 다르다. Public import는
+`package:<project>/modules/<module path>.dart`, ABI 값은 `package:<project>/cott_runtime.dart`다.
+Free wrapper는 callable별 library이며 stateful owner와 method wrapper/parts는 같은 private
+library에 둔다. 공개 setter/schema로 state나 seal을 우회할 수 없다.
+
+### 16B.2 정확한 Dart ABI
+
+I8/I16/I32/U8/U16/U32는 범위 검사한 Dart `int`, I64/U64는 `BigInt`다. Contract 정수 연산은
+수학적 BigInt 값으로 수행하여 native overflow와 web 53-bit 손실을 피한다. F32/F64는 finite
+`double`이며 F32는 binary32 rounding을 적용한다. String은 Unicode scalar를 검사한다.
+Unit, Option, Result, JsonValue, Path와 immutable container는 구별되는 Cott ABI 값이다.
+Runtime은 Dart standard library만 사용하며 Flutter 의존성을 갖지 않는다.
+
+Aliases, refined nominal newtype, struct/default/invariant, payload enum, trait/associated type,
+concrete impl/default/specialization, const witness, Factory/Dyn/Opaque와 protocol을 같은 IR에서
+투영한다. Dart generic reification만으로 Cott 정수폭·F32 구별이나 invariant/contravariant 관계를
+복구할 수 없으므로 필요한 API에는 명시적인 `CottType<T>` witness가 있다. Generic nominal은
+private carrier와 seal-bound typed view를 사용한다. Cott descriptor 관계를 검사한 뒤 새 typed
+view를 만들며 원래 Dart covariant carrier를 억지로 cast하지 않는다. Multiple bound도 모두
+검사한다. Const parameter는 `CottConst` witness를 사용한다.
+
+Recursive descriptor forwarding은 값 graph edge가 아니며 별도 cycle/depth guard로 해석한다.
+Value graph의 active cycle·depth·node 제한, shared DAG identity, immutable snapshot과 deep
+equality를 보존한다. Nonconstant struct defaults는 private omission marker와 runtime constructor
+검증으로 처리한다. Cott 함수 parameter default나 enum payload default 문법을 추가하지 않는다.
+
+Async callable은 `Future<T>`다. Iterator/Generator 및 async protocol은 typed callback source와
+명시적인 next/send/return/raise/close lifecycle을 사용하며 단순 Stream으로 정보를 버리지 않는다.
+CancellationSource/TaskScope는 cooperative token과 명시적 owned task만 관리한다. Guard와 mutation
+capability는 exact live lease를 요구하고 종료 시 revoke한다. Zone 상속으로 reentrant ownership을
+부여하지 않는다. 임의 Future가 preempted되었다는 evidence는 생성하지 않는다.
+
+### 16B.3 Frozen dependencies와 source identity
+
+Manifest, contract, Dart source, generator rules, pub metadata는 실제 소비한 bytes를 한 번 고정해
+hash한다. Initial prompt, retry, binding freshness와 publication은 같은 rule/dependency authority를
+사용한다. 재읽은 새 bytes로 오래된 구현을 fresh로 바꿀 수 없다. Missing authentic source는
+unresolved로 남고 current implementation/run identity만 제거한다. Moved, tampered, unrecorded
+source는 실패한다. 성공한 provider의 source-audited candidate도 target 검증 실패 후에는
+authenticated pending repair source로 남을 수 있지만 resolved/certified로 자동 승격하지 않는다.
+
+Stdlib-only module에는 authored pub metadata가 필요 없다. 의존성이 있으면 pubspec name/version은
+Cott project와 일치해야 하고 root/transitive declaration의 source kind, registry/name 또는
+declaring-package-relative path와 전체 Dart/pub version constraint를 lock과 비교한다.
+Prerelease/build 정보를 버리는 근사 비교, dependency override, project 밖 path는 허용하지 않는다.
+허용 package import 집합은 frozen production/transitive closure에서만 오며 dev-only·미선택
+package나 external type projection 자체는 import authority가 아니다.
+
+Hosted package는 원본 locked archive를
+`PUB_CACHE/hosted-archives/<registry-cache-key>/<name>-<version>.tar.gz`에 명시적으로 준비한다.
+Cott는 compressed archive SHA256을 lock과 대조하고 size/member/expansion 한도 안에서
+link/traversal/duplicate/special-file을 거부하며 archive tree와 extracted cache를 비교한다.
+수정 가능한 hosted-hashes sidecar만으로 처음 본 tree를 신뢰하지 않는다. Archive가 없으면 필요한
+경로와 locked identity를 진단하고 verify는 다운로드하지 않는다. Project-local path package도
+해석한 정확한 tree를 snapshot에 포함한다. 원래 archive/tree는 private frozen material이며
+portable record에 absolute cache path를 넣지 않는다.
+
+Dependency record는 `{schema_version:1,pubspec_hash,lockfile_hash,packages}`다. 각 package에는
+`name,version,source,source_identity,content_hash,dependencies,runtime`만 있고 이름/edge는 sorted,
+unique, closed다. Hosted source_identity는 HTTPS registry와 locked archive SHA256, path는
+normalized project-relative origin이다. Compiler-owned pubspec은 exact runtime vendor paths를
+사용하고 `publish_to: none`이다. Flutter solver가 다른 transitive 코드를 몰래 선택하지 않는다.
+
+### 16B.4 실제 검증과 process-memory 경계
+
+`verify`는 SDK `>=3.13.3,<4.0.0` identity와 expected source/managed bytes를 검사하고 기존 sandbox
+안에서 offline enforced pub resolution, strict Dart analyzer, facade kernel과 bounded runner
+kernel compilation을 수행한다. Depfile로 실제 compiler input 경계를 확인한다. Native runner는
+public facade만 호출하며 structured candidates, constructor/method/protocol 및 finite
+filesystem·isolated-loopback HTTP scenario의 실제 결과를 기록한다. Genuine construction/budget/
+observation 부재만 unknown/unobserved다. Malformed schema, 내부 renderer error, 잘못 생성된 코드,
+실패한 clause를 unobserved로 바꾸지 않는다. Implicit safety guard를 없는 IR clause로 꾸미지 않는다.
+
+Runtime 실행은 bubblewrap 안의 single-threaded compiler launcher에서 Landlock ABI `>=3`을 먼저
+설치한 뒤 Dart VM을 exec한다. SDK/system/package는 read-only, scratch는 필요한 write만 허용하고
+VM stack bounds에 필요한 정확한 `/proc/self/maps` file만 procfs rule로 연다. Self/thread-self
+memory, environ, cmdline의 sync/async 접근은 거부된다. 후속 VM thread는 제한을 상속한다.
+Landlock은 기존 descriptor를 revoke하거나 anonymous pipe magic link 전부를 금지하는 기능이
+아니다. 따라서 source의 process/stdio/control 접근도 감사하고 key pipe는 candidate 전에 소진한다.
+지원되지 않는 kernel이나 policy 설치 실패에는 unsandboxed fallback이 없다.
+
+Fresh 32-byte key는 one-way stdin으로만 전달하고 trusted runner가 candidate 실행 전에 읽는다.
+HMAC-SHA256은 sequence의 big-endian u64와 exact UTF-8 JSON을 함께 인증한다. Host는 MAC,
+순서, closed event inventory와 final done을 검사한다. Key는 source, argv, environment,
+artifact나 stdout에 저장하지 않는다. Pinned crypto `3.0.7`의 필요한 원본 source와 LICENSE는
+compiler-only private support이며 사용자 package가 shadow하거나 deployment에 포함하지 않는다.
+
+Emit과 generate는 항상 unverified다. Explicit verify만 complete evidence/coverage와
+`current == last_verified`를 atomic publish한다. Selected coverage policy 실패는 인증 evidence를
+보존하며 exit `8`로 gate한다. No unresolved/drift와 passing policy가 deployment 조건이다.
+
+### 16B.5 Portable deployment와 Flutter
+
+Dart deployment는 새 directory의 `lib/`, compiler-owned `pubspec.yaml`, unchanged
+`generation.json`, `dependencies.json`, exact runtime `vendor/` closure다. Private part 경로를
+보존한다. `verification/cott-module.dill`은 native 검증용이지 portable Flutter library가 아니므로
+배포하지 않는다. 계약·원래 generated layout·authoring copy·runner·SDK·cache·추론한 app asset도
+제외한다. Flutter는 deployed directory를 path dependency로 가져와 자신의 platform용으로 compile한다.
+
+`examples/integrations/flutter-counter/tool/setup.dart`는 emit/verify/no-replace deploy 후 Flutter
+pub get을 실행한다. App은 public `example.counter` facade만 사용한다. Flutter `3.47.4`/
+Dart `3.13.3`의 browser에서 `0 → 1 → 0`와 `0..100` 경계를 확인했고 module의 여섯 clause는
+observed다. Android/web platform scaffold, UI, plugin, resource, DEX/APK/AAB, signing, 배포와
+device lifecycle은 Flutter/Gradle 영역이며 Cott는 Flutter app scaffolder가 아니다.
+
 ---
 
 ## 17. 에이전트 코드 생성 흐름
@@ -2017,9 +2172,9 @@ Cott body를 추가하거나 contract를 약화하거나 기존 target code를 s
 callable prompt는 AUTHORITY, CURRENT INTENT, FORMAL DECLARATIONS, PROJECT RULES, REFERENCE
 IMPLEMENTATIONS, target OUTPUT RULES, retry의 VALIDATION FEEDBACK을 분리한다. Formal declaration이
 sole semantic authority이고 다른 prose/source는 이를 override하지 않는다. Python write path는
-`implementation.py`, Kotlin write path는 `implementation.kt`다. Kotlin output rules는 exact
-package, `internal`/`suspend`, associated generic, const value witness와 public/private import
-boundary를 포함한다. 한 generate invocation의 모든 초기 prompt는 같은 frozen reference snapshot을
+`implementation.py`, Kotlin은 `implementation.kt`, Dart는 `implementation.dart`다. Output rules는
+각 target의 exact signature, generic/const witness와 public/private import boundary를 포함한다.
+한 generate invocation의 모든 초기 prompt는 같은 frozen reference snapshot을
 사용하고 accepted wave candidate는 validation에만 쓴다. `cott prompt` JSON은 target과 무관하게
 `{symbol, intent_hash, prompt_hash, generation_required, context, prompt}`다.
 
@@ -2096,7 +2251,7 @@ CLI argument parsing 뒤 compiler는 먼저 project root를 canonical directory 
 
 Content input과 transaction destination의 각 path component는 project root handle 기준 no-follow로
 연다. Symlink, `st_nlink != 1` regular file과 project root 밖 path는 hash 전에 거부한다. Manifest가
-지정한 Python interpreter/type checker, Kotlin compiler/Java launcher와 agent executable만
+지정한 Python interpreter/type checker, Kotlin compiler/Java launcher, Dart SDK 및 agent executable은
 canonical regular-file path로 symlink를 한 번 해소하는 예외다.
 
 `.cott`, 모든 transaction destination과 staging payload가 같은 filesystem이 아니거나 그 filesystem이 same-directory atomic rename, exclusive advisory lock, regular file·directory의 durable `fsync`를 제공하지 않으면 multi-file apply를 시작하지 않는다.
@@ -2117,8 +2272,8 @@ compiler payload의 regular file mode는 `0644`, directory mode는 `0755`로 고
 
 Transaction 시작 시 계약, manifest, referenced rule, selected target input/dependency, generated
 tree와 compiler-owned evidence tree의 file list/content hash를 기록한다. Project binding과 existing
-implementation도 포함한다. Python-specific agent path와 managed scope는 아래와 같고 Kotlin
-counterpart는 16A의 `<target.kotlin.source>/cott_impl` 및 Kotlin artifact scope를 따른다.
+implementation도 포함한다. Python-specific scope는 아래와 같고 Kotlin은 16A, Dart는 16B의
+durable source/private part/package scope를 따른다.
 
 staging에는 대상 계약, allowed direct helper 계약, binding, rule, 기존 구현과 compiler 생성물의 사본을 제공하고 실제 project path는 agent에게 노출하지 않는다. 각 agent process의 workspace write allowlist는 현재 callable file 하나로 제한한다.
 
@@ -2141,6 +2296,8 @@ target의 durable implementation change와 compiler-owned managed set 및 record
 반영한다. `cott fmt`의 actual source edit는 기존 current certification을 invalidate하고 history를
 보존한다. Python verify는 expected managed bytes를 비교하고 성공 record만 반영한다. Kotlin
 verify는 16A.3의 compiled JAR/runtime dependency와 성공 record를 함께 반영한다.
+Dart verify는 16B의 portable package/vendor identities, native kernel evidence와 성공 record를
+publish하며 deployment에서는 kernel과 runner를 제외한다.
 
 OS advisory lock은 Cott process끼리만 조정한다. 이를 따르지 않는 editor/package installer/build
 process는 command 실행 중 같은 project destination이나 dependency를 바꾸면 안 된다. Final hash
@@ -2225,9 +2382,10 @@ def process_bar(data, options):
 ### 18.1 프로젝트 초기화
 
 ```bash
-cott init <path> [--target python|kotlin] [--name <project-name>] [--no-sync] [--format json]
+cott init <path> [--target python|kotlin|dart] [--name <project-name>] [--no-sync] [--format json]
 cott init path/to/python-project
 cott init path/to/kotlin-module --target kotlin
+cott init path/to/dart-module --target dart --name dart_module
 ```
 
 `<path>`는 필수이며 absolute·relative path를 허용한다. 기존 parent를 canonicalize하고 그 안의
@@ -2278,16 +2436,17 @@ cott emit ir
 
 기존 target 산출물을 유지할 때는 current callable kind/intent와 일치하는
 implementation·AgentRun·source input hash만 보존한다. 신규, intent-changed 또는 pending 대상은
-unresolved다. 이 판정에 Python/Kotlin compiler나 checker를 실행하지 않는다.
+unresolved다. 이 판정에 Python/Kotlin/Dart compiler나 checker를 실행하지 않는다.
 
 ### 18.5 Target source 생성
 
 ```bash
 cott emit python
 cott emit kotlin
+cott emit dart
 ```
 
-Manifest가 선택한 target과 explicit emit target은 일치해야 한다. 두 명령은 agent나 target
+Manifest가 선택한 target과 explicit emit target은 일치해야 한다. 세 명령은 agent나 target
 compiler 없이 compiler-owned source를 staging에서 만들고 원자 갱신한다. 미구현 callable은
 facade에서 생략하고 `current.unresolved`에 기록하며 placeholder를 만들지 않는다. Authentic
 pending agent source는 소유권을 유지한다. 결과는 항상 `current.verified = false`이고
@@ -2296,18 +2455,19 @@ pending agent source는 소유권을 유지한다. 결과는 항상 `current.ver
 ### 18.6 구현 생성
 
 ```bash
-cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin [-j <jobs>] [--project <dir>] [--format json]
+cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]
 
 cott generate --agent claude --target python
 cott generate foo.bar.process_bar --agent omp --target python
 cott generate example.module.calculate --agent codex --target kotlin
+cott generate example.module.calculate --agent omp --target dart
 ```
 
 Explicit `--target`은 필수고 manifest의 exactly-one target과 일치해야 한다. Selection은 exact
 canonical free-function 또는 eligible impl-method FQN만 받고 glob/alias는 거부한다. 선택된
 unresolved callable이 있으면 `--agent`가 필수이고 허용 값은 `codex`, `claude`, `omp`다. Binding
-및 fresh accepted source는 재사용하고 stale/unresolved source만 target별 `implementation.py` 또는
-`implementation.kt` candidate로 생성한다. Source audit와 complete-candidate validation은 실제
+및 fresh accepted source는 재사용하고 stale/unresolved source만 target별 `implementation.py`,
+`implementation.kt`, `implementation.dart` candidate로 생성한다. Source audit와 complete-candidate validation은 실제
 target 규칙을 사용하고 failure checkpoint는 정확한 pending source provenance를 남긴다. 모든
 generate 결과는 `current.verified = false`; 배포 gate는 explicit full `cott verify`다.
 
@@ -2320,8 +2480,8 @@ cott prompt <fully.qualified.callable> [--project <dir>] [--format json]
 FQN은 generate와 같은 exact canonical callable symbol이다. Provider와 target compiler/checker를
 요구하지 않고 같은 초기 frozen snapshot의 prompt bytes를 렌더한다. JSON은
 `{symbol, intent_hash, prompt_hash, generation_required, context, prompt}`와 final newline이고
-`prompt_hash`는 retry feedback 전 initial bytes만 hash한다. Python write path는
-`implementation.py`, Kotlin write path는 `implementation.kt`다. Inspection은 lock metadata를
+`prompt_hash`는 retry feedback 전 initial bytes만 hash한다. Python/Kotlin/Dart write path는 각각
+`implementation.py`/`implementation.kt`/`implementation.dart`다. Inspection은 lock metadata를
 쓸 수 있지만 pending journal을 recovery/publication 없이 거부한다. Formal source가 authority이고
 project rule/reference source는 override하지 않는다.
 
@@ -2363,6 +2523,7 @@ kotlinc/JDK/stdlib/coroutine/classpath/compile-only identity를 확인한 뒤 sa
 `cott-module.jar`와 real public-facade runner를 compile/run한다. Kotlin도 unresolved와 drift를
 거부하며, complete evidence와 `semantic_coverage`를 가진 `current == last_verified` snapshot만
 `verified = true`로 publish한다.
+Dart verify는 16B.4의 offline package/analyzer/kernel/runner 및 pre-VM Landlock 경계를 사용한다.
 
 ### 18.7.1 실행용 배포
 
@@ -2445,10 +2606,10 @@ baseline/current `[project].version`은 restricted `x.y.z` API version이며 cur
 `cott diff`는 `generation_id` mismatch 자체를 change로 보지 않는다. 같은 target environment에서는
 해당 compiler/runtime/tool identity와 managed artifact hash를 비교한다. 다른 machine에서는
 machine-local identity를 제외하고 normalized contract/public target symbol, durable implementation
-content와 dependency identity를 비교한다. Python과 Kotlin record를 서로 baseline으로 읽지 않는다.
+content와 dependency identity를 비교한다. 다른 backend의 record를 서로 baseline으로 읽지 않는다.
 
 Generation result cache는 없다. Contract, manifest, rule, target input, exact Python
-interpreter/checker/lock 또는 Kotlin compiler/JDK/JAR identity, implementation
+interpreter/checker/lock, Kotlin compiler/JDK/JAR 또는 Dart SDK/locked-package identity, implementation
 source/runtime-origin/hash 중 하나라도 달라지면 새 target generation이다. `cott verify`도 항상
 선택 target의 모든 검사를 실행한다.
 
@@ -2747,6 +2908,8 @@ Python external import에는 기존 lock/dependency provenance가 필수다. 각
 `generation.json`은 `current`와 `last_verified`, implementation owner, target symbol,
 source/runtime origin, content hash와 managed set을 자신의 closed schema로 기록한다. Kotlin
 classpath/compile-only는 raw input hash와 canonical tool metadata에 함께 기록한다.
+Dart source/private parts와 frozen pub/archived dependency closure는 16B를 따른다. Ordinary Flutter
+app dependency resolution은 Flutter가 소유하며 Cott verification은 offline이다.
 
 Python uv lock의 frozen registry/install provenance 규칙은 그대로 유지한다. Kotlin compiler는
 dependency를 resolve/download하지 않고 manifest에 지정된 existing JAR만 검사한다. Agent
@@ -2855,8 +3018,8 @@ parse error가 있으면 file을 쓰지 않으며 `cott fmt --check`는 formatte
 * `COTT-K101` shadow warning, authored/deployed facade bypass audit, deterministic canonical-evidence inventory와 separated certification/coverage-policy gate
 * Python closed generation v7/domain `cott.generation.v7`/runtime ABI7/strategy v5와 Kotlin closed
   generation v1/domain `cott.kotlin.generation.v1`/runtime ABI1, 공통 Canonical IR v8,
-  diagnostics schema v1 및 project API version identity
-* Python facade/stub/runtime/verified loader와 Kotlin JVM17 facade/runtime/module JAR, target별
+  Dart generation v1/domain `cott.dart.generation.v1`/runtime ABI1, diagnostics schema v1 및 project API version identity
+* Python facade/stub/runtime/verified loader, Kotlin JVM17 module JAR, Dart portable package, target별
   static ABI·sandboxed bounded proof/runner, `current`/`last_verified` provenance,
   `tools.cott_intent` version 1, prompt/generate/diff/deploy
 
@@ -2866,8 +3029,8 @@ parse error가 있으면 file을 쓰지 않으며 `cott fmt --check`는 formatte
 * ownership, borrow checker, lifetime, arbitrary/unbounded theorem proof·candidate expansion·lifecycle observation
 * Cott 밖 target call graph/effect inference, private implementation entry, mutable Cott container
   state, arbitrary `old()`, automatic refactoring/adapter/exception conversion
-* 한 manifest의 simultaneous Python+Kotlin target, Python/Kotlin 외 partial backend, Cott-owned
-  Android UI/Manifest/resource/DEX/APK/AAB/signing, full IDE plugin, multi-project Python
+* 한 manifest의 simultaneous multi-target, unsupported partial backend, Cott-owned
+  Android/Flutter UI/Manifest/resource/DEX/APK/AAB/signing, full IDE plugin, multi-project Python
   environment, external struct/enum direct binding
 * dependency resolver/package manager, live reader transaction snapshot isolation, installed wheel whole-origin verification
 * non-Linux or unsandboxed effect-fixture execution; unavailable capability is explicit unobserved, never an alternate profile
@@ -2878,11 +3041,11 @@ parse error가 있으면 file을 쓰지 않으며 `cott fmt --check`는 formatte
 
 v1.0은 다음을 모두 자동 검증할 때 완료다.
 
-1. clean checkout의 declared project가 parse, format, IR emit, selected Python/Kotlin emit,
+1. clean checkout의 declared project가 parse, format, IR emit, selected Python/Kotlin/Dart emit,
    generate와 explicit verify를 수행하고 target public projection/facade/runtime이 동일 IR을
    소비한다.
 2. 모든 declaration/type/clause/scenario/fixture가 Canonical IR v8와 target별 closed Python
-   v7/v5 또는 Kotlin generation v1 record를 통과하고 cross-target/legacy identity를 fail closed한다.
+   v7/v5, Kotlin generation v1 또는 Dart generation v1 record를 통과하고 cross-target/legacy identity를 fail closed한다.
 3. struct invariant의 syntax/order/type/intrinsic selector, canonical bytes/hash, direct construction, defaults/generic/recursive values와 forged facade input/return rejection을 확인한다.
 4. Result error contract의 top-level Ok success obligation lint, source-order conditional predicate priority, branch reachability와 bounded runner counts/witness를 확인하며 unobserved Ok evidence는 semantic coverage policy로 선택해 gate한다.
 5. pure candidate generation은 refinement/requires/invariant를 만족하고 invalid constructor candidate를 결정적으로 skip하며 zero valid case를 observation으로 위장하지 않는다.
@@ -2936,8 +3099,8 @@ cott는 실행 본문이 없는 선언형 계약 DSL이며 `.cott`와 typed Cano
 ### 결정 2
 
 MVP module graph는 비순환이고 source path mapping은 injective며 package 가능한 module은 최소 두
-segment다. `core.*`와 target별 `cott_runtime`, Python `_cott_impl`/`*_types`, Kotlin `cott_impl`
-private path를 예약한다.
+segment다. `core.*`와 target별 `cott_runtime`, Python `_cott_impl`/`*_types`, Kotlin `cott_impl`,
+Dart private implementation parts와 `_cott_` compiler namespace를 예약한다.
 
 ### 결정 3
 
@@ -3039,9 +3202,9 @@ MVP compiler host와 runtime target은 같은 OS family·architecture의 `x86_64
 
 ### 결정 26
 
-`cott init`은 absent target에 selected Python 또는 Kotlin minimal scaffold만 만든다. Python은 uv에
-supported Python install/lock/sync를 위임하고 Kotlin은 installed toolchain만 probe한다. Cott는
-dependency resolver/package manager 또는 Android app scaffolder가 아니다.
+`cott init`은 absent target에 selected Python/Kotlin/Dart minimal module scaffold만 만든다.
+Python은 uv에 supported Python install/lock/sync를 위임하고 Kotlin/Dart는 installed toolchain을
+probe한다. Cott는 dependency resolver/package manager나 Android/Flutter app scaffolder가 아니다.
 ### 결정 27
 
 struct 생성·facade boundary·IR은 하나의 canonical constructor/invariant 의미를 공유한다. direct Python construction, fixture, runner, loader 어느 경로도 별도 validation profile을 갖지 않는다.
@@ -3060,12 +3223,15 @@ Python facade는 유일한 public implementation entry이며 authored/deployed t
 `_cott_impl`·`cott_bindings` direct/dynamic import, public re-export와 unsafe link/artifact shape를
 verify가 거부한다. Kotlin consumer는 compiled Cott public package만 사용하고 `cott_impl`/
 `cott_bindings`를 import하지 않는다.
+Dart consumer는 deployed package의 generated module facade를 사용하며 private part를 독립
+library로 import하거나 compiler-private state/control을 직접 참조하지 않는다.
 
 ### 결정 31
 
-Manifest는 Python 또는 Kotlin target 하나만 선택한다. Kotlin은 Python compatibility field를
-재사용하지 않는 generation schema/domain 1/`cott.kotlin.generation.v1`, runtime ABI1, JVM17
-module backend이고 explicit verify만 `current == last_verified` certification을 publish한다.
+Manifest는 Python/Kotlin/Dart target 하나만 선택한다. Kotlin과 Dart는 Python compatibility
+field를 재사용하지 않는 독립 generation-1/runtime-1 backend다. 각각의 domain은
+`cott.kotlin.generation.v1`와 `cott.dart.generation.v1`이며 explicit verify만
+`current == last_verified` certification을 publish한다.
 
 ### 결정 32
 

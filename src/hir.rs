@@ -293,6 +293,17 @@ pub struct HirEffect {
     pub source_order: usize,
 }
 
+pub(crate) const INTRINSIC_EFFECTS: [&str; 8] = [
+    "file.read",
+    "file.write",
+    "network",
+    "database.read",
+    "database.write",
+    "clock",
+    "random",
+    "process.exit",
+];
+
 /// A compact, stable view of the formal facts exposed by a callable.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HirFormalFacet {
@@ -10968,16 +10979,6 @@ fn validate_effects(
     custom: &BTreeSet<String>,
     errors: &mut Vec<ProjectDiagnostic>,
 ) {
-    let builtins = [
-        "file.read",
-        "file.write",
-        "network",
-        "database.read",
-        "database.write",
-        "clock",
-        "random",
-        "process.exit",
-    ];
     for module in modules {
         let contracts = module
             .declarations
@@ -11001,7 +11002,9 @@ fn validate_effects(
         for contract in contracts {
             let mut seen = BTreeSet::new();
             for effect in &contract.effects {
-                if !builtins.contains(&effect.key.as_str()) && !custom.contains(&effect.key) {
+                if !INTRINSIC_EFFECTS.contains(&effect.key.as_str())
+                    && !custom.contains(&effect.key)
+                {
                     errors.push(ProjectDiagnostic {
                         path: module.source.clone(),
                         diagnostic: Diagnostic::new(

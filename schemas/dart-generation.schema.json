@@ -1,0 +1,362 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cott.dev/schema/dart-generation/v1",
+  "title": "cott Dart generation record v1",
+  "type": "object",
+  "required": ["schema_version", "current", "last_verified"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "current": {"$ref": "#/$defs/snapshot"},
+    "last_verified": {
+      "anyOf": [
+        {
+          "allOf": [
+            {"$ref": "#/$defs/snapshot"},
+            {"properties": {"verified": {"const": true}}}
+          ]
+        },
+        {"type": "null"}
+      ]
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "canonical_symbol": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+    },
+    "snapshot": {
+      "type": "object",
+      "required": [
+        "target",
+        "generation_id",
+        "verified",
+        "compiler_version",
+        "canonical_ir_schema",
+        "runtime_abi",
+        "project_name",
+        "project_version",
+        "inputs",
+        "tools",
+        "ir",
+        "contract_surface",
+        "public_symbols",
+        "implementations",
+        "dependencies",
+        "managed_files",
+        "unresolved",
+        "verification",
+        "semantic_coverage",
+        "agent_runs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "target": {"const": "dart"},
+        "generation_id": {"$ref": "#/$defs/digest"},
+        "verified": {"type": "boolean"},
+        "compiler_version": {"const": "1.0.0"},
+        "canonical_ir_schema": {"const": 8},
+        "runtime_abi": {"const": 1},
+        "project_name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z](?:[a-z0-9]|_[a-z0-9])*$",
+          "not": {
+            "enum": [
+              "abstract", "assert", "async", "await", "base", "break", "case", "catch",
+              "class", "const", "continue", "covariant", "deferred", "do", "dynamic", "else",
+              "enum", "export", "extends", "extension", "external", "factory", "false", "final",
+              "finally", "for", "get", "hide", "if", "implements", "import", "in", "interface",
+              "is", "late", "library", "mixin", "new", "null", "of", "on", "operator", "part",
+              "required", "rethrow", "return", "sealed", "set", "show", "static", "super",
+              "switch", "sync", "type", "true", "try", "typedef", "var", "void", "when",
+              "while", "with", "yield"
+            ]
+          }
+        },
+        "project_version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        },
+        "inputs": {
+          "type": "object",
+          "minProperties": 2,
+          "required": ["cott.toml"],
+          "additionalProperties": {"$ref": "#/$defs/digest"}
+        },
+        "tools": {
+          "type": "object",
+          "properties": {"cott_intent": {"$ref": "#/$defs/cott_intent"}},
+          "additionalProperties": true
+        },
+        "ir": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"$ref": "#/$defs/canonical_symbol"},
+          "additionalProperties": {"$ref": "#/$defs/digest"}
+        },
+        "contract_surface": {"type": "object", "minProperties": 1},
+        "public_symbols": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/canonical_symbol"},
+          "additionalProperties": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
+          }
+        },
+        "implementations": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/implementation"}
+        },
+        "dependencies": {"$ref": "#/$defs/dependencies"},
+        "managed_files": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/digest"}
+        },
+        "unresolved": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/canonical_symbol"}
+        },
+        "verification": {"anyOf": [{"type": "null"}, {"type": "object"}]},
+        "semantic_coverage": {"$ref": "#/$defs/semantic_coverage"},
+        "agent_runs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/agent_run"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"verified": {"const": true}}, "required": ["verified"]},
+          "then": {
+            "properties": {
+              "verification": {"type": "object"},
+              "unresolved": {"maxItems": 0}
+            }
+          },
+          "else": {"properties": {"verification": {"type": "null"}}}
+        }
+      ]
+    },
+    "implementation": {
+      "type": "object",
+      "required": [
+        "cott_symbol",
+        "target_symbol",
+        "source_origin",
+        "runtime_origin",
+        "content_hash",
+        "owner"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "cott_symbol": {"$ref": "#/$defs/canonical_symbol"},
+        "target_symbol": {
+          "type": "string",
+          "pattern": "^[^:/\\\\]+(?:/[^:/\\\\]+)*\\.dart:_[A-Za-z0-9_$]*$"
+        },
+        "source_origin": {"type": "string", "minLength": 1},
+        "runtime_origin": {
+          "type": "string",
+          "pattern": "^dart/lib/src/cott_impl/(?:[A-Za-z_][A-Za-z0-9_]*/)+[A-Za-z_][A-Za-z0-9_]*\\.dart$"
+        },
+        "content_hash": {"$ref": "#/$defs/digest"},
+        "owner": {"enum": ["manifest", "agent"]}
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "required": ["schema_version", "pubspec_hash", "lockfile_hash", "packages"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": 1},
+        "pubspec_hash": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "lockfile_hash": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "packages": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/dependency_package"}
+        }
+      }
+    },
+    "dependency_package": {
+      "type": "object",
+      "required": ["name", "version", "source", "source_identity", "content_hash", "dependencies", "runtime"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "pattern": "^[a-z_][a-z0-9_]*$"},
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+        },
+        "source": {"enum": ["hosted", "path"]},
+        "source_identity": {"type": "string", "minLength": 1},
+        "content_hash": {"$ref": "#/$defs/digest"},
+        "dependencies": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "pattern": "^[a-z_][a-z0-9_]*$"}
+        },
+        "runtime": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"source": {"const": "hosted"}}, "required": ["source"]},
+          "then": {
+            "properties": {
+              "source_identity": {
+                "type": "string",
+                "pattern": "^https://[^\\s#?]+[^/\\s#?]#sha256:[0-9a-f]{64}$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "cott_intent": {
+      "type": "object",
+      "required": ["version", "hashes"],
+      "additionalProperties": false,
+      "properties": {
+        "version": {"const": 1},
+        "hashes": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/canonical_symbol"},
+          "additionalProperties": {"$ref": "#/$defs/digest"}
+        }
+      }
+    },
+    "semantic_coverage": {
+      "type": "object",
+      "required": ["clauses", "summary", "policy"],
+      "additionalProperties": false,
+      "properties": {
+        "clauses": {"type": "array", "items": {"$ref": "#/$defs/clause_coverage"}},
+        "summary": {"$ref": "#/$defs/coverage_summary"},
+        "policy": {"$ref": "#/$defs/coverage_policy_result"}
+      }
+    },
+    "clause_coverage": {
+      "type": "object",
+      "required": ["symbol", "clause_id", "span", "status", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "symbol": {"$ref": "#/$defs/canonical_symbol"},
+        "clause_id": {
+          "type": "string",
+          "pattern": "^(?:(?:requires|ensures|error|invariant):(0|[1-9][0-9]*)|modifies:[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)$"
+        },
+        "span": {"$ref": "#/$defs/source_span"},
+        "status": {"$ref": "#/$defs/coverage_status"},
+        "evidence": {"type": "array", "items": {}}
+      }
+    },
+    "coverage_summary": {
+      "type": "object",
+      "required": ["observed", "unobserved", "trust_declaration", "unknown"],
+      "additionalProperties": false,
+      "properties": {
+        "observed": {"type": "integer", "minimum": 0},
+        "unobserved": {"type": "integer", "minimum": 0},
+        "trust_declaration": {"type": "integer", "minimum": 0},
+        "unknown": {"type": "integer", "minimum": 0}
+      }
+    },
+    "coverage_policy_result": {
+      "type": "object",
+      "required": ["selected", "passed", "violations"],
+      "additionalProperties": false,
+      "properties": {
+        "selected": {"type": "integer", "minimum": 0},
+        "passed": {"type": "boolean"},
+        "violations": {"type": "array", "items": {"$ref": "#/$defs/coverage_violation"}}
+      }
+    },
+    "coverage_violation": {
+      "type": "object",
+      "required": ["symbol", "clause_id", "span", "status", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "symbol": {"$ref": "#/$defs/canonical_symbol"},
+        "clause_id": {
+          "type": "string",
+          "pattern": "^(?:(?:requires|ensures|error|invariant):(0|[1-9][0-9]*)|modifies:[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)$"
+        },
+        "span": {"$ref": "#/$defs/source_span"},
+        "status": {"$ref": "#/$defs/coverage_status"},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "coverage_status": {
+      "enum": ["observed", "unobserved", "trust_declaration", "unknown"]
+    },
+    "source_span": {
+      "type": "object",
+      "required": ["start_byte", "end_byte", "start_line", "start_column", "end_line", "end_column"],
+      "additionalProperties": false,
+      "properties": {
+        "start_byte": {"type": "integer", "minimum": 0},
+        "end_byte": {"type": "integer", "minimum": 0},
+        "start_line": {"type": "integer", "minimum": 1},
+        "start_column": {"type": "integer", "minimum": 1},
+        "end_line": {"type": "integer", "minimum": 1},
+        "end_column": {"type": "integer", "minimum": 1}
+      }
+    },
+    "agent_run": {
+      "type": "object",
+      "required": [
+        "symbol", "adapter", "adapter_version", "argv_template", "executable", "executable_hash",
+        "prompt_hash", "implementation_hash", "environment_names", "duration_ms", "status", "stdout", "stderr"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "symbol": {"$ref": "#/$defs/canonical_symbol"},
+        "adapter": {"enum": ["claude", "codex", "omp"]},
+        "adapter_version": {"type": "string", "minLength": 1},
+        "argv_template": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "executable": {"type": "string", "minLength": 1},
+        "executable_hash": {"$ref": "#/$defs/digest"},
+        "prompt_hash": {"$ref": "#/$defs/digest"},
+        "implementation_hash": {"$ref": "#/$defs/digest"},
+        "environment_names": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
+        },
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "status": {"$ref": "#/$defs/agent_status"},
+        "stdout": {"$ref": "#/$defs/stream_digest"},
+        "stderr": {"$ref": "#/$defs/stream_digest"}
+      }
+    },
+    "agent_status": {
+      "type": "object",
+      "required": ["exit_code", "signal", "timed_out", "cancelled"],
+      "additionalProperties": false,
+      "properties": {
+        "exit_code": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+        "signal": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+        "timed_out": {"type": "boolean"},
+        "cancelled": {"type": "boolean"}
+      }
+    },
+    "stream_digest": {
+      "type": "object",
+      "required": ["bytes", "sha256", "truncated"],
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {"type": "integer", "minimum": 0},
+        "sha256": {"$ref": "#/$defs/digest"},
+        "truncated": {"type": "boolean"}
+      }
+    }
+  }
+}

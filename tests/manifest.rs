@@ -1,10 +1,10 @@
 use std::path::Path;
 
 use cott::manifest::{
-    KotlinProjectConfig, MAX_CANDIDATE_LIMIT, MAX_FILESYSTEM_BYTES, MAX_FILESYSTEM_FILES,
-    MAX_HTTP_BODY_BYTES, MAX_HTTP_REDIRECTS, MAX_HTTP_REQUESTS, MAX_LIFECYCLE_LIMIT,
-    MAX_PROOF_BRANCH_LIMIT, MAX_PROOF_NODE_LIMIT, MAX_SCENARIO_TIMEOUT_MS, MAX_TRANSCRIPT_EVENTS,
-    ProjectConfig, RuntimeValidation, TargetLanguage, target_language,
+    DartProjectConfig, KotlinProjectConfig, MAX_CANDIDATE_LIMIT, MAX_FILESYSTEM_BYTES,
+    MAX_FILESYSTEM_FILES, MAX_HTTP_BODY_BYTES, MAX_HTTP_REDIRECTS, MAX_HTTP_REQUESTS,
+    MAX_LIFECYCLE_LIMIT, MAX_PROOF_BRANCH_LIMIT, MAX_PROOF_NODE_LIMIT, MAX_SCENARIO_TIMEOUT_MS,
+    MAX_TRANSCRIPT_EVENTS, ProjectConfig, RuntimeValidation, TargetLanguage, target_language,
 };
 
 const VALID: &str = r#"
@@ -40,6 +40,26 @@ compile_only = ["libs/android.jar"]
 
 [target.kotlin.external_types]
 "demo.AndroidContext" = "android.content.Context"
+"#;
+
+const VALID_DART: &str = r#"
+[project]
+name = "demo_app"
+version = "0.1.0"
+source = "src"
+
+[target.dart]
+source = "dart-src"
+generated = "generated/dart"
+runtime_validation = "boundary"
+
+[target.dart.implementations]
+"demo.fetch" = "impl/fetch.dart:_fetch"
+
+[target.dart.external_types]
+"demo.Instant" = "dart:core#DateTime"
+"demo.Widget" = "package:flutter/widgets.dart#Widget"
+"demo.AsyncMemoizer" = "package:async/async.dart#AsyncMemoizer"
 "#;
 
 #[test]
@@ -369,11 +389,33 @@ fn discriminates_one_closed_target_without_python_defaults() {
         target_language(Path::new("cott.toml"), VALID_KOTLIN).expect("Kotlin target"),
         TargetLanguage::Kotlin
     );
+    assert_eq!(
+        target_language(Path::new("cott.toml"), VALID_DART).expect("Dart target"),
+        TargetLanguage::Dart
+    );
 
     let manifest = KotlinProjectConfig::parse(Path::new("cott.toml"), VALID_KOTLIN)
         .expect("Kotlin manifest should parse");
     assert_eq!(manifest.kotlin.classpath, ["libs/runtime.jar"]);
     assert_eq!(manifest.kotlin.compile_only, ["libs/android.jar"]);
+    let dart = DartProjectConfig::parse(Path::new("cott.toml"), VALID_DART)
+        .expect("Dart manifest should parse");
+    assert_eq!(dart.dart.sdk, "dart");
+    assert_eq!(dart.dart.runtime_validation, RuntimeValidation::Boundary);
+    assert_eq!(
+        dart.dart.implementations.get("demo.fetch"),
+        Some(&"impl/fetch.dart:_fetch".to_owned())
+    );
+    assert_eq!(
+        dart.dart.external_types.get("demo.Widget"),
+        Some(&"package:flutter/widgets.dart#Widget".to_owned())
+    );
+    assert_eq!(
+        dart.dart.external_types.get("demo.AsyncMemoizer"),
+        Some(&"package:async/async.dart#AsyncMemoizer".to_owned())
+    );
+    assert!(dart.dart.pubspec.is_none());
+    assert!(dart.dart.lockfile.is_none());
     ProjectConfig::parse(
         Path::new("cott.toml"),
         &VALID.replace("name = \"demo\"", "name = \"Demo\""),
@@ -392,6 +434,22 @@ fn discriminates_one_closed_target_without_python_defaults() {
         KotlinProjectConfig::parse(Path::new("cott.toml"), VALID).is_err(),
         "Kotlin API must reject Python"
     );
+    assert!(
+        ProjectConfig::parse(Path::new("cott.toml"), VALID_DART).is_err(),
+        "Python API must reject Dart"
+    );
+    assert!(
+        KotlinProjectConfig::parse(Path::new("cott.toml"), VALID_DART).is_err(),
+        "Kotlin API must reject Dart"
+    );
+    assert!(
+        DartProjectConfig::parse(Path::new("cott.toml"), VALID).is_err(),
+        "Dart API must reject Python"
+    );
+    assert!(
+        DartProjectConfig::parse(Path::new("cott.toml"), VALID_KOTLIN).is_err(),
+        "Dart API must reject Kotlin"
+    );
 
     let mixed = format!(
         "{VALID}\n[target.kotlin]\nsource = \"kotlin-src\"\ngenerated = \"kotlin-out/kotlin\"\nruntime_validation = \"boundary\"\n"
@@ -400,6 +458,12 @@ fn discriminates_one_closed_target_without_python_defaults() {
         target_language(Path::new("cott.toml"), &mixed).is_err(),
         "mixed targets must be rejected"
     );
+    let triple = format!(
+        "{mixed}\n[target.dart]\nsource = \"dart-src\"\ngenerated = \"generated/dart\"\nruntime_validation = \"boundary\"\n"
+    );
+    let error = target_language(Path::new("cott.toml"), &triple)
+        .expect_err("three targets must be rejected");
+    assert!(error.message.contains("exactly one"), "{}", error.message);
     assert!(
         target_language(
             Path::new("cott.toml"),
@@ -408,6 +472,135 @@ fn discriminates_one_closed_target_without_python_defaults() {
         .is_err(),
         "unknown targets must be rejected by the closed target table"
     );
+}
+
+#[test]
+fn validates_dart_metadata_paths_and_pairing() {
+    let with_metadata = VALID_DART.replace(
+        "runtime_validation = \"boundary\"",
+        "runtime_validation = \"boundary\"\npubspec = \"dart-package/pubspec.yaml\"\nlockfile = \"dart-package/pubspec.lock\"",
+    );
+    let manifest = DartProjectConfig::parse(Path::new("cott.toml"), &with_metadata)
+        .expect("paired Dart metadata should parse");
+    assert_eq!(
+        manifest.dart.pubspec.as_deref(),
+        Some("dart-package/pubspec.yaml")
+    );
+    assert_eq!(
+        manifest.dart.lockfile.as_deref(),
+        Some("dart-package/pubspec.lock")
+    );
+
+    for invalid in [
+        VALID_DART.replace(
+            "runtime_validation = \"boundary\"",
+            "runtime_validation = \"boundary\"\npubspec = \"dart-package/pubspec.yaml\"",
+        ),
+        VALID_DART.replace(
+            "runtime_validation = \"boundary\"",
+            "runtime_validation = \"boundary\"\nlockfile = \"dart-package/pubspec.lock\"",
+        ),
+        VALID_DART.replace(
+            "runtime_validation = \"boundary\"",
+            "runtime_validation = \"boundary\"\npubspec = \"src/pubspec.yaml\"\nlockfile = \"dart-package/pubspec.lock\"",
+        ),
+        VALID_DART.replace(
+            "runtime_validation = \"boundary\"",
+            "runtime_validation = \"boundary\"\npubspec = \"dart-package/pubspec.yaml\"\nlockfile = \"dart-package/pubspec.yaml\"",
+        ),
+        VALID_DART.replace(
+            "runtime_validation = \"boundary\"",
+            "runtime_validation = \"boundary\"\npubspec = \"dart-package/pubspec.yaml\"\nlockfile = \"dart-package/../pubspec.lock\"",
+        ),
+    ] {
+        DartProjectConfig::parse(Path::new("cott.toml"), &invalid)
+            .expect_err("unsafe or unpaired Dart metadata must fail");
+    }
+}
+
+#[test]
+fn rejects_malformed_dart_target_fields_and_bindings() {
+    let invalid_names = [
+        "DemoApp",
+        "demo-app",
+        "demo__app",
+        "_demo_app",
+        "demo_app_",
+        "enum",
+    ];
+    for name in invalid_names {
+        DartProjectConfig::parse(
+            Path::new("cott.toml"),
+            &VALID_DART.replace("name = \"demo_app\"", &format!("name = \"{name}\"")),
+        )
+        .expect_err("invalid Dart package name must fail");
+    }
+
+    for invalid in [
+        VALID_DART.replace("generated/dart", "generated/package"),
+        VALID_DART.replace("generated/dart", "build/dart"),
+        VALID_DART.replace("source = \"dart-src\"", "source = \".dart_tool/impl\""),
+        VALID_DART.replace("source = \"dart-src\"", "source = \"../dart-src\""),
+        VALID_DART.replace("source = \"dart-src\"", "source = \"dart-src//impl\""),
+        VALID_DART.replace("source = \"src\"", "source = \"src//contracts\""),
+        VALID_DART.replace(
+            "source = \"dart-src\"",
+            "source = \"generated/implementations\"",
+        ),
+        VALID_DART.replace(
+            "runtime_validation = \"boundary\"",
+            "runtime_validation = \"boundary\"\nsdk = \"../dart\"",
+        ),
+        VALID_DART.replace(
+            "runtime_validation = \"boundary\"",
+            "runtime_validation = \"boundary\"\nsdk = \"/opt//dart\"",
+        ),
+        VALID_DART.replace("impl/fetch.dart:_fetch", "impl/fetch.txt:_fetch"),
+        VALID_DART.replace("impl/fetch.dart:_fetch", "../fetch.dart:_fetch"),
+        VALID_DART.replace("impl/fetch.dart:_fetch", "impl/fetch.dart:fetch"),
+        VALID_DART.replace("impl/fetch.dart:_fetch", "impl/fetch.dart:_cott_fetch"),
+        VALID_DART.replace("impl/fetch.dart:_fetch", "impl/fetch.dart:_fetch:other"),
+        VALID_DART.replace("impl/fetch.dart:_fetch", ".dart_tool/fetch.dart:_fetch"),
+        VALID_DART.replace(
+            "runtime_validation = \"boundary\"",
+            "runtime_validation = \"boundary\"\nunknown = true",
+        ),
+    ] {
+        DartProjectConfig::parse(Path::new("cott.toml"), &invalid)
+            .expect_err("malformed Dart target field or binding must fail");
+    }
+}
+
+#[test]
+fn rejects_malformed_dart_external_type_uris() {
+    for target in [
+        "https://example.test/types.dart#DateTime",
+        "file:types.dart#DateTime",
+        "dart:#DateTime",
+        "dart:core#_Private",
+        "dart:core#class",
+        "dart:core#DateTime#Other",
+        "package:flutter#Widget",
+        "package:flutter/../widgets.dart#Widget",
+        "package:flutter/widgets.txt#Widget",
+        "package:flutter/widgets.dart?query#Widget",
+    ] {
+        let invalid = VALID_DART.replace("dart:core#DateTime", target);
+        let error = DartProjectConfig::parse(Path::new("cott.toml"), &invalid)
+            .expect_err("malformed Dart external type URI must fail");
+        assert!(
+            error
+                .message
+                .contains("invalid Dart external type projection"),
+            "{target}: {}",
+            error.message
+        );
+    }
+    DartProjectConfig::parse(
+        Path::new("cott.toml"),
+        &VALID_DART.replace("\"demo.Instant\"", "\"Instant\""),
+    )
+    .expect_err("external Cott symbols must remain qualified");
 }
 
 #[test]

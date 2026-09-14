@@ -1,3 +1,5 @@
+pub mod landlock;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read, Write};
 use std::os::unix::process::CommandExt;

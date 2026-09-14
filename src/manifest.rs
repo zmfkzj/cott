@@ -39,12 +39,22 @@ pub struct ProjectConfig {
 pub enum TargetLanguage {
     Python,
     Kotlin,
+    Dart,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KotlinProjectConfig {
     pub project: ProjectMetadata,
     pub kotlin: KotlinTarget,
+    pub effects: BTreeMap<String, bool>,
+    pub generator: GeneratorConfig,
+    pub verification: VerificationConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DartProjectConfig {
+    pub project: ProjectMetadata,
+    pub dart: DartTarget,
     pub effects: BTreeMap<String, bool>,
     pub generator: GeneratorConfig,
     pub verification: VerificationConfig,
@@ -236,6 +246,8 @@ struct Target {
     python: Option<PythonTarget>,
     #[serde(default)]
     kotlin: Option<KotlinTarget>,
+    #[serde(default)]
+    dart: Option<DartTarget>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -275,6 +287,28 @@ pub struct KotlinTarget {
     pub implementations: BTreeMap<String, String>,
     #[serde(default)]
     pub external_types: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DartTarget {
+    pub source: String,
+    pub generated: String,
+    #[serde(default = "default_dart_sdk")]
+    pub sdk: String,
+    pub runtime_validation: RuntimeValidation,
+    #[serde(default)]
+    pub pubspec: Option<String>,
+    #[serde(default)]
+    pub lockfile: Option<String>,
+    #[serde(default)]
+    pub implementations: BTreeMap<String, String>,
+    #[serde(default)]
+    pub external_types: BTreeMap<String, String>,
+}
+
+fn default_dart_sdk() -> String {
+    "dart".to_owned()
 }
 
 fn default_kotlin_compiler() -> String {
@@ -327,16 +361,13 @@ fn parse_raw(path: &Path, bytes: &str) -> Result<RawManifest, ManifestError> {
 }
 
 fn selected_target(path: &Path, target: &Target) -> Result<TargetLanguage, ManifestError> {
-    match (&target.python, &target.kotlin) {
-        (Some(_), None) => Ok(TargetLanguage::Python),
-        (None, Some(_)) => Ok(TargetLanguage::Kotlin),
-        (None, None) => Err(ManifestError::new(
+    match (&target.python, &target.kotlin, &target.dart) {
+        (Some(_), None, None) => Ok(TargetLanguage::Python),
+        (None, Some(_), None) => Ok(TargetLanguage::Kotlin),
+        (None, None, Some(_)) => Ok(TargetLanguage::Dart),
+        _ => Err(ManifestError::new(
             path,
-            "target must define exactly one of target.python or target.kotlin",
-        )),
-        (Some(_), Some(_)) => Err(ManifestError::new(
-            path,
-            "target must not define both target.python and target.kotlin",
+            "target must define exactly one of target.python, target.kotlin, or target.dart",
         )),
     }
 }
@@ -575,6 +606,131 @@ impl KotlinProjectConfig {
     }
 }
 
+impl DartProjectConfig {
+    pub fn parse(path: &Path, bytes: &str) -> Result<Self, ManifestError> {
+        let raw = parse_raw(path, bytes)?;
+        if selected_target(path, &raw.target)? != TargetLanguage::Dart {
+            return Err(ManifestError::new(
+                path,
+                "DartProjectConfig only supports target.dart manifests",
+            ));
+        }
+        let config = Self {
+            project: raw.project,
+            dart: raw
+                .target
+                .dart
+                .expect("selected Dart target must be present"),
+            effects: raw.effects,
+            generator: raw.generator,
+            verification: raw.verification,
+        };
+        validate_common(
+            path,
+            &config.project,
+            &config.effects,
+            &config.generator,
+            &config.verification,
+        )?;
+        config.validate_dart(path)?;
+        Ok(config)
+    }
+
+    fn validate_dart(&self, path: &Path) -> Result<(), ManifestError> {
+        if !valid_dart_project_name(&self.project.name) {
+            return Err(ManifestError::new(
+                path,
+                "project.name must be a lowercase snake_case Dart package identifier",
+            ));
+        }
+        for (field, value) in [
+            ("project.source", &self.project.source),
+            ("target.dart.source", &self.dart.source),
+            ("target.dart.generated", &self.dart.generated),
+        ] {
+            dart_normalized_relative_path(value)
+                .map_err(|message| ManifestError::new(path, format!("{field} {message}")))?;
+        }
+        if !valid_dart_tool_spec(&self.dart.sdk) {
+            return Err(ManifestError::new(
+                path,
+                "target.dart.sdk must be a bare executable or normalized path",
+            ));
+        }
+        if self.dart.pubspec.is_some() != self.dart.lockfile.is_some() {
+            return Err(ManifestError::new(
+                path,
+                "target.dart.pubspec and target.dart.lockfile must be configured together",
+            ));
+        }
+
+        let generated = Path::new(&self.dart.generated);
+        let Some(artifact_root) = generated
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        else {
+            return Err(ManifestError::new(
+                path,
+                "target.dart.generated must be `<artifact-root>/dart`",
+            ));
+        };
+        if generated.file_name().and_then(|name| name.to_str()) != Some("dart") {
+            return Err(ManifestError::new(
+                path,
+                "target.dart.generated must be `<artifact-root>/dart`",
+            ));
+        }
+
+        let mut protected_paths = vec![
+            PathBuf::from(&self.project.source),
+            PathBuf::from(&self.dart.source),
+            artifact_root.to_path_buf(),
+            PathBuf::from("tests/generated"),
+            PathBuf::from(".cott"),
+            PathBuf::from(".dart_tool"),
+            PathBuf::from(".pub-cache"),
+            PathBuf::from(".flutter-plugins"),
+            PathBuf::from(".flutter-plugins-dependencies"),
+            PathBuf::from("build"),
+        ];
+        if let Some(rules) = &self.generator.rules {
+            let rules_path = dart_normalized_relative_path(rules).map_err(|message| {
+                ManifestError::new(path, format!("generator.rules {message}"))
+            })?;
+            protected_paths.push(rules_path);
+        }
+        for (field, configured) in [
+            ("target.dart.pubspec", self.dart.pubspec.as_deref()),
+            ("target.dart.lockfile", self.dart.lockfile.as_deref()),
+        ] {
+            if let Some(value) = configured {
+                let metadata_path = dart_normalized_relative_path(value)
+                    .map_err(|message| ManifestError::new(path, format!("{field} {message}")))?;
+                protected_paths.push(metadata_path);
+            }
+        }
+        validate_path_overlaps(path, &protected_paths)?;
+
+        for (symbol, target) in &self.dart.implementations {
+            if !valid_qname(symbol) || !valid_dart_implementation_target(target) {
+                return Err(ManifestError::new(
+                    path,
+                    format!("invalid Dart implementation binding `{symbol}` = `{target}`"),
+                ));
+            }
+        }
+        for (symbol, target) in &self.dart.external_types {
+            if !valid_external_type_symbol(symbol) || !valid_dart_external_type_projection(target) {
+                return Err(ManifestError::new(
+                    path,
+                    format!("invalid Dart external type projection `{symbol}` = `{target}`"),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 fn validate_common(
     path: &Path,
     project: &ProjectMetadata,
@@ -634,18 +790,9 @@ fn validate_common(
     }
     validate_fixture_limits(path, &verification.fixtures)?;
     validate_coverage_policy(path, &verification.coverage)?;
-    const PRELUDE_EFFECTS: [&str; 8] = [
-        "file.read",
-        "file.write",
-        "network",
-        "database.read",
-        "database.write",
-        "clock",
-        "random",
-        "process.exit",
-    ];
     for (name, enabled) in effects {
-        if !enabled || !valid_qname(name) || PRELUDE_EFFECTS.contains(&name.as_str()) {
+        if !enabled || !valid_qname(name) || crate::hir::INTRINSIC_EFFECTS.contains(&name.as_str())
+        {
             return Err(ManifestError::new(
                 path,
                 format!("effect `{name}` must be a custom qname with literal value true"),
@@ -815,6 +962,16 @@ pub fn normalized_relative_path(value: &str) -> Result<PathBuf, &'static str> {
     Ok(path.to_path_buf())
 }
 
+fn dart_normalized_relative_path(value: &str) -> Result<PathBuf, &'static str> {
+    if value
+        .split('/')
+        .any(|component| component.is_empty() || component == ".")
+    {
+        return Err("must be a normalized relative path");
+    }
+    normalized_relative_path(value)
+}
+
 fn valid_tool_spec(value: &str) -> bool {
     if value.is_empty() || value.contains('\0') {
         return false;
@@ -838,6 +995,18 @@ fn valid_tool_spec(value: &str) -> bool {
     saw_name
 }
 
+fn valid_dart_tool_spec(value: &str) -> bool {
+    if !valid_tool_spec(value) {
+        return false;
+    }
+    let path = Path::new(value);
+    if path.is_absolute() {
+        path.components().collect::<PathBuf>().as_os_str() == path.as_os_str()
+    } else {
+        dart_normalized_relative_path(value).is_ok()
+    }
+}
+
 pub(crate) fn valid_kotlin_project_name(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()
@@ -848,6 +1017,180 @@ pub(crate) fn valid_kotlin_project_name(value: &str) -> bool {
         && bytes
             .iter()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+pub(crate) fn valid_dart_project_name(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes[0].is_ascii_lowercase()
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && !value.contains("__")
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
+        && !is_dart_keyword(value)
+}
+
+fn valid_dart_package_uri_name(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && (bytes[0].is_ascii_lowercase() || bytes[0] == b'_')
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
+}
+
+fn valid_dart_implementation_target(value: &str) -> bool {
+    value.matches(':').count() == 1
+        && value.split_once(':').is_some_and(|(source, function)| {
+            dart_normalized_relative_path(source).is_ok_and(|path| {
+                path.extension().and_then(|extension| extension.to_str()) == Some("dart")
+                    && !path.components().any(|component| {
+                        matches!(component, Component::Normal(name) if is_dart_cache_name(name))
+                    })
+            }) && function.starts_with('_')
+                && !function.starts_with("_cott_")
+                && valid_dart_identifier(function)
+        })
+}
+
+fn valid_dart_external_type_projection(value: &str) -> bool {
+    value.matches('#').count() == 1
+        && value.split_once('#').is_some_and(|(uri, name)| {
+            valid_dart_import_uri(uri)
+                && !name.starts_with('_')
+                && (name == "Function" || !is_dart_keyword(name))
+                && valid_dart_identifier(name)
+        })
+}
+
+fn valid_dart_import_uri(value: &str) -> bool {
+    if value
+        .bytes()
+        .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        || value.contains(|character| matches!(character, '\\' | '%' | '?' | '#'))
+    {
+        return false;
+    }
+    if let Some(library) = value.strip_prefix("dart:") {
+        return library
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+            && library
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
+    }
+    let Some(uri) = value.strip_prefix("package:") else {
+        return false;
+    };
+    let Some((package, source)) = uri.split_once('/') else {
+        return false;
+    };
+    valid_dart_package_uri_name(package)
+        && source
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/'))
+        && dart_normalized_relative_path(source).is_ok_and(|path| {
+            path.extension().and_then(|extension| extension.to_str()) == Some("dart")
+        })
+}
+
+fn valid_dart_identifier(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'$'))
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$'))
+}
+
+fn is_dart_cache_name(value: &std::ffi::OsStr) -> bool {
+    matches!(
+        value.to_str(),
+        Some(
+            ".dart_tool"
+                | ".pub-cache"
+                | ".flutter-plugins"
+                | ".flutter-plugins-dependencies"
+                | "build"
+                | ".cott"
+        )
+    )
+}
+
+fn is_dart_keyword(value: &str) -> bool {
+    matches!(
+        value,
+        "abstract"
+            | "as"
+            | "assert"
+            | "async"
+            | "await"
+            | "base"
+            | "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "covariant"
+            | "default"
+            | "deferred"
+            | "do"
+            | "dynamic"
+            | "else"
+            | "enum"
+            | "export"
+            | "extends"
+            | "extension"
+            | "external"
+            | "factory"
+            | "false"
+            | "final"
+            | "finally"
+            | "for"
+            | "Function"
+            | "get"
+            | "hide"
+            | "if"
+            | "implements"
+            | "import"
+            | "in"
+            | "interface"
+            | "is"
+            | "late"
+            | "library"
+            | "mixin"
+            | "new"
+            | "null"
+            | "of"
+            | "on"
+            | "operator"
+            | "part"
+            | "required"
+            | "rethrow"
+            | "return"
+            | "sealed"
+            | "set"
+            | "show"
+            | "static"
+            | "super"
+            | "switch"
+            | "sync"
+            | "this"
+            | "throw"
+            | "true"
+            | "try"
+            | "type"
+            | "typedef"
+            | "var"
+            | "void"
+            | "when"
+            | "while"
+            | "with"
+            | "yield"
+    )
 }
 
 pub(crate) fn valid_kotlin_fqn(value: &str) -> bool {

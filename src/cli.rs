@@ -48,7 +48,7 @@ use crate::python_verify::verify_python;
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession, TransactionError};
 use crate::version::{is_at_least, parse_version};
 
-const USAGE: &str = "Cott compiles contracts into verifiable Python and Kotlin.\n\nUsage:\n  cott init <path> [--target python|kotlin] [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python|kotlin [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
+const USAGE: &str = "Cott compiles contracts into verifiable Python, Kotlin, and Dart.\n\nUsage:\n  cott init <path> [--target python|kotlin|dart] [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python|kotlin|dart [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
 
 #[cfg(test)]
 thread_local! {
@@ -175,6 +175,9 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
             TargetLanguage::Kotlin => {
                 finish_kotlin_init(crate::kotlin::pipeline::init(path, name, no_sync, format))
             }
+            TargetLanguage::Dart => {
+                finish_dart_init(crate::dart::pipeline::init(path, name, no_sync, format))
+            }
         },
         Ok(Command::Check {
             source, project, ..
@@ -269,6 +272,7 @@ fn run_json(arguments: Vec<OsString>) -> i32 {
         2 => code::CLI_USAGE,
         3 => code::SYNTAX,
         4 if diagnostic_target == TargetLanguage::Kotlin => code::KOTLIN,
+        4 if diagnostic_target == TargetLanguage::Dart => code::DART,
         4 => code::PYTHON,
         5 => code::AGENT,
         6 => code::FILESYSTEM,
@@ -288,10 +292,10 @@ fn run_json(arguments: Vec<OsString>) -> i32 {
             .strip_prefix(if warning { "warning: " } else { "error: " })
             .unwrap_or(line);
         let mut diagnostic = if warning {
-            let warning_code = if diagnostic_target == TargetLanguage::Kotlin {
-                code::KOTLIN
-            } else {
-                code::SHADOW_SPECIFICATION
+            let warning_code = match diagnostic_target {
+                TargetLanguage::Python => code::SHADOW_SPECIFICATION,
+                TargetLanguage::Kotlin => code::KOTLIN,
+                TargetLanguage::Dart => code::DART,
             };
             Diagnostic::warning(warning_code, body, Span::new(0, 0))
         } else {
@@ -388,6 +392,10 @@ fn command_diagnostic_target(command: &Command) -> TargetLanguage {
             target: EmitTarget::Kotlin,
             ..
         } => TargetLanguage::Kotlin,
+        Command::Emit {
+            target: EmitTarget::Dart,
+            ..
+        } => TargetLanguage::Dart,
         _ => command_project_argument(command)
             .and_then(|project| {
                 project
@@ -418,6 +426,13 @@ fn json_project_paths(command: &Command) -> Option<JsonProjectPaths> {
                 source_dir: paths.source_dir,
             })
         }
+        TargetLanguage::Dart => {
+            let (_, paths, _) = crate::project::load_dart_config_with_paths(&root).ok()?;
+            Some(JsonProjectPaths {
+                root: paths.root,
+                source_dir: paths.source_dir,
+            })
+        }
     }
 }
 
@@ -432,6 +447,7 @@ pub enum EmitTarget {
     Ir,
     Python,
     Kotlin,
+    Dart,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -540,7 +556,8 @@ fn parse_target_language(value: Option<&str>) -> Result<TargetLanguage, &'static
     match value {
         Some("python") => Ok(TargetLanguage::Python),
         Some("kotlin") => Ok(TargetLanguage::Kotlin),
-        _ => Err("`--target` requires `python` or `kotlin`"),
+        Some("dart") => Ok(TargetLanguage::Dart),
+        _ => Err("`--target` requires `python`, `kotlin`, or `dart`"),
     }
 }
 
@@ -687,7 +704,8 @@ fn parse_emit(values: &[OsString]) -> Result<Command, &'static str> {
         Some("ir") => EmitTarget::Ir,
         Some("python") => EmitTarget::Python,
         Some("kotlin") => EmitTarget::Kotlin,
-        _ => return Err("expected `emit ir`, `emit python`, or `emit kotlin`"),
+        Some("dart") => EmitTarget::Dart,
+        _ => return Err("expected `emit ir`, `emit python`, `emit kotlin`, or `emit dart`"),
     };
     let options = ExistingOptions::parse(&values[1..])?;
     Ok(Command::Emit {
@@ -756,7 +774,7 @@ fn parse_generate(values: &[OsString]) -> Result<Command, &'static str> {
         index += 1;
     }
     let Some(target) = target else {
-        return Err("`generate` requires `--target python|kotlin`");
+        return Err("`generate` requires `--target python|kotlin|dart`");
     };
     Ok(Command::Generate {
         target,
@@ -4172,6 +4190,7 @@ fn target_name(target: TargetLanguage) -> &'static str {
     match target {
         TargetLanguage::Python => "python",
         TargetLanguage::Kotlin => "kotlin",
+        TargetLanguage::Dart => "dart",
     }
 }
 
@@ -4236,12 +4255,53 @@ fn finish_kotlin_verification(result: Result<PathBuf, crate::kotlin::pipeline::F
     }
 }
 
+fn finish_dart_unit(result: Result<(), crate::dart::pipeline::Failure>) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(failure) => {
+            eprintln!("error: {}", failure.message);
+            failure.code
+        }
+    }
+}
+
+fn finish_dart_init(result: Result<PathBuf, crate::dart::pipeline::Failure>) -> i32 {
+    finish_dart_unit(result.map(|_| ()))
+}
+
+fn finish_dart_path(result: Result<PathBuf, crate::dart::pipeline::Failure>) -> i32 {
+    match result {
+        Ok(path) => {
+            println!("{}", path.display());
+            0
+        }
+        Err(failure) => {
+            eprintln!("error: {}", failure.message);
+            failure.code
+        }
+    }
+}
+
+fn finish_dart_verification(result: Result<PathBuf, crate::dart::pipeline::Failure>) -> i32 {
+    match result {
+        Ok(path) => {
+            println!("verified {}", path.display());
+            0
+        }
+        Err(failure) => {
+            eprintln!("error: {}", failure.message);
+            failure.code
+        }
+    }
+}
+
 fn check_for_target(project: Option<PathBuf>, source: Option<PathBuf>) -> i32 {
     match selected_project_target(&project) {
         Ok(TargetLanguage::Python) => check_project(project, source),
         Ok(TargetLanguage::Kotlin) => {
             finish_kotlin_unit(crate::kotlin::pipeline::check(project, source))
         }
+        Ok(TargetLanguage::Dart) => finish_dart_unit(crate::dart::pipeline::check(project, source)),
         Err(message) => target_selection_failure(OutputFormat::Human, message),
     }
 }
@@ -4252,6 +4312,7 @@ fn format_for_target(project: Option<PathBuf>, check: bool) -> i32 {
         Ok(TargetLanguage::Kotlin) => {
             finish_kotlin_unit(crate::kotlin::pipeline::format(project, check))
         }
+        Ok(TargetLanguage::Dart) => finish_dart_unit(crate::dart::pipeline::format(project, check)),
         Err(message) => target_selection_failure(OutputFormat::Human, message),
     }
 }
@@ -4282,15 +4343,24 @@ fn emit_for_target(project: Option<PathBuf>, requested: EmitTarget) -> i32 {
         (EmitTarget::Ir, TargetLanguage::Kotlin) => {
             finish_kotlin_path(crate::kotlin::pipeline::emit(project, true))
         }
+        (EmitTarget::Ir, TargetLanguage::Dart) => {
+            finish_dart_path(crate::dart::pipeline::emit(project, true))
+        }
         (EmitTarget::Python, TargetLanguage::Python) => emit_python_project(project),
         (EmitTarget::Kotlin, TargetLanguage::Kotlin) => {
             finish_kotlin_path(crate::kotlin::pipeline::emit(project, false))
         }
-        (EmitTarget::Python, TargetLanguage::Kotlin) => {
+        (EmitTarget::Dart, TargetLanguage::Dart) => {
+            finish_dart_path(crate::dart::pipeline::emit(project, false))
+        }
+        (EmitTarget::Python, actual @ (TargetLanguage::Kotlin | TargetLanguage::Dart)) => {
             target_mismatch(TargetLanguage::Python, actual)
         }
-        (EmitTarget::Kotlin, TargetLanguage::Python) => {
+        (EmitTarget::Kotlin, actual @ (TargetLanguage::Python | TargetLanguage::Dart)) => {
             target_mismatch(TargetLanguage::Kotlin, actual)
+        }
+        (EmitTarget::Dart, actual @ (TargetLanguage::Python | TargetLanguage::Kotlin)) => {
+            target_mismatch(TargetLanguage::Dart, actual)
         }
     }
 }
@@ -4312,6 +4382,7 @@ fn generate_for_target(
     match requested {
         TargetLanguage::Python => generate_project(project, symbol, agent, jobs),
         TargetLanguage::Kotlin => crate::kotlin::generation::generate(project, symbol, agent, jobs),
+        TargetLanguage::Dart => crate::dart::generation::generate(project, symbol, agent, jobs),
     }
 }
 
@@ -4319,6 +4390,7 @@ fn prompt_for_target(project: Option<PathBuf>, symbol: String, format: OutputFor
     match selected_project_target(&project) {
         Ok(TargetLanguage::Python) => prompt_project(project, symbol, format),
         Ok(TargetLanguage::Kotlin) => crate::kotlin::prompt::prompt(project, symbol, format),
+        Ok(TargetLanguage::Dart) => crate::dart::prompt::prompt(project, symbol, format),
         Err(message) => target_selection_failure(format, message),
     }
 }
@@ -4351,6 +4423,9 @@ fn verify_for_target(project: Option<PathBuf>) -> i32 {
         Ok(TargetLanguage::Kotlin) => {
             finish_kotlin_verification(crate::kotlin::pipeline::verify(project))
         }
+        Ok(TargetLanguage::Dart) => {
+            finish_dart_verification(crate::dart::pipeline::verify(project))
+        }
         Err(message) => target_selection_failure(OutputFormat::Human, message),
     }
 }
@@ -4366,6 +4441,9 @@ fn diff_for_target(
         Ok(TargetLanguage::Kotlin) => {
             crate::kotlin::pipeline::diff(project, baseline, exit_code, format)
         }
+        Ok(TargetLanguage::Dart) => {
+            crate::dart::pipeline::diff(project, baseline, exit_code, format)
+        }
         Err(message) => target_selection_failure(format, message),
     }
 }
@@ -4375,6 +4453,9 @@ fn deploy_for_target(project: Option<PathBuf>, output: Option<PathBuf>) -> i32 {
         Ok(TargetLanguage::Python) => deploy_project(project, output),
         Ok(TargetLanguage::Kotlin) => {
             finish_kotlin_path(crate::kotlin::pipeline::deploy(project, output))
+        }
+        Ok(TargetLanguage::Dart) => {
+            finish_dart_path(crate::dart::pipeline::deploy(project, output))
         }
         Err(message) => target_selection_failure(OutputFormat::Human, message),
     }

@@ -2,7 +2,7 @@
 
 `cott` is a language-like compiler for typed intent and prompt authoring. A bodyless `.cott`
 module declares public types, functions, contracts, effects, scenarios, and errors. Those
-declarations are the authored intent; Python and Kotlin/JVM are verified projections, not second
+declarations are the authored intent; Python, Kotlin/JVM, and Dart are verified projections, not second
 contract sources. Runtime code uses generated public facades and does not read authored `.cott`
 live.
 
@@ -17,6 +17,8 @@ identity remains package `1.0.0`, Canonical IR schema `8`, generation schema/dom
 schema `1`. Kotlin uses the same package and Canonical IR but a distinct closed generation schema
 `1`, domain `cott.kotlin.generation.v1`, and runtime ABI `1`; it never stores Kotlin truth in
 Python-only fields. Readers and runtimes reject records and identities from the other backend.
+Dart has its own generation schema `1`, domain `cott.dart.generation.v1`, and runtime ABI `1`.
+Its Dart package is directly consumable by Flutter; no Kotlin bridge is required.
 
 If these docs and repository source disagree, the source files and closed schema validators are
 authoritative; documentation must be corrected rather than inventing a compatibility path.
@@ -112,8 +114,8 @@ cott verify --project "$project"
 
 ### Kotlin/JVM module workflow
 
-A manifest selects exactly one target: `[target.python]` or `[target.kotlin]`, never both. The
-Kotlin table is closed. `source`, `generated`, and `runtime_validation` are required;
+A manifest selects exactly one of `[target.python]`, `[target.kotlin]`, or `[target.dart]`.
+The Kotlin table is closed. `source`, `generated`, and `runtime_validation` are required;
 `compiler = "kotlinc"`, `java = "java"`, and `jvm_target = 17` have those defaults and JVM 17 is
 the only accepted target. `classpath` contains runtime JARs and `compile_only` contains compile-time
 JARs such as an Android SDK `android.jar`; both are hashed compiler inputs, but only `classpath`
@@ -177,6 +179,92 @@ callables and authentic intent-stale agent sources remain unresolved; unrecorded
 agent files fail closed rather than refreshing trust from an old record. Public
 consumers import only the generated Cott module package, never `cott_bindings` or `cott_impl`.
 
+### Dart module and Flutter workflow
+
+Dart requires SDK `>=3.13.3,<4.0.0`; `project.name` is the lowercase snake_case Dart package name.
+Cott owns the module, while Flutter owns widgets, plugins, application resources and platform builds.
+`cott init --target dart` creates a Dart Cott module, not a Flutter application.
+
+```toml
+[project]
+name = "flutter_counter"
+version = "0.1.0"
+source = "src"
+
+[target.dart]
+source = "dart"
+generated = "generated/dart"
+sdk = "dart"
+runtime_validation = "boundary"
+
+[target.dart.implementations]
+"example.counter.increment" = "cott_bindings/counter/increment.dart:_increment"
+```
+
+```bash
+cott init path/to/module --target dart --name example_module
+# init creates an empty module. First declare a callable in src/example_module/main.cott,
+# for example: fn main() -> Unit
+cott check --project path/to/module
+cott emit dart --project path/to/module
+cott prompt example_module.main.main --project path/to/module
+cott generate --agent omp --target dart --project path/to/module
+cott verify --project path/to/module
+cott diff --project path/to/module
+cott deploy --project path/to/module --output dist/example_module
+```
+
+`emit dart` and `generate --target dart` always publish an unverified snapshot. Only `verify`
+runs the real Dart analyzer, kernel compiler and authenticated bounded runner, then certifies
+`current == last_verified`. Authored private implementation functions become compiler-owned Dart
+parts; public callers import `package:<name>/modules/<module path>.dart`, not implementation files.
+Stateful methods share an owner-private library so state and guard internals remain private.
+
+The runtime preserves I64/U64 through `BigInt`, exact fixed-width bounds, F32 rounding, Unicode,
+immutable values and protocol lifecycles. Generic APIs use explicit `CottType<T>` witnesses where
+Dart types cannot recover Cott distinctions; checked views enforce Cott variance instead of relying
+on Dart covariance. Const generics use `CottConst` witnesses. Cancellation is cooperative and guard
+ownership is explicit; arbitrary `Future` preemption is never claimed.
+
+Verification requires Linux bubblewrap and Landlock ABI `>=3`. The filesystem policy is applied
+before Dart VM threads start. It denies process-memory access while permitting the VM's own
+`/proc/self/maps` and declared scratch I/O. Runner messages use a fresh stdin-only HMAC-SHA256 key;
+candidate stdout cannot certify a snapshot.
+
+For dependencies, set both `target.dart.pubspec` and `target.dart.lockfile` to project-relative
+metadata files outside the implementation source tree, for example `dart_package/pubspec.yaml`
+and `dart_package/pubspec.lock`. Package name/version must match Cott. Verification is offline and
+uses the exact production closure, not dependency overrides or a fresh solver choice. Hosted
+packages additionally require the original locked archive at
+`$PUB_CACHE/hosted-archives/<registry-cache-key>/<name>-<version>.tar.gz`.
+Prepare these archives explicitly from the registry's `archive_url`; Cott checks their compressed
+SHA-256 against the lock and compares extracted bytes before trusting the cache. An extracted
+pub cache plus its writable hash sidecar is insufficient. Missing archives fail with their required
+path; Cott does not silently download them during verification.
+
+The working Flutter consumer is `examples/integrations/flutter-counter`:
+
+```bash
+cd examples/integrations/flutter-counter
+COTT_BIN=/absolute/path/to/cott FLUTTER_BIN=/absolute/path/to/flutter dart tool/setup.dart
+cd flutter
+flutter analyze --no-pub
+flutter build web --release --no-pub --no-web-resources-cdn
+flutter build apk --debug --no-pub
+```
+
+Setup emits, verifies and deploys the module to `flutter/cott_module`, refuses an existing output,
+then runs Flutter's own `pub get`. The app depends on that directory and imports only
+`package:flutter_counter/modules/example/counter.dart`. Dart deployment contains `lib/`,
+compiler-owned `pubspec.yaml`, unchanged `generation.json`, `dependencies.json` and verified
+runtime vendor packages. It excludes kernel verification artifacts, contracts, authoring copies,
+the SDK, runner support and caches. Flutter compiles those portable sources for its chosen platform.
+Flutter `3.47.4` with bundled Dart `3.13.3` was exercised: analyzer, release web build and debug
+Android APK build passed. Browser interaction confirmed `0 → 1 → 0` and both bounds `0..100`;
+the Cott module recorded all six clauses as observed. APK build is not device execution evidence.
+
+### Prompt inspection and snapshot lifecycle
+
 Inspect a callable using its own project and fully qualified name, for example:
 
 ```bash
@@ -189,8 +277,8 @@ generation prompt. It does not call a provider or target compiler/checker, and i
 or recover journals. Human mode writes the prompt bytes; JSON is
 `{symbol,intent_hash,prompt_hash,generation_required,context,prompt}`. `prompt` matches those
 initial bytes, `prompt_hash` hashes only that initial prompt, and retries later append actual
-validation feedback. The requested write path is `implementation.py` for Python or
-`implementation.kt` for Kotlin. Inspection may take the project lock and write lock metadata; a
+validation feedback. The requested write path is `implementation.py` for Python,
+`implementation.kt` for Kotlin, or `implementation.dart` for Dart. Inspection may take the project lock and write lock metadata; a
 pending journal is refused without recovery. `context` is the scoped transitive declaration set:
 explicit identifier references, `constant_ref` uses, `cott.applied_rule` links and their bases,
 relevant incoming scenarios, and global rule prose plus `cott-domain` lines for selected callables.
@@ -305,10 +393,12 @@ app and does not run Python on-device.
 
 ## Reduced example index
 
-The maintained inventory has 26 Python projects plus one Kotlin/Android project: six grammar
-lessons, three simple lessons, one complex curriculum project, the separate `process-bar`
-full-generation fixture, seven focused features, one modular project, one FastAPI integration, six
-real-world generation-first projects, and the Android counter module/consumer integration.
+The authored inventory contains 26 Python projects, 20 Kotlin projects and one Dart/Flutter project.
+The Python set has six grammar lessons, three simple lessons, one complex curriculum project, the
+separate `process-bar` fixture, seven features, one modular project, one FastAPI integration and six
+real-world projects. `examples/kotlin/` contains 19 corresponding Kotlin lessons/fixtures, with
+`integrations/android-counter` as the twentieth Kotlin project.
+`integrations/flutter-counter` is the Dart module and standard Flutter consumer.
 
 ### Grammar — 6
 
