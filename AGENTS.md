@@ -3,41 +3,49 @@
 ## Project Overview
 
 `cott` is a Rust 2024 compiler for language-like typed intent and prompt authoring. A bodyless
-`.cott` module is the public contract source. Python bindings or accepted agent implementations are
-checked projections; generated Python facades are the only public import path. Runtime does not
-read authored `.cott` live.
+`.cott` module is the public contract source. Python and Kotlin bindings or accepted agent
+implementations are checked projections; generated target facades are the only public import path.
+Runtime code does not read authored `.cott` live.
 
-`architecture.md` is the authoritative implemented v1.0 contract: package `1.0.0`, Canonical IR
-schema `8`, generation schema/domain `7` (`cott.generation.v7`), runtime ABI `7`, contract-test
-strategy schema `5`, and diagnostics schema `1`. Keep this closed compatibility contract:
-incompatible records, runtimes, and strategies fail closed. Do not add a legacy reader, partial
-profile, unsandboxed fixture fallback, or second source of truth.
+`architecture.md` is the normative implemented v1.0 contract. Preserve the Python closed identity:
+package `1.0.0`, Canonical IR schema `8`, generation schema/domain `7`
+(`cott.generation.v7`), runtime ABI `7`, contract-test strategy schema `5`, and diagnostics schema
+`1`. Kotlin shares package `1.0.0` and Canonical IR `8` but has separate closed generation schema
+`1`, domain `cott.kotlin.generation.v1`, and runtime ABI `1`. Never put Kotlin truth in
+Python-named fields or accept one backend's record in the other. Do not add legacy readers, partial
+profiles, unsandboxed fallbacks, or a second source of truth. When documentation and implementation
+source disagree, the source files and closed schema validators are authoritative; update the docs
+rather than preserving a contradictory convention.
 
 ## Architecture & Data Flow
 
 ```text
-cott check / fmt / emit / generate / prompt / verify / diff
-  → closed manifest + symlink-safe source discovery
-  → lossless CST → AST → complete HIR → canonical IR
-  → intent fingerprints + binding or scoped agent implementation validation
-  → deterministic Python, stub, test, and provenance plan
-  → prompt inspection, or journaled publish, exact verification, or semantic diff
+cott check / fmt / emit / generate / prompt / verify / diff / deploy
+  → exactly one closed Python or Kotlin target + symlink-safe source discovery
+  → lossless CST → AST → complete HIR → Canonical IR
+  → intent fingerprints + target binding or scoped agent implementation validation
+  → deterministic target facade/runtime/provenance plan
+  → prompt inspection, unverified journaled publish, explicit verification, semantic diff, or deployment
 ```
 
-- `src/manifest.rs` and `src/project.rs` own the closed manifest, paths, and source discovery.
+- `src/manifest.rs` and `src/project.rs` own the single closed manifest parser, exactly-one-target
+  selection, paths, and source discovery.
 - `src/syntax.rs`, `src/lexer.rs`, `src/parser.rs`, `src/ast.rs`, `src/hir.rs`, and `src/formatter.rs`
   implement the source pipeline; `src/ir.rs` renders and validates canonical JSON.
 - `src/intent.rs` fingerprints scoped declaration context (`doc`, applied rules and bases, contract
-  constants, types, incoming scenarios, retained generator-rule identifiers) as `tools.cott_intent` version 1 hashes under unchanged generation-7 identity.
-- `src/binding.rs` resolves manifest and durable agent implementations with byte identity, pending
-  unresolved source ownership, same-v7 baseline derivation, and tamper checks.
-- `src/python_emit.rs`, `src/python_runtime.rs`, `src/python_verify.rs`, and
-  `src/contract_test.rs` own the Python ABI and verification pipeline.
-- `src/agent.rs`, `src/sandbox.rs`, `src/transaction.rs`, and `src/cli.rs` own prompt rendering,
-  external execution, containment, crash-safe publication, inspection lock, command grammar, and
-  exit codes.
-- `src/deploy.rs` selects authored runtime adapters; `src/cli.rs` gates and atomically publishes
-  runtime-only deployment directories without rewriting the generated snapshot.
+  constants, types, incoming scenarios, retained generator-rule identifiers) as
+  `tools.cott_intent` version 1 hashes.
+- `src/binding.rs`, `src/python_emit.rs`, `src/python_runtime.rs`, `src/python_verify.rs`, and
+  `src/contract_test.rs` own the unchanged Python generation-7/runtime-7 backend.
+- `src/kotlin/{binding,emit,runtime,provenance,pipeline,verify,runner,prompt,generation}.rs` own the
+  distinct Kotlin generation-1/runtime-1 module pipeline. Do not reuse Python record fields or
+  weaken either validator.
+- `src/agent.rs`, `src/sandbox.rs`, `src/transaction.rs`, and `src/cli.rs` own external execution,
+  containment, crash-safe publication, inspection lock, target dispatch, command grammar, and exit
+  codes.
+- Python deployment selects authored runtime adapters. Kotlin deployment packages the verified
+  module and runtime JAR dependencies. `src/cli.rs` and `src/kotlin/pipeline.rs` gate and atomically
+  publish new runtime-only directories without rewriting the generated snapshot.
 - Generated artifact paths are compiler-owned. Do not hand-edit `generated/`; change the contract or
   the selected implementation source, then use the command that owns the managed output.
 
@@ -47,25 +55,30 @@ cott check / fmt / emit / generate / prompt / verify / diff
 | --- | --- |
 | `src/` | Rust compiler, semantic model, emitter, and CLI |
 | `tests/` | Rust integration tests; use public APIs or the built `cott` binary |
-| `examples/grammar/` | Six declaration and ABI lessons, including `checked-add` binding |
-| `examples/simple/` | Three compact composition lessons |
-| `examples/complex/artifact-pipeline/` | The one pure complex curriculum project |
-| `examples/complex/process-bar/` | Focused full-agent-generation fixture, outside curriculum counts |
-| `examples/features/` | Seven focused v1.0 feature projects |
-| `examples/modular/order-management/` | Multi-module facade composition |
-| `examples/integrations/fastapi-hello/` | FastAPI external-type projection |
-| `examples/real/` | Six independent real-world generation-first projects |
+| `examples/grammar/` | Six Python declaration and ABI lessons, including `checked-add` binding |
+| `examples/simple/` | Three compact Python composition lessons |
+| `examples/complex/artifact-pipeline/` | The one pure complex Python curriculum project |
+| `examples/complex/process-bar/` | Focused Python full-agent-generation fixture, outside curriculum counts |
+| `examples/features/` | Seven focused Python v1.0 feature projects |
+| `examples/modular/order-management/` | Python multi-module facade composition |
+| `examples/integrations/fastapi-hello/` | Python FastAPI external-type projection |
+| `examples/integrations/android-counter/` | Kotlin/JVM Cott module plus standard Gradle-owned Android consumer |
+| `examples/real/` | Six independent Python real-world generation-first projects |
 | `examples/**/src/**/*.cott` | Authoritative example contracts |
-| `examples/**/python/cott_bindings/**/*.py` | Selected project-local binding sources where a manifest maps them |
-| `examples/**/python/_cott_impl/**/*.py` | Durable accepted agent implementation sources where present |
+| `examples/**/python/cott_bindings/**/*.py` | Selected Python binding sources |
+| `examples/**/python/_cott_impl/**/*.py` | Durable accepted Python agent implementation sources |
+| `examples/**/kotlin/cott_bindings/**/*.kt` | Selected Kotlin binding sources |
+| `examples/**/kotlin/cott_impl/**/*.kt` | Durable accepted Kotlin agent implementation sources |
 | `architecture.md` | Normative implemented v1.0 contract |
 
-The maintained inventory is 26 independent projects: grammar 6, simple 3, complex curriculum 1,
-`process-bar` fixture 1, features 7, modular 1, FastAPI integration 1, and real-world 6
-(`yt-dlp`, `harlequin`, `pgcli`, `posting`, `toolong`, `frogmouth`). Every project has `cott.toml`
-and `src/`; its managed/output and implementation layout follows its own manifest and generation
-record. Committed `generated/` and agent-owned `_cott_impl` content are compiler results. Never
-treat `.venv/`, `.cott/`, or `__pycache__/` as managed project content.
+The maintained inventory is 26 Python projects plus one Kotlin/Android project. The Python set is
+grammar 6, simple 3, complex curriculum 1, `process-bar` fixture 1, features 7, modular 1, FastAPI
+integration 1, and real-world 6 (`yt-dlp`, `harlequin`, `pgcli`, `posting`, `toolong`,
+`frogmouth`). `integrations/android-counter` is the Kotlin/JVM module and Android consumer. Every
+project has `cott.toml` and `src/`; its output and implementation layout follows its one selected
+target and generation record. Committed `generated/` and agent-owned implementation content are
+compiler results. Never treat `.venv/`, `.cott/`, `.gradle/`, `build/`, or `__pycache__/` as managed
+project content.
 
 ## Development Commands
 
@@ -80,11 +93,11 @@ cargo run -- emit ir --project examples/grammar/checked-add
 The implemented command forms are:
 
 ```text
-cott init <path> [--name <name>] [--no-sync] [--format json]
+cott init <path> [--target python|kotlin] [--name <name>] [--no-sync] [--format json]
 cott check [<source.cott>] [--project <dir>] [--format json]
 cott fmt [--check] [--project <dir>] [--format json]
-cott emit ir|python [--project <dir>] [--format json]
-cott generate [<fully.qualified.function>] --agent codex|claude|omp --target python [-j <jobs>] [--project <dir>] [--format json]
+cott emit ir|python|kotlin [--project <dir>] [--format json]
+cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin [-j <jobs>] [--project <dir>] [--format json]
 cott prompt <fully.qualified.callable> [--project <dir>] [--format json]
 cott verify [--project <dir>] [--format json]
 cott deploy [--output <dir>] [--project <dir>] [--format json]
@@ -94,42 +107,48 @@ cott lsp
 
 `deploy` packages a verified, fully resolved snapshot with passing coverage policy and unchanged
 input/managed bytes into `<project>/dist/<name>-<version>/` or `--output` (relative to the calling
-working directory). Existing output is never overwritten. It preserves runtime Python code under
-`python/`, authored runtime adapters, unchanged `generation.json`, exact `.python-version`, and
-hash-pinned production `requirements.txt`; it excludes source contracts, original `generated/`
-layout, IR, stubs, tests, authoring implementation copies and caches. The runtime and provenance
-record remain required. Dependencies export offline from the frozen lock with uv, excluding dev
-and default groups; the destination installs Python and external dependencies separately.
-Non-Python application resources are not inferred. No agent, Python or checker is called by deploy.
+working directory). Existing output is never overwritten. Python deployment preserves runtime code
+under `python/`, authored adapters, unchanged `generation.json`, exact `.python-version`, and
+hash-pinned production `requirements.txt`. Kotlin deployment preserves `cott-module.jar`, unchanged
+`generation.json`, `dependencies.json`, compiler-bundled coroutine `1.8.0`, and verified runtime
+`classpath` JARs under `runtime-libs/`; Kotlin stdlib is recorded as required and provided by
+Kotlin/Gradle, while `compile_only` JARs are excluded. Both targets exclude contracts, the original
+generated layout, tests, authoring implementation copies, and caches. Deploy never generates,
+re-verifies, runs an agent, or infers application resources.
 
-`emit` and `generate` publish through the project transaction and leave `current.verified = false`.
-`emit python` never invokes an agent. Unresolved callables are omitted from the public facade.
-`emit ir` rewrites only IR scope and `generation.json`; non-IR managed hashes stay trusted recorded
-values and cannot bless unrelated on-disk edits. Pending unresolved agent sources with authentic `AgentRun` provenance keep the old source across
-repeated emit and checkpoint until regeneration. Manifest-owned bindings are excluded from intent
-regeneration. Same-v7 records without `tools.cott_intent` derive fingerprints from recorded
-`contract_surface`; absence is never assumed fresh, and missing manifest or rule evidence
-invalidates conservatively. Tampered agent files that do not match recorded path and hash are
-rejected. `generate` invokes the selected agent only for eligible unresolved callables.
-One generate invocation freezes the advertised initial prompt snapshot; later accepted wave
-candidates are used for validation, not that initial `prompt_hash`.
-`cott prompt` renders the same initial prompt without a provider, Python, or checker. JSON is
-`{symbol,intent_hash,prompt_hash,generation_required,context,prompt}`. `prompt_hash` covers the
-initial prompt only; retries append actual validation feedback. The write path is relative
-`implementation.py`. Inspection may hold the project lock and write lock metadata; pending journals
-are refused without recovery or publication. Normal commands recover. Context is scoped transitive
-declarations, explicit identifier references, `constant_ref`, `cott.applied_rule` links and bases, relevant incoming scenarios, and scoped `cott-domain`
-directives versus global prose. Prompt sections stay separated: authority, current intent, formal
-declarations, project rules, reference implementations, output rules, feedback. Rules and
-reference prose never override source; conflicts are surfaced, not NLP-proved. `doc` still
-invalidates intent; the diff class `DOCUMENTATION` is a separate label. `verify` rebuilds and
-checks the complete target without a cache, refuses pending unresolved work, does not export old
-managed implementations that are not in the current facade, then updates provenance and applies
-any selected semantic-coverage gate. `current` is the last emitted epoch; `last_verified` is
-history. An already deployed snapshot keeps its old contract until `emit` or `generate`.
-`generate -j` runs stable waves and reports per-callable progress. Agent or final validation
-failures checkpoint source-audited candidates as unverified, retain exit `5`, and resume unresolved
-callables on the next generate.
+`emit` and `generate` publish through the project transaction and always leave
+`current.verified = false`; only explicit `verify` certifies a snapshot. Target emit never invokes
+an agent. Unresolved callables are omitted from the callable facade. `emit ir` rewrites only IR
+scope and `generation.json`; non-IR managed hashes stay trusted recorded values and cannot bless
+unrelated on-disk edits. Pending unresolved agent sources with authentic `AgentRun` provenance keep
+their old bytes across repeated emit and checkpoint until regeneration. Manifest-owned bindings
+are excluded from intent regeneration. Same-v7 fallback derivation applies only to Python records;
+Kotlin remains closed generation schema 1. Missing manifest/rule evidence and source/path/hash
+drift invalidate conservatively. `generate` invokes the selected agent only for eligible unresolved
+callables and freezes all advertised initial prompts before accepting any wave candidate.
+
+`cott prompt` renders that same initial snapshot without a provider or target compiler/checker.
+JSON is `{symbol,intent_hash,prompt_hash,generation_required,context,prompt}`; `prompt_hash` covers
+only the initial bytes. The requested write path is `implementation.py` for Python and
+`implementation.kt` for Kotlin. Context is the scoped transitive declaration closure, including
+explicit references, `constant_ref`, applied rules/bases, relevant scenarios, and scoped
+`cott-domain` directives. Prompt sections stay separated: authority, current intent, formal
+declarations, project rules, references, target output rules, and feedback. Formal source is
+authoritative; rules and references never override it.
+
+`verify` rebuilds and checks the complete selected target without a result cache, refuses unresolved
+work, and publishes certification only after real target verification. Kotlin verify uses
+kotlinc `>=2.2.10`, JDK `>=17`, JVM target 17, compiler-distribution stdlib and coroutine `1.8.0`,
+then compiles `library/cott-module.jar` and executes the bounded runner in the existing sandbox.
+For Kotlin, `current.verified = true` requires `current == last_verified`. Emit, generate, and
+actual format edits retain history but invalidate current certification. An already deployed
+snapshot keeps its old contract until a later deployment.
+
+Kotlin/JVM erases ordinary type parameters. Associated projections become additional bounded Kotlin
+type parameters, with concrete impl assignments resolved before overrides; never add reflection or
+phantom associated wrappers. Free const generics require `_cott_const_*: CottConst` value witnesses.
+Runtime evidence must not claim arbitrary erased `T` or abstract associated values were reified:
+unsupported bounded candidates remain unobserved/unknown.
 
 `generate` has three direct adapters: `codex`, direct `claude`, and `omp`; selecting a Claude
 model inside OMP is still `omp`, never the direct Claude adapter. Before generation, direct Claude's
@@ -188,32 +207,62 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
   commit its verified generated artifacts. Manifest bindings are limited to the essential host
   boundaries: yt-dlp transfer, Harlequin REPL, Posting HTTP, and Frogmouth document loading.
 
+### Kotlin Implementations and Android Boundary
+
+- `[target.kotlin.implementations]` maps a Cott callable to a Kotlin package/function FQN under
+  `target.kotlin.source`. Durable agent files use
+  `<target.kotlin.source>/cott_impl/<module path>/<function>.kt`; methods include the concrete-type
+  path.
+- Audit exact package, one canonical internal top-level function, signature, owner, source/runtime
+  origin, content hash, intent fingerprint, and permitted private helpers. Unimplemented callables
+  and authenticated intent-stale agent sources remain unresolved; unrecorded, moved, tampered, or
+  manifest-shadowed agent files fail closed. Never refresh trust from old provenance.
+- Public consumers import the generated Cott package only. Direct `cott_bindings`/`cott_impl`
+  imports or public re-exports are boundary violations.
+- `target.kotlin.classpath` and `target.kotlin.compile_only` are disjoint normalized
+  project-relative JAR lists and hashed compiler inputs. Only `classpath` is a deployable runtime
+  dependency.
+- The Android counter uses Android Gradle plugin `9.0.1` (bundled Kotlin `2.2.10`), SDK `36`,
+  min SDK `26`, JVM 17, and its
+  pinned Gradle `9.1.0` wrapper with distribution SHA-256
+  `a17ddd85a26b6a7f5ddb71ff8b05fc5104c0202c6e64782429790c933686c806`; set `COTT_BIN` to an
+  absolute in-tree compiler path during development.
+- Cott owns the Cott module's compilation, contract verification, and deployment. Standard
+  Gradle/Android owns UI, `AndroidManifest.xml`, resources, dependency resolution, DEX, APK/AAB,
+  signing, installation, and device lifecycle. Do not claim Cott scaffolds an Android app or runs
+  Python on-device.
+
 ## Important Files
 
 - `Cargo.toml` — Rust package metadata; `src/main.rs` is the binary bridge.
-- `src/cli.rs` — command grammar, exit-code mapping, staged publish, prompt inspection, and exact verification.
-- `src/manifest.rs` / `src/project.rs` — manifest and path trust boundary.
+- `src/cli.rs` — command grammar, exactly-one-target dispatch, exit codes, and Python publication.
+- `src/manifest.rs` / `src/project.rs` — shared manifest and path trust boundary.
 - `src/hir.rs` / `src/ir.rs` — semantic source of truth and canonical serialization.
-- `src/intent.rs` — scoped intent context and `tools.cott_intent` version 1 fingerprints, including applied-rule and constant-ref closure.
-- `src/python_emit.rs` / `src/python_runtime.rs` — target ABI and managed artifact layout.
-- `src/python_verify.rs` / `src/contract_test.rs` — checker, runtime, dependency, and contract evidence.
-- `src/agent.rs` / `src/sandbox.rs` — prompt rendering, pinned provider adapters, and containment.
-- `src/transaction.rs` / `src/cli.rs` — journaled mutation, inspection lock, commands, output, and exit codes.
+- `src/intent.rs` — scoped intent context and `tools.cott_intent` version 1 fingerprints.
+- `src/python_emit.rs` / `src/python_runtime.rs` / `src/python_verify.rs` — unchanged Python ABI.
+- `src/kotlin/` — Kotlin ABI, binding, emission, provenance, prompt/generation, verification,
+  runner, publication, diff, init, and deployment.
+- `src/agent.rs` / `src/sandbox.rs` — pinned provider adapters and containment.
+- `src/transaction.rs` — journaled mutation and inspection lock.
 
 ## Runtime/Tooling Preferences
 
 - Use the committed Rust toolchain through Cargo.
-- The Python target is CPython `>=3.14.6,<3.15` with BasedPyright `>=1.39.9`; init and lock
+- The Python target is CPython `>=3.14.6,<3.15` with BasedPyright `>=1.39.9`; Python init and lock
   operations use uv `>=0.12.3`.
-- Generated runtime code is standard-library-only. Project implementations may use lock-selected
-  external distributions whose installed identity and files verify exactly.
+- The Kotlin target is kotlinc `>=2.2.10`, JDK `>=17`, JVM 17, compiler-matched stdlib, and the
+  exact compiler-distribution `kotlinx-coroutines-core-jvm` `1.8.0`.
+- Python generated runtime code is standard-library-only. Kotlin generated runtime code additionally
+  requires the recorded coroutine JAR. Project dependencies remain target-manifest inputs.
 
 ## Testing & QA
 
 - Run `cargo fmt --check` and `cargo test` after compiler code changes.
 - Test observable contracts: diagnostics, canonical bytes, signatures and wrappers, provenance,
-  sandboxing, transactions, exit codes, output-tree preservation, and semantic-coverage evidence.
+  sandboxing, transactions, target dispatch, output-tree preservation, and semantic coverage.
 - Python verification tests use explicit fake pinned tool wrappers where a real CPython 3.14.6
-  environment is unavailable.
-- Do not copy or assert transient `.venv/`, `.cott/`, or `__pycache__/` content. Managed example
-  output changes only when the requested work includes the compiler-owned result.
+  environment is unavailable. Kotlin verification tests use controlled Kotlin/JDK toolchains; real
+  Android integration remains a standard Gradle consumer check, distinct from Cott module verify.
+- Do not copy or assert transient `.venv/`, `.cott/`, `.gradle/`, `build/`, or `__pycache__/`
+  content. Managed example output changes only when the requested work includes the compiler-owned
+  result.

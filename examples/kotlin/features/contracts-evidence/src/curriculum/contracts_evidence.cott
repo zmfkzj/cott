@@ -1,0 +1,47 @@
+module curriculum.contracts_evidence
+
+newtype AcceptedLabel(Str)
+    where self.len > 0
+
+struct LabelRequest:
+    label: Option[Str]
+    minimum_length: U64
+
+struct LabelAssessment:
+    text: Str
+    length: U64
+    label: AcceptedLabel
+
+    invariant self.text.len == self.length
+    invariant self.text == self.label.value
+
+enum LabelEvidenceError:
+    Legacy
+    Missing
+    TooShort(actual: Str)
+
+rule BaselineLabelRule:
+    error LabelEvidenceError.Legacy
+    error LabelEvidenceError.Missing
+
+rule RefinedLabelRule(BaselineLabelRule):
+    override error LabelEvidenceError.Missing when false
+
+    delete error LabelEvidenceError.Legacy
+
+fn assess_label(request: LabelRequest) -> Result[LabelAssessment, LabelEvidenceError]:
+    doc """
+    Assess labels directly: missing labels and labels shorter than the requested
+    minimum are declared errors; successful labels are nominally refined and
+    meet the request's minimum length.
+    """
+
+    requires request.minimum_length > 0
+
+    ensures Result.Ok(value) => value.text.len >= request.minimum_length
+    ensures Result.Err(LabelEvidenceError.TooShort(actual)) => actual.len < request.minimum_length
+
+    error LabelEvidenceError.Missing
+    error LabelEvidenceError.TooShort with request.label matches Option.Some(text) when (text.len < request.minimum_length)
+
+    effects []

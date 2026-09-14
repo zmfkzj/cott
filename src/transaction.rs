@@ -129,19 +129,32 @@ impl InputSnapshot {
         expected: impl IntoIterator<Item = (PathBuf, String)>,
         extra_paths: impl IntoIterator<Item = PathBuf>,
     ) -> Result<Self, TransactionError> {
-        let expected = expected.into_iter().collect::<BTreeMap<_, _>>();
-        let mut paths = expected.keys().cloned().collect::<Vec<_>>();
+        let mut expected_files = BTreeMap::new();
+        for (path, hash) in expected {
+            validate_relative(&path)?;
+            let hash = hash.strip_prefix("sha256:").unwrap_or(&hash).to_owned();
+            match expected_files.get(&path) {
+                Some(existing) if existing != &hash => {
+                    return Err(TransactionError::SnapshotDrift(path));
+                }
+                Some(_) => {}
+                None => {
+                    expected_files.insert(path, hash);
+                }
+            }
+        }
+        let mut paths = expected_files.keys().cloned().collect::<Vec<_>>();
         paths.extend(extra_paths);
         paths.sort();
         paths.dedup();
         let snapshot = Self::capture(root, paths)?;
-        for (path, hash) in expected {
+        for (path, hash) in expected_files {
             let actual = snapshot
                 .files
                 .get(&path)
                 .and_then(Option::as_ref)
                 .map(|file| file.sha256.as_str());
-            if actual != Some(hash.strip_prefix("sha256:").unwrap_or(&hash)) {
+            if actual != Some(hash.as_str()) {
                 return Err(TransactionError::SnapshotDrift(path));
             }
         }
@@ -843,7 +856,7 @@ fn read_regular_file(
     let path = root.join(relative);
     let mut file = match OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(&path)
     {
         Ok(file) => file,

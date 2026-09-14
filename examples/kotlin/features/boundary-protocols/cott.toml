@@ -1,0 +1,18 @@
+[project]
+name = "boundary-protocols"
+version = "0.1.0"
+source = "src"
+
+[target.kotlin]
+source = "kotlin"
+generated = "generated/kotlin"
+compiler = "kotlinc"
+java = "java"
+jvm_target = 17
+runtime_validation = "boundary"
+
+[target.kotlin.external_types]
+"curriculum.boundary_protocols.TextBuffer" = "java.io.BufferedReader"
+
+[generator]
+rules = "GENERATOR_RULES.txt"

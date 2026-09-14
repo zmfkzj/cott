@@ -1,0 +1,1 @@
+For curriculum.trait_protocol.SimpleTask.complete only, retain the exact generated suspend helper signature. Assign self.lifecycle = curriculum.trait_protocol.TaskLifecycle.Completed, increment self.completion_count exactly once, then return true. Do not recreate a resource state type or bypass the generated receiver's internal setters.

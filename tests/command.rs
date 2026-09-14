@@ -1,8 +1,10 @@
 use std::ffi::OsString;
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use cott::cli::{AgentKind, Command, EmitTarget, OutputFormat, parse_command};
+use cott::cli::{AgentKind, Command, EmitTarget, OutputFormat, TargetLanguage, parse_command};
 
 fn parse(values: &[&str]) -> Command {
     parse_command(&values.iter().map(OsString::from).collect::<Vec<_>>())
@@ -30,6 +32,7 @@ fn parses_global_options_in_any_position() {
         ]),
         Command::Generate {
             symbol: Some("foo.bar.run".to_owned()),
+            target: TargetLanguage::Python,
             agent: Some(AgentKind::Omp),
             jobs: 1,
             project: None,
@@ -47,6 +50,7 @@ fn parses_global_options_in_any_position() {
         ]),
         Command::Generate {
             symbol: Some("foo.bar.Reader.read".to_owned()),
+            target: TargetLanguage::Python,
             agent: Some(AgentKind::Codex),
             jobs: 1,
             project: None,
@@ -64,6 +68,7 @@ fn parses_global_options_in_any_position() {
         ]),
         Command::Generate {
             symbol: Some("foo.bar.Writer.write".to_owned()),
+            target: TargetLanguage::Python,
             agent: Some(AgentKind::Claude),
             jobs: 1,
             project: None,
@@ -81,6 +86,7 @@ fn parses_generate_jobs() {
             ]),
             Command::Generate {
                 symbol: None,
+                target: TargetLanguage::Python,
                 agent: Some(AgentKind::Omp),
                 jobs: 5,
                 project: None,
@@ -88,6 +94,64 @@ fn parses_generate_jobs() {
             },
         );
     }
+}
+
+#[test]
+fn parses_closed_python_and_kotlin_targets() {
+    assert_eq!(
+        parse(&["init", "demo"]),
+        Command::Init {
+            path: PathBuf::from("demo"),
+            target: TargetLanguage::Python,
+            name: None,
+            no_sync: false,
+            format: OutputFormat::Human,
+        }
+    );
+    assert_eq!(
+        parse(&[
+            "init",
+            "--target",
+            "kotlin",
+            "--format",
+            "json",
+            "demo",
+            "--no-sync",
+        ]),
+        Command::Init {
+            path: PathBuf::from("demo"),
+            target: TargetLanguage::Kotlin,
+            name: None,
+            no_sync: true,
+            format: OutputFormat::Json,
+        }
+    );
+    assert_eq!(
+        parse(&["emit", "kotlin", "--project", "demo"]),
+        Command::Emit {
+            target: EmitTarget::Kotlin,
+            project: Some(PathBuf::from("demo")),
+            format: OutputFormat::Human,
+        }
+    );
+    assert_eq!(
+        parse(&[
+            "generate",
+            "foo.bar.run",
+            "--target",
+            "kotlin",
+            "--agent",
+            "omp"
+        ]),
+        Command::Generate {
+            symbol: Some("foo.bar.run".to_owned()),
+            target: TargetLanguage::Kotlin,
+            agent: Some(AgentKind::Omp),
+            jobs: 1,
+            project: None,
+            format: OutputFormat::Human,
+        }
+    );
 }
 
 #[test]
@@ -136,6 +200,45 @@ fn lsp_options_bypass_json_diagnostic_routing() {
 }
 
 #[test]
+fn prompt_and_diff_target_selection_errors_remain_json() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "cott-command-special-json-{}-{nonce}",
+        std::process::id()
+    ));
+    let malformed = root.join("malformed");
+    fs::create_dir_all(&malformed).unwrap();
+    fs::write(malformed.join("cott.toml"), "not valid toml = [").unwrap();
+
+    let prompt = ProcessCommand::new(env!("CARGO_BIN_EXE_cott"))
+        .args(["prompt", "demo.run", "--project"])
+        .arg(root.join("missing"))
+        .args(["--format", "json"])
+        .output()
+        .expect("cott should report a missing prompt project");
+    let diff = ProcessCommand::new(env!("CARGO_BIN_EXE_cott"))
+        .args(["diff", "--project"])
+        .arg(&malformed)
+        .args(["--format", "json"])
+        .output()
+        .expect("cott should report a malformed diff manifest");
+
+    for output in [prompt, diff] {
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stderr.is_empty());
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("selection failure should report JSON");
+        assert_eq!(report["schema_version"], 1);
+        assert_eq!(report["diagnostics"][0]["code"], "COTT-C001");
+        assert_eq!(report["diagnostics"][0]["severity"], "error");
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn rejects_duplicate_or_invalid_options() {
     assert!(
         parse_command(&["verify", "--project", "a", "--project", "b"].map(OsString::from)).is_err()
@@ -143,9 +246,125 @@ fn rejects_duplicate_or_invalid_options() {
     assert!(parse_command(&["init", "demo", "--project", "demo"].map(OsString::from)).is_err());
     assert!(parse_command(&["generate", "--target", "rust"].map(OsString::from)).is_err());
     assert_eq!(
+        parse_command(&["generate", "--agent", "omp"].map(OsString::from)),
+        Err("`generate` requires `--target python|kotlin`")
+    );
+    for arguments in [
+        &["init", "demo", "--target", "python", "--target", "kotlin"][..],
+        &["generate", "--target", "python", "--target", "kotlin"][..],
+        &["check", "--target", "kotlin"][..],
+        &["fmt", "--target", "kotlin"][..],
+        &["verify", "--target", "kotlin"][..],
+        &["deploy", "--target", "kotlin"][..],
+        &["diff", "--target", "kotlin"][..],
+        &["emit", "java"][..],
+    ] {
+        assert!(
+            parse_command(&arguments.iter().map(OsString::from).collect::<Vec<_>>()).is_err(),
+            "{arguments:?}"
+        );
+    }
+    assert_eq!(
         parse_command(&["generate", "--agent", "unknown"].map(OsString::from)),
         Err("`--agent` requires `codex`, `claude`, or `omp`")
     );
+}
+
+#[test]
+fn rejects_explicit_target_mismatch_before_backend_dispatch() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "cott-command-target-{}-{nonce}",
+        std::process::id()
+    ));
+    let kotlin = root.join("kotlin");
+    let python = root.join("python");
+    fs::create_dir_all(&kotlin).unwrap();
+    fs::create_dir_all(&python).unwrap();
+    fs::write(
+        kotlin.join("cott.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nsource = \"src\"\n\n[target.kotlin]\nsource = \"kotlin\"\ngenerated = \"generated/kotlin\"\nruntime_validation = \"boundary\"\n",
+    )
+    .unwrap();
+    fs::write(
+        python.join("cott.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nsource = \"src\"\n\n[target.python]\nsource = \"python\"\ngenerated = \"generated/python\"\nstubs = \"generated/stubs\"\ninterpreter = \".venv/bin/python\"\ntype_checker = \".venv/bin/basedpyright\"\nruntime_validation = \"boundary\"\n",
+    )
+    .unwrap();
+
+    let generate = ProcessCommand::new(env!("CARGO_BIN_EXE_cott"))
+        .args([
+            "generate",
+            "--target",
+            "python",
+            "--agent",
+            "omp",
+            "--project",
+        ])
+        .arg(&kotlin)
+        .output()
+        .expect("cott should reject the target mismatch");
+    assert_eq!(generate.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&generate.stderr)
+            .contains("requested target `python` does not match project target `kotlin`")
+    );
+
+    let emit = ProcessCommand::new(env!("CARGO_BIN_EXE_cott"))
+        .args(["emit", "kotlin", "--project"])
+        .arg(&python)
+        .output()
+        .expect("cott should reject the target mismatch");
+    assert_eq!(emit.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&emit.stderr)
+            .contains("requested target `kotlin` does not match project target `python`")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn reports_kotlin_validation_failures_with_kotlin_diagnostics() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root =
+        std::env::temp_dir().join(format!("cott-command-json-{}-{nonce}", std::process::id()));
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("kotlin")).unwrap();
+    fs::write(
+        root.join("cott.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nsource = \"src\"\n\n[target.kotlin]\nsource = \"kotlin\"\ngenerated = \"generated/kotlin\"\nruntime_validation = \"boundary\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/demo.cott"),
+        "module demo\n\nfn unresolved() -> Unit\n",
+    )
+    .unwrap();
+
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_cott"))
+        .args(["verify", "--project"])
+        .arg(&root)
+        .args(["--format", "json"])
+        .output()
+        .expect("cott should report Kotlin verification failure");
+    assert_eq!(output.status.code(), Some(4));
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("Kotlin diagnostics should be JSON");
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["diagnostics"][0]["code"], "COTT-T201");
+    assert!(
+        report["diagnostics"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("unresolved Kotlin implementations"))
+    );
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

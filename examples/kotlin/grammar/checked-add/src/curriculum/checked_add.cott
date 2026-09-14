@@ -1,0 +1,11 @@
+module curriculum.checked_add
+
+fn checked_add(left: I32, right: I32) -> I64:
+    doc """
+    Compute the exact mathematical sum of two signed 32-bit integers as a signed 64-bit integer.
+    Each input is in the inclusive range -2,147,483,648 through 2,147,483,647, so the result is in the inclusive range -4,294,967,296 through 4,294,967,294 and cannot overflow I64.
+    The function performs no additional validation, raises no declared errors, and deterministically returns left plus right.
+    """
+
+    ensures result >= -4294967296
+    ensures result <= 4294967294

@@ -1,0 +1,6 @@
+.cott/
+.gradle/
+.kotlin/
+build/
+generated/kotlin/
+local.properties

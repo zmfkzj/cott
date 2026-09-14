@@ -1,0 +1,76 @@
+module curriculum.trait_protocol
+
+trait Summarizable:
+    type Summary
+    async fn summary(self) -> Summarizable.Summary
+
+trait Prioritizable:
+    async fn priority_level(self) -> I32
+
+trait TaskView[+T] for Summarizable + Prioritizable:
+    async fn display(self) -> T
+    async fn category(self) -> Str = curriculum.trait_protocol.default_category
+
+trait Completable:
+    async fn complete(self) -> Bool
+
+async fn default_category[T](receiver: TaskView[T]) -> Str:
+    effects []
+
+async fn specialized_display(receiver: SimpleTask) -> Str:
+    effects []
+
+fn task_factory() -> Factory[SimpleTask]:
+    effects []
+
+async fn inspect_dyn(item: Dyn[TaskView[Str]]) -> Str:
+    effects []
+
+resource TaskLifecycle:
+    initial Pending
+    state Pending
+    state Completed
+    terminal Completed
+    transition Pending -> Completed
+
+specialize SimpleTask for TaskView[Str]:
+    display = curriculum.trait_protocol.specialized_display
+
+impl SimpleTask for TaskView[Str] + Completable:
+    type Summary = Str
+    state:
+        title: Str
+        urgency: I32
+        lifecycle: TaskLifecycle
+        completion_count: I32 = 0
+
+    invariant self.title.len > 0
+    invariant self.urgency >= 0
+    invariant self.completion_count >= 0
+
+    init(title: Str, urgency: I32):
+        requires title.len > 0
+        requires urgency >= 0
+
+        ensures self.title == title
+        ensures self.urgency == urgency
+
+    async fn summary(self) -> Str:
+        ensures result.len > 0
+
+        effects []
+
+    async fn priority_level(self) -> I32:
+        ensures result == self.urgency
+
+        effects []
+
+    async fn complete(self) -> Bool:
+        transitions self.lifecycle: TaskLifecycle.Pending -> TaskLifecycle.Completed
+
+        modifies self.completion_count
+
+        ensures result == true
+        ensures old(self.completion_count) + 1 == self.completion_count
+
+        effects []

@@ -7,6 +7,8 @@ edition = "2024"
 path = "src/lib.rs"
 
 [dependencies]
+getrandom = "0.3"
+hmac = "0.12"
 jsonschema = "0.37"
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
@@ -16,3 +18,5 @@ toml = "0.8"
 tokio = { version = "1", default-features = false, features = ["io-std", "rt-multi-thread", "sync"] }
 tower-lsp = "0.20"
 rustpython-parser = "0.4"
+tree-sitter = "0.27"
+tree-sitter-kotlin-ng = "1.1"

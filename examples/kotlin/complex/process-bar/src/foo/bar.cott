@@ -1,0 +1,85 @@
+module foo.bar
+
+const MAX_PAYLOAD_SIZE: U32 = 8192
+
+newtype Probability(F32)
+    where 0.0 <= self <= 1.0
+
+newtype PayloadSize(U32)
+    where 1 <= self <= MAX_PAYLOAD_SIZE
+
+enum PayloadFormat:
+    Raw
+    Text
+    Structured
+
+struct InputPayload:
+    data: Bytes
+    declared_size: PayloadSize
+    format: PayloadFormat
+
+struct OutputPayload:
+    data: Bytes
+    source_size: PayloadSize
+    format: PayloadFormat
+
+enum BarError:
+    InvalidPayload(reason: Str)
+    ServiceUnavailable
+    ProcessingFailed(message: Str)
+
+struct BarOptions:
+    threshold: Probability = Probability(0.5)
+    use_cache: Bool = false
+
+fn validate_payload(data: InputPayload) -> Result[InputPayload, BarError]:
+    doc """
+    Reject empty payload bytes before pure processing.
+    """
+
+    ensures Result.Ok(validated) => validated.data == data.data
+    ensures Result.Ok(validated) => validated.declared_size == data.declared_size
+    ensures Result.Ok(validated) => validated.format == data.format
+
+    error BarError.InvalidPayload when data.data.len == 0
+
+    effects []
+
+fn process_payload_bytes(data: Bytes, options: BarOptions) -> Result[Bytes, BarError]:
+    doc """
+    Perform the pure byte-processing step without changing payload bytes.
+    """
+
+    ensures Result.Ok(processed) => processed == data
+
+    error BarError.ServiceUnavailable
+    error BarError.ProcessingFailed
+
+    effects []
+
+fn build_output(data: Bytes, source_size: PayloadSize, format: PayloadFormat) -> OutputPayload:
+    doc """
+    Construct output from processed bytes and the original payload metadata.
+    """
+
+    ensures result.data == data
+    ensures result.source_size == source_size
+    ensures result.format == format
+
+    effects []
+
+fn process_bar(data: InputPayload, options: BarOptions) -> Result[OutputPayload, BarError]:
+    doc """
+    Compose validate_payload, process_payload_bytes, and build_output in that
+    order, propagating validation and processing errors unchanged.
+    """
+
+    ensures Result.Ok(output) => output.data == data.data
+    ensures Result.Ok(output) => output.source_size == data.declared_size
+    ensures Result.Ok(output) => output.format == data.format
+
+    error BarError.InvalidPayload when data.data.len == 0
+    error BarError.ServiceUnavailable
+    error BarError.ProcessingFailed
+
+    effects []

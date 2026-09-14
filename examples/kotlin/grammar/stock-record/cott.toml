@@ -1,0 +1,12 @@
+[project]
+name = "stock-record"
+version = "0.1.0"
+source = "src"
+
+[target.kotlin]
+source = "kotlin"
+generated = "generated/kotlin"
+compiler = "kotlinc"
+java = "java"
+jvm_target = 17
+runtime_validation = "boundary"

@@ -3,7 +3,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cott::project::{discover_python_sources, discover_sources_from_paths, load_config_with_paths};
+use cott::project::{
+    discover_kotlin_contract_sources, discover_kotlin_sources, discover_python_sources,
+    discover_sources_from_paths, load_config_with_paths, load_kotlin_config_with_paths,
+};
 #[cfg(unix)]
 use std::ffi::CString;
 #[cfg(unix)]
@@ -55,6 +58,20 @@ type_checker = ".venv/bin/basedpyright"
 runtime_validation = "boundary"
 "#;
 
+const KOTLIN_MANIFEST: &str = r#"
+[project]
+name = "demo"
+version = "0.1.0"
+source = "src"
+
+[target.kotlin]
+source = "kotlin-src"
+generated = "generated/kotlin"
+runtime_validation = "boundary"
+classpath = ["libs/runtime.jar"]
+compile_only = ["libs/android.jar"]
+"#;
+
 fn manifest(root: &Path, contents: &str) {
     fs::write(root.join("cott.toml"), contents).expect("manifest should be writable");
 }
@@ -74,6 +91,17 @@ fn valid_project() -> TempDir {
     manifest(&temp.path, NORMATIVE_MANIFEST);
     fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
     target_metadata(&temp.path);
+    temp
+}
+
+fn valid_kotlin_project() -> TempDir {
+    let temp = TempDir::new();
+    manifest(&temp.path, KOTLIN_MANIFEST);
+    fs::create_dir_all(temp.path.join("src")).expect("source directory");
+    fs::create_dir_all(temp.path.join("kotlin-src")).expect("Kotlin source directory");
+    fs::create_dir_all(temp.path.join("libs")).expect("classpath directory");
+    fs::write(temp.path.join("libs/runtime.jar"), b"runtime").expect("runtime classpath");
+    fs::write(temp.path.join("libs/android.jar"), b"android").expect("compile-only classpath");
     temp
 }
 
@@ -376,5 +404,114 @@ fn rejects_unsafe_python_tree_entries() {
 
         fs::hard_link(python.join("app.py"), python.join("linked.py")).expect("hard link");
         assert!(discover_python_sources(&python).is_err());
+    }
+}
+
+#[test]
+fn loads_kotlin_only_paths_and_discovers_authored_inputs() {
+    let temp = valid_kotlin_project();
+    fs::create_dir_all(temp.path.join("src/demo")).expect("Cott source directory");
+    fs::write(temp.path.join("src/demo/api.cott"), "module demo.api\n").expect("Cott source");
+    fs::create_dir_all(temp.path.join("kotlin-src/demo")).expect("Kotlin package");
+    fs::write(
+        temp.path.join("kotlin-src/demo/z.kt"),
+        "package demo\ninternal fun z() = 1\n",
+    )
+    .expect("Kotlin source");
+    fs::write(
+        temp.path.join("kotlin-src/demo/a.kt"),
+        "package demo\ninternal fun a() = 2\n",
+    )
+    .expect("Kotlin source");
+    for cache in [".gradle", "build", ".cott"] {
+        fs::create_dir_all(temp.path.join("kotlin-src").join(cache)).expect("cache directory");
+        fs::write(
+            temp.path.join("kotlin-src").join(cache).join("ignored.kt"),
+            [0xff],
+        )
+        .expect("ignored cache source");
+    }
+
+    let (_, paths, _) =
+        load_kotlin_config_with_paths(&temp.path).expect("Kotlin-only manifest should load");
+    assert_eq!(paths.root, temp.path);
+    assert_eq!(paths.source_dir, temp.path.join("src"));
+    assert_eq!(paths.kotlin_source_dir, temp.path.join("kotlin-src"));
+    assert_eq!(paths.generated_dir, temp.path.join("generated/kotlin"));
+    assert_eq!(paths.artifact_root, temp.path.join("generated"));
+    assert_eq!(paths.classpath, [temp.path.join("libs/runtime.jar")]);
+    assert_eq!(paths.compile_only, [temp.path.join("libs/android.jar")]);
+
+    let contracts =
+        discover_kotlin_contract_sources(&paths).expect("Kotlin contract sources should load");
+    assert_eq!(contracts[0].path, PathBuf::from("demo/api.cott"));
+    let kotlin =
+        discover_kotlin_sources(&paths.kotlin_source_dir).expect("Kotlin sources should load");
+    assert_eq!(
+        kotlin
+            .into_iter()
+            .map(|source| source.path)
+            .collect::<Vec<_>>(),
+        [PathBuf::from("demo/a.kt"), PathBuf::from("demo/z.kt"),]
+    );
+    assert!(
+        load_config_with_paths(&temp.path).is_err(),
+        "Python loader must reject Kotlin-only projects"
+    );
+}
+
+#[test]
+fn rejects_unsafe_kotlin_sources_and_classpath_inputs() {
+    let temp = valid_kotlin_project();
+    fs::remove_file(temp.path.join("libs/android.jar")).expect("remove compile-only JAR");
+    fs::create_dir(temp.path.join("libs/android.jar")).expect("non-regular compile-only input");
+    assert!(
+        load_kotlin_config_with_paths(&temp.path).is_err(),
+        "non-regular compile-only JAR must fail"
+    );
+    fs::remove_dir(temp.path.join("libs/android.jar")).expect("remove classpath directory");
+    if symlink_file(
+        &temp.path.join("libs/android.jar"),
+        &temp.path.join("libs/runtime.jar"),
+    )
+    .is_ok()
+    {
+        assert!(
+            load_kotlin_config_with_paths(&temp.path).is_err(),
+            "symlinked compile-only JAR must fail"
+        );
+        fs::remove_file(temp.path.join("libs/android.jar")).expect("remove classpath symlink");
+    }
+    fs::write(temp.path.join("libs/android.jar"), b"android").expect("restore compile-only JAR");
+
+    #[cfg(unix)]
+    {
+        fs::hard_link(
+            temp.path.join("libs/runtime.jar"),
+            temp.path.join("libs/runtime-copy.jar"),
+        )
+        .expect("classpath hard link");
+        assert!(
+            load_kotlin_config_with_paths(&temp.path).is_err(),
+            "hard-linked classpath JAR must fail"
+        );
+        fs::remove_file(temp.path.join("libs/runtime-copy.jar"))
+            .expect("remove classpath hard link");
+    }
+
+    let kotlin = temp.path.join("kotlin-src");
+    fs::write(kotlin.join("bad.kt"), [0xff]).expect("invalid Kotlin source");
+    assert!(discover_kotlin_sources(&kotlin).is_err());
+    fs::remove_file(kotlin.join("bad.kt")).expect("remove invalid Kotlin source");
+    fs::write(kotlin.join("safe.kt"), "package demo\n").expect("safe Kotlin source");
+    if symlink_file(&kotlin.join("linked.kt"), &kotlin.join("safe.kt")).is_ok() {
+        assert!(discover_kotlin_sources(&kotlin).is_err());
+        fs::remove_file(kotlin.join("linked.kt")).expect("remove Kotlin symlink");
+    }
+    #[cfg(unix)]
+    {
+        fs::hard_link(kotlin.join("safe.kt"), kotlin.join("hard-linked.kt"))
+            .expect("Kotlin hard link");
+        assert!(discover_kotlin_sources(&kotlin).is_err());
     }
 }

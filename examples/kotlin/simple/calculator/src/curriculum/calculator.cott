@@ -1,0 +1,19 @@
+module curriculum.calculator
+
+enum CalculatorOp:
+    Add
+    Subtract
+    Multiply
+    Divide
+
+enum CalculatorError:
+    DivideByZero
+
+fn calculate(left: F64, operator: CalculatorOp, right: F64) -> Result[F64, CalculatorError]:
+    doc """
+    Apply one arithmetic operation and reject division by zero.
+    """
+
+    ensures Result.Ok(value) => ((operator == CalculatorOp.Add and value == left + right) or (operator == CalculatorOp.Subtract and value == left - right) or (operator == CalculatorOp.Multiply and value == left * right) or (operator == CalculatorOp.Divide and right != 0.0 and value == left / right))
+
+    error CalculatorError.DivideByZero when operator == CalculatorOp.Divide and right == 0.0

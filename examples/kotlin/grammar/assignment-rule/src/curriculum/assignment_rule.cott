@@ -1,0 +1,32 @@
+module curriculum.assignment_rule
+
+enum AccessCodeError:
+    LegacyFormat
+    EmptyCode
+    TooShort
+
+doc """
+Base error clauses for an access code.
+"""
+rule BaseAccessCodeRule:
+    error AccessCodeError.LegacyFormat
+    error AccessCodeError.EmptyCode
+
+doc """
+Current access-code clauses composed from the base rule.
+"""
+rule StrictAccessCodeRule(BaseAccessCodeRule):
+    override error AccessCodeError.EmptyCode when false
+
+    delete error AccessCodeError.LegacyFormat
+
+    error AccessCodeError.TooShort
+
+fn validate_access_code(code: Str) -> Result[Str, AccessCodeError]:
+    doc """
+    Trim an access code and require at least four characters.
+    """
+
+    rule StrictAccessCodeRule
+
+    ensures Result.Ok(trimmed) => trimmed.len >= 4

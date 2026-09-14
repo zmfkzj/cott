@@ -31,9 +31,11 @@ use crate::hash::sha256_hex;
 use crate::hir::lower_with_effects;
 use crate::intent;
 use crate::ir::render;
+pub use crate::manifest::TargetLanguage;
 use crate::manifest::{ApiVersion, parse_api_version};
 use crate::project::{
     ProjectPaths, discover_python_sources, discover_sources_from_paths, load_config_with_paths,
+    load_target_language,
 };
 use crate::provenance::{
     AgentRun, AgentStatus, ClauseCoverage, CoveragePolicyResult, CoverageStatus, CoverageSummary,
@@ -46,7 +48,7 @@ use crate::python_verify::verify_python;
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession, TransactionError};
 use crate::version::{is_at_least, parse_version};
 
-const USAGE: &str = "Cott compiles contracts into verifiable Python.\n\nUsage:\n  cott init <path> [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
+const USAGE: &str = "Cott compiles contracts into verifiable Python and Kotlin.\n\nUsage:\n  cott init <path> [--target python|kotlin] [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python|kotlin [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
 
 #[cfg(test)]
 thread_local! {
@@ -107,7 +109,7 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
             format: OutputFormat::Json,
         }) = parse_command(&arguments)
     {
-        return diff_project(project, baseline, exit_code, OutputFormat::Json);
+        return diff_for_target(project, baseline, exit_code, OutputFormat::Json);
     }
     if !version_requested
         && arguments.first().is_some_and(|command| command == "prompt")
@@ -122,7 +124,7 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
             format: OutputFormat::Json,
         }) = parse_command(&arguments)
     {
-        return prompt_project(project, symbol, OutputFormat::Json);
+        return prompt_for_target(project, symbol, OutputFormat::Json);
     }
     let json_formats = arguments
         .windows(2)
@@ -164,76 +166,46 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
         }
         Ok(Command::Init {
             path,
+            target,
             name,
             no_sync,
             format,
-        }) => init_project(path, name, no_sync, format),
+        }) => match target {
+            TargetLanguage::Python => init_project(path, name, no_sync, format),
+            TargetLanguage::Kotlin => {
+                finish_kotlin_init(crate::kotlin::pipeline::init(path, name, no_sync, format))
+            }
+        },
         Ok(Command::Check {
             source, project, ..
-        }) => check_project(project, source),
-        Ok(Command::Fmt { check, project, .. }) => format_project(project, check),
+        }) => check_for_target(project, source),
+        Ok(Command::Fmt { check, project, .. }) => format_for_target(project, check),
         Ok(Command::Emit {
-            target: EmitTarget::Ir,
-            project,
-            ..
-        }) => emit_ir(project),
-        Ok(Command::Emit {
-            target: EmitTarget::Python,
-            project,
-            ..
-        }) => match plan(project) {
-            Ok(plan) => match publish(&plan) {
-                Ok(()) => {
-                    println!("{}", generated_path(&plan.paths));
-                    0
-                }
-                Err(message) => {
-                    eprintln!("error: {message}");
-                    6
-                }
-            },
-            Err(code) => code,
-        },
+            target, project, ..
+        }) => emit_for_target(project, target),
         Ok(Command::Generate {
             symbol,
+            target,
             agent,
             jobs,
             project,
             ..
-        }) => generate_project(project, symbol, agent, jobs),
+        }) => generate_for_target(project, target, symbol, agent, jobs),
         Ok(Command::Prompt {
             symbol,
             project,
             format,
-        }) => prompt_project(project, symbol, format),
+        }) => prompt_for_target(project, symbol, format),
         Ok(Command::Deploy {
             output, project, ..
-        }) => deploy_project(project, output),
+        }) => deploy_for_target(project, output),
         Ok(Command::Diff {
             baseline,
             exit_code,
             project,
             format,
-        }) => diff_project(project, baseline, exit_code, format),
-        Ok(Command::Verify { project, .. }) => match plan(project) {
-            Ok(plan) => match verify(&plan) {
-                Ok(()) => {
-                    println!("verified {}", generated_path(&plan.paths));
-                    0
-                }
-                Err(messages) => {
-                    let contract_failure = messages.iter().any(|message| {
-                        crate::proof::is_disproved_error(message)
-                            || message.starts_with(COVERAGE_POLICY_PREFIX)
-                    });
-                    for message in messages {
-                        eprintln!("error: {message}");
-                    }
-                    if contract_failure { 3 } else { 4 }
-                }
-            },
-            Err(code) => code,
-        },
+        }) => diff_for_target(project, baseline, exit_code, format),
+        Ok(Command::Verify { project, .. }) => verify_for_target(project),
         Err(message) => {
             eprintln!("error: {message}");
             eprint!("{USAGE}");
@@ -257,9 +229,20 @@ fn run_json(arguments: Vec<OsString>) -> i32 {
             index += 1;
         }
     }
-    let init_no_sync = human_arguments.first().is_some_and(|value| value == "init")
-        && human_arguments.iter().any(|value| value == "--no-sync");
-    let project_paths = json_project_paths(&human_arguments);
+    let command = parse_command(&human_arguments).ok();
+    let diagnostic_target = command
+        .as_ref()
+        .map(command_diagnostic_target)
+        .unwrap_or(TargetLanguage::Python);
+    let init_no_sync = matches!(
+        command.as_ref(),
+        Some(Command::Init {
+            target: TargetLanguage::Python,
+            no_sync: true,
+            ..
+        })
+    );
+    let project_paths = command.as_ref().and_then(json_project_paths);
     let output = match std::env::current_exe().and_then(|executable| {
         ProcessCommand::new(executable)
             .args(&human_arguments)
@@ -285,6 +268,7 @@ fn run_json(arguments: Vec<OsString>) -> i32 {
     let error_code = match exit_code {
         2 => code::CLI_USAGE,
         3 => code::SYNTAX,
+        4 if diagnostic_target == TargetLanguage::Kotlin => code::KOTLIN,
         4 => code::PYTHON,
         5 => code::AGENT,
         6 => code::FILESYSTEM,
@@ -304,7 +288,12 @@ fn run_json(arguments: Vec<OsString>) -> i32 {
             .strip_prefix(if warning { "warning: " } else { "error: " })
             .unwrap_or(line);
         let mut diagnostic = if warning {
-            Diagnostic::warning(code::SHADOW_SPECIFICATION, body, Span::new(0, 0))
+            let warning_code = if diagnostic_target == TargetLanguage::Kotlin {
+                code::KOTLIN
+            } else {
+                code::SHADOW_SPECIFICATION
+            };
+            Diagnostic::warning(warning_code, body, Span::new(0, 0))
         } else {
             Diagnostic::error(error_code, body, Span::new(0, 0))
         };
@@ -369,13 +358,67 @@ fn run_json(arguments: Vec<OsString>) -> i32 {
     exit_code
 }
 
-fn json_project_paths(arguments: &[OsString]) -> Option<ProjectPaths> {
-    let root = arguments
-        .windows(2)
-        .find(|pair| pair[0] == "--project")
-        .map(|pair| PathBuf::from(&pair[1]))
+struct JsonProjectPaths {
+    root: PathBuf,
+    source_dir: PathBuf,
+}
+
+fn command_project_argument(command: &Command) -> Option<&Option<PathBuf>> {
+    match command {
+        Command::Check { project, .. }
+        | Command::Fmt { project, .. }
+        | Command::Emit { project, .. }
+        | Command::Generate { project, .. }
+        | Command::Prompt { project, .. }
+        | Command::Verify { project, .. }
+        | Command::Deploy { project, .. }
+        | Command::Diff { project, .. } => Some(project),
+        Command::Init { .. } | Command::Lsp | Command::Help | Command::Version => None,
+    }
+}
+
+fn command_diagnostic_target(command: &Command) -> TargetLanguage {
+    match command {
+        Command::Init { target, .. } | Command::Generate { target, .. } => *target,
+        Command::Emit {
+            target: EmitTarget::Python,
+            ..
+        } => TargetLanguage::Python,
+        Command::Emit {
+            target: EmitTarget::Kotlin,
+            ..
+        } => TargetLanguage::Kotlin,
+        _ => command_project_argument(command)
+            .and_then(|project| {
+                project
+                    .clone()
+                    .or_else(|| std::env::current_dir().ok())
+                    .and_then(|root| load_target_language(&root).ok())
+            })
+            .unwrap_or(TargetLanguage::Python),
+    }
+}
+
+fn json_project_paths(command: &Command) -> Option<JsonProjectPaths> {
+    let root = command_project_argument(command)?
+        .clone()
         .or_else(|| std::env::current_dir().ok())?;
-    load_config_with_paths(&root).ok().map(|(_, paths)| paths)
+    match load_target_language(&root).ok()? {
+        TargetLanguage::Python => {
+            let (_, paths) = load_config_with_paths(&root).ok()?;
+            Some(JsonProjectPaths {
+                root: paths.root,
+                source_dir: paths.source_dir,
+            })
+        }
+        TargetLanguage::Kotlin => {
+            let (_, paths, _) = crate::project::load_kotlin_config_with_paths(&root).ok()?;
+            Some(JsonProjectPaths {
+                root: paths.root,
+                source_dir: paths.source_dir,
+            })
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -388,12 +431,14 @@ pub enum OutputFormat {
 pub enum EmitTarget {
     Ir,
     Python,
+    Kotlin,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Command {
     Init {
         path: PathBuf,
+        target: TargetLanguage,
         name: Option<String>,
         no_sync: bool,
         format: OutputFormat,
@@ -415,6 +460,7 @@ pub enum Command {
     },
     Generate {
         symbol: Option<String>,
+        target: TargetLanguage,
         agent: Option<AgentKind>,
         jobs: usize,
         project: Option<PathBuf>,
@@ -490,6 +536,14 @@ impl Default for OutputFormat {
     }
 }
 
+fn parse_target_language(value: Option<&str>) -> Result<TargetLanguage, &'static str> {
+    match value {
+        Some("python") => Ok(TargetLanguage::Python),
+        Some("kotlin") => Ok(TargetLanguage::Kotlin),
+        _ => Err("`--target` requires `python` or `kotlin`"),
+    }
+}
+
 impl ExistingOptions {
     fn parse(values: &[OsString]) -> Result<Self, &'static str> {
         let mut options = Self::default();
@@ -521,17 +575,12 @@ impl ExistingOptions {
 }
 
 fn parse_init(values: &[OsString]) -> Result<Command, &'static str> {
-    let path = values
-        .first()
-        .filter(|value| !value.is_empty())
-        .ok_or("`init` requires a path")?;
-    if path == "--project" {
-        return Err("`init` does not accept `--project`");
-    }
+    let mut path = None;
     let mut name = None;
+    let mut target = None;
     let mut no_sync = false;
     let mut format = OutputFormat::Human;
-    let mut index = 1;
+    let mut index = 0;
     while index < values.len() {
         match values[index].to_str() {
             Some("--name") if name.is_none() => {
@@ -545,6 +594,12 @@ fn parse_init(values: &[OsString]) -> Result<Command, &'static str> {
                         .to_owned(),
                 );
             }
+            Some("--target") if target.is_none() => {
+                index += 1;
+                target = Some(parse_target_language(
+                    values.get(index).and_then(|value| value.to_str()),
+                )?);
+            }
             Some("--no-sync") if !no_sync => no_sync = true,
             Some("--format") if format == OutputFormat::Human => {
                 index += 1;
@@ -554,12 +609,20 @@ fn parse_init(values: &[OsString]) -> Result<Command, &'static str> {
                 format = OutputFormat::Json;
             }
             Some("--project") => return Err("`init` does not accept `--project`"),
+            Some(value) if !value.starts_with('-') && path.is_none() => {
+                path = Some(&values[index]);
+            }
+            None if path.is_none() => {
+                path = Some(&values[index]);
+            }
             _ => return Err("unexpected or duplicate option"),
         }
         index += 1;
     }
+    let path = path.ok_or("`init` requires a path")?;
     Ok(Command::Init {
         path: PathBuf::from(path),
+        target: target.unwrap_or(TargetLanguage::Python),
         name,
         no_sync,
         format,
@@ -623,7 +686,8 @@ fn parse_emit(values: &[OsString]) -> Result<Command, &'static str> {
     let target = match values.first().and_then(|value| value.to_str()) {
         Some("ir") => EmitTarget::Ir,
         Some("python") => EmitTarget::Python,
-        _ => return Err("expected `emit ir` or `emit python`"),
+        Some("kotlin") => EmitTarget::Kotlin,
+        _ => return Err("expected `emit ir`, `emit python`, or `emit kotlin`"),
     };
     let options = ExistingOptions::parse(&values[1..])?;
     Ok(Command::Emit {
@@ -653,12 +717,9 @@ fn parse_generate(values: &[OsString]) -> Result<Command, &'static str> {
             }
             Some("--target") if target.is_none() => {
                 index += 1;
-                target = Some(
-                    values
-                        .get(index)
-                        .and_then(|value| value.to_str())
-                        .ok_or("`--target` requires `python`")?,
-                );
+                target = Some(parse_target_language(
+                    values.get(index).and_then(|value| value.to_str()),
+                )?);
             }
             Some("-j" | "--jobs") if jobs.is_none() => {
                 index += 1;
@@ -694,10 +755,11 @@ fn parse_generate(values: &[OsString]) -> Result<Command, &'static str> {
         }
         index += 1;
     }
-    if target != Some("python") {
-        return Err("`generate` requires `--target python`");
-    }
+    let Some(target) = target else {
+        return Err("`generate` requires `--target python|kotlin`");
+    };
     Ok(Command::Generate {
+        target,
         symbol,
         agent,
         jobs: jobs.unwrap_or(1),
@@ -4105,6 +4167,219 @@ fn project_root(project: Option<PathBuf>) -> Result<PathBuf, i32> {
             2
         })
 }
+
+fn target_name(target: TargetLanguage) -> &'static str {
+    match target {
+        TargetLanguage::Python => "python",
+        TargetLanguage::Kotlin => "kotlin",
+    }
+}
+
+fn selected_project_target(project: &Option<PathBuf>) -> Result<TargetLanguage, String> {
+    let root = project
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or_else(|| "failed to determine current directory".to_owned())?;
+    load_target_language(&root).map_err(|error| error.to_string())
+}
+
+fn target_selection_failure(format: OutputFormat, message: impl AsRef<str>) -> i32 {
+    prompt_fail(format, 2, message)
+}
+
+fn target_mismatch(requested: TargetLanguage, actual: TargetLanguage) -> i32 {
+    eprintln!(
+        "error: requested target `{}` does not match project target `{}`",
+        target_name(requested),
+        target_name(actual)
+    );
+    2
+}
+
+fn finish_kotlin_unit(result: Result<(), crate::kotlin::pipeline::Failure>) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(failure) => {
+            eprintln!("error: {}", failure.message);
+            failure.code
+        }
+    }
+}
+
+fn finish_kotlin_init(result: Result<PathBuf, crate::kotlin::pipeline::Failure>) -> i32 {
+    finish_kotlin_unit(result.map(|_| ()))
+}
+
+fn finish_kotlin_path(result: Result<PathBuf, crate::kotlin::pipeline::Failure>) -> i32 {
+    match result {
+        Ok(path) => {
+            println!("{}", path.display());
+            0
+        }
+        Err(failure) => {
+            eprintln!("error: {}", failure.message);
+            failure.code
+        }
+    }
+}
+
+fn finish_kotlin_verification(result: Result<PathBuf, crate::kotlin::pipeline::Failure>) -> i32 {
+    match result {
+        Ok(path) => {
+            println!("verified {}", path.display());
+            0
+        }
+        Err(failure) => {
+            eprintln!("error: {}", failure.message);
+            failure.code
+        }
+    }
+}
+
+fn check_for_target(project: Option<PathBuf>, source: Option<PathBuf>) -> i32 {
+    match selected_project_target(&project) {
+        Ok(TargetLanguage::Python) => check_project(project, source),
+        Ok(TargetLanguage::Kotlin) => {
+            finish_kotlin_unit(crate::kotlin::pipeline::check(project, source))
+        }
+        Err(message) => target_selection_failure(OutputFormat::Human, message),
+    }
+}
+
+fn format_for_target(project: Option<PathBuf>, check: bool) -> i32 {
+    match selected_project_target(&project) {
+        Ok(TargetLanguage::Python) => format_project(project, check),
+        Ok(TargetLanguage::Kotlin) => {
+            finish_kotlin_unit(crate::kotlin::pipeline::format(project, check))
+        }
+        Err(message) => target_selection_failure(OutputFormat::Human, message),
+    }
+}
+
+fn emit_python_project(project: Option<PathBuf>) -> i32 {
+    match plan(project) {
+        Ok(plan) => match publish(&plan) {
+            Ok(()) => {
+                println!("{}", generated_path(&plan.paths));
+                0
+            }
+            Err(message) => {
+                eprintln!("error: {message}");
+                6
+            }
+        },
+        Err(code) => code,
+    }
+}
+
+fn emit_for_target(project: Option<PathBuf>, requested: EmitTarget) -> i32 {
+    let actual = match selected_project_target(&project) {
+        Ok(target) => target,
+        Err(message) => return target_selection_failure(OutputFormat::Human, message),
+    };
+    match (requested, actual) {
+        (EmitTarget::Ir, TargetLanguage::Python) => emit_ir(project),
+        (EmitTarget::Ir, TargetLanguage::Kotlin) => {
+            finish_kotlin_path(crate::kotlin::pipeline::emit(project, true))
+        }
+        (EmitTarget::Python, TargetLanguage::Python) => emit_python_project(project),
+        (EmitTarget::Kotlin, TargetLanguage::Kotlin) => {
+            finish_kotlin_path(crate::kotlin::pipeline::emit(project, false))
+        }
+        (EmitTarget::Python, TargetLanguage::Kotlin) => {
+            target_mismatch(TargetLanguage::Python, actual)
+        }
+        (EmitTarget::Kotlin, TargetLanguage::Python) => {
+            target_mismatch(TargetLanguage::Kotlin, actual)
+        }
+    }
+}
+
+fn generate_for_target(
+    project: Option<PathBuf>,
+    requested: TargetLanguage,
+    symbol: Option<String>,
+    agent: Option<AgentKind>,
+    jobs: usize,
+) -> i32 {
+    let actual = match selected_project_target(&project) {
+        Ok(target) => target,
+        Err(message) => return target_selection_failure(OutputFormat::Human, message),
+    };
+    if actual != requested {
+        return target_mismatch(requested, actual);
+    }
+    match requested {
+        TargetLanguage::Python => generate_project(project, symbol, agent, jobs),
+        TargetLanguage::Kotlin => crate::kotlin::generation::generate(project, symbol, agent, jobs),
+    }
+}
+
+fn prompt_for_target(project: Option<PathBuf>, symbol: String, format: OutputFormat) -> i32 {
+    match selected_project_target(&project) {
+        Ok(TargetLanguage::Python) => prompt_project(project, symbol, format),
+        Ok(TargetLanguage::Kotlin) => crate::kotlin::prompt::prompt(project, symbol, format),
+        Err(message) => target_selection_failure(format, message),
+    }
+}
+
+fn verify_python_project(project: Option<PathBuf>) -> i32 {
+    match plan(project) {
+        Ok(plan) => match verify(&plan) {
+            Ok(()) => {
+                println!("verified {}", generated_path(&plan.paths));
+                0
+            }
+            Err(messages) => {
+                let contract_failure = messages.iter().any(|message| {
+                    crate::proof::is_disproved_error(message)
+                        || message.starts_with(COVERAGE_POLICY_PREFIX)
+                });
+                for message in messages {
+                    eprintln!("error: {message}");
+                }
+                if contract_failure { 3 } else { 4 }
+            }
+        },
+        Err(code) => code,
+    }
+}
+
+fn verify_for_target(project: Option<PathBuf>) -> i32 {
+    match selected_project_target(&project) {
+        Ok(TargetLanguage::Python) => verify_python_project(project),
+        Ok(TargetLanguage::Kotlin) => {
+            finish_kotlin_verification(crate::kotlin::pipeline::verify(project))
+        }
+        Err(message) => target_selection_failure(OutputFormat::Human, message),
+    }
+}
+
+fn diff_for_target(
+    project: Option<PathBuf>,
+    baseline: Option<PathBuf>,
+    exit_code: bool,
+    format: OutputFormat,
+) -> i32 {
+    match selected_project_target(&project) {
+        Ok(TargetLanguage::Python) => diff_project(project, baseline, exit_code, format),
+        Ok(TargetLanguage::Kotlin) => {
+            crate::kotlin::pipeline::diff(project, baseline, exit_code, format)
+        }
+        Err(message) => target_selection_failure(format, message),
+    }
+}
+
+fn deploy_for_target(project: Option<PathBuf>, output: Option<PathBuf>) -> i32 {
+    match selected_project_target(&project) {
+        Ok(TargetLanguage::Python) => deploy_project(project, output),
+        Ok(TargetLanguage::Kotlin) => {
+            finish_kotlin_path(crate::kotlin::pipeline::deploy(project, output))
+        }
+        Err(message) => target_selection_failure(OutputFormat::Human, message),
+    }
+}
+
 fn check_project(project_argument: Option<PathBuf>, selected: Option<PathBuf>) -> i32 {
     let Ok(root) = project_root(project_argument) else {
         return 2;
@@ -5361,7 +5636,7 @@ fn coverage_order(clause: &ClauseCoverage) -> (String, u8, u32, String) {
     coverage_order_values(&clause.symbol, &clause.clause_id)
 }
 
-fn semantic_coverage(
+pub(crate) fn semantic_coverage(
     report: &serde_json::Value,
     policy: &crate::manifest::CoveragePolicy,
 ) -> Result<SemanticCoverage, String> {

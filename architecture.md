@@ -8,13 +8,35 @@
 
 ## 1.0 릴리스 호환성
 
-이 문서는 구현된 v1.0 언어와 Python backend를 규정한다. package version은 `1.0.0`이다. CPython `>=3.14.6,<3.15`, BasedPyright `>=1.39.9`, uv `>=0.12.3`, Codex CLI `>=0.147.0`, Claude Code CLI `>=2.1.89`, OMP `>=17.2.12`를 지원한다. 각 tool version은 이 lower bound 이상이어야 하며, full version과 content hash는 provenance에 기록한다.
+이 문서는 구현된 v1.0 언어와 Python 및 Kotlin/JVM backend를 규정한다. package version은
+`1.0.0`이다. Python은 CPython `>=3.14.6,<3.15`, BasedPyright `>=1.39.9`, uv
+`>=0.12.3`를 사용한다. Kotlin은 kotlinc-jvm `>=2.2.10`, JDK `>=17`, 고정 JVM target
+`17`, compiler distribution과 일치하는 Kotlin stdlib 및
+`kotlinx-coroutines-core-jvm` `1.8.0`을 사용한다. Codex CLI `>=0.147.0`, Claude Code CLI
+`>=2.1.89`, OMP `>=17.2.12`를 지원한다. 각 실제 tool/runtime dependency의 full version과
+content hash는 target provenance에 기록한다.
 
-Canonical IR schema는 **v8**, generation record schema와 generation domain은 **v7**/`cott.generation.v7`, Python runtime ABI는 **7**, contract-test strategy schema는 **v5**다. 이 compatibility number와 compiler package `1.0.0`은 generation snapshot·facade·runtime identity에 함께 기록하며, 현재 값과 다른 generation record·runtime·strategy는 읽거나 load하지 않는다. diagnostics schema는 **v1**을 유지한다. `[project].version`은 compiler version이 아니라 공개 API version이며 generation snapshot의 `project_version`과 facade runtime identity에만 쓰인다. 예제 project의 공개 version은 계속 `0.1.0`이다.
+Canonical IR schema는 두 backend 모두 **v8**이고 diagnostics schema는 **v1**이다. Python의
+닫힌 compatibility identity는 generation schema/domain **v7**/`cott.generation.v7`, runtime
+ABI **7**, contract-test strategy schema **v5**로 그대로 유지한다. Kotlin은 별도의 닫힌
+generation schema **v1**, domain `cott.kotlin.generation.v1`, runtime ABI **1**을 사용하며
+Python의 `public_python_symbols`·`python_symbol` 같은 field를 재사용하지 않는다. 각 reader와
+runtime은 다른 backend 또는 다른 version의 record를 거부한다. `[project].version`은 compiler
+version이 아니라 공개 API version이고 예제 project는 `0.1.0`을 유지한다.
 
-구현된 v0.8 `.cott` source는 v1.0에서도 의미를 바꾸지 않고 유효하다. source compatibility는 serialized artifact compatibility를 뜻하지 않는다. 생성된 Python public ABI는 runtime `__all__`, facade/stub signature, canonical constructor와 read-only nominal wrapper, validation behavior의 합이다. incompatible ABI change는 ABI bump를 요구한다. package version이 정확히 다르면 ABI가 7이어도 artifact는 stale이며 `emit` 또는 `generate`로 재생성해야 한다; `verify`와 runtime은 이를 거부한다. 호환되지 않는 wire record를 재생성하거나 읽는 경로는 없다.
+구현된 v0.8 `.cott` source는 v1.0에서도 의미를 바꾸지 않고 유효하다. source compatibility는
+serialized artifact compatibility가 아니다. 생성 target의 public ABI는 facade signature,
+canonical constructor, nominal/runtime type identity와 validation behavior의 합이다. incompatible
+ABI change는 해당 target ABI bump가 필요하다. package 또는 target identity가 다르면 artifact는
+stale이며 `emit` 또는 `generate`로 재생성해야 하고 `verify`와 runtime은 이를 fail closed한다.
+호환되지 않는 wire record용 legacy reader나 변환 경로는 없다.
 
-`emit python`과 `verify`는 agent를 호출하지 않는다. `cott prompt`는 provider·Python·checker 없이 초기 generation prompt만 렌더하며 publication과 journal recovery를 하지 않는다. agent 호출은 `generate`에서만 조건부로 수행한다. 기존 project command의 `--project <dir>`은 subcommand 뒤 어느 위치에서나 한 번만 허용하며 기본은 현재 directory다. `init`은 target path를 받고 `--project`를 거부한다.
+`emit python`, `emit kotlin`, `verify`는 agent를 호출하지 않는다. `cott prompt`는 provider나
+target compiler/checker 없이 초기 generation prompt만 렌더하고 publication과 journal recovery를
+하지 않는다. Agent 호출은 `generate`에서만 조건부로 수행한다. 기존 project command의
+`--project <dir>`은 subcommand 뒤 어느 위치에서나 한 번만 허용하며 기본은 현재 directory다.
+`init`은 target path를 받고 `--project`를 거부한다. 이 문서와 implementation이 충돌하면
+repository source와 closed schema validator가 authority이며 문서를 구현에 맞게 고친다.
 ---
 
 ## 1. 개요
@@ -29,7 +51,14 @@ cott의 역할은 다음 세 가지로 제한한다.
 2. 구현이 지켜야 할 계약과 typed intent를 선언한다.
 3. scoped prompt를 렌더하고, 생성되거나 binding된 코드가 선언된 계약과 일치하는지 검증한다.
 
-기본 대상 언어는 Python이다. Cott의 우선순위는 선언을 고정하고, scoped generation prompt와 intent fingerprint를 렌더·기록하며, 그 선언을 target ABI로 결정적으로 투영하고, 구현 conformance·artifact identity·실제로 확보한 evidence만 검사·기록하는 것이다. 선언은 intent의 완전한 형식화가 아니고, 통과한 검증은 구현 전반의 정확성 증명이 아니다. Implementation selection과 runtime observation은 이 순서를 바꾸거나 declaration의 의미를 대체하지 않는다. runtime은 authored `.cott`를 live로 읽지 않는다. 이미 배포된 snapshot은 `emit` 또는 `generate` 전까지 옛 계약을 유지한다. 제품은 속도 주장이 아니다.
+각 project manifest는 Python 또는 Kotlin 중 정확히 하나를 선택하고 `cott init`의 default는
+Python이다. Cott의 우선순위는 선언을 고정하고, scoped generation prompt와 intent fingerprint를
+렌더·기록하며, 그 선언을 선택 target ABI로 결정적으로 투영하고, 구현 conformance·artifact
+identity·실제로 확보한 evidence만 검사·기록하는 것이다. 선언은 intent의 완전한 형식화가 아니고,
+통과한 검증은 구현 전반의 정확성 증명이 아니다. Implementation selection과 runtime observation은
+이 순서를 바꾸거나 declaration 의미를 대체하지 않는다. runtime은 authored `.cott`를 live로 읽지
+않는다. 이미 배포된 snapshot은 `emit` 또는 `generate` 전까지 옛 계약을 유지한다. 제품은 속도
+주장이 아니다.
 
 `doc`는 실행 계약이 아니다. `doc`만 바뀐 contract diff는 `DOCUMENTATION`이며 이 label은 regeneration 요구와 별개다. `doc`·적용된 rule과 그 base·계약 상수·참조 type·incoming scenario·retained generator rule 식별자 변경은 intent fingerprint를 바꾸고 agent-owned source를 stale로 표시할 수 있다. 관찰된 clause가 요구사항 완전성을 증명하지 않는다. `verified`는 해당 snapshot의 artifact/type/runtime/proof/runner 인증이며, 모든 semantic clause 관찰이나 coverage policy 통과를 뜻하지 않는다. coverage gate는 선택한 rule이 있을 때만 동작한다. 외부 effect와 일부 boundary는 trust declaration이다. proof와 sampling은 bounded다. unsupported formula 또는 proof budget exhaustion은 `unknown`이고, 실행 관찰이 없으면 capability에 따라 `미관찰` 또는 신뢰 선언이며, 어느 쪽도 성공으로 위장하지 않는다.
 
@@ -42,17 +71,17 @@ cott의 역할은 다음 세 가지로 제한한다.
     ↓
 파싱 및 타입 검사
     ↓
-정규화된 IR 생성
+정규화된 Canonical IR 생성
     ↓
-intent fingerprint와 scoped prompt 렌더
+intent fingerprint와 scoped target prompt 렌더
     ↓
-Python 타입 생성 및 기존 구현 바인딩 해석
+선택한 Python 또는 Kotlin target projection과 기존 구현 binding 해석
     ↓
-미구현 함수가 있으면 사용자가 지정한 에이전트 호출
+미구현 callable이 있으면 사용자가 지정한 agent 호출
     ↓
-Python 공개 facade 생성
+target public facade/runtime 생성
     ↓
-정적 타입 검사 및 계약 검증
+정적 target 검사, sandboxed runtime observation과 계약 검증
 ```
 
 ---
@@ -125,9 +154,13 @@ def process_bar(data: InputPayload, threshold: float) -> OutputPayload:
 
 `.cott` 파일이 프로그램의 공개 구조와 계약의 원본이다.
 
-Python 구현은 에이전트가 생성하거나 기존 project function에 명시적으로 binding할 수 있다. 선언된 external type은 semantic Cott identity이며 Python emitter가 `[target.python.external_types]` projection으로 해석한다. API 계약이 다를 때만 project-local typed adapter가 이를 맞춘다. test code, 문서와 agent 구현 지시는 모두 cott 선언에서 파생된다.
+Python 또는 Kotlin 구현은 agent가 생성하거나 existing project function에 명시적으로 binding할
+수 있다. 선언된 external type은 semantic Cott identity이고 선택 backend가
+`[target.python.external_types]` 또는 `[target.kotlin.external_types]` projection으로 해석한다.
+API 계약이 다를 때만 project-local typed adapter가 이를 맞춘다. test code, 문서와 agent 구현
+지시는 모두 Cott 선언과 Canonical IR에서 파생된다.
 
-생성되거나 바인딩된 Python 구현이 cott 선언과 충돌하면 Python 구현이 잘못된 것으로 판단한다.
+생성되거나 binding된 target 구현이 Cott 선언과 충돌하면 target 구현이 잘못된 것으로 판단한다.
 
 ### 3.2 명시적 타입만 허용한다
 
@@ -217,9 +250,11 @@ v1.0에서도 다음 기능은 구현하지 않는다.
 * 클래스 상속, 메타프로그래밍, 매크로, 런타임 리플렉션, 임의 Python 코드 삽입
 * Rust ownership, borrow checker, lifetime
 * `.cott` execution body, parameter default, generic overload
-* Cott 밖 Python call graph/effect inference, mutable Cott container state, arbitrary `old()`
+* Cott 밖 target call graph/effect inference, mutable Cott container state, arbitrary `old()`
 * automatic refactoring/adapter/exception conversion
-* multi-target backend, full IDE plugin, multi-project Python environment, external struct/enum direct binding
+* 한 project에서 Python과 Kotlin을 동시에 선택하는 manifest, Python/Kotlin 외 추가 backend의
+  부분 구현, Cott-owned Android app/UI/Manifest/resource/APK/AAB/signing lifecycle, full IDE
+  plugin, multi-project Python environment, external struct/enum direct binding
 * dependency resolver/package manager, live reader transaction snapshot isolation, installed wheel whole-origin verification
 * SMT 또는 무제한 정리 증명
 
@@ -718,17 +753,35 @@ struct Page[+T, const N: U32]:
 fn first[T](items: List[T]) -> Option[T]
 ```
 
-const generic parameter는 `const NAME: U8|U16|U32|U64`이며 type parameter와 같은 ordered generic list에 섞을 수 있다. type use의 argument는 declaration order와 kind를 exact match해야 한다. const argument는 literal, compatible constant, arithmetic expression 또는 in-scope const parameter이고 compile time에 canonical typed value로 계산된다.
+const generic parameter는 `const NAME: U8|U16|U32|U64`이며 type parameter와 같은 ordered
+generic list에 섞을 수 있다. type use의 argument는 declaration order와 kind를 exact match해야
+한다. const argument는 literal, compatible constant, arithmetic expression 또는 in-scope const
+parameter이고 compile time에 canonical typed value로 계산된다. Kotlin/JVM projection에서는
+free const generic과 값을 다른 argument에서 복구할 수 없는 constructor에
+`_cott_const_<NAME>: CottConst` value witness를 명시해 erased JVM signature에서도 exact unsigned
+mathematical value와 kind를 유지한다. witness omission, reflection 복구와 silent erasure는 없다.
 
 ### 8.2 Trait bound와 associated projection
 
-복수 bound는 `T: Comparable + Serializable`로 쓴다. bound trait closure의 same-name member는 exact signature/kind여야 하며 otherwise HIR error다. associated projection은 trait declaration identity와 associated name을 보존하고 impl selection 때 exact assignment로 치환한다. recursive generic bounds are allowed only when their bound graph does not create an invalid unresolved/self-expanding projection cycle.
+복수 bound는 `T: Comparable + Serializable`로 쓴다. bound trait closure의 same-name member는
+exact signature/kind여야 하며 otherwise HIR error다. associated projection은 trait declaration
+identity와 associated name을 보존하고 impl selection 때 exact assignment로 치환한다. recursive
+generic bounds are allowed only when their bound graph does not create an invalid
+unresolved/self-expanding projection cycle. Kotlin은 abstract associated slot을 추가 bounded type
+parameter로 lift하고, 예를 들어 `Reader<Item>`과 `Impl : Reader<Int>`처럼 표현한다. Concrete impl
+assignment는 override 전에 concrete Kotlin type으로 치환한다. Base를 subtype으로 만들지 못하는
+phantom wrapper, reflection 또는 blanket runtime witness는 사용하지 않는다.
 
 ### 8.3 변성과 `Dyn`
 
 generic type parameter is invariant unless declared `+` or `-`; const parameter is invariant. The verifier checks parameter/return nesting polarity, including invariant constructors. nominal assignability follows declared variance and trait inheritance. `Dyn[Trait]` deliberately does not inherit this implicit conversion: construction is explicit and exact nominal runtime validation preserves the full trait specialization.
 
-Python emitter projects declared variance to `TypeVar(covariant=True)` or `TypeVar(contravariant=True)` and uses invariant TypeVars otherwise; fixed length remains `Literal[N]`. erased TypeVar/const relationships are static guarantees, not per-call runtime unification. generic input/return relation is never weakened to implicit `Any`.
+Python emitter는 declared variance를 `TypeVar`로, fixed length를 `Literal[N]`으로 projection한다.
+Kotlin emitter는 declaration-site variance와 bounded generic을 유지하지만 JVM의 ordinary type과
+associated generic은 erased된다. 따라서 그 input/return/associated 관계는 static guarantee이고
+runtime에서 임의의 `T`를 per-call reify하거나 unify했다고 주장하지 않는다. Concrete associated
+assignment와 explicit const value witness만 concrete runtime descriptor/value를 갖는다. 어느
+backend도 generic 관계를 implicit `Any`로 약화하지 않는다.
 
 ---
 
@@ -742,9 +795,18 @@ async fn fetch_payload(id: PayloadId) -> Result[Payload, FetchError]:
     effects [network]
 ```
 
-`async fn` is allowed for free functions, trait methods and impl methods. Its default/specialized target and selected slot must match callable kind exactly. async callable return type cannot be `Iterator`, `Generator` or `Never`; `AsyncIterator[T]` and `AsyncGenerator[Y, S]` model an explicit async lifecycle protocol instead of a native async-generator implementation function. Canonical IR, provenance, facade, stub, binding signature and contract runner preserve `sync`/`async` callable kind. facade directly awaits the implementation coroutine; no `asyncio.run`, thread, or sync compatibility wrapper exists. A kind change is breaking.
+`async fn` is allowed for free functions, trait methods and impl methods. Its default/specialized
+target and selected slot must match callable kind exactly. async callable return type cannot be
+`Iterator`, `Generator` or `Never`; `AsyncIterator[T]` and `AsyncGenerator[Y, S]` model an explicit
+async lifecycle protocol instead of a native async-generator implementation function. Canonical IR,
+provenance, facade, binding signature and contract runner preserve `sync`/`async` callable kind.
+Python facade는 implementation coroutine을 직접 await하고 Kotlin facade는 exact `suspend`
+callable을 사용한다. sync compatibility wrapper, thread bridge 또는 nested event loop는 없다. kind
+change는 breaking이다.
 
-함수 오버로딩과 parameter default는 금지한다. 호출 option은 default field가 있는 struct로 묶는다. 모든 parameter는 Python positional-or-keyword parameter로 emit한다. 같은 module 안에서는 함수 이름이 유일하다.
+함수 오버로딩과 parameter default는 금지한다. 호출 option은 default field가 있는 struct로
+묶는다. Python parameter는 positional-or-keyword로, Kotlin parameter는 named Kotlin signature로
+emit한다. 같은 module 안에서 function 이름은 유일하다.
 
 ---
 
@@ -880,9 +942,21 @@ IR의 모든 struct는 source-order `invariants`를 반드시 가진다(없는 �
 
 ### 10.7 Finite scenario, fixture와 workflow
 
-scenario는 public facade만 호출하는 비공개 declaration이며 Python API symbol을 만들지 않는다. `call value = facade(args)`는 sync call 또는 async facade의 completion을 저장하고, `spawn worker = async_facade(args)`는 async public facade만 허용한다. `await worker as value`, `await worker cancelled`, `cancel worker`, `tick`, `assert Bool`만 있다. loop, branch, sleep, callback, arbitrary code, private implementation/binding import와 widget/tree syntax는 없다. prior value와 typed field만 다음 argument/assertion에 쓸 수 있고 worker reference는 ABI value가 아니다.
+scenario는 public facade만 호출하는 비공개 declaration이며 public target API symbol을 만들지
+않는다. `call value = facade(args)`는 sync call 또는 async facade의 completion을 저장하고,
+`spawn worker = async_facade(args)`는 async public facade만 허용한다. `await worker as value`,
+`await worker cancelled`, `cancel worker`, `tick`, `assert Bool`만 있다. loop, branch, sleep,
+callback, arbitrary code, private implementation/binding import와 widget/tree syntax는 없다. prior
+value와 typed field만 다음 argument/assertion에 쓸 수 있고 worker reference는 ABI value가 아니다.
 
-scenario는 최대 64 step이고 적어도 한 step을 가져야 한다. `verification.lifecycle_limit` (1..64)은 동시 live worker와 총 tick의 상한이다. worker는 `pending -> completed(value)|failed(exception)|cancel_requested -> cancelled`이며 `cancel`은 live worker에 한 번만, value/cancelled await는 terminal outcome에 한 번만 유효하다. scenario는 `ready -> running -> passed|failed -> cleaned`; 종료 시 live/unconsumed worker가 있으면 실패하고 모두 cancel/join한다. `tick`은 정확히 한 cooperative `asyncio.sleep(0)` turn이다. 100 ms bounded join과 OS resource limit은 containment이지 ordering evidence가 아니다.
+scenario는 최대 64 step이고 적어도 한 step을 가져야 한다. `verification.lifecycle_limit`
+(1..64)은 동시 live worker와 총 tick의 상한이다. worker는
+`pending -> completed(value)|failed(exception)|cancel_requested -> cancelled`이고 `cancel`은 live
+worker에 한 번만, value/cancelled await는 terminal outcome에 한 번만 유효하다. scenario는
+`ready -> running -> passed|failed -> cleaned`; 종료 시 live/unconsumed worker가 있으면 실패하고
+모두 cancel/join한다. `tick`은 target scheduler의 정확히 한 cooperative turn이며 Python은
+`asyncio.sleep(0)`, Kotlin은 `kotlinx.coroutines.yield()`를 사용한다. bounded join과 OS resource
+limit은 containment이지 ordering evidence가 아니다.
 
 `fixtures:` 안의 closed kind는 `fs`, `http`, `clock`, `failure`뿐이다. filesystem은 normalized relative POSIX path와 inline `text`/`bytes` file만, HTTP는 normalized `/path`와 `response(status, body, encoding)`·relative `redirect(status, location)`·`delay(ms)`·`disconnect()`만, clock은 unsigned `start_ms`/`tick_ms`만 가진다. failure는 `file.open|read|write|flush|replace`, `http.connect|read`, `clock.read`의 정확히 한 occurrence와 `permission_denied|not_found|disk_full|timeout|connection_reset`만 가진다. source/manifest/IR에는 host path, socket address, remote URL, script, plugin 또는 monkeypatch name이 없다. HIR은 target/argument/result/fixture reference를 resolve하고 required effect union과 fixture authority의 exact match를 강제한다. custom/database/random/process effect는 fixture backend가 없으므로 observed scenario가 될 수 없다.
 
@@ -1252,24 +1326,37 @@ normative schema는 repository의 `schemas/canonical-ir.schema.json` (v8), `sche
 
 IR은 다음 목적으로 사용한다.
 
-* Python `.pyi` 생성
-* 에이전트 프롬프트 생성
-* 문서 생성
-* 테스트 생성
-* 변경점 비교
-* 다른 언어용 emitter 개발
+* Python facade·`.pyi`와 Kotlin facade/runtime source 생성
+* target별 agent prompt 생성
+* 문서와 deterministic test strategy 생성
+* semantic contract·public target API 변경점 비교
+* backend별 closed generation record와 verification plan 생성
 
 에이전트 prompt의 semantic payload는 선택 symbol의 scoped transitive Canonical IR declaration context다. 대상 callable, explicit identifier·nominal reference·`constant_ref`로 닫히는 type·const·helper, `cott.applied_rule`과 그 base 및 그 `doc`, 관련 incoming scenario, retained generator rule 식별자, 사람이 읽을 수 있게 렌더한 `doc`·clause를 포함한다. raw `.cott` source는 workspace에서 read-only context로만 제공하고 agent나 target이 다시 parse한 결과를 계약 의미로 사용하지 않는다. runtime loader도 authored `.cott`를 live로 읽지 않는다.
 
 `contracts.requires`, `contracts.ensures`, `contracts.errors`는 원본의 모든 절을 순서대로 보존한다. 각 절은 kind별 source-order `clause_id`, source span과 resolved expression을 가진다. `ensures.pattern`은 `null`이거나 `variant`·`binding`·`wildcard`의 재귀 node며 expression과 별도로 타입 검사한다. 조건부 `error`의 `priority`는 source-order identity/diagnostic ordering이면서 overlap precedence다. 동시에 applicable한 conditional error에서는 첫 priority만 반환 variant를 결정한다. 조건 없는 `error`는 `priority: null`, `when: null`을 가진다. target은 문자열을 재파싱하지 않는다.
 
-상수는 `{"kind": "const", "name", "type", "value", "public", "span"}` declaration으로 저장한다. 값은 compile-time canonical value다. refinement·default·contract expression의 constant reference는 항상 canonical `constant_ref` node와 symbol identity를 보존하며 Canonical IR이나 `contract_surface`에서 값으로 inline하지 않는다. intent selector는 `constant_ref`와 nested `kind: constant`를 같은 종속성 닫힘에 포함한다. target 최적화는 이 단계 뒤에만 값을 inline할 수 있다. `public_python_symbols(IR)`은 모든 공개 declaration을 alias 이름, trait `Protocol`, struct·newtype class, enum union alias·variant class, constant와 function의 결정적 Python target symbol 집합으로 투영하며 compiler-synthesized `TypeVar`·합성 `Protocol`·support name은 제외한다.
+상수는 `{"kind": "const", "name", "type", "value", "public", "span"}` declaration으로 저장한다.
+값은 compile-time canonical value다. refinement·default·contract expression의 constant reference는
+항상 canonical `constant_ref` node와 symbol identity를 보존하며 Canonical IR이나
+`contract_surface`에서 값으로 inline하지 않는다. intent selector는 `constant_ref`와 nested
+`kind: constant`를 같은 종속성 닫힘에 포함한다. target 최적화는 이 단계 뒤에만 값을 inline할 수
+있다. Python `public_python_symbols(IR)`과 Kotlin `public_symbols`는 각각 전체 공개 declaration의
+결정적 target symbol 집합을 기록하고 compiler-synthesized support name은 제외한다. Kotlin record가
+Python-named projection field를 재사용하지 않는다.
 
 기존 구현의 import 경로는 대상 언어에 종속되므로 Canonical IR에 포함하지 않는다. 대상 emitter와 verifier가 manifest binding을 IR과 함께 해석한다.
 
-계약 의미의 원본은 Canonical IR뿐이다. target emitter의 결정적 입력은 Canonical IR, target manifest, compiler·runtime version, exact target Python identity·platform, lockfile, 해석된 implementation symbol identity·source/runtime origin·content hash다. implementation 본문은 compiler 생성물이 아니지만 facade의 embedded provenance 때문에 emitter 입력에 포함된다.
+계약 의미의 원본은 Canonical IR뿐이다. target emitter의 결정적 입력은 Canonical IR, 선택한 target
+manifest, compiler·runtime version, 해석된 implementation symbol identity·source/runtime
+origin·content hash다. Python은 exact interpreter/platform·type checker·lockfile/dependency
+identity를 추가하고 Kotlin은 exact kotlinc/JDK/JAR compile input과 runtime dependency identity를
+추가한다. implementation 본문은 compiler 생성물이 아니지만 facade와 provenance에 포함되는
+authenticated target input이다.
 
-`generation.json`은 이 입력, agent executable·version·prompt hash와 검증 결과를 기록한다. 결정적인 compiler 산출물과 비결정적인 구현 provenance를 별도 필드로 구분한다.
+각 target의 `generation.json`은 이 입력, agent executable·version·initial prompt hash와 실제
+verification result를 해당 target의 닫힌 schema로 기록한다. 결정적인 compiler 산출물과
+비결정적인 implementation provenance는 별도 field로 구분한다.
 
 ---
 
@@ -1674,7 +1761,16 @@ verify는 모든 evidence를 먼저 finalize하고 `current.verified=true`, clos
 
 ### 16.10 유지 example generation-first policy
 
-유지 inventory는 grammar 6개(`checked-add`, `assignment-rule`, `cta-row`, `fractional-range-values`, `portfolio-cost`, `stock-record`), simple 3개(`alphabetical-file-groups`, `calculator`, `decimal-binary`), 순수 complex curriculum 1개(`artifact-pipeline`), 별도 full-generation fixture `process-bar`, focused feature 7개(`declarations-generics`, `contracts-evidence`, `boundary-protocols`, `trait-protocol`, `json-transform`, `effects-selection`, `workflow-scenario`), multi-module `order-management`, FastAPI external projection `fastapi-hello`, real-world generation-first 6개(`real/yt-dlp`, `real/harlequin`, `real/pgcli`, `real/posting`, `real/toolong`, `real/frogmouth`)로 총 26 project다. `process-bar`는 curriculum count에 넣지 않는다.
+유지 inventory는 Python project 26개와 Kotlin/Android project 1개다. Python set은 grammar
+6개(`checked-add`, `assignment-rule`, `cta-row`, `fractional-range-values`, `portfolio-cost`,
+`stock-record`), simple 3개(`alphabetical-file-groups`, `calculator`, `decimal-binary`), 순수
+complex curriculum `artifact-pipeline`, 별도 full-generation fixture `process-bar`, focused
+feature 7개(`declarations-generics`, `contracts-evidence`, `boundary-protocols`, `trait-protocol`,
+`json-transform`, `effects-selection`, `workflow-scenario`), multi-module `order-management`,
+FastAPI external projection `fastapi-hello`, real-world generation-first 6개(`real/yt-dlp`,
+`real/harlequin`, `real/pgcli`, `real/posting`, `real/toolong`, `real/frogmouth`)다.
+`integrations/android-counter`는 Kotlin/JVM Cott module과 standard Android consumer로 구성된
+별도 project다. `process-bar`는 curriculum count에 넣지 않는다.
 
 유지되는 curriculum module의 source order는 type 선언, 작은 domain leaf function, 더 큰 composition function, domain-named final operation 순서다. 의미 있는 경계만 stage로 공개한다. grammar lesson은 의도적으로 leaf 하나일 수 있고 simple·complex lesson도 domain responsibility가 독립적인 경우에만 stage를 추가한다. `artifact-pipeline`은 순수 topological artifact-plan composition이고, `process-bar`는 `foo.bar` 전체의 unresolved-to-agent-generation 전환을 집중적으로 보이는 fixture다.
 
@@ -1684,9 +1780,219 @@ real project는 각자 독립 generation-first example이며 project API version
 
 `checked-add`는 manifest binding syntax를 집중적으로 가르치는 lesson이다. 구현 선택은 항상 각 project의 `[target.python.implementations]`과 generation record가 정한다. Binding은 compatible project-local implementation을 선택할 뿐 Cott contract를 정의하지 않으며, example마다 binding 또는 agent implementation을 임의로 일반화해서는 안 된다. checkout에 commit된 `generated/`는 compiler-owned result이고, agent-owned free-function `python/_cott_impl/<cott module>/<function>.py` 및 impl-method `python/_cott_impl/<cott module>/<Concrete>/<method>.py`는 matching `agent_runs` provenance가 있는 실제 `cott generate --agent <agent> --target python` 성공 결과다. `.venv/`, `.cott/`, `__pycache__/`는 transient이며 managed artifact나 evidence가 아니다.
 
-`cott emit python`은 agent를 호출하지 않고 compiler-owned output과 unresolved metadata만 materialize한다. `cott generate`는 eligible unresolved callable에만 callable별 durable source를 생성한다. 생성 뒤 composition도 위 exact facade 경계를 통과하며 필요한 implementation selection과 managed artifact가 모두 일치해야 `cott verify`가 certify한다. 유지되는 example은 generic `run` function, forwarding alias, direct implementation-to-implementation call, duplicated validation, nominal-wrapper-only helper를 금지한다.
+`cott emit python`은 Python, `cott emit kotlin`은 Kotlin compiler-owned output과 unresolved
+metadata만 materialize하며 agent나 target compiler를 호출하지 않는다. `cott generate`는 선택
+target의 eligible unresolved callable에만 durable source를 생성한다. 필요한 implementation
+selection과 managed artifact가 모두 일치해야 explicit `cott verify`가 certify한다. 유지되는
+Python example은 generic `run` function, forwarding alias, direct
+implementation-to-implementation call, duplicated validation, nominal-wrapper-only helper를
+금지한다.
 
-`generate -j <jobs>`는 callable을 stable source-order wave로 최대 `jobs`개씩 실행하고 callable별 `start`, `validate`, `retry`, `done` progress를 stderr에 기록한다. 한 generate 호출의 초기 prompt와 `prompt_hash`는 invocation 시작의 immutable resolution snapshot만 사용한다. 이후 wave에서 수락한 candidate는 validation에만 쓰이며 광고된 초기 prompt를 바꾸지 않는다. 한 agent 또는 final bundle validation이 실패해도 source audit를 통과한 candidate는 `current.verified = false`인 transaction checkpoint로 publish하며 command는 exit `5`를 유지한다. 다음 generate는 checkpoint에서 unresolved callable만 재개한다. final diagnostic이 가리키는 checkpoint source는 삭제하고 `emit python` 뒤 해당 symbol을 다시 generate할 수 있다.
+`generate -j <jobs>`는 callable을 stable source-order wave로 최대 `jobs`개씩 실행하고
+callable별 progress를 stderr에 기록한다. 한 generate 호출의 초기 prompt와 `prompt_hash`는
+invocation 시작의 immutable resolution snapshot만 사용한다. 이후 wave candidate는 validation에만
+쓰인다. Agent 또는 final bundle validation이 실패해도 source audit를 통과한 candidate는
+`current.verified = false` checkpoint로 publish하고 exit `5`를 유지한다. 다음 generate는
+unresolved callable만 재개한다. 성공한 generate도 certification이 아니며 explicit verify만
+`verified = true`를 publish한다.
+
+## 16A. Kotlin/JVM 17 module 대상
+
+### 16A.1 닫힌 manifest와 source ownership
+
+한 manifest는 `[target.python]` 또는 `[target.kotlin]` 중 정확히 하나만 가진다. 둘 다 없거나
+둘 다 있으면 configuration error이고 target mismatch는 provider나 compiler 실행 전에 거부한다.
+Kotlin table의 실제 field는 다음과 같다.
+
+```toml
+[project]
+name = "example-module"
+version = "0.1.0"
+source = "src"
+
+[target.kotlin]
+source = "kotlin"
+generated = "generated/kotlin"
+compiler = "kotlinc"
+java = "java"
+jvm_target = 17
+runtime_validation = "boundary"
+classpath = ["libs/runtime-dependency.jar"]
+compile_only = ["sdk/android.jar"]
+
+[target.kotlin.implementations]
+"example.module.callable" = "cott_bindings.example.callable"
+
+[target.kotlin.external_types]
+"example.module.PlatformValue" = "android.os.Bundle"
+```
+
+`source`, `generated`, `runtime_validation`은 필수다. `compiler`, `java`, `jvm_target`의 default는
+각각 위 값이며 JVM 17 이외의 값은 거부한다. `generated`는 정확히
+`<artifact-root>/kotlin` 형태다. `classpath`와 `compile_only`는 duplicate/overlap이 없는
+normalized project-relative regular `.jar` path 목록이고 둘 다 compiler input으로 hash한다.
+`classpath`는 runtime dependency이고 `compile_only`는 compile-time symbol만 제공하므로 배포하지
+않는다. `[target.kotlin.external_types]` key는 declared external Cott FQN, value는 Kotlin FQN이다.
+`[target.kotlin.implementations]`는 Cott callable FQN을 target source tree의 Kotlin
+package/function FQN에 연결하는 binding table이며 Cott contract를 정의하지 않는다.
+
+Manifest binding source는 `<target.kotlin.source>/` 아래에서 사용자가 소유한다. Agent source는
+`<target.kotlin.source>/cott_impl/<module path>/<function>.kt`, method면
+`<module path>/<Concrete>/<method>.kt`에 지속된다. Resolver는 symlink, non-regular file,
+hardlink와 unsafe UTF-8 path를 거부하고 package, 하나의 canonical `internal` top-level function,
+exact sync/`suspend` signature, permitted private helper, source/runtime origin, content hash, owner와
+intent fingerprint를 감사한다. 미구현 callable과 소유권이 확인된 intent-stale agent source는
+unresolved다. 기록되지 않거나 이동·변조·manifest-shadowed 상태인 agent source는 오류로
+거부하며 이전 record에서 trust를 갱신하지 않는다. Manifest binding은 intent regeneration
+대상이 아니지만 exact source bytes와 signature 검사를 통과해야 한다.
+
+Audited implementation은 wildcard import, process 종료와 검증 관찰·제어 API 접근을 거부한다.
+`CottRuntime` object를 값으로 전달하거나 보관할 수 없고, 승인된 ABI·수학·snapshot API만 직접
+호출할 수 있다. Import alias가 승인된 runtime member 이름을 가리는 것도 거부한다. Manifest,
+contract, implementation과 generator rules의 input hash는 실제 해석에 소비한 bytes에서 나온다.
+Generator rules는 project load에서 한 번 읽어 freshness, prompt, retry와 publication에 공유하고,
+publication 전 입력 drift가 확인되면 기존 output과 동시 편집을 그대로 보존하며 거부한다.
+
+### 16A.2 emit, generic ABI와 public module
+
+Kotlin public package는 Cott module FQN과 같고 identifier spelling을 보존해 필요한 경우 Kotlin
+backtick escaping만 한다. 각 module의 compiler-owned output은 `Types.kt`와 `Facade.kt`이고
+standard ABI는 `kotlin/cott_runtime/CottRuntime.kt`와 `CottMarkers.kt`가 제공한다. Resolved
+implementation은 generated `kotlin/cott_impl/` copy로 들어가며 public consumer는 Cott module의
+public facade만 import한다. `cott_bindings`와 `cott_impl` package는 public import/re-export
+path가 아니다. Gradle consumer는 compiled JAR를 dependency로 사용하므로 Kotlin `internal`
+implementation visibility는 module boundary에서 유지되며 raw generated source를 app source set에
+합치지 않는다.
+
+Alias는 transparent, newtype은 nominal, struct는 immutable, payload enum은 sealed, trait는
+associated generic parameter가 포함된 interface로 projection한다. Associated projection은
+additional bounded Kotlin type parameter로 lift하고 concrete impl assignment는 override 전에
+concrete type으로 치환한다. Abstract associated generic과 ordinary `T`에는 blanket runtime
+witness를 추가하지 않고 reflection이나 phantom `CottAssociated<Base, Marker>` wrapper도 쓰지
+않는다.
+
+JVM은 const generic parameter도 erase하므로 free const generic에는
+`_cott_const_<NAME>: cott_runtime.CottConst` value-witness parameter를 public facade와 internal
+helper signature에 넣는다. 값 metadata에서 복구할 수 없는 constructor에도 witness가 있다.
+`U8|U16|U32|U64` kind/range와 exact mathematical value는 witness `.value`로 검사하며 contract의
+free-N expression도 그 값을 사용한다. Explicit canonical const value도 같은 의미의 value
+witness다. Canonical IR을 바꾸거나 witness를 silent omission하지 않는다.
+
+`cott emit kotlin`은 agent, kotlinc, Java 또는 user code를 실행하지 않는다. Current IR,
+runtime, facade, implementation copy와 `generation.json`을 transaction으로 publish하되 unresolved
+callable facade와 placeholder/stub은 만들지 않는다. `emit ir`은 IR scope와 record만 갱신한다.
+두 emit과 `generate --target kotlin`은 언제나 `current.verified = false`, `verification = null`로
+publish하고 historical `last_verified`를 보존한다.
+
+### 16A.3 compilation, runtime evidence와 certification
+
+Kotlin generation record는 Python record와 구별되는 closed object다. Top-level
+`schema_version = 1`; snapshot은 `target = "kotlin"`, compiler package `1.0.0`, Canonical IR
+`8`, runtime ABI `1`, `public_symbols`, target symbol/source/runtime origin, managed file hash,
+tools, evidence와 semantic coverage를 사용한다. Domain은 `cott.kotlin.generation.v1`이다.
+Python `public_python_symbols`, `python_symbol`, generation v7 또는 runtime ABI 7을 Kotlin
+truth로 재사용하지 않는다.
+
+오직 `cott verify`만 Kotlin snapshot을 certify한다. Verify는 unresolved가 없고 current
+source/manifest/implementation input 및 emitted managed source가 expected bytes와 일치해야
+시작한다. 실제 kotlinc-jvm `>=2.2.10`, JDK `>=17`, compiler-matched stdlib, bundled
+`kotlinx-coroutines-core-jvm` exactly `1.8.0`, manifest `classpath`와 `compile_only` identity를
+확인한다. Source와 모든 compiler/JAR input을 read-only로 제공하고 scratch write, bounded
+process/output/time/memory, sanitized Java environment와 default-disabled network를 적용하는
+기존 sandbox 안에서 `-jvm-target 17 -Xjdk-release=17 -no-reflect`로 library를 compile한다.
+Unsandboxed fallback은 없다.
+
+실제 compile/runtime classpath에 넣는 JAR는 nonempty manifest `Class-Path`를 거부하여 기록되지
+않은 transitive JAR를 로드하지 않는다. JDK manifest parser의 folded·case-insensitive attribute
+처리와 multi-release logical class 검사를 적용한다. 단순히 identity를 기록하는 compiler
+distribution 전체를 application classpath로 취급하지는 않는다.
+
+Verifier는 real `library/cott-module.jar`와 bounded contract runner JAR를 별도로 compile하고
+runner가 public facade를 실제 호출한 event만 evidence로 받는다. Canonical IR clause inventory,
+bounded proof, derived strategy, actual eligible/applicable/satisfied case와 scenario trace를 closed
+semantic-coverage join에 보존한다. Unsupported formula/budget exhaustion은 `unknown`, 실행
+capability 또는 concrete candidate 부재는 `unobserved`이고 어느 것도 success로 바꾸지 않는다.
+Ordinary `T`와 abstract associated generic은 JVM에서 erased되므로 arbitrary per-call runtime
+unification을 주장하지 않는다. Runner가 concrete bounded type argument를 생성할 수 없거나
+abstract associated projection만 있으면 실제 관찰을 만들지 않는다. Concrete associated
+assignment와 const witness가 있는 path만 해당 concrete descriptor/value를 검사한다.
+
+Runner event는 매 실행 새로 만든 256-bit key와 HMAC-SHA256으로 인증한다. Key는 one-way stdin
+pipe로만 전달하고 trusted runner가 candidate 실행 전에 전부 소비한다. Sequence와 exact JSON
+payload를 함께 인증하며 host는 순서, MAC과 authenticated final completion을 검사한다.
+Key는 stdout, environment, command-line argument나 artifact에 노출하지 않는다. Candidate의 일반
+stdout은 evidence authority가 아니고, public prefix를 흉내 낸 JSON과 exit `0`만으로 인증할 수 없다.
+
+Full verification이 성공하면 `library/cott-module.jar`와 exact compiler-distribution coroutine
+JAR를 `runtime-libs/kotlinx-coroutines-core-jvm.jar`로 managed publish하고 complete evidence를
+기록한다. Kotlin stdlib version/hash는 required dependency로 기록하지만 Kotlin compiler 또는
+Android Gradle plugin이 제공하므로 두 번째 copy를 bundle하지 않는다. Certification은
+`current.verified = true`와 `last_verified == current`를 함께 atomic publish하는 verify-only
+transition이다. Emit, generate 또는 실제 fmt 변경은 current를 unverified로 만들고 history만
+유지한다. Coverage policy violation은 evidence와 certified snapshot을 보존한 채 exit `8`로
+gate하고 deploy는 passed policy를 요구한다.
+
+### 16A.4 deploy와 Android consumer 경계
+
+Kotlin deploy는 verified, fully resolved, policy-passed, non-drifted current snapshot을 새
+directory에 atomic no-replace 방식으로 package한다. Payload는 다음뿐이다.
+
+```text
+cott-module.jar
+dependencies.json
+generation.json
+runtime-libs/
+├── kotlinx-coroutines-core-jvm.jar
+└── <verified target.kotlin.classpath JAR copies>
+```
+
+`dependencies.json` schema 1은 project identity, JVM target, module path/hash, Kotlin stdlib
+provided dependency, 각 runtime library의 path/hash와 coroutine version을 기록한다. `.cott`,
+manifest, authored Kotlin source, original generated layout, tests, compiler/JDK, Android SDK와
+`compile_only` JAR는 배포하지 않는다. Cott deployment는 JAR publication이지 APK/AAB
+publication이 아니다.
+
+`cott init <path> --target kotlin`은 bodyless Cott module, Kotlin implementation root, closed
+Kotlin manifest와 `.gitignore`만 만든다. Android app, Gradle build, UI, resource 또는 manifest를
+scaffold하지 않는다. `--no-sync`가 없으면 installed Kotlin/JDK toolchain을 probe할 뿐 download나
+Python/uv 작업을 하지 않는다.
+
+`examples/integrations/android-counter`는 standard Gradle consumer와 Cott module을 명시적으로
+분리한다. Cott source/binding lifecycle은 다음과 같다.
+
+```bash
+project=examples/integrations/android-counter
+cott check --project "$project"
+cott fmt --check --project "$project"
+cott emit kotlin --project "$project"
+cott verify --project "$project"
+cott deploy --project "$project" --output dist/android-counter-module
+```
+
+Android project는 AGP `9.0.1`(bundled Kotlin `2.2.10`), compile/target SDK `36`, min SDK `26`,
+JVM 17을 사용한다. 개발
+중 repository binary를 쓰는 build는 official Gradle `9.1.0` distribution SHA-256
+`a17ddd85a26b6a7f5ddb71ff8b05fc5104c0202c6e64782429790c933686c806`을 pin한 wrapper와
+`COTT_BIN` override를 사용한다.
+
+```bash
+COTT_BIN="$PWD/target/debug/cott" \
+  "$project/android/gradlew" --project-dir "$project/android" --no-daemon :app:assembleDebug
+```
+
+Gradle task가 verified module을 별도 directory에 deploy하고 `cott-module.jar`와
+`runtime-libs/*.jar`만 dependency로 연결한다. Kotlin stdlib는 Android Gradle plugin이 제공하며
+같은 coroutine library를 app graph에서 다시 선언해 duplicate class를 만들지 않는다. App source는
+`example.counter.increment`와 `example.counter.decrement` public facade만 import한다. 독립 native
+JVM consumer는 deployed module로 compile/run되어 `increment(0) == 1`,
+`decrement(100) == 99`, invalid `increment(100)` rejection을 확인했고 두 callable의 여섯 clause에
+unknown/unobserved 없이 observation이 기록되었다. 같은 pinned Gradle build는 debug APK를
+assemble해 AOSP API 36 software emulator에 설치했고 UI의 bounded counter에서 `0 → 1 → 0`
+전이를 관찰했다. 이는 software-emulator evidence이며 physical-device 성공 주장은 아니다.
+
+Cott가 소유하는 범위는 Cott module compile/verify/deploy다. Standard Gradle/Android가 Kotlin UI,
+`AndroidManifest.xml`, resource, application dependency graph, DEX, APK/AAB assembly, signing,
+installation과 device lifecycle을 소유한다. Android device에서 Python을 실행하는 경로는 없다.
 
 ---
 
@@ -1694,20 +2000,31 @@ real project는 각자 독립 generation-first example이며 project API version
 
 ### 17.1 생성 입력
 
-선택된 에이전트에게 전달되는 정보는 다음과 같다. Unresolved function is eligible regardless of declared `Any`, `Unknown`, external type, `Iterator`, `Generator`, or recursively placed `Opaque`; agent code may implement the contract but cannot add a Cott body, weaken a declaration, or treat Python implementation code as contract source.
+선택된 agent는 target별 implementation을 작성한다. Unresolved callable은 선언된 `Any`,
+`Unknown`, external type, iterator/protocol 또는 recursive `Opaque` 때문에 자동 제외되지 않지만
+Cott body를 추가하거나 contract를 약화하거나 기존 target code를 semantic authority로 취급할 수
+없다.
 
 1. 생성 대상 callable의 Canonical IR과 원본 `doc`
 2. 사전 조건·사후 조건·오류 조건·부작용
-3. 생성 대상 언어 규칙과 프로젝트 코딩 규칙
-4. scoped transitive declaration context: explicit identifier·nominal reference·`constant_ref`로 닫히는 type·const·helper, `cott.applied_rule`과 그 base, 관련 incoming scenario, retained generator rule 식별자
-5. free function일 때 구현 바인딩과 바인딩된 심볼 목록 및 읽기 전용 프로젝트 내부 바인딩 파일
-6. identity가 선택된 선언에 있는 reference implementation. pending이면 대상의 existing source
-7. impl method일 때 concrete name, ordered state fields/defaults, init contract, invariants, method `modifies` clause, canonical helper name/path와 `self` public-method call rule
-8. Canonical IR 밖에서 fully qualified Cott symbol 순으로 정렬한 deterministic Python external projection section
+3. 선택 target language/ABI 규칙과 project coding rule
+4. explicit reference·`constant_ref`·applied rule/base·incoming scenario로 닫힌 transitive context
+5. free function의 target binding identity와 read-only authenticated reference source
+6. pending 대상의 existing durable source
+7. impl method의 concrete/state/init/invariant/`modifies` 정보와 canonical helper signature
+8. target별 external projection과 dependency context
 
-callable별 prompt는 `COTT_AGENT_PROMPT_V1`이며 섹션은 AUTHORITY, CURRENT INTENT, FORMAL DECLARATIONS, PROJECT RULES, REFERENCE IMPLEMENTATIONS, PYTHON OUTPUT RULES, retry 시 VALIDATION FEEDBACK 순이다. AUTHORITY는 FORMAL DECLARATIONS가 원본이고 CURRENT INTENT `doc`과 PROJECT RULES는 계약을 대체하지 않으며, 충돌은 NLP로 증명하지 않고 보고한 뒤 target을 unresolved로 둔다고 명시한다. CURRENT INTENT는 선택 symbol, relative write path `implementation.py`, 대상과 관련 declaration `doc`이다. FORMAL DECLARATIONS는 scoped transitive declaration JSON이며 `doc` text는 이 섹션에서 제거한다. PROJECT RULES는 전역 prose를 유지하고 `cott-domain` directive는 선택 callable만 남긴다. REFERENCE IMPLEMENTATIONS는 비권위 예시다. PYTHON OUTPUT RULES는 ABI·ownership·import이며 impl method prompt에는 binding이 없고 compiler-owned class/init/wrapper를 수정하지 말라는 조건을 포함한다. projection section은 manifest configuration에서 derive하며 Canonical IR이나 generation implementation schema에 섞이지 않는다. 각 helper는 자신의 binding·generation·verification 단위를 갖지만 prompt context는 depth-one으로 잘리지 않는다.
+callable prompt는 AUTHORITY, CURRENT INTENT, FORMAL DECLARATIONS, PROJECT RULES, REFERENCE
+IMPLEMENTATIONS, target OUTPUT RULES, retry의 VALIDATION FEEDBACK을 분리한다. Formal declaration이
+sole semantic authority이고 다른 prose/source는 이를 override하지 않는다. Python write path는
+`implementation.py`, Kotlin write path는 `implementation.kt`다. Kotlin output rules는 exact
+package, `internal`/`suspend`, associated generic, const value witness와 public/private import
+boundary를 포함한다. 한 generate invocation의 모든 초기 prompt는 같은 frozen reference snapshot을
+사용하고 accepted wave candidate는 validation에만 쓴다. `cott prompt` JSON은 target과 무관하게
+`{symbol, intent_hash, prompt_hash, generation_required, context, prompt}`다.
 
-초기 CURRENT INTENT의 관련 `doc`은 이 닫힌 선언 집합에서 오며 적용된 rule `doc`을 작성 `doc`에 이어 붙이지 않는다. 한 generate 호출의 모든 초기 prompt는 같은 frozen reference snapshot에서 렌더하고, 이후 수락한 wave candidate는 validation에만 쓴다. `cott prompt`도 그 초기 snapshot과 같은 schema `{symbol, intent_hash, prompt_hash, generation_required, context, prompt}`를 쓴다.
+초기 CURRENT INTENT의 관련 `doc`은 닫힌 선언 집합에서 오며 applied rule `doc`을 authored `doc`에
+합쳐 semantic constraint로 승격하지 않는다.
 
 ### 17.2 에이전트 선택 및 호출
 
@@ -1721,7 +2038,12 @@ MVP는 다음 세 가지 direct agent adapter와 각 adapter가 제공하는 CLI
 | `claude`      | direct `claude` (Claude Code) |
 | `omp`         | `omp -p`        |
 
-cott는 17.1의 입력을 하나의 callable별 구현 지시로 구성하여 선택된 인터페이스에 전달한다. implementation kind가 free function이면 바인딩된 symbol을 다시 구현하지 말고 project-local call에는 exact cott facade function import만 사용하라고 명시한다. kind가 impl method이면 supplied exact canonical function을 작성하고 class·init·wrapper·state declaration을 작성하지 말며 project-local method coordination에는 `self.<declared_method>(...)`만 사용하라고 명시한다. 어느 경우든 prompt는 same-file private helper와 literal `Final` constant가 canonical function의 private implementation detail이며 public behavior가 되면 Cott로 승격해야 함을 명시한다.
+cott는 17.1의 target-specific 입력을 하나의 callable별 구현 지시로 구성해 선택 interface에
+전달한다. Binding된 symbol은 다시 구현하지 않는다. Python composition은 exact generated facade,
+Kotlin composition은 exact public Cott package를 사용하고 private implementation package를
+import하지 않는다. Impl method는 supplied canonical helper만 작성하고 compiler-owned
+class/init/wrapper/state declaration을 만들지 않는다. Same-file private helper는 canonical function의
+hashed implementation detail이고 public behavior가 되면 Cott declaration으로 승격한다.
 
 `codex`, `claude`, `omp` 밖의 `--agent` 값은 에이전트를 호출하기 전에 오류로 거부한다.
 
@@ -1772,7 +2094,10 @@ impl method agent는 exact private `_cott_impl_<Concrete>_<method>` canonical to
 
 CLI argument parsing 뒤 compiler는 먼저 project root를 canonical directory handle로 고정한다. clean checkout에서 `.cott`이 없으면 root handle 기준 `mkdirat`으로 mode `0755` directory를 만들고 root를 fsync하며, 이미 있으면 no-follow directory인지 확인한다. `.cott/lock`은 그 handle 기준 `O_NOFOLLOW | O_CREAT`로 열어 regular file·`st_nlink == 1`을 확인한 뒤 exclusive OS advisory lock을 획득하며, 다른 project input은 lock 전 읽지 않는다. lock 안에서 `transactions` directory도 같은 방식으로 생성·검사한다. 모든 project command는 종료까지 lock을 유지하고 read-only command도 같은 coherent snapshot을 읽는다. lock metadata는 PID와 execution nonce를 기록하며 process 사망 시 OS가 lock을 해제한다. `cott prompt`는 이 lock과 metadata를 허용하는 inspection이며 pending journal이 있으면 recovery와 publication 없이 거부한다. `fmt`·`emit`·`generate`·`verify`·`diff` 등 일반 command는 같은 lock에서 미완료 journal을 복구한다.
 
-content input·transaction destination의 각 path component는 project root handle 기준 no-follow로 연다. symlink, `st_nlink != 1`인 regular file과 project root 밖으로 벗어나는 path는 hash 계산 전 거부한다. manifest가 지정한 interpreter·type checker와 agent executable만 canonical regular-file path로 symlink를 한 번 해소하는 예외다.
+Content input과 transaction destination의 각 path component는 project root handle 기준 no-follow로
+연다. Symlink, `st_nlink != 1` regular file과 project root 밖 path는 hash 전에 거부한다. Manifest가
+지정한 Python interpreter/type checker, Kotlin compiler/Java launcher와 agent executable만
+canonical regular-file path로 symlink를 한 번 해소하는 예외다.
 
 `.cott`, 모든 transaction destination과 staging payload가 같은 filesystem이 아니거나 그 filesystem이 same-directory atomic rename, exclusive advisory lock, regular file·directory의 durable `fsync`를 제공하지 않으면 multi-file apply를 시작하지 않는다.
 
@@ -1790,7 +2115,10 @@ rollback은 idempotent해야 하며 recovery 자체가 중단되면 같은 journ
 
 compiler payload의 regular file mode는 `0644`, directory mode는 `0755`로 고정하고 process umask와 무관하게 설정한다.
 
-transaction 시작 시 계약, manifest, manifest가 참조하는 rule, lockfile, `<target.python.source>`, generated tree와 compiler-owned test tree의 파일 목록·content hash를 기록한다. 프로젝트 내부 binding과 기존 implementation도 포함한다. 그 뒤 임시 staging workspace와 별도 scratch directory를 만든다.
+Transaction 시작 시 계약, manifest, referenced rule, selected target input/dependency, generated
+tree와 compiler-owned evidence tree의 file list/content hash를 기록한다. Project binding과 existing
+implementation도 포함한다. Python-specific agent path와 managed scope는 아래와 같고 Kotlin
+counterpart는 16A의 `<target.kotlin.source>/cott_impl` 및 Kotlin artifact scope를 따른다.
 
 staging에는 대상 계약, allowed direct helper 계약, binding, rule, 기존 구현과 compiler 생성물의 사본을 제공하고 실제 project path는 agent에게 노출하지 않는다. 각 agent process의 workspace write allowlist는 현재 callable file 하나로 제한한다.
 
@@ -1807,15 +2135,27 @@ compiler-owned 관리 집합은 `<target.python.generated>`, `<target.python.stu
 
 성공적으로 project source에 승격된 agent callable file은 비결정적이지만 durable implementation source로 취급하며 cott가 자동 삭제하지 않는다. IR에서 더 이상 참조하지 않는 file은 `cott diff`의 `IMPLEMENTATION STALE`로 보고하되 public facade나 verify 대상에는 포함하지 않는다. 사용자가 명시적으로 삭제한다.
 
-각 command의 staging 검사가 성공한 뒤 시작 project file list·hash와 해석된 tool executable·direct external dependency origin·distribution metadata의 identity·content hash를 다시 비교하고 달라졌으면 덮어쓰지 않는다. `emit ir`의 반영 대상은 IR scope와 `generation.json`, `emit python`·`generate`는 command 범위의 durable implementation, 전체 compiler 관리 집합·stale 삭제와 `generation.json`이다. `cott fmt`는 모든 선택 source의 formatted bytes를 먼저 staging하고 같은 journal로 한꺼번에 반영하며, 기존 `generation.json`이 있으면 실제 input·managed state를 다시 기록해 `current.verified = false`로 만들고 `last_verified`를 보존한 record를 마지막에 반영한다. record가 없으면 fmt가 새로 만들지 않는다. verify는 managed artifact를 반영하지 않고 성공 record만 같은 journal로 반영한다.
+각 command의 staging 검사가 성공한 뒤 시작 input와 해석된 tool/dependency identity/hash를 다시
+비교하고 달라졌으면 덮어쓰지 않는다. `emit ir`은 IR scope와 record, target emit/generate는 해당
+target의 durable implementation change와 compiler-owned managed set 및 record를 generation-last로
+반영한다. `cott fmt`의 actual source edit는 기존 current certification을 invalidate하고 history를
+보존한다. Python verify는 expected managed bytes를 비교하고 성공 record만 반영한다. Kotlin
+verify는 16A.3의 compiled JAR/runtime dependency와 성공 record를 함께 반영한다.
 
-OS advisory lock은 cott process끼리만 조정한다. 이를 따르지 않는 editor·package installer 등 외부 writer는 command 실행 중 같은 project destination이나 해석된 dependency를 변경해서는 안 된다. 마지막 hash 재확인은 apply 전 drift를 탐지하고 배포 gate는 apply 뒤에도 hash를 다시 계산하지만, concurrent non-cott writer의 수정 보존이나 실행 중 Python reader의 snapshot isolation은 보장하지 않는다. 배포는 성공한 transaction 뒤 새 Python process로 시작해야 한다.
+OS advisory lock은 Cott process끼리만 조정한다. 이를 따르지 않는 editor/package installer/build
+process는 command 실행 중 같은 project destination이나 dependency를 바꾸면 안 된다. Final hash
+재확인은 apply 전 drift를 탐지하지만 concurrent non-Cott writer의 수정 보존이나 실행 중 target
+reader의 snapshot isolation은 보장하지 않는다. 배포된 target은 complete transaction 뒤 새
+runtime/build process에서 사용한다.
 
 실패, timeout, 취소 또는 검증 오류에서는 이전 세대를 유지한다. 프로젝트 밖 dependency는 sandbox에서 읽기 전용으로 제공한다.
 
 ### 17.5 생성 결과 검증
 
-아래 full pipeline은 `emit python`, `generate`와 full `verify`에 적용한다. `emit ir`은 Canonical IR 생성 뒤 final input 재확인과 17.4의 IR-scope apply로 이동하며 Python target을 만들지 않는다.
+아래 full pipeline은 Python의 `emit python`, `generate --target python`, full `verify`를 상세화한다.
+Kotlin의 대응 pipeline은 16A.2–16A.3에 규정한다. 두 target 모두 `emit ir`은 Canonical IR 뒤
+IR-scope apply로 이동하고, emit/generate는 unverified publication이며 explicit verify만
+certification을 publish한다.
 
 ```text
 project lock 획득 및 미완료 journal 복구
@@ -1885,22 +2225,32 @@ def process_bar(data, options):
 ### 18.1 프로젝트 초기화
 
 ```bash
-cott init <path>
-cott init <path> --name <project-name> --no-sync
-cott init <path> --format json
+cott init <path> [--target python|kotlin] [--name <project-name>] [--no-sync] [--format json]
+cott init path/to/python-project
+cott init path/to/kotlin-module --target kotlin
 ```
 
-`<path>`는 필수며 absolute·relative path를 모두 허용한다. 기존 directory인 parent를 canonicalize한 뒤 그 안의 final component 하나를 target으로 사용한다. final component는 비어 있거나 `.`·`..`일 수 없고, target이 symlink를 포함해 이미 존재하면 내용과 무관하게 exit `2`다. 따라서 symlink가 포함된 parent path는 canonical parent로 정규화하되 새 target 자체의 symlink·alias collision은 허용하지 않는다. 기본 project name은 target basename을 변환하지 않고 그대로 사용하며, 이 값이 유효하지 않으면 `--name`이 필요하다. name은 `^[a-z](?:[a-z0-9]|-[a-z0-9])*$`를 만족하는 1–64자여야 하므로 trailing·consecutive hyphen을 거부하고 Python distribution name과 module name을 동시에 만족한다. `-`를 `_`로 바꾼 top-level module도 기존 reserved/collision 검사를 통과해야 한다. interactive prompt, `--force`, overwrite, dry-run은 없다.
+`<path>`는 필수이며 absolute·relative path를 허용한다. 기존 parent를 canonicalize하고 그 안의
+final component 하나를 새 target으로 사용한다. Target이 symlink를 포함해 이미 존재하면 exit
+`2`다. 기본 project name은 target basename이고 invalid name에는 `--name`이 필요하다. Python과
+Kotlin target 모두 normalized lowercase kebab-case project identity와 injective module path를
+검사한다. Interactive prompt, `--force`, overwrite, dry-run은 없다.
 
-`init`은 아직 project가 없어서 17.4의 project lock/journal을 쓰지 않는 유일한 명령이다. canonical parent directory handle 아래에 mode `0700` private sibling temporary scaffold를 만들고 target root의 mode `0600` `.cott-init` file에 closed `schema_version`·nonce ownership record를 저장한다. 모든 file을 fsync한 뒤 directory를 bottom-up fsync하고, Linux `renameat2(RENAME_NOREPLACE)` 또는 macOS `renameatx_np(RENAME_EXCL)`에 해당하는 같은-parent atomic no-replace rename으로만 publish한 다음 parent를 fsync한다. publish 전 실패는 init-owned temp를 no-follow로 제거하고 parent를 fsync한다. 경합 `EEXIST`는 이 cleanup까지 성공한 경우에만 exit `2`이며, 다른 scaffold·rename·fsync 실패나 cleanup 실패는 exit `6`이다. publish 뒤에는 uv 실행과 모든 probe를 먼저 완료한다. `.cott-init` unlink가 final commit transition이며, unlink 전 실패는 root file identity와 in-memory nonce가 marker record와 모두 일치하는 init-owned target만 no-follow로 제거하고 parent를 fsync한 뒤 원래 exit code를 반환한다. identity가 달라졌거나 cleanup이 실패하면 target을 보존하고 exit `6`을 반환한다. unlink를 시작한 뒤에는 target을 자동 삭제하지 않는다. unlink 또는 이어지는 target-root fsync가 실패하면 exact completed tree나 ownership-marked completed tree를 보존하고 exit `6`과 수동 확인 경로를 진단하며, 둘 다 성공해야 init이 성공한다. process crash로 남은 ownership-marked temp·target도 다음 init이 자동 삭제하거나 overwrite하지 않고 exit `2`와 수동 확인 경로를 진단한다. uv가 한 번이라도 시작된 뒤 실패하면 선택된 human 또는 JSON diagnostic에 global managed-Python·cache 변경이 남고 rollback되지 않을 수 있음을 반드시 포함한다.
+`init`은 아직 project가 없으므로 project lock/journal 대신 private sibling staging,
+mode `0600` closed `.cott-init` ownership record, fsync와 atomic no-replace rename을 사용한다.
+실패 cleanup은 자신이 가진 nonce/marker가 일치하는 staging만 제거한다.
 
-scaffold는 `python/.python-version`에 `3.14`를 쓰고 `python/pyproject.toml`의 `requires-python`을 `>=3.14.6,<3.15`로 고정하며 BasedPyright `>=1.39.9`를 dev dependency로 둔다. v1.0은 CPython `>=3.14.6,<3.15`와 uv `0.12.3` 이상을 지원하며, init은 그 범위의 managed CPython patch를 설치·probe한다. `uv.lock`은 Python exact patch를 고정하지 않으며, 실제 설치된 full patch는 이후 generation provenance에 고정한다.
+Default Python init은 `python/.python-version`, `pyproject.toml`, `uv.lock`과 선택적 `.venv`를
+만들고 uv `>=0.12.3`, CPython `>=3.14.6,<3.15`, BasedPyright `>=1.39.9`의 기존 closed
+install/lock/sync/probe contract를 따른다. Python `--no-sync`는 managed Python install/probe와
+lock은 수행하고 environment sync와 root venv tool probe만 건너뛴다. Subprocess는 shell 없이
+sanitized environment와 bounded output/time을 사용한다.
 
-uv executable은 shell 없이 PATH에서 한 번만 canonical regular file로 resolve하고 version이 `0.12.3` 이상인지 검사한다. uv subprocess environment는 empty base에서 compiler-fixed sanitized `PATH`와 허용한 `HOME`·temporary-directory·platform TLS/certificate 변수만 복사하고 inherited `UV_*`, `VIRTUAL_ENV`, `CONDA_PREFIX`는 전부 제외한 뒤 `UV_PYTHON`·`UV_PROJECT_ENVIRONMENT`만 해당 단계에 명시하며 canonical uv를 `--no-config`로 실행한다. `<uv> --no-config python dir`의 canonical managed-install root를 기록한 뒤 다음 순서로 실행한다: `<uv> --no-config python install --upgrade 3.14`; `<uv> --no-config python find --managed-python --system 3.14`가 반환한 canonical path가 그 root 아래인지 확인하고 해당 interpreter를 `-I -c <compiler-fixed-identity-probe>`로 실행해 CPython `>=3.14.6,<3.15`를 검증; project cwd `python/`에서 lock, sync 순서를 수행한다.
-
-`--no-sync`는 Python install·upgrade, lock 및 uv-managed Python probe까지 수행하고 sync와 root venv Python·BasedPyright probe만 생략한다. human 출력은 `/usr/bin/env -i HOME=<home> TMPDIR=<temporary-directory> PATH=<sanitized-path> UV_PYTHON=<canonical-managed-interpreter> UV_PROJECT_ENVIRONMENT=<canonical-target-absolute>/.venv <canonical-uv> --no-config sync --directory <canonical-target-absolute>/python --frozen --managed-python`의 placeholder를 init과 같은 compiler-owned environment allowlist의 실제 값 및 canonical path로 POSIX-shell-escape해 렌더링한다. JSON 출력은 같은 명령을 `severity: "note"`, `span: null` diagnostic의 `help` 원소로 제공한다.
-
-모든 subprocess는 shell 없이 실행하고 stdout/stderr를 drain하되 output은 bounded하게 보관하며 compiler-fixed timeout과 cancel을 적용한다. uv missing/unsupported와 invalid args/path/name은 exit `2`; init의 uv dir·install/upgrade·find·lock·sync, managed/root venv interpreter·BasedPyright probe 실패, timeout 또는 cancel은 exit `5`다.
+Kotlin init은 Cott source, empty Kotlin implementation root, closed `[target.kotlin]` manifest와
+`.gitignore`만 만든다. `--no-sync`가 없으면 configured kotlinc/JDK/stdlib/coroutine identity를
+probe하고, 있으면 그 probe를 건너뛴다. Kotlin init은 uv, Python, Gradle, network download 또는
+Android scaffold를 실행하지 않는다. Kotlin name/tool probe/config failure는 exit `2`, filesystem
+publication failure는 `6`으로 fail closed한다.
 
 ### 18.2 타입 및 문법 검사
 
@@ -1926,27 +2276,40 @@ cott emit ir
 
 이 명령은 `<artifact-root>/ir` scope와 `<artifact-root>/generation.json`만 원자 갱신하고 다른 compiler-owned managed bytes는 그대로 둔다. non-IR managed hash는 기존 trusted 값을 유지하고, IR-only emission이 무관한 managed 편집을 새 baseline으로 기록하지 않는다. `current.verified = false`이며 `last_verified`를 보존한다.
 
-기존 Python 산출물을 유지할 때는 현재 callable kind와 intent가 일치하는 implementation·AgentRun·구현 source input hash도 보존한다. 따라서 변경 없는 IR-only 갱신이 재생성을 새로 요구하지 않는다. 신규·intent 변경·기존 pending 대상은 계속 unresolved이며, 이 판정에 Python이나 type checker를 실행하지 않는다.
+기존 target 산출물을 유지할 때는 current callable kind/intent와 일치하는
+implementation·AgentRun·source input hash만 보존한다. 신규, intent-changed 또는 pending 대상은
+unresolved다. 이 판정에 Python/Kotlin compiler나 checker를 실행하지 않는다.
 
-### 18.5 Python 대상 생성
+### 18.5 Target source 생성
 
 ```bash
 cott emit python
+cott emit kotlin
 ```
 
-이 명령은 agent 없이 compiler-owned 산출물을 staging에서 만들고 원자 갱신한다. 미구현 free function과 impl method는 facade에서 생략하고 kind·canonical symbol을 `current.unresolved`에 기록한다. pending unresolved이며 authentic `AgentRun`이 있는 agent source는 기존 bytes를 유지한다. `current.verified = false`로 갱신하지만 `last_verified`와 durable agent implementation file은 보존한다. emitter 자체가 성공하면 exit 0이지만 배포 가능한 결과는 아니다.
+Manifest가 선택한 target과 explicit emit target은 일치해야 한다. 두 명령은 agent나 target
+compiler 없이 compiler-owned source를 staging에서 만들고 원자 갱신한다. 미구현 callable은
+facade에서 생략하고 `current.unresolved`에 기록하며 placeholder를 만들지 않는다. Authentic
+pending agent source는 소유권을 유지한다. 결과는 항상 `current.verified = false`이고
+`last_verified`를 보존하므로 배포 가능한 certification이 아니다.
 
 ### 18.6 구현 생성
 
 ```bash
-cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python [-j <jobs>] [--project <dir>] [--format json]
+cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin [-j <jobs>] [--project <dir>] [--format json]
 
 cott generate --agent claude --target python
 cott generate foo.bar.process_bar --agent omp --target python
-cott generate foo.bar.Counter.increment --agent codex --target python
+cott generate example.module.calculate --agent codex --target kotlin
 ```
 
-selection은 exact canonical free-function FQN 또는 impl-method FQN `<module>.<Concrete>.<method>`만 받으며 class FQN alone, trait FQN, glob과 alias는 거부한다. 선택 범위에 미구현 callable이 있으면 `--agent`가 필수다. 허용 값은 `codex`, `claude`, `omp`다. `claude`는 direct Claude Code adapter이고 OMP가 Claude model을 선택하는 경우와 별개다. 선택된 free function이 모두 binding되어 있고 intent fingerprint가 같으면 agent를 호출하지 않지만, intent가 stale이거나 impl method가 unresolved이면 agent candidate다. 특정 callable generate에서 agent write 대상은 그 callable의 durable source file뿐이며 apply는 선택 implementation과 전체 compiler-owned 관리 집합을 함께 갱신한다. verified baseline guard는 17.5의 정확한 규칙을 사용한다. 최초 검증 전에는 선택 범위 성공만으로 진행할 수 있다. 결과는 `current.verified = false`며 project 전체 미구현 상태를 별도 진단한다. 배포 gate는 항상 full `cott verify`다.
+Explicit `--target`은 필수고 manifest의 exactly-one target과 일치해야 한다. Selection은 exact
+canonical free-function 또는 eligible impl-method FQN만 받고 glob/alias는 거부한다. 선택된
+unresolved callable이 있으면 `--agent`가 필수이고 허용 값은 `codex`, `claude`, `omp`다. Binding
+및 fresh accepted source는 재사용하고 stale/unresolved source만 target별 `implementation.py` 또는
+`implementation.kt` candidate로 생성한다. Source audit와 complete-candidate validation은 실제
+target 규칙을 사용하고 failure checkpoint는 정확한 pending source provenance를 남긴다. 모든
+generate 결과는 `current.verified = false`; 배포 gate는 explicit full `cott verify`다.
 
 ### 18.6.1 Prompt 검사
 
@@ -1954,7 +2317,13 @@ selection은 exact canonical free-function FQN 또는 impl-method FQN `<module>.
 cott prompt <fully.qualified.callable> [--project <dir>] [--format json]
 ```
 
-FQN은 generate와 같은 exact canonical free-function 또는 impl-method symbol이다. provider·Python·checker를 요구하지 않고 generate와 같은 초기 frozen reference snapshot에서 초기 generation prompt만 렌더한다. human mode는 그 bytes를 stdout에 쓴다. JSON은 `{symbol, intent_hash, prompt_hash, generation_required, context, prompt}` 한 object와 끝 newline이다. `prompt`는 초기 bytes와 같고 `prompt_hash`는 그 bytes만 hash한다. retry는 실제 validation feedback을 뒤에 붙이며 검사 `prompt_hash`에 넣지 않는다. 이후 wave에서 수락한 candidate는 이 광고된 초기 prompt를 바꾸지 않는다. `intent_hash`는 domain `cott.intent` fingerprint다. `context`는 `{symbol, declarations, project_rules}`다. write path는 relative `implementation.py`다. inspection은 project lock과 lock metadata를 허용하며 pending journal은 recovery와 publication 없이 거부한다. JSON 오류는 diagnostics schema v1 document이며 prompt text가 아니다. compiler-owned method는 usage error다.
+FQN은 generate와 같은 exact canonical callable symbol이다. Provider와 target compiler/checker를
+요구하지 않고 같은 초기 frozen snapshot의 prompt bytes를 렌더한다. JSON은
+`{symbol, intent_hash, prompt_hash, generation_required, context, prompt}`와 final newline이고
+`prompt_hash`는 retry feedback 전 initial bytes만 hash한다. Python write path는
+`implementation.py`, Kotlin write path는 `implementation.kt`다. Inspection은 lock metadata를
+쓸 수 있지만 pending journal을 recovery/publication 없이 거부한다. Formal source가 authority이고
+project rule/reference source는 override하지 않는다.
 
 ### 18.7 구현 검증
 
@@ -1979,7 +2348,21 @@ cott verify
 * configured mode의 public callable `requires`, concrete 반환 타입, canonical struct invariant, allowed error variant와 `ensures`, always-on impl init/state checks
 * recursive-placement `Opaque` tag/key admissibility와 reserved target path, staged sandbox/isolated-loopback fixture authorization·cleanup·process-group containment, closed semantic coverage/policy와 current/last_verified provenance
 
-`cott verify`는 result cache를 사용하지 않고 현재 contract·manifest·lock·implementation input에서 expected IR·Python·stub·docs·test artifact를 staging에 다시 만든 뒤 실제 managed file 집합과 byte-for-byte 비교한다. unresolved pending이 있으면 실패한다. 현재 facade에 없는 옛 managed implementation은 export하지 않는다. input drift는 새 검증 대상으로 허용하지만 missing·extra·hand-edited managed file은 hard failure이며 `cott emit` 또는 `cott generate`로 먼저 갱신해야 한다. verify는 source와 managed file을 고치지 않고, 시작 snapshot이 실행 중 달라져도 실패한다. artifact verification이 성공하면 `generation.json`만 journal transaction으로 갱신해 same snapshot의 `current.verified=true`, complete evidence/`semantic_coverage`, `last_verified`를 먼저 publish한다. 이후 selected coverage policy 위반은 이 certified record를 되돌리지 않고 exit `8`로 gate만 실패시킨다.
+Python `cott verify`는 result cache를 사용하지 않고 current contract, manifest, lock,
+implementation input에서 expected IR/Python/stub/docs/test artifact를 staging에 다시 만든 뒤 actual
+managed set과 byte-for-byte 비교한다. Unresolved pending, missing/extra/hand-edited managed file과
+start snapshot drift는 hard failure다. Current facade에 없는 old implementation은 export하지
+않는다. Verify는 source/managed file을 고치지 않고 artifact verification이 성공한 뒤
+`generation.json`만 journal transaction으로 갱신해 same snapshot의
+`current.verified = true`, complete evidence/`semantic_coverage`, `last_verified`를 publish한다.
+Selected coverage policy 위반은 certified record를 되돌리지 않고 exit `8`로 gate만 실패시킨다.
+
+위 bullet은 Python target의 세부 verification inventory다. Kotlin verify는 16A.3의 별도
+generation-1/runtime-1 pipeline으로 expected Kotlin source를 byte-compare하고 exact
+kotlinc/JDK/stdlib/coroutine/classpath/compile-only identity를 확인한 뒤 sandbox에서
+`cott-module.jar`와 real public-facade runner를 compile/run한다. Kotlin도 unresolved와 drift를
+거부하며, complete evidence와 `semantic_coverage`를 가진 `current == last_verified` snapshot만
+`verified = true`로 publish한다.
 
 ### 18.7.1 실행용 배포
 
@@ -1988,10 +2371,10 @@ cott deploy [--output <dir>] [--project <dir>] [--format json]
 ```
 
 `deploy`는 현재 verified generation snapshot의 실행용 directory package를 만든다. 기본 출력은
-`<project>/dist/<project.name>-<project.version>/`이며, 상대 `--output`은 호출한 working directory
-기준이다. 기존 target은 비어 있어도 덮어쓰지 않는다. project 입력·managed artifact·`.cott`·`.venv`
-안의 출력과 symlink parent/target은 거부한다. project lock을 획득하고 기존 journal을 정상 recovery한
-뒤 입력을 읽으며, source·managed artifact·generation record를 갱신하거나 agent·Python·checker를
+`<project>/dist/<project.name>-<project.version>/`이며 상대 `--output`은 호출 working directory
+기준이다. 기존 target은 비어 있어도 덮어쓰지 않는다. Project input, managed artifact, `.cott`,
+`.venv`, unsafe parent/target과 겹치는 output은 거부한다. Project lock/recovery 뒤 읽기만 하고
+source, managed artifact 또는 generation record를 갱신하지 않으며 agent나 target compiler/checker를
 호출하지 않는다.
 
 gate는 closed generation schema/identity와 현재 compiler/runtime package version, project version,
@@ -2000,24 +2383,26 @@ gate는 closed generation schema/identity와 현재 compiler/runtime package ver
 비교하고, 전체 managed inventory와 실제 bytes를 확인한다. 대상 regular file과 parent는 symlink와
 hardlink를 허용하지 않는다. 읽은 input snapshot을 publication 직전에 다시 비교한다.
 
-배포 payload는 `python/` 아래 managed `.py` facade·type·runtime·implementation과 authored runtime
-Python adapter, byte-identical `generation.json`, exact recorded CPython patch의 `.python-version`,
-production `requirements.txt`다. authored adapter는 기존 facade-only AST audit를 적용한다.
-recorded `source_origin`에서 derive한 private implementation top-level package와 `_cott_impl`/
-`cott_bindings`, hidden/dev/test directory, `conftest.py`, `test_*.py`, `*_test.py`, cache는 adapter에서
-제외한다. authored package가 generated package를 가리면 실패한다. `.cott` source, `cott.toml`, IR,
-stub, strategy/test artifact, typing marker, authored private copy와 원래 `generated/` 경로는 배포하지
-않으며 non-Python application resource를 추론하지 않는다. 실제 생성 Python code와 기존 runtime
-provenance record는 필요한 실행물이며 ABI/schema 변경이나 loader 우회 없이 보존한다.
+Python payload는 `python/` 아래 managed facade/type/runtime/implementation, authored runtime
+adapter, byte-identical `generation.json`, exact `.python-version`, production
+`requirements.txt`다. Existing facade-only audit와 uv frozen offline export 규칙은 그대로다.
+`.cott`, manifest, IR, stub, strategy/test, authored private copy와 original generated path는
+제외하며 non-Python application resource를 추론하지 않는다.
 
-production dependency가 있으면 uv `>=0.12.3`의 bounded subprocess로 target metadata와 configured
-lock의 private scratch copy를 `export --frozen --offline --no-default-groups --no-dev
+Kotlin payload는 `cott-module.jar`, byte-identical `generation.json`, schema-1
+`dependencies.json`, `runtime-libs/kotlinx-coroutines-core-jvm.jar`와 verified
+`target.kotlin.classpath` copy다. Kotlin stdlib는 required/provided dependency로 metadata에
+기록하지만 bundle하지 않고 `compile_only`, compiler/JDK, Android SDK/source/resource도 제외한다.
+두 target의 payload는 runtime에 필요한 target code와 provenance를 보존한다.
+
+Python production dependency가 있으면 uv `>=0.12.3`의 bounded subprocess로 target metadata와
+configured lock의 private scratch copy를 `export --frozen --offline --no-default-groups --no-dev
 --no-emit-project --no-editable --no-header --no-annotate --no-config --no-cache
---no-python-downloads --format requirements.txt`로 export한다. package/version/marker와 artifact
-hash를 보존하고 local/editable/VCS requirement는 거부한다. recorded installed runtime dependency가
-production export에 없으면 실패한다. dependency-free project는 uv를 호출하지 않는다.
-interpreter와 external distribution 자체는 bundle에 복사하지 않으며 destination이 기록된 CPython
-patch·OS·architecture 및 dependency identity를 만족해야 한다.
+--no-python-downloads --format requirements.txt`로 export한다. Package/version/marker와 artifact
+hash를 보존하고 local/editable/VCS requirement는 거부한다. Recorded installed Python runtime
+dependency가 production export에 없으면 실패한다. Dependency-free Python project는 uv를
+호출하지 않는다. Interpreter와 external distribution 자체는 bundle에 복사하지 않으며 destination이
+기록된 CPython patch·OS·architecture 및 dependency identity를 만족해야 한다.
 
 private sibling staging에 payload를 쓰고 fsync한 뒤 기존 init의 atomic no-replace rename으로
 directory 전체를 publish한다. 실패한 staging은 제거하며 기존 output을 지우거나 수정하지 않는다.
@@ -2057,9 +2442,15 @@ public declaration 제거·rename, sync/async kind, signature·generic·type sha
 
 baseline/current `[project].version`은 restricted `x.y.z` API version이며 current가 baseline보다 작으면 diff error다. breaking change는 baseline major가 `0`이면 최소 minor, 그 밖에는 최소 major bump를 요구한다. additive change는 최소 minor bump를 요구하고 implementation/documentation-only change는 bump를 요구하지 않는다. insufficient bump는 `VERSION INCOMPATIBLE` change로 report에 추가되고 `--exit-code`는 7을 반환한다. report는 declaration removal에 “Remove uses …”, addition에 “Adopt …” migration advice를 함께 제공한다.
 
-`cott diff`는 `generation_id` mismatch 자체를 change로 보지 않는다. 같은 target environment에서는 compiler·runtime·Python·type-checker identity와 managed artifact hash까지 비교한다. target identity가 다른 cross-machine 비교에서는 이 machine-local 항목을 변경 판정에서 제외하고 normalized contract·public symbol, durable implementation content와 normalized lock·dependency identity를 비교한다.
+`cott diff`는 `generation_id` mismatch 자체를 change로 보지 않는다. 같은 target environment에서는
+해당 compiler/runtime/tool identity와 managed artifact hash를 비교한다. 다른 machine에서는
+machine-local identity를 제외하고 normalized contract/public target symbol, durable implementation
+content와 dependency identity를 비교한다. Python과 Kotlin record를 서로 baseline으로 읽지 않는다.
 
-MVP는 generation result cache를 두지 않고 emit·generate 때마다 target을 결정적으로 다시 만든다. `generation_id`를 구성하는 contract·manifest·rule·target metadata·lock raw hash, compiler·runtime·Python·type-checker identity, implementation identity·source/runtime origin·content hash 중 하나라도 달라지면 새 세대다. `cott verify`도 항상 모든 검사를 실행한다.
+Generation result cache는 없다. Contract, manifest, rule, target input, exact Python
+interpreter/checker/lock 또는 Kotlin compiler/JDK/JAR identity, implementation
+source/runtime-origin/hash 중 하나라도 달라지면 새 target generation이다. `cott verify`도 항상
+선택 target의 모든 검사를 실행한다.
 
 ### 18.9 언어 서버
 
@@ -2075,14 +2466,14 @@ cott lsp
 | --- | --- |
 | `0` | 요청한 범위 성공 |
 | `1` | formatter 비멱등성을 포함한 internal compiler error |
-| `2` | CLI 사용법, init의 uv missing/unsupported·invalid args/path/name, manifest 구성 또는 diff baseline 부재·읽기·schema 오류 |
-| `3` | cott 문법, 이름, 타입 또는 계약 오류 |
-| `4` | 구현 누락·불일치, provenance drift 또는 verify 실패 |
-| `5` | agent 또는 init uv 실행·probe 실패, timeout 또는 취소 |
-| `6` | init filesystem·cleanup·atomic no-replace rename, lock, 동시 수정, sandbox 또는 원자적 반영 실패 |
+| `2` | CLI 사용법, init tool/name/path, manifest 구성 또는 diff baseline 오류 |
+| `3` | Cott 문법, 이름, 타입 또는 계약 오류 |
+| `4` | target 구현 누락·불일치, provenance drift 또는 verify 실패 |
+| `5` | agent 또는 Python init uv 실행·probe 실패, timeout 또는 취소 |
+| `6` | init filesystem/cleanup/atomic rename, lock, concurrent mutation, sandbox 또는 apply 실패 |
 | `7` | `cott diff --exit-code`에서 breaking contract 발견 |
-| `8` | certified semantic coverage policy gate 실패 |
-| `9` | `cott fmt --check` format mismatch |
+| `8` | certified semantic coverage policy gate 실패 또는 Kotlin `cott fmt --check` mismatch |
+| `9` | Python `cott fmt --check` format mismatch |
 
 `cott diff`는 기본적으로 차이를 출력하고 0을 반환하며 `--exit-code`에서만 breaking change를 7로 반환한다. `cott emit`의 미구현 진단과 `verified = false`는 emitter 자체가 성공했다면 0이지만 배포 성공을 뜻하지 않는다. policy-failed verify는 generic `verified` success line을 출력하지 않지만 record는 publication되어 diff/provenance가 policy failure를 관찰할 수 있다.
 
@@ -2092,9 +2483,10 @@ cott lsp
 
 ## 19. 프로젝트 구조
 
-### 19.1 `cott init` 직후 구조
+### 19.1 Python `cott init` 직후 구조
 
-`cott init <path> [--name <name>] [--no-sync]`는 존재하지 않는 새 target에 다음 최소 scaffold를 만든다. `<module>`은 project name에서 derive한 Python-safe module name이다.
+Default `cott init <path>`는 존재하지 않는 새 Python target에 다음 최소 scaffold를 만든다.
+`<module>`은 project name에서 derive한 Python-safe module name이다.
 
 이 tree는 성공한 command의 final state다. 실행 중에는 root에 mode `0600` transient `.cott-init` ownership record가 존재하며 final commit에서 제거된다. crash 뒤 이 file이 남은 directory는 ownership-marked incomplete 또는 completed state로 진단하고 자동 삭제·overwrite하거나 정상 project로 취급하지 않는다.
 
@@ -2156,6 +2548,41 @@ dev = ["basedpyright==<basedpyright-version>"]
 ```
 
 `<basedpyright-version>`은 사용 중인 cott compiler release가 고정한 exact supported BasedPyright version을 렌더링하는 template parameter다.
+
+### 19.2 Kotlin `cott init` 직후 구조
+
+`cott init <path> --target kotlin`의 final tree는 다음과 같다. Android/Gradle file은 없다.
+
+```text
+<path>/
+├── .gitignore
+├── cott.toml
+├── src/
+│   └── <module>/
+│       └── main.cott
+└── kotlin/
+```
+
+`main.cott`는 `module <module>.main`과 bodyless `fn main() -> Unit`을 담는다. Kotlin
+`.gitignore`는 `.cott/`, `generated/`, `dist/`, `.gradle/`, `build/`를 ignore한다. 생성 manifest는
+다음과 같고 binding/external/effect/generator/verification table을 임의로 만들지 않는다.
+
+```toml
+[project]
+name = "<name>"
+version = "0.1.0"
+source = "src"
+
+[target.kotlin]
+source = "kotlin"
+generated = "generated/kotlin"
+compiler = "kotlinc"
+java = "java"
+jvm_target = 17
+runtime_validation = "boundary"
+```
+
+### 19.3 확장된 Python project
 
 프로젝트가 성장하면 user-added `AGENTS.md`, adapter, implementation은 유지되고 다음처럼 확장된다.
 
@@ -2227,9 +2654,14 @@ tests/
 └── manual/
 ```
 
-`.cott/lock`, `.cott/transactions`와 `<artifact-root>/generation.json`은 machine-local state며 source control과 배포 package에 포함하지 않는다. release baseline으로 보관한 generation record는 `cott diff --baseline`에 명시할 수 있다.
+`.cott/lock`, `.cott/transactions`와 source project의 `<artifact-root>/generation.json`은
+machine-local state다. Release baseline으로 따로 보관한 record는 `cott diff --baseline`에
+명시할 수 있다. Runtime deployment에는 source-control 여부와 무관하게 verified
+`generation.json`의 byte-identical copy가 포함된다.
 
-manifest 예시:
+### 19.4 닫힌 manifest와 target 선택
+
+Python manifest 예시:
 
 ```toml
 [project]
@@ -2262,7 +2694,12 @@ lifecycle_limit = 3
 rules = "AGENTS.md"
 timeout_seconds = 900
 ```
-MVP manifest schema는 닫혀 있고 Python target 하나만 허용한다. `[effects]`, `[target.python.implementations]`, `[target.python.external_types]`의 동적 key 외 unknown table·field는 configuration error다. `[target.python.external_types]` key는 quoted fully qualified Cott external symbol이고 value는 `module:Qualname`이다; key는 선언된 external type에 정확히 하나씩 대응해야 하며 non-external·missing·stale key, malformed module/qualname과 prompt에 안전하지 않은 value는 configuration error다. 이 projection table은 target configuration일 뿐 Canonical IR이나 implementation selection에 들어가지 않는다.
+Manifest schema는 닫혀 있고 `[target.python]` 또는 `[target.kotlin]` 중 정확히 하나만 허용한다.
+Target별 `implementations`와 `external_types`, 공통 `[effects]`의 dynamic key 이외 unknown
+table/field는 configuration error다. Python external projection value는 `module:Qualname`,
+Kotlin value는 Kotlin FQN이고 각 key는 declared external type에 exactly one 대응해야 한다.
+Missing/stale/non-external key와 malformed/prompt-unsafe value는 emit 전 configuration error다.
+Projection table은 target configuration이며 Canonical IR이나 implementation authority가 아니다.
 
 `[verification]`은 선택적 closed table이며 proof/candidate/lifecycle limit과 closed `[verification.fixtures]`, `[verification.coverage]`만 허용한다. 누락하면 default를 사용하고 zero, non-integer, unknown key 또는 hard maximum 초과는 configuration error로 즉시 fail closed하며 managed tree를 쓰지 않는다.
 
@@ -2279,23 +2716,42 @@ MVP manifest schema는 닫혀 있고 Python target 하나만 허용한다. `[eff
 
 fixture limits are resource ceilings only: fixture content, path, route, host, command, script and plugin registration are manifest syntax가 아니다. `[[verification.coverage.rules]]`의 exact selector/allow booleans는 16.9 규칙을 따르며 별도 suppression/severity knob는 없다. effective verification budget과 fixture ceiling은 strategy v5와 verification evidence에 기록한다. limit 변경은 `proved`·`disproved`·`unknown`, test observation·`미관찰`의 의미를 바꾸지 않는다.
 
-`[project]`의 `name`·`version`·`source`와 `[target.python]`의 `source`·`generated`·`stubs`·`interpreter`·`type_checker`·`runtime_validation`은 필수다. `lockfile`은 아래 dependency 규칙의 조건부 필드이고 `[effects]`, `[target.python.implementations]`, `[target.python.external_types]`, `[generator]`, `[verification]`는 선택이다. `[generator]`가 없으면 `timeout_seconds = 900`이고 project coding rule은 없으며, 있으면 `rules`는 선택적인 project-relative regular file이고 `timeout_seconds`는 선택적인 1–3600 정수다.
+`[project]`의 `name`·`version`·`source`는 공통 필수다. Python target의
+`source`·`generated`·`stubs`·`interpreter`·`type_checker`·`runtime_validation`은 필수이고
+`lockfile`은 dependency에 따라 조건부다. Kotlin target의 `source`·`generated`·
+`runtime_validation`은 필수이며 `compiler = "kotlinc"`, `java = "java"`,
+`jvm_target = 17`, empty `classpath`/`compile_only`가 default다. 두 JAR list는 normalized
+project-relative `.jar`이고 disjoint해야 한다. Target별 `implementations`, `external_types`와
+공통 `[effects]`, `[generator]`, `[verification]`은 선택이다.
 
-모든 manifest path는 project-relative normalized path여야 하며 absolute path와 `..`를 거부한다. content file·directory는 symlink일 수 없다. `[project].source`, `[target.python].source`, artifact root, `tests/generated`, `.cott` directory root는 서로 disjoint하며 중첩할 수 없다. artifact root는 필수 `[target.python].generated`의 parent directory로 derive하고 `generated`의 basename은 반드시 `python`이어야 한다. `[target.python].stubs`는 `<artifact-root>/stubs`여야 하며 IR·docs·record는 각각 `<artifact-root>/ir`, `<artifact-root>/docs`, `<artifact-root>/generation.json`으로 derive한다. executable path만 symlink를 해소해 canonical regular file로 실행한다.
+모든 content path는 project-relative normalized path이고 absolute path, `..`, symlink와 overlap을
+거부한다. `[project].source`, selected target source, artifact root, `tests/generated`, `.cott`는
+disjoint하다. Python generated/stubs 규칙은 기존 `<artifact-root>/python|stubs`를 유지한다.
+Kotlin generated는 정확히 `<artifact-root>/kotlin`이고 IR/record 및 verify-only
+`library`/`runtime-libs`는 같은 artifact root 아래에서 derive한다. Executable spec만 bare name
+또는 normalized path를 허용하고 실행 전에 canonical regular file로 해석한다.
 
-`core.*`는 source tree가 아니라 compiler prelude다. `source`는 `_cott_impl`과 user adapter를 포함하는 durable implementation root이고 `generated`는 public cott module, `cott_runtime`과 verified local implementation copy를 포함하는 단일 runtime·package root다. source에는 cott 공개 path, `*_types` 또는 `cott_runtime`과 충돌하는 module을 둘 수 없다.
+`core.*`는 source tree가 아니라 compiler prelude다. Python `target.python.source`는 `_cott_impl`과
+user adapter를 포함하는 durable implementation root이고 `generated`는 public Cott module,
+`cott_runtime`과 verified local implementation copy를 포함하는 runtime/package root다. Python
+source에는 Cott public path, `*_types` 또는 `cott_runtime` 충돌을 둘 수 없다. Python runtime과
+BasedPyright search path, target metadata/lock, CPython 3.14 compatibility와 uv init 위임은
+16.1–16.8의 기존 규칙을 그대로 따른다.
 
-runtime과 BasedPyright search path는 generated root 뒤에 standard library와 locked distribution만 둔다. source root와 tool-only stubs는 runtime path에서 제외한다. Python build도 generated root의 runtime file만 포함한다.
+Kotlin `target.kotlin.source`는 binding과 `cott_impl` durable source root이고 generated Kotlin
+source는 public Cott package, `cott_runtime`과 authenticated implementation copy를 포함한다.
+Kotlin dependency는 manifest JAR input이며 Cott가 resolve/download하지 않는다. Python init만 uv
+managed Python install/lock/sync를 위임하고 Kotlin init은 configured local toolchain만 probe한다.
 
-interpreter와 type checker path는 project root 기준이며 regular executable로 resolve되어야 한다. target project metadata는 `<target.python.source>/pyproject.toml`로 고정하고 `requires-python`이 CPython 3.14와 호환되어야 한다.
+Python external import에는 기존 lock/dependency provenance가 필수다. 각 target
+`generation.json`은 `current`와 `last_verified`, implementation owner, target symbol,
+source/runtime origin, content hash와 managed set을 자신의 closed schema로 기록한다. Kotlin
+classpath/compile-only는 raw input hash와 canonical tool metadata에 함께 기록한다.
 
-`cott init`만 uv에 해당 supported uv release가 제공하는 최신 CPython 3.14 patch의 managed install·upgrade, `uv.lock` 생성, default dev group을 포함한 frozen sync를 위임한다. `uv.lock`은 Python exact patch를 고정하지 않으며, 실제 full patch는 이후 generation provenance에 고정한다. `--no-sync`는 sync와 그 결과에 의존하는 root venv Python·BasedPyright probe만 건너뛰며 Python install·upgrade, managed Python probe와 lock 생성은 수행한다. `cott init`의 명시적인 uv 위임을 제외한 compiler/verify command는 dependency를 설치하거나 다시 해석하지 않고 기존 lockfile·provenance 규칙을 따른다. init이 만든 lockfile은 production dependency가 비어 있어도 존재한다; manually authored project에서는 external dependency가 전혀 없을 때만 생략할 수 있다.
-
-binding 또는 agent implementation이 standard library·generated module 밖의 distribution을 하나라도 import하면 lockfile이 필수다. 존재하는 lockfile은 항상 provenance와 `generation_id`에 포함한다. `generation.json`은 `current`와 `last_verified`, implementation owner·source/runtime origin·content hash와 compiler 관리 집합을 기록한다.
-
-MVP가 해석하는 lock format은 supported schema version의 `uv.lock`뿐이다. `pyproject.toml`의 production dependency 선언과 lock의 root metadata가 frozen 상태로 일치해야 하며, 구현이 import하는 모든 distribution은 현재 platform에서 선택된 production dependency closure에 속해야 한다. external distribution은 installed metadata의 name·version·inventory가 그 selected non-editable registry dependency와 일치해야 한다. editable·path·VCS·unhashed source는 거부하고 selected lock hash는 기대 `lock_artifact_hash`, installed metadata·module bytes는 별도 관찰 hash로 기록한다. immutable archive나 검증 가능한 installer receipt가 없으면 둘의 provenance 연결은 신뢰 선언이며, `cott init`의 명시적인 uv 위임을 제외한 compiler/verify command는 dependency를 설치하거나 다시 해석하지 않는다.
-
-agent implementation은 source file로 지속되고 compiler stale file만 자동 정리한다. 변경 command와 같은 project를 사용하는 Python process는 동시에 실행하지 않는다.
+Python uv lock의 frozen registry/install provenance 규칙은 그대로 유지한다. Kotlin compiler는
+dependency를 resolve/download하지 않고 manifest에 지정된 existing JAR만 검사한다. Agent
+implementation은 durable source file로 지속되고 compiler는 stale managed copy만 정리한다. Cott
+mutation과 같은 project를 사용하는 target runtime/build process를 동시에 실행하지 않는다.
 
 ---
 
@@ -2397,15 +2853,22 @@ parse error가 있으면 file을 쓰지 않으며 `cott fmt --check`는 formatte
 * sync/async free function·trait/impl method, task-aware reentrant async impl lock, bounded protocol observation
 * finite facade-only scenario state machine, closed fs/http/clock/failure fixtures, compiler-owned Linux isolated-loopback sandbox, bounded trace/transcript와 cleanup/atomicity evidence
 * `COTT-K101` shadow warning, authored/deployed facade bypass audit, deterministic canonical-evidence inventory와 separated certification/coverage-policy gate
-* Canonical IR v8, generation schema/domain v7/`cott.generation.v7`, runtime ABI7, contract strategy v5, diagnostics schema v1와 project API version identity
-* Python facade/stub/runtime, static ABI check, bounded proof v2, verified loader, deterministic pure/scenario contract test, `current`/`last_verified` provenance, `tools.cott_intent` version 1 fingerprints, `cott prompt` inspection and diff/migration advice
+* Python closed generation v7/domain `cott.generation.v7`/runtime ABI7/strategy v5와 Kotlin closed
+  generation v1/domain `cott.kotlin.generation.v1`/runtime ABI1, 공통 Canonical IR v8,
+  diagnostics schema v1 및 project API version identity
+* Python facade/stub/runtime/verified loader와 Kotlin JVM17 facade/runtime/module JAR, target별
+  static ABI·sandboxed bounded proof/runner, `current`/`last_verified` provenance,
+  `tools.cott_intent` version 1, prompt/generate/diff/deploy
 
 ### 22.2 v1.0에서 제외
 
 * `.cott` execution body, parameter default, generic overload, arbitrary call/lambda/quantifier와 user-defined fixture/plugin
 * ownership, borrow checker, lifetime, arbitrary/unbounded theorem proof·candidate expansion·lifecycle observation
-* Cott 밖 Python call graph/effect inference, private implementation entry, mutable Cott container state, arbitrary `old()`, automatic refactoring/adapter/exception conversion
-* multi-target backend, full IDE plugin, multi-project Python environment, external struct/enum direct binding
+* Cott 밖 target call graph/effect inference, private implementation entry, mutable Cott container
+  state, arbitrary `old()`, automatic refactoring/adapter/exception conversion
+* 한 manifest의 simultaneous Python+Kotlin target, Python/Kotlin 외 partial backend, Cott-owned
+  Android UI/Manifest/resource/DEX/APK/AAB/signing, full IDE plugin, multi-project Python
+  environment, external struct/enum direct binding
 * dependency resolver/package manager, live reader transaction snapshot isolation, installed wheel whole-origin verification
 * non-Linux or unsandboxed effect-fixture execution; unavailable capability is explicit unobserved, never an alternate profile
 
@@ -2415,8 +2878,11 @@ parse error가 있으면 file을 쓰지 않으며 `cott fmt --check`는 formatte
 
 v1.0은 다음을 모두 자동 검증할 때 완료다.
 
-1. clean checkout의 declared project가 parse, format, IR emit, Python emit, generate, verify를 수행하고 public projection·stub·facade·runtime이 동일 IR을 소비한다.
-2. 모든 declaration/type/clause/scenario/fixture가 v8 typed IR와 closed v7/v5 generation/strategy schema를 통과하고 legacy identity를 fail closed한다.
+1. clean checkout의 declared project가 parse, format, IR emit, selected Python/Kotlin emit,
+   generate와 explicit verify를 수행하고 target public projection/facade/runtime이 동일 IR을
+   소비한다.
+2. 모든 declaration/type/clause/scenario/fixture가 Canonical IR v8와 target별 closed Python
+   v7/v5 또는 Kotlin generation v1 record를 통과하고 cross-target/legacy identity를 fail closed한다.
 3. struct invariant의 syntax/order/type/intrinsic selector, canonical bytes/hash, direct construction, defaults/generic/recursive values와 forged facade input/return rejection을 확인한다.
 4. Result error contract의 top-level Ok success obligation lint, source-order conditional predicate priority, branch reachability와 bounded runner counts/witness를 확인하며 unobserved Ok evidence는 semantic coverage policy로 선택해 gate한다.
 5. pure candidate generation은 refinement/requires/invariant를 만족하고 invalid constructor candidate를 결정적으로 skip하며 zero valid case를 observation으로 위장하지 않는다.
@@ -2430,12 +2896,22 @@ v1.0은 다음을 모두 자동 검증할 때 완료다.
 13. artifact verification은 policy 전 evidence와 `verified=true` snapshot을 atomic publish하며 policy failure를 exit `8`로 반환해도 runtime loader의 artifact trust와 `last_verified` baseline을 되돌리지 않는다.
 14. `cott diff`는 project API version만 비교하고 compiler/package/wire version은 compatibility reader/writer boundary에서만 비교한다. example project public version은 `0.1.0`으로 유지한다.
 15. agent/binding/implementation provenance, strict type checking, exact verified loader, transaction recovery, diagnostics v1, formatter idempotence와 init atomicity의 기존 guarantees를 보존한다.
+16. Kotlin verification은 JVM17 module JAR와 coroutine runtime dependency를 실제 compile/run하고,
+    erased generic/abstract associated observation을 과장하지 않으며 Android app lifecycle과
+    certification boundary를 혼합하지 않는다.
 
 ---
 
 ## 24. 구현 언어 및 내부 구조
 
-cott 컴파일러는 Rust 단일 crate이며 `cli`, `manifest`, `syntax`, `parser`, `ast`, `hir`, `typeck`, `contract`, `ir`, `intent`, `python::{emit,binding,loader,verify}`, `lsp`, `agent`, `sandbox`, `transaction`, `provenance`, `diagnostics`, `formatter` module을 둔다. 파서는 복구 가능한 오류와 source position을 보존하고 AST/HIR을 분리한다. emitter는 AST를 직접 참조하지 않으며 모든 target 계약 의미는 Canonical IR에서, target 연결 정보는 manifest에서만 얻는다. implementation body/source origin/agent run은 durable provenance이고 verification result는 cache하지 않는다. `cott lsp`는 parser/HIR 기반 editor analysis만 제공하며 generation·publish·agent invocation은 하지 않는다. `cott prompt`는 같은 parser/HIR에서 초기 prompt만 렌더하며 publish하지 않는다.
+cott compiler는 Rust single crate다. Common `manifest`, `project`, parser/CST/AST/HIR/typeck,
+`contract`, `ir`, `intent`, `agent`, `sandbox`, `transaction`, `diagnostics`, `formatter`, `lsp`와
+unchanged Python emit/runtime/verify modules, `kotlin::{binding,emit,runtime,provenance,pipeline,
+verify,runner,prompt,generation}`을 둔다. Emitter는 AST를 직접 참조하지 않고 모든 target contract
+meaning은 Canonical IR, target connection은 exactly-one manifest에서 얻는다. Implementation
+body/source origin/agent run은 durable provenance이고 verification result cache는 없다. LSP는
+Python-only metadata를 요구하지 않고 두 target project의 parser/HIR editor analysis만 제공한다.
+`cott prompt`는 선택 target prompt를 publication 없이 렌더한다.
 
 ---
 
@@ -2459,7 +2935,9 @@ cott는 실행 본문이 없는 선언형 계약 DSL이며 `.cott`와 typed Cano
 
 ### 결정 2
 
-MVP module graph는 비순환이고 source path mapping은 injective며 package 가능한 module은 최소 두 segment다. `core.*`, `cott_runtime`, `_cott_impl`과 `*_types` target path는 예약한다.
+MVP module graph는 비순환이고 source path mapping은 injective며 package 가능한 module은 최소 두
+segment다. `core.*`와 target별 `cott_runtime`, Python `_cott_impl`/`*_types`, Kotlin `cott_impl`
+private path를 예약한다.
 
 ### 결정 3
 
@@ -2499,11 +2977,18 @@ binding은 import 없이 staged type module에 대해 정적으로 해석한다.
 
 ### 결정 12
 
-호출자는 cott path의 typed facade만 사용한다. facade는 embedded provenance로 local implementation의 generated copy를 검증하고 direct external dependency origin·hash를 preflight한 뒤 canonical name당 하나의 implementation module만 lazy load하며 load와 invocation을 같은 exception boundary로 감싼다. authored/deployed AST audit은 `_cott_impl`·`cott_bindings` direct/dynamic bypass와 public re-export를 거부한다.
+Python caller는 Cott path의 typed facade만 사용한다. Facade는 embedded provenance로 local
+implementation copy와 external dependency를 preflight한 뒤 canonical name당 하나의 implementation
+module만 lazy load한다. Python authored/deployed audit은 `_cott_impl`·`cott_bindings`
+direct/dynamic bypass와 public re-export를 거부한다. Kotlin public/private module boundary는 16A를
+따른다.
 
 ### 결정 13
 
-`off`, `boundary`, `test-only`는 facade bytes에 compile-time specialize되어 optional free-function/method ABI·contract 검증 범위만 바꾸며 provenance, F32 normalization, newtype invariant, impl init/state snapshot/invariant/modifies/transition, sync·async serialization과 cancellation exception containment는 끄지 않는다.
+Python의 `off`, `boundary`, `test-only`는 facade bytes에 compile-time specialize되어 optional
+callable ABI/contract 검증 범위만 바꾸며 provenance, F32 normalization, newtype/impl state
+guarantee와 sync/async containment는 끄지 않는다. Kotlin mode는 16A의 compiled runtime/facade
+projection에 고정되고 verify-only certification이나 source provenance를 끄지 않는다.
 
 ### 결정 14
 
@@ -2554,7 +3039,9 @@ MVP compiler host와 runtime target은 같은 OS family·architecture의 `x86_64
 
 ### 결정 26
 
-`cott init`은 absent target에 minimal scaffold를 만들고 uv에 supported Python minor의 최신 patch 설치·lock·sync만 위임한다. cott는 dependency resolver나 package manager가 아니다.
+`cott init`은 absent target에 selected Python 또는 Kotlin minimal scaffold만 만든다. Python은 uv에
+supported Python install/lock/sync를 위임하고 Kotlin은 installed toolchain만 probe한다. Cott는
+dependency resolver/package manager 또는 Android app scaffolder가 아니다.
 ### 결정 27
 
 struct 생성·facade boundary·IR은 하나의 canonical constructor/invariant 의미를 공유한다. direct Python construction, fixture, runner, loader 어느 경로도 별도 validation profile을 갖지 않는다.
@@ -2569,4 +3056,20 @@ effect scenario는 compiler-owned fs/local HTTP/clock/failure adapter와 Linux i
 
 ### 결정 30
 
-facade는 유일한 public implementation entry다. authored/deployed tree의 `_cott_impl`·`cott_bindings` direct/dynamic import, public re-export와 unsafe link/artifact shape는 verify가 모두 보고하고 거부한다.
+Python facade는 유일한 public implementation entry이며 authored/deployed tree의
+`_cott_impl`·`cott_bindings` direct/dynamic import, public re-export와 unsafe link/artifact shape를
+verify가 거부한다. Kotlin consumer는 compiled Cott public package만 사용하고 `cott_impl`/
+`cott_bindings`를 import하지 않는다.
+
+### 결정 31
+
+Manifest는 Python 또는 Kotlin target 하나만 선택한다. Kotlin은 Python compatibility field를
+재사용하지 않는 generation schema/domain 1/`cott.kotlin.generation.v1`, runtime ABI1, JVM17
+module backend이고 explicit verify만 `current == last_verified` certification을 publish한다.
+
+### 결정 32
+
+Kotlin deployment는 compiled `cott-module.jar`, closed metadata, exact coroutine/runtime classpath
+JAR만 제공한다. Kotlin stdlib는 Kotlin/Gradle이 제공하고 compile-only dependency는 배포하지
+않는다. Android UI/Manifest/resource/DEX/APK/AAB/signing/device lifecycle은 standard
+Gradle/Android boundary이며 Cott는 이를 소유하거나 Python을 on-device 실행하지 않는다.

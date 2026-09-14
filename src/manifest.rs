@@ -35,6 +35,21 @@ pub struct ProjectConfig {
     pub verification: VerificationConfig,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum TargetLanguage {
+    Python,
+    Kotlin,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KotlinProjectConfig {
+    pub project: ProjectMetadata,
+    pub kotlin: KotlinTarget,
+    pub effects: BTreeMap<String, bool>,
+    pub generator: GeneratorConfig,
+    pub verification: VerificationConfig,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct VerificationConfig {
@@ -217,7 +232,10 @@ struct RawManifest {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct Target {
-    python: PythonTarget,
+    #[serde(default)]
+    python: Option<PythonTarget>,
+    #[serde(default)]
+    kotlin: Option<KotlinTarget>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -235,6 +253,40 @@ pub struct PythonTarget {
     pub implementations: BTreeMap<String, String>,
     #[serde(default)]
     pub external_types: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct KotlinTarget {
+    pub source: String,
+    pub generated: String,
+    #[serde(default = "default_kotlin_compiler")]
+    pub compiler: String,
+    #[serde(default = "default_java")]
+    pub java: String,
+    #[serde(default = "default_jvm_target")]
+    pub jvm_target: u8,
+    pub runtime_validation: RuntimeValidation,
+    #[serde(default)]
+    pub classpath: Vec<String>,
+    #[serde(default)]
+    pub compile_only: Vec<String>,
+    #[serde(default)]
+    pub implementations: BTreeMap<String, String>,
+    #[serde(default)]
+    pub external_types: BTreeMap<String, String>,
+}
+
+fn default_kotlin_compiler() -> String {
+    "kotlinc".to_owned()
+}
+
+fn default_java() -> String {
+    "java".to_owned()
+}
+
+const fn default_jvm_target() -> u8 {
+    17
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -267,35 +319,65 @@ const fn default_timeout_seconds() -> u16 {
     900
 }
 
+fn parse_raw(path: &Path, bytes: &str) -> Result<RawManifest, ManifestError> {
+    toml::from_str(bytes).map_err(|source| ManifestError {
+        path: path.to_path_buf(),
+        message: source.to_string(),
+    })
+}
+
+fn selected_target(path: &Path, target: &Target) -> Result<TargetLanguage, ManifestError> {
+    match (&target.python, &target.kotlin) {
+        (Some(_), None) => Ok(TargetLanguage::Python),
+        (None, Some(_)) => Ok(TargetLanguage::Kotlin),
+        (None, None) => Err(ManifestError::new(
+            path,
+            "target must define exactly one of target.python or target.kotlin",
+        )),
+        (Some(_), Some(_)) => Err(ManifestError::new(
+            path,
+            "target must not define both target.python and target.kotlin",
+        )),
+    }
+}
+
+pub fn target_language(path: &Path, bytes: &str) -> Result<TargetLanguage, ManifestError> {
+    let raw = parse_raw(path, bytes)?;
+    selected_target(path, &raw.target)
+}
+
 impl ProjectConfig {
     pub fn parse(path: &Path, bytes: &str) -> Result<Self, ManifestError> {
-        let raw: RawManifest = toml::from_str(bytes).map_err(|source| ManifestError {
-            path: path.to_path_buf(),
-            message: source.to_string(),
-        })?;
+        let raw = parse_raw(path, bytes)?;
+        if selected_target(path, &raw.target)? != TargetLanguage::Python {
+            return Err(ManifestError::new(
+                path,
+                "ProjectConfig only supports target.python manifests",
+            ));
+        }
         let config = Self {
             project: raw.project,
-            python: raw.target.python,
+            python: raw
+                .target
+                .python
+                .expect("selected Python target must be present"),
             effects: raw.effects,
             generator: raw.generator,
             verification: raw.verification,
         };
-        config.validate(path)?;
+        validate_common(
+            path,
+            &config.project,
+            &config.effects,
+            &config.generator,
+            &config.verification,
+        )?;
+        config.validate_python(path)?;
         Ok(config)
     }
 
-    fn validate(&self, path: &Path) -> Result<(), ManifestError> {
-        if self.project.name.trim().is_empty() {
-            return Err(ManifestError::new(path, "project.name must be nonempty"));
-        }
-        if parse_api_version(&self.project.version).is_none() {
-            return Err(ManifestError::new(
-                path,
-                "project.version must be a restricted x.y.z version",
-            ));
-        }
+    fn validate_python(&self, path: &Path) -> Result<(), ManifestError> {
         for (field, value) in [
-            ("project.source", &self.project.source),
             ("target.python.source", &self.python.source),
             ("target.python.generated", &self.python.generated),
             ("target.python.stubs", &self.python.stubs),
@@ -310,48 +392,6 @@ impl ProjectConfig {
                 ManifestError::new(path, format!("target.python.lockfile {message}"))
             })?;
         }
-        if let Some(rules) = &self.generator.rules {
-            normalized_relative_path(rules).map_err(|message| {
-                ManifestError::new(path, format!("generator.rules {message}"))
-            })?;
-        }
-        if self.generator.timeout_seconds == 0 || self.generator.timeout_seconds > 3600 {
-            return Err(ManifestError::new(
-                path,
-                "generator.timeout_seconds must be 1..=3600",
-            ));
-        }
-        for (field, value, maximum) in [
-            (
-                "verification.proof_node_limit",
-                self.verification.proof_node_limit,
-                MAX_PROOF_NODE_LIMIT,
-            ),
-            (
-                "verification.proof_branch_limit",
-                self.verification.proof_branch_limit,
-                MAX_PROOF_BRANCH_LIMIT,
-            ),
-            (
-                "verification.candidate_limit",
-                self.verification.candidate_limit,
-                MAX_CANDIDATE_LIMIT,
-            ),
-            (
-                "verification.lifecycle_limit",
-                self.verification.lifecycle_limit,
-                MAX_LIFECYCLE_LIMIT,
-            ),
-        ] {
-            if value == 0 || value > maximum {
-                return Err(ManifestError::new(
-                    path,
-                    format!("{field} must be 1..={maximum}"),
-                ));
-            }
-        }
-        validate_fixture_limits(path, &self.verification.fixtures)?;
-        validate_coverage_policy(path, &self.verification.coverage)?;
         let generated = Path::new(&self.python.generated);
         let Some(artifact_root) = generated
             .parent()
@@ -370,45 +410,16 @@ impl ProjectConfig {
                 "target.python.generated and stubs must be `<artifact-root>/python` and `<artifact-root>/stubs`",
             ));
         }
-        let roots = [
-            Path::new(&self.project.source),
-            Path::new(&self.python.source),
-            artifact_root,
-            Path::new("tests/generated"),
-            Path::new(".cott"),
-        ];
-        for (index, left) in roots.iter().enumerate() {
-            for right in roots.iter().skip(index + 1) {
-                if path_overlaps(left, right) {
-                    return Err(ManifestError::new(
-                        path,
-                        format!(
-                            "managed path overlap: {} and {}",
-                            left.display(),
-                            right.display()
-                        ),
-                    ));
-                }
-            }
-        }
-        const PRELUDE_EFFECTS: [&str; 8] = [
-            "file.read",
-            "file.write",
-            "network",
-            "database.read",
-            "database.write",
-            "clock",
-            "random",
-            "process.exit",
-        ];
-        for (name, enabled) in &self.effects {
-            if !enabled || !valid_qname(name) || PRELUDE_EFFECTS.contains(&name.as_str()) {
-                return Err(ManifestError::new(
-                    path,
-                    format!("effect `{name}` must be a custom qname with literal value true"),
-                ));
-            }
-        }
+        validate_path_overlaps(
+            path,
+            &[
+                Path::new(&self.project.source),
+                Path::new(&self.python.source),
+                artifact_root,
+                Path::new("tests/generated"),
+                Path::new(".cott"),
+            ],
+        )?;
         for (symbol, target) in &self.python.implementations {
             let valid_target = target
                 .split_once(':')
@@ -431,6 +442,237 @@ impl ProjectConfig {
         }
         Ok(())
     }
+}
+
+impl KotlinProjectConfig {
+    pub fn parse(path: &Path, bytes: &str) -> Result<Self, ManifestError> {
+        let raw = parse_raw(path, bytes)?;
+        if selected_target(path, &raw.target)? != TargetLanguage::Kotlin {
+            return Err(ManifestError::new(
+                path,
+                "KotlinProjectConfig only supports target.kotlin manifests",
+            ));
+        }
+        let config = Self {
+            project: raw.project,
+            kotlin: raw
+                .target
+                .kotlin
+                .expect("selected Kotlin target must be present"),
+            effects: raw.effects,
+            generator: raw.generator,
+            verification: raw.verification,
+        };
+        validate_common(
+            path,
+            &config.project,
+            &config.effects,
+            &config.generator,
+            &config.verification,
+        )?;
+        config.validate_kotlin(path)?;
+        Ok(config)
+    }
+
+    fn validate_kotlin(&self, path: &Path) -> Result<(), ManifestError> {
+        if !valid_kotlin_project_name(&self.project.name) {
+            return Err(ManifestError::new(
+                path,
+                "project.name must be lowercase kebab-case for Kotlin targets",
+            ));
+        }
+        for (field, value) in [
+            ("target.kotlin.source", &self.kotlin.source),
+            ("target.kotlin.generated", &self.kotlin.generated),
+        ] {
+            normalized_relative_path(value)
+                .map_err(|message| ManifestError::new(path, format!("{field} {message}")))?;
+        }
+        for (field, value) in [
+            ("target.kotlin.compiler", &self.kotlin.compiler),
+            ("target.kotlin.java", &self.kotlin.java),
+        ] {
+            if !valid_tool_spec(value) {
+                return Err(ManifestError::new(
+                    path,
+                    format!("{field} must be a bare executable or normalized path"),
+                ));
+            }
+        }
+        if self.kotlin.jvm_target != 17 {
+            return Err(ManifestError::new(
+                path,
+                "target.kotlin.jvm_target must be 17",
+            ));
+        }
+        let generated = Path::new(&self.kotlin.generated);
+        let Some(artifact_root) = generated
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        else {
+            return Err(ManifestError::new(
+                path,
+                "target.kotlin.generated must be `<artifact-root>/kotlin`",
+            ));
+        };
+        if generated.file_name().and_then(|name| name.to_str()) != Some("kotlin") {
+            return Err(ManifestError::new(
+                path,
+                "target.kotlin.generated must be `<artifact-root>/kotlin`",
+            ));
+        }
+
+        let mut protected_paths = vec![
+            PathBuf::from(&self.project.source),
+            PathBuf::from(&self.kotlin.source),
+            artifact_root.to_path_buf(),
+            PathBuf::from("tests/generated"),
+            PathBuf::from(".cott"),
+        ];
+        if let Some(rules) = &self.generator.rules {
+            protected_paths.push(PathBuf::from(rules));
+        }
+        for (field, entries) in [
+            ("target.kotlin.classpath", &self.kotlin.classpath),
+            ("target.kotlin.compile_only", &self.kotlin.compile_only),
+        ] {
+            for classpath in entries {
+                let classpath_path = normalized_relative_path(classpath).map_err(|message| {
+                    ManifestError::new(path, format!("{field} entry {message}"))
+                })?;
+                if classpath_path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    != Some("jar")
+                {
+                    return Err(ManifestError::new(
+                        path,
+                        format!("{field} entries must be .jar files"),
+                    ));
+                }
+                protected_paths.push(classpath_path);
+            }
+        }
+        validate_path_overlaps(path, &protected_paths)?;
+
+        for (symbol, target) in &self.kotlin.implementations {
+            if !valid_qname(symbol) || !valid_kotlin_fqn(target) {
+                return Err(ManifestError::new(
+                    path,
+                    format!("invalid Kotlin implementation binding `{symbol}` = `{target}`"),
+                ));
+            }
+        }
+        for (symbol, target) in &self.kotlin.external_types {
+            if !valid_external_type_symbol(symbol) || !valid_kotlin_fqn(target) {
+                return Err(ManifestError::new(
+                    path,
+                    format!("invalid Kotlin external type projection `{symbol}` = `{target}`"),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_common(
+    path: &Path,
+    project: &ProjectMetadata,
+    effects: &BTreeMap<String, bool>,
+    generator: &GeneratorConfig,
+    verification: &VerificationConfig,
+) -> Result<(), ManifestError> {
+    if project.name.trim().is_empty() {
+        return Err(ManifestError::new(path, "project.name must be nonempty"));
+    }
+    if parse_api_version(&project.version).is_none() {
+        return Err(ManifestError::new(
+            path,
+            "project.version must be a restricted x.y.z version",
+        ));
+    }
+    normalized_relative_path(&project.source)
+        .map_err(|message| ManifestError::new(path, format!("project.source {message}")))?;
+    if let Some(rules) = &generator.rules {
+        normalized_relative_path(rules)
+            .map_err(|message| ManifestError::new(path, format!("generator.rules {message}")))?;
+    }
+    if generator.timeout_seconds == 0 || generator.timeout_seconds > 3600 {
+        return Err(ManifestError::new(
+            path,
+            "generator.timeout_seconds must be 1..=3600",
+        ));
+    }
+    for (field, value, maximum) in [
+        (
+            "verification.proof_node_limit",
+            verification.proof_node_limit,
+            MAX_PROOF_NODE_LIMIT,
+        ),
+        (
+            "verification.proof_branch_limit",
+            verification.proof_branch_limit,
+            MAX_PROOF_BRANCH_LIMIT,
+        ),
+        (
+            "verification.candidate_limit",
+            verification.candidate_limit,
+            MAX_CANDIDATE_LIMIT,
+        ),
+        (
+            "verification.lifecycle_limit",
+            verification.lifecycle_limit,
+            MAX_LIFECYCLE_LIMIT,
+        ),
+    ] {
+        if value == 0 || value > maximum {
+            return Err(ManifestError::new(
+                path,
+                format!("{field} must be 1..={maximum}"),
+            ));
+        }
+    }
+    validate_fixture_limits(path, &verification.fixtures)?;
+    validate_coverage_policy(path, &verification.coverage)?;
+    const PRELUDE_EFFECTS: [&str; 8] = [
+        "file.read",
+        "file.write",
+        "network",
+        "database.read",
+        "database.write",
+        "clock",
+        "random",
+        "process.exit",
+    ];
+    for (name, enabled) in effects {
+        if !enabled || !valid_qname(name) || PRELUDE_EFFECTS.contains(&name.as_str()) {
+            return Err(ManifestError::new(
+                path,
+                format!("effect `{name}` must be a custom qname with literal value true"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_path_overlaps<P: AsRef<Path>>(path: &Path, paths: &[P]) -> Result<(), ManifestError> {
+    for (index, left) in paths.iter().enumerate() {
+        let left = left.as_ref();
+        for right in paths.iter().skip(index + 1) {
+            let right = right.as_ref();
+            if path_overlaps(left, right) {
+                return Err(ManifestError::new(
+                    path,
+                    format!(
+                        "managed path overlap: {} and {}",
+                        left.display(),
+                        right.display()
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_fixture_limits(path: &Path, fixtures: &FixtureLimits) -> Result<(), ManifestError> {
@@ -571,6 +813,53 @@ pub fn normalized_relative_path(value: &str) -> Result<PathBuf, &'static str> {
         return Err("must be a normalized relative path");
     }
     Ok(path.to_path_buf())
+}
+
+fn valid_tool_spec(value: &str) -> bool {
+    if value.is_empty() || value.contains('\0') {
+        return false;
+    }
+    #[cfg(not(windows))]
+    if value.contains('\\') {
+        return false;
+    }
+    let path = Path::new(value);
+    if !path.is_absolute() {
+        return normalized_relative_path(value).is_ok();
+    }
+    let mut saw_name = false;
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {}
+            Component::Normal(_) => saw_name = true,
+            Component::CurDir | Component::ParentDir => return false,
+        }
+    }
+    saw_name
+}
+
+pub(crate) fn valid_kotlin_project_name(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes[0].is_ascii_lowercase()
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && !value.contains("--")
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+pub(crate) fn valid_kotlin_fqn(value: &str) -> bool {
+    value.contains('.') && value.split('.').all(valid_kotlin_name)
+}
+
+fn valid_kotlin_name(value: &str) -> bool {
+    let mut characters = value.chars();
+    characters
+        .next()
+        .is_some_and(|character| character == '_' || character.is_alphabetic())
+        && characters.all(|character| character == '_' || character.is_alphanumeric())
 }
 
 fn path_overlaps(left: &Path, right: &Path) -> bool {

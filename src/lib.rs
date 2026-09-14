@@ -11,6 +11,7 @@ pub mod hash;
 pub mod hir;
 pub mod intent;
 pub mod ir;
+pub mod kotlin;
 pub mod lexer;
 pub mod lsp;
 pub mod manifest;

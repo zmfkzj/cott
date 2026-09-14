@@ -1,0 +1,16 @@
+module declarations.presentation
+
+use declarations.core.{ByteBlock, LABEL_BYTES, Label, LabelFrame, NonEmptyLabel}
+
+fn package_label(
+    label: NonEmptyLabel,
+    values: Array[U8, 4],
+    raw: Buffer[4],
+) -> Tuple[Label, LabelFrame[Array[U8, 4]], ByteBlock[4]]:
+    doc """
+    Return a named fixed-width label, its covariant array-payload frame, and matching raw bytes.
+    """
+
+    requires values.len == LABEL_BYTES
+
+    effects []

@@ -1,10 +1,10 @@
 use std::path::Path;
 
 use cott::manifest::{
-    MAX_CANDIDATE_LIMIT, MAX_FILESYSTEM_BYTES, MAX_FILESYSTEM_FILES, MAX_HTTP_BODY_BYTES,
-    MAX_HTTP_REDIRECTS, MAX_HTTP_REQUESTS, MAX_LIFECYCLE_LIMIT, MAX_PROOF_BRANCH_LIMIT,
-    MAX_PROOF_NODE_LIMIT, MAX_SCENARIO_TIMEOUT_MS, MAX_TRANSCRIPT_EVENTS, ProjectConfig,
-    RuntimeValidation,
+    KotlinProjectConfig, MAX_CANDIDATE_LIMIT, MAX_FILESYSTEM_BYTES, MAX_FILESYSTEM_FILES,
+    MAX_HTTP_BODY_BYTES, MAX_HTTP_REDIRECTS, MAX_HTTP_REQUESTS, MAX_LIFECYCLE_LIMIT,
+    MAX_PROOF_BRANCH_LIMIT, MAX_PROOF_NODE_LIMIT, MAX_SCENARIO_TIMEOUT_MS, MAX_TRANSCRIPT_EVENTS,
+    ProjectConfig, RuntimeValidation, TargetLanguage, target_language,
 };
 
 const VALID: &str = r#"
@@ -20,6 +20,26 @@ stubs = "generated/stubs"
 interpreter = ".venv/bin/python"
 type_checker = ".venv/bin/basedpyright"
 runtime_validation = "boundary"
+"#;
+
+const VALID_KOTLIN: &str = r#"
+[project]
+name = "demo"
+version = "0.1.0"
+source = "src"
+
+[target.kotlin]
+source = "kotlin-src"
+generated = "generated/kotlin"
+runtime_validation = "boundary"
+classpath = ["libs/runtime.jar"]
+compile_only = ["libs/android.jar"]
+
+[target.kotlin.implementations]
+"demo.fetch" = "demo.impl.fetch"
+
+[target.kotlin.external_types]
+"demo.AndroidContext" = "android.content.Context"
 "#;
 
 #[test]
@@ -337,6 +357,84 @@ fn rejects_malformed_external_type_projections() {
 fn rejects_unknown_manifest_fields() {
     let invalid = VALID.replace("source = \"src\"", "source = \"src\"\nentry = \"app.run\"");
     assert!(ProjectConfig::parse(Path::new("cott.toml"), &invalid).is_err());
+}
+
+#[test]
+fn discriminates_one_closed_target_without_python_defaults() {
+    assert_eq!(
+        target_language(Path::new("cott.toml"), VALID).expect("Python target"),
+        TargetLanguage::Python
+    );
+    assert_eq!(
+        target_language(Path::new("cott.toml"), VALID_KOTLIN).expect("Kotlin target"),
+        TargetLanguage::Kotlin
+    );
+
+    let manifest = KotlinProjectConfig::parse(Path::new("cott.toml"), VALID_KOTLIN)
+        .expect("Kotlin manifest should parse");
+    assert_eq!(manifest.kotlin.classpath, ["libs/runtime.jar"]);
+    assert_eq!(manifest.kotlin.compile_only, ["libs/android.jar"]);
+    ProjectConfig::parse(
+        Path::new("cott.toml"),
+        &VALID.replace("name = \"demo\"", "name = \"Demo\""),
+    )
+    .expect("Python manifest name behavior must remain unchanged");
+    KotlinProjectConfig::parse(
+        Path::new("cott.toml"),
+        &VALID_KOTLIN.replace("demo.impl.fetch", "demo.when.fetch"),
+    )
+    .expect("raw Kotlin FQNs may contain identifiers that require source escaping");
+    assert!(
+        ProjectConfig::parse(Path::new("cott.toml"), VALID_KOTLIN).is_err(),
+        "Python API must reject Kotlin"
+    );
+    assert!(
+        KotlinProjectConfig::parse(Path::new("cott.toml"), VALID).is_err(),
+        "Kotlin API must reject Python"
+    );
+
+    let mixed = format!(
+        "{VALID}\n[target.kotlin]\nsource = \"kotlin-src\"\ngenerated = \"kotlin-out/kotlin\"\nruntime_validation = \"boundary\"\n"
+    );
+    assert!(
+        target_language(Path::new("cott.toml"), &mixed).is_err(),
+        "mixed targets must be rejected"
+    );
+    assert!(
+        target_language(
+            Path::new("cott.toml"),
+            &VALID_KOTLIN.replace("[target.kotlin]", "[target.unknown]"),
+        )
+        .is_err(),
+        "unknown targets must be rejected by the closed target table"
+    );
+}
+
+#[test]
+fn rejects_unsafe_or_ambiguous_kotlin_target_paths() {
+    for invalid in [
+        VALID_KOTLIN.replace("generated/kotlin", "generated/classes"),
+        VALID_KOTLIN.replace("libs/runtime.jar", "../runtime.jar"),
+        VALID_KOTLIN.replace("libs/runtime.jar", "libs/runtime.zip"),
+        VALID_KOTLIN.replace("libs/android.jar", "libs/runtime.jar"),
+        VALID_KOTLIN.replace("name = \"demo\"", "name = \"../escape\""),
+        VALID_KOTLIN.replace("name = \"demo\"", "name = \"demo/name\""),
+        VALID_KOTLIN.replace("name = \"demo\"", "name = \"Demo\""),
+        VALID_KOTLIN.replace("name = \"demo\"", "name = \"demo--name\""),
+        VALID_KOTLIN.replace("demo.impl.fetch", "demo.impl:fetch"),
+        VALID_KOTLIN.replace("android.content.Context", "android.content:Context"),
+        VALID_KOTLIN.replace(
+            "runtime_validation = \"boundary\"",
+            "runtime_validation = \"boundary\"\nunknown = true",
+        ),
+        VALID_KOTLIN.replace(
+            "runtime_validation = \"boundary\"",
+            "runtime_validation = \"boundary\"\njvm_target = 21",
+        ),
+    ] {
+        KotlinProjectConfig::parse(Path::new("cott.toml"), &invalid)
+            .expect_err("unsafe Kotlin target must fail");
+    }
 }
 
 #[test]

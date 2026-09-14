@@ -341,6 +341,12 @@ pub fn run() -> i32 {
     0
 }
 
+struct DiscoveredProject {
+    source_dir: PathBuf,
+    effects: BTreeSet<String>,
+    sources: Vec<SourceFile>,
+}
+
 fn analyze_documents(documents: &[(Url, String)]) -> Analysis {
     let mut documents = documents
         .iter()
@@ -350,25 +356,28 @@ fn analyze_documents(documents: &[(Url, String)]) -> Analysis {
     let project = documents
         .iter()
         .find_map(|(path, _)| discover_project(path));
-    if let Some((config, paths)) = project {
-        if let Ok(mut sources) = crate::project::discover_sources_from_paths(&paths) {
-            for (path, text) in &documents {
-                let Ok(path) = path.strip_prefix(&paths.source_dir) else {
-                    continue;
-                };
-                if let Some(source) = sources.iter_mut().find(|source| source.path == path) {
-                    source.text = text.clone();
-                } else if path
-                    .extension()
-                    .is_some_and(|extension| extension == "cott")
-                {
-                    sources.push(SourceFile::new(path, text));
-                }
+    if let Some(mut project) = project {
+        for (path, text) in &documents {
+            let Ok(path) = path.strip_prefix(&project.source_dir) else {
+                continue;
+            };
+            if let Some(source) = project
+                .sources
+                .iter_mut()
+                .find(|source| source.path == path)
+            {
+                source.text = text.clone();
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension == "cott")
+            {
+                project.sources.push(SourceFile::new(path, text));
             }
-            sources.sort_by(|left, right| left.path.cmp(&right.path));
-            let effects = config.effects.keys().cloned().collect();
-            return analyze_sources(sources, Some(paths.source_dir), effects);
         }
+        project
+            .sources
+            .sort_by(|left, right| left.path.cmp(&right.path));
+        return analyze_sources(project.sources, Some(project.source_dir), project.effects);
     }
     analyze_sources(
         documents
@@ -384,14 +393,37 @@ fn analyze_documents(documents: &[(Url, String)]) -> Analysis {
     )
 }
 
-fn discover_project(
-    path: &Path,
-) -> Option<(crate::manifest::ProjectConfig, crate::project::ProjectPaths)> {
+fn discover_project(path: &Path) -> Option<DiscoveredProject> {
     path.parent()?.ancestors().find_map(|root| {
-        root.join("cott.toml")
-            .is_file()
-            .then(|| crate::project::load_config_with_paths(root).ok())
-            .flatten()
+        match crate::project::load_target_language(root).ok()? {
+            crate::manifest::TargetLanguage::Python => {
+                let (config, paths) = crate::project::load_config_with_paths(root).ok()?;
+                let sources = match crate::project::discover_sources_from_paths(&paths) {
+                    Ok(sources) => sources,
+                    Err(crate::project::ProjectError::NoSources { .. }) => Vec::new(),
+                    Err(_) => return None,
+                };
+                Some(DiscoveredProject {
+                    source_dir: paths.source_dir,
+                    effects: config.effects.into_keys().collect(),
+                    sources,
+                })
+            }
+            crate::manifest::TargetLanguage::Kotlin => {
+                let (config, paths, _) =
+                    crate::project::load_kotlin_config_with_paths(root).ok()?;
+                let sources = match crate::project::discover_kotlin_contract_sources(&paths) {
+                    Ok(sources) => sources,
+                    Err(crate::project::ProjectError::NoSources { .. }) => Vec::new(),
+                    Err(_) => return None,
+                };
+                Some(DiscoveredProject {
+                    source_dir: paths.source_dir,
+                    effects: config.effects.into_keys().collect(),
+                    sources,
+                })
+            }
+        }
     })
 }
 
@@ -1061,6 +1093,52 @@ mod tests {
                 .get(Path::new("second.cott"))
                 .is_none_or(Vec::is_empty)
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn analyzes_complete_kotlin_projects_with_unsaved_sources_and_effects() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("cott-lsp-kotlin-{}-{nonce}", std::process::id()));
+        let source_dir = root.join("src/demo");
+        fs::create_dir_all(&source_dir).unwrap();
+        fs::create_dir_all(root.join("kotlin")).unwrap();
+        fs::write(
+            root.join("cott.toml"),
+            "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nsource = \"src\"\n\n[target.kotlin]\nsource = \"kotlin\"\ngenerated = \"generated/kotlin\"\nruntime_validation = \"boundary\"\n\n[effects]\n\"engine.compute\" = true\n",
+        )
+        .unwrap();
+        fs::write(
+            source_dir.join("types.cott"),
+            "module demo.types\n\nstruct Widget:\n    value: I32\n",
+        )
+        .unwrap();
+        let main_path = source_dir.join("main.cott");
+        fs::write(&main_path, "module demo.main\n\nfn stale() -> Unit\n").unwrap();
+        let main = "module demo.main\n\nuse demo.types.{Widget}\n\nfn compute(value: Widget) -> Unit:\n    effects [engine.compute]\n";
+        let documents = vec![(Url::from_file_path(&main_path).unwrap(), main.to_owned())];
+
+        let analysis = analyze_documents(&documents);
+
+        assert_eq!(analysis.root, root.join("src"));
+        assert!(analysis.diagnostics.values().all(Vec::is_empty));
+        assert!(
+            analysis
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "Widget")
+        );
+        assert!(
+            analysis
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "compute")
+        );
+        assert!(analysis.symbols.iter().all(|symbol| symbol.name != "stale"));
         fs::remove_dir_all(root).unwrap();
     }
 }

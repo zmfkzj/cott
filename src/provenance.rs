@@ -454,7 +454,7 @@ fn validate_unresolved_records(unresolved: &[UnresolvedRecord]) -> Result<(), St
     Ok(())
 }
 
-fn validate_semantic_coverage(coverage: &SemanticCoverage) -> Result<(), String> {
+pub(crate) fn validate_semantic_coverage(coverage: &SemanticCoverage) -> Result<(), String> {
     let mut summary = CoverageSummary::default();
     let mut previous = None;
     let mut clauses = BTreeMap::new();

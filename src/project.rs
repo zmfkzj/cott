@@ -18,9 +18,31 @@ pub struct ProjectPaths {
     pub lockfile: Option<PathBuf>,
 }
 
+/// Trusted filesystem paths for a Kotlin target.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KotlinPaths {
+    pub root: PathBuf,
+    pub manifest: PathBuf,
+    pub source_dir: PathBuf,
+    pub kotlin_source_dir: PathBuf,
+    pub generated_dir: PathBuf,
+    pub artifact_root: PathBuf,
+    pub classpath: Vec<PathBuf>,
+    pub compile_only: Vec<PathBuf>,
+}
+
 /// A UTF-8 Python source safely discovered beneath a project-owned tree.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PythonSourceFile {
+    /// Lexical path relative to the scanned tree.
+    pub path: PathBuf,
+    pub disk_path: PathBuf,
+    pub source: String,
+}
+
+/// A UTF-8 Kotlin source safely discovered beneath a project-owned tree.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KotlinSourceFile {
     /// Lexical path relative to the scanned tree.
     pub path: PathBuf,
     pub disk_path: PathBuf,
@@ -101,6 +123,28 @@ pub fn load_config_with_paths(
     Ok((config, paths))
 }
 
+/// Loads a Kotlin manifest, derives its trusted filesystem paths, and returns
+/// the exact UTF-8 manifest text consumed by the parser.
+pub fn load_kotlin_config_with_paths(
+    root: &Path,
+) -> Result<(crate::manifest::KotlinProjectConfig, KotlinPaths, String), ProjectError> {
+    let (root, manifest, bytes, config) = read_kotlin_config(root)?;
+    let paths = derive_kotlin_paths(&root, &manifest, &config)?;
+    Ok((config, paths, bytes))
+}
+
+/// Reads the normative manifest through the project trust boundary and returns
+/// its one selected target without deriving target-specific paths.
+pub fn load_target_language(root: &Path) -> Result<crate::manifest::TargetLanguage, ProjectError> {
+    let (_, manifest, bytes) = read_manifest(root)?;
+    crate::manifest::target_language(&manifest, &bytes).map_err(|error| {
+        ProjectError::InvalidManifest {
+            path: manifest,
+            message: error.message,
+        }
+    })
+}
+
 /// Loads the normative v0.1 manifest without deriving filesystem paths.
 pub fn load_config(root: &Path) -> Result<crate::manifest::ProjectConfig, ProjectError> {
     Ok(read_config(root)?.2)
@@ -109,6 +153,39 @@ pub fn load_config(root: &Path) -> Result<crate::manifest::ProjectConfig, Projec
 fn read_config(
     root: &Path,
 ) -> Result<(PathBuf, PathBuf, crate::manifest::ProjectConfig), ProjectError> {
+    let (root, manifest, bytes) = read_manifest(root)?;
+    let config = crate::manifest::ProjectConfig::parse(&manifest, &bytes).map_err(|error| {
+        ProjectError::InvalidManifest {
+            path: manifest.clone(),
+            message: error.message,
+        }
+    })?;
+    Ok((root, manifest, config))
+}
+
+fn read_kotlin_config(
+    root: &Path,
+) -> Result<
+    (
+        PathBuf,
+        PathBuf,
+        String,
+        crate::manifest::KotlinProjectConfig,
+    ),
+    ProjectError,
+> {
+    let (root, manifest, bytes) = read_manifest(root)?;
+    let config =
+        crate::manifest::KotlinProjectConfig::parse(&manifest, &bytes).map_err(|error| {
+            ProjectError::InvalidManifest {
+                path: manifest.clone(),
+                message: error.message,
+            }
+        })?;
+    Ok((root, manifest, bytes, config))
+}
+
+fn read_manifest(root: &Path) -> Result<(PathBuf, PathBuf, String), ProjectError> {
     let root = canonical_project_root(root)?;
     let manifest = root.join("cott.toml");
     ensure_no_symlinks(&manifest)?;
@@ -128,13 +205,7 @@ fn read_config(
         path: manifest.clone(),
         source,
     })?;
-    let config = crate::manifest::ProjectConfig::parse(&manifest, &bytes).map_err(|error| {
-        ProjectError::InvalidManifest {
-            path: manifest.clone(),
-            message: error.message,
-        }
-    })?;
-    Ok((root, manifest, config))
+    Ok((root, manifest, bytes))
 }
 
 fn canonical_project_root(root: &Path) -> Result<PathBuf, ProjectError> {
@@ -255,11 +326,86 @@ fn derive_project_paths(
     })
 }
 
+fn derive_kotlin_paths(
+    root: &Path,
+    manifest: &Path,
+    config: &crate::manifest::KotlinProjectConfig,
+) -> Result<KotlinPaths, ProjectError> {
+    let source = configured_path("project.source", &config.project.source)?;
+    let kotlin_source = configured_path("target.kotlin.source", &config.kotlin.source)?;
+    let generated = configured_path("target.kotlin.generated", &config.kotlin.generated)?;
+    let artifact_root = generated
+        .parent()
+        .ok_or(ProjectError::InvalidProject {
+            message: "Kotlin generated path has no artifact root",
+        })?
+        .to_path_buf();
+    let classpath = config
+        .kotlin
+        .classpath
+        .iter()
+        .map(|value| configured_path("target.kotlin.classpath", value).map(|path| root.join(path)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let compile_only = config
+        .kotlin
+        .compile_only
+        .iter()
+        .map(|value| {
+            configured_path("target.kotlin.compile_only", value).map(|path| root.join(path))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let source_dir = root.join(source);
+    let kotlin_source_dir = root.join(kotlin_source);
+    let generated_dir = root.join(generated);
+    let artifact_root = root.join(artifact_root);
+
+    ensure_required_directory(&source_dir, "source path is not a directory")?;
+    ensure_required_directory(&kotlin_source_dir, "Kotlin source path is not a directory")?;
+    ensure_directory_if_present(&artifact_root, "artifact root is not a directory")?;
+    ensure_directory_if_present(&generated_dir, "generated directory")?;
+    for path in classpath.iter().chain(&compile_only) {
+        ensure_regular_input(
+            path,
+            "Kotlin classpath entry must be a regular single-link file",
+        )?;
+    }
+    if let Some(rules) = &config.generator.rules {
+        ensure_regular_input(&root.join(rules), "generator rules")?;
+    }
+
+    Ok(KotlinPaths {
+        root: root.to_path_buf(),
+        manifest: manifest.to_path_buf(),
+        source_dir,
+        kotlin_source_dir,
+        generated_dir,
+        artifact_root,
+        classpath,
+        compile_only,
+    })
+}
+
+fn configured_path(field: &'static str, value: &str) -> Result<PathBuf, ProjectError> {
+    crate::manifest::normalized_relative_path(value).map_err(|message| ProjectError::InvalidPath {
+        field,
+        path: value.to_owned(),
+        message,
+    })
+}
+
 /// Reads all regular `.cott` files under normative project paths.
 pub fn discover_sources_from_paths(
     project: &ProjectPaths,
 ) -> Result<Vec<crate::compiler::SourceFile>, ProjectError> {
     discover_sources_at(&project.root, &project.source_dir)
+}
+
+/// Reads all regular `.cott` files for a Kotlin target.
+pub fn discover_kotlin_contract_sources(
+    paths: &KotlinPaths,
+) -> Result<Vec<crate::compiler::SourceFile>, ProjectError> {
+    discover_sources_at(&paths.root, &paths.source_dir)
 }
 
 fn discover_sources_at(
@@ -421,6 +567,116 @@ fn collect_python_sources(
     Ok(())
 }
 
+/// Reads every Kotlin source in a project-owned tree after rejecting unsafe
+/// links and files. Development cache directories are outside the authored tree.
+pub fn discover_kotlin_sources(root: &Path) -> Result<Vec<KotlinSourceFile>, ProjectError> {
+    ensure_no_symlinks(root)?;
+    let metadata = fs::symlink_metadata(root).map_err(|source| ProjectError::Io {
+        operation: "stat Kotlin source directory",
+        path: root.to_path_buf(),
+        source,
+    })?;
+    if !metadata.is_dir() {
+        return Err(ProjectError::InvalidProject {
+            message: "Kotlin source path is not a directory",
+        });
+    }
+
+    let mut files = Vec::new();
+    collect_kotlin_sources(root, root, &mut files)?;
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
+}
+
+fn collect_kotlin_sources(
+    root: &Path,
+    directory: &Path,
+    files: &mut Vec<KotlinSourceFile>,
+) -> Result<(), ProjectError> {
+    let mut entries = fs::read_dir(directory)
+        .map_err(|source| ProjectError::Io {
+            operation: "read Kotlin source directory",
+            path: directory.to_path_buf(),
+            source,
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| ProjectError::Io {
+            operation: "read Kotlin source directory entry",
+            path: directory.to_path_buf(),
+            source,
+        })?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    for entry in entries {
+        if matches!(
+            entry.file_name().to_str(),
+            Some(".gradle" | "build" | ".cott")
+        ) {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|source| ProjectError::Io {
+            operation: "stat Kotlin source entry",
+            path: path.clone(),
+            source,
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(ProjectError::Symlink { path });
+        }
+        if metadata.is_dir() {
+            collect_kotlin_sources(root, &path, files)?;
+            continue;
+        }
+        if path.extension() != Some(OsStr::new("kt")) {
+            continue;
+        }
+        #[cfg(unix)]
+        let single_link = metadata.nlink() == 1;
+        #[cfg(not(unix))]
+        let single_link = true;
+        if !metadata.is_file() || !single_link {
+            return Err(ProjectError::InvalidProject {
+                message: "Kotlin source files must be regular single-link files",
+            });
+        }
+        let bytes = fs::read(&path).map_err(|source| ProjectError::Io {
+            operation: "read Kotlin source",
+            path: path.clone(),
+            source,
+        })?;
+        let source = String::from_utf8(bytes).map_err(|_| ProjectError::InvalidProject {
+            message: "Kotlin source is not UTF-8",
+        })?;
+        let rechecked = fs::symlink_metadata(&path).map_err(|source| ProjectError::Io {
+            operation: "re-stat Kotlin source",
+            path: path.clone(),
+            source,
+        })?;
+        #[cfg(unix)]
+        let stable =
+            rechecked.is_file() && !rechecked.file_type().is_symlink() && rechecked.nlink() == 1;
+        #[cfg(not(unix))]
+        let stable = rechecked.is_file() && !rechecked.file_type().is_symlink();
+        if !stable {
+            return Err(ProjectError::InvalidProject {
+                message: "Kotlin source changed while being read",
+            });
+        }
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| ProjectError::InvalidProject {
+                message: "Kotlin source path is outside scanned tree",
+            })?
+            .to_path_buf();
+        files.push(KotlinSourceFile {
+            path: relative,
+            disk_path: path,
+            source,
+        });
+    }
+    Ok(())
+}
+
 fn collect_sources(
     root: &Path,
     directory: &Path,
@@ -489,6 +745,19 @@ fn ensure_no_symlinks(path: &Path) -> Result<(), ProjectError> {
                 });
             }
         }
+    }
+    Ok(())
+}
+
+fn ensure_required_directory(path: &Path, label: &'static str) -> Result<(), ProjectError> {
+    ensure_no_symlinks(path)?;
+    let metadata = fs::symlink_metadata(path).map_err(|source| ProjectError::Io {
+        operation: "stat project directory",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.is_dir() {
+        return Err(ProjectError::InvalidProject { message: label });
     }
     Ok(())
 }

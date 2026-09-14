@@ -1,0 +1,44 @@
+module curriculum.stock_record
+
+struct StockRecord:
+    name: Str
+    shares: I64
+    price: F64
+
+enum StockRecordError:
+    EmptyName
+    NegativeShares
+    NonFinitePrice
+    NegativePrice
+    ValuationOverflow
+
+fn value_record(record: StockRecord) -> Result[F64, StockRecordError]:
+    doc """
+    Computes the value of a validated stock record.
+    
+    The caller supplies non-negative shares and a non-negative price.
+    ValuationOverflow is returned when the binary64 product is not finite.
+    """
+
+    requires record.price >= 0.0
+    requires record.shares >= 0
+
+    ensures Result.Ok(value) => value >= 0.0
+
+    error StockRecordError.ValuationOverflow
+
+fn value_stock_record(record: StockRecord) -> Result[F64, StockRecordError]:
+    doc """
+    Validates and values one raw stock record.
+    
+    Validation reports EmptyName, NegativeShares, NonFinitePrice, then
+    NegativePrice in source order. A valid record is valued by value_record.
+    """
+
+    ensures Result.Ok(value) => value >= 0.0
+
+    error StockRecordError.EmptyName when record.name.len == 0
+    error StockRecordError.NegativeShares when record.shares < 0
+    error StockRecordError.NonFinitePrice
+    error StockRecordError.NegativePrice when record.price < 0.0
+    error StockRecordError.ValuationOverflow
