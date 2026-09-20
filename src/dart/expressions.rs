@@ -2,7 +2,7 @@ use serde_json::{Map, Value};
 
 use super::types::{
     dart_string, enum_variant_name, escape_identifier, internal_name, local_name,
-    render_canonical_symbol, render_const_witness, render_named_arguments,
+    render_canonical_symbol, render_const_witness, render_named_arguments, render_type_contextual,
     render_type_witness_values, render_value_contextual,
 };
 
@@ -399,19 +399,22 @@ fn render_pattern(
     let kind = required_string(object.get("kind"), "pattern.kind")?;
     match kind {
         "wildcard" => Ok(("true".to_owned(), Vec::new())),
-        "binding" => Ok((
-            "true".to_owned(),
-            vec![format!(
-                "final {} = {value}",
-                escape_identifier(
-                    object
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .or_else(|| object.get("symbol").and_then(Value::as_str).map(local_name))
-                        .ok_or_else(|| "binding pattern is missing name".to_owned())?
-                )?
-            )],
-        )),
+        "binding" => {
+            let name = escape_identifier(
+                object
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .or_else(|| object.get("symbol").and_then(Value::as_str).map(local_name))
+                    .ok_or_else(|| "binding pattern is missing name".to_owned())?,
+            )?;
+            let binding_type = required(object.get("type"), "binding pattern.type")
+                .and_then(|ty| render_type_contextual(ty, module, None))
+                .map_err(|error| format!("render canonical binding pattern type: {error}"))?;
+            Ok((
+                "true".to_owned(),
+                vec![format!("final {name} = ({value}) as {binding_type}")],
+            ))
+        }
         "result_ok" | "result_err" | "option_some" | "option_none" | "enum" | "variant" => {
             let symbol = required_string(object.get("symbol"), "variant pattern.symbol")?;
             let mut conditions = Vec::new();

@@ -1468,14 +1468,12 @@ fn candidate_values(
             values
         }
         "option" => {
-            let mut values = vec!["const cott_runtime.Nothing()".to_owned()];
-            match candidate_values(
-                object
-                    .get("item")
-                    .ok_or("Option candidate has no item type")?,
-                context,
-                depth + 1,
-            ) {
+            let item = object
+                .get("item")
+                .ok_or("Option candidate has no item type")?;
+            let rendered_item = emit::render_consumer_type(context.plan, item, context.aliases)?;
+            let mut values = vec![format!("const cott_runtime.Nothing<{rendered_item}>()")];
+            match candidate_values(item, context, depth + 1) {
                 Ok(items) => {
                     if let Some(item) = items.first() {
                         values.push(format!("cott_runtime.Some({item})"));

@@ -247,6 +247,61 @@ impl Meter for Reads:
 
 #[test]
 #[ignore = "requires COTT_DART, bubblewrap, and the provisioned Dart 3.13.3 SDK"]
+fn native_runner_uses_typed_nothing_for_defaulted_option_fields() {
+    let fixture = Fixture::new(
+        "typed-nothing",
+        r#"module demo.runner
+
+struct Payload:
+    bytes: Bytes
+
+enum Envelope:
+    Wrapped(payload: Payload)
+
+enum PayloadFailure:
+    Failed(payload: Payload)
+
+struct Message:
+    payload: Option[Payload] = Option.Nothing
+    outcome: Result[Payload, PayloadFailure]
+    envelope: Envelope
+
+    invariant self.payload matches Option.Some(payload) => payload.bytes.len >= 0
+    invariant self.outcome matches Result.Ok(payload) => payload.bytes.len >= 0
+    invariant self.outcome matches Result.Err(PayloadFailure.Failed(payload)) => payload.bytes.len >= 0
+    invariant self.envelope matches Envelope.Wrapped(payload) => payload.bytes.len >= 0
+
+fn payload_is_nothing(message: Message) -> Bool:
+    effects []
+"#,
+        &[(
+            "demo.runner.payload_is_nothing",
+            "payload_is_nothing.dart",
+            "_payload_is_nothing",
+            "bool _payload_is_nothing(Message message) {\n  return message.payload is cott_runtime.Nothing<Object?>;\n}\n",
+        )],
+    );
+    let emitted = fixture.run(&["emit", "dart"]);
+    assert_eq!(emitted.status.code(), Some(0), "{}", stderr(&emitted));
+    let verified = fixture.run(&["verify"]);
+    assert_eq!(verified.status.code(), Some(0), "{}", stderr(&verified));
+
+    let generation = fixture.generation();
+    assert_eq!(generation["current"]["verified"], true);
+    assert!(
+        generation["current"]["verification"]["contract_tests"]["cases"]
+            .as_array()
+            .expect("typed Nothing runner cases")
+            .iter()
+            .any(|case| {
+                case["symbol"] == "demo.runner.payload_is_nothing" && case["status"] == "passed"
+            }),
+        "missing passing case for typed Nothing candidate"
+    );
+}
+
+#[test]
+#[ignore = "requires COTT_DART, bubblewrap, and the provisioned Dart 3.13.3 SDK"]
 fn native_runner_rejects_an_authenticated_failed_clause() {
     let source = r#"module demo.runner
 
