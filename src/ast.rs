@@ -774,6 +774,7 @@ pub enum UnaryOp {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BinaryOp {
+    Implies,
     Or,
     And,
     Add,

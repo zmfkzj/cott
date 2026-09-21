@@ -3010,6 +3010,7 @@ fn eval_const_binary(left: HirValue, op: BinaryOp, right: HirValue) -> Option<Hi
         (HirValue::Bool(left), HirValue::Bool(right)) => match op {
             BinaryOp::And => Some(HirValue::Bool(left && right)),
             BinaryOp::Or => Some(HirValue::Bool(left || right)),
+            BinaryOp::Implies => Some(HirValue::Bool(!left || right)),
             _ => None,
         },
         (HirValue::Integer(left), HirValue::Integer(right)) => {
@@ -3305,7 +3306,7 @@ fn owned_invalid_expr_type(tag: &'static str) -> HirType {
 }
 
 fn owned_binary_is_logical(op: BinaryOp) -> bool {
-    matches!(op, BinaryOp::Or | BinaryOp::And)
+    matches!(op, BinaryOp::Implies | BinaryOp::Or | BinaryOp::And)
 }
 
 fn owned_numeric_literal_expression(value: &Expr) -> bool {
@@ -3972,7 +3973,7 @@ impl<'a> OwnedLower<'a> {
                 }
                 let valid = !zero_divisor
                     && match op {
-                        BinaryOp::Or | BinaryOp::And => {
+                        BinaryOp::Implies | BinaryOp::Or | BinaryOp::And => {
                             left_value.ty == HirType::Primitive(PrimitiveType::Bool)
                                 && right_value.ty == HirType::Primitive(PrimitiveType::Bool)
                         }
@@ -4021,8 +4022,24 @@ impl<'a> OwnedLower<'a> {
                 } else {
                     owned_invalid_expr_type("invalid-binary")
                 };
+                if *op == BinaryOp::Implies {
+                    let not_ty = if left_value.ty == HirType::Primitive(PrimitiveType::Bool) {
+                        HirType::Primitive(PrimitiveType::Bool)
+                    } else {
+                        owned_invalid_expr_type("invalid-unary")
+                    };
+                    left_value = HirExpr {
+                        span: left_value.span.clone(),
+                        ty: not_ty,
+                        reference: None,
+                        kind: HirExprKind::Unary {
+                            op: HirUnaryOp::Not,
+                            operand: Box::new(left_value),
+                        },
+                    };
+                }
                 let op = match op {
-                    BinaryOp::Or => HirBinaryOp::Or,
+                    BinaryOp::Implies | BinaryOp::Or => HirBinaryOp::Or,
                     BinaryOp::And => HirBinaryOp::And,
                     BinaryOp::Add => HirBinaryOp::Add,
                     BinaryOp::Subtract => HirBinaryOp::Subtract,
@@ -9374,7 +9391,7 @@ fn owned_integer_expression(
                 BinaryOp::Multiply => left.checked_mul(right),
                 BinaryOp::Divide => (right != 0).then(|| left / right),
                 BinaryOp::Remainder => (right != 0).then(|| left % right),
-                BinaryOp::Or | BinaryOp::And => None,
+                BinaryOp::Implies | BinaryOp::Or | BinaryOp::And => None,
             }
         }
         ExprKind::Intrinsic { .. }

@@ -421,3 +421,20 @@ scenario workflow for app.run:
     assert_eq!(output, expected);
     assert_eq!(formatted(&output), expected);
 }
+
+#[test]
+fn formats_boolean_implication_without_rewriting_disjunction() {
+    let source = r#"module demo.implies
+
+fn check(a: Bool, b: Bool, c: Bool) -> Unit:
+    requires a => b
+    requires not a or b
+    requires a or b => c
+    requires a => b => c
+    requires (a => b) => c
+"#;
+    let expected = "module demo.implies\n\nfn check(a: Bool, b: Bool, c: Bool) -> Unit:\n    requires a => b\n    requires not a or b\n    requires a or b => c\n    requires a => b => c\n    requires (a => b) => c\n";
+    let output = formatted(source);
+    assert_eq!(output, expected);
+    assert_eq!(formatted(&output), output);
+}

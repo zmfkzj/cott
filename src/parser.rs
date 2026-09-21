@@ -2697,7 +2697,24 @@ impl Parser {
         QualifiedName::new(Self::join(fs, end), segs)
     }
     fn parse_expr(&mut self) -> Option<Expr> {
-        self.parse_or()
+        self.parse_implies()
+    }
+    fn parse_implies(&mut self) -> Option<Expr> {
+        let left = self.parse_or()?;
+        if !self.at(&TokenKind::FatArrow) {
+            return Some(left);
+        }
+        self.bump();
+        let right = self.parse_implies()?;
+        let span = Self::join(left.span.clone(), right.span.clone());
+        Some(Expr {
+            span,
+            kind: ExprKind::Binary {
+                left: Box::new(left),
+                op: BinaryOp::Implies,
+                right: Box::new(right),
+            },
+        })
     }
     fn parse_or(&mut self) -> Option<Expr> {
         self.binary(Self::parse_and, &[Keyword::Or], BinaryOp::Or)

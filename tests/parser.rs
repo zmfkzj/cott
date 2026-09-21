@@ -1336,3 +1336,193 @@ fn rejects_framework_tree_and_general_execution_inside_scenarios() {
         assert_rejected(source);
     }
 }
+
+#[test]
+fn parses_boolean_implication_with_guard_syntax_winning() {
+    let source = r#"module demo.implies
+
+enum Failure:
+    Bad
+
+struct Flag:
+    ready: Bool
+    done: Bool
+    invariant ready or done => done
+
+fn check(a: Bool, b: Bool, c: Bool, value: Option[I32]) -> Result[I32, Failure]:
+    requires a or b => c
+    requires a => b => c
+    requires value matches Option.Some(input) => input > 0
+    ensures (a) => b
+    ensures a != b => c
+    ensures Result.Ok(item) => item > 0
+    ensures flag => a
+    error Failure.Bad when a and b => c
+"#;
+    let file = parse(source).expect("implication source should parse");
+    let structure = match &file.declarations[1] {
+        Declaration::Struct(value) => value,
+        other => panic!("expected struct, got {other:?}"),
+    };
+    assert!(structure.invariants[0].guard.is_none());
+    assert!(matches!(
+        &structure.invariants[0].condition.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Implies,
+            left,
+            ..
+        } if matches!(&left.kind, ExprKind::Binary { op: BinaryOp::Or, .. })
+    ));
+
+    let function = match &file.declarations[2] {
+        Declaration::Function(value) => value,
+        other => panic!("expected function, got {other:?}"),
+    };
+    let clauses = match &function.body {
+        cott::ast::FunctionBody::Clauses { clauses, .. } => clauses,
+        other => panic!("expected function clauses, got {other:?}"),
+    };
+
+    let requires_or = match &clauses[0].kind {
+        ClauseKind::Requires {
+            guard: None,
+            condition,
+        } => condition,
+        other => panic!("expected unguarded requires, got {other:?}"),
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::Implies,
+        left,
+        right,
+    } = &requires_or.kind
+    else {
+        panic!(
+            "expected `a or b => c` to parse as implication, got {:?}",
+            requires_or.kind
+        );
+    };
+    assert!(matches!(
+        &left.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Or,
+            ..
+        }
+    ));
+    assert!(matches!(&right.kind, ExprKind::Name(_)));
+
+    let requires_chain = match &clauses[1].kind {
+        ClauseKind::Requires {
+            guard: None,
+            condition,
+        } => condition,
+        other => panic!("expected unguarded requires chain, got {other:?}"),
+    };
+    let ExprKind::Binary {
+        op: BinaryOp::Implies,
+        left,
+        right,
+    } = &requires_chain.kind
+    else {
+        panic!(
+            "expected `a => b => c` to parse as implication, got {:?}",
+            requires_chain.kind
+        );
+    };
+    assert!(matches!(&left.kind, ExprKind::Name(_)));
+    assert!(matches!(
+        &right.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Implies,
+            ..
+        }
+    ));
+
+    let ClauseKind::Requires {
+        guard: Some(guard),
+        condition,
+    } = &clauses[2].kind
+    else {
+        panic!("expected match-guard requires, got {:?}", clauses[2].kind);
+    };
+    assert!(matches!(&guard.scrutinee.kind, ExprKind::Name(_)));
+    assert!(matches!(
+        &guard.pattern.kind,
+        PatternKind::Variant { path, .. } if path.segments == ["Option", "Some"]
+    ));
+    assert!(!matches!(
+        &condition.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Implies,
+            ..
+        }
+    ));
+
+    let parenthesized = match &clauses[3].kind {
+        ClauseKind::Ensures {
+            guard: None,
+            condition,
+        } => condition,
+        other => panic!("expected parenthesized implication ensures, got {other:?}"),
+    };
+    assert!(matches!(
+        &parenthesized.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Implies,
+            left,
+            ..
+        } if matches!(&left.kind, ExprKind::Parenthesized(_))
+    ));
+
+    let compared = match &clauses[4].kind {
+        ClauseKind::Ensures {
+            guard: None,
+            condition,
+        } => condition,
+        other => panic!("expected comparison implication ensures, got {other:?}"),
+    };
+    assert!(matches!(
+        &compared.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Implies,
+            left,
+            ..
+        } if matches!(&left.kind, ExprKind::Comparison { .. })
+    ));
+
+    let ClauseKind::Ensures {
+        guard: Some(guard), ..
+    } = &clauses[5].kind
+    else {
+        panic!("expected result-pattern ensures, got {:?}", clauses[5].kind);
+    };
+    assert!(matches!(
+        &guard.pattern.kind,
+        PatternKind::Variant { path, .. } if path.segments == ["Result", "Ok"]
+    ));
+
+    let ClauseKind::Ensures {
+        guard: Some(guard), ..
+    } = &clauses[6].kind
+    else {
+        panic!(
+            "expected bare-identifier result guard, got {:?}",
+            clauses[6].kind
+        );
+    };
+    assert!(matches!(&guard.pattern.kind, PatternKind::Binding(name) if name == "flag"));
+
+    let when = match &clauses[7].kind {
+        ClauseKind::Error {
+            when: Some(when), ..
+        } => when,
+        other => panic!("expected error when implication, got {other:?}"),
+    };
+    assert!(matches!(
+        &when.kind,
+        ExprKind::Binary {
+            op: BinaryOp::Implies,
+            left,
+            ..
+        } if matches!(&left.kind, ExprKind::Binary { op: BinaryOp::And, .. })
+    ));
+}

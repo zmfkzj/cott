@@ -1028,12 +1028,19 @@ impl<'a> Printer<'a> {
                 UnaryOp::Plus => format!("+{}", self.expr(operand, precedence)),
                 UnaryOp::Minus => format!("-{}", self.expr(operand, precedence)),
             },
-            ExprKind::Binary { left, op, right } => format!(
-                "{} {} {}",
-                self.expr(left, precedence),
-                binary_operator(*op),
-                self.expr(right, precedence + 1)
-            ),
+            ExprKind::Binary { left, op, right } => {
+                let (left_parent, right_parent) = if matches!(op, BinaryOp::Implies) {
+                    (precedence + 1, precedence)
+                } else {
+                    (precedence, precedence + 1)
+                };
+                format!(
+                    "{} {} {}",
+                    self.expr(left, left_parent),
+                    binary_operator(*op),
+                    self.expr(right, right_parent)
+                )
+            }
             ExprKind::Comparison { first, rest } => {
                 let mut rendered = self.expr(first, precedence);
                 for (operator, expression) in rest {
@@ -1306,6 +1313,7 @@ fn rule_clause_group(clause: &RuleClause) -> u8 {
 fn expression_precedence(expression: &Expr) -> u8 {
     match &expression.kind {
         ExprKind::Binary { op, .. } => match op {
+            BinaryOp::Implies => 0,
             BinaryOp::Or => 1,
             BinaryOp::And => 2,
             BinaryOp::Add | BinaryOp::Subtract => 4,
@@ -1320,6 +1328,7 @@ fn expression_precedence(expression: &Expr) -> u8 {
 
 const fn binary_operator(operator: BinaryOp) -> &'static str {
     match operator {
+        BinaryOp::Implies => "=>",
         BinaryOp::Or => "or",
         BinaryOp::And => "and",
         BinaryOp::Add => "+",

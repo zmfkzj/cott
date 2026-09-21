@@ -3,10 +3,10 @@ use std::path::Path;
 use cott::compiler::{SourceFile, parse_project};
 use cott::diagnostics::Span;
 use cott::hir::{
-    APPLIED_RULE_ANNOTATION, HirCallableKind, HirClause, HirClauseKind, HirCompareOp,
+    APPLIED_RULE_ANNOTATION, HirBinaryOp, HirCallableKind, HirClause, HirClauseKind, HirCompareOp,
     HirConstArgument, HirContract, HirDeclaration, HirDoc, HirExpr, HirExprKind, HirGenericArg,
-    HirGenericParam, HirPattern, HirPatternKind, HirTrait, HirType, HirValue, HirVariance,
-    ModuleId, PrimitiveType, SymbolId, is_assignable, lower,
+    HirGenericParam, HirPattern, HirPatternKind, HirTrait, HirType, HirUnaryOp, HirValue,
+    HirVariance, ModuleId, PrimitiveType, SymbolId, is_assignable, lower,
 };
 use cott::ir::{load, render};
 
@@ -2371,4 +2371,87 @@ fn run() -> Unit:
         .expect("run declaration");
     assert_eq!(function["annotations"][0]["name"], APPLIED_RULE_ANNOTATION);
     assert_eq!(function["annotations"][0]["argument"], "applied.Marker");
+}
+
+fn strip_spans(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.remove("span");
+            for child in map.values_mut() {
+                strip_spans(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                strip_spans(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn implication_lowers_to_the_same_canonical_ir_as_not_or() {
+    fn source(condition: &str) -> String {
+        format!("module implies\n\nfn check(a: Bool, b: Bool) -> Unit:\n    requires {condition}\n")
+    }
+    let implies = parse_project([SourceFile::new("src/implies.cott", source("a => b"))])
+        .expect("implication fixture should parse");
+    let disjunction = parse_project([SourceFile::new("src/implies.cott", source("not a or b"))])
+        .expect("disjunction fixture should parse");
+    let implies_project = lower(Path::new("src"), implies).expect("implication should lower");
+    let disjunction_project =
+        lower(Path::new("src"), disjunction).expect("disjunction should lower");
+
+    let HirDeclaration::Function(function) = &implies_project.modules[0].declarations[0] else {
+        panic!("expected function");
+    };
+    let HirClauseKind::Requires { expression, .. } = &function.contract.clauses[0].kind else {
+        panic!("expected requires");
+    };
+    let HirExprKind::Binary {
+        op: HirBinaryOp::Or,
+        left,
+        ..
+    } = &expression.kind
+    else {
+        panic!("implication must desugar to or, got {:?}", expression.kind);
+    };
+    assert!(matches!(
+        &left.kind,
+        HirExprKind::Unary {
+            op: HirUnaryOp::Not,
+            ..
+        }
+    ));
+
+    let implies_ir = render(&implies_project).expect("implication should render");
+    let disjunction_ir = render(&disjunction_project).expect("disjunction should render");
+    let mut implies_json = load(&implies_ir.modules[0].bytes).expect("implication IR should load");
+    let mut disjunction_json =
+        load(&disjunction_ir.modules[0].bytes).expect("disjunction IR should load");
+    strip_spans(&mut implies_json);
+    strip_spans(&mut disjunction_json);
+    assert_eq!(implies_json, disjunction_json);
+}
+
+#[test]
+fn implication_rejects_non_boolean_operands() {
+    for source in [
+        "module implies\n\nfn check(value: I32) -> Unit:\n    requires value => true\n",
+        "module implies\n\nfn check(value: I32) -> Unit:\n    requires true => value\n",
+    ] {
+        let parsed = parse_project([SourceFile::new("src/implies.cott", source)])
+            .expect("invalid implication fixture should parse");
+        let errors =
+            lower(Path::new("src"), parsed).expect_err("non-boolean implication operand must fail");
+        assert_eq!(
+            errors
+                .iter()
+                .map(|error| error.diagnostic.message.as_str())
+                .collect::<Vec<_>>(),
+            ["logical operator requires boolean operands"],
+            "unexpected diagnostics for:\n{source}"
+        );
+    }
 }
