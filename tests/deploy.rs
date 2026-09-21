@@ -136,10 +136,23 @@ fn emit_and_certify(root: &Path) -> Vec<u8> {
 }
 
 fn deploy(root: &Path, output: Option<&Path>, cwd: &Path, json: bool) -> Output {
+    deploy_with(root, output, cwd, json, false)
+}
+
+fn deploy_with(
+    root: &Path,
+    output: Option<&Path>,
+    cwd: &Path,
+    json: bool,
+    replace: bool,
+) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_cott"));
     command.arg("deploy");
     if let Some(output) = output {
         command.arg("--output").arg(output);
+    }
+    if replace {
+        command.arg("--replace");
     }
     command.arg("--project").arg(root);
     if json {
@@ -478,4 +491,136 @@ fn deploy_refuses_symlink_output_without_changing_its_target() {
             .is_symlink()
     );
     assert_eq!(file_snapshot(&victim), before);
+}
+
+fn assert_no_deploy_temps(parent: &Path) {
+    let mut leftovers = Vec::new();
+    let mut entries = fs::read_dir(parent)
+        .expect("deployment parent should be readable")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("deployment parent entries should be readable");
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with(".cott-deploy") {
+            leftovers.push(entry.path());
+        }
+    }
+    assert!(
+        leftovers.is_empty(),
+        "deployment left temporary directories: {leftovers:?}"
+    );
+}
+
+#[test]
+fn deploy_without_replace_refuses_a_previous_deployment() {
+    let project = project(true);
+    emit_and_certify(&project.path);
+    let invocation = TempDir::new();
+    let relative = Path::new("release");
+    assert_success_json(&deploy(
+        &project.path,
+        Some(relative),
+        &invocation.path,
+        true,
+    ));
+    let bundle = invocation.path.join(relative);
+    write_file(&bundle, "user/note.txt", b"keep me\n");
+    let before = file_snapshot(&bundle);
+
+    let repeated = deploy(&project.path, Some(relative), &invocation.path, true);
+
+    assert_eq!(repeated.status.code(), Some(6));
+    let report: serde_json::Value =
+        serde_json::from_slice(&repeated.stdout).expect("deploy rejection should report JSON");
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .expect("deploy JSON should use the diagnostic envelope")
+            .iter()
+            .any(|diagnostic| diagnostic["severity"] == "error")
+    );
+    assert_eq!(file_snapshot(&bundle), before);
+}
+
+#[test]
+fn deploy_replace_republishes_over_the_same_project_tree() {
+    let project = project(true);
+    emit_and_certify(&project.path);
+    let invocation = TempDir::new();
+    let relative = Path::new("release");
+    assert_success_json(&deploy(
+        &project.path,
+        Some(relative),
+        &invocation.path,
+        true,
+    ));
+    let bundle = invocation.path.join(relative);
+    write_file(&bundle, "stale.txt", b"old tree\n");
+    assert!(bundle.join("stale.txt").is_file());
+
+    let replaced = deploy_with(&project.path, Some(relative), &invocation.path, true, true);
+
+    assert_success_json(&replaced);
+    assert!(!bundle.join("stale.txt").exists());
+    assert!(bundle.join("generation.json").is_file());
+    assert!(bundle.join("python/cott_runtime/__init__.py").is_file());
+    assert_no_deploy_temps(&invocation.path);
+}
+
+#[test]
+fn deploy_replace_refuses_a_file_and_a_foreign_directory() {
+    let project = project(true);
+    emit_and_certify(&project.path);
+    let invocation = TempDir::new();
+
+    let file_output = invocation.path.join("release-file");
+    fs::write(&file_output, b"not a directory\n").expect("file output should be writable");
+    let rejected = deploy_with(
+        &project.path,
+        Some(Path::new("release-file")),
+        &invocation.path,
+        true,
+        true,
+    );
+    assert_eq!(rejected.status.code(), Some(6));
+    let report: serde_json::Value =
+        serde_json::from_slice(&rejected.stdout).expect("deploy rejection should report JSON");
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .expect("deploy JSON should use the diagnostic envelope")
+            .iter()
+            .any(|diagnostic| diagnostic["severity"] == "error")
+    );
+    assert_eq!(
+        fs::read(&file_output).expect("file output should remain"),
+        b"not a directory\n"
+    );
+
+    let foreign = invocation.path.join("release-dir");
+    fs::create_dir(&foreign).expect("foreign directory should be creatable");
+    fs::write(foreign.join("note.txt"), b"keep me\n").expect("foreign file should be writable");
+    let rejected = deploy_with(
+        &project.path,
+        Some(Path::new("release-dir")),
+        &invocation.path,
+        true,
+        true,
+    );
+    assert_eq!(rejected.status.code(), Some(6));
+    let report: serde_json::Value =
+        serde_json::from_slice(&rejected.stdout).expect("deploy rejection should report JSON");
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .expect("deploy JSON should use the diagnostic envelope")
+            .iter()
+            .any(|diagnostic| diagnostic["severity"] == "error")
+    );
+    assert_eq!(
+        fs::read(foreign.join("note.txt")).expect("foreign file should remain"),
+        b"keep me\n"
+    );
+    assert!(!foreign.join("generation.json").exists());
 }

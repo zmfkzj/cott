@@ -479,6 +479,8 @@ method_clause = function_clause | "transitions", "self", ".", field_name, ":", q
                   { ",", "self", ".", field_name, ":", qname, "->", qname }, NEWLINE
                 | "modifies", "self", ".", field_name, { ",", "self", ".", field_name }, NEWLINE ;
 guarded_condition = expression | expression, "matches", pattern, "=>", expression ;
+expression    = implication ;
+implication   = disjunction, [ "=>", implication ] ;
 fixtures_block = "fixtures", ":", NEWLINE, INDENT, { fixture }, DEDENT ;
 fixture       = "fs", identifier, ":", NEWLINE, INDENT, { "file", string_literal, scenario_data, NEWLINE }, DEDENT
               | "http", identifier, ":", NEWLINE, INDENT, { "route", string_literal, "->", http_outcome, NEWLINE }, DEDENT
@@ -527,7 +529,7 @@ external declaration은 target이나 source path를 갖지 않는 semantic named
 
 function block에는 `doc` 최대 하나, `rule`, `requires`·`ensures`·`error` 각 0개 이상, `effects` 최대 하나가 이 순서로 온다. `rule`은 explicit clauses보다 앞에 오며 적용된 rule의 effective clauses와 effects를 합성한다. clause add는 추가, override는 같은 의무 치환, delete는 제거다. effects Add는 지정 key를 합집합하고, Override는 inherited effect set을 지정 set으로 바꾸며, Delete는 지정 effect key만 제거한다. 무시되는 action은 없다. 적용 전 inherited generic은 effective clause·guard·type에 치환하고, 호출부의 expression·result·guard type과 호환되어야 한다. Unit으로 낮춘 unguarded `result`를 다른 반환 type에 붙이지 않는다. error와 variant guard 동일성은 전체 canonical `SymbolId`다. 같은 module 정의 span은 유지하고, 원본 파일을 schema가 담을 수 없는 cross-module 복제 clause·effect·expression·pattern span은 적용 지점 span으로 재배치한다. top-level `doc`은 바로 다음 type, resource, rule 또는 constant declaration에 붙으며 orphan·중복 doc은 오류다.
 
-expression precedence는 낮은 순서로 `or`, `and`, unary `not`, comparison, `+ -`, `* / %`, unary `+ -`, field/`.len`, primary다. comparison은 `== != < <= > >=`이며 연쇄 비교를 허용한다. primary는 scalar literal, `Unit` literal `()`, 현재 scope의 name·constant·enum singleton과 괄호식, method `ensures`에서만 쓰는 `old(self.field)`이다. 임의 call, index, collection literal과 attribute method call은 계약 표현식에 없다.
+expression precedence는 낮은 순서로 boolean implication `=>`, `or`, `and`, unary `not`, comparison, `+ -`, `* / %`, unary `+ -`, field/`.len`, primary다. `=>`는 right-associative이며 `A => B`는 `not A or B`와 같은 HIR·Canonical IR로 낮춘다. 두 operand는 `Bool`이어야 한다. clause의 match guard가 우선하므로 `ensures Pattern => condition`과 `scrutinee matches Pattern => condition`은 그대로 guard로 parse하고, `ensures` 선두의 단일 identifier는 계속 result binding pattern이다. boolean implication을 그 자리에서 쓰려면 `(flag) => condition`처럼 괄호식이나 복합식으로 시작한다. comparison은 `== != < <= > >=`이며 연쇄 비교를 허용한다. primary는 scalar literal, `Unit` literal `()`, 현재 scope의 name·constant·enum singleton과 괄호식, method `ensures`에서만 쓰는 `old(self.field)`이다. 임의 call, index, collection literal과 attribute method call은 계약 표현식에 없다.
 
 arithmetic operand는 같은 numeric type이어야 한다. `/`는 float에만, `%`는 integer에만 허용하고 unary `-`는 unsigned type에 허용하지 않는다. integer contract 중간값은 declared width를 넘을 수 있는 mathematical integer며 remainder는 `0 <= r < abs(divisor)`인 Euclidean remainder다. emitter는 `%`를 Python operator가 아니라 `cott_runtime._cott_euclidean_mod`로 낮춘다. zero divisor는 compile-time constant에서 semantic error, runtime clause에서 `CottContractViolation`이다. `F32` 중간 결과는 매 연산 후 binary32, `F64`는 binary64로 평가한다. compiler constant evaluator와 runtime clause·refinement evaluator는 같은 규칙을 쓴다.
 
@@ -2178,6 +2180,8 @@ sole semantic authority이고 다른 prose/source는 이를 override하지 않�
 사용하고 accepted wave candidate는 validation에만 쓴다. `cott prompt` JSON은 target과 무관하게
 `{symbol, intent_hash, prompt_hash, generation_required, context, prompt}`다.
 
+FORMAL DECLARATIONS는 선택된 선언의 canonical 구조를 그대로 싣되, 각 contract expression·guard·condition·refinement는 그 span이 가리키는 **저자 Cott 원문 문자열**로 싣는다. span·`source_order`·`doc`은 이 view에서 제거하고 `doc`은 CURRENT INTENT가 단독으로 소유한다. authored source를 읽을 수 없거나 span이 source를 벗어나면 prompt는 실패하며 축약되지 않은 대체본을 내지 않는다. 이 view는 prompt 전용이고 `context`와 `tools.cott_intent` fingerprint는 stripped canonical context를 그대로 쓴다.
+
 초기 CURRENT INTENT의 관련 `doc`은 닫힌 선언 집합에서 오며 applied rule `doc`을 authored `doc`에
 합쳐 semantic constraint로 승격하지 않는다.
 
@@ -2426,6 +2430,8 @@ cott fmt --check
 
 `cott fmt`는 17.4의 project lock을 획득하고 journal을 복구한 뒤 locked source snapshot을 parse·format하여 old 또는 new complete source snapshot을 같은 journal로 반영한다. 실제 byte 변경이 있으면 기존 generation record도 같은 transaction에서 invalidated current로 갱신한다. `cott fmt --check`도 공통 lock 초기화와 journal recovery를 수행하지만 locked snapshot을 읽기만 하며 source, managed artifact 또는 generation record를 반영하지 않는다.
 
+`cott fmt`는 contract source만 다시 쓰므로 target implementation selection을 수행하지 않는다. manifest, rule, contract source, target source의 frozen snapshot만 확보하고 binding resolution과 agent provenance 검증은 건너뛴다. 따라서 미해결 callable, 기록되지 않은 durable agent source, 또는 통째로 없는 generation record가 있어도 formatting은 성공하며 그런 상태는 `check`, `emit`, `generate`, `verify`가 그대로 거부한다.
+
 ### 18.4 IR 생성
 
 ```bash
@@ -2528,12 +2534,20 @@ Dart verify는 16B.4의 offline package/analyzer/kernel/runner 및 pre-VM Landlo
 ### 18.7.1 실행용 배포
 
 ```bash
-cott deploy [--output <dir>] [--project <dir>] [--format json]
+cott deploy [--output <dir>] [--replace] [--project <dir>] [--format json]
 ```
 
 `deploy`는 현재 verified generation snapshot의 실행용 directory package를 만든다. 기본 출력은
 `<project>/dist/<project.name>-<project.version>/`이며 상대 `--output`은 호출 working directory
-기준이다. 기존 target은 비어 있어도 덮어쓰지 않는다. Project input, managed artifact, `.cott`,
+기준이다. 기본적으로 기존 target은 비어 있어도 덮어쓰지 않는다. `--replace`는 output이 **이 project의
+이전 Cott deployment**일 때만 교체를 허용한다: no-follow로 확인한 실제 directory이고, symlink가 아니며,
+project root·contract source·target source·generated artifact root와 그 조상이 아니고, 이 target의
+generation record로 parse되는 regular single-link `generation.json`을 담고 있어야 한다. 그 외 기존
+경로는 `--replace`가 있어도 그대로 거부한다. 교체는 완성된 staged tree를 sibling temp에 만든 뒤
+`RENAME_NOREPLACE` rename으로 기존 tree를 옆으로 옮기고 staged tree를 제자리에 넣은 다음 옛 tree를
+지우는 swap이며, 실패하면 이전 deployment를 되돌리고 temp를 남기지 않는다. deploy 자격 판정
+(verified·unresolved·drift·coverage policy)은 `--replace`와 무관하게 동일하다. Project input,
+managed artifact, `.cott`,
 `.venv`, unsafe parent/target과 겹치는 output은 거부한다. Project lock/recovery 뒤 읽기만 하고
 source, managed artifact 또는 generation record를 갱신하지 않으며 agent나 target compiler/checker를
 호출하지 않는다.

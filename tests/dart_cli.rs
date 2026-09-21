@@ -258,6 +258,38 @@ fn dart_source_paths_and_format_drift_are_checked_without_an_sdk() {
 }
 
 #[test]
+fn dart_format_does_not_require_resolvable_implementations() {
+    let project = dart_project("module demo.main\n\nfn answer( ) -> Unit\n");
+    fs::create_dir_all(project.path.join("dart/cott_impl/demo/main"))
+        .expect("durable agent directory");
+    fs::write(
+        project.path.join("dart/cott_impl/demo/main/answer.dart"),
+        "void _cott_demo_main_answer() {}\n",
+    )
+    .expect("durable agent source");
+
+    let rejected = run(&project.path, &["check"]);
+    assert_eq!(
+        rejected.status.code(),
+        Some(4),
+        "{}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+
+    let formatted = run(&project.path, &["fmt"]);
+    assert_eq!(
+        formatted.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&formatted.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(project.path.join("src/demo/main.cott")).expect("formatted source"),
+        "module demo.main\n\nfn answer() -> Unit\n"
+    );
+}
+
+#[test]
 fn consumed_manifest_and_contract_bytes_cannot_be_refreshed() {
     let project = dart_project("module demo.main\n\nfn main() -> Unit\n");
     let (_, paths, manifest_source) =
@@ -660,6 +692,36 @@ fn deploy_publishes_only_the_verified_portable_dart_package_without_overwrite() 
     assert_eq!(
         fs::read(output.join("lib/cott_runtime.dart")).expect("runtime retained"),
         runtime_before
+    );
+
+    fs::write(output.join("stale.txt"), b"old tree\n").expect("stale marker");
+    let replaced = run(&project.path, &["deploy", "--replace"]);
+    assert_eq!(
+        replaced.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&replaced.stderr)
+    );
+    assert!(!output.join("stale.txt").exists());
+    assert_eq!(
+        fs::read(output.join("lib/cott_runtime.dart")).expect("replaced runtime"),
+        runtime_before
+    );
+    let dist = output.parent().expect("deployment parent");
+    let leftovers = fs::read_dir(dist)
+        .expect("dist should be readable")
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".cott-deploy")
+        })
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    assert!(
+        leftovers.is_empty(),
+        "Dart replace left temporary directories: {leftovers:?}"
     );
 
     fs::write(

@@ -109,14 +109,17 @@ cott emit ir|python|kotlin|dart [--project <dir>] [--format json]
 cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]
 cott prompt <fully.qualified.callable> [--project <dir>] [--format json]
 cott verify [--project <dir>] [--format json]
-cott deploy [--output <dir>] [--project <dir>] [--format json]
+cott deploy [--output <dir>] [--replace] [--project <dir>] [--format json]
 cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]
 cott lsp
 ```
 
 `deploy` packages a verified, fully resolved snapshot with passing coverage policy and unchanged
 input/managed bytes into `<project>/dist/<name>-<version>/` or `--output` (relative to the calling
-working directory). Existing output is never overwritten. Python deployment preserves runtime code
+working directory). Existing output is never overwritten unless `--replace` is given, which
+atomically swaps in a freshly staged tree only when the output is a prior Cott deployment of the
+same project (real no-follow directory holding a parseable `generation.json` for this target).
+Python deployment preserves runtime code
 under `python/`, authored adapters, unchanged `generation.json`, exact `.python-version`, and
 hash-pinned production `requirements.txt`. Kotlin deployment preserves `cott-module.jar`, unchanged
 `generation.json`, `dependencies.json`, compiler-bundled coroutine `1.8.0`, and verified runtime

@@ -35,7 +35,7 @@ pub use crate::manifest::TargetLanguage;
 use crate::manifest::{ApiVersion, parse_api_version};
 use crate::project::{
     ProjectPaths, discover_python_sources, discover_sources_from_paths, load_config_with_paths,
-    load_target_language,
+    load_dart_config_with_paths, load_kotlin_config_with_paths, load_target_language,
 };
 use crate::provenance::{
     AgentRun, AgentStatus, ClauseCoverage, CoveragePolicyResult, CoverageStatus, CoverageSummary,
@@ -48,7 +48,7 @@ use crate::python_verify::verify_python;
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession, TransactionError};
 use crate::version::{is_at_least, parse_version};
 
-const USAGE: &str = "Cott compiles contracts into verifiable Python, Kotlin, and Dart.\n\nUsage:\n  cott init <path> [--target python|kotlin|dart] [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python|kotlin|dart [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
+const USAGE: &str = "Cott compiles contracts into verifiable Python, Kotlin, and Dart.\n\nUsage:\n  cott init <path> [--target python|kotlin|dart] [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python|kotlin|dart [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--replace] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
 
 #[cfg(test)]
 thread_local! {
@@ -200,8 +200,11 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
             format,
         }) => prompt_for_target(project, symbol, format),
         Ok(Command::Deploy {
-            output, project, ..
-        }) => deploy_for_target(project, output),
+            output,
+            replace,
+            project,
+            ..
+        }) => deploy_for_target(project, output, replace),
         Ok(Command::Diff {
             baseline,
             exit_code,
@@ -493,6 +496,7 @@ pub enum Command {
     },
     Deploy {
         output: Option<PathBuf>,
+        replace: bool,
         project: Option<PathBuf>,
         format: OutputFormat,
     },
@@ -827,6 +831,7 @@ fn parse_prompt(values: &[OsString]) -> Result<Command, &'static str> {
 
 fn parse_deploy(values: &[OsString]) -> Result<Command, &'static str> {
     let mut output = None;
+    let mut replace = false;
     let mut retained = Vec::new();
     let mut index = 0;
     while index < values.len() {
@@ -843,6 +848,11 @@ fn parse_deploy(values: &[OsString]) -> Result<Command, &'static str> {
                     })
                     .ok_or("`--output` requires a directory")?,
             ));
+        } else if values[index] == "--replace" {
+            if replace {
+                return Err("duplicate option");
+            }
+            replace = true;
         } else {
             retained.push(values[index].clone());
         }
@@ -851,12 +861,17 @@ fn parse_deploy(values: &[OsString]) -> Result<Command, &'static str> {
     let options = ExistingOptions::parse(&retained)?;
     Ok(Command::Deploy {
         output,
+        replace,
         project: options.project,
         format: options.format,
     })
 }
 
-fn deploy_project(project_argument: Option<PathBuf>, output: Option<PathBuf>) -> i32 {
+fn deploy_project(
+    project_argument: Option<PathBuf>,
+    output: Option<PathBuf>,
+    replace: bool,
+) -> i32 {
     let Ok(root) = project_root(project_argument) else {
         return 2;
     };
@@ -888,7 +903,36 @@ fn deploy_project(project_argument: Option<PathBuf>, output: Option<PathBuf>) ->
             config.project.name, config.project.version
         )),
     };
-    if let Err(error) = deployment_target(&paths, &target) {
+    if replace {
+        match fs::symlink_metadata(&target) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if let Err(error) = deployment_target(&paths, &target, true) {
+                    eprintln!("error: {error}");
+                    return 6;
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "error: deployment output is not a replaceable Cott deployment: inspect {}: {error}",
+                    target.display()
+                );
+                return 6;
+            }
+            Ok(_) => {
+                let context = match python_replace_context(&paths, &config.project.name) {
+                    Ok(context) => context,
+                    Err(error) => {
+                        eprintln!("error: {error}");
+                        return 6;
+                    }
+                };
+                if let Err(error) = crate::deploy::require_replaceable(&context, &target) {
+                    eprintln!("error: {error}");
+                    return 6;
+                }
+            }
+        }
+    } else if let Err(error) = deployment_target(&paths, &target, false) {
         eprintln!("error: {error}");
         return 6;
     }
@@ -899,7 +943,14 @@ fn deploy_project(project_argument: Option<PathBuf>, output: Option<PathBuf>) ->
             return 4;
         }
     };
-    match publish_deployment(&paths, &target, &files, &snapshot) {
+    match publish_deployment(
+        &paths,
+        &target,
+        &files,
+        &snapshot,
+        replace,
+        &config.project.name,
+    ) {
         Ok(()) => {
             println!("{}", display_path(&paths.root, &target));
             0
@@ -1204,7 +1255,7 @@ fn deployment_requirements(paths: &ProjectPaths) -> Result<Vec<u8>, String> {
     result
 }
 
-fn deployment_target(paths: &ProjectPaths, target: &Path) -> Result<(), String> {
+fn deployment_target(paths: &ProjectPaths, target: &Path, replace: bool) -> Result<(), String> {
     if !target.is_absolute()
         || target
             .components()
@@ -1231,6 +1282,9 @@ fn deployment_target(paths: &ProjectPaths, target: &Path) -> Result<(), String> 
         return Err("deployment output overlaps project inputs or managed artifacts".to_owned());
     }
     for ancestor in target.ancestors() {
+        if replace && ancestor == target {
+            continue;
+        }
         match fs::symlink_metadata(ancestor) {
             Ok(metadata)
                 if ancestor == target
@@ -1260,11 +1314,13 @@ fn publish_deployment(
     target: &Path,
     files: &BTreeMap<PathBuf, Vec<u8>>,
     snapshot: &InputSnapshot,
+    replace: bool,
+    project_name: &str,
 ) -> Result<(), String> {
-    deployment_target(paths, target)?;
+    deployment_target(paths, target, replace)?;
     let parent = target.parent().ok_or("deployment output has no parent")?;
     fs::create_dir_all(parent).map_err(|error| format!("create deployment parent: {error}"))?;
-    deployment_target(paths, target)?;
+    deployment_target(paths, target, replace)?;
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
@@ -1301,11 +1357,33 @@ fn publish_deployment(
         fs::set_permissions(&temporary, fs::Permissions::from_mode(0o755))
             .map_err(|error| format!("set deployment directory permissions: {error}"))?;
         sync_tree(&temporary)?;
-        deployment_target(paths, target)?;
-        rename_noreplace(&temporary, target)?;
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| format!("sync deployment parent: {error}"))
+        deployment_target(paths, target, replace)?;
+        let existing = match fs::symlink_metadata(target) {
+            Ok(_) if replace => true,
+            Ok(_) => {
+                return Err(format!(
+                    "deployment output exists or has an unsafe parent: {}",
+                    target.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => {
+                return Err(format!(
+                    "inspect deployment output {}: {error}",
+                    target.display()
+                ));
+            }
+        };
+        if existing {
+            let context = python_replace_context(paths, project_name)?;
+            crate::deploy::require_replaceable(&context, target)?;
+            crate::deploy::publish_replace(&temporary, target)
+        } else {
+            rename_noreplace(&temporary, target)?;
+            File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|error| format!("sync deployment parent: {error}"))
+        }
     })();
     if temporary.exists() {
         fs::remove_dir_all(&temporary)
@@ -1753,6 +1831,8 @@ fn configured_rule_bytes(
 
 fn render_generation_prompt(
     plan: &PythonArtifactPlan,
+    ir: &crate::ir::CanonicalIr,
+    paths: &ProjectPaths,
     callable: &PythonCallable,
     rules: &[u8],
     references: &[ResolvedBinding],
@@ -1761,9 +1841,17 @@ fn render_generation_prompt(
     feedback: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     let context = intent::context(&plan.contract_surface(), &callable.cott_symbol, rules)?;
+    let canonical = plan
+        .modules
+        .iter()
+        .map(|module| (module.module.as_str(), &module.declarations))
+        .collect::<BTreeMap<_, _>>();
+    let module_sources = crate::prompt_declarations::module_sources(ir, &paths.source_dir)?;
     render_prompt(
         callable,
         &context,
+        &canonical,
+        &module_sources,
         references,
         external_types,
         existing,
@@ -2026,6 +2114,8 @@ fn prompt_project(project_argument: Option<PathBuf>, symbol: String, format: Out
     };
     let prompt = match render_generation_prompt(
         &plan,
+        &ir,
+        &paths,
         callable,
         &rules,
         &resolution.resolved,
@@ -3026,6 +3116,8 @@ fn generate_project(
                 let result = (|| {
                     let prompt = render_generation_prompt(
                         &plan,
+                        &ir,
+                        &paths,
                         callable,
                         &rules,
                         bindings,
@@ -3072,6 +3164,8 @@ fn generate_project(
                                 feedback.push_str(&validation_error);
                                 let retry_prompt = render_generation_prompt(
                                     &plan,
+                                    &ir,
+                                    &paths,
                                     callable,
                                     &rules,
                                     bindings,
@@ -4448,16 +4542,170 @@ fn diff_for_target(
     }
 }
 
-fn deploy_for_target(project: Option<PathBuf>, output: Option<PathBuf>) -> i32 {
+fn deploy_for_target(project: Option<PathBuf>, output: Option<PathBuf>, replace: bool) -> i32 {
     match selected_project_target(&project) {
-        Ok(TargetLanguage::Python) => deploy_project(project, output),
-        Ok(TargetLanguage::Kotlin) => {
-            finish_kotlin_path(crate::kotlin::pipeline::deploy(project, output))
-        }
-        Ok(TargetLanguage::Dart) => {
-            finish_dart_path(crate::dart::pipeline::deploy(project, output))
-        }
+        Ok(TargetLanguage::Python) => deploy_project(project, output, replace),
+        Ok(TargetLanguage::Kotlin) => finish_kotlin_path(deploy_language(
+            project,
+            output,
+            replace,
+            TargetLanguage::Kotlin,
+            crate::kotlin::pipeline::deploy,
+            |code, message| crate::kotlin::pipeline::Failure::new(code, message),
+        )),
+        Ok(TargetLanguage::Dart) => finish_dart_path(deploy_language(
+            project,
+            output,
+            replace,
+            TargetLanguage::Dart,
+            crate::dart::pipeline::deploy,
+            |code, message| crate::dart::pipeline::Failure::new(code, message),
+        )),
         Err(message) => target_selection_failure(OutputFormat::Human, message),
+    }
+}
+
+fn python_replace_context(
+    paths: &ProjectPaths,
+    project_name: &str,
+) -> Result<crate::deploy::ReplaceContext, String> {
+    Ok(crate::deploy::ReplaceContext {
+        root: paths.root.clone(),
+        source_dir: paths.source_dir.clone(),
+        language_source_dir: paths.python_source_dir.clone(),
+        artifact_root: artifact_root_for_paths(paths)?,
+        extra_protected: vec![
+            paths.stubs_dir.clone(),
+            paths.root.join(".cott"),
+            paths.root.join(".venv"),
+        ],
+        project_name: project_name.to_owned(),
+        language: TargetLanguage::Python,
+    })
+}
+
+fn resolve_deploy_output(
+    root: &Path,
+    name: &str,
+    version: &str,
+    output: Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    match output {
+        Some(path) if path.is_absolute() => Ok(path),
+        Some(path) => match std::env::current_dir() {
+            Ok(cwd) => Ok(cwd.join(path)),
+            Err(error) => Err(format!("determine deployment directory: {error}")),
+        },
+        None => Ok(root.join("dist").join(format!("{name}-{version}"))),
+    }
+}
+
+fn deploy_language<E>(
+    project: Option<PathBuf>,
+    output: Option<PathBuf>,
+    replace: bool,
+    language: TargetLanguage,
+    deploy: impl FnOnce(Option<PathBuf>, Option<PathBuf>) -> Result<PathBuf, E>,
+    error: impl Fn(i32, String) -> E,
+) -> Result<PathBuf, E> {
+    if !replace {
+        return deploy(project, output);
+    }
+    let context_and_target = language_replace_plan(project.clone(), output.clone(), language)
+        .map_err(|message| error(6, message))?;
+    match context_and_target {
+        LanguageReplacePlan::Create => deploy(project, output),
+        LanguageReplacePlan::Replace { target, staging } => {
+            match deploy(project, Some(staging.clone())) {
+                Ok(_) => crate::deploy::publish_replace(&staging, &target)
+                    .map(|()| target)
+                    .map_err(|message| {
+                        let _ = crate::deploy::remove_tree_if_present(&staging);
+                        error(6, message)
+                    }),
+                Err(failure) => {
+                    let _ = crate::deploy::remove_tree_if_present(&staging);
+                    Err(failure)
+                }
+            }
+        }
+    }
+}
+
+enum LanguageReplacePlan {
+    Create,
+    Replace { target: PathBuf, staging: PathBuf },
+}
+
+fn language_replace_plan(
+    project: Option<PathBuf>,
+    output: Option<PathBuf>,
+    language: TargetLanguage,
+) -> Result<LanguageReplacePlan, String> {
+    let root = project
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or_else(|| "failed to determine current directory".to_owned())?;
+    let (context, target) = match language {
+        TargetLanguage::Python => {
+            return Err("Python replace is handled by the Python deploy path".to_owned());
+        }
+        TargetLanguage::Kotlin => {
+            let (config, paths, _) =
+                load_kotlin_config_with_paths(&root).map_err(|error| error.to_string())?;
+            let target = resolve_deploy_output(
+                &paths.root,
+                &config.project.name,
+                &config.project.version,
+                output,
+            )?;
+            let context = crate::deploy::ReplaceContext {
+                extra_protected: vec![paths.root.join(".cott")],
+                root: paths.root,
+                source_dir: paths.source_dir,
+                language_source_dir: paths.kotlin_source_dir,
+                artifact_root: paths.artifact_root,
+                project_name: config.project.name,
+                language: TargetLanguage::Kotlin,
+            };
+            (context, target)
+        }
+        TargetLanguage::Dart => {
+            let (config, paths, _) =
+                load_dart_config_with_paths(&root).map_err(|error| error.to_string())?;
+            let target = resolve_deploy_output(
+                &paths.root,
+                &config.project.name,
+                &config.project.version,
+                output,
+            )?;
+            let context = crate::deploy::ReplaceContext {
+                extra_protected: vec![paths.root.join(".cott")],
+                root: paths.root,
+                source_dir: paths.source_dir,
+                language_source_dir: paths.dart_source_dir,
+                artifact_root: paths.artifact_root,
+                project_name: config.project.name,
+                language: TargetLanguage::Dart,
+            };
+            (context, target)
+        }
+    };
+    match fs::symlink_metadata(&target) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(LanguageReplacePlan::Create)
+        }
+        Err(error) => Err(format!(
+            "deployment output is not a replaceable Cott deployment: inspect {}: {error}",
+            target.display()
+        )),
+        Ok(_) => {
+            crate::deploy::require_replaceable(&context, &target)?;
+            Ok(LanguageReplacePlan::Replace {
+                staging: crate::deploy::sibling_temp(&target, "replace")?,
+                target,
+            })
+        }
     }
 }
 

@@ -1,9 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsStr;
+use std::ffi::{CString, OsStr};
+use std::fs::{self, File, OpenOptions};
+use std::io::Read;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::binding::{PythonFileRole, audit_facade_file};
-use crate::manifest::normalized_relative_path;
+use crate::dart::provenance::DartGenerationRecord;
+use crate::kotlin::provenance::KotlinGenerationRecord;
+use crate::manifest::{TargetLanguage, normalized_relative_path};
 use crate::project::{ProjectPaths, discover_python_sources};
 use crate::provenance::GenerationRecord;
 
@@ -165,4 +172,257 @@ fn excluded_directory(name: &OsStr) -> bool {
                 "__pycache__" | "dev" | "development" | "test" | "tests"
             )
     })
+}
+
+pub(crate) struct ReplaceContext {
+    pub root: PathBuf,
+    pub source_dir: PathBuf,
+    pub language_source_dir: PathBuf,
+    pub artifact_root: PathBuf,
+    pub extra_protected: Vec<PathBuf>,
+    pub project_name: String,
+    pub language: crate::manifest::TargetLanguage,
+}
+
+pub(crate) fn require_replaceable(context: &ReplaceContext, target: &Path) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(target) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return Err(format!(
+                "deployment output is not a replaceable Cott deployment: inspect {}: {error}",
+                target.display()
+            ));
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(
+            "deployment output is not a replaceable Cott deployment: path is a symlink".to_owned(),
+        );
+    }
+    if metadata.is_file() {
+        return Err(
+            "deployment output is not a replaceable Cott deployment: path is a file".to_owned(),
+        );
+    }
+    if !metadata.is_dir() {
+        return Err(
+            "deployment output is not a replaceable Cott deployment: not a regular directory"
+                .to_owned(),
+        );
+    }
+    if output_overlaps_project(context, target) {
+        return Err(
+            "deployment output is not a replaceable Cott deployment: overlaps project inputs or managed artifacts"
+                .to_owned(),
+        );
+    }
+
+    let generation = target.join("generation.json");
+    let bytes = match read_regular_file(&generation)? {
+        Some(bytes) => bytes,
+        None => {
+            return Err(
+                "deployment output is not a replaceable Cott deployment: missing generation.json"
+                    .to_owned(),
+            );
+        }
+    };
+    match generation_project_name(context.language, &bytes) {
+        Ok(None) => Ok(()),
+        Ok(Some(name)) if name == context.project_name => Ok(()),
+        Ok(Some(_)) => Err(
+            "deployment output is not a replaceable Cott deployment: generation.json names a different project"
+                .to_owned(),
+        ),
+        Err(_) => Err(
+            "deployment output is not a replaceable Cott deployment: generation.json is not this target's record"
+                .to_owned(),
+        ),
+    }
+}
+
+pub(crate) fn output_overlaps_project(context: &ReplaceContext, target: &Path) -> bool {
+    let identity = [
+        context.root.as_path(),
+        context.source_dir.as_path(),
+        context.language_source_dir.as_path(),
+        context.artifact_root.as_path(),
+    ];
+    if identity.iter().any(|path| path.starts_with(target)) {
+        return true;
+    }
+    let nested = [
+        context.source_dir.as_path(),
+        context.language_source_dir.as_path(),
+        context.artifact_root.as_path(),
+    ];
+    nested.iter().any(|path| target.starts_with(path))
+        || context
+            .extra_protected
+            .iter()
+            .any(|path| target.starts_with(path) || path.starts_with(target))
+}
+
+pub(crate) fn sibling_temp(target: &Path, kind: &str) -> Result<PathBuf, String> {
+    let parent = target.parent().ok_or("deployment output has no parent")?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    Ok(parent.join(format!(
+        ".cott-deploy-{kind}-{}-{nonce}",
+        std::process::id()
+    )))
+}
+
+pub(crate) fn remove_tree_if_present(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            fs::remove_dir_all(path)
+                .map_err(|error| format!("remove deployment temporary {}: {error}", path.display()))
+        }
+        Ok(_) => Err(format!(
+            "refusing to remove non-directory deployment path {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "inspect deployment temporary {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+pub(crate) fn publish_replace(staged: &Path, target: &Path) -> Result<(), String> {
+    let parent = target.parent().ok_or("deployment output has no parent")?;
+    let aside = sibling_temp(target, "aside")?;
+    if let Err(error) = rename_exclusive(target, &aside) {
+        let _ = remove_tree_if_present(staged);
+        return Err(error);
+    }
+    if let Err(error) = rename_exclusive(staged, target) {
+        let restored = rename_exclusive(&aside, target);
+        let _ = remove_tree_if_present(staged);
+        let _ = remove_tree_if_present(&aside);
+        return match restored {
+            Ok(()) => Err(error),
+            Err(restore) => Err(format!("{error}; restore original deployment: {restore}")),
+        };
+    }
+    if let Err(error) = fs::remove_dir_all(&aside) {
+        let rollback = sibling_temp(target, "rollback")?;
+        let _ = rename_exclusive(target, &rollback);
+        let _ = rename_exclusive(&aside, target);
+        let _ = remove_tree_if_present(&rollback);
+        return Err(format!("remove replaced deployment: {error}"));
+    }
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("sync deployment parent: {error}"))
+}
+
+fn generation_project_name(
+    language: crate::manifest::TargetLanguage,
+    bytes: &[u8],
+) -> Result<Option<String>, String> {
+    match language {
+        crate::manifest::TargetLanguage::Python => {
+            GenerationRecord::parse(bytes)?;
+            Ok(None)
+        }
+        crate::manifest::TargetLanguage::Kotlin => {
+            let record = crate::kotlin::provenance::KotlinGenerationRecord::parse(bytes)?;
+            Ok(Some(record.current.project_name))
+        }
+        crate::manifest::TargetLanguage::Dart => {
+            let record = crate::dart::provenance::DartGenerationRecord::parse(bytes)?;
+            Ok(Some(record.current.project_name))
+        }
+    }
+}
+
+fn read_regular_file(path: &Path) -> Result<Option<Vec<u8>>, String> {
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "deployment output is not a replaceable Cott deployment: unreadable generation.json: {error}"
+            ));
+        }
+    };
+    let before = file.metadata().map_err(|error| {
+        format!(
+            "deployment output is not a replaceable Cott deployment: inspect generation.json: {error}"
+        )
+    })?;
+    if !before.is_file() || before.nlink() != 1 {
+        return Err(
+            "deployment output is not a replaceable Cott deployment: generation.json is not a regular single-link file"
+                .to_owned(),
+        );
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|error| {
+        format!(
+            "deployment output is not a replaceable Cott deployment: read generation.json: {error}"
+        )
+    })?;
+    let after = file.metadata().map_err(|error| {
+        format!(
+            "deployment output is not a replaceable Cott deployment: re-inspect generation.json: {error}"
+        )
+    })?;
+    let leaf = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "deployment output is not a replaceable Cott deployment: re-inspect generation.json: {error}"
+        )
+    })?;
+    if !after.is_file()
+        || after.nlink() != 1
+        || !leaf.is_file()
+        || leaf.file_type().is_symlink()
+        || leaf.nlink() != 1
+        || before.dev() != after.dev()
+        || before.ino() != after.ino()
+        || before.len() != after.len()
+        || after.dev() != leaf.dev()
+        || after.ino() != leaf.ino()
+    {
+        return Err(
+            "deployment output is not a replaceable Cott deployment: generation.json changed while being read"
+                .to_owned(),
+        );
+    }
+    Ok(Some(bytes))
+}
+
+fn rename_exclusive(source: &Path, target: &Path) -> Result<(), String> {
+    let source = CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| "deployment path contains NUL".to_owned())?;
+    let target_c = CString::new(target.as_os_str().as_bytes())
+        .map_err(|_| "deployment path contains NUL".to_owned())?;
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            target_c.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            Err(format!("output already exists: {}", target.display()))
+        } else {
+            Err(format!("atomically publish {}: {error}", target.display()))
+        }
+    }
 }
