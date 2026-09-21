@@ -1,0 +1,772 @@
+{
+  "ai_maintenance": {
+    "agent_runs": [
+      {
+        "adapter": "omp",
+        "adapter_version": "18.1.11",
+        "argv_template": [
+          "-p",
+          "--cwd",
+          "<workspace>",
+          "--no-session",
+          "--no-rules",
+          "--no-skills",
+          "--no-extensions",
+          "--no-lsp",
+          "--no-pty",
+          "--no-title",
+          "--tools",
+          "read,grep,glob,edit,write",
+          "--approval-mode",
+          "yolo",
+          "--max-time",
+          "<seconds>s",
+          "--config",
+          "<overlay>",
+          "@<prompt-file>"
+        ],
+        "duration_ms": 51336,
+        "executable": "/home/arthur/.local/bin/omp",
+        "executable_hash": "sha256:2b2c785bbbafd3b43fb6096e4ae63a0342c4d8069de2f875a9b76ea9947c2383",
+        "implementation_hash": "sha256:e8a7ab87c45f0842b4575f513338093348f9b69db13e8e52431f3c3a7c06cfb7",
+        "prompt_hash": "sha256:7aa44614318d3cd37c09e8820848b9e52c7f68bcc968e18b4b917220fa793f53",
+        "status": {
+          "cancelled": false,
+          "exit_code": 0,
+          "signal": null,
+          "timed_out": false
+        },
+        "stderr": {
+          "bytes": 11,
+          "sha256": "sha256:dfef4c342f986ab93a9e0bb90f2d88c3bf25b2455853253d31ef95c1c55192a7",
+          "truncated": false
+        },
+        "stdout": {
+          "bytes": 409,
+          "sha256": "sha256:73631d4baec6aa0cb87d2fa40312d1dca1edb1ce7c6867aae2b8ce4d7ebce19e",
+          "truncated": false
+        },
+        "symbol": "curriculum.artifact_pipeline.plan_pipeline"
+      },
+      {
+        "adapter": "omp",
+        "adapter_version": "18.1.11",
+        "argv_template": [
+          "-p",
+          "--cwd",
+          "<workspace>",
+          "--no-session",
+          "--no-rules",
+          "--no-skills",
+          "--no-extensions",
+          "--no-lsp",
+          "--no-pty",
+          "--no-title",
+          "--tools",
+          "read,grep,glob,edit,write",
+          "--approval-mode",
+          "yolo",
+          "--max-time",
+          "<seconds>s",
+          "--config",
+          "<overlay>",
+          "@<prompt-file>"
+        ],
+        "duration_ms": 68763,
+        "executable": "/home/arthur/.local/bin/omp",
+        "executable_hash": "sha256:2b2c785bbbafd3b43fb6096e4ae63a0342c4d8069de2f875a9b76ea9947c2383",
+        "implementation_hash": "sha256:dbf58722b545b1e001b155b639a2848a413933847a0728bbe71cc69abd6a644f",
+        "prompt_hash": "sha256:6e2979377e9ae95063b73459dd3678c8afa35d9a3dc9ba6b38fbbecf87c10e2a",
+        "status": {
+          "cancelled": false,
+          "exit_code": 0,
+          "signal": null,
+          "timed_out": false
+        },
+        "stderr": {
+          "bytes": 11,
+          "sha256": "sha256:dfef4c342f986ab93a9e0bb90f2d88c3bf25b2455853253d31ef95c1c55192a7",
+          "truncated": false
+        },
+        "stdout": {
+          "bytes": 526,
+          "sha256": "sha256:3f4bf8bb473cdcd4f3760cff3ea4b35fce44d152124542eb4d62d2fb956e7edc",
+          "truncated": false
+        },
+        "symbol": "curriculum.artifact_pipeline.topologically_order_steps"
+      }
+    ],
+    "authored_edit": {
+      "authored_bytes_changed": 149,
+      "authored_lines_changed": 2
+    },
+    "emit": {
+      "argv": [
+        "/home/arthur/Code/cott/target/debug/cott",
+        "emit",
+        "python",
+        "--project",
+        "/tmp/cott-maintenance-25i7ryt8/ai-policy-change"
+      ],
+      "infrastructure": false,
+      "ok": true,
+      "returncode": 0,
+      "seconds": 5.510346214985475,
+      "stderr": "",
+      "stdout": "generated/python\n",
+      "timed_out": false
+    },
+    "generation_exit": 0,
+    "generation_wall_seconds": 93.06,
+    "implementation_diff": {
+      "python/_cott_impl/curriculum/artifact_pipeline/plan_pipeline.py": {
+        "authored_bytes_changed": 0,
+        "authored_lines_changed": 0
+      },
+      "python/_cott_impl/curriculum/artifact_pipeline/topologically_order_steps.py": {
+        "authored_bytes_changed": 340,
+        "authored_lines_changed": 8
+      }
+    },
+    "independent_acceptance": {
+      "plan_pipeline": 6237,
+      "topologically_order_steps": 6237
+    },
+    "independent_checker_hash": "sha256:05fcb3f58ea70bc4916a5fb9b72a50c71668c1c3c340d597b3693615d43d0f03",
+    "jobs": 2,
+    "model": "openai-codex/gpt-5.6-sol",
+    "old_implementation_new_acceptance": {
+      "argv": [
+        "/tmp/cott-maintenance-25i7ryt8/pipeline-baseline/.venv/bin/python",
+        "/tmp/cott-maintenance-25i7ryt8/check_length_order.py",
+        "--project",
+        "/tmp/cott-maintenance-25i7ryt8/pipeline-baseline"
+      ],
+      "infrastructure": false,
+      "ok": false,
+      "returncode": 1,
+      "seconds": 2.2679634370142594,
+      "stderr": "Traceback (most recent call last):\n  File \"/tmp/cott-maintenance-25i7ryt8/check_length_order.py\", line 332, in <module>\n    raise SystemExit(main())\n                     ~~~~^^\n  File \"/tmp/cott-maintenance-25i7ryt8/check_length_order.py\", line 323, in main\n    \"topologically_order_steps\": check(order_eval),\n                                 ~~~~~^^^^^^^^^^^^\n  File \"/tmp/cott-maintenance-25i7ryt8/check_length_order.py\", line 264, in check\n    raise AssertionError(\n        f\"{case['name']}: expected {case['expected']!r}, got {actual!r}\"\n    )\nAssertionError: length-enum2:a:,b:: expected {'ok': ['b', 'aaa']}, got {'ok': ['aaa', 'b']}\n",
+      "stdout": "",
+      "timed_out": false
+    },
+    "old_sources_preserved": true,
+    "pending_verify": {
+      "argv": [
+        "/home/arthur/Code/cott/target/debug/cott",
+        "verify",
+        "--project",
+        "/tmp/cott-maintenance-25i7ryt8/ai-policy-change"
+      ],
+      "infrastructure": false,
+      "ok": false,
+      "returncode": 4,
+      "seconds": 5.365647476050071,
+      "stderr": "error: unresolved implementations: curriculum.artifact_pipeline.plan_pipeline, curriculum.artifact_pipeline.topologically_order_steps\n",
+      "stdout": "",
+      "timed_out": false
+    },
+    "postverify_unresolved": [],
+    "preview_hash_matches": {
+      "curriculum.artifact_pipeline.plan_pipeline": true,
+      "curriculum.artifact_pipeline.topologically_order_steps": true
+    },
+    "preview_hashes": {
+      "curriculum.artifact_pipeline.plan_pipeline": "sha256:7aa44614318d3cd37c09e8820848b9e52c7f68bcc968e18b4b917220fa793f53",
+      "curriculum.artifact_pipeline.topologically_order_steps": "sha256:6e2979377e9ae95063b73459dd3678c8afa35d9a3dc9ba6b38fbbecf87c10e2a"
+    },
+    "requirement": "Ready steps are ordered by increasing name length, then lexicographically for ties.",
+    "sample_size": 1,
+    "thinking": "high",
+    "unresolved": [
+      {
+        "callable_kind": "sync",
+        "cott_symbol": "curriculum.artifact_pipeline.plan_pipeline",
+        "kind": "function",
+        "span": {
+          "end_byte": 1578,
+          "end_column": 1,
+          "end_line": 52,
+          "start_byte": 993,
+          "start_column": 1,
+          "start_line": 37
+        }
+      },
+      {
+        "callable_kind": "sync",
+        "cott_symbol": "curriculum.artifact_pipeline.topologically_order_steps",
+        "kind": "function",
+        "span": {
+          "end_byte": 993,
+          "end_column": 1,
+          "end_line": 37,
+          "start_byte": 302,
+          "start_column": 1,
+          "start_line": 20
+        }
+      }
+    ],
+    "verify_exit": 0
+  },
+  "archive": {
+    "contents": [
+      "results.json",
+      "check_length_order.py",
+      "original_check_semantics.py",
+      "ai-policy-change/ (source, selected implementations, generated output, manifest, rules, lockfile; no virtualenv or agent credentials)",
+      "original-implementations/"
+    ],
+    "environment_note": "The archive excludes .venv, .cott, __pycache__, and provider state. Use the repository-pinned Python environment to execute the checker against the archived project.",
+    "path": "benchmarks/maintenance-results.zip"
+  },
+  "baseline_acceptance": {
+    "argv": [
+      "/tmp/cott-maintenance-25i7ryt8/pipeline-baseline/.venv/bin/python",
+      "/home/arthur/Code/cott/examples/complex/artifact-pipeline/check_semantics.py",
+      "--project",
+      "/tmp/cott-maintenance-25i7ryt8/pipeline-baseline"
+    ],
+    "infrastructure": false,
+    "ok": true,
+    "returncode": 0,
+    "seconds": 6.932032617973164,
+    "stderr": "",
+    "stdout": "{\"topologically_order_steps\": 3130, \"plan_pipeline\": 3130}\n",
+    "timed_out": false
+  },
+  "compiler": {
+    "content_hash": "sha256:05de713040cd71d2f64a370f40f2b66f1cf0d06138d78c72f2a648f956a6edf4",
+    "path": "/home/arthur/Code/cott/target/debug/cott"
+  },
+  "limits": [
+    "Single-project AI maintenance case; no longitudinal or human productivity measurement.",
+    "No direct-Python AI control; no comparative productivity claim.",
+    "Existing semantic checker reused; original example sources and generated artifacts are not edited."
+  ],
+  "mutants": {
+    "checked_add_return0": {
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/mutant-checked_add_return0"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 5.567866005003452,
+        "stderr": "",
+        "stdout": "generated/python\n",
+        "timed_out": false
+      },
+      "independent": {
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 0.36658348806668073,
+        "stderr": "",
+        "stdout": "0\n"
+      },
+      "independent_caught": true,
+      "mutation": {
+        "category": "constant_return",
+        "id": "checked_add_return0",
+        "new": "    return 0",
+        "old": "    return left + right",
+        "path": "python/cott_bindings/curriculum/checked_add/checked_add.py",
+        "project": "checked-add"
+      },
+      "verify": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "verify",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/mutant-checked_add_return0"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 16.408144823974,
+        "stderr": "",
+        "stdout": "verified generated/python\n",
+        "timed_out": false
+      }
+    },
+    "toolong_ignored_filter": {
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/mutant-toolong_ignored_filter"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 5.802795625990257,
+        "stderr": "",
+        "stdout": "generated/python\n",
+        "timed_out": false
+      },
+      "independent": {
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 0.44280435401014984,
+        "stderr": "",
+        "stdout": "2\n"
+      },
+      "independent_caught": true,
+      "mutation": {
+        "category": "ignored_filter",
+        "id": "toolong_ignored_filter",
+        "old": "from cott_runtime import CottList, Option, Some\nfrom real.toolong_types import LogEntry\n\n\ndef filter_entries(entries: CottList[LogEntry], contains: Option[str]) -> CottList[LogEntry]:\n    if isinstance(contains, Some):\n        needle = contains.value.casefold()\n        return CottList(values=tuple(entry for entry in entries if needle in entry.text.casefold()))\n    else:\n        return entries\n",
+        "path": "python/cott_bindings/measurement.py",
+        "project": "toolong",
+        "source": "from cott_runtime import CottList, Option\nfrom real.toolong_types import LogEntry\n\n\ndef filter_entries(entries: CottList[LogEntry], contains: Option[str]) -> CottList[LogEntry]:\n    return entries\n"
+      },
+      "verify": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "verify",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/mutant-toolong_ignored_filter"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 16.86625517194625,
+        "stderr": "",
+        "stdout": "verified generated/python\n",
+        "timed_out": false
+      }
+    },
+    "topo_reversed_order": {
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/mutant-topo_reversed_order"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 5.6267852779710665,
+        "stderr": "",
+        "stdout": "generated/python\n",
+        "timed_out": false
+      },
+      "independent": {
+        "infrastructure": false,
+        "ok": false,
+        "returncode": 1,
+        "seconds": 0.4010465870378539,
+        "stderr": "Traceback (most recent call last):\n  File \"/home/arthur/Code/cott/examples/complex/artifact-pipeline/check_semantics.py\", line 326, in <module>\n    raise SystemExit(main())\n                     ~~~~^^\n  File \"/home/arthur/Code/cott/examples/complex/artifact-pipeline/check_semantics.py\", line 317, in main\n    \"topologically_order_steps\": check(order_eval),\n                                 ~~~~~^^^^^^^^^^^^\n  File \"/home/arthur/Code/cott/examples/complex/artifact-pipeline/check_semantics.py\", line 258, in check\n    raise AssertionError(\n        f\"{case['name']}: expected {case['expected']!r}, got {actual!r}\"\n    )\nAssertionError: enum2:a:,b:: expected {'ok': ['a', 'b']}, got {'ok': ['b', 'a']}\n",
+        "stdout": ""
+      },
+      "independent_caught": true,
+      "mutation": {
+        "category": "reversed_ordering",
+        "id": "topo_reversed_order",
+        "new": "    return Ok(value=CottList(values=list(reversed(ordered_steps))))",
+        "old": "    return Ok(value=CottList(values=ordered_steps))",
+        "path": "python/cott_bindings/measurement.py",
+        "project": "artifact-pipeline"
+      },
+      "verify": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "verify",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/mutant-topo_reversed_order"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 16.026388997910544,
+        "stderr": "",
+        "stdout": "verified generated/python\n",
+        "timed_out": false
+      }
+    },
+    "topo_unconditional_cycle": {
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/mutant-topo_unconditional_cycle"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 5.572219609981403,
+        "stderr": "",
+        "stdout": "generated/python\n",
+        "timed_out": false
+      },
+      "independent": {
+        "infrastructure": false,
+        "ok": false,
+        "returncode": 1,
+        "seconds": 0.4008534839376807,
+        "stderr": "Traceback (most recent call last):\n  File \"/home/arthur/Code/cott/examples/complex/artifact-pipeline/check_semantics.py\", line 326, in <module>\n    raise SystemExit(main())\n                     ~~~~^^\n  File \"/home/arthur/Code/cott/examples/complex/artifact-pipeline/check_semantics.py\", line 317, in main\n    \"topologically_order_steps\": check(order_eval),\n                                 ~~~~~^^^^^^^^^^^^\n  File \"/home/arthur/Code/cott/examples/complex/artifact-pipeline/check_semantics.py\", line 258, in check\n    raise AssertionError(\n        f\"{case['name']}: expected {case['expected']!r}, got {actual!r}\"\n    )\nAssertionError: enum0:: expected {'ok': []}, got {'error': 'Cycle'}\n",
+        "stdout": ""
+      },
+      "independent_caught": true,
+      "mutation": {
+        "category": "unconditional_error",
+        "id": "topo_unconditional_cycle",
+        "old": "from heapq import heapify, heappop, heappush\n\nfrom cott_runtime import CottList, Err, Ok, Result\nfrom curriculum.artifact_pipeline_types import ArtifactPipelineError, ArtifactPipelineError_BlankStepName, ArtifactPipelineError_Cycle, ArtifactPipelineError_DuplicateStep, ArtifactPipelineError_SelfDependency, ArtifactPipelineError_UnknownDependency, BuildStep\n\n\ndef topologically_order_steps(steps: CottList[BuildStep]) -> Result[CottList[str], ArtifactPipelineError]:\n    for step in steps:\n        if step.name.strip() == \"\":\n            return Err(error=ArtifactPipelineError_BlankStepName())\n\n    names: set[str] = set()\n    for step in steps:\n        if step.name in names:\n            return Err(error=ArtifactPipelineError_DuplicateStep())\n        names.add(step.name)\n\n    for step in steps:\n        for dependency in step.needs:\n            if dependency not in names:\n                return Err(error=ArtifactPipelineError_UnknownDependency())\n\n    for step in steps:\n        if step.name in step.needs:\n            return Err(error=ArtifactPipelineError_SelfDependency())\n\n    indegree: dict[str, int] = {}\n    dependents: dict[str, list[str]] = {}\n    for step in steps:\n        indegree[step.name] = len(step.needs)\n        dependents[step.name] = []\n    for step in steps:\n        for dependency in step.needs:\n            dependents[dependency].append(step.name)\n\n    ready: list[str] = [name for name in names if indegree[name] == 0]\n    heapify(ready)\n    ordered_steps: list[str] = []\n    while ready:\n        name = heappop(ready)\n        ordered_steps.append(name)\n        for dependent in dependents[name]:\n            indegree[dependent] -= 1\n            if indegree[dependent] == 0:\n                heappush(ready, dependent)\n\n    if len(ordered_steps) != len(steps):\n        return Err(error=ArtifactPipelineError_Cycle())\n    return Ok(value=CottList(values=ordered_steps))\n",
+        "path": "python/cott_bindings/measurement.py",
+        "project": "artifact-pipeline",
+        "source": "from cott_runtime import CottList, Err, Result\nfrom curriculum.artifact_pipeline_types import ArtifactPipelineError, ArtifactPipelineError_Cycle, BuildStep\n\n\ndef topologically_order_steps(steps: CottList[BuildStep]) -> Result[CottList[str], ArtifactPipelineError]:\n    return Err(error=ArtifactPipelineError_Cycle())\n"
+      },
+      "verify": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "verify",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/mutant-topo_unconditional_cycle"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 15.660647753975354,
+        "stderr": "",
+        "stdout": "verified generated/python\n",
+        "timed_out": false
+      }
+    }
+  },
+  "mutation_controls": {
+    "artifact-pipeline": {
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/mutation-control-artifact-pipeline"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 6.124708339921199,
+        "stderr": "",
+        "stdout": "generated/python\n",
+        "timed_out": false
+      },
+      "verify": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "verify",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/mutation-control-artifact-pipeline"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 17.203849393990822,
+        "stderr": "",
+        "stdout": "verified generated/python\n",
+        "timed_out": false
+      }
+    },
+    "checked-add": {
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/mutation-control-checked-add"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 5.3640105680096895,
+        "stderr": "",
+        "stdout": "generated/python\n",
+        "timed_out": false
+      },
+      "verify": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "verify",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/mutation-control-checked-add"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 15.743467865977436,
+        "stderr": "",
+        "stdout": "verified generated/python\n",
+        "timed_out": false
+      }
+    },
+    "toolong": {
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/mutation-control-toolong"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 5.5760205739643425,
+        "stderr": "",
+        "stdout": "generated/python\n",
+        "timed_out": false
+      },
+      "verify": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "verify",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/mutation-control-toolong"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 17.340747608919628,
+        "stderr": "",
+        "stdout": "verified generated/python\n",
+        "timed_out": false
+      }
+    }
+  },
+  "original_project_trees_unchanged": true,
+  "protocol": {
+    "ai_maintenance": "Change only the listed Cott doc sentence. Emit, reject verification while pending, preview both prompts, generate with omp -j 2, verify, and run the independent acceptance checker.",
+    "baseline": "Copy each original project, preserving its virtualenv tool identity; emit python before any binding retarget to stamp current intent metadata.",
+    "change_scope": "Independent copies of the bootstrapped baseline; apply one listed edit; emit python; record unresolved callables and generation record preservation.",
+    "oracle": "Bounded permutation oracle minimizes the sequence of (name length, name). Original 3130 cases plus 3107 renamed exhaustive graph/input-order cases; explicit large-chain expectation retained.",
+    "regression_mutations": "For each original benchmark mutant, copy a successful retargeted control, edit the selected manifest binding, emit, verify, then observe the public facade independently."
+  },
+  "scenarios": {
+    "direct_implementation_edit": {
+      "callable_count": 2,
+      "edit": {
+        "new": "\n# Maintenance hotfix annotation.\n",
+        "old": "\n",
+        "path": "python/_cott_impl/curriculum/artifact_pipeline/topologically_order_steps.py"
+      },
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/direct_implementation_edit"
+        ],
+        "infrastructure": false,
+        "ok": false,
+        "returncode": 4,
+        "seconds": 0.2726726069813594,
+        "stderr": "error: python/_cott_impl/curriculum/artifact_pipeline/topologically_order_steps.py: durable implementation `curriculum.artifact_pipeline.topologically_order_steps` is neither manifest-bound nor backed by matching agent provenance\n",
+        "stdout": "",
+        "timed_out": false
+      },
+      "record_preserved": true,
+      "unresolved": []
+    },
+    "equivalent_doc_rewording": {
+      "callable_count": 5,
+      "edit": {
+        "new": "Without a filter, retain every entry; with a filter, retain case-insensitive substring matches.",
+        "old": "Keep all entries without a filter; otherwise keep case-insensitive substring matches.",
+        "path": "src/real/toolong.cott"
+      },
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/equivalent_doc_rewording"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 5.538503185962327,
+        "stderr": "",
+        "stdout": "generated/python\n",
+        "timed_out": false
+      },
+      "record_preserved": false,
+      "unresolved": [
+        {
+          "callable_kind": "sync",
+          "cott_symbol": "real.toolong.filter_entries",
+          "kind": "function",
+          "span": {
+            "end_byte": 1040,
+            "end_column": 1,
+            "end_line": 45,
+            "start_byte": 818,
+            "start_column": 1,
+            "start_line": 38
+          }
+        }
+      ]
+    },
+    "local_filter_policy": {
+      "callable_count": 5,
+      "edit": {
+        "new": "Keep all entries without a filter; otherwise keep case-sensitive substring matches.",
+        "old": "Keep all entries without a filter; otherwise keep case-insensitive substring matches.",
+        "path": "src/real/toolong.cott"
+      },
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/local_filter_policy"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 6.03104094194714,
+        "stderr": "",
+        "stdout": "generated/python\n",
+        "timed_out": false
+      },
+      "record_preserved": false,
+      "unresolved": [
+        {
+          "callable_kind": "sync",
+          "cott_symbol": "real.toolong.filter_entries",
+          "kind": "function",
+          "span": {
+            "end_byte": 1028,
+            "end_column": 1,
+            "end_line": 45,
+            "start_byte": 818,
+            "start_column": 1,
+            "start_line": 38
+          }
+        }
+      ]
+    },
+    "shared_type_change": {
+      "callable_count": 5,
+      "edit": {
+        "new": "    line: U32",
+        "old": "    line: U64",
+        "path": "src/real/toolong.cott"
+      },
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/shared_type_change"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 6.773065406945534,
+        "stderr": "",
+        "stdout": "generated/python\n",
+        "timed_out": false
+      },
+      "record_preserved": false,
+      "unresolved": [
+        {
+          "callable_kind": "sync",
+          "cott_symbol": "real.toolong.filter_entries",
+          "kind": "function",
+          "span": {
+            "end_byte": 1030,
+            "end_column": 1,
+            "end_line": 45,
+            "start_byte": 818,
+            "start_column": 1,
+            "start_line": 38
+          }
+        },
+        {
+          "callable_kind": "sync",
+          "cott_symbol": "real.toolong.load_entries",
+          "kind": "function",
+          "span": {
+            "end_byte": 818,
+            "end_column": 1,
+            "end_line": 38,
+            "start_byte": 534,
+            "start_column": 1,
+            "start_line": 27
+          }
+        },
+        {
+          "callable_kind": "sync",
+          "cott_symbol": "real.toolong.render_entries",
+          "kind": "function",
+          "span": {
+            "end_byte": 1187,
+            "end_column": 1,
+            "end_line": 52,
+            "start_byte": 1030,
+            "start_column": 1,
+            "start_line": 45
+          }
+        }
+      ]
+    },
+    "whitespace_only": {
+      "callable_count": 5,
+      "edit": {
+        "new": "module real.toolong\n\n",
+        "old": "module real.toolong\n",
+        "path": "src/real/toolong.cott"
+      },
+      "emit": {
+        "argv": [
+          "/home/arthur/Code/cott/target/debug/cott",
+          "emit",
+          "python",
+          "--project",
+          "/tmp/cott-maintenance-25i7ryt8/whitespace_only"
+        ],
+        "infrastructure": false,
+        "ok": true,
+        "returncode": 0,
+        "seconds": 5.551063154009171,
+        "stderr": "",
+        "stdout": "generated/python\n",
+        "timed_out": false
+      },
+      "record_preserved": false,
+      "unresolved": []
+    }
+  },
+  "scripts": {
+    "ai_generation": {
+      "content_hash": "sha256:a2b18bfb644e87efee9ab8db60b5b52a6a4808f4d2d11320d732a4d4e0633eef",
+      "path": "benchmarks/ai_generation.py"
+    },
+    "contract_value": {
+      "content_hash": "sha256:e63e174a58b343f673c056fde43704c54cec4df4048911481e87e6a7ed97273a",
+      "path": "benchmarks/contract_value.py"
+    },
+    "original_acceptance": {
+      "content_hash": "sha256:8894eb68a8763f4e24edf69331b2a10d9ebaaa51fb2e19d43afb343673b8a3d7",
+      "path": "/home/arthur/Code/cott/examples/complex/artifact-pipeline/check_semantics.py"
+    }
+  },
+  "source_revision": "b78cfb9"
+}
