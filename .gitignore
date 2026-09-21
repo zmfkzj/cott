@@ -1,3 +1,5 @@
+.codegraph
+.omp
 target/
 __pycache__/
 .cott/
