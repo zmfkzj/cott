@@ -62,7 +62,26 @@ pub(crate) struct Project {
     pub package_metadata: PackageMetadata,
 }
 
-pub(crate) fn load(project: Option<PathBuf>, inspection: bool) -> Result<Project, Failure> {
+/// Everything a Cott source command needs before any Dart implementation is
+/// resolved. Formatting rewrites contract sources only, so it must not depend
+/// on binding selection or agent provenance.
+pub(crate) struct SourceProject {
+    pub session: ProjectSession,
+    pub config: DartProjectConfig,
+    pub paths: DartPaths,
+    pub plan: DartPlan,
+    pub generator_rules: Option<String>,
+    pub baseline: Option<DartGenerationRecord>,
+    pub generation_bytes: Option<Vec<u8>>,
+    pub generation_snapshot: InputSnapshot,
+    pub inputs: BTreeMap<String, String>,
+    pub package_metadata: PackageMetadata,
+}
+
+pub(crate) fn load_sources(
+    project: Option<PathBuf>,
+    inspection: bool,
+) -> Result<SourceProject, Failure> {
     let root = project_root(project)?;
     let session = if inspection {
         ProjectSession::acquire_for_inspection(&root)
@@ -167,6 +186,34 @@ pub(crate) fn load(project: Option<PathBuf>, inspection: bool) -> Result<Project
             "Dart source",
         )?;
     }
+
+    Ok(SourceProject {
+        session,
+        config,
+        paths,
+        plan,
+        generator_rules,
+        baseline,
+        generation_bytes: baseline_bytes,
+        generation_snapshot,
+        inputs,
+        package_metadata,
+    })
+}
+
+pub(crate) fn load(project: Option<PathBuf>, inspection: bool) -> Result<Project, Failure> {
+    let SourceProject {
+        session,
+        config,
+        paths,
+        plan,
+        generator_rules,
+        baseline,
+        generation_bytes: baseline_bytes,
+        generation_snapshot,
+        mut inputs,
+        package_metadata,
+    } = load_sources(project, inspection)?;
 
     let bindings = resolve(
         &config,
@@ -548,8 +595,24 @@ pub(crate) fn check(project: Option<PathBuf>, source: Option<PathBuf>) -> Result
     Ok(())
 }
 
+fn source_snapshot(loaded: &SourceProject) -> Result<InputSnapshot, Failure> {
+    let expected = loaded
+        .inputs
+        .iter()
+        .map(|(path, hash)| (PathBuf::from(path), hash.clone()))
+        .collect::<Vec<_>>();
+    let mut snapshot = InputSnapshot::capture_expected(
+        &loaded.paths.root,
+        expected,
+        std::iter::empty::<PathBuf>(),
+    )
+    .map_err(|error| Failure::new(6, error.to_string()))?;
+    snapshot.merge_missing(loaded.generation_snapshot.clone());
+    Ok(snapshot)
+}
+
 pub(crate) fn format(project: Option<PathBuf>, check: bool) -> Result<(), Failure> {
-    let loaded = load(project, false)?;
+    let loaded = load_sources(project, false)?;
     let sources = discover_dart_contract_sources(&loaded.paths)
         .map_err(|error| Failure::new(2, error.to_string()))?;
     for source in &sources {
@@ -618,7 +681,7 @@ pub(crate) fn format(project: Option<PathBuf>, check: bool) -> Result<(), Failur
         return Ok(());
     }
 
-    let mut snapshot = loaded.input_snapshot.clone();
+    let mut snapshot = source_snapshot(&loaded)?;
     let mut changes = ChangeSet::default();
     let mut replacement_hashes = BTreeMap::new();
     for (path, bytes) in writes {

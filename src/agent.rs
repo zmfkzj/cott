@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use crate::binding::ResolvedBinding;
 use crate::diagnostics::{Diagnostic, Span, code};
 use crate::hash::sha256_hex;
+use crate::prompt_declarations;
 use crate::python::artifact_plan::{PythonCallable, PythonCallableKind};
 use crate::sandbox::{BindMounts, NetworkAccess, ResourceLimits, SandboxSpec, run};
 use crate::version::{is_at_least, parse_version};
@@ -467,6 +468,8 @@ const fn ascii_word(byte: u8) -> bool {
 pub fn render_prompt(
     callable: &PythonCallable,
     context: &serde_json::Value,
+    canonical: &BTreeMap<&str, &Vec<serde_json::Value>>,
+    module_sources: &BTreeMap<String, String>,
     references: &[ResolvedBinding],
     external_types: &BTreeMap<String, String>,
     existing: Option<&[u8]>,
@@ -523,10 +526,8 @@ pub fn render_prompt(
     ));
     append_intent_docs(declarations, symbol, &mut prompt);
     prompt.push_str("\nFORMAL DECLARATIONS\n");
-    prompt.push_str(
-        &serde_json::to_string_pretty(&strip_docs(declarations))
-            .map_err(|error| error.to_string())?,
-    );
+    let formal = prompt_declarations::scoped_declarations(canonical, module_sources, declarations)?;
+    prompt.push_str(&serde_json::to_string_pretty(&formal).map_err(|error| error.to_string())?);
     prompt.push('\n');
     prompt.push_str("\nPROJECT RULES\n");
     prompt.push_str(project_rules);
@@ -897,22 +898,6 @@ fn type_expr_kind(kind: &str) -> bool {
             | "factory"
             | "opaque"
     )
-}
-
-fn strip_docs(value: &serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Array(values) => {
-            serde_json::Value::Array(values.iter().map(strip_docs).collect())
-        }
-        serde_json::Value::Object(object) => serde_json::Value::Object(
-            object
-                .iter()
-                .filter(|(key, _)| *key != "doc")
-                .map(|(key, child)| (key.clone(), strip_docs(child)))
-                .collect(),
-        ),
-        other => other.clone(),
-    }
 }
 
 fn declaration_doc(value: &serde_json::Value) -> Option<&str> {

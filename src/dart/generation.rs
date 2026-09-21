@@ -136,6 +136,7 @@ pub(crate) fn generate(
         let initial = match prepare_prompt(
             &project.config,
             &project.plan,
+            &project.paths.source_dir,
             callable,
             project.generator_rules.as_deref(),
             &project.package_metadata,
@@ -354,6 +355,7 @@ fn generate_candidate(
             prepare_prompt(
                 &project.config,
                 &project.plan,
+                &project.paths.source_dir,
                 &item.callable,
                 project.generator_rules.as_deref(),
                 &project.package_metadata,

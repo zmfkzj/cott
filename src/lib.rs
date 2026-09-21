@@ -20,6 +20,7 @@ pub mod syntax;
 
 pub mod parser;
 pub mod project;
+pub mod prompt_declarations;
 pub mod proof;
 pub mod provenance;
 pub mod python;

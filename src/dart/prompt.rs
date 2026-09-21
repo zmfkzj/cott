@@ -11,6 +11,7 @@ use crate::diagnostics::{Diagnostic, DiagnosticReport, SourceMap, Span, code};
 use crate::hash::sha256_hex;
 use crate::intent;
 use crate::manifest::DartProjectConfig;
+use crate::prompt_declarations;
 
 use super::binding::{candidate_binding, requires_binding};
 use super::dependencies::{self, PackageMetadata};
@@ -32,6 +33,7 @@ pub(crate) struct PreparedPrompt {
 pub(crate) fn prepare(
     config: &DartProjectConfig,
     plan: &DartPlan,
+    source_dir: &Path,
     callable: &DartCallable,
     generator_rules: Option<&str>,
     package_metadata: &PackageMetadata,
@@ -45,11 +47,13 @@ pub(crate) fn prepare(
         generator_rules.unwrap_or_default().as_bytes(),
     )?;
     let intent_hash = intent::fingerprint_context(&context)?;
+    let module_sources = prompt_declarations::module_sources(&plan.ir, source_dir)?;
     let bytes = render_generation_prompt(
         config,
         plan,
         callable,
         &context,
+        &module_sources,
         package_metadata,
         references,
         existing,
@@ -70,6 +74,7 @@ pub(crate) fn render_generation_prompt(
     plan: &DartPlan,
     callable: &DartCallable,
     context: &Value,
+    module_sources: &BTreeMap<String, String>,
     package_metadata: &PackageMetadata,
     references: &[DartBinding],
     existing: Option<&[u8]>,
@@ -104,8 +109,15 @@ pub(crate) fn render_generation_prompt(
     if current_intent.is_empty() {
         current_intent.push_str("(no documentation selected)\n");
     }
-    let formal_declarations = serde_json::to_string_pretty(&strip_docs(declarations))
-        .map_err(|error| format!("serialize formal Dart declarations: {error}"))?;
+    let canonical = plan
+        .modules
+        .iter()
+        .map(|module| (module.name.as_str(), &module.declarations))
+        .collect::<BTreeMap<_, _>>();
+    let formal_declarations = serde_json::to_string_pretty(
+        &prompt_declarations::scoped_declarations(&canonical, module_sources, declarations)?,
+    )
+    .map_err(|error| format!("serialize formal Dart declarations: {error}"))?;
 
     let mut identities = BTreeSet::new();
     collect_identities(declarations, &mut identities);
@@ -168,6 +180,7 @@ The compiler moves audited authored imports into the private wrapper library and
 Add an import only when the implementation body needs a declared external package or safe Dart SDK library. Such imports must precede all declarations and preserve their exact URI/alias; relative, `file:`, network, deferred, conditional, hidden, and private generated-library imports are forbidden. The compiler alone inserts the exact `part of 'package:{project_name}/src/wrappers/...';` directive into the managed copy.\n\
 \n# Dart ABI and construction rules\n\
 Use only the types and aliases shown in the signature and compiler imports. Cott I8/I16/I32/U8/U16/U32 values are Dart `int` with exact checked bounds. I64/U64 and mathematical integer contract operations use `BigInt`; never narrow them to `int`, wrap around, or use floating-point arithmetic. F32 uses the runtime's Float32List rounding and all floats reject non-finite values. Preserve Unicode scalar validity and immutable snapshots for bytes, arrays, buffers, lists, sets, maps, options, and results. Use the compiler-provided `cott_runtime` and nominal type APIs; do not define replacements, cast through `Object?`/`dynamic`, use reflection, or reach compiler-only observation/control APIs. Async functions return the exact `Future<T>` shown. Generators and async generators use the explicit Cott lifecycle APIs, not a lossy `Iterable`/`Stream` substitute.\n\
+A Cott enum is emitted as a sealed base class whose variants are separate concrete classes named `<Enum><Variant>`: construct and match `<types alias>.EnumVariant(...)` with an ordinary invocation, never `<types alias>.Enum.Variant`, a static member on the base class, or a Dart `enum`. A struct constructor takes its declared fields as named parameters spelled exactly as the declarations spell them, including snake_case; a newtype constructor takes `value:`; a payload-variant constructor takes `field0:`, `field1:`, ... in declared order while the constructed variant exposes the declared field names as properties. `cott_runtime.CottOption<T>` is exactly `cott_runtime.Some<T>(value)` or `cott_runtime.Nothing<T>()`, `cott_runtime.CottResult<T, E>` is exactly `cott_runtime.Ok<T, E>(value)` or `cott_runtime.Err<T, E>(error)`, and the only unit value is `cott_runtime.CottUnit.instance`. Those sealed bases expose no `isSome`, `unwrapOr`, `valueOrNull`, `orElse`, or base value getter, so read them with an exhaustive `switch` or class pattern such as `cott_runtime.Some<T>(value: final value)`. Immutable containers are built from their exact constructors: `cott_runtime.CottList<T>(values)`, `cott_runtime.CottSet<T>(values)`, `cott_runtime.CottBytes(bytes)`, `cott_runtime.CottBuffer(bytes, dimension)`, `cott_runtime.CottArray(values, dimension)`, and `cott_runtime.FrozenMap<K, V>(map)` or `cott_runtime.FrozenMap<K, V>.entries(entries)`.\n\
 Every generic type witness shown is semantically required: use and forward the supplied `cott_runtime.CottType<T>` value for generic validation and nominal construction. Obtain a generic nominal descriptor only through its emitted `TypeName.cottType<T, ...>(_cott_type_T, ...constWitnesses)` API, and let `cott_runtime.checkedNominal` rebuild the typed view; never cast or reuse an original generic carrier. Never infer a witness from `runtimeType`, synthesize a substitute, or discard stored witnesses when constructing a generic nominal value or `CottGenericValue`.\n\
 When the exact signature includes `cott_runtime.CottStateMutation _cott_mutation` and `cott_runtime.CottGuardLease _cott_lease`, perform declared state reads/writes only through that supplied mutation capability and forward the lease only to nested calls that require it. Never construct either capability, access `compilerLease`, or retain, leak, or broaden its authority.\n\
 Explicit canonical const values in the declarations are value witnesses and must be honored exactly. External projections and frozen package metadata are context only; import only dependencies declared below.\n\
@@ -226,6 +239,7 @@ pub(crate) fn prompt(project: Option<PathBuf>, symbol: String, format: OutputFor
     let prepared = match prepare(
         &project.config,
         &project.plan,
+        &project.paths.source_dir,
         &callable,
         project.generator_rules.as_deref(),
         &project.package_metadata,
@@ -454,20 +468,6 @@ fn collect_intent_docs(value: &Value, output: &mut String) {
             }
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-    }
-}
-
-fn strip_docs(value: &Value) -> Value {
-    match value {
-        Value::Array(values) => Value::Array(values.iter().map(strip_docs).collect()),
-        Value::Object(values) => Value::Object(
-            values
-                .iter()
-                .filter(|(key, _)| *key != "doc")
-                .map(|(key, value)| (key.clone(), strip_docs(value)))
-                .collect(),
-        ),
-        value => value.clone(),
     }
 }
 

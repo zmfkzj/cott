@@ -10,6 +10,7 @@ use crate::diagnostics::{Diagnostic, DiagnosticReport, SourceMap, Span, code};
 use crate::hash::sha256_hex;
 use crate::intent;
 use crate::manifest::KotlinProjectConfig;
+use crate::prompt_declarations;
 
 use super::binding::{agent_source_origin, requires_binding};
 use super::emit::implementation_signature;
@@ -25,9 +26,11 @@ pub(crate) struct PreparedPrompt {
     pub bytes: Vec<u8>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare(
     config: &KotlinProjectConfig,
     plan: &KotlinPlan,
+    source_dir: &Path,
     callable: &KotlinCallable,
     generator_rules: Option<&str>,
     references: &[KotlinBinding],
@@ -40,8 +43,16 @@ pub(crate) fn prepare(
         generator_rules.unwrap_or_default().as_bytes(),
     )?;
     let intent_hash = intent::fingerprint_context(&context)?;
+    let module_sources = prompt_declarations::module_sources(&plan.ir, source_dir)?;
     let bytes = render_generation_prompt(
-        config, plan, callable, &context, references, existing, feedback,
+        config,
+        plan,
+        callable,
+        &context,
+        &module_sources,
+        references,
+        existing,
+        feedback,
     )?;
     let prompt_hash = format!("sha256:{}", sha256_hex(&bytes));
     Ok(PreparedPrompt {
@@ -52,11 +63,13 @@ pub(crate) fn prepare(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_generation_prompt(
     config: &KotlinProjectConfig,
     plan: &KotlinPlan,
     callable: &KotlinCallable,
     context: &Value,
+    module_sources: &BTreeMap<String, String>,
     references: &[KotlinBinding],
     existing: Option<&[u8]>,
     feedback: Option<&str>,
@@ -89,8 +102,15 @@ pub(crate) fn render_generation_prompt(
     if current_intent.is_empty() {
         current_intent.push_str("(no documentation selected)\n");
     }
-    let formal_declarations = serde_json::to_string_pretty(&strip_docs(declarations))
-        .map_err(|error| format!("serialize formal Kotlin declarations: {error}"))?;
+    let canonical = plan
+        .modules
+        .iter()
+        .map(|module| (module.name.as_str(), &module.declarations))
+        .collect::<BTreeMap<_, _>>();
+    let formal_declarations = serde_json::to_string_pretty(
+        &prompt_declarations::scoped_declarations(&canonical, module_sources, declarations)?,
+    )
+    .map_err(|error| format!("serialize formal Kotlin declarations: {error}"))?;
     let mut identities = BTreeSet::new();
     collect_identities(declarations, &mut identities);
     let external_types = config
@@ -207,6 +227,7 @@ pub(crate) fn prompt(project: Option<PathBuf>, symbol: String, format: OutputFor
     let prepared = match prepare(
         &project.config,
         &project.plan,
+        &project.paths.source_dir,
         &callable,
         rules,
         &project.bindings,
@@ -369,20 +390,6 @@ fn collect_intent_docs(value: &Value, output: &mut String) {
             }
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-    }
-}
-
-fn strip_docs(value: &Value) -> Value {
-    match value {
-        Value::Array(values) => Value::Array(values.iter().map(strip_docs).collect()),
-        Value::Object(values) => Value::Object(
-            values
-                .iter()
-                .filter(|(key, _)| *key != "doc")
-                .map(|(key, value)| (key.clone(), strip_docs(value)))
-                .collect(),
-        ),
-        value => value.clone(),
     }
 }
 

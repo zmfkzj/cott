@@ -255,6 +255,38 @@ fn kotlin_source_paths_and_format_drift_are_checked_without_a_toolchain() {
 }
 
 #[test]
+fn kotlin_format_does_not_require_resolvable_implementations() {
+    let project = kotlin_project("module demo.main\n\nfn answer( ) -> Unit\n");
+    fs::create_dir_all(project.path.join("kotlin/cott_impl/demo/main"))
+        .expect("durable agent directory");
+    fs::write(
+        project.path.join("kotlin/cott_impl/demo/main/answer.kt"),
+        "package cott_impl.demo.main\n\ninternal fun answer() {}\n",
+    )
+    .expect("durable agent source");
+
+    let rejected = run(&project.path, &["check"]);
+    assert_eq!(
+        rejected.status.code(),
+        Some(4),
+        "{}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+
+    let formatted = run(&project.path, &["fmt"]);
+    assert_eq!(
+        formatted.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&formatted.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(project.path.join("src/demo/main.cott")).expect("formatted source"),
+        "module demo.main\n\nfn answer() -> Unit\n"
+    );
+}
+
+#[test]
 fn consumed_manifest_and_contract_bytes_refuse_later_replacements() {
     let project = kotlin_project("module demo.main\n\nfn main() -> Unit\n");
     let (_, paths, manifest_source) =

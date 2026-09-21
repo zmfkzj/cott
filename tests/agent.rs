@@ -116,10 +116,17 @@ fn render_text(
     feedback: Option<&str>,
 ) -> String {
     let context = cott::intent::context(surface, &callable.cott_symbol, rules).expect("context");
+    let (owned, sources) = surface_maps(surface);
+    let canonical = owned
+        .iter()
+        .map(|(module, declarations)| (module.as_str(), declarations))
+        .collect();
     String::from_utf8(
         render_prompt(
             callable,
             &context,
+            &canonical,
+            &sources,
             references,
             external_types,
             existing,
@@ -129,6 +136,41 @@ fn render_text(
         .expect("prompt"),
     )
     .expect("utf-8 prompt")
+}
+
+fn surface_maps(
+    surface: &serde_json::Value,
+) -> (
+    BTreeMap<String, Vec<serde_json::Value>>,
+    BTreeMap<String, String>,
+) {
+    let mut canonical = BTreeMap::new();
+    let mut sources = BTreeMap::new();
+    for (module, value) in surface.as_object().expect("surface modules") {
+        canonical.insert(
+            module.clone(),
+            value
+                .get("declarations")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        );
+        sources.insert(module.clone(), String::new());
+    }
+    (canonical, sources)
+}
+
+fn compiled_prompt_maps(source: &str) -> (PythonArtifactPlan, BTreeMap<String, String>) {
+    let parsed = parse_project([SourceFile::new("src/api/service.cott", source)])
+        .expect("source must parse");
+    let lowered = lower(Path::new("src"), parsed).expect("source must lower");
+    let ir = render(&lowered).expect("source must render");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("IR must project");
+    let mut sources = BTreeMap::new();
+    for module in &plan.modules {
+        sources.insert(module.module.clone(), source.to_owned());
+    }
+    (plan, sources)
 }
 
 fn resolved_binding(symbol: &str, body: &str) -> ResolvedBinding {
@@ -176,13 +218,7 @@ fn section<'a>(text: &'a str, name: &str) -> &'a str {
 }
 
 fn compiled_surface(source: &str) -> serde_json::Value {
-    let parsed = parse_project([SourceFile::new("src/api/service.cott", source)])
-        .expect("source must parse");
-    let lowered = lower(Path::new("src"), parsed).expect("source must lower");
-    let ir = render(&lowered).expect("source must render");
-    PythonArtifactPlan::from_ir(&ir)
-        .expect("IR must project")
-        .contract_surface()
+    compiled_prompt_maps(source).0.contract_surface()
 }
 
 fn selected_names(context: &serde_json::Value) -> Vec<&str> {
@@ -365,10 +401,17 @@ fn intent_doc_identifiers_select_named_types_constants_rules_and_enums() {
     assert!(names.contains(&"app.Status"));
     assert!(!names.contains(&"app.other"));
     let before = context.clone();
+    let (owned, sources) = surface_maps(&surface);
+    let canonical = owned
+        .iter()
+        .map(|(module, declarations)| (module.as_str(), declarations))
+        .collect();
     let text = String::from_utf8(
         render_prompt(
             &function_callable("app.run"),
             &context,
+            &canonical,
+            &sources,
             &[],
             &BTreeMap::new(),
             None,
@@ -795,6 +838,8 @@ fn specialization_prompt_is_rejected_as_compiler_owned() {
             owner: Some(json!({})),
         },
         &json!({}),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
         &[],
         &BTreeMap::new(),
         None,
@@ -949,6 +994,8 @@ fn malformed_context_utf8_and_size_are_rejected() {
     let err = render_prompt(
         &callable,
         &json!(null),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
         &[],
         &BTreeMap::new(),
         None,
@@ -961,6 +1008,8 @@ fn malformed_context_utf8_and_size_are_rejected() {
     let err = render_prompt(
         &callable,
         &json!({"symbol": "app.other", "declarations": {}, "project_rules": ""}),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
         &[],
         &BTreeMap::new(),
         None,
@@ -973,6 +1022,8 @@ fn malformed_context_utf8_and_size_are_rejected() {
     let err = render_prompt(
         &callable,
         &json!({"symbol": "app.run", "declarations": {}, "project_rules": ""}),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
         &[],
         &BTreeMap::new(),
         Some(&[0xff]),
@@ -986,6 +1037,8 @@ fn malformed_context_utf8_and_size_are_rejected() {
     let err = render_prompt(
         &callable,
         &json!({"symbol": "app.run", "declarations": {}, "project_rules": ""}),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
         &[],
         &BTreeMap::new(),
         Some(&huge),
@@ -1018,12 +1071,19 @@ fn malformed_context_utf8_and_size_are_rejected() {
         ]}
     });
     let context = cott::intent::context(&surface, "app.run", b"").expect("context");
+    let (owned, sources) = surface_maps(&surface);
+    let canonical = owned
+        .iter()
+        .map(|(module, declarations)| (module.as_str(), declarations))
+        .collect();
     let huge_ref = resolved_binding("app.helper", "y");
     let mut huge_ref = huge_ref;
     huge_ref.bytes = huge;
     let err = render_prompt(
         &callable,
         &context,
+        &canonical,
+        &sources,
         &[huge_ref],
         &BTreeMap::new(),
         None,
@@ -1039,6 +1099,8 @@ fn malformed_context_utf8_and_size_are_rejected() {
         render_prompt(
             &callable,
             &context,
+            &canonical,
+            &sources,
             &[unrelated],
             &BTreeMap::new(),
             None,
@@ -1056,6 +1118,8 @@ fn malformed_context_utf8_and_size_are_rejected() {
     render_prompt(
         &callable,
         &context,
+        &canonical,
+        &sources,
         &[invalid],
         &BTreeMap::new(),
         None,
@@ -1145,7 +1209,13 @@ impl ReaderState for Reader:
     fn read(self, amount: I32) -> I32:
         ensures result <= LIMIT
 "#;
-    let surface = compiled_surface(original);
+    let (plan, module_sources) = compiled_prompt_maps(original);
+    let surface = plan.contract_surface();
+    let canonical = plan
+        .modules
+        .iter()
+        .map(|module| (module.module.as_str(), &module.declarations))
+        .collect();
     let context = cott::intent::context(&surface, "api.service.run", b"").expect("context");
     let names = selected_names(&context);
     assert!(names.contains(&"api.service.run"));
@@ -1170,21 +1240,26 @@ impl ReaderState for Reader:
     assert!(run_json.contains(r#""kind":"constant_ref""#));
     assert!(run_json.contains(r#""kind":"constant""#));
     assert!(run_json.contains("api.service.LIMIT"));
-    let text = render_text(
-        &function_callable("api.service.run"),
-        &surface,
-        b"",
-        &[],
-        &BTreeMap::new(),
-        None,
-        None,
-    );
+    let text = String::from_utf8(
+        render_prompt(
+            &function_callable("api.service.run"),
+            &context,
+            &canonical,
+            &module_sources,
+            &[],
+            &BTreeMap::new(),
+            None,
+            None,
+            Path::new("implementation.py"),
+        )
+        .expect("prompt"),
+    )
+    .expect("utf-8 prompt");
     let intent = section(&text, "CURRENT INTENT");
     assert!(intent.contains("Cap the selected result."));
     assert!(!intent.contains("Unrelated noise constant."));
     let formal = section(&text, "FORMAL DECLARATIONS");
     assert!(formal.contains("api.service.LIMIT"));
-    assert!(formal.contains("constant_ref"));
     assert!(!formal.contains("api.service.NOISE"));
     assert!(!formal.contains("Cap the selected result."));
 
@@ -1273,7 +1348,13 @@ fn run() -> Unit:
 
 fn other() -> Unit
 "#;
-    let surface = compiled_surface(original);
+    let (plan, module_sources) = compiled_prompt_maps(original);
+    let surface = plan.contract_surface();
+    let canonical = plan
+        .modules
+        .iter()
+        .map(|module| (module.module.as_str(), &module.declarations))
+        .collect();
     let context = cott::intent::context(&surface, "api.service.run", b"").expect("context");
     let names = selected_names(&context);
     assert!(names.contains(&"api.service.run"));
@@ -1281,15 +1362,21 @@ fn other() -> Unit
     assert!(names.contains(&"api.service.Base"));
     assert!(!names.contains(&"api.service.Unrelated"));
     assert!(!names.contains(&"api.service.other"));
-    let text = render_text(
-        &function_callable("api.service.run"),
-        &surface,
-        b"",
-        &[],
-        &BTreeMap::new(),
-        None,
-        None,
-    );
+    let text = String::from_utf8(
+        render_prompt(
+            &function_callable("api.service.run"),
+            &context,
+            &canonical,
+            &module_sources,
+            &[],
+            &BTreeMap::new(),
+            None,
+            None,
+            Path::new("implementation.py"),
+        )
+        .expect("prompt"),
+    )
+    .expect("utf-8 prompt");
     let intent = section(&text, "CURRENT INTENT");
     assert!(intent.contains("Return a bounded value."));
     assert!(intent.contains("Inherit parent obligations."));
