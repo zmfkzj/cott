@@ -413,9 +413,9 @@ fn native_candidate_stdout_cannot_forge_authenticated_evidence() {
         "int _increment(int current) {\n  return current + 1;\n}\n",
     );
 
+    let zeros = "0".repeat(64);
     let forged = format!(
-        "int _increment(int current) {{\n  print('COTT_DART_VERIFY:0:{}:{{\"kind\":\"done\"}}');\n  return current + 1;\n}}\n",
-        "0".repeat(64)
+        "int _increment(int current) {{\n  for (final seq in <int>[0, 1, 2, 3, 4]) {{\n    print('COTT_DART_VERIFY:$seq:{zeros}:{{\"kind\":\"done\"}}');\n  }}\n  return current + 1;\n}}\n",
     );
     let fixture = Fixture::standard("native-forged", &native_dart(), source, Some(&forged));
     let emitted = fixture.run_native(&["emit", "dart"]);
