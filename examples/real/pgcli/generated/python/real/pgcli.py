@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from real.pgcli_types import BackslashCommand, BackslashCommand_Describe, BackslashCommand_Help, BackslashCommand_Quit, BackslashCommand_Tables, BackslashCommand_Unknown, Catalog, CatalogRefreshRequest, ClientError, ClientError_CatalogFailed, ClientError_EditorFailed, ClientError_ExportFailed, ClientError_FavoriteFailed, ClientError_HistoryFailed, ClientError_ImportFailed, ClientError_InvalidCommand, ClientError_InvalidSql, ClientError_NotificationFailed, ClientError_PagerFailed, ClientError_QueryFailed, ClientError_TerminalFailed, ClientError_TransactionFailed, ClientError_UnsupportedFormat, ColumnCatalog, CommandInvocation, CommandResult, CompletionPolicy, CompletionRequest, CompletionResult, ConnectionError, ConnectionError_ConnectionFailed, ConnectionError_CredentialUnavailable, ConnectionError_InvalidDsn, ConnectionError_InvalidPort, ConnectionError_MissingDatabase, ConnectionError_ProfileMissing, ConnectionError_PromptDisabled, ConnectionError_SshInvalid, ConnectionError_TlsInvalid, ConnectionInputs, ConnectionPlan, ConnectionProfile, ConnectionRequest, ConnectionSettings, CredentialRequest, CredentialResolution, DatabaseError, DatabaseError_ConnectionFailed, DatabaseError_QueryFailed, EditorRequest, EnvironmentInputs, ExecutedQuery, ExportRequest, Favorite, FavoriteStore, FormatRequest, FormattedQuery, HighlightRequest, HighlightedSql, HistoryEntry, HistoryPolicy, ImportRequest, InputBuffer, InteractiveRequest, MetaCommand, MetaCommand_ClearOutput, MetaCommand_Connect, MetaCommand_ConnectionInfo, MetaCommand_Copy, MetaCommand_DeleteFavorite, MetaCommand_DeleteNamedQuery, MetaCommand_Describe, MetaCommand_Echo, MetaCommand_EditBuffer, MetaCommand_ExecuteBuffer, MetaCommand_ExecuteExpanded, MetaCommand_Expanded, MetaCommand_Favorite, MetaCommand_Help, MetaCommand_History, MetaCommand_ListDataTypes, MetaCommand_ListDatabases, MetaCommand_ListDefaultPrivileges, MetaCommand_ListDomains, MetaCommand_ListExtensions, MetaCommand_ListFavorites, MetaCommand_ListForeignTables, MetaCommand_ListFunctions, MetaCommand_ListIndexes, MetaCommand_ListMaterializedViews, MetaCommand_ListNotifications, MetaCommand_ListPrivileges, MetaCommand_ListRoles, MetaCommand_ListSchemas, MetaCommand_ListSequences, MetaCommand_ListTables, MetaCommand_ListTablespaces, MetaCommand_ListTextSearchConfigurations, MetaCommand_ListViews, MetaCommand_NamedQuery, MetaCommand_Password, MetaCommand_PrintBuffer, MetaCommand_PrintNamedQuery, MetaCommand_QueryOutputEcho, MetaCommand_Quit, MetaCommand_ReadFile, MetaCommand_ReadRelativeFile, MetaCommand_RefreshCatalog, MetaCommand_ResetBuffer, MetaCommand_SaveNamedQuery, MetaCommand_SetFormat, MetaCommand_SetLogFile, MetaCommand_SetOptions, MetaCommand_SetOutput, MetaCommand_SetPager, MetaCommand_Shell, MetaCommand_ShowFunction, MetaCommand_SqlHelp, MetaCommand_Timing, MetaCommand_Unknown, MetaCommand_VerboseErrors, MetaCommand_Watch, MetaCommand_WriteBuffer, Notification, NotificationRequest, PagerRequest, PasswordSource, PasswordSource_Environment, PasswordSource_Keyring, PasswordSource_None, PasswordSource_Prompt, PasswordSource_Supplied, PromptAction, PromptAction_PromptPassword, PromptAction_UsePassword, QueryPlan, QueryRequest, QueryResult, RelationCatalog, RenderLayout, RenderLayout_Horizontal, RenderLayout_Vertical, RenderRequest, RenderedQuery, RoutineCatalog, SessionOptions, SshSettings, TableCatalog, TableFormat, TableFormat_Aligned, TableFormat_Csv, TableFormat_Html, TableFormat_Json, TableFormat_JsonLines, TableFormat_Latex, TableFormat_Markdown, TableFormat_Tsv, TableFormat_Vertical, TlsSettings, TransactionMode, TransactionMode_AutoCommit, TransactionMode_Manual, TransactionMode_ReadOnly, TransactionState, TransferResult, WatchRequest, WatchResult
 
@@ -38,11 +39,16 @@ def parse_dsn(value: str) -> Result[ConnectionInputs, ConnectionError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.parse_dsn", phase="error", span={"end_byte":7977,"end_column":1,"end_line":415,"start_byte":7796,"start_column":1,"start_line":408}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.parse_dsn", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.parse_dsn", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ConnectionError_InvalidDsn:
+        _cott_contract_condition(True, "real.pgcli.parse_dsn", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             inputs = _cott_match_value.value
-            return (((inputs).database != ""))
+            return (_cott_contract_condition((((inputs).database != "")), "real.pgcli.parse_dsn", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.parse_dsn", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.parse_dsn", clause="ensures:0", phase="ensures", span={"end_byte":7921,"end_column":55,"end_line":409,"start_byte":7871,"start_column":5,"start_line":409}, expected="true", actual="false")
@@ -77,11 +83,16 @@ def resolve_profile(name: str, profiles: CottList[ConnectionProfile]) -> Result[
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.resolve_profile", phase="error", span={"end_byte":8214,"end_column":1,"end_line":425,"start_byte":7977,"start_column":1,"start_line":415}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.resolve_profile", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.resolve_profile", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ConnectionError_ProfileMissing:
+        _cott_contract_condition(True, "real.pgcli.resolve_profile", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             profile = _cott_match_value.value
-            return (((profile).name == name))
+            return (_cott_contract_condition((((profile).name == name)), "real.pgcli.resolve_profile", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.resolve_profile", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.resolve_profile", clause="ensures:0", phase="ensures", span={"end_byte":8154,"end_column":55,"end_line":419,"start_byte":8104,"start_column":5,"start_line":419}, expected="true", actual="false")
@@ -116,11 +127,18 @@ def resolve_connection(inputs: ConnectionInputs, environment: EnvironmentInputs)
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.resolve_connection", phase="error", span={"end_byte":9254,"end_column":1,"end_line":440,"start_byte":8214,"start_column":1,"start_line":425}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.resolve_connection", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.resolve_connection", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ConnectionError_MissingDatabase:
+        _cott_contract_condition(True, "real.pgcli.resolve_connection", "error:5")
+    if type(_result) is Err and type(_result.error) is ConnectionError_InvalidPort:
+        _cott_contract_condition(True, "real.pgcli.resolve_connection", "error:6")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             settings = _cott_match_value.value
-            return (((((inputs).host != "") and ((settings).host == (inputs).host)) or (((inputs).host == "") and ((settings).host == (environment).host))))
+            return (_cott_contract_condition((((((inputs).host != "") and ((settings).host == (inputs).host)) or (((inputs).host == "") and ((settings).host == (environment).host)))), "real.pgcli.resolve_connection", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.resolve_connection", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.resolve_connection", clause="ensures:0", phase="ensures", span={"end_byte":8503,"end_column":151,"end_line":429,"start_byte":8357,"start_column":5,"start_line":429}, expected="true", actual="false")
@@ -128,7 +146,8 @@ def resolve_connection(inputs: ConnectionInputs, environment: EnvironmentInputs)
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             settings = _cott_match_value.value
-            return (((((inputs).port != "") and ((settings).port == (inputs).port)) or (((inputs).port == "") and ((settings).port == (environment).port))))
+            return (_cott_contract_condition((((((inputs).port != "") and ((settings).port == (inputs).port)) or (((inputs).port == "") and ((settings).port == (environment).port)))), "real.pgcli.resolve_connection", "ensures:1"))
+        _cott_contract_condition((False), "real.pgcli.resolve_connection", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.resolve_connection", clause="ensures:1", phase="ensures", span={"end_byte":8654,"end_column":151,"end_line":430,"start_byte":8508,"start_column":5,"start_line":430}, expected="true", actual="false")
@@ -136,7 +155,8 @@ def resolve_connection(inputs: ConnectionInputs, environment: EnvironmentInputs)
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             settings = _cott_match_value.value
-            return (((((inputs).user != "") and ((settings).user == (inputs).user)) or (((inputs).user == "") and ((settings).user == (environment).user))))
+            return (_cott_contract_condition((((((inputs).user != "") and ((settings).user == (inputs).user)) or (((inputs).user == "") and ((settings).user == (environment).user)))), "real.pgcli.resolve_connection", "ensures:2"))
+        _cott_contract_condition((False), "real.pgcli.resolve_connection", "ensures:2:applicable")
         return True
     if not (_cott_match_ensures_2()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.resolve_connection", clause="ensures:2", phase="ensures", span={"end_byte":8805,"end_column":151,"end_line":431,"start_byte":8659,"start_column":5,"start_line":431}, expected="true", actual="false")
@@ -144,7 +164,8 @@ def resolve_connection(inputs: ConnectionInputs, environment: EnvironmentInputs)
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             settings = _cott_match_value.value
-            return (((((inputs).password != "") and ((settings).password == (inputs).password)) or (((inputs).password == "") and ((settings).password == (environment).password))))
+            return (_cott_contract_condition((((((inputs).password != "") and ((settings).password == (inputs).password)) or (((inputs).password == "") and ((settings).password == (environment).password)))), "real.pgcli.resolve_connection", "ensures:3"))
+        _cott_contract_condition((False), "real.pgcli.resolve_connection", "ensures:3:applicable")
         return True
     if not (_cott_match_ensures_3()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.resolve_connection", clause="ensures:3", phase="ensures", span={"end_byte":8980,"end_column":175,"end_line":432,"start_byte":8810,"start_column":5,"start_line":432}, expected="true", actual="false")
@@ -152,7 +173,8 @@ def resolve_connection(inputs: ConnectionInputs, environment: EnvironmentInputs)
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             settings = _cott_match_value.value
-            return (((((inputs).database != "") and ((settings).database == (inputs).database)) or (((inputs).database == "") and ((settings).database == (environment).database))))
+            return (_cott_contract_condition((((((inputs).database != "") and ((settings).database == (inputs).database)) or (((inputs).database == "") and ((settings).database == (environment).database)))), "real.pgcli.resolve_connection", "ensures:4"))
+        _cott_contract_condition((False), "real.pgcli.resolve_connection", "ensures:4:applicable")
         return True
     if not (_cott_match_ensures_4()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.resolve_connection", clause="ensures:4", phase="ensures", span={"end_byte":9155,"end_column":175,"end_line":433,"start_byte":8985,"start_column":5,"start_line":433}, expected="true", actual="false")
@@ -187,11 +209,24 @@ def resolve_connection_plan(request: ConnectionRequest, profile: Option[Connecti
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.resolve_connection_plan", phase="error", span={"end_byte":9669,"end_column":1,"end_line":454,"start_byte":9254,"start_column":1,"start_line":440}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.resolve_connection_plan", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.resolve_connection_plan", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ConnectionError_MissingDatabase:
+        _cott_contract_condition(True, "real.pgcli.resolve_connection_plan", "error:1")
+    if type(_result) is Err and type(_result.error) is ConnectionError_InvalidPort:
+        _cott_contract_condition(True, "real.pgcli.resolve_connection_plan", "error:2")
+    if type(_result) is Err and type(_result.error) is ConnectionError_InvalidDsn:
+        _cott_contract_condition(True, "real.pgcli.resolve_connection_plan", "error:3")
+    if type(_result) is Err and type(_result.error) is ConnectionError_TlsInvalid:
+        _cott_contract_condition(True, "real.pgcli.resolve_connection_plan", "error:4")
+    if type(_result) is Err and type(_result.error) is ConnectionError_SshInvalid:
+        _cott_contract_condition(True, "real.pgcli.resolve_connection_plan", "error:5")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             plan = _cott_match_value.value
-            return ((((plan).settings).database != ""))
+            return (_cott_contract_condition(((((plan).settings).database != "")), "real.pgcli.resolve_connection_plan", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.resolve_connection_plan", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.resolve_connection_plan", clause="ensures:0", phase="ensures", span={"end_byte":9459,"end_column":60,"end_line":444,"start_byte":9404,"start_column":5,"start_line":444}, expected="true", actual="false")
@@ -204,7 +239,7 @@ def prompt_policy(no_prompt: bool, password: str) -> Result[PromptAction, Connec
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
-    if _expected_error is None and ((no_prompt and (password == ""))):
+    if _expected_error is None and (_cott_contract_condition(((no_prompt and (password == ""))), "real.pgcli.prompt_policy", "error:1:condition")):
         _expected_error = ConnectionError_PromptDisabled
         _expected_error_span = {"end_byte":9988,"end_column":75,"end_line":457,"start_byte":9918,"start_column":5,"start_line":457}
         _expected_error_clause = "error:1"
@@ -230,11 +265,14 @@ def prompt_policy(no_prompt: bool, password: str) -> Result[PromptAction, Connec
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.prompt_policy", phase="error", span={"end_byte":10006,"end_column":1,"end_line":461,"start_byte":9669,"start_column":1,"start_line":454}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.prompt_policy", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.prompt_policy", _expected_error_clause)
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             action = _cott_match_value.value
-            return ((((password != "") and (action == PromptAction_UsePassword())) or ((password == "") and (action == PromptAction_PromptPassword()))))
+            return (_cott_contract_condition(((((password != "") and (action == PromptAction_UsePassword())) or ((password == "") and (action == PromptAction_PromptPassword())))), "real.pgcli.prompt_policy", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.prompt_policy", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.prompt_policy", clause="ensures:0", phase="ensures", span={"end_byte":9912,"end_column":153,"end_line":455,"start_byte":9764,"start_column":5,"start_line":455}, expected="true", actual="false")
@@ -268,11 +306,18 @@ def resolve_credential(request: CredentialRequest) -> Result[CredentialResolutio
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.resolve_credential", phase="error", span={"end_byte":10340,"end_column":1,"end_line":469,"start_byte":10006,"start_column":1,"start_line":461}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.resolve_credential", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.resolve_credential", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ConnectionError_CredentialUnavailable:
+        _cott_contract_condition(True, "real.pgcli.resolve_credential", "error:1")
+    if type(_result) is Err and type(_result.error) is ConnectionError_PromptDisabled:
+        _cott_contract_condition(True, "real.pgcli.resolve_credential", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             resolution = _cott_match_value.value
-            return ((((resolution).password != "") or ((resolution).source == PasswordSource_None())))
+            return (_cott_contract_condition(((((resolution).password != "") or ((resolution).source == PasswordSource_None()))), "real.pgcli.resolve_credential", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.resolve_credential", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.resolve_credential", clause="ensures:0", phase="ensures", span={"end_byte":10214,"end_column":109,"end_line":462,"start_byte":10110,"start_column":5,"start_line":462}, expected="true", actual="false")
@@ -306,11 +351,16 @@ def connect(plan: ConnectionPlan) -> Result[Unit, ConnectionError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.connect", phase="error", span={"end_byte":10558,"end_column":1,"end_line":476,"start_byte":10340,"start_column":1,"start_line":469}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.connect", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.connect", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ConnectionError_ConnectionFailed:
+        _cott_contract_condition(True, "real.pgcli.connect", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             connected = _cott_match_value.value
-            return ((connected == UNIT))
+            return (_cott_contract_condition(((connected == UNIT)), "real.pgcli.connect", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.connect", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.connect", clause="ensures:0", phase="ensures", span={"end_byte":10458,"end_column":52,"end_line":470,"start_byte":10411,"start_column":5,"start_line":470}, expected="true", actual="false")
@@ -344,11 +394,16 @@ def refresh_catalog(request: CatalogRefreshRequest) -> Result[Catalog, ClientErr
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.refresh_catalog", phase="error", span={"end_byte":10854,"end_column":1,"end_line":484,"start_byte":10558,"start_column":1,"start_line":476}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.refresh_catalog", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.refresh_catalog", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_CatalogFailed:
+        _cott_contract_condition(True, "real.pgcli.refresh_catalog", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             catalog = _cott_match_value.value
-            return (((catalog).limit == (request).limit))
+            return (_cott_contract_condition((((catalog).limit == (request).limit)), "real.pgcli.refresh_catalog", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.refresh_catalog", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.refresh_catalog", clause="ensures:0", phase="ensures", span={"end_byte":10706,"end_column":65,"end_line":477,"start_byte":10646,"start_column":5,"start_line":477}, expected="true", actual="false")
@@ -356,7 +411,8 @@ def refresh_catalog(request: CatalogRefreshRequest) -> Result[Catalog, ClientErr
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             catalog = _cott_match_value.value
-            return ((len((catalog).relations) <= (request).limit))
+            return (_cott_contract_condition(((len((catalog).relations) <= (request).limit)), "real.pgcli.refresh_catalog", "ensures:1"))
+        _cott_contract_condition((False), "real.pgcli.refresh_catalog", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.refresh_catalog", clause="ensures:1", phase="ensures", span={"end_byte":10779,"end_column":73,"end_line":478,"start_byte":10711,"start_column":5,"start_line":478}, expected="true", actual="false")
@@ -399,7 +455,7 @@ def complete_catalog_sql(request: CompletionRequest, policy: CompletionPolicy) -
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="real.pgcli.complete_catalog_sql", phase="implementation-call", span={"end_byte":11110,"end_column":1,"end_line":492,"start_byte":10935,"start_column":1,"start_line":487}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, CompletionResult, path="$.return")
-    if not ((len((_result).candidates) <= (policy).max_candidates)):
+    if not (_cott_contract_condition(((len((_result).candidates) <= (policy).max_candidates)), "real.pgcli.complete_catalog_sql", "ensures:0")):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.complete_catalog_sql", clause="ensures:0", phase="ensures", span={"end_byte":11092,"end_column":59,"end_line":488,"start_byte":11038,"start_column":5,"start_line":488}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, CompletionResult, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -450,11 +506,16 @@ def plan_query(buffer: InputBuffer) -> Result[QueryPlan, ClientError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.plan_query", phase="error", span={"end_byte":11365,"end_column":1,"end_line":502,"start_byte":11189,"start_column":1,"start_line":495}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.plan_query", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.plan_query", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_InvalidSql:
+        _cott_contract_condition(True, "real.pgcli.plan_query", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             plan = _cott_match_value.value
-            return (((plan).sql == (buffer).text))
+            return (_cott_contract_condition((((plan).sql == (buffer).text)), "real.pgcli.plan_query", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.plan_query", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.plan_query", clause="ensures:0", phase="ensures", span={"end_byte":11313,"end_column":55,"end_line":496,"start_byte":11263,"start_column":5,"start_line":496}, expected="true", actual="false")
@@ -478,7 +539,7 @@ def edit_multiline(buffer: InputBuffer, input: str) -> InputBuffer:
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="real.pgcli.edit_multiline", phase="implementation-call", span={"end_byte":11494,"end_column":1,"end_line":507,"start_byte":11365,"start_column":1,"start_line":502}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, InputBuffer, path="$.return")
-    if not (((_result).cursor <= len((_result).text))):
+    if not (_cott_contract_condition((((_result).cursor <= len((_result).text))), "real.pgcli.edit_multiline", "ensures:0")):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.edit_multiline", clause="ensures:0", phase="ensures", span={"end_byte":11476,"end_column":45,"end_line":503,"start_byte":11436,"start_column":5,"start_line":503}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, InputBuffer, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -556,7 +617,7 @@ def format_query(request: FormatRequest) -> FormattedQuery:
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="real.pgcli.format_query", phase="implementation-call", span={"end_byte":11838,"end_column":1,"end_line":521,"start_byte":11708,"start_column":1,"start_line":516}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, FormattedQuery, path="$.return")
-    if not (((_result).truncated_rows <= (request).max_rows)):
+    if not (_cott_contract_condition((((_result).truncated_rows <= (request).max_rows)), "real.pgcli.format_query", "ensures:0")):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.format_query", clause="ensures:0", phase="ensures", span={"end_byte":11820,"end_column":54,"end_line":517,"start_byte":11771,"start_column":5,"start_line":517}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, FormattedQuery, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -589,11 +650,18 @@ def execute_query(connection: ConnectionSettings, sql: str) -> Result[QueryResul
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.execute_query", phase="error", span={"end_byte":12158,"end_column":1,"end_line":529,"start_byte":11838,"start_column":1,"start_line":521}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.execute_query", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.execute_query", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is DatabaseError_ConnectionFailed:
+        _cott_contract_condition(True, "real.pgcli.execute_query", "error:1")
+    if type(_result) is Err and type(_result.error) is DatabaseError_QueryFailed:
+        _cott_contract_condition(True, "real.pgcli.execute_query", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             query_result = _cott_match_value.value
-            return (((len((query_result).rows) == 0) or (len((query_result).columns) > 0)))
+            return (_cott_contract_condition((((len((query_result).rows) == 0) or (len((query_result).columns) > 0))), "real.pgcli.execute_query", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.execute_query", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.execute_query", clause="ensures:0", phase="ensures", span={"end_byte":12033,"end_column":98,"end_line":522,"start_byte":11940,"start_column":5,"start_line":522}, expected="true", actual="false")
@@ -627,11 +695,18 @@ def execute_planned_query(request: QueryRequest) -> Result[ExecutedQuery, Client
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.execute_planned_query", phase="error", span={"end_byte":12453,"end_column":1,"end_line":537,"start_byte":12158,"start_column":1,"start_line":529}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.execute_planned_query", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.execute_planned_query", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_QueryFailed:
+        _cott_contract_condition(True, "real.pgcli.execute_planned_query", "error:1")
+    if type(_result) is Err and type(_result.error) is ClientError_TransactionFailed:
+        _cott_contract_condition(True, "real.pgcli.execute_planned_query", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             executed = _cott_match_value.value
-            return ((len(((executed).result).rows) <= (request).max_rows))
+            return (_cott_contract_condition(((len(((executed).result).rows) <= (request).max_rows)), "real.pgcli.execute_planned_query", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.execute_planned_query", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.execute_planned_query", clause="ensures:0", phase="ensures", span={"end_byte":12324,"end_column":80,"end_line":530,"start_byte":12249,"start_column":5,"start_line":530}, expected="true", actual="false")
@@ -654,7 +729,7 @@ def begin_transaction(mode: TransactionMode) -> TransactionState:
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="real.pgcli.begin_transaction", phase="implementation-call", span={"end_byte":12581,"end_column":1,"end_line":542,"start_byte":12453,"start_column":1,"start_line":537}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, TransactionState, path="$.return")
-    if not (((_result).mode == mode)):
+    if not (_cott_contract_condition((((_result).mode == mode)), "real.pgcli.begin_transaction", "ensures:0")):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.begin_transaction", clause="ensures:0", phase="ensures", span={"end_byte":12549,"end_column":32,"end_line":538,"start_byte":12522,"start_column":5,"start_line":538}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, TransactionState, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -686,11 +761,16 @@ def commit_transaction(transaction: TransactionState) -> Result[TransactionState
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.commit_transaction", phase="error", span={"end_byte":12805,"end_column":1,"end_line":549,"start_byte":12581,"start_column":1,"start_line":542}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.commit_transaction", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.commit_transaction", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_TransactionFailed:
+        _cott_contract_condition(True, "real.pgcli.commit_transaction", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             committed = _cott_match_value.value
-            return ((not (committed).active))
+            return (_cott_contract_condition(((not (committed).active)), "real.pgcli.commit_transaction", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.commit_transaction", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.commit_transaction", clause="ensures:0", phase="ensures", span={"end_byte":12732,"end_column":57,"end_line":543,"start_byte":12680,"start_column":5,"start_line":543}, expected="true", actual="false")
@@ -724,11 +804,16 @@ def rollback_transaction(transaction: TransactionState) -> Result[TransactionSta
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.rollback_transaction", phase="error", span={"end_byte":13035,"end_column":1,"end_line":556,"start_byte":12805,"start_column":1,"start_line":549}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.rollback_transaction", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.rollback_transaction", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_TransactionFailed:
+        _cott_contract_condition(True, "real.pgcli.rollback_transaction", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             rolled_back = _cott_match_value.value
-            return ((not (rolled_back).active))
+            return (_cott_contract_condition(((not (rolled_back).active)), "real.pgcli.rollback_transaction", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.rollback_transaction", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.rollback_transaction", clause="ensures:0", phase="ensures", span={"end_byte":12962,"end_column":61,"end_line":550,"start_byte":12906,"start_column":5,"start_line":550}, expected="true", actual="false")
@@ -762,11 +847,16 @@ def load_history(policy: HistoryPolicy) -> Result[CottList[HistoryEntry], Client
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.load_history", phase="error", span={"end_byte":13249,"end_column":1,"end_line":563,"start_byte":13035,"start_column":1,"start_line":556}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.load_history", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.load_history", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_HistoryFailed:
+        _cott_contract_condition(True, "real.pgcli.load_history", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             entries = _cott_match_value.value
-            return ((len(entries) <= (policy).max_entries))
+            return (_cott_contract_condition(((len(entries) <= (policy).max_entries)), "real.pgcli.load_history", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.load_history", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.load_history", clause="ensures:0", phase="ensures", span={"end_byte":13185,"end_column":68,"end_line":557,"start_byte":13122,"start_column":5,"start_line":557}, expected="true", actual="false")
@@ -801,11 +891,16 @@ def save_history(policy: HistoryPolicy, entries: CottList[HistoryEntry]) -> Resu
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.save_history", phase="error", span={"end_byte":13455,"end_column":1,"end_line":570,"start_byte":13249,"start_column":1,"start_line":563}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.save_history", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.save_history", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_HistoryFailed:
+        _cott_contract_condition(True, "real.pgcli.save_history", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             saved = _cott_match_value.value
-            return ((saved == UNIT))
+            return (_cott_contract_condition(((saved == UNIT)), "real.pgcli.save_history", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.save_history", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.save_history", clause="ensures:0", phase="ensures", span={"end_byte":13390,"end_column":44,"end_line":564,"start_byte":13351,"start_column":5,"start_line":564}, expected="true", actual="false")
@@ -830,7 +925,7 @@ def remember_history(policy: HistoryPolicy, entries: CottList[HistoryEntry], ent
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="real.pgcli.remember_history", phase="implementation-call", span={"end_byte":13648,"end_column":1,"end_line":579,"start_byte":13455,"start_column":1,"start_line":570}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, CottList[HistoryEntry], path="$.return")
-    if not ((len(_result) <= (policy).max_entries)):
+    if not (_cott_contract_condition(((len(_result) <= (policy).max_entries)), "real.pgcli.remember_history", "ensures:0")):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.remember_history", clause="ensures:0", phase="ensures", span={"end_byte":13630,"end_column":45,"end_line":575,"start_byte":13590,"start_column":5,"start_line":575}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, CottList[HistoryEntry], path="$.return", validator=_cott_validate_abi)
     return _result
@@ -862,11 +957,16 @@ def load_favorites(store: FavoriteStore) -> Result[CottList[Favorite], ClientErr
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.load_favorites", phase="error", span={"end_byte":13863,"end_column":1,"end_line":586,"start_byte":13648,"start_column":1,"start_line":579}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.load_favorites", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.load_favorites", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_FavoriteFailed:
+        _cott_contract_condition(True, "real.pgcli.load_favorites", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             favorites = _cott_match_value.value
-            return ((len(favorites) <= (store).max_entries))
+            return (_cott_contract_condition(((len(favorites) <= (store).max_entries)), "real.pgcli.load_favorites", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.load_favorites", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.load_favorites", clause="ensures:0", phase="ensures", span={"end_byte":13798,"end_column":71,"end_line":580,"start_byte":13732,"start_column":5,"start_line":580}, expected="true", actual="false")
@@ -901,11 +1001,16 @@ def save_favorites(store: FavoriteStore, favorites: CottList[Favorite]) -> Resul
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.save_favorites", phase="error", span={"end_byte":14069,"end_column":1,"end_line":593,"start_byte":13863,"start_column":1,"start_line":586}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.save_favorites", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.save_favorites", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_FavoriteFailed:
+        _cott_contract_condition(True, "real.pgcli.save_favorites", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             saved = _cott_match_value.value
-            return ((saved == UNIT))
+            return (_cott_contract_condition(((saved == UNIT)), "real.pgcli.save_favorites", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.save_favorites", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.save_favorites", clause="ensures:0", phase="ensures", span={"end_byte":14003,"end_column":44,"end_line":587,"start_byte":13964,"start_column":5,"start_line":587}, expected="true", actual="false")
@@ -940,11 +1045,18 @@ def import_delimited(plan: ConnectionPlan, request: ImportRequest) -> Result[Tra
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.import_delimited", phase="error", span={"end_byte":14367,"end_column":1,"end_line":604,"start_byte":14069,"start_column":1,"start_line":593}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.import_delimited", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.import_delimited", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_ImportFailed:
+        _cott_contract_condition(True, "real.pgcli.import_delimited", "error:1")
+    if type(_result) is Err and type(_result.error) is ClientError_QueryFailed:
+        _cott_contract_condition(True, "real.pgcli.import_delimited", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             imported = _cott_match_value.value
-            return (((imported).rows <= (request).max_rows))
+            return (_cott_contract_condition((((imported).rows <= (request).max_rows)), "real.pgcli.import_delimited", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.import_delimited", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.import_delimited", clause="ensures:0", phase="ensures", span={"end_byte":14254,"end_column":69,"end_line":597,"start_byte":14190,"start_column":5,"start_line":597}, expected="true", actual="false")
@@ -979,11 +1091,18 @@ def export_query(plan: ConnectionPlan, request: ExportRequest) -> Result[Transfe
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.export_query", phase="error", span={"end_byte":14661,"end_column":1,"end_line":615,"start_byte":14367,"start_column":1,"start_line":604}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.export_query", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.export_query", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_ExportFailed:
+        _cott_contract_condition(True, "real.pgcli.export_query", "error:1")
+    if type(_result) is Err and type(_result.error) is ClientError_QueryFailed:
+        _cott_contract_condition(True, "real.pgcli.export_query", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             exported = _cott_match_value.value
-            return (((exported).rows <= (request).max_rows))
+            return (_cott_contract_condition((((exported).rows <= (request).max_rows)), "real.pgcli.export_query", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.export_query", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.export_query", clause="ensures:0", phase="ensures", span={"end_byte":14548,"end_column":69,"end_line":608,"start_byte":14484,"start_column":5,"start_line":608}, expected="true", actual="false")
@@ -1017,11 +1136,16 @@ def edit_in_editor(request: EditorRequest) -> Result[InputBuffer, ClientError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.edit_in_editor", phase="error", span={"end_byte":14880,"end_column":1,"end_line":622,"start_byte":14661,"start_column":1,"start_line":615}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.edit_in_editor", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.edit_in_editor", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_EditorFailed:
+        _cott_contract_condition(True, "real.pgcli.edit_in_editor", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             buffer = _cott_match_value.value
-            return (((buffer).cursor <= len((buffer).text)))
+            return (_cott_contract_condition((((buffer).cursor <= len((buffer).text))), "real.pgcli.edit_in_editor", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.edit_in_editor", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.edit_in_editor", clause="ensures:0", phase="ensures", span={"end_byte":14805,"end_column":66,"end_line":616,"start_byte":14744,"start_column":5,"start_line":616}, expected="true", actual="false")
@@ -1055,11 +1179,16 @@ def page_output(request: PagerRequest) -> Result[Unit, ClientError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.page_output", phase="error", span={"end_byte":15065,"end_column":1,"end_line":629,"start_byte":14880,"start_column":1,"start_line":622}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.page_output", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.page_output", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_PagerFailed:
+        _cott_contract_condition(True, "real.pgcli.page_output", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             paged = _cott_match_value.value
-            return ((paged == UNIT))
+            return (_cott_contract_condition(((paged == UNIT)), "real.pgcli.page_output", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.page_output", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.page_output", clause="ensures:0", phase="ensures", span={"end_byte":14991,"end_column":44,"end_line":623,"start_byte":14952,"start_column":5,"start_line":623}, expected="true", actual="false")
@@ -1093,11 +1222,16 @@ def receive_notifications(request: NotificationRequest) -> Result[CottList[Notif
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.receive_notifications", phase="error", span={"end_byte":15330,"end_column":1,"end_line":636,"start_byte":15065,"start_column":1,"start_line":629}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.receive_notifications", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.receive_notifications", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_NotificationFailed:
+        _cott_contract_condition(True, "real.pgcli.receive_notifications", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             notifications = _cott_match_value.value
-            return ((len(notifications) <= (request).max_notifications))
+            return (_cott_contract_condition(((len(notifications) <= (request).max_notifications)), "real.pgcli.receive_notifications", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.receive_notifications", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.receive_notifications", clause="ensures:0", phase="ensures", span={"end_byte":15250,"end_column":87,"end_line":630,"start_byte":15168,"start_column":5,"start_line":630}, expected="true", actual="false")
@@ -1131,11 +1265,18 @@ def watch_query(request: WatchRequest) -> Result[WatchResult, ClientError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.watch_query", phase="error", span={"end_byte":15612,"end_column":1,"end_line":644,"start_byte":15330,"start_column":1,"start_line":636}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.watch_query", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.watch_query", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_QueryFailed:
+        _cott_contract_condition(True, "real.pgcli.watch_query", "error:1")
+    if type(_result) is Err and type(_result.error) is ClientError_TransactionFailed:
+        _cott_contract_condition(True, "real.pgcli.watch_query", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             watched = _cott_match_value.value
-            return (((watched).executions <= (request).max_iterations))
+            return (_cott_contract_condition((((watched).executions <= (request).max_iterations)), "real.pgcli.watch_query", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.watch_query", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.watch_query", clause="ensures:0", phase="ensures", span={"end_byte":15483,"end_column":79,"end_line":637,"start_byte":15409,"start_column":5,"start_line":637}, expected="true", actual="false")
@@ -1171,11 +1312,36 @@ def run_meta_command(invocation: CommandInvocation, options: SessionOptions, cat
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.run_meta_command", phase="error", span={"end_byte":16324,"end_column":1,"end_line":665,"start_byte":15612,"start_column":1,"start_line":644}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.run_meta_command", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.run_meta_command", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_InvalidCommand:
+        _cott_contract_condition(True, "real.pgcli.run_meta_command", "error:1")
+    if type(_result) is Err and type(_result.error) is ClientError_CatalogFailed:
+        _cott_contract_condition(True, "real.pgcli.run_meta_command", "error:2")
+    if type(_result) is Err and type(_result.error) is ClientError_QueryFailed:
+        _cott_contract_condition(True, "real.pgcli.run_meta_command", "error:3")
+    if type(_result) is Err and type(_result.error) is ClientError_TransactionFailed:
+        _cott_contract_condition(True, "real.pgcli.run_meta_command", "error:4")
+    if type(_result) is Err and type(_result.error) is ClientError_ImportFailed:
+        _cott_contract_condition(True, "real.pgcli.run_meta_command", "error:5")
+    if type(_result) is Err and type(_result.error) is ClientError_ExportFailed:
+        _cott_contract_condition(True, "real.pgcli.run_meta_command", "error:6")
+    if type(_result) is Err and type(_result.error) is ClientError_HistoryFailed:
+        _cott_contract_condition(True, "real.pgcli.run_meta_command", "error:7")
+    if type(_result) is Err and type(_result.error) is ClientError_FavoriteFailed:
+        _cott_contract_condition(True, "real.pgcli.run_meta_command", "error:8")
+    if type(_result) is Err and type(_result.error) is ClientError_EditorFailed:
+        _cott_contract_condition(True, "real.pgcli.run_meta_command", "error:9")
+    if type(_result) is Err and type(_result.error) is ClientError_PagerFailed:
+        _cott_contract_condition(True, "real.pgcli.run_meta_command", "error:10")
+    if type(_result) is Err and type(_result.error) is ClientError_NotificationFailed:
+        _cott_contract_condition(True, "real.pgcli.run_meta_command", "error:11")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             step = _cott_match_value.value
-            return (((step).quit or (((step).buffer).cursor <= len(((step).buffer).text))))
+            return (_cott_contract_condition((((step).quit or (((step).buffer).cursor <= len(((step).buffer).text)))), "real.pgcli.run_meta_command", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.run_meta_command", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.run_meta_command", clause="ensures:0", phase="ensures", span={"end_byte":15846,"end_column":87,"end_line":649,"start_byte":15764,"start_column":5,"start_line":649}, expected="true", actual="false")
@@ -1209,11 +1375,36 @@ def run_interactive(request: InteractiveRequest) -> Result[Unit, ClientError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.run_interactive", phase="error", span={"end_byte":16938,"end_column":1,"end_line":682,"start_byte":16324,"start_column":1,"start_line":665}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.run_interactive", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.pgcli.run_interactive", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ClientError_InvalidCommand:
+        _cott_contract_condition(True, "real.pgcli.run_interactive", "error:1")
+    if type(_result) is Err and type(_result.error) is ClientError_InvalidSql:
+        _cott_contract_condition(True, "real.pgcli.run_interactive", "error:2")
+    if type(_result) is Err and type(_result.error) is ClientError_CatalogFailed:
+        _cott_contract_condition(True, "real.pgcli.run_interactive", "error:3")
+    if type(_result) is Err and type(_result.error) is ClientError_QueryFailed:
+        _cott_contract_condition(True, "real.pgcli.run_interactive", "error:4")
+    if type(_result) is Err and type(_result.error) is ClientError_TransactionFailed:
+        _cott_contract_condition(True, "real.pgcli.run_interactive", "error:5")
+    if type(_result) is Err and type(_result.error) is ClientError_HistoryFailed:
+        _cott_contract_condition(True, "real.pgcli.run_interactive", "error:6")
+    if type(_result) is Err and type(_result.error) is ClientError_FavoriteFailed:
+        _cott_contract_condition(True, "real.pgcli.run_interactive", "error:7")
+    if type(_result) is Err and type(_result.error) is ClientError_EditorFailed:
+        _cott_contract_condition(True, "real.pgcli.run_interactive", "error:8")
+    if type(_result) is Err and type(_result.error) is ClientError_PagerFailed:
+        _cott_contract_condition(True, "real.pgcli.run_interactive", "error:9")
+    if type(_result) is Err and type(_result.error) is ClientError_NotificationFailed:
+        _cott_contract_condition(True, "real.pgcli.run_interactive", "error:10")
+    if type(_result) is Err and type(_result.error) is ClientError_TerminalFailed:
+        _cott_contract_condition(True, "real.pgcli.run_interactive", "error:11")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             finished = _cott_match_value.value
-            return ((finished == UNIT))
+            return (_cott_contract_condition(((finished == UNIT)), "real.pgcli.run_interactive", "ensures:0"))
+        _cott_contract_condition((False), "real.pgcli.run_interactive", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.pgcli.run_interactive", clause="ensures:0", phase="ensures", span={"end_byte":16451,"end_column":50,"end_line":666,"start_byte":16406,"start_column":5,"start_line":666}, expected="true", actual="false")

@@ -36,11 +36,8 @@ impl Drop for TempDir {
     }
 }
 
-const MANIFEST: &str = r#"[project]
-name = "demo"
-version = "0.1.0"
-source = "src"
-
+const VERSION: &str = "0.1.0";
+const MANIFEST_TARGET: &str = r#"
 [target.python]
 source = "python"
 generated = "generated/python"
@@ -68,8 +65,14 @@ fn write_file(root: &Path, relative: &str, bytes: impl AsRef<[u8]>) {
 }
 
 fn project(with_binding: bool) -> TempDir {
+    named_project("demo", with_binding)
+}
+
+fn named_project(name: &str, with_binding: bool) -> TempDir {
     let temp = TempDir::new();
-    let mut manifest = MANIFEST.to_owned();
+    let mut manifest =
+        format!("[project]\nname = \"{name}\"\nversion = \"{VERSION}\"\nsource = \"src\"\n");
+    manifest.push_str(MANIFEST_TARGET);
     if with_binding {
         manifest.push_str(IMPLEMENTATION_BINDING);
     }
@@ -78,7 +81,9 @@ fn project(with_binding: bool) -> TempDir {
     write_file(
         &temp.path,
         "python/pyproject.toml",
-        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nrequires-python = \">=3.14.6,<3.15\"\ndependencies = []\n",
+        format!(
+            "[project]\nname = \"{name}\"\nversion = \"{VERSION}\"\nrequires-python = \">=3.14.6,<3.15\"\ndependencies = []\n"
+        ),
     );
     write_file(&temp.path, "python/demo_cli/__init__.py", CLI_ADAPTER);
     write_file(&temp.path, "python/demo_cli/__main__.py", CLI_ENTRYPOINT);
@@ -346,6 +351,106 @@ fn deploy_relocates_only_runtime_files_and_preserves_generation_bytes() {
         String::from_utf8_lossy(&default.stderr)
     );
     assert!(default_output.is_dir());
+}
+
+#[test]
+fn deployed_python_runs_after_moving_only_its_self_contained_tree() {
+    let project = project(true);
+    emit_and_certify(&project.path);
+    let invocation = TempDir::new();
+    let bundle = invocation.path.join("release");
+    assert_success_json(&deploy(
+        &project.path,
+        Some(&bundle),
+        &invocation.path,
+        true,
+    ));
+
+    // The deployment fixture targets 3.14.6; retarget its tool evidence to the
+    // host only so this runtime relocation check also runs on older Python hosts.
+    let host_tools = Command::new("python3")
+        .args([
+            "-I",
+            "-c",
+            r#"import hashlib,json,pathlib,platform,sys,sysconfig
+e=pathlib.Path(sys.executable).resolve()
+print(json.dumps({"cache_tag":sys.implementation.cache_tag,"content_hash":"sha256:"+hashlib.sha256(e.read_bytes()).hexdigest(),"executable":str(e),"implementation":sys.implementation.name,"machine":platform.machine(),"os":sys.platform,"platform":sysconfig.get_platform(),"version":platform.python_version()}))
+"#,
+        ])
+        .output()
+        .expect("host Python tool evidence");
+    assert!(
+        host_tools.status.success(),
+        "{}",
+        String::from_utf8_lossy(&host_tools.stderr)
+    );
+    let generation_path = bundle.join("generation.json");
+    let mut record =
+        GenerationRecord::parse(&fs::read(&generation_path).expect("deployed generation record"))
+            .expect("deployed reference record");
+    record.current.tools["python"] =
+        serde_json::from_slice(&host_tools.stdout).expect("host Python tool evidence JSON");
+    record
+        .current
+        .compute_generation_id()
+        .expect("host generation identity");
+    record.last_verified = Some(record.current.clone());
+    let generation = record.canonical_bytes().expect("host reference record");
+    fs::write(&generation_path, &generation).expect("retarget deployed runtime fixture");
+
+    let destination = TempDir::new();
+    let moved = destination.path.join("application");
+    fs::rename(&bundle, &moved).expect("move only the deployed tree");
+    drop(project);
+    drop(invocation);
+    let files = file_snapshot(&moved);
+    assert_eq!(
+        files
+            .keys()
+            .filter(|path| path
+                .file_name()
+                .is_some_and(|name| name == "generation.json"))
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![PathBuf::from("generation.json")]
+    );
+    assert!(!moved.join(".cott").exists());
+    let output = Command::new("python3")
+        .args([
+            "-I",
+            "-B",
+            "-c",
+            r#"import json,pathlib,sys
+root=pathlib.Path(sys.argv[1])
+sys.path.insert(0,str(root/"python"))
+import cott_runtime as runtime
+wire=json.loads((root/"generation.json").read_bytes())
+assert set(wire)=={"schema_version","current","last_verified","snapshots"}
+assert wire["schema_version"]==8
+assert wire["current"]==wire["last_verified"]
+assert set(wire["snapshots"])=={wire["current"]}
+current,last=runtime._cott_resolve_generation_record(wire)
+assert current==last and current["verified"]
+assert runtime._cott_snapshot_digest(current)==wire["current"]
+from demo_cli import main
+print(main())
+"#,
+        ])
+        .arg(&moved)
+        .current_dir(&destination.path)
+        .output()
+        .expect("run relocated Python deployment in an isolated interpreter");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"7\n");
+    assert_eq!(file_snapshot(&moved), files);
+    assert_eq!(
+        fs::read(moved.join("generation.json")).expect("relocated generation record"),
+        generation
+    );
 }
 
 #[test]
@@ -623,4 +728,175 @@ fn deploy_replace_refuses_a_file_and_a_foreign_directory() {
         b"keep me\n"
     );
     assert!(!foreign.join("generation.json").exists());
+}
+
+#[test]
+fn deploy_replace_refuses_a_foreign_python_project_at_the_same_version() {
+    let source = project(true);
+    emit_and_certify(&source.path);
+    let foreign = named_project("foreign", true);
+    emit_and_certify(&foreign.path);
+    let invocation = TempDir::new();
+    let relative = Path::new("release");
+    assert_success_json(&deploy(
+        &foreign.path,
+        Some(relative),
+        &invocation.path,
+        true,
+    ));
+    let output = invocation.path.join(relative);
+    let before = file_snapshot(&output);
+
+    let rejected = deploy_with(&source.path, Some(relative), &invocation.path, true, true);
+
+    assert_eq!(rejected.status.code(), Some(6));
+    assert_eq!(file_snapshot(&output), before);
+    assert_no_deploy_temps(&invocation.path);
+}
+
+#[test]
+fn deploy_replace_rejects_unrecorded_python_runtime_identity() {
+    let source = project(true);
+    emit_and_certify(&source.path);
+    let invocation = TempDir::new();
+    let relative = Path::new("release");
+    assert_success_json(&deploy(
+        &source.path,
+        Some(relative),
+        &invocation.path,
+        true,
+    ));
+    let output = invocation.path.join(relative);
+    let runtime = output.join("python/cott_runtime/__init__.py");
+    let bytes = fs::read_to_string(&runtime).expect("deployed runtime");
+    fs::write(
+        &runtime,
+        bytes.replace("PROJECT_NAME = 'demo'", "PROJECT_NAME = 'foreign'"),
+    )
+    .expect("modified runtime identity");
+    let before = file_snapshot(&output);
+
+    let rejected = deploy_with(&source.path, Some(relative), &invocation.path, true, true);
+
+    assert_eq!(rejected.status.code(), Some(6));
+    assert_eq!(file_snapshot(&output), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_replace_rejects_symlink_ancestors_and_linked_identity_files() {
+    use std::os::unix::fs::symlink;
+
+    let source = project(true);
+    emit_and_certify(&source.path);
+    let invocation = TempDir::new();
+    let relative = Path::new("real/release");
+    assert_success_json(&deploy(
+        &source.path,
+        Some(relative),
+        &invocation.path,
+        true,
+    ));
+    let output = invocation.path.join(relative);
+    let before = file_snapshot(&output);
+    symlink(invocation.path.join("real"), invocation.path.join("alias")).expect("ancestor symlink");
+    symlink(&output, invocation.path.join("release-link")).expect("output symlink");
+    for unsafe_path in [Path::new("alias/release"), Path::new("release-link")] {
+        let rejected = deploy_with(
+            &source.path,
+            Some(unsafe_path),
+            &invocation.path,
+            true,
+            true,
+        );
+        assert_eq!(rejected.status.code(), Some(6));
+        assert_eq!(file_snapshot(&output), before);
+    }
+    for member in ["generation.json", "python/cott_runtime/__init__.py"] {
+        let original = output.join(member);
+        let retained = invocation.path.join("retained");
+        fs::rename(&original, &retained).expect("retain original identity file");
+        symlink(&retained, &original).expect("identity symlink");
+        let rejected = deploy_with(&source.path, Some(relative), &invocation.path, true, true);
+        assert_eq!(rejected.status.code(), Some(6));
+        assert_eq!(fs::read(&retained).unwrap(), before[Path::new(member)]);
+        fs::remove_file(&original).expect("remove test symlink");
+        fs::hard_link(&retained, &original).expect("identity hard link");
+        let rejected = deploy_with(&source.path, Some(relative), &invocation.path, true, true);
+        assert_eq!(rejected.status.code(), Some(6));
+        assert_eq!(file_snapshot(&output), before);
+        fs::remove_file(&original).expect("remove test hard link");
+        fs::rename(&retained, &original).expect("restore identity file");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_replace_rejects_a_forged_journal_nominating_the_authoring_project() {
+    use std::io::Write;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    let invocation = TempDir::new();
+    let source = project(true);
+    let source_path = invocation.path.join("source");
+    fs::rename(&source.path, &source_path).expect("authoring project beside deployment");
+    emit_and_certify(&source_path);
+    assert_success_json(&deploy(
+        &source_path,
+        Some(Path::new("release")),
+        &invocation.path,
+        true,
+    ));
+    let output = invocation.path.join("release");
+    let before = file_snapshot(&source_path);
+    let deployed_before = file_snapshot(&output);
+    let identity = |path: &Path| {
+        let metadata = fs::symlink_metadata(path).expect("real directory identity");
+        serde_json::json!({
+            "device": metadata.dev(),
+            "inode": metadata.ino(),
+            "owner": metadata.uid(),
+        })
+    };
+    let journal_name = format!(
+        ".cott-deploy-journal-{}",
+        cott::hash::sha256_hex(b"release")
+    );
+    let record_hash = cott::hash::sha256_hex(&fs::read(output.join("generation.json")).unwrap());
+    let forged = serde_json::json!({
+        "version": 1,
+        "parent": identity(&invocation.path),
+        "target": b"release".to_vec(),
+        "staging": b"source".to_vec(),
+        "exchange": format!("{journal_name}-tree").as_bytes().to_vec(),
+        "old": identity(&output),
+        "new": identity(&source_path),
+        "old_record": record_hash,
+        "new_record": "unvalidated-by-the-vulnerable-prepared-recovery",
+    });
+    let mut bytes = serde_json::to_vec(&forged).unwrap();
+    bytes.extend_from_slice(b"\nP");
+    let journal_path = invocation.path.join(journal_name);
+    let mut journal = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&journal_path)
+        .expect("single-link current-user forged journal");
+    journal.write_all(&bytes).unwrap();
+    journal.sync_all().unwrap();
+    assert_eq!(fs::metadata(&journal_path).unwrap().nlink(), 1);
+
+    let rejected = deploy_with(
+        &source_path,
+        Some(Path::new("release")),
+        &invocation.path,
+        true,
+        true,
+    );
+
+    assert_eq!(rejected.status.code(), Some(6));
+    assert_eq!(file_snapshot(&source_path), before);
+    assert_eq!(file_snapshot(&output), deployed_before);
+    assert_eq!(fs::read(&journal_path).unwrap(), bytes);
 }

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from curriculum.cta_row_types import DayType, DayType_Saturday, DayType_SundayHoliday, DayType_Weekday, RideCount, RideRow, RideRowError, RideRowError_InvalidDate, RideRowError_InvalidDayType, RideRowError_InvalidRidership, RideRowError_InvalidRoute, RouteCode, ServiceDate
 
@@ -22,11 +23,11 @@ Success returns a RideRow containing nominal RouteCode, ServiceDate, and RideCou
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
-    if _expected_error is None and ((not (((day_type == "U") or (day_type == "A")) or (day_type == "W")))):
+    if _expected_error is None and (_cott_contract_condition(((not (((day_type == "U") or (day_type == "A")) or (day_type == "W")))), "curriculum.cta_row.decode_row", "error:2:condition")):
         _expected_error = RideRowError_InvalidDayType
         _expected_error_span = {"end_byte":1344,"end_column":103,"end_line":35,"start_byte":1246,"start_column":5,"start_line":35}
         _expected_error_clause = "error:2"
-    if _expected_error is None and ((rides < 0)):
+    if _expected_error is None and (_cott_contract_condition(((rides < 0)), "curriculum.cta_row.decode_row", "error:3:condition")):
         _expected_error = RideRowError_InvalidRidership
         _expected_error_span = {"end_byte":1399,"end_column":55,"end_line":36,"start_byte":1349,"start_column":5,"start_line":36}
         _expected_error_clause = "error:3"
@@ -52,11 +53,18 @@ Success returns a RideRow containing nominal RouteCode, ServiceDate, and RideCou
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.cta_row.decode_row", phase="error", span={"end_byte":1471,"end_column":1,"end_line":39,"start_byte":355,"start_column":1,"start_line":26}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.cta_row.decode_row", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "curriculum.cta_row.decode_row", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is RideRowError_InvalidRoute:
+        _cott_contract_condition(True, "curriculum.cta_row.decode_row", "error:4")
+    if type(_result) is Err and type(_result.error) is RideRowError_InvalidDate:
+        _cott_contract_condition(True, "curriculum.cta_row.decode_row", "error:5")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             row = _cott_match_value.value
-            return ((((((row).route).value == route) and (((row).date).value == date)) and (((row).rides).value <= 9223372036854775807)))
+            return (_cott_contract_condition(((((((row).route).value == route) and (((row).date).value == date)) and (((row).rides).value <= 9223372036854775807))), "curriculum.cta_row.decode_row", "ensures:1"))
+        _cott_contract_condition((False), "curriculum.cta_row.decode_row", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.cta_row.decode_row", clause="ensures:1", phase="ensures", span={"end_byte":1240,"end_column":127,"end_line":33,"start_byte":1118,"start_column":5,"start_line":33}, expected="true", actual="false")

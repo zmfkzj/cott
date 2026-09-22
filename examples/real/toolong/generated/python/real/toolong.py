@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from real.toolong_types import LogEntry, ToolongError, ToolongError_InvalidArguments, ToolongError_ReadFailed, ViewerOptions
 
@@ -39,11 +40,16 @@ def parse_arguments(arguments: CottList[str]) -> Result[ViewerOptions, ToolongEr
             raise CottContractViolation("returned error is not allowed", symbol="real.toolong.parse_arguments", phase="error", span={"end_byte":534,"end_column":1,"end_line":27,"start_byte":253,"start_column":1,"start_line":16}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.toolong.parse_arguments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.toolong.parse_arguments", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ToolongError_InvalidArguments:
+        _cott_contract_condition(True, "real.toolong.parse_arguments", "error:2")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             options = _cott_match_value.value
-            return ((len((options).sources) > 0))
+            return (_cott_contract_condition(((len((options).sources) > 0)), "real.toolong.parse_arguments", "ensures:1"))
+        _cott_contract_condition((False), "real.toolong.parse_arguments", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.toolong.parse_arguments", clause="ensures:1", phase="ensures", span={"end_byte":475,"end_column":58,"end_line":21,"start_byte":422,"start_column":5,"start_line":21}, expected="true", actual="false")
@@ -78,11 +84,16 @@ def load_entries(sources: CottList[Path]) -> Result[CottList[LogEntry], ToolongE
             raise CottContractViolation("returned error is not allowed", symbol="real.toolong.load_entries", phase="error", span={"end_byte":818,"end_column":1,"end_line":38,"start_byte":534,"start_column":1,"start_line":27}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.toolong.load_entries", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.toolong.load_entries", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ToolongError_ReadFailed:
+        _cott_contract_condition(True, "real.toolong.load_entries", "error:2")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             entries = _cott_match_value.value
-            return ((len(sources) > 0))
+            return (_cott_contract_condition(((len(sources) > 0)), "real.toolong.load_entries", "ensures:1"))
+        _cott_contract_condition((False), "real.toolong.load_entries", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.toolong.load_entries", clause="ensures:1", phase="ensures", span={"end_byte":756,"end_column":50,"end_line":32,"start_byte":711,"start_column":5,"start_line":32}, expected="true", actual="false")
@@ -158,11 +169,18 @@ def execute(arguments: CottList[str]) -> Result[str, ToolongError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.toolong.execute", phase="error", span={"end_byte":1512,"end_column":1,"end_line":63,"start_byte":1187,"start_column":1,"start_line":52}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.toolong.execute", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.toolong.execute", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ToolongError_InvalidArguments:
+        _cott_contract_condition(True, "real.toolong.execute", "error:2")
+    if type(_result) is Err and type(_result.error) is ToolongError_ReadFailed:
+        _cott_contract_condition(True, "real.toolong.execute", "error:3")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             rendered = _cott_match_value.value
-            return ((len(arguments) > 0))
+            return (_cott_contract_condition(((len(arguments) > 0)), "real.toolong.execute", "ensures:1"))
+        _cott_contract_condition((False), "real.toolong.execute", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.toolong.execute", clause="ensures:1", phase="ensures", span={"end_byte":1411,"end_column":53,"end_line":57,"start_byte":1363,"start_column":5,"start_line":57}, expected="true", actual="false")

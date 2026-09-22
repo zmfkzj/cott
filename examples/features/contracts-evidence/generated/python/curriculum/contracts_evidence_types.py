@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Annotated, Any, Final, ForwardRef, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_descending_by, _cott_ends_with, _cott_euclidean_mod, _cott_normalize_f32, _cott_starts_with, _cott_unique_by, _cott_validate_abi, _cott_validated_construction
+from cott_runtime import _cott_contract_condition
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AcceptedLabel:
@@ -14,7 +15,7 @@ class AcceptedLabel:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "value", _cott_validate_abi(self.value, str, path="$.value"))
-        if not ((len(self.value) > 0)):
+        if not (_cott_contract_condition(((len(self.value) > 0)), "curriculum.contracts_evidence.AcceptedLabel", "refinement")):
             raise CottContractViolation("AcceptedLabel refinement failed", symbol="curriculum.contracts_evidence.AcceptedLabel", phase="refinement", span={"end_byte":87,"end_column":23,"end_line":4,"start_byte":75,"start_column":11,"start_line":4}, expected="true", actual="false")
 
 @final
@@ -45,9 +46,9 @@ class LabelAssessment:
             object.__setattr__(self, "length", _cott_validate_abi(self.length, U64, path="$.length"))
         if not _cott_validated_construction():
             object.__setattr__(self, "label", _cott_validate_abi(self.label, AcceptedLabel, path="$.label"))
-        if not ((len((self).text) == (self).length)):
+        if not (_cott_contract_condition(((len((self).text) == (self).length)), "curriculum.contracts_evidence.LabelAssessment", "invariant:0")):
             raise CottContractViolation("invariant failed", symbol="curriculum.contracts_evidence.LabelAssessment", clause="invariant:0", phase="invariant", span={"end_byte":280,"end_column":43,"end_line":15,"start_byte":242,"start_column":5,"start_line":15}, expected="true", actual="false")
-        if not (((self).text == ((self).label).value)):
+        if not (_cott_contract_condition((((self).text == ((self).label).value)), "curriculum.contracts_evidence.LabelAssessment", "invariant:1")):
             raise CottContractViolation("invariant failed", symbol="curriculum.contracts_evidence.LabelAssessment", clause="invariant:1", phase="invariant", span={"end_byte":324,"end_column":44,"end_line":16,"start_byte":285,"start_column":5,"start_line":16}, expected="true", actual="false")
 
 @final

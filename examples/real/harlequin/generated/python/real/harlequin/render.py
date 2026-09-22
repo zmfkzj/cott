@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from real.harlequin.render_types import ExportFormat, ExportFormat_Csv, ExportFormat_Json, ExportFormat_Markdown, ExportFormat_Sql, ExportFormat_Tsv, ExportRequest, KeyBinding, Keymap, RenderError, RenderError_DestinationDenied, RenderError_ExportFailed, RenderError_InvalidWidth, RenderError_UnsupportedCell, RenderLayout, RenderLayout_Table, RenderLayout_Vertical, RenderOptions, Theme
 from real.harlequin.catalog_types import CatalogColumn, CatalogMatch, CatalogRelation
@@ -79,11 +80,18 @@ def render_result(result: QueryResult, options: RenderOptions) -> Result[str, Re
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.render.render_result", phase="error", span={"end_byte":1238,"end_column":1,"end_line":62,"start_byte":1004,"start_column":1,"start_line":54}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.render.render_result", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.render.render_result", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is RenderError_InvalidWidth:
+        _cott_contract_condition(True, "real.harlequin.render.render_result", "error:1")
+    if type(_result) is Err and type(_result.error) is RenderError_UnsupportedCell:
+        _cott_contract_condition(True, "real.harlequin.render.render_result", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             rendered = _cott_match_value.value
-            return ((len(rendered) > 0))
+            return (_cott_contract_condition(((len(rendered) > 0)), "real.harlequin.render.render_result", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.render.render_result", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.render.render_result", clause="ensures:0", phase="ensures", span={"end_byte":1146,"end_column":52,"end_line":55,"start_byte":1099,"start_column":5,"start_line":55}, expected="true", actual="false")
@@ -251,11 +259,18 @@ def export_result(request: ExportRequest) -> Result[Unit, RenderError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.render.export_result", phase="error", span={"end_byte":2127,"end_column":1,"end_line":94,"start_byte":1767,"start_column":1,"start_line":83}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.render.export_result", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.render.export_result", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is RenderError_DestinationDenied:
+        _cott_contract_condition(True, "real.harlequin.render.export_result", "error:2")
+    if type(_result) is Err and type(_result.error) is RenderError_ExportFailed:
+        _cott_contract_condition(True, "real.harlequin.render.export_result", "error:3")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             written = _cott_match_value.value
-            return (((request).destination).writable)
+            return (_cott_contract_condition((((request).destination).writable), "real.harlequin.render.export_result", "ensures:1"))
+        _cott_contract_condition((False), "real.harlequin.render.export_result", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.render.export_result", clause="ensures:1", phase="ensures", span={"end_byte":2015,"end_column":63,"end_line":88,"start_byte":1957,"start_column":5,"start_line":88}, expected="true", actual="false")

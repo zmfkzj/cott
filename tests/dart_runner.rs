@@ -6,6 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
 
+#[path = "support/snapshot.rs"]
+mod snapshot;
+
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 struct TempDir(PathBuf);
@@ -123,10 +126,9 @@ runtime_validation = "boundary"
     }
 
     fn generation(&self) -> Value {
-        serde_json::from_slice(
+        snapshot::read(
             &fs::read(self.temp.0.join("generated/generation.json")).expect("generation record"),
         )
-        .expect("generation JSON")
     }
 }
 
@@ -261,10 +263,15 @@ enum Envelope:
 enum PayloadFailure:
     Failed(payload: Payload)
 
+enum Grade:
+    Low
+    High
+
 struct Message:
     payload: Option[Payload] = Option.Nothing
     outcome: Result[Payload, PayloadFailure]
     envelope: Envelope
+    grade: Grade = Grade.Low
 
     invariant self.payload matches Option.Some(payload) => payload.bytes.len >= 0
     invariant self.outcome matches Result.Ok(payload) => payload.bytes.len >= 0
@@ -524,4 +531,80 @@ Future<bool> _probe(cott_runtime.CottPath source) async {
         &fixture.generation(),
         "demo.runner.probe"
     ));
+}
+
+#[test]
+#[ignore = "requires COTT_DART, bubblewrap, and the provisioned Dart 3.13.3 SDK"]
+fn native_runner_guarded_success_requires_a_matched_condition() {
+    let fixture = Fixture::new(
+        "guarded-success",
+        r#"module demo.runner
+
+fn absent(value: Bool) -> Option[I32]:
+    ensures result matches Option.Some(item) => item > 0
+
+fn mixed(value: Bool) -> Option[I32]:
+    ensures result matches Option.Some(item) => item > 0
+
+async fn asynchronous(value: Bool) -> Option[I32]:
+    ensures result matches Option.Some(item) => item > 0
+
+fn beyond_boundary(value: I32) -> Option[I32]:
+    requires value > 41
+    ensures result matches Option.Some(item) => item > 41
+"#,
+        &[
+            (
+                "demo.runner.absent",
+                "absent.dart",
+                "_absent",
+                "cott_runtime.CottOption<int> _absent(bool value) { return const cott_runtime.Nothing<int>(); }\n",
+            ),
+            (
+                "demo.runner.mixed",
+                "mixed.dart",
+                "_mixed",
+                "cott_runtime.CottOption<int> _mixed(bool value) { return value ? const cott_runtime.Some<int>(1) : const cott_runtime.Nothing<int>(); }\n",
+            ),
+            (
+                "demo.runner.asynchronous",
+                "asynchronous.dart",
+                "_asynchronous",
+                "Future<cott_runtime.CottOption<int>> _asynchronous(bool value) async { await Future<void>.delayed(Duration.zero); return value ? const cott_runtime.Some<int>(1) : const cott_runtime.Nothing<int>(); }\n",
+            ),
+            (
+                "demo.runner.beyond_boundary",
+                "beyond_boundary.dart",
+                "_beyond_boundary",
+                "cott_runtime.CottOption<int> _beyond_boundary(int value) { return cott_runtime.Some<int>(value); }\n",
+            ),
+        ],
+    );
+    let emitted = fixture.run(&["emit", "dart"]);
+    assert_eq!(emitted.status.code(), Some(0), "{}", stderr(&emitted));
+    let verified = fixture.run(&["verify"]);
+    assert_eq!(verified.status.code(), Some(0), "{}", stderr(&verified));
+    let generation = fixture.generation();
+    assert!(!has_positive_clause(&generation, "demo.runner.absent"));
+    assert!(has_positive_clause(&generation, "demo.runner.mixed"));
+    assert!(has_positive_clause(&generation, "demo.runner.asynchronous"));
+    let absent = generation["current"]["semantic_coverage"]["clauses"]
+        .as_array()
+        .expect("coverage inventory")
+        .iter()
+        .find(|clause| clause["symbol"] == "demo.runner.absent")
+        .expect("guarded absent clause remains in inventory");
+    assert_ne!(absent["status"], "observed");
+    let success = generation["current"]["semantic_coverage"]["clauses"]
+        .as_array()
+        .expect("coverage inventory")
+        .iter()
+        .find(|clause| {
+            clause["symbol"] == "demo.runner.beyond_boundary"
+                && clause["clause_id"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("ensures:"))
+        })
+        .expect("guarded boundary clause");
+    assert_eq!(success["status"], "observed");
 }

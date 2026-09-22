@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from real.harlequin.core_types import AdapterDescriptor, AdapterKind, AdapterKind_Adbc, AdapterKind_BigQuery, AdapterKind_Cassandra, AdapterKind_Databricks, AdapterKind_DuckDb, AdapterKind_MySql, AdapterKind_NebulaGraph, AdapterKind_Odbc, AdapterKind_PostgreSql, AdapterKind_Sqlite, AdapterKind_Trino, Cell, Cell_Blob, Cell_Integer, Cell_Null, Cell_Real, Cell_Text, CliError, CliError_ConflictingConnectionInputs, CliError_InvalidAdapter, CliError_MissingOptionValue, CliError_UnknownOption, CliOptions, Configuration, ConfigurationError, ConfigurationError_Invalid, ConfigurationError_Missing, ConfigurationError_ProfileDuplicate, ConfigurationError_ProfileMissing, Connection, ConnectionError, ConnectionError_AdapterUnavailable, ConnectionError_AuthenticationFailed, ConnectionError_Failed, ConnectionError_InvalidEndpoint, ConnectionProfile, ConnectionRequest, DatabaseTarget, DatabaseTarget_File, DatabaseTarget_Memory, FileError, FileError_InvalidEncoding, FileError_NotFound, FileError_PermissionDenied, FileError_TransferFailed, FileLocation, FileLocation_Local, FileLocation_S3, FileReference, IdeSession, LoadedFile, QueryBatch, QueryHistory, QueryHistoryEntry, QueryResult, QueryTab, SavedFile, SessionError, SessionError_HistoryCapacityInvalid, SessionError_TabMissing, Setting, SqlClientError, SqlClientError_Cancelled, SqlClientError_EmptySql, SqlClientError_ExecutionFailed, SqlClientError_ReadOnlyViolation, SqlClientError_ResultLimitExceeded, SqlClientError_SqliteFailure, SqlClientError_UnsupportedValue, SqlClientError_UnterminatedSql, Transaction, TypedRow
 
@@ -26,7 +27,7 @@ def adapter_descriptors() -> CottList[AdapterDescriptor]:
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.core.adapter_descriptors", phase="implementation-call", span={"end_byte":3304,"end_column":1,"end_line":170,"start_byte":3205,"start_column":1,"start_line":165}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, CottList[AdapterDescriptor], path="$.return")
-    if not ((len(_result) == 11)):
+    if not (_cott_contract_condition(((len(_result) == 11)), "real.harlequin.core.adapter_descriptors", "ensures:0")):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.adapter_descriptors", clause="ensures:0", phase="ensures", span={"end_byte":3286,"end_column":29,"end_line":166,"start_byte":3262,"start_column":5,"start_line":166}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, CottList[AdapterDescriptor], path="$.return", validator=_cott_validate_abi)
     return _result
@@ -58,11 +59,22 @@ def parse_cli(arguments: CottList[str]) -> Result[CliOptions, CliError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.core.parse_cli", phase="error", span={"end_byte":3623,"end_column":1,"end_line":180,"start_byte":3304,"start_column":1,"start_line":170}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.core.parse_cli", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.core.parse_cli", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is CliError_UnknownOption:
+        _cott_contract_condition(True, "real.harlequin.core.parse_cli", "error:1")
+    if type(_result) is Err and type(_result.error) is CliError_MissingOptionValue:
+        _cott_contract_condition(True, "real.harlequin.core.parse_cli", "error:2")
+    if type(_result) is Err and type(_result.error) is CliError_InvalidAdapter:
+        _cott_contract_condition(True, "real.harlequin.core.parse_cli", "error:3")
+    if type(_result) is Err and type(_result.error) is CliError_ConflictingConnectionInputs:
+        _cott_contract_condition(True, "real.harlequin.core.parse_cli", "error:4")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             options = _cott_match_value.value
-            return (((options).source_argument_count <= len(arguments)))
+            return (_cott_contract_condition((((options).source_argument_count <= len(arguments))), "real.harlequin.core.parse_cli", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.core.parse_cli", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.parse_cli", clause="ensures:0", phase="ensures", span={"end_byte":3452,"end_column":81,"end_line":171,"start_byte":3376,"start_column":5,"start_line":171}, expected="true", actual="false")
@@ -97,11 +109,20 @@ def load_configuration(path: Path) -> Result[Configuration, ConfigurationError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.core.load_configuration", phase="error", span={"end_byte":4031,"end_column":1,"end_line":193,"start_byte":3623,"start_column":1,"start_line":180}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.core.load_configuration", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.core.load_configuration", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ConfigurationError_Missing:
+        _cott_contract_condition(True, "real.harlequin.core.load_configuration", "error:2")
+    if type(_result) is Err and type(_result.error) is ConfigurationError_Invalid:
+        _cott_contract_condition(True, "real.harlequin.core.load_configuration", "error:3")
+    if type(_result) is Err and type(_result.error) is ConfigurationError_ProfileDuplicate:
+        _cott_contract_condition(True, "real.harlequin.core.load_configuration", "error:4")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             configuration = _cott_match_value.value
-            return ((len((configuration).profiles) <= 100000))
+            return (_cott_contract_condition(((len((configuration).profiles) <= 100000)), "real.harlequin.core.load_configuration", "ensures:1"))
+        _cott_contract_condition((False), "real.harlequin.core.load_configuration", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.load_configuration", clause="ensures:1", phase="ensures", span={"end_byte":3883,"end_column":77,"end_line":185,"start_byte":3811,"start_column":5,"start_line":185}, expected="true", actual="false")
@@ -137,11 +158,16 @@ def resolve_profile(configuration: Configuration, options: CliOptions) -> Result
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.core.resolve_profile", phase="error", span={"end_byte":4389,"end_column":1,"end_line":207,"start_byte":4031,"start_column":1,"start_line":193}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.core.resolve_profile", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.core.resolve_profile", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ConfigurationError_ProfileMissing:
+        _cott_contract_condition(True, "real.harlequin.core.resolve_profile", "error:2")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             request = _cott_match_value.value
-            return ((len((request).endpoint) > 0))
+            return (_cott_contract_condition(((len((request).endpoint) > 0)), "real.harlequin.core.resolve_profile", "ensures:1"))
+        _cott_contract_condition((False), "real.harlequin.core.resolve_profile", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.resolve_profile", clause="ensures:1", phase="ensures", span={"end_byte":4326,"end_column":59,"end_line":201,"start_byte":4272,"start_column":5,"start_line":201}, expected="true", actual="false")
@@ -175,11 +201,22 @@ def connect(request: ConnectionRequest) -> Result[Connection, ConnectionError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.core.connect", phase="error", span={"end_byte":4750,"end_column":1,"end_line":217,"start_byte":4389,"start_column":1,"start_line":207}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.core.connect", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.core.connect", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ConnectionError_AdapterUnavailable:
+        _cott_contract_condition(True, "real.harlequin.core.connect", "error:1")
+    if type(_result) is Err and type(_result.error) is ConnectionError_InvalidEndpoint:
+        _cott_contract_condition(True, "real.harlequin.core.connect", "error:2")
+    if type(_result) is Err and type(_result.error) is ConnectionError_AuthenticationFailed:
+        _cott_contract_condition(True, "real.harlequin.core.connect", "error:3")
+    if type(_result) is Err and type(_result.error) is ConnectionError_Failed:
+        _cott_contract_condition(True, "real.harlequin.core.connect", "error:4")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             connection = _cott_match_value.value
-            return (((connection).adapter == (request).adapter))
+            return (_cott_contract_condition((((connection).adapter == (request).adapter)), "real.harlequin.core.connect", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.core.connect", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.connect", clause="ensures:0", phase="ensures", span={"end_byte":4542,"end_column":75,"end_line":208,"start_byte":4472,"start_column":5,"start_line":208}, expected="true", actual="false")
@@ -232,11 +269,16 @@ def begin_transaction(connection: Connection) -> Result[Transaction, ConnectionE
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.core.begin_transaction", phase="error", span={"end_byte":5076,"end_column":1,"end_line":227,"start_byte":4835,"start_column":1,"start_line":220}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.core.begin_transaction", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.core.begin_transaction", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ConnectionError_Failed:
+        _cott_contract_condition(True, "real.harlequin.core.begin_transaction", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             transaction = _cott_match_value.value
-            return (((transaction).connection_id == (connection).id))
+            return (_cott_contract_condition((((transaction).connection_id == (connection).id)), "real.harlequin.core.begin_transaction", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.core.begin_transaction", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.begin_transaction", clause="ensures:0", phase="ensures", span={"end_byte":5001,"end_column":81,"end_line":221,"start_byte":4925,"start_column":5,"start_line":221}, expected="true", actual="false")
@@ -270,11 +312,16 @@ def commit_transaction(transaction: Transaction) -> Result[Transaction, Connecti
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.core.commit_transaction", phase="error", span={"end_byte":5324,"end_column":1,"end_line":234,"start_byte":5076,"start_column":1,"start_line":227}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.core.commit_transaction", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.core.commit_transaction", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ConnectionError_Failed:
+        _cott_contract_condition(True, "real.harlequin.core.commit_transaction", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             updated = _cott_match_value.value
-            return (((updated).connection_id == (transaction).connection_id))
+            return (_cott_contract_condition((((updated).connection_id == (transaction).connection_id)), "real.harlequin.core.commit_transaction", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.core.commit_transaction", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.commit_transaction", clause="ensures:0", phase="ensures", span={"end_byte":5249,"end_column":85,"end_line":228,"start_byte":5169,"start_column":5,"start_line":228}, expected="true", actual="false")
@@ -308,11 +355,16 @@ def rollback_transaction(transaction: Transaction) -> Result[Transaction, Connec
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.core.rollback_transaction", phase="error", span={"end_byte":5574,"end_column":1,"end_line":241,"start_byte":5324,"start_column":1,"start_line":234}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.core.rollback_transaction", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.core.rollback_transaction", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is ConnectionError_Failed:
+        _cott_contract_condition(True, "real.harlequin.core.rollback_transaction", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             updated = _cott_match_value.value
-            return (((updated).connection_id == (transaction).connection_id))
+            return (_cott_contract_condition((((updated).connection_id == (transaction).connection_id)), "real.harlequin.core.rollback_transaction", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.core.rollback_transaction", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.rollback_transaction", clause="ensures:0", phase="ensures", span={"end_byte":5499,"end_column":85,"end_line":235,"start_byte":5419,"start_column":5,"start_line":235}, expected="true", actual="false")
@@ -358,7 +410,7 @@ def edit_query_tab(tab: QueryTab, source: str, cursor: U64) -> QueryTab:
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.core.edit_query_tab", phase="implementation-call", span={"end_byte":5791,"end_column":1,"end_line":249,"start_byte":5655,"start_column":1,"start_line":244}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, QueryTab, path="$.return")
-    if not (((_result).cursor <= len((_result).source))):
+    if not (_cott_contract_condition((((_result).cursor <= len((_result).source))), "real.harlequin.core.edit_query_tab", "ensures:0")):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.edit_query_tab", clause="ensures:0", phase="ensures", span={"end_byte":5773,"end_column":47,"end_line":245,"start_byte":5731,"start_column":5,"start_line":245}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, QueryTab, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -380,7 +432,7 @@ def append_query_history(history: QueryHistory, entry: QueryHistoryEntry) -> Que
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.core.append_query_history", phase="implementation-call", span={"end_byte":5949,"end_column":1,"end_line":254,"start_byte":5791,"start_column":1,"start_line":249}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, QueryHistory, path="$.return")
-    if not ((len((_result).entries) <= (history).capacity)):
+    if not (_cott_contract_condition(((len((_result).entries) <= (history).capacity)), "real.harlequin.core.append_query_history", "ensures:0")):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.append_query_history", clause="ensures:0", phase="ensures", span={"end_byte":5931,"end_column":51,"end_line":250,"start_byte":5885,"start_column":5,"start_line":250}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, QueryHistory, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -402,13 +454,13 @@ def start_session(connection: Connection, history_capacity: U64) -> IdeSession:
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.core.start_session", phase="implementation-call", span={"end_byte":6222,"end_column":1,"end_line":262,"start_byte":5949,"start_column":1,"start_line":254}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, IdeSession, path="$.return")
-    if not (((_result).connection == connection)):
+    if not (_cott_contract_condition((((_result).connection == connection)), "real.harlequin.core.start_session", "ensures:0")):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.start_session", clause="ensures:0", phase="ensures", span={"end_byte":6071,"end_column":44,"end_line":255,"start_byte":6032,"start_column":5,"start_line":255}, expected="true", actual="false")
-    if not ((len((_result).tabs) == 0)):
+    if not (_cott_contract_condition(((len((_result).tabs) == 0)), "real.harlequin.core.start_session", "ensures:1")):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.start_session", clause="ensures:1", phase="ensures", span={"end_byte":6104,"end_column":33,"end_line":256,"start_byte":6076,"start_column":5,"start_line":256}, expected="true", actual="false")
-    if not ((len(((_result).history).entries) == 0)):
+    if not (_cott_contract_condition(((len(((_result).history).entries) == 0)), "real.harlequin.core.start_session", "ensures:2")):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.start_session", clause="ensures:2", phase="ensures", span={"end_byte":6148,"end_column":44,"end_line":257,"start_byte":6109,"start_column":5,"start_line":257}, expected="true", actual="false")
-    if not ((((_result).history).capacity == history_capacity)):
+    if not (_cott_contract_condition(((((_result).history).capacity == history_capacity)), "real.harlequin.core.start_session", "ensures:3")):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.start_session", clause="ensures:3", phase="ensures", span={"end_byte":6204,"end_column":56,"end_line":258,"start_byte":6153,"start_column":5,"start_line":258}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, IdeSession, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -430,7 +482,7 @@ def add_query_tab(session: IdeSession, tab: QueryTab) -> IdeSession:
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.core.add_query_tab", phase="implementation-call", span={"end_byte":6359,"end_column":1,"end_line":267,"start_byte":6222,"start_column":1,"start_line":262}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, IdeSession, path="$.return")
-    if not ((len((_result).tabs) == (len((session).tabs) + 1))):
+    if not (_cott_contract_condition(((len((_result).tabs) == (len((session).tabs) + 1))), "real.harlequin.core.add_query_tab", "ensures:0")):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.add_query_tab", clause="ensures:0", phase="ensures", span={"end_byte":6341,"end_column":52,"end_line":263,"start_byte":6294,"start_column":5,"start_line":263}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, IdeSession, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -463,11 +515,16 @@ def activate_query_tab(session: IdeSession, tab_id: str) -> Result[IdeSession, S
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.core.activate_query_tab", phase="error", span={"end_byte":6575,"end_column":1,"end_line":274,"start_byte":6359,"start_column":1,"start_line":267}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.core.activate_query_tab", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.core.activate_query_tab", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is SessionError_TabMissing:
+        _cott_contract_condition(True, "real.harlequin.core.activate_query_tab", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             updated = _cott_match_value.value
-            return ((len((updated).tabs) == len((session).tabs)))
+            return (_cott_contract_condition(((len((updated).tabs) == len((session).tabs))), "real.harlequin.core.activate_query_tab", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.core.activate_query_tab", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.activate_query_tab", clause="ensures:0", phase="ensures", span={"end_byte":6522,"end_column":71,"end_line":268,"start_byte":6456,"start_column":5,"start_line":268}, expected="true", actual="false")
@@ -503,11 +560,16 @@ def close_query_tab(session: IdeSession, tab_id: str) -> Result[IdeSession, Sess
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.core.close_query_tab", phase="error", span={"end_byte":6865,"end_column":1,"end_line":285,"start_byte":6575,"start_column":1,"start_line":274}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.core.close_query_tab", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.core.close_query_tab", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is SessionError_TabMissing:
+        _cott_contract_condition(True, "real.harlequin.core.close_query_tab", "error:2")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             updated = _cott_match_value.value
-            return ((len((updated).tabs) < len((session).tabs)))
+            return (_cott_contract_condition(((len((updated).tabs) < len((session).tabs))), "real.harlequin.core.close_query_tab", "ensures:1"))
+        _cott_contract_condition((False), "real.harlequin.core.close_query_tab", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.close_query_tab", clause="ensures:1", phase="ensures", span={"end_byte":6812,"end_column":70,"end_line":279,"start_byte":6747,"start_column":5,"start_line":279}, expected="true", actual="false")
@@ -541,11 +603,18 @@ def split_statements(sql: str) -> Result[CottList[str], SqlClientError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.core.split_statements", phase="error", span={"end_byte":7082,"end_column":1,"end_line":293,"start_byte":6865,"start_column":1,"start_line":285}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.core.split_statements", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.core.split_statements", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is SqlClientError_EmptySql:
+        _cott_contract_condition(True, "real.harlequin.core.split_statements", "error:1")
+    if type(_result) is Err and type(_result.error) is SqlClientError_UnterminatedSql:
+        _cott_contract_condition(True, "real.harlequin.core.split_statements", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             statements = _cott_match_value.value
-            return ((len(statements) > 0))
+            return (_cott_contract_condition(((len(statements) > 0)), "real.harlequin.core.split_statements", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.core.split_statements", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.split_statements", clause="ensures:0", phase="ensures", span={"end_byte":6988,"end_column":56,"end_line":286,"start_byte":6937,"start_column":5,"start_line":286}, expected="true", actual="false")
@@ -581,11 +650,24 @@ def execute_sql(database: DatabaseTarget, sql: str, read_only: bool) -> Result[C
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.core.execute_sql", phase="error", span={"end_byte":7507,"end_column":1,"end_line":308,"start_byte":7082,"start_column":1,"start_line":293}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.core.execute_sql", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.core.execute_sql", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is SqlClientError_EmptySql:
+        _cott_contract_condition(True, "real.harlequin.core.execute_sql", "error:1")
+    if type(_result) is Err and type(_result.error) is SqlClientError_UnterminatedSql:
+        _cott_contract_condition(True, "real.harlequin.core.execute_sql", "error:2")
+    if type(_result) is Err and type(_result.error) is SqlClientError_ReadOnlyViolation:
+        _cott_contract_condition(True, "real.harlequin.core.execute_sql", "error:3")
+    if type(_result) is Err and type(_result.error) is SqlClientError_SqliteFailure:
+        _cott_contract_condition(True, "real.harlequin.core.execute_sql", "error:4")
+    if type(_result) is Err and type(_result.error) is SqlClientError_UnsupportedValue:
+        _cott_contract_condition(True, "real.harlequin.core.execute_sql", "error:5")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             results = _cott_match_value.value
-            return ((len(results) > 0))
+            return (_cott_contract_condition(((len(results) > 0)), "real.harlequin.core.execute_sql", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.core.execute_sql", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.execute_sql", clause="ensures:0", phase="ensures", span={"end_byte":7260,"end_column":50,"end_line":298,"start_byte":7215,"start_column":5,"start_line":298}, expected="true", actual="false")
@@ -621,11 +703,26 @@ def execute_statements(connection: Connection, sql: str, maximum_rows: U32) -> R
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.core.execute_statements", phase="error", span={"end_byte":8005,"end_column":1,"end_line":324,"start_byte":7507,"start_column":1,"start_line":308}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.core.execute_statements", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.core.execute_statements", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is SqlClientError_EmptySql:
+        _cott_contract_condition(True, "real.harlequin.core.execute_statements", "error:1")
+    if type(_result) is Err and type(_result.error) is SqlClientError_UnterminatedSql:
+        _cott_contract_condition(True, "real.harlequin.core.execute_statements", "error:2")
+    if type(_result) is Err and type(_result.error) is SqlClientError_ReadOnlyViolation:
+        _cott_contract_condition(True, "real.harlequin.core.execute_statements", "error:3")
+    if type(_result) is Err and type(_result.error) is SqlClientError_ExecutionFailed:
+        _cott_contract_condition(True, "real.harlequin.core.execute_statements", "error:4")
+    if type(_result) is Err and type(_result.error) is SqlClientError_ResultLimitExceeded:
+        _cott_contract_condition(True, "real.harlequin.core.execute_statements", "error:5")
+    if type(_result) is Err and type(_result.error) is SqlClientError_Cancelled:
+        _cott_contract_condition(True, "real.harlequin.core.execute_statements", "error:6")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             batch = _cott_match_value.value
-            return ((len((batch).statements) == len((batch).results)))
+            return (_cott_contract_condition(((len((batch).statements) == len((batch).results))), "real.harlequin.core.execute_statements", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.core.execute_statements", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.execute_statements", clause="ensures:0", phase="ensures", span={"end_byte":7709,"end_column":74,"end_line":313,"start_byte":7640,"start_column":5,"start_line":313}, expected="true", actual="false")
@@ -660,11 +757,22 @@ def load_query_file(reference: FileReference) -> Result[LoadedFile, FileError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.core.load_query_file", phase="error", span={"end_byte":8427,"end_column":1,"end_line":338,"start_byte":8005,"start_column":1,"start_line":324}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.core.load_query_file", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.core.load_query_file", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is FileError_NotFound:
+        _cott_contract_condition(True, "real.harlequin.core.load_query_file", "error:2")
+    if type(_result) is Err and type(_result.error) is FileError_PermissionDenied:
+        _cott_contract_condition(True, "real.harlequin.core.load_query_file", "error:3")
+    if type(_result) is Err and type(_result.error) is FileError_InvalidEncoding:
+        _cott_contract_condition(True, "real.harlequin.core.load_query_file", "error:4")
+    if type(_result) is Err and type(_result.error) is FileError_TransferFailed:
+        _cott_contract_condition(True, "real.harlequin.core.load_query_file", "error:5")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             loaded = _cott_match_value.value
-            return (((loaded).reference == reference))
+            return (_cott_contract_condition((((loaded).reference == reference)), "real.harlequin.core.load_query_file", "ensures:1"))
+        _cott_contract_condition((False), "real.harlequin.core.load_query_file", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.load_query_file", clause="ensures:1", phase="ensures", span={"end_byte":8253,"end_column":63,"end_line":329,"start_byte":8195,"start_column":5,"start_line":329}, expected="true", actual="false")
@@ -699,11 +807,18 @@ def save_query_file(reference: FileReference, source: str) -> Result[SavedFile, 
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.core.save_query_file", phase="error", span={"end_byte":8688,"end_column":1,"end_line":346,"start_byte":8427,"start_column":1,"start_line":338}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.core.save_query_file", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.core.save_query_file", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is FileError_PermissionDenied:
+        _cott_contract_condition(True, "real.harlequin.core.save_query_file", "error:1")
+    if type(_result) is Err and type(_result.error) is FileError_TransferFailed:
+        _cott_contract_condition(True, "real.harlequin.core.save_query_file", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             saved = _cott_match_value.value
-            return (((saved).reference == reference))
+            return (_cott_contract_condition((((saved).reference == reference)), "real.harlequin.core.save_query_file", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.core.save_query_file", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.core.save_query_file", clause="ensures:0", phase="ensures", span={"end_byte":8578,"end_column":61,"end_line":339,"start_byte":8522,"start_column":5,"start_line":339}, expected="true", actual="false")

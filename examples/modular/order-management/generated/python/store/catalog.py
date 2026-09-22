@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from store.catalog_types import Catalog, CatalogError, CatalogError_ItemNotFound, Item
 
@@ -15,7 +16,7 @@ def find_item(catalog: Catalog, sku: str) -> Result[Item, CatalogError]:
     """Look up an item in the catalog by its SKU."""
     catalog = _cott_validate_abi(catalog, Catalog, path="$.catalog")
     sku = _cott_validate_abi(sku, str, path="$.sku")
-    if not ((len(sku) > 0)):
+    if not (_cott_contract_condition(((len(sku) > 0)), "store.catalog.find_item", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="store.catalog.find_item", clause="requires:1", phase="requires", span={"end_byte":334,"end_column":25,"end_line":19,"start_byte":314,"start_column":5,"start_line":19}, expected="true", actual="false")
     _expected_error = None
     _expected_error_span = None
@@ -42,11 +43,16 @@ def find_item(catalog: Catalog, sku: str) -> Result[Item, CatalogError]:
             raise CottContractViolation("returned error is not allowed", symbol="store.catalog.find_item", phase="error", span={"end_byte":420,"end_column":1,"end_line":24,"start_byte":170,"start_column":1,"start_line":14}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="store.catalog.find_item", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "store.catalog.find_item", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is CatalogError_ItemNotFound:
+        _cott_contract_condition(True, "store.catalog.find_item", "error:3")
     def _cott_match_ensures_2() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             item = _cott_match_value.value
-            return (((item).sku == sku))
+            return (_cott_contract_condition((((item).sku == sku)), "store.catalog.find_item", "ensures:2"))
+        _cott_contract_condition((False), "store.catalog.find_item", "ensures:2:applicable")
         return True
     if not (_cott_match_ensures_2()):
         raise CottContractViolation("ensures clause failed", symbol="store.catalog.find_item", clause="ensures:2", phase="ensures", span={"end_byte":382,"end_column":47,"end_line":21,"start_byte":340,"start_column":5,"start_line":21}, expected="true", actual="false")

@@ -154,8 +154,10 @@ def cott_runs(project):
     if not path.is_file():
         return None
     try:
-        runs = (json.loads(path.read_text(encoding="utf-8")).get("current") or {}).get("agent_runs") or []
-    except json.JSONDecodeError:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        current = record["snapshots"][record["current"]]
+        runs = current["agent_runs"]
+    except (json.JSONDecodeError, KeyError, TypeError):
         return None
     keys = ("symbol", "duration_ms", "status", "stdout", "stderr", "adapter", "adapter_version",
             "prompt_hash", "implementation_hash", "argv_template", "executable", "executable_hash")

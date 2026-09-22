@@ -26,7 +26,16 @@ const COMPILER_TIMEOUT: Duration = Duration::from_secs(120);
 const CONSUMER_TIMEOUT: Duration = Duration::from_secs(20);
 const ABI_OPAQUE_TAG: &str = "dart-abi-secret";
 
+const SHARED_CONTRACT: &str = r#"module shared
+
+enum Tier:
+    Free
+    Paid
+"#;
+
 const CONTRACT: &str = r#"module semantics
+
+use shared.{Tier}
 
 enum Choice[T]:
     Empty
@@ -35,8 +44,36 @@ enum Choice[T]:
 enum Consumer[-T]:
     Ready
 
+enum Kind:
+    Local
+    Remote
+
+enum Mode:
+    Mode
+    Batch
+
+enum RouteError:
+    Rejected
+
+struct Route:
+    kind: Kind = Kind.Local
+    mode: Mode
+    tier: Tier = Tier.Free
+
 struct GenericDefault[T]:
     value: Option[T] = Option.Nothing
+
+struct CopyState[T, const N: U32]:
+    value: T
+    len: I32 = 7
+    enabled: Bool = true
+    items: List[I32]
+    bytes: Buffer[N]
+    invariant self.len >= 0
+
+struct Legacy:
+    copy_with: I32
+    len: I32
 
 struct Node:
     value: I32
@@ -106,6 +143,9 @@ fn echo_shared(node: SharedNode) -> SharedNode
 fn retain[T: Combined](value: T) -> T
 fn retain_both[T: Child + Secondary](value: T) -> T
 fn retain_member[T: Associated](owner: T, member: T.Member) -> T.Member
+fn classify(kind: Kind) -> Result[Kind, RouteError]:
+    ensures Result.Ok(value) => value == kind
+    error RouteError.Rejected when kind == Kind.Remote
 "#;
 
 const ABI_CONTRACT: &str = r#"module abi
@@ -140,6 +180,7 @@ struct Defaulted:
     values: Array[U8, 2] = Array(1, 2)
     bytes: Buffer[2] = Buffer("00ff")
     anything: Any
+    nullable: Option[Any] = Option.Nothing
 
 struct AbiBundle:
     count: Count
@@ -156,6 +197,7 @@ fn echo_bundle(value: AbiBundle) -> AbiBundle
 
 const SEMANTICS_CONSUMER: &str = r#"import 'package:dart_semantics/cott_runtime.dart' as cott_runtime;
 import 'package:dart_semantics/modules/semantics.dart' as semantics;
+import 'package:dart_semantics/modules/shared.dart' as tiers;
 
 void check(bool condition, String label) {
   if (!condition) throw StateError(label);
@@ -173,6 +215,18 @@ void expectViolation(void Function() operation, String label) {
 final class BadAssociated implements semantics.Associated<semantics.ChildOnlyState> {
   @override
   semantics.ChildOnlyState member(semantics.ChildOnlyState value) => value;
+}
+
+final class Two implements cott_runtime.CottConst {
+  const Two();
+  @override
+  BigInt get value => BigInt.two;
+}
+
+final class OtherTwo implements cott_runtime.CottConst {
+  const OtherTwo();
+  @override
+  BigInt get value => BigInt.two;
 }
 
 void main() {
@@ -203,6 +257,75 @@ void main() {
     ),
     'explicit invalid object must not impersonate an omitted argument',
   );
+  final preservedDefault = explicitDefault.copyWith();
+  check(
+    identical(preservedDefault.value, explicitOption) &&
+        identical(preservedDefault.cottTypeT, explicitDefault.cottTypeT) &&
+        preservedDefault.cottGenericIdentity == explicitDefault.cottGenericIdentity,
+    'copy must keep the exact stored generic default override and witness',
+  );
+  final clearedDefault =
+      explicitDefault.copyWith(value: const cott_runtime.Nothing<int>());
+  check(clearedDefault.value is cott_runtime.Nothing<int>,
+      'explicit Nothing must clear rather than omit the field');
+  final byteDefault = semantics.GenericDefault<int>(
+    cott_runtime.CottTypes.u8,
+    value: const cott_runtime.Some<int>(255),
+  );
+  expectViolation(
+    () => byteDefault.copyWith(value: const cott_runtime.Some<int>(256)),
+    'copy must retain exact U8 descriptor rather than widen to Dart int',
+  );
+  expectViolation(
+    () => explicitDefault.copyWith(value: null),
+    'null is not omission for a nonnullable Option field',
+  );
+
+  const dimension = Two();
+  final storedItems = cott_runtime.CottList<int>([1, 2]);
+  final storedBytes = cott_runtime.CottBuffer<cott_runtime.CottConst>(
+    [3, 4], dimension,
+  );
+  final state = semantics.CopyState<int, cott_runtime.CottConst>(
+    cott_runtime.CottTypes.i32,
+    value: 12,
+    len: 9,
+    items: storedItems,
+    bytes: storedBytes,
+    cottConstN: dimension,
+  );
+  final untouched = state.copyWith();
+  check(untouched == state && untouched.hashCode == state.hashCode &&
+      untouched.len == 9 && identical(untouched.items, storedItems) &&
+      identical(untouched.bytes, storedBytes),
+      'omitted copy fields must preserve values, sharing and equality');
+  final emptied = state.copyWith(
+    value: 0,
+    len: 0,
+    enabled: false,
+    items: cott_runtime.CottList<int>(const []),
+  );
+  check(emptied.value == 0 && emptied.len == 0 && !emptied.enabled &&
+      emptied.items.isEmpty && identical(emptied.cottTypeT, state.cottTypeT) &&
+      identical(emptied.cottConstN, dimension) &&
+      identical(emptied.bytes, storedBytes),
+      'zero, false and empty values must update without losing witnesses');
+  check(state.value == 12 && state.len == 9 && state.enabled &&
+      identical(state.items, storedItems), 'copy mutated its source');
+  expectViolation(() => state.copyWith(len: -1),
+      'copy must rerun struct invariants');
+  expectViolation(() => state.copyWith(value: 2147483648),
+      'copy must check the stored generic numeric bounds');
+  expectViolation(
+    () => state.copyWith(bytes: cott_runtime.CottBuffer<cott_runtime.CottConst>(
+      [3, 4], const OtherTwo(),
+    )),
+    'copy must reject a same-length buffer with a different const witness',
+  );
+  final legacy = semantics.Legacy(copy_with: 8, len: 4);
+  final legacyCopy = semantics.Legacy$CopyWith(legacy).copyWith(copy_with: 0);
+  check(legacy.copy_with == 8 && legacyCopy.copy_with == 0 && legacyCopy.len == 4,
+      'named extension must preserve the existing snake_case field API');
 
   final valid = semantics.Node(
     value: 1,
@@ -303,11 +426,106 @@ void main() {
     ),
     'invariant checked view',
   );
+
+  check(
+    semantics.Kind.values.length == 2 &&
+        identical(semantics.Kind.values[0], semantics.Kind.Local) &&
+        identical(semantics.Kind.values[1], semantics.Kind.Remote),
+    'native enum declares its variants in canonical order',
+  );
+  check(
+    semantics.Kind.Local.name == 'Local' &&
+        semantics.Kind.Remote.name == 'Remote' &&
+        semantics.Kind.Local.index == 0 &&
+        semantics.Kind.Remote.index == 1,
+    'native enum keeps the exact Cott variant spelling and declared order',
+  );
+  const localKind = semantics.Kind.Local;
+  check(
+    identical(localKind, semantics.Kind.Local) &&
+        localKind == semantics.Kind.Local &&
+        localKind != semantics.Kind.Remote &&
+        localKind.hashCode == semantics.Kind.Local.hashCode,
+    'native enum members are immutable constant singletons',
+  );
+  check(
+    semantics.Kind.Local.cottVariant == 'semantics.Kind.Local' &&
+        semantics.Kind.Local.cottTypeIdentity == 'semantics.Kind.Local' &&
+        semantics.Kind.Remote.cottVariant == 'semantics.Kind.Remote',
+    'native enum keeps its full canonical variant identity',
+  );
+  check(
+    semantics.Kind.Local.cottPayload.isEmpty &&
+        semantics.Kind.Local.cottFieldNames.isEmpty &&
+        identical(
+          semantics.Kind.Local.cottPayload,
+          semantics.Kind.Remote.cottPayload,
+        ) &&
+        identical(
+          semantics.Kind.Local.cottFieldNames,
+          semantics.Kind.Remote.cottFieldNames,
+        ),
+    'native enum metadata is empty and shared rather than reallocated',
+  );
+  expectViolation(
+    () => semantics.Kind.Local.cottField('kind'),
+    'a payloadless native variant has no canonical field',
+  );
+  check(
+    cott_runtime.CottRuntime.canonicalEqual(
+          semantics.Kind.Local,
+          semantics.Kind.Local,
+        ) &&
+        !cott_runtime.CottRuntime.canonicalEqual(
+          semantics.Kind.Local,
+          semantics.Kind.Remote,
+        ),
+    'canonical equality agrees with native enum identity',
+  );
+  final describedKind = switch (semantics.Kind.Remote) {
+    semantics.Kind.Local => 'local',
+    semantics.Kind.Remote => 'remote',
+  };
+  check(describedKind == 'remote', 'native enum supports exhaustive constant switches');
+  check(
+    semantics.Mode.Mode$.cottVariant == 'semantics.Mode.Mode' &&
+        semantics.Mode.values.length == 2 &&
+        identical(semantics.Mode.values[0], semantics.Mode.Mode$),
+    'a self-named variant is escaped in Dart while keeping its canonical identity',
+  );
+
+  final routed = semantics.Route(mode: semantics.Mode.Batch);
+  check(
+    identical(routed.kind, semantics.Kind.Local) &&
+        identical(routed.tier, tiers.Tier.Free) &&
+        identical(routed.mode, semantics.Mode.Batch),
+    'omitted native enum defaults resolve to the declared constant member',
+  );
+  final rerouted = routed.copyWith(kind: semantics.Kind.Remote);
+  check(
+    identical(rerouted.kind, semantics.Kind.Remote) &&
+        identical(routed.kind, semantics.Kind.Local),
+    'copying a struct replaces only the named native enum field',
+  );
+
+  final accepted = semantics.classify(semantics.Kind.Local);
+  check(
+    accepted is cott_runtime.Ok<semantics.Kind, semantics.RouteError> &&
+        identical(accepted.value, semantics.Kind.Local),
+    'native enum round-trips through a declared Result success',
+  );
+  final rejected = semantics.classify(semantics.Kind.Remote);
+  check(
+    rejected is cott_runtime.Err<semantics.Kind, semantics.RouteError> &&
+        identical(rejected.error, semantics.RouteError.Rejected),
+    'a native enum error variant satisfies its declared error clause',
+  );
 }
 "#;
 
 const ABI_CONSUMER: &str = r#"import 'package:dart_abi/cott_runtime.dart' as cott_runtime;
 import 'package:dart_abi/modules/abi.dart' as abi;
+import 'dart:typed_data';
 
 void check(bool condition, String label) {
   if (!condition) throw StateError(label);
@@ -348,6 +566,49 @@ void main() {
   check(defaults.values[0] == 1 && defaults.values[1] == 2, 'array default');
   check(defaults.bytes[0] == 0 && defaults.bytes[1] == 255, 'buffer default');
   check(defaults.anything == null, 'required Any null');
+  final overriddenDefaults = abi.Defaulted(
+    wide: BigInt.zero,
+    label: label,
+    values: values,
+    bytes: bytes,
+    anything: Object(),
+    nullable: const cott_runtime.Some<Object?>(null),
+  );
+  final copiedDefaults = overriddenDefaults.copyWith(anything: null);
+  check(copiedDefaults.wide == BigInt.zero &&
+      identical(copiedDefaults.label, label) &&
+      identical(copiedDefaults.values, values) &&
+      identical(copiedDefaults.bytes, bytes) &&
+      identical(copiedDefaults.nullable, overriddenDefaults.nullable) &&
+      copiedDefaults.anything == null &&
+      overriddenDefaults.anything != null,
+      'copy omission must preserve overrides while explicit Any null replaces');
+  check(overriddenDefaults.copyWith(
+    nullable: const cott_runtime.Nothing<Object?>(),
+  ).nullable is cott_runtime.Nothing<Object?>,
+      'Some(null) and explicit Nothing must remain distinct during copies');
+
+  final byteInput = Uint8List.fromList([1, 255]);
+  final byteValue = cott_runtime.CottBytes(byteInput);
+  final readOnlyBytes = byteValue.readOnlyView;
+  final copiedBytes = byteValue.toUint8List();
+  byteInput[0] = 2;
+  copiedBytes[1] = 3;
+  var viewRejectedMutation = false;
+  try {
+    readOnlyBytes[0] = 9;
+  } on UnsupportedError {
+    viewRejectedMutation = true;
+  }
+  check(viewRejectedMutation && readOnlyBytes[0] == 1 &&
+      readOnlyBytes[1] == 255 && copiedBytes[1] == 3,
+      'native bytes view must be read-only while conversions are mutable snapshots');
+  final nullableOption = cott_runtime.optionFromNullable<int>(0);
+  check(cott_runtime.optionToNullable<int>(nullableOption) == 0 &&
+      cott_runtime.optionFromNullable<int>(
+        cott_runtime.optionToNullable<int>(const cott_runtime.Nothing<int>()),
+      ) is cott_runtime.Nothing<int>,
+      'native nullable helpers must distinguish zero from absence');
 
   final abi.Moment moment = DateTime.parse('2026-09-13T12:34:56Z');
   final secretPayload = Object();
@@ -487,14 +748,17 @@ fn assert_succeeded(label: &str, output: &Output) {
 }
 
 fn fixture(
-    source_path: &str,
-    source: &str,
+    sources: &[(&str, &str)],
     project_name: &str,
     external_types: BTreeMap<String, String>,
     effects: BTreeMap<String, bool>,
 ) -> (DartProjectConfig, DartPlan) {
-    let parsed = parse_project([SourceFile::new(source_path, source)])
-        .expect("Dart native semantics fixture should parse");
+    let parsed = parse_project(
+        sources
+            .iter()
+            .map(|(path, source)| SourceFile::new(*path, *source)),
+    )
+    .expect("Dart native semantics fixture should parse");
     let effect_names = effects.keys().cloned().collect();
     let ir = render(
         &lower_with_effects(Path::new("src"), parsed, &effect_names).expect("fixture should lower"),
@@ -540,6 +804,9 @@ fn implementation_body(callable: &DartCallable) -> &'static str {
         | "semantics.AssociatedState.member"
         | "semantics.ChildOnlyState.child" => "return value;",
         "semantics.retain_member" => "return member;",
+        "semantics.classify" => {
+            "return kind == _cott_t_semantics.Kind.Remote\n      ? cott_runtime.Err(_cott_t_semantics.RouteError.Rejected)\n      : cott_runtime.Ok(kind);"
+        }
         "abi.ReaderState.read" => "return 37;",
         "abi.echo_bundle" => "return value;",
         symbol => panic!("unexpected callable in Dart native fixture: {symbol}"),
@@ -550,7 +817,7 @@ fn binding(plan: &DartPlan, config: &DartProjectConfig, callable: &DartCallable)
     let signature = implementation_signature(plan, callable)
         .expect("canonical Dart implementation signature should render");
     let source = if callable.symbol == "semantics.increment" {
-        let prefix = format!("_cott_t_{}", &sha256_hex(b"semantics")[..16]);
+        let prefix = "_cott_t_semantics";
         format!(
             "import 'dart:math' as arithmetic;\n\n{signature} {{\n  return _incrementValue(value, null);\n}}\n\nint _incrementValue(int value, {prefix}.Node? marker) {{\n  return marker == null ? arithmetic.max(value, value + 1) : marker.value;\n}}\n"
         )
@@ -828,8 +1095,10 @@ fn compile_and_run(
 #[ignore = "requires COTT_DART=/tmp/cott-dart-toolchain/dart-sdk/bin/dart"]
 fn emitted_dart_preserves_generic_recursive_associated_and_variance_semantics() {
     let (config, plan) = fixture(
-        "src/semantics.cott",
-        CONTRACT,
+        &[
+            ("src/semantics.cott", CONTRACT),
+            ("src/shared.cott", SHARED_CONTRACT),
+        ],
         "dart_semantics",
         BTreeMap::new(),
         BTreeMap::from([("vendor.audit".to_owned(), true)]),
@@ -838,7 +1107,7 @@ fn emitted_dart_preserves_generic_recursive_associated_and_variance_semantics() 
         config,
         plan,
         &semantics_consumer(),
-        16,
+        17,
         "src/cott_impl/semantics/increment.dart",
     );
 }
@@ -847,8 +1116,7 @@ fn emitted_dart_preserves_generic_recursive_associated_and_variance_semantics() 
 #[ignore = "requires COTT_DART=/tmp/cott-dart-toolchain/dart-sdk/bin/dart"]
 fn emitted_dart_exposes_full_abi_and_runtime_defaults_to_a_real_consumer() {
     let (config, plan) = fixture(
-        "src/abi.cott",
-        ABI_CONTRACT,
+        &[("src/abi.cott", ABI_CONTRACT)],
         "dart_abi",
         BTreeMap::from([("abi.Moment".to_owned(), "dart:core#DateTime".to_owned())]),
         BTreeMap::new(),

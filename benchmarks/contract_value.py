@@ -496,7 +496,7 @@ def parse_json_stdout(stdout: str) -> dict | None:
 def coverage_summary(project: Path) -> dict:
     path = project / "generated" / "generation.json"
     record = json.loads(path.read_text(encoding="utf-8"))
-    current = record.get("current") or {}
+    current = record["snapshots"][record["current"]]
     coverage = current.get("semantic_coverage") or {}
     policy = coverage.get("policy") or {}
     return {

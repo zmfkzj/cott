@@ -2544,6 +2544,20 @@ fn render_doc(out: &mut String, doc: Option<&Value>, indent: usize) {
     writeln!(out, "{prefix} */").expect("writing to String cannot fail");
 }
 
+fn guarded_check(guard: Option<&Value>, statement: String) -> Result<String, String> {
+    let Some(guard) = guard.filter(|value| !value.is_null()) else {
+        return Ok(statement);
+    };
+    expressions::render_guard(
+        guard,
+        &serde_json::json!({
+            "kind": "kotlin_synthetic",
+            "code": format!("run {{ {statement}; true }}"),
+        }),
+        true,
+    )
+}
+
 fn render_invariant_calls(
     out: &mut String,
     declaration: &Map<String, Value>,
@@ -2558,7 +2572,7 @@ fn render_invariant_calls(
         if let Some(guard) = &mut guard {
             rewrite_const_references(guard, declaration);
         }
-        let condition = render_condition(&expression, guard.as_ref(), true)?;
+        let condition = render_condition(&expression, None, true)?;
         let clause = format!(
             "invariant:{}",
             invariant
@@ -2566,14 +2580,14 @@ fn render_invariant_calls(
                 .and_then(Value::as_u64)
                 .ok_or_else(|| format!("invariant on `{symbol}` is missing clause_id"))?
         );
-        writeln!(
-            out,
-            "{prefix}cott_runtime.CottRuntime.invariant({condition}, {}, clause = {}, span = {}, expected = \"true\", actual = \"false\")",
+        let statement = format!(
+            "cott_runtime.CottRuntime.invariant({condition}, {}, clause = {}, span = {}, expected = \"true\", actual = \"false\")",
             kotlin_string(symbol),
             kotlin_string(&clause),
             render_span(invariant.get("span"))?
-        )
-        .expect("writing to String cannot fail");
+        );
+        writeln!(out, "{prefix}{}", guarded_check(guard.as_ref(), statement)?)
+            .expect("writing to String cannot fail");
     }
     Ok(())
 }
@@ -3610,14 +3624,11 @@ fn render_contract_clauses(
         if let Some(guard) = &mut guard {
             rewrite_const_references(guard, declaration);
         }
-        let condition = callable_expression(
-            render_condition(&expression, guard.as_ref(), true)?,
-            asynchronous,
-        );
+        let condition =
+            callable_expression(render_condition(&expression, None, true)?, asynchronous);
         let label = clause_label(clause)?;
-        writeln!(
-            out,
-            "{nested}cott_runtime.CottRuntime.{}({condition}, {}, \"{}\", clause = {}, span = {}, expected = \"true\", actual = \"false\")",
+        let statement = format!(
+            "cott_runtime.CottRuntime.{}({condition}, {}, \"{}\", clause = {}, span = {}, expected = \"true\", actual = \"false\")",
             if asynchronous {
                 "checkContractSuspend"
             } else {
@@ -3627,6 +3638,11 @@ fn render_contract_clauses(
             kind,
             kotlin_string(&label),
             render_span(clause.get("span"))?
+        );
+        writeln!(
+            out,
+            "{nested}{}",
+            callable_expression(guarded_check(guard.as_ref(), statement)?, asynchronous)
         )
         .expect("writing to String cannot fail");
     }
@@ -3672,7 +3688,7 @@ fn render_expected_errors(
     let prefix = " ".repeat(indent);
     let nested = " ".repeat(indent + 4);
     if declare {
-        writeln!(out, "{prefix}var _cottExpectedError: kotlin.String? = null")
+        writeln!(out, "{prefix}var _cottExpectedError: kotlin.String? = null\n{prefix}var _cottExpectedErrorClause: kotlin.String? = null")
             .expect("writing to String cannot fail");
     }
     writeln!(
@@ -3725,8 +3741,9 @@ fn render_expected_errors(
             .ok_or_else(|| format!("error clause on `{symbol}` is missing variant"))?;
         writeln!(
             out,
-            "{nested}if (_cottExpectedError == null && ({condition})) _cottExpectedError = {}",
-            kotlin_string(variant)
+            "{nested}if (_cottExpectedError == null && ({condition})) {{ _cottExpectedError = {}; _cottExpectedErrorClause = {} }}",
+            kotlin_string(variant),
+            kotlin_string(&clause_label(clause)?),
         )
         .expect("writing to String cannot fail");
     }
@@ -3790,6 +3807,31 @@ fn render_error_contracts(
         kotlin_string(symbol)
     )
     .expect("writing to String cannot fail");
+    for clause in errors {
+        let label = clause_label(clause)?;
+        let variant = required_string(
+            clause.as_object().ok_or("error clause must be an object")?,
+            "variant",
+            symbol,
+        )?;
+        let applicable = if clause.get("guard").is_none_or(Value::is_null)
+            && clause.get("when").is_none_or(Value::is_null)
+        {
+            format!("_cottActualErrorVariant == {}", kotlin_string(variant))
+        } else {
+            format!("_cottExpectedErrorClause == {}", kotlin_string(&label))
+        };
+        writeln!(
+            out,
+            "{prefix}if ({applicable}) cott_runtime.CottRuntime.{}(_cottActualErrorVariant == {}, {}, \"error\", clause = {}, span = {})",
+            if asynchronous { "checkContractSuspend" } else { "checkContract" },
+            kotlin_string(variant),
+            kotlin_string(symbol),
+            kotlin_string(&label),
+            render_span(clause.get("span"))?,
+        )
+        .expect("writing to String cannot fail");
+    }
     Ok(())
 }
 
@@ -4064,7 +4106,7 @@ fn render_implementation_class(
                 invariant
                     .get("expression")
                     .ok_or_else(|| "implementation invariant is missing expression".to_owned())?,
-                invariant.get("guard"),
+                None,
                 true,
             )?;
             let clause = format!(
@@ -4074,9 +4116,16 @@ fn render_implementation_class(
                     .and_then(Value::as_u64)
                     .ok_or_else(|| "implementation invariant is missing clause_id".to_owned())?
             );
-            Ok(format!(
-                "cott_runtime.CottInvariant({}, {{ {expression} }}, {})",
+            let statement = format!(
+                "cott_runtime.CottRuntime.invariant({expression}, {}, clause = {}, span = {})",
+                kotlin_string(canonical),
                 kotlin_string(&clause),
+                render_span(invariant.get("span"))?
+            );
+            Ok(format!(
+                "cott_runtime.CottInvariant.checked({}, {{ {} }}, {})",
+                kotlin_string(&clause),
+                guarded_check(invariant.get("guard"), statement)?,
                 render_span(invariant.get("span"))?
             ))
         })
@@ -4261,7 +4310,7 @@ fn render_impl_method(
                 invariant
                     .get("expression")
                     .ok_or_else(|| "implementation invariant missing expression".to_owned())?,
-                invariant.get("guard"),
+                None,
                 true,
             )?;
             let clause = format!(
@@ -4271,9 +4320,16 @@ fn render_impl_method(
                     .and_then(Value::as_u64)
                     .ok_or_else(|| "implementation invariant missing clause_id".to_owned())?
             );
-            Ok(format!(
-                "cott_runtime.CottInvariant({}, {{ {expression} }}, {})",
+            let statement = format!(
+                "cott_runtime.CottRuntime.invariant({expression}, {}, clause = {}, span = {})",
+                kotlin_string(&callable.symbol),
                 kotlin_string(&clause),
+                render_span(invariant.get("span"))?
+            );
+            Ok(format!(
+                "cott_runtime.CottInvariant.checked({}, {{ {} }}, {})",
+                kotlin_string(&clause),
+                guarded_check(invariant.get("guard"), statement)?,
                 render_span(invariant.get("span"))?
             ))
         })
@@ -4285,7 +4341,7 @@ fn render_impl_method(
         .and_then(Value::as_array)
         .is_some_and(|errors| !errors.is_empty());
     if has_errors {
-        out.push_str("        var _cottExpectedError: kotlin.String? = null\n");
+        out.push_str("        var _cottExpectedError: kotlin.String? = null\n        var _cottExpectedErrorClause: kotlin.String? = null\n");
     }
     for field in state {
         let field_name = field

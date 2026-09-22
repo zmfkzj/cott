@@ -1551,12 +1551,13 @@ fn build_record(
         "cott".to_owned(),
         current_compiler_tool().map_err(|message| Failure::new(6, message))?,
     );
-    object.entry("runtime".to_owned()).or_insert_with(|| {
+    object.insert(
+        "runtime".to_owned(),
         json!({
             "abi": DART_RUNTIME_ABI_VERSION,
             "version": env!("CARGO_PKG_VERSION"),
-        })
-    });
+        }),
+    );
     object.insert(
         "target".to_owned(),
         json!({"language": "dart", "sdk": project.config.dart.sdk}),

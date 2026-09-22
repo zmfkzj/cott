@@ -375,6 +375,131 @@ fn canonical_sync_async_and_generic_signatures_are_ast_exact() {
 }
 
 #[test]
+fn compiler_type_prefixes_are_exact_in_signatures_helpers_and_imports() {
+    let fixture = fixture(
+        "module api.service\n\nstruct Node:\n    value: I32\n\nfn run(value: Node) -> Node\n",
+    );
+    let callable = callable(&fixture.plan, "api.service.run");
+    let prefix = "_cott_t_api__service";
+    let source = candidate_source(
+        &fixture.plan,
+        &callable,
+        "return _cott_t_api__service.Node$CopyWith(value).copyWith(value: value.value);",
+    );
+    validate_candidate(
+        &fixture.config,
+        &fixture.plan,
+        &callable,
+        &fixture.allowed_runtime_packages,
+        source.as_bytes(),
+    )
+    .expect("compiler type aliases authorize the public copyWith extension");
+
+    let old_prefix = format!("_cott_t_{}", &sha256_hex(b"api.service")[..16]);
+    let cases = [
+        (source.replace(prefix, &old_prefix), old_prefix.as_str()),
+        (
+            candidate_source(
+                &fixture.plan,
+                &callable,
+                "return _cott_t_unknown.Node$CopyWith(value).copyWith();",
+            ),
+            "_cott_t_unknown",
+        ),
+        (
+            format!(
+                "{}\n_cott_t_helper.Node _identity(_cott_t_helper.Node value) => value;\n",
+                candidate_source(&fixture.plan, &callable, "return _identity(value);")
+            ),
+            "_cott_t_helper",
+        ),
+        (
+            format!("import 'dart:math' as _cott_t_unknown;\n{source}"),
+            "_cott_t_unknown",
+        ),
+    ];
+    for (invalid, unknown) in cases {
+        let error = validate_candidate(
+            &fixture.config,
+            &fixture.plan,
+            &callable,
+            &fixture.allowed_runtime_packages,
+            invalid.as_bytes(),
+        )
+        .expect_err("unrecognized compiler type aliases cannot be imported or accepted");
+        assert!(error.contains(unknown), "{error}");
+        assert!(error.contains(prefix), "{error}");
+        assert!(
+            error.contains("package:demo_app/src/types/api/service.dart"),
+            "{error}"
+        );
+    }
+
+    let inert = candidate_source(
+        &fixture.plan,
+        &callable,
+        "const text = '_cott_t_unknown.Node'; // _cott_t_obsolete.Node\n  return value.copyWith(value: value.value + text.length);",
+    );
+    validate_candidate(
+        &fixture.config,
+        &fixture.plan,
+        &callable,
+        &fixture.allowed_runtime_packages,
+        inert.as_bytes(),
+    )
+    .expect("prefix-like comments and strings are not references");
+
+    for invalid in [
+        format!("import 'dart:math' as {prefix};\n{source}"),
+        candidate_source(
+            &fixture.plan,
+            &callable,
+            "final _cott_t_api__service = value; return value;",
+        ),
+        format!(
+            "import 'dart:math' as arithmetic;\nimport 'dart:collection' as arithmetic;\n{source}"
+        ),
+    ] {
+        validate_candidate(
+            &fixture.config,
+            &fixture.plan,
+            &callable,
+            &fixture.allowed_runtime_packages,
+            invalid.as_bytes(),
+        )
+        .expect_err("genuine authored import-prefix collisions remain forbidden");
+    }
+}
+
+#[test]
+fn public_value_conveniences_do_not_grant_private_runtime_authority() {
+    let fixture = fixture("module api.service\n\nfn run(value: Bytes) -> Bytes\n");
+    let callable = callable(&fixture.plan, "api.service.run");
+    let source = candidate_source(
+        &fixture.plan,
+        &callable,
+        "final option = cott_runtime.optionFromNullable(value);\n  final bytes = cott_runtime.optionToNullable(option) ?? value;\n  return cott_runtime.CottBytes(bytes.readOnlyView);",
+    );
+    validate_candidate(
+        &fixture.config,
+        &fixture.plan,
+        &callable,
+        &fixture.allowed_runtime_packages,
+        source.as_bytes(),
+    )
+    .expect("public exact-value adapters are ordinary runtime references");
+    let invalid = source.replace("bytes.readOnlyView", "bytes._cott_observation");
+    validate_candidate(
+        &fixture.config,
+        &fixture.plan,
+        &callable,
+        &fixture.allowed_runtime_packages,
+        invalid.as_bytes(),
+    )
+    .expect_err("public convenience calls do not authorize private members");
+}
+
+#[test]
 fn guarded_state_witnesses_are_exact_without_exposing_compiler_private_members() {
     let mut fixture = fixture(
         r#"module api.service
@@ -1113,6 +1238,8 @@ fn durable_agent_identity_distinguishes_missing_stale_tampered_and_pending_sourc
         Vec::new(),
         None,
     );
+    let generation_path = fixture.paths.artifact_root.join("generation.json");
+    let generation = fs::read(&generation_path).unwrap();
     let bindings = resolve(
         &fixture.config,
         &fixture.paths,
@@ -1123,6 +1250,13 @@ fn durable_agent_identity_distinguishes_missing_stale_tampered_and_pending_sourc
     .expect("recorded durable source resolves");
     assert_eq!(bindings.len(), 1);
     assert_eq!(bindings[0].owner, DartOwner::Agent);
+    assert_eq!(bindings[0].bytes, source.as_bytes());
+    assert_eq!(
+        bindings[0].content_hash,
+        format!("sha256:{}", sha256_hex(source.as_bytes()))
+    );
+    assert_eq!(fs::read(&path).unwrap(), source.as_bytes());
+    assert_eq!(fs::read(&generation_path).unwrap(), generation);
 
     fs::write(&path, format!("{source}// tampered\n")).expect("tamper source");
     resolve(
@@ -1188,6 +1322,58 @@ fn durable_agent_identity_distinguishes_missing_stale_tampered_and_pending_sourc
         None,
     )
     .expect_err("provider success cannot retain a source that fails the AST authority audit");
+}
+
+#[test]
+fn obsolete_nominal_aliases_never_refresh_authenticated_agent_bytes() {
+    let fixture = fixture(
+        "module api.service\n\nstruct Node:\n    value: I32\n\nfn run(value: Node) -> Node\n",
+    );
+    let callable = callable(&fixture.plan, "api.service.run");
+    let current = candidate_source(&fixture.plan, &callable, "return value;");
+    let old_prefix = format!("_cott_t_{}", &sha256_hex(b"api.service")[..16]);
+    let old_source = current.replace("_cott_t_api__service", &old_prefix);
+    assert_ne!(old_source, current);
+    let path = fixture
+        .paths
+        .dart_source_dir
+        .join("cott_impl/api/service/run.dart");
+    write_source(&path, &old_source);
+    write_agent_record(
+        &fixture,
+        &callable,
+        &path,
+        old_source.as_bytes(),
+        &fixture.plan,
+        Vec::new(),
+        None,
+    );
+    let generation_path = fixture.paths.artifact_root.join("generation.json");
+    let generation = fs::read(&generation_path).unwrap();
+    let error = resolve(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        &fixture.allowed_runtime_packages,
+        None,
+    )
+    .expect_err("authentic historical bytes still require the current exact source spelling");
+    assert!(error.contains(&old_prefix), "{error}");
+    assert!(error.contains("_cott_t_api__service"), "{error}");
+    assert_eq!(fs::read(&path).unwrap(), old_source.as_bytes());
+    assert_eq!(fs::read(&generation_path).unwrap(), generation);
+
+    fs::write(&path, current).expect("unauthenticated cosmetic alias edit");
+    let error = resolve(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        &fixture.allowed_runtime_packages,
+        None,
+    )
+    .expect_err("cosmetic source migration cannot retain the prior agent identity");
+    assert!(!error.contains("compiler type import prefix"), "{error}");
+    assert_eq!(fs::read(&generation_path).unwrap(), generation);
 }
 
 #[test]

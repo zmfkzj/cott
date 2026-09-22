@@ -1,23 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cott.dev/schema/dart-generation/v1",
-  "title": "cott Dart generation record v1",
+  "$id": "https://cott.dev/schema/dart-generation/v2",
+  "title": "cott Dart generation record v2",
   "type": "object",
-  "required": ["schema_version", "current", "last_verified"],
+  "required": ["schema_version", "current", "last_verified", "snapshots"],
   "additionalProperties": false,
   "properties": {
-    "schema_version": {"const": 1},
-    "current": {"$ref": "#/$defs/snapshot"},
-    "last_verified": {
-      "anyOf": [
-        {
-          "allOf": [
-            {"$ref": "#/$defs/snapshot"},
-            {"properties": {"verified": {"const": true}}}
-          ]
-        },
-        {"type": "null"}
-      ]
+    "schema_version": {"const": 2},
+    "current": {"$ref": "#/$defs/digest"},
+    "last_verified": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+    "snapshots": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 2,
+      "patternProperties": {"^sha256:[0-9a-f]{64}$": {"$ref": "#/$defs/snapshot"}},
+      "additionalProperties": false
     }
   },
   "$defs": {
@@ -60,7 +57,7 @@
         "verified": {"type": "boolean"},
         "compiler_version": {"const": "1.0.0"},
         "canonical_ir_schema": {"const": 8},
-        "runtime_abi": {"const": 1},
+        "runtime_abi": {"const": 2},
         "project_name": {
           "type": "string",
           "minLength": 1,

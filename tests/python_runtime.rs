@@ -51,6 +51,138 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 #[test]
+fn snapshot_digests_match_rust_for_all_json_types() {
+    let temp = TempDir::new();
+    write_runtime(&temp.path);
+    let values = [
+        serde_json::json!(null),
+        serde_json::json!(false),
+        serde_json::json!(true),
+        serde_json::json!(i64::MIN),
+        serde_json::json!(u64::MAX),
+        serde_json::json!(0),
+        serde_json::json!(0.0),
+        serde_json::json!(-0.0),
+        serde_json::json!(1.0),
+        serde_json::json!(1e-200),
+        serde_json::json!(1e200),
+        serde_json::json!(f64::from_bits(1)),
+        serde_json::json!({"é": ["λ", "😀", "\0", -17, 0.125], "a": {}}),
+    ];
+    let vectors = values
+        .iter()
+        .map(|value| {
+            serde_json::json!({
+                "value": value,
+                "digest": cott::snapshot_record::digest(value).expect("valid snapshot value"),
+            })
+        })
+        .collect::<Vec<_>>();
+    let output = match Command::new("python3")
+        .args([
+            "-c",
+            "import json, sys, cott_runtime\nfor vector in json.loads(sys.argv[1]):\n    actual = cott_runtime._cott_snapshot_digest(vector['value'])\n    assert actual == vector['digest'], (vector, actual)\n",
+            &serde_json::to_string(&vectors).expect("digest vectors JSON"),
+        ])
+        .current_dir(&temp.path)
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to execute Python digest vectors: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Python snapshot digest mismatch:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn rust_generation_with_float_tool_metadata_loads_in_python() {
+    use cott::provenance::{
+        GENERATION_SCHEMA_VERSION, GenerationCompatibility, GenerationRecord, GenerationSnapshot,
+        SemanticCoverage,
+    };
+
+    let temp = TempDir::new();
+    write_runtime(&temp.path);
+    let probe = match Command::new("python3")
+        .args([
+            "-c",
+            "import json, platform, sys, sysconfig; print(json.dumps(dict(implementation=sys.implementation.name,version=platform.python_version(),cache_tag=sys.implementation.cache_tag,os=sys.platform,machine=platform.machine(),platform=sysconfig.get_platform())))",
+        ])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to probe Python identity: {error}"),
+    };
+    assert!(probe.status.success(), "Python identity probe failed");
+    let python: serde_json::Value = serde_json::from_slice(&probe.stdout).expect("Python identity");
+    let source = b"def run():\n    return 42\n";
+    let digest = sha256_hex(source);
+    let implementation = temp.path.join("_cott_impl/demo/run.py");
+    fs::create_dir_all(implementation.parent().unwrap()).expect("implementation parent");
+    fs::write(&implementation, source).expect("implementation source");
+    let mut current = GenerationSnapshot {
+        generation_id: String::new(),
+        verified: false,
+        project_version: "0.3.0".to_owned(),
+        compatibility: GenerationCompatibility::current(),
+        inputs: serde_json::json!({}),
+        tools: serde_json::json!({
+            "python": python,
+            "runtime": {"abi": "7", "version": env!("CARGO_PKG_VERSION")},
+            "numeric_metadata": [1e-7, 1e20, -0.0, f64::from_bits(1), i64::MIN, u64::MAX],
+        }),
+        ir: serde_json::json!({}),
+        contract_surface: serde_json::json!({}),
+        public_python_symbols: serde_json::json!({"demo": ["run"]}),
+        implementations: serde_json::json!([{
+            "cott_symbol": "demo.run", "kind": "function", "callable_kind": "sync",
+            "concrete": null, "method": null, "selection": null, "owner": "manifest",
+            "python_symbol": "_cott_impl.demo.run:run",
+            "source_origin": "python/cott_bindings/demo/run.py",
+            "runtime_origin": "_cott_impl/demo/run.py", "content_hash": format!("sha256:{digest}"),
+        }]),
+        dependencies: serde_json::json!([]),
+        managed_files: Default::default(),
+        unresolved: vec![],
+        verification: serde_json::Value::Null,
+        semantic_coverage: SemanticCoverage::default(),
+        agent_runs: vec![],
+    };
+    current
+        .compute_generation_id()
+        .expect("structural generation identity");
+    let record = GenerationRecord {
+        schema_version: GENERATION_SCHEMA_VERSION,
+        current,
+        last_verified: None,
+    };
+    fs::write(
+        temp.path.join("generation.json"),
+        record.canonical_bytes().expect("Rust generation record"),
+    )
+    .expect("generation file");
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            "import sys; from cott_runtime import _cott_load; assert _cott_load('_cott_impl/demo/run.py', sys.argv[1], 'run', 'demo', expected_cott_symbol='demo.run')() == 42",
+            &digest,
+        ])
+        .current_dir(&temp.path)
+        .output()
+        .expect("Python generation loader");
+    assert!(
+        output.status.success(),
+        "Python rejected Rust floating-point generation metadata:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn generated_runtime_exercises_abi_and_provenance_loader() {
     let python = match Command::new("python3").arg("--version").output() {
         Ok(output) if output.status.success() => output,
@@ -196,17 +328,35 @@ def _generation_id(current: dict) -> str:
     identity = dict(current)
     for key in ("generation_id", "verified", "verification", "semantic_coverage", "agent_runs"):
         identity.pop(key)
-    payload = dict(domain="cott.generation.v7", schema_version=7, current=identity)
-    return "sha256:" + hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n").hexdigest()
+    payload = dict(domain="cott.generation.v8", schema_version=8, current=identity)
+    return _runtime._cott_snapshot_digest(payload)
+
+# Expanded views are test-only conveniences; every loader input uses the wire table.
+def _pack_record(view: dict) -> dict:
+    current = _runtime._cott_snapshot_digest(view["current"])
+    snapshots = {{current: view["current"]}}
+    last = view["last_verified"]
+    last_verified = None if last is None else _runtime._cott_snapshot_digest(last)
+    if last is not None:
+        snapshots[last_verified] = last
+    return dict(schema_version=view["schema_version"], current=current, last_verified=last_verified, snapshots=snapshots)
+
+def _read_record(text: str) -> dict:
+    wire = json.loads(text)
+    current, last = _runtime._cott_resolve_generation_record(wire)
+    return dict(schema_version=wire["schema_version"], current=current, last_verified=last)
 
 _current = dict(generation_id="", verified=True, project_version="0.3.0", compatibility=dict(
-    generation_schema=7, canonical_ir_schema=8, runtime_abi=7, contract_strategy_schema=5,
+    generation_schema=8, canonical_ir_schema=8, runtime_abi=7, contract_strategy_schema=5,
 ), inputs={{}}, tools=dict(
     python=dict(implementation=sys.implementation.name, version=platform.python_version(), cache_tag=sys.implementation.cache_tag, os=sys.platform, machine=platform.machine(), platform=sysconfig.get_platform(), executable=str(Path(sys.executable).resolve()), content_hash="sha256:"+hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest()),
     runtime=dict(abi=_runtime._COTT_RUNTIME_ABI, version=_runtime._COTT_RUNTIME_VERSION),
 ), ir={{}}, contract_surface={{}}, public_python_symbols={{"demo":["CounterState","bad","external","run"],"support":["helper"]}}, implementations=[_good, _bad, _external, _method, _async], dependencies=[], managed_files={{}}, unresolved=[_unresolved], verification=None, semantic_coverage=dict(clauses=[], summary=dict(observed=0, unobserved=0, trust_declaration=0, unknown=0), policy=dict(selected=0, passed=True, violations=[])), agent_runs=[])
 _current["generation_id"] = _generation_id(_current)
-Path("generation.json").write_text(json.dumps(dict(schema_version=7, current=_current, last_verified=None), sort_keys=True, separators=(",", ":")) + "\n")
+_wire = _pack_record(dict(schema_version=8, current=_current, last_verified=_current))
+assert _wire["current"] == _wire["last_verified"]
+assert list(_wire["snapshots"]) == [_wire["current"]]
+Path("generation.json").write_text(json.dumps(_wire, sort_keys=True, separators=(",", ":")) + "\n")
 assert _runtime._cott_validate_generation_snapshot(_current, "current") is _current
 _invalid_unresolved = dict(_current)
 _invalid_unresolved["unresolved"] = [dict(_unresolved, span=dict(_unresolved["span"], end_line=0))]
@@ -655,43 +805,84 @@ except CottContractViolation as error:
     assert error.phase == "facade-import"
 else:
     raise AssertionError("project mismatch was accepted")
-def _reject_generation(record: object, label: str) -> None:
-    Path("generation.json").write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+def _reject_wire_text(text: str, label: str, expected: str | None = None) -> None:
+    Path("generation.json").write_text(text)
     try:
         _cott_load("_cott_impl/demo/bad.py", "{bad_hash}", "bad", "demo")
     except CottContractViolation as error:
         assert error.phase == "provenance", (label, error.phase)
+        if expected is not None:
+            assert expected in error.message, (label, error.message)
     else:
         raise AssertionError(f"{{label}} generation record was accepted")
     finally:
         Path("generation.json").write_text(_original_generation)
+
+def _reject_generation(record: object, label: str, expected: str | None = None) -> None:
+    _reject_wire_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n", label, expected)
+
 _original_generation = Path("generation.json").read_text()
 _v1 = json.loads(_original_generation)
 _v1["schema_version"] = 1
 _reject_generation(_v1, "v1")
-_missing = json.loads(_original_generation)
+_old_expanded = _read_record(_original_generation)
+_old_expanded["schema_version"] = 7
+_reject_generation(_old_expanded, "old expanded format", "record is malformed")
+_unknown_root = json.loads(_original_generation)
+_unknown_root["extra"] = None
+_reject_generation(_unknown_root, "unknown root field", "record is malformed")
+_dangling = json.loads(_original_generation)
+del _dangling["snapshots"][_dangling["current"]]
+_reject_generation(_dangling, "dangling snapshot", "dangling or unreferenced")
+_unreferenced = json.loads(_original_generation)
+_spare = dict(_current, verified=False)
+_unreferenced["snapshots"][_runtime._cott_snapshot_digest(_spare)] = _spare
+_reject_generation(_unreferenced, "unreferenced snapshot", "dangling or unreferenced")
+_mutated_blob = json.loads(_original_generation)
+_mutated_blob["snapshots"][_mutated_blob["current"]]["verification"] = dict(forged=True)
+_reject_generation(_mutated_blob, "mutated snapshot evidence", "snapshot digest mismatch")
+_forged_verified = _pack_record(dict(schema_version=8, current=dict(_current, verified=False), last_verified=None))
+_forged_verified["snapshots"][_forged_verified["current"]]["verified"] = True
+_reject_generation(_forged_verified, "forged verified flag", "snapshot digest mismatch")
+_invalid_ref = json.loads(_original_generation)
+_invalid_ref["current"] = "sha256:INVALID"
+_reject_generation(_invalid_ref, "invalid snapshot reference", "record is malformed")
+_reject_wire_text('{{"schema_version":8,' + _original_generation[1:], "duplicate root key", "duplicate JSON object key")
+_reject_wire_text(_original_generation.replace('"verified":true', '"verified":true,"verified":false'), "duplicate snapshot key", "duplicate JSON object key")
+_nonfinite = json.loads(_original_generation)
+_nonfinite["snapshots"][_nonfinite["current"]]["verification"] = float("nan")
+_reject_generation(_nonfinite, "nonfinite JSON constant", "nonfinite JSON constant")
+_negative_zero = _read_record(_original_generation)
+_negative_zero["current"]["tools"]["numeric_probe"] = 0
+_negative_zero["current"]["generation_id"] = _generation_id(_negative_zero["current"])
+_negative_zero_text = json.dumps(_pack_record(_negative_zero), sort_keys=True, separators=(",", ":")).replace('"numeric_probe":0', '"numeric_probe":-0')
+_reject_wire_text(_negative_zero_text, "noncanonical negative integer zero", "noncanonical JSON integer zero")
+_overflow_integer = json.loads(_original_generation)
+_overflow_integer["snapshots"][_overflow_integer["current"]]["verification"] = 1 << 64
+_reject_generation(_overflow_integer, "overflow JSON integer", "outside the snapshot integer range")
+_missing = _read_record(_original_generation)
 del _missing["current"]["project_version"]
-_reject_generation(_missing, "missing")
-_extra = json.loads(_original_generation)
+_reject_generation(_pack_record(_missing), "missing", "snapshot is malformed")
+_extra = _read_record(_original_generation)
 _extra["current"]["unexpected"] = None
-_reject_generation(_extra, "extra")
-_incompatible = json.loads(_original_generation)
+_reject_generation(_pack_record(_extra), "extra", "snapshot is malformed")
+_incompatible = _read_record(_original_generation)
 _incompatible["current"]["compatibility"]["runtime_abi"] = 1
 _incompatible["current"]["generation_id"] = _generation_id(_incompatible["current"])
-_reject_generation(_incompatible, "compatibility")
-_runtime_version_mismatch = json.loads(_original_generation)
+_reject_generation(_pack_record(_incompatible), "compatibility", "compatibility is incompatible")
+_runtime_version_mismatch = _read_record(_original_generation)
 _runtime_version_mismatch["current"]["tools"]["runtime"]["version"] = "0.0.0"
 _runtime_version_mismatch["current"]["generation_id"] = _generation_id(_runtime_version_mismatch["current"])
-_reject_generation(_runtime_version_mismatch, "runtime package version")
-_version_mismatch = json.loads(_original_generation)
+_reject_generation(_pack_record(_runtime_version_mismatch), "runtime package version")
+_version_mismatch = _read_record(_original_generation)
 _version_mismatch["current"]["project_version"] = "0.3.1"
 _version_mismatch["current"]["generation_id"] = _generation_id(_version_mismatch["current"])
-_reject_generation(_version_mismatch, "project version")
+_reject_generation(_pack_record(_version_mismatch), "project version", "project version mismatch")
 _original_generation = Path("generation.json").read_text()
-_mutated = json.loads(_original_generation)
+_mutated = _read_record(_original_generation)
 _mutated["current"]["tools"]["python"]["version"] = "0.0.0"
 _mutated["current"]["generation_id"] = _generation_id(_mutated["current"])
-Path("generation.json").write_text(json.dumps(_mutated, sort_keys=True, separators=(",", ":")) + "\n")
+Path("generation.json").write_text(json.dumps(_pack_record(_mutated), sort_keys=True, separators=(",", ":")) + "\n")
 try:
     _cott_load("_cott_impl/demo/bad.py", "{bad_hash}", "bad", "demo")
 except CottContractViolation as error:
@@ -978,6 +1169,126 @@ for forged in (
     assert!(
         output.status.success(),
         "generated runtime Dyn validation failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn contract_observer_context_cannot_expose_or_redirect_mutable_evidence() {
+    if Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let temp = TempDir::new();
+    write_runtime(&temp.path);
+    let script = r#"import asyncio
+import contextvars
+from cott_runtime import CottContractViolation, _cott_contract_condition, _cott_observe_contracts
+
+with _cott_observe_contracts() as events:
+    for variable, value in contextvars.copy_context().items():
+        if isinstance(value, list):
+            value.append(("model.same", "ensures:0", True))
+assert events == [], events
+
+with _cott_observe_contracts() as outer:
+    with _cott_observe_contracts() as inner:
+        _cott_contract_condition(True, "model.same", "ensures:0")
+    _cott_contract_condition(True, "model.same", "requires:0")
+assert inner == [("model.same", "ensures:0", True)]
+assert outer == [("model.same", "requires:0", True)]
+
+try:
+    with _cott_observe_contracts() as events:
+        variable = next(variable for variable in contextvars.copy_context()
+                        if variable.name == "_cott_contract_observer")
+        changed = variable.set(object())
+        try:
+            _cott_contract_condition(True, "model.same", "ensures:0")
+        except CottContractViolation as error:
+            assert error.phase == "evidence"
+        finally:
+            variable.reset(changed)
+except CottContractViolation as error:
+    assert error.phase == "evidence"
+else:
+    raise AssertionError("restoring a replaced observation token hid tampering")
+assert events == []
+
+try:
+    with _cott_observe_contracts() as outer:
+        variable, identity = next((variable, value) for variable, value
+                                  in contextvars.copy_context().items()
+                                  if variable.name == "_cott_contract_observer")
+        try:
+            with _cott_observe_contracts() as inner:
+                changed = variable.set(identity)
+                try:
+                    _cott_contract_condition(True, "model.same", "ensures:0")
+                finally:
+                    variable.reset(changed)
+        except CottContractViolation:
+            pass
+except CottContractViolation as error:
+    assert error.phase == "evidence"
+else:
+    raise AssertionError("nested observation accepted an outer invocation token")
+assert outer == [] and inner == []
+
+async def exercise_async():
+    ready = asyncio.Event()
+    arrivals = 0
+    async def observe(clause):
+        nonlocal arrivals
+        with _cott_observe_contracts() as events:
+            arrivals += 1
+            if arrivals == 2:
+                ready.set()
+            await ready.wait()
+            _cott_contract_condition(True, "model.same", clause)
+        return events
+    first, second = await asyncio.gather(observe("requires:0"), observe("ensures:0"))
+    assert first == [("model.same", "requires:0", True)]
+    assert second == [("model.same", "ensures:0", True)]
+
+    async def inherited():
+        await asyncio.sleep(0)
+        _cott_contract_condition(True, "model.same", "ensures:0")
+    with _cott_observe_contracts() as events:
+        await asyncio.create_task(inherited())
+    assert events == [("model.same", "ensures:0", True)]
+
+    entered = asyncio.Event()
+    async def cancelled():
+        with _cott_observe_contracts():
+            entered.set()
+            await asyncio.Future()
+    task = asyncio.create_task(cancelled())
+    await entered.wait()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    local = contextvars.ContextVar("application-local", default=0)
+    with _cott_observe_contracts() as events:
+        token = local.set(7)
+        await asyncio.sleep(0)
+        assert local.get() == 7
+        local.reset(token)
+        _cott_contract_condition(True, "model.same", "ensures:0")
+    assert events == [("model.same", "ensures:0", True)]
+
+asyncio.run(exercise_async())
+"#;
+    let output = Command::new("python3")
+        .args(["-c", script])
+        .current_dir(&temp.path)
+        .output()
+        .expect("python3 should execute observer regression");
+    assert!(
+        output.status.success(),
+        "observer authority regression:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

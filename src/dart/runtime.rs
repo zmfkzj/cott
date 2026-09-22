@@ -26,7 +26,7 @@ typedef Option<T> = CottOption<T>;
 const String cottProjectName = __COTT_PROJECT_NAME_LITERAL__;
 const String cottProjectVersion = __COTT_PROJECT_VERSION_LITERAL__;
 const String cottCompilerVersion = __COTT_RUNTIME_VERSION_LITERAL__;
-const int cottRuntimeAbi = 1;
+const int cottRuntimeAbi = 2;
 
 enum RuntimeValidation { boundary, testOnly, off }
 
@@ -287,6 +287,30 @@ final class Nothing<T> extends CottOption<T> {
   String toString() => 'Nothing';
 }
 
+/// Converts a nullable nonnullable payload without conflating Some(null) and Nothing.
+CottOption<T> optionFromNullable<T extends Object>(T? value) =>
+    value == null ? Nothing<T>() : Some<T>(value);
+
+/// The inverse of optionFromNullable; nullable Option payloads must be matched explicitly.
+T? optionToNullable<T extends Object>(CottOption<T> value) {
+  switch (value) {
+    case Some<T>():
+      // Never collapse Some(null), even if a caller circumvents static checking.
+      final Object? payload = value.value;
+      if (payload == null) {
+        return CottRuntime.violation(
+          'Some(null) has no lossless nullable representation',
+          phase: 'validation',
+          expected: 'a nonnull Option payload',
+          actual: 'null',
+        );
+      }
+      return value.value;
+    case Nothing<T>():
+      return null;
+  }
+}
+
 sealed class CottResult<T, E> {
   const CottResult();
 }
@@ -384,6 +408,9 @@ final class CottBytes extends ListBase<int> {
 
   @override
   void operator []=(int index, int value) => _immutableMutation('CottBytes');
+
+  /// A zero-copy read-only view. Neither this view nor casts can expose storage.
+  List<int> get readOnlyView => this;
 
   Uint8List toUint8List() => Uint8List.fromList(_data);
 
@@ -3017,6 +3044,7 @@ final class CottRuntime {
       value is Ok ? Some<Object?>(value.value) : const Nothing<Object?>();
   static CottOption<Object?> resultErr(Object? value) =>
       value is Err ? Some<Object?>(value.error) : const Nothing<Object?>();
+  static Object? resultError(Object? value) => value is Err ? value.error : null;
   static CottOption<Object?> optionSome(Object? value) =>
       value is Some ? Some<Object?>(value.value) : const Nothing<Object?>();
   static CottOption<CottList<Object?>> variant(Object? value, String expectedVariant) =>
@@ -4185,7 +4213,15 @@ final class CottTransition {
 }
 
 final class CottInvariant {
-  const CottInvariant({required this.clause, required this.check, this.span});
+  const CottInvariant({required this.clause, required this.check, this.span})
+      : _checked = null;
+  CottInvariant.checked({
+    required this.clause,
+    required void Function() check,
+    this.span,
+  })  : _checked = check,
+        check = (() { check(); return true; });
+  final void Function()? _checked;
   final String clause;
   final bool Function() check;
   final CottSpan? span;
@@ -4353,6 +4389,11 @@ final class CottResourceContract {
 
   void _validateInvariants() {
     for (final invariant in invariants) {
+      final checked = invariant._checked;
+      if (checked != null) {
+        checked();
+        continue;
+      }
       CottRuntime.invariant(
         invariant.check(),
         symbol,

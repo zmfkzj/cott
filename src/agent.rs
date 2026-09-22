@@ -468,8 +468,6 @@ const fn ascii_word(byte: u8) -> bool {
 pub fn render_prompt(
     callable: &PythonCallable,
     context: &serde_json::Value,
-    canonical: &BTreeMap<&str, &Vec<serde_json::Value>>,
-    module_sources: &BTreeMap<String, String>,
     references: &[ResolvedBinding],
     external_types: &BTreeMap<String, String>,
     existing: Option<&[u8]>,
@@ -526,7 +524,8 @@ pub fn render_prompt(
     ));
     append_intent_docs(declarations, symbol, &mut prompt);
     prompt.push_str("\nFORMAL DECLARATIONS\n");
-    let formal = prompt_declarations::scoped_declarations(canonical, module_sources, declarations)?;
+    prompt.push_str(prompt_declarations::FORMAT);
+    let formal = prompt_declarations::scoped_declarations(declarations)?;
     prompt.push_str(&serde_json::to_string_pretty(&formal).map_err(|error| error.to_string())?);
     prompt.push('\n');
     prompt.push_str("\nPROJECT RULES\n");
@@ -1205,6 +1204,7 @@ pub fn run_agent(
     if kind == AgentKind::Claude && !native_claude_entrypoint(&executable, &executable_bytes) {
         return Err("claude executable must use the official native entrypoint".to_owned());
     }
+    let runtime = omp_bun_runtime(kind, &executable, &executable_bytes)?;
     let target_relative = target
         .strip_prefix(workspace)
         .map_err(|_| "agent target escaped workspace")?
@@ -1218,6 +1218,7 @@ pub fn run_agent(
     let workspace_before = workspace_snapshot(workspace, Some(&target_relative))?;
     let version = run_process(
         &executable,
+        runtime.as_ref(),
         spec.version_argv.iter().map(ToString::to_string).collect(),
         workspace,
         &scratch,
@@ -1333,6 +1334,7 @@ pub fn run_agent(
     let started = Instant::now();
     let completed = run_process(
         &executable,
+        runtime.as_ref(),
         arguments,
         workspace,
         &scratch,
@@ -1343,6 +1345,9 @@ pub fn run_agent(
         timeout_seconds,
     )?;
     let duration_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    if let Some(runtime) = &runtime {
+        runtime.verify()?;
+    }
     if fs::read(&executable)
         .map_err(|error| format!("re-read {} executable: {error}", spec.executable_name))?
         != executable_bytes
@@ -1403,6 +1408,284 @@ pub fn run_agent(
         duration_ms,
         environment_names: agent_environment_names(kind),
     })
+}
+
+struct OmpBunRuntime {
+    executable: PathBuf,
+    digest: [u8; 32],
+    read_only: Vec<PathBuf>,
+}
+
+impl OmpBunRuntime {
+    fn verify(&self) -> Result<(), String> {
+        if bun_digest(&self.executable)? != self.digest {
+            return Err("OMP Bun runtime changed during generation".to_owned());
+        }
+        Ok(())
+    }
+}
+
+fn bun_digest(executable: &Path) -> Result<[u8; 32], String> {
+    use sha2::{Digest, Sha256};
+
+    let metadata = fs::symlink_metadata(executable)
+        .map_err(|error| format!("stat OMP Bun runtime: {error}"))?;
+    if !metadata.is_file() || metadata.nlink() != 1 || metadata.mode() & 0o111 == 0 {
+        return Err("OMP Bun runtime must be a regular single-link executable file".to_owned());
+    }
+    let mut file =
+        fs::File::open(executable).map_err(|error| format!("open OMP Bun runtime: {error}"))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|error| format!("read OMP Bun runtime: {error}"))?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(digest.finalize().into())
+}
+
+fn omp_bun_runtime(
+    kind: AgentKind,
+    executable: &Path,
+    bytes: &[u8],
+) -> Result<Option<OmpBunRuntime>, String> {
+    if kind != AgentKind::Omp {
+        return Ok(None);
+    }
+    let shebang = bytes
+        .split(|byte| *byte == b'\n')
+        .next()
+        .unwrap_or_default();
+    if shebang != b"#!/usr/bin/env bun" {
+        if executable
+            .extension()
+            .is_some_and(|extension| extension == "js")
+            || shebang
+                .split(|byte| byte.is_ascii_whitespace())
+                .any(|word| word == b"bun" || word.ends_with(b"/bun"))
+        {
+            return Err(
+                "unsupported OMP script entrypoint; expected #!/usr/bin/env bun".to_owned(),
+            );
+        }
+        return Ok(None);
+    }
+    let path = std::env::var_os("PATH").ok_or("missing PATH while locating OMP Bun runtime")?;
+    let mut bun = None;
+    for directory in std::env::split_paths(&path) {
+        let candidate = directory.join("bun");
+        match fs::symlink_metadata(&candidate) {
+            Ok(_) => {
+                bun = Some(
+                    fs::canonicalize(&candidate)
+                        .map_err(|error| format!("resolve OMP Bun runtime: {error}"))?,
+                );
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("locate OMP Bun runtime: {error}")),
+        }
+    }
+    let bun = bun.ok_or("missing OMP Bun runtime on PATH")?;
+    let digest = bun_digest(&bun)?;
+    let read_only = omp_package_mounts(executable)?;
+    Ok(Some(OmpBunRuntime {
+        executable: bun,
+        digest,
+        read_only,
+    }))
+}
+
+fn package_metadata(root: &Path) -> Result<serde_json::Value, String> {
+    let path = root.join("package.json");
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|error| format!("inspect OMP runtime package {}: {error}", path.display()))?;
+    if !metadata.is_file() || metadata.len() > 1024 * 1024 {
+        return Err(format!(
+            "unsafe OMP runtime package metadata {}",
+            path.display()
+        ));
+    }
+    serde_json::from_slice(
+        &fs::read(&path)
+            .map_err(|error| format!("read OMP runtime package {}: {error}", path.display()))?,
+    )
+    .map_err(|error| format!("parse OMP runtime package {}: {error}", path.display()))
+}
+
+fn package_name(name: &str) -> bool {
+    let valid_part = |part: &str| {
+        !part.is_empty()
+            && !part.starts_with('.')
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+    };
+    match name.split_once('/') {
+        Some((scope, name)) => scope.strip_prefix('@').is_some_and(valid_part) && valid_part(name),
+        None => valid_part(name),
+    }
+}
+
+fn omp_package_mounts(executable: &Path) -> Result<Vec<PathBuf>, String> {
+    // Only installed node_modules packages qualify. A linked checkout or an
+    // arbitrary directory with a fabricated package.json is not a runtime root.
+    let modules = executable
+        .ancestors()
+        .filter(|path| path.file_name().is_some_and(|name| name == "node_modules"))
+        .last()
+        .ok_or("OMP Bun entrypoint must belong to an installed node_modules package")?;
+    let root = executable
+        .ancestors()
+        .skip(1)
+        .take_while(|path| *path != modules)
+        .find(|path| path.join("package.json").exists())
+        .ok_or("missing OMP entrypoint package metadata")?;
+    let metadata = package_metadata(root)?;
+    let bin = metadata["bin"]["omp"]
+        .as_str()
+        .ok_or("OMP package must declare its omp entrypoint")?;
+    if metadata["name"].as_str() != Some("@oh-my-pi/pi-coding-agent")
+        || !Path::new(bin)
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+        || root.join(bin) != executable
+    {
+        return Err("OMP script does not match the official package entrypoint".to_owned());
+    }
+
+    let mut pending = vec![(root.to_path_buf(), "@oh-my-pi/pi-coding-agent".to_owned())];
+    let mut packages = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
+    while let Some((location, expected_name)) = pending.pop() {
+        let canonical = fs::canonicalize(&location).map_err(|error| {
+            format!(
+                "resolve OMP runtime package {}: {error}",
+                location.display()
+            )
+        })?;
+        if !canonical.starts_with(modules)
+            || !canonical.ends_with(Path::new("node_modules").join(&expected_name))
+            || !canonical.is_dir()
+        {
+            return Err(format!(
+                "unsafe OMP runtime package location {}",
+                location.display()
+            ));
+        }
+        if let Some(locations) = packages.get_mut(&canonical) {
+            locations.insert(location);
+            continue;
+        }
+        let metadata = package_metadata(&canonical)?;
+        if metadata["name"].as_str() != Some(expected_name.as_str()) {
+            return Err(format!(
+                "OMP runtime package identity mismatch at {}",
+                location.display()
+            ));
+        }
+        packages.insert(
+            canonical.clone(),
+            BTreeSet::from([location, canonical.clone()]),
+        );
+        let mut dependencies = BTreeMap::new();
+        for field in ["dependencies", "peerDependencies", "optionalDependencies"] {
+            let Some(values) = metadata.get(field) else {
+                continue;
+            };
+            let values = values
+                .as_object()
+                .ok_or("invalid OMP package dependency metadata")?;
+            for name in values.keys() {
+                if !package_name(name) {
+                    return Err(format!("unsafe OMP runtime dependency name `{name}`"));
+                }
+                let optional = field == "optionalDependencies"
+                    || (field == "peerDependencies"
+                        && metadata["peerDependenciesMeta"][name]["optional"].as_bool()
+                            == Some(true));
+                dependencies.insert(name.clone(), optional);
+            }
+        }
+        for (name, optional) in dependencies {
+            let mut found = None;
+            for ancestor in canonical.ancestors() {
+                if !ancestor.starts_with(modules) && Some(ancestor) != modules.parent() {
+                    break;
+                }
+                if ancestor
+                    .file_name()
+                    .is_some_and(|name| name == "node_modules")
+                {
+                    continue;
+                }
+                let candidate = ancestor.join("node_modules").join(&name);
+                match fs::symlink_metadata(&candidate) {
+                    Ok(_) => {
+                        found = Some(candidate);
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(format!("locate OMP runtime dependency `{name}`: {error}"));
+                    }
+                }
+            }
+            if let Some(dependency) = found {
+                pending.push((dependency, name));
+            } else if !optional {
+                return Err(format!("missing OMP runtime dependency `{name}`"));
+            }
+        }
+    }
+
+    let mut mounts = BTreeSet::new();
+    for (package, locations) in packages {
+        // Mount package contents, not node_modules containers: hoisted and
+        // symlinked dependencies are exposed individually from the closure.
+        for entry in
+            fs::read_dir(&package).map_err(|error| format!("list OMP runtime package: {error}"))?
+        {
+            let entry = entry.map_err(|error| format!("list OMP runtime package: {error}"))?;
+            if entry.file_name() == "node_modules" {
+                continue;
+            }
+            validate_package_content(&entry.path(), &package)?;
+            for location in &locations {
+                mounts.insert(location.join(entry.file_name()));
+            }
+        }
+    }
+    Ok(mounts.into_iter().collect())
+}
+
+fn validate_package_content(path: &Path, package: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("inspect OMP package content {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        let target = fs::canonicalize(path)
+            .map_err(|error| format!("resolve OMP package content {}: {error}", path.display()))?;
+        if !target.starts_with(package) || target.starts_with(package.join("node_modules")) {
+            return Err(format!(
+                "OMP package content escapes its package: {}",
+                path.display()
+            ));
+        }
+    } else if metadata.is_dir() {
+        for entry in fs::read_dir(path)
+            .map_err(|error| format!("list OMP package content {}: {error}", path.display()))?
+        {
+            let entry = entry.map_err(|error| format!("list OMP package content: {error}"))?;
+            validate_package_content(&entry.path(), package)?;
+        }
+    } else if !metadata.is_file() {
+        return Err(format!("unsafe OMP package content {}", path.display()));
+    }
+    Ok(())
 }
 
 fn native_claude_entrypoint(executable: &Path, bytes: &[u8]) -> bool {
@@ -1561,7 +1844,8 @@ fn agent_environment_names(kind: AgentKind) -> Vec<String> {
 
 fn run_process(
     executable: &Path,
-    arguments: Vec<String>,
+    runtime: Option<&OmpBunRuntime>,
+    mut arguments: Vec<String>,
     workspace: &Path,
     scratch: &Path,
     stdin: Vec<u8>,
@@ -1571,6 +1855,21 @@ fn run_process(
     timeout_seconds: u16,
 ) -> Result<crate::sandbox::CompletedProcess, String> {
     let mut read_only = vec![executable.to_path_buf()];
+    let program = if let Some(runtime) = runtime {
+        runtime.verify()?;
+        read_only.push(runtime.executable.clone());
+        read_only.extend(runtime.read_only.iter().cloned());
+        arguments.insert(
+            0,
+            executable
+                .to_str()
+                .ok_or("OMP entrypoint path is not UTF-8")?
+                .to_owned(),
+        );
+        &runtime.executable
+    } else {
+        executable
+    };
     let mut environment = BTreeMap::from([
         ("HOME".to_owned(), scratch.display().to_string()),
         ("TMPDIR".to_owned(), scratch.display().to_string()),
@@ -1694,7 +1993,7 @@ fn run_process(
         64 * 1024 * 1024
     };
     run(&SandboxSpec {
-        program: executable.to_path_buf(),
+        program: program.to_path_buf(),
         arguments,
         cwd: workspace.to_path_buf(),
         environment,

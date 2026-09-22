@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from frogmouth.document_types import LoadError, LoadError_InvalidEncoding, LoadError_NetworkFailed, LoadError_NotFound, LoadError_ReadFailed, LoadError_TooLarge
 from frogmouth.model_types import Document, Location
@@ -40,11 +41,24 @@ def load_document(location: Location) -> Result[Document, LoadError]:
             raise CottContractViolation("returned error is not allowed", symbol="frogmouth.document.load_document", phase="error", span={"end_byte":817,"end_column":1,"end_line":28,"start_byte":258,"start_column":1,"start_line":12}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="frogmouth.document.load_document", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "frogmouth.document.load_document", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is LoadError_NotFound:
+        _cott_contract_condition(True, "frogmouth.document.load_document", "error:4")
+    if type(_result) is Err and type(_result.error) is LoadError_InvalidEncoding:
+        _cott_contract_condition(True, "frogmouth.document.load_document", "error:5")
+    if type(_result) is Err and type(_result.error) is LoadError_TooLarge:
+        _cott_contract_condition(True, "frogmouth.document.load_document", "error:6")
+    if type(_result) is Err and type(_result.error) is LoadError_NetworkFailed:
+        _cott_contract_condition(True, "frogmouth.document.load_document", "error:7")
+    if type(_result) is Err and type(_result.error) is LoadError_ReadFailed:
+        _cott_contract_condition(True, "frogmouth.document.load_document", "error:8")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             document = _cott_match_value.value
-            return (((document).location == location))
+            return (_cott_contract_condition((((document).location == location)), "frogmouth.document.load_document", "ensures:1"))
+        _cott_contract_condition((False), "frogmouth.document.load_document", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.load_document", clause="ensures:1", phase="ensures", span={"end_byte":496,"end_column":65,"end_line":17,"start_byte":436,"start_column":5,"start_line":17}, expected="true", actual="false")
@@ -52,7 +66,8 @@ def load_document(location: Location) -> Result[Document, LoadError]:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             document = _cott_match_value.value
-            return ((len((document).title) > 0))
+            return (_cott_contract_condition(((len((document).title) > 0)), "frogmouth.document.load_document", "ensures:2"))
+        _cott_contract_condition((False), "frogmouth.document.load_document", "ensures:2:applicable")
         return True
     if not (_cott_match_ensures_2()):
         raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.load_document", clause="ensures:2", phase="ensures", span={"end_byte":554,"end_column":58,"end_line":18,"start_byte":501,"start_column":5,"start_line":18}, expected="true", actual="false")
@@ -60,7 +75,8 @@ def load_document(location: Location) -> Result[Document, LoadError]:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             document = _cott_match_value.value
-            return ((len((document).markdown) <= 5242880))
+            return (_cott_contract_condition(((len((document).markdown) <= 5242880)), "frogmouth.document.load_document", "ensures:3"))
+        _cott_contract_condition((False), "frogmouth.document.load_document", "ensures:3:applicable")
         return True
     if not (_cott_match_ensures_3()):
         raise CottContractViolation("ensures clause failed", symbol="frogmouth.document.load_document", clause="ensures:3", phase="ensures", span={"end_byte":622,"end_column":68,"end_line":19,"start_byte":559,"start_column":5,"start_line":19}, expected="true", actual="false")

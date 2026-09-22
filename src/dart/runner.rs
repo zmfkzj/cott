@@ -10,7 +10,7 @@ use crate::contract_test::{Classification, ContractTestStrategy};
 use crate::manifest::{DartProjectConfig, VerificationConfig};
 
 use super::emit;
-use super::types::{escape_identifier, internal_name, local_name};
+use super::types::{DartEnumProjection, escape_identifier, internal_name, local_name};
 use super::{DartCallable, DartPlan};
 
 const EVENT_PREFIX: &str = "COTT_DART_VERIFY:";
@@ -57,8 +57,6 @@ struct Invocation {
     call: String,
     return_type: Value,
     asynchronous: bool,
-    subjects: Vec<String>,
-    parameters: Vec<(String, String)>,
 }
 
 #[derive(Debug)]
@@ -106,7 +104,6 @@ pub(crate) fn render(
     }
     let declarations = declaration_index(plan)?;
     let mut source = runner_prelude(config, plan, &aliases)?;
-    source.push_str(&render_guard_applicability(plan, &aliases)?);
     let mut invocations = Vec::new();
     let mut expected_cases = BTreeMap::new();
     let mut expected_cancellations = BTreeSet::new();
@@ -441,41 +438,7 @@ Future<Uint8List> _readEvidenceKey() async {
   return Uint8List.fromList(bytes);
 }
 
-List<Object?> _applicabilitySubjects(List<Object?> roots) {
-  final subjects = <Object?>[];
-  final pending = List<Object?>.of(roots);
-  var remaining = 64;
-  while (pending.isNotEmpty && remaining > 0) {
-    remaining -= 1;
-    final value = pending.removeLast();
-    if (value == null) {
-      continue;
-    }
-    subjects.add(value);
-    if (value is cott_runtime.CottFieldValue) {
-      for (final name in value.cottFieldNames) {
-        pending.add(value.cottField(name));
-      }
-    } else if (value is cott_runtime.Some) {
-      pending.add(value.value);
-    } else if (value is cott_runtime.Ok) {
-      pending.add(value.value);
-    } else if (value is cott_runtime.CottList) {
-      for (final item in value) {
-        pending.add(item);
-      }
-    }
-  }
-  return subjects;
-}
-
-List<Map<String, Object?>> _observations(
-  cott_runtime.CottObservation observation, {
-  Object? result,
-  Map<String, Object?> parameters = const <String, Object?>{},
-  List<Object?> subjects = const <Object?>[],
-}) {
-  final explored = _applicabilitySubjects(subjects);
+List<Map<String, Object?>> _observations(cott_runtime.CottObservation observation) {
   return List<Map<String, Object?>>.unmodifiable(observation.observations().map((value) {
     return <String, Object?>{
       'symbol': value.symbol,
@@ -484,13 +447,7 @@ List<Map<String, Object?>> _observations(
       'status': value.status.name,
       'passed': value.passed,
       'reason': value.reason,
-      'applicable': _guardApplicable(
-        value.symbol,
-        value.clause,
-        result: result,
-        parameters: parameters,
-        subjects: explored,
-      ),
+      'applicable': value.passed == null ? null : true,
     };
   }));
 }
@@ -501,9 +458,6 @@ void _emitCase(
   int caseId,
   String status,
   cott_runtime.CottObservation observation, {
-  Object? result,
-  Map<String, Object?> parameters = const <String, Object?>{},
-  List<Object?> subjects = const <Object?>[],
   cott_runtime.CottContractViolation? error,
 }) {
   evidence.emit(<String, Object?>{
@@ -514,12 +468,7 @@ void _emitCase(
     'phase': error?.phase,
     'clause': error?.clause,
     'error_symbol': error?.symbol,
-    'observations': _observations(
-      observation,
-      result: result,
-      parameters: parameters,
-      subjects: subjects,
-    ),
+    'observations': _observations(observation),
   });
 }
 
@@ -832,7 +781,7 @@ fn render_case(
     )
     .expect("writing to String cannot fail");
     source.push_str(
-        "  final observation = cott_runtime.CottObservation();\n  var invoked = false;\n  final _subjects = <Object?>[];\n  final _parameters = <String, Object?>{};\n  Object? _resultValue;\n  try {\n",
+        "  final observation = cott_runtime.CottObservation();\n  var invoked = false;\n  try {\n",
     );
     writeln!(
         source,
@@ -841,22 +790,6 @@ fn render_case(
     .expect("writing to String cannot fail");
     for line in &invocation.prelude {
         writeln!(source, "      {line}").expect("writing to String cannot fail");
-    }
-    for (name, local) in &invocation.parameters {
-        writeln!(
-            source,
-            "      _parameters[{}] = {local};",
-            dart_string(name)
-        )
-        .expect("writing to String cannot fail");
-    }
-    if !invocation.subjects.is_empty() {
-        writeln!(
-            source,
-            "      _subjects.addAll([{}]);",
-            invocation.subjects.join(", ")
-        )
-        .expect("writing to String cannot fail");
     }
     source.push_str("      invoked = true;\n");
     writeln!(
@@ -870,7 +803,6 @@ fn render_case(
         invocation.call
     )
     .expect("writing to String cannot fail");
-    source.push_str("      _resultValue = _result;\n      _subjects.add(_result);\n");
     render_protocol_consumption(
         source,
         &invocation.return_type,
@@ -885,31 +817,31 @@ fn render_case(
     .expect("writing to String cannot fail");
     writeln!(
         source,
-        "    _emitCase(evidence, {quoted_symbol}, {case}, 'passed', observation, result: _resultValue, parameters: _parameters, subjects: _subjects);"
+        "    _emitCase(evidence, {quoted_symbol}, {case}, 'passed', observation);"
     )
     .expect("writing to String cannot fail");
     source.push_str("  } on cott_runtime.CottContractViolation catch (error) {\n");
     writeln!(
         source,
-        "    _emitCase(evidence, {quoted_symbol}, {case}, !invoked ? 'candidate_unavailable' : error.phase == 'requires' ? 'ineligible' : 'failed', observation, result: _resultValue, parameters: _parameters, subjects: _subjects, error: error);"
+        "    _emitCase(evidence, {quoted_symbol}, {case}, !invoked ? 'candidate_unavailable' : error.phase == 'requires' ? 'ineligible' : 'failed', observation, error: error);"
     )
     .expect("writing to String cannot fail");
     source.push_str("  } on TimeoutException {\n");
     writeln!(
         source,
-        "    _emitCase(evidence, {quoted_symbol}, {case}, 'timeout', observation, result: _resultValue, parameters: _parameters, subjects: _subjects);"
+        "    _emitCase(evidence, {quoted_symbol}, {case}, 'timeout', observation);"
     )
     .expect("writing to String cannot fail");
     source.push_str("  } on cott_runtime.CottCancellationException {\n");
     writeln!(
         source,
-        "    _emitCase(evidence, {quoted_symbol}, {case}, 'unexpected_cancellation', observation, result: _resultValue, parameters: _parameters, subjects: _subjects);"
+        "    _emitCase(evidence, {quoted_symbol}, {case}, 'unexpected_cancellation', observation);"
     )
     .expect("writing to String cannot fail");
     source.push_str("  } catch (_) {\n");
     writeln!(
         source,
-        "    _emitCase(evidence, {quoted_symbol}, {case}, 'unexpected_exception', observation, result: _resultValue, parameters: _parameters, subjects: _subjects);"
+        "    _emitCase(evidence, {quoted_symbol}, {case}, 'unexpected_exception', observation);"
     )
     .expect("writing to String cannot fail");
     source.push_str("  }\n}\n\n");
@@ -976,28 +908,26 @@ fn render_callable_cases(
     };
     let limit = usize::try_from(verification.candidate_limit).unwrap_or(usize::MAX);
     let mut count = 0u32;
-    'constructors: for constructor in &constructor_cases {
-        for values in &parameter_cases {
-            if usize::try_from(count).unwrap_or(usize::MAX) >= limit {
-                break 'constructors;
-            }
-            let invocation = invocation(
-                callable,
-                parameters,
-                constructor,
-                values,
-                &context,
-                return_type.clone(),
-                asynchronous,
-            )?;
-            render_case(source, &invocation, &callable.symbol, count, verification)?;
-            main_lines.push(format!(
-                "await _case_{}_{}(evidence);",
-                safe_name(&callable.symbol),
-                count
-            ));
-            count = count.saturating_add(1);
-        }
+    for indices in bounded_product_indices(&[constructor_cases.len(), parameter_cases.len()], limit)
+    {
+        let constructor = &constructor_cases[indices[0]];
+        let values = &parameter_cases[indices[1]];
+        let invocation = invocation(
+            callable,
+            parameters,
+            constructor,
+            values,
+            &context,
+            return_type.clone(),
+            asynchronous,
+        )?;
+        render_case(source, &invocation, &callable.symbol, count, verification)?;
+        main_lines.push(format!(
+            "await _case_{}_{}(evidence);",
+            safe_name(&callable.symbol),
+            count
+        ));
+        count = count.saturating_add(1);
     }
     if count == 0 {
         return Err(RenderFailure::unavailable(
@@ -1033,7 +963,7 @@ fn render_initializer_cases(
         type_arguments: BTreeMap::new(),
         node_limit: 64,
         container_limit: 3,
-        literals: collect_declaration_literals(owner, aliases),
+        literals: collect_declaration_literals(owner, aliases, plan.enum_projection()),
     };
     let cases = constructor_candidates(owner, &mut context)?;
     let parameters = initializer_parameters(owner)?;
@@ -1048,10 +978,6 @@ fn render_initializer_cases(
             call: constructor_invocation(owner, parameters, "_constructor", &context)?,
             return_type: serde_json::json!({"kind": "primitive", "name": "unit"}),
             asynchronous: false,
-            subjects: (0..parameters.len())
-                .map(|index| format!("_constructor_{index}"))
-                .collect(),
-            parameters: parameter_bindings("_constructor", parameters),
         };
         render_case(source, &invocation, &symbol, count, verification)?;
         main_lines.push(format!(
@@ -1111,7 +1037,7 @@ fn render_nominal_cases(
         type_arguments: BTreeMap::new(),
         node_limit: 64,
         container_limit: 3,
-        literals: collect_declaration_literals(declaration, aliases),
+        literals: collect_declaration_literals(declaration, aliases, plan.enum_projection()),
     };
     let ty = serde_json::json!({
         "kind": "named",
@@ -1127,8 +1053,6 @@ fn render_nominal_cases(
             call: "_instance".to_owned(),
             return_type: serde_json::json!({"kind": "primitive", "name": "unit"}),
             asynchronous: false,
-            subjects: vec!["_instance".to_owned()],
-            parameters: Vec::new(),
         };
         render_case(source, &invocation, symbol, count, verification)?;
         main_lines.push(format!(
@@ -1229,20 +1153,11 @@ fn invocation(
             positional.join(", ")
         )
     };
-    let mut subjects = (0..parameters.len())
-        .map(|index| format!("_candidate_{index}"))
-        .collect::<Vec<_>>();
-    if callable.owner.is_some() {
-        subjects.extend((0..constructor.len()).map(|index| format!("_constructor_{index}")));
-        subjects.push("_receiver".to_owned());
-    }
     Ok(Invocation {
         prelude,
         call,
         return_type,
         asynchronous,
-        subjects,
-        parameters: parameter_bindings("_candidate", parameters),
     })
 }
 
@@ -1276,19 +1191,6 @@ fn typed_candidates(
                 _ => base,
             };
             Ok(format!("final {rendered} {prefix}_{index} = {value};"))
-        })
-        .collect()
-}
-
-fn parameter_bindings(prefix: &str, parameters: &[Value]) -> Vec<(String, String)> {
-    parameters
-        .iter()
-        .enumerate()
-        .filter_map(|(index, parameter)| {
-            parameter
-                .get("name")
-                .and_then(Value::as_str)
-                .map(|name| (local_name(name).to_owned(), format!("{prefix}_{index}")))
         })
         .collect()
 }
@@ -1466,9 +1368,13 @@ fn candidate_context<'a>(
             }
         }
     }
-    let mut literals = collect_declaration_literals(&callable.declaration, aliases);
+    let mut literals =
+        collect_declaration_literals(&callable.declaration, aliases, plan.enum_projection());
     if let Some(owner) = callable.owner.as_ref() {
-        literals = merge_literals(&literals, collect_declaration_literals(owner, aliases));
+        literals = merge_literals(
+            &literals,
+            collect_declaration_literals(owner, aliases, plan.enum_projection()),
+        );
     }
     Ok(CandidateContext {
         config,
@@ -1631,15 +1537,16 @@ fn initializer_parameters(owner: &Value) -> Result<&[Value], String> {
 fn collect_declaration_literals(
     declaration: &Value,
     aliases: &BTreeMap<String, String>,
+    projection: &DartEnumProjection,
 ) -> Vec<(String, String)> {
     let mut literals = Vec::new();
     let mut seen = BTreeSet::new();
     for clause in declaration_contract_clauses(declaration) {
-        collect_literals(clause, aliases, &mut literals, &mut seen);
+        collect_literals(clause, aliases, projection, &mut literals, &mut seen);
     }
     if let Some(init) = declaration.get("init").filter(|init| init.is_object()) {
         for clause in declaration_contract_clauses(init) {
-            collect_literals(clause, aliases, &mut literals, &mut seen);
+            collect_literals(clause, aliases, projection, &mut literals, &mut seen);
         }
     }
     for invariant in declaration
@@ -1648,7 +1555,13 @@ fn collect_declaration_literals(
         .into_iter()
         .flatten()
     {
-        collect_literals(invariant, aliases, &mut literals, &mut seen);
+        collect_literals(invariant, aliases, projection, &mut literals, &mut seen);
+    }
+    if let Some(refinement) = declaration
+        .get("refinement")
+        .filter(|value| !value.is_null())
+    {
+        collect_literals(refinement, aliases, projection, &mut literals, &mut seen);
     }
     literals
 }
@@ -1670,25 +1583,35 @@ fn merge_literals(
 fn collect_literals(
     value: &Value,
     aliases: &BTreeMap<String, String>,
+    projection: &DartEnumProjection,
     literals: &mut Vec<(String, String)>,
     seen: &mut BTreeSet<(String, String)>,
 ) {
     match value {
         Value::Array(values) => {
             for value in values {
-                collect_literals(value, aliases, literals, seen);
+                collect_literals(value, aliases, projection, literals, seen);
             }
         }
         Value::Object(object) => {
             match object.get("kind").and_then(Value::as_str) {
-                Some("literal") => push_literal(literal_candidate(value), literals, seen),
+                Some("literal") => {
+                    push_literal(literal_candidate(value), literals, seen);
+                    for candidate in integer_boundary_candidates(value) {
+                        push_literal(Some(candidate), literals, seen);
+                    }
+                }
                 Some("enum_singleton_ref") => {
-                    push_literal(enum_singleton_candidate(value, aliases), literals, seen);
+                    push_literal(
+                        enum_singleton_candidate(value, aliases, projection),
+                        literals,
+                        seen,
+                    );
                 }
                 _ => {}
             }
             for child in object.values() {
-                collect_literals(child, aliases, literals, seen);
+                collect_literals(child, aliases, projection, literals, seen);
             }
         }
         _ => {}
@@ -1732,12 +1655,51 @@ fn literal_candidate(expression: &Value) -> Option<(String, String)> {
     Some((key, rendered))
 }
 
+fn integer_boundary_candidates(expression: &Value) -> Vec<(String, String)> {
+    let Some(ty) = expression.get("type") else {
+        return Vec::new();
+    };
+    let Some(name) = ty.get("name").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    let Some(value) = expression
+        .get("value")
+        .filter(|value| value.get("kind").and_then(Value::as_str) == Some("integer"))
+        .and_then(|value| value.get("value"))
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<i128>().ok())
+    else {
+        return Vec::new();
+    };
+    let (minimum, maximum) = match name {
+        "i8" => (i8::MIN as i128, i8::MAX as i128),
+        "i16" => (i16::MIN as i128, i16::MAX as i128),
+        "i32" => (i32::MIN as i128, i32::MAX as i128),
+        "i64" => (i64::MIN as i128, i64::MAX as i128),
+        "u8" => (0, u8::MAX as i128),
+        "u16" => (0, u16::MAX as i128),
+        "u32" => (0, u32::MAX as i128),
+        "u64" => (0, u64::MAX as i128),
+        _ => return Vec::new(),
+    };
+    let Some(key) = candidate_type_key(ty) else {
+        return Vec::new();
+    };
+    [value.checked_add(1), value.checked_sub(1)]
+        .into_iter()
+        .flatten()
+        .filter(|value| (minimum..=maximum).contains(value))
+        .map(|value| (key.clone(), integer_candidate(&value.to_string(), name)))
+        .collect()
+}
+
 fn enum_singleton_candidate(
     expression: &Value,
     aliases: &BTreeMap<String, String>,
+    projection: &DartEnumProjection,
 ) -> Option<(String, String)> {
     let key = candidate_type_key(expression.get("type")?)?;
-    let rendered = emit::render_consumer_expression(expression, aliases).ok()?;
+    let rendered = emit::render_consumer_expression(expression, aliases, projection).ok()?;
     Some((key, rendered))
 }
 
@@ -2137,7 +2099,7 @@ fn named_candidates(
         .to_owned();
     nested.literals = merge_literals(
         &nested.literals,
-        collect_declaration_literals(declaration, nested.aliases),
+        collect_declaration_literals(declaration, nested.aliases, nested.plan.enum_projection()),
     );
     let type_witnesses =
         emit::render_consumer_type_witnesses(context.config, context.plan, ty, context.aliases)?;
@@ -2219,7 +2181,13 @@ fn named_candidates(
                     Err(RenderFailure::Unavailable(_)) => continue,
                     Err(error @ RenderFailure::Fatal(_)) => return Err(error),
                 };
-                let variant = emit::render_consumer_enum_variant(symbol, context.aliases)?;
+                let projection = context.plan.enum_projection();
+                let variant =
+                    emit::render_consumer_enum_variant(symbol, context.aliases, projection)?;
+                if projection.is_native_variant(symbol) {
+                    output.push(variant);
+                    continue;
+                }
                 for values in product_bounded(&choices, 4) {
                     let named = values
                         .into_iter()
@@ -2243,7 +2211,7 @@ fn named_candidates(
                 .ok_or_else(|| format!("resource `{name}` has no initial state"))?;
             Ok(vec![format!(
                 "{}()",
-                emit::render_consumer_enum_variant(initial, context.aliases)?
+                emit::render_consumer_resource_state(initial, context.aliases)?
             )])
         }
         Some("impl") => {
@@ -2575,23 +2543,38 @@ fn unsigned_values(maximum: u64) -> Result<Vec<String>, String> {
 }
 
 fn product_bounded(choices: &[Vec<String>], limit: usize) -> Vec<Vec<String>> {
-    if limit == 0 || choices.iter().any(Vec::is_empty) {
+    bounded_product_indices(&choices.iter().map(Vec::len).collect::<Vec<_>>(), limit)
+        .into_iter()
+        .map(|indices| {
+            indices
+                .into_iter()
+                .enumerate()
+                .map(|(dimension, index)| choices[dimension][index].clone())
+                .collect()
+        })
+        .collect()
+}
+
+fn bounded_product_indices(lengths: &[usize], limit: usize) -> Vec<Vec<usize>> {
+    if limit == 0 || lengths.contains(&0) {
         return Vec::new();
     }
-    let mut product = vec![Vec::new()];
-    for values in choices {
-        let mut next = Vec::new();
-        'outer: for prefix in &product {
-            for value in values {
-                let mut candidate = prefix.clone();
-                candidate.push(value.clone());
-                next.push(candidate);
-                if next.len() == limit {
-                    break 'outer;
-                }
+    // Visit low-index candidates in every dimension before advancing deeply in one.
+    // Literal seeds retain priority without starving other parameters or receivers.
+    let mut pending = BTreeSet::from([(0usize, vec![0usize; lengths.len()])]);
+    let mut product = Vec::new();
+    while product.len() < limit {
+        let Some((distance, indices)) = pending.pop_first() else {
+            break;
+        };
+        for (dimension, length) in lengths.iter().enumerate() {
+            if indices[dimension] + 1 < *length {
+                let mut next = indices.clone();
+                next[dimension] += 1;
+                pending.insert((distance + 1, next));
             }
         }
-        product = next;
+        product.push(indices);
     }
     product
 }
@@ -2872,7 +2855,7 @@ fn render_scenario(
                     .get("target")
                     .and_then(Value::as_str)
                     .ok_or("Dart scenario call has no target")?;
-                let arguments = scenario_arguments(step, aliases)?;
+                let arguments = scenario_arguments(step, aliases, plan.enum_projection())?;
                 let asynchronous =
                     step.get("callable_kind").and_then(Value::as_str) == Some("async");
                 writeln!(
@@ -2898,7 +2881,7 @@ fn render_scenario(
                     .get("target")
                     .and_then(Value::as_str)
                     .ok_or("Dart scenario spawn has no target")?;
-                let arguments = scenario_arguments(step, aliases)?;
+                let arguments = scenario_arguments(step, aliases, plan.enum_projection())?;
                 writeln!(
                     rendered,
                     "      {worker} = _ScenarioWorker<{ty}>.start(Future<{ty}>.sync(() => {}({})));",
@@ -2951,6 +2934,7 @@ fn render_scenario(
                     step.get("expression")
                         .ok_or("Dart scenario assertion has no expression")?,
                     aliases,
+                    plan.enum_projection(),
                 )?;
                 writeln!(
                     rendered,
@@ -3021,12 +3005,13 @@ fn render_scenario(
 fn scenario_arguments(
     step: &Value,
     aliases: &BTreeMap<String, String>,
+    projection: &DartEnumProjection,
 ) -> Result<Vec<String>, String> {
     step.get("arguments")
         .and_then(Value::as_array)
         .ok_or("Dart scenario call has no arguments")?
         .iter()
-        .map(|argument| emit::render_consumer_expression(argument, aliases))
+        .map(|argument| emit::render_consumer_expression(argument, aliases, projection))
         .collect()
 }
 
@@ -3409,146 +3394,6 @@ fn dart_string(value: &str) -> String {
     output
 }
 
-fn render_guard_applicability(
-    plan: &DartPlan,
-    aliases: &BTreeMap<String, String>,
-) -> Result<String, String> {
-    let clauses = collect_guarded_clauses(plan, aliases)?;
-    let mut source = String::from(
-        "\nbool? _guardApplicable(\n  String symbol,\n  String clause, {\n  Object? result,\n  Map<String, Object?> parameters = const <String, Object?>{},\n  List<Object?> subjects = const <Object?>[],\n}) {\n  switch ('$symbol:$clause') {\n",
-    );
-    for ((symbol, clause), (needs_self, expression)) in &clauses {
-        writeln!(
-            source,
-            "    case {}:",
-            dart_string(&format!("{symbol}:{clause}")),
-        )
-        .expect("writing to String cannot fail");
-        source.push_str("      try {\n");
-        if *needs_self {
-            source.push_str(
-                "        cott_runtime.CottFieldValue? _found;\n        for (final subject in subjects) {\n          if (subject is cott_runtime.CottFieldValue && subject.cottTypeIdentity == symbol) {\n            _found = subject;\n            break;\n          }\n        }\n        if (_found == null) {\n          return null;\n        }\n        final _self = _found as cott_runtime.CottFieldValue;\n",
-            );
-        }
-        writeln!(source, "        return {expression};").expect("writing to String cannot fail");
-        source.push_str("      } catch (_) {\n        return null;\n      }\n");
-    }
-    source.push_str("    default:\n      return null;\n  }\n}\n\n");
-    Ok(source)
-}
-
-fn collect_guarded_clauses(
-    plan: &DartPlan,
-    aliases: &BTreeMap<String, String>,
-) -> Result<BTreeMap<(String, String), (bool, String)>, String> {
-    let mut clauses = BTreeMap::new();
-    for declaration in plan.modules.iter().flat_map(|module| &module.declarations) {
-        let Some(symbol) = declaration.get("name").and_then(Value::as_str) else {
-            continue;
-        };
-        let Some(kind) = declaration.get("kind").and_then(Value::as_str) else {
-            continue;
-        };
-        if matches!(kind, "struct" | "newtype" | "impl") {
-            insert_invariant_guards(
-                &mut clauses,
-                symbol,
-                kind,
-                declaration,
-                &BTreeSet::new(),
-                aliases,
-            )?;
-        }
-        if kind == "impl"
-            && let Some(init) = declaration.get("init").filter(|init| init.is_object())
-        {
-            insert_contract_guards(
-                &mut clauses,
-                &format!("{symbol}.init"),
-                init,
-                &value_parameter_names(init),
-                aliases,
-            )?;
-        }
-    }
-    for callable in plan.callables() {
-        insert_contract_guards(
-            &mut clauses,
-            &callable.symbol,
-            &callable.declaration,
-            &value_parameter_names(&callable.declaration),
-            aliases,
-        )?;
-    }
-    Ok(clauses)
-}
-
-fn insert_invariant_guards(
-    clauses: &mut BTreeMap<(String, String), (bool, String)>,
-    symbol: &str,
-    kind: &str,
-    declaration: &Value,
-    parameters: &BTreeSet<String>,
-    aliases: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    for invariant in declaration
-        .get("invariants")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let Some(guard) = invariant.get("guard").filter(|guard| guard.is_object()) else {
-            continue;
-        };
-        let clause_id = invariant
-            .get("clause_id")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| format!("Dart {kind} `{symbol}` invariant has no clause_id"))?;
-        try_insert_guard(
-            clauses,
-            symbol,
-            format!("invariant:{clause_id}"),
-            guard,
-            parameters,
-            aliases,
-        )?;
-    }
-    Ok(())
-}
-
-fn insert_contract_guards(
-    clauses: &mut BTreeMap<(String, String), (bool, String)>,
-    symbol: &str,
-    declaration: &Value,
-    parameters: &BTreeSet<String>,
-    aliases: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    for clause in declaration_contract_clauses(declaration) {
-        let Some(kind) = clause.get("kind").and_then(Value::as_str) else {
-            continue;
-        };
-        if kind == "modifies" {
-            continue;
-        }
-        let Some(guard) = clause.get("guard").filter(|guard| guard.is_object()) else {
-            continue;
-        };
-        let clause_id = clause
-            .get("clause_id")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| format!("Dart `{symbol}` {kind} clause has no clause_id"))?;
-        try_insert_guard(
-            clauses,
-            symbol,
-            format!("{kind}:{clause_id}"),
-            guard,
-            parameters,
-            aliases,
-        )?;
-    }
-    Ok(())
-}
-
 fn declaration_contract_clauses(declaration: &Value) -> Vec<&Value> {
     let ordinary = declaration
         .get("contract")
@@ -3569,210 +3414,6 @@ fn declaration_contract_clauses(declaration: &Value) -> Vec<&Value> {
                 .flatten()
         })
         .collect()
-}
-
-fn value_parameter_names(declaration: &Value) -> BTreeSet<String> {
-    declaration
-        .get("parameters")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|parameter| {
-            parameter
-                .get("name")
-                .and_then(Value::as_str)
-                .map(|name| local_name(name).to_owned())
-        })
-        .collect()
-}
-
-fn try_insert_guard(
-    clauses: &mut BTreeMap<(String, String), (bool, String)>,
-    symbol: &str,
-    clause: String,
-    guard: &Value,
-    parameters: &BTreeSet<String>,
-    aliases: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    if !guard_is_decidable(guard, parameters) {
-        return Ok(());
-    }
-    let needs_self = contains_kind(guard, "self_ref");
-    let mut guard = guard.clone();
-    rewrite_self_refs(&mut guard);
-    rewrite_self_fields(&mut guard);
-    rewrite_result_refs(&mut guard);
-    rewrite_parameter_refs(&mut guard);
-    let mut predicate = serde_json::Map::new();
-    predicate.insert(
-        "kind".to_owned(),
-        Value::String("dart_synthetic".to_owned()),
-    );
-    predicate.insert("code".to_owned(), Value::String("true".to_owned()));
-    let Ok(rendered) =
-        super::expressions::render_guard(&guard, &Value::Object(predicate), false, None)
-    else {
-        return Ok(());
-    };
-    clauses.insert(
-        (symbol.to_owned(), clause),
-        (needs_self, apply_module_aliases(rendered, aliases)),
-    );
-    Ok(())
-}
-
-fn guard_is_decidable(value: &Value, parameters: &BTreeSet<String>) -> bool {
-    match value {
-        Value::Object(object) => match object.get("kind").and_then(Value::as_str) {
-            Some("old_state_field" | "fixture_path" | "fixture_url") => false,
-            Some("parameter_ref" | "binding_ref") => object
-                .get("symbol")
-                .and_then(Value::as_str)
-                .is_some_and(|symbol| parameters.contains(local_name(symbol))),
-            _ => object
-                .values()
-                .all(|child| guard_is_decidable(child, parameters)),
-        },
-        Value::Array(values) => values
-            .iter()
-            .all(|child| guard_is_decidable(child, parameters)),
-        _ => true,
-    }
-}
-
-fn contains_kind(value: &Value, kind: &str) -> bool {
-    match value {
-        Value::Object(object) => {
-            object.get("kind").and_then(Value::as_str) == Some(kind)
-                || object.values().any(|child| contains_kind(child, kind))
-        }
-        Value::Array(values) => values.iter().any(|child| contains_kind(child, kind)),
-        _ => false,
-    }
-}
-
-fn rewrite_self_refs(value: &mut Value) {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                rewrite_self_refs(value);
-            }
-        }
-        Value::Object(object) => {
-            if object.get("kind").and_then(Value::as_str) == Some("self_ref") {
-                object.clear();
-                object.insert(
-                    "kind".to_owned(),
-                    Value::String("dart_synthetic".to_owned()),
-                );
-                object.insert("code".to_owned(), Value::String("_self".to_owned()));
-                return;
-            }
-            for child in object.values_mut() {
-                rewrite_self_refs(child);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn rewrite_self_fields(value: &mut Value) {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                rewrite_self_fields(value);
-            }
-        }
-        Value::Object(object) => {
-            for child in object.values_mut() {
-                rewrite_self_fields(child);
-            }
-            if object.get("kind").and_then(Value::as_str) == Some("field")
-                && object
-                    .get("base")
-                    .and_then(Value::as_object)
-                    .is_some_and(|base| {
-                        base.get("kind").and_then(Value::as_str) == Some("dart_synthetic")
-                            && base.get("code").and_then(Value::as_str) == Some("_self")
-                    })
-                && let Some(name) = object
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            {
-                let code = format!("_self.cottField({})", dart_string(&name));
-                object.clear();
-                object.insert(
-                    "kind".to_owned(),
-                    Value::String("dart_synthetic".to_owned()),
-                );
-                object.insert("code".to_owned(), Value::String(code));
-            }
-        }
-        _ => {}
-    }
-}
-
-fn rewrite_result_refs(value: &mut Value) {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                rewrite_result_refs(value);
-            }
-        }
-        Value::Object(object) => {
-            if object.get("kind").and_then(Value::as_str) == Some("result_ref") {
-                object.clear();
-                object.insert(
-                    "kind".to_owned(),
-                    Value::String("dart_synthetic".to_owned()),
-                );
-                object.insert("code".to_owned(), Value::String("result".to_owned()));
-                return;
-            }
-            for child in object.values_mut() {
-                rewrite_result_refs(child);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn rewrite_parameter_refs(value: &mut Value) {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                rewrite_parameter_refs(value);
-            }
-        }
-        Value::Object(object) => {
-            if matches!(
-                object.get("kind").and_then(Value::as_str),
-                Some("parameter_ref" | "binding_ref")
-            ) && let Some(symbol) = object.get("symbol").and_then(Value::as_str)
-            {
-                let code = format!("parameters[{}]", dart_string(local_name(symbol)));
-                object.clear();
-                object.insert(
-                    "kind".to_owned(),
-                    Value::String("dart_synthetic".to_owned()),
-                );
-                object.insert("code".to_owned(), Value::String(code));
-                return;
-            }
-            for child in object.values_mut() {
-                rewrite_parameter_refs(child);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn apply_module_aliases(mut rendered: String, aliases: &BTreeMap<String, String>) -> String {
-    for (module, alias) in aliases {
-        rendered = rendered.replace(&super::types::module_prefix(module), alias);
-    }
-    rendered
 }
 
 #[cfg(test)]

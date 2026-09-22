@@ -1382,7 +1382,7 @@ fn validate_restricted_tree(
         allowed_reserved.insert(target_name.clone());
     }
 
-    validate_canonical_function(target, source, expected)?;
+    validate_canonical_function(target, source, expected, &compiler_prefixes)?;
     for (name, function) in &by_name {
         if name != &target_name {
             validate_helper_function(*function, source, name, &compiler_prefixes)?;
@@ -1460,6 +1460,9 @@ fn import_index(
             return Err(format!("duplicate Dart import `{}`", import.uri));
         }
         if let Some(prefix) = import.alias {
+            if let Some(message) = unknown_type_prefix(&prefix, compiler_prefixes) {
+                return Err(message);
+            }
             if prefix.starts_with("_cott_") || compiler_prefixes.contains_key(&prefix) {
                 return Err(format!(
                     "authored Dart import prefix `{prefix}` shadows a compiler-owned import"
@@ -1599,6 +1602,21 @@ fn compiler_prefixes(
     Ok(prefixes)
 }
 
+fn unknown_type_prefix(name: &str, compiler_prefixes: &BTreeMap<String, String>) -> Option<String> {
+    if !name.starts_with("_cott_t_") || compiler_prefixes.contains_key(name) {
+        return None;
+    }
+    let expected = compiler_prefixes
+        .iter()
+        .filter(|(prefix, _)| prefix.starts_with("_cott_t_"))
+        .map(|(prefix, uri)| format!("`{prefix}` for `{uri}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "unknown or obsolete compiler type import prefix `{name}`; use the compiler-supplied aliases: {expected}; authored imports cannot define compiler aliases"
+    ))
+}
+
 fn type_library_uri(project: &str, module: &str) -> Result<String, String> {
     let segments = cott_segments(module)?;
     let mut path = segments[..segments.len() - 1].join("/");
@@ -1652,6 +1670,7 @@ fn validate_canonical_function(
     function: Node<'_>,
     source: &str,
     expected: &ExpectedFunction<'_>,
+    compiler_prefixes: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     let target_name = parse_target_symbol(expected.target_symbol)?.1;
     let actual_name = function_name(function, source)?;
@@ -1668,6 +1687,14 @@ fn validate_canonical_function(
     let actual_tokens = signature_tokens_with_name_marker(function, source)?;
     let expected_tokens = expected_signature_tokens(&expected.signature)?;
     if actual_tokens != expected_tokens {
+        for token in &actual_tokens {
+            if let SignatureToken::Token(kind, name) = token
+                && matches!(kind.as_str(), "identifier" | "type_identifier")
+                && let Some(message) = unknown_type_prefix(name, compiler_prefixes)
+            {
+                return Err(message);
+            }
+        }
         return Err(format!(
             "function `{target_name}` does not match the canonical Dart ABI signature `{}`",
             expected.signature
@@ -2086,7 +2113,11 @@ fn audit_node(
             }
             let reserved_declaration = is_declaration_identifier(node);
             let compiler_prefix = compiler_prefixes.contains_key(name);
-            if name.starts_with("_cott_")
+            if name != target
+                && let Some(message) = unknown_type_prefix(name, compiler_prefixes)
+            {
+                push_error(errors, message);
+            } else if name.starts_with("_cott_")
                 && (!allowed_reserved.contains(name)
                     || !compiler_prefix && current != target
                     || reserved_declaration

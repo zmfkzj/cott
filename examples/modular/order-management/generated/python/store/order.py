@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from store.order_types import Order, OrderError, OrderError_EmptyOrder, OrderError_InvalidQuantity, OrderError_ItemUnavailable, OrderLine, OrderReceipt
 from store.catalog_types import Catalog, CatalogError
@@ -18,7 +19,7 @@ def validate_line(line: OrderLine) -> Result[OrderLine, OrderError]:
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
-    if _expected_error is None and (((line).quantity == 0)):
+    if _expected_error is None and (_cott_contract_condition((((line).quantity == 0)), "store.order.validate_line", "error:2:condition")):
         _expected_error = OrderError_InvalidQuantity
         _expected_error_span = {"end_byte":608,"end_column":61,"end_line":30,"start_byte":552,"start_column":5,"start_line":30}
         _expected_error_clause = "error:2"
@@ -44,11 +45,14 @@ def validate_line(line: OrderLine) -> Result[OrderLine, OrderError]:
             raise CottContractViolation("returned error is not allowed", symbol="store.order.validate_line", phase="error", span={"end_byte":610,"end_column":1,"end_line":32,"start_byte":359,"start_column":1,"start_line":23}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="store.order.validate_line", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "store.order.validate_line", _expected_error_clause)
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             valid = _cott_match_value.value
-            return (((valid).quantity > 0))
+            return (_cott_contract_condition((((valid).quantity > 0)), "store.order.validate_line", "ensures:1"))
+        _cott_contract_condition((False), "store.order.validate_line", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="store.order.validate_line", clause="ensures:1", phase="ensures", span={"end_byte":546,"end_column":51,"end_line":28,"start_byte":500,"start_column":5,"start_line":28}, expected="true", actual="false")
@@ -62,7 +66,7 @@ def calculate_order(catalog: Catalog, order: Order) -> Result[OrderReceipt, Orde
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
-    if _expected_error is None and ((len((order).lines) == 0)):
+    if _expected_error is None and (_cott_contract_condition(((len((order).lines) == 0)), "store.order.calculate_order", "error:2:condition")):
         _expected_error = OrderError_EmptyOrder
         _expected_error_span = {"end_byte":919,"end_column":58,"end_line":39,"start_byte":866,"start_column":5,"start_line":39}
         _expected_error_clause = "error:2"
@@ -88,11 +92,18 @@ def calculate_order(catalog: Catalog, order: Order) -> Result[OrderReceipt, Orde
             raise CottContractViolation("returned error is not allowed", symbol="store.order.calculate_order", phase="error", span={"end_byte":994,"end_column":1,"end_line":42,"start_byte":610,"start_column":1,"start_line":32}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="store.order.calculate_order", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "store.order.calculate_order", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is OrderError_InvalidQuantity:
+        _cott_contract_condition(True, "store.order.calculate_order", "error:3")
+    if type(_result) is Err and type(_result.error) is OrderError_ItemUnavailable:
+        _cott_contract_condition(True, "store.order.calculate_order", "error:4")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             receipt = _cott_match_value.value
-            return (((receipt).order_id == (order).order_id))
+            return (_cott_contract_condition((((receipt).order_id == (order).order_id)), "store.order.calculate_order", "ensures:1"))
+        _cott_contract_condition((False), "store.order.calculate_order", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="store.order.calculate_order", clause="ensures:1", phase="ensures", span={"end_byte":860,"end_column":69,"end_line":37,"start_byte":796,"start_column":5,"start_line":37}, expected="true", actual="false")

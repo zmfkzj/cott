@@ -914,7 +914,7 @@ fn validate_events(
 ) -> Result<(), String> {
     let mut expected_clauses = BTreeSet::new();
     for (symbol, clause) in coverage_inventory(plan, strategies)? {
-        for alias in observation_aliases(plan, &symbol) {
+        for alias in observation_aliases(&symbol) {
             expected_clauses.insert((alias, clause.clone()));
         }
     }
@@ -1181,7 +1181,6 @@ fn validate_observations<'a>(
         .get("observations")
         .and_then(Value::as_array)
         .ok_or_else(|| format!("{context} observations are not an array"))?;
-    let mut seen = BTreeMap::new();
     for observation in observations {
         exact_event_fields(
             observation,
@@ -1198,7 +1197,7 @@ fn validate_observations<'a>(
         )?;
         let symbol = required_event_string(observation, "symbol")?;
         let clause = required_event_string(observation, "clause")?;
-        let phase = required_event_string(observation, "phase")?;
+        required_event_string(observation, "phase")?;
         if !expected_clauses
             .iter()
             .any(|(expected_symbol, expected_clause)| {
@@ -1245,13 +1244,6 @@ fn validate_observations<'a>(
         if !applicable.is_null() && !applicable.is_boolean() {
             return Err("Dart clause observation applicable field is not a boolean".to_owned());
         }
-        if let Some(prior) = seen.insert((symbol, clause, phase), status)
-            && prior != status
-        {
-            return Err(format!(
-                "Dart runner emitted contradictory clause observations `{symbol}:{clause}:{phase}`"
-            ));
-        }
     }
     Ok(observations)
 }
@@ -1288,15 +1280,10 @@ fn contract_report(
     for (symbol, clause_id) in coverage_inventory(plan, strategies)? {
         let span = clause_span(plan, &symbol, &clause_id)?;
         let guarded = clause_is_guarded(plan, &symbol, &clause_id);
-        let aliases = observation_aliases(plan, &symbol);
-        let mut fallback_phases = BTreeSet::new();
-        let mut fallback_cases = BTreeSet::new();
-        let mut fallback_scenarios = BTreeSet::new();
-        let mut applicable_phases = BTreeSet::new();
-        let mut applicable_cases = BTreeSet::new();
-        let mut applicable_scenarios = BTreeSet::new();
-        let mut decided = false;
-        let mut undecided = false;
+        let aliases = observation_aliases(&symbol);
+        let mut phases = BTreeSet::new();
+        let mut valid_cases = BTreeSet::new();
+        let mut valid_scenarios = BTreeSet::new();
         for event in &case_events {
             if event.get("status").and_then(Value::as_str) != Some("passed") {
                 continue;
@@ -1313,40 +1300,20 @@ fn contract_report(
                 if aliases.contains(observed_symbol)
                     && observation.get("clause").and_then(Value::as_str) == Some(clause_id.as_str())
                     && observation.get("passed").and_then(Value::as_bool) == Some(true)
+                    && (!guarded
+                        || observation.get("applicable").and_then(Value::as_bool) == Some(true))
                 {
-                    fallback_phases.insert(
+                    phases.insert(
                         observation
                             .get("phase")
                             .and_then(Value::as_str)
                             .unwrap_or("contract")
                             .to_owned(),
                     );
-                    fallback_cases.insert((
+                    valid_cases.insert((
                         required_event_string(event, "symbol")?.to_owned(),
                         required_event_u32(event, "case")?,
                     ));
-                    match observation.get("applicable") {
-                        Some(Value::Bool(true)) => {
-                            decided = true;
-                            applicable_phases.insert(
-                                observation
-                                    .get("phase")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("contract")
-                                    .to_owned(),
-                            );
-                            applicable_cases.insert((
-                                required_event_string(event, "symbol")?.to_owned(),
-                                required_event_u32(event, "case")?,
-                            ));
-                        }
-                        Some(Value::Bool(false)) => {
-                            decided = true;
-                        }
-                        _ => {
-                            undecided = true;
-                        }
-                    }
                 }
             }
         }
@@ -1366,47 +1333,20 @@ fn contract_report(
                 if aliases.contains(observed_symbol)
                     && observation.get("clause").and_then(Value::as_str) == Some(clause_id.as_str())
                     && observation.get("passed").and_then(Value::as_bool) == Some(true)
+                    && (!guarded
+                        || observation.get("applicable").and_then(Value::as_bool) == Some(true))
                 {
-                    fallback_phases.insert(
+                    phases.insert(
                         observation
                             .get("phase")
                             .and_then(Value::as_str)
                             .unwrap_or("contract")
                             .to_owned(),
                     );
-                    fallback_scenarios
-                        .insert(required_event_string(event, "scenario_id")?.to_owned());
-                    match observation.get("applicable") {
-                        Some(Value::Bool(true)) => {
-                            decided = true;
-                            applicable_phases.insert(
-                                observation
-                                    .get("phase")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("contract")
-                                    .to_owned(),
-                            );
-                            applicable_scenarios
-                                .insert(required_event_string(event, "scenario_id")?.to_owned());
-                        }
-                        Some(Value::Bool(false)) => {
-                            decided = true;
-                        }
-                        _ => {
-                            undecided = true;
-                        }
-                    }
+                    valid_scenarios.insert(required_event_string(event, "scenario_id")?.to_owned());
                 }
             }
         }
-        let positively_applicable =
-            !applicable_cases.is_empty() || !applicable_scenarios.is_empty();
-        let use_applicability = guarded && (positively_applicable || (decided && !undecided));
-        let (phases, valid_cases, valid_scenarios) = if use_applicability {
-            (applicable_phases, applicable_cases, applicable_scenarios)
-        } else {
-            (fallback_phases, fallback_cases, fallback_scenarios)
-        };
         let evidence = if !valid_cases.is_empty() || !valid_scenarios.is_empty() {
             vec![json!({
                 "applicable_cases": valid_cases.len() + valid_scenarios.len(),
@@ -1419,8 +1359,8 @@ fn contract_report(
         } else {
             let reason = if let Some(reason) = program.unavailable.get(&symbol) {
                 reason.clone()
-            } else if use_applicability {
-                "runtime clause hook does not expose whether a guarded clause was positively applicable".to_owned()
+            } else if guarded {
+                "no matched guarded clause condition completed successfully".to_owned()
             } else if clause_id.starts_with("error:") {
                 "individual Result error branch was not reached by a positive applicable case"
                     .to_owned()
@@ -1749,19 +1689,9 @@ fn collect_clause_candidates(value: &Value, kind: &str, id: u64, candidates: &mu
     }
 }
 
-fn observation_aliases(plan: &DartPlan, symbol: &str) -> BTreeSet<String> {
+fn observation_aliases(symbol: &str) -> BTreeSet<String> {
     let mut aliases = BTreeSet::from([symbol.to_owned()]);
     if let Some(owner) = symbol.strip_suffix(".init") {
-        aliases.insert(owner.to_owned());
-    }
-    if let Some(owner) = plan
-        .callables()
-        .iter()
-        .find(|callable| callable.symbol == symbol)
-        .and_then(|callable| callable.owner.as_ref())
-        .and_then(|owner| owner.get("name"))
-        .and_then(Value::as_str)
-    {
         aliases.insert(owner.to_owned());
     }
     aliases

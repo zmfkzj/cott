@@ -5,21 +5,65 @@ use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::hash::sha256_hex;
 use crate::provenance::{AgentRun, SemanticCoverage};
+use crate::snapshot_record;
 
 use super::DartOwner;
 
-pub const DART_GENERATION_SCHEMA_VERSION: u32 = 1;
-pub const DART_RUNTIME_ABI_VERSION: u32 = 1;
-const DART_GENERATION_DOMAIN: &str = "cott.dart.generation.v1";
+pub const DART_GENERATION_SCHEMA_VERSION: u32 = 2;
+pub const DART_RUNTIME_ABI_VERSION: u32 = 2;
+const DART_GENERATION_DOMAIN: &str = "cott.dart.generation.v2";
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DartGenerationRecord {
     pub schema_version: u32,
     pub current: DartGenerationSnapshot,
     pub last_verified: Option<DartGenerationSnapshot>,
+}
+
+impl Serialize for DartGenerationRecord {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let current = serde_json::to_value(&self.current).map_err(serde::ser::Error::custom)?;
+        let last_verified = self
+            .last_verified
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(serde::ser::Error::custom)?;
+        let wire = snapshot_record::encode(self.schema_version, &current, last_verified.as_ref())
+            .map_err(serde::ser::Error::custom)?;
+        self.validate_identities(&wire)
+            .map_err(serde::ser::Error::custom)?;
+        wire.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for DartGenerationRecord {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = snapshot_record::deserialize_json(deserializer)?;
+        validate_schema(&wire).map_err(serde::de::Error::custom)?;
+        let (current, last_verified) =
+            snapshot_record::decode(&wire, DART_GENERATION_SCHEMA_VERSION)
+                .map_err(serde::de::Error::custom)?;
+        let record = Self {
+            schema_version: DART_GENERATION_SCHEMA_VERSION,
+            current: serde_json::from_value(current).map_err(serde::de::Error::custom)?,
+            last_verified: last_verified
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(serde::de::Error::custom)?,
+        };
+        record
+            .validate_identities(&wire)
+            .map_err(serde::de::Error::custom)?;
+        Ok(record)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -61,32 +105,27 @@ pub struct DartBindingRecord {
 impl DartGenerationSnapshot {
     pub fn compute_generation_id(&mut self) -> Result<(), String> {
         validate_snapshot_contents(self)?;
-        let identity = canonical_json(&normalized_generation_identity(self)?)?;
-        self.generation_id = format!("sha256:{}", sha256_hex(&identity));
+        self.generation_id = snapshot_record::digest(&normalized_generation_identity(self)?)?;
         Ok(())
     }
 }
 
 impl DartGenerationRecord {
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
-        let value: Value = serde_json::from_slice(bytes)
+        let value = snapshot_record::parse_json(bytes)
             .map_err(|error| format!("invalid Dart generation JSON: {error}"))?;
-        validate_schema(&value)?;
-        let record: Self = serde_json::from_value(value)
-            .map_err(|error| format!("invalid Dart generation record: {error}"))?;
-        record.validate_identities()?;
-        Ok(record)
+        serde_json::from_value(value)
+            .map_err(|error| format!("invalid Dart generation record: {error}"))
     }
 
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
-        self.validate_identities()?;
         let value = serde_json::to_value(self)
             .map_err(|error| format!("serialize Dart generation record: {error}"))?;
         validate_schema(&value)?;
         canonical_json(&value)
     }
 
-    fn validate_identities(&self) -> Result<(), String> {
+    fn validate_identities(&self, wire: &Value) -> Result<(), String> {
         if self.schema_version != DART_GENERATION_SCHEMA_VERSION {
             return Err(format!(
                 "Dart generation schema version must be {DART_GENERATION_SCHEMA_VERSION}"
@@ -102,7 +141,7 @@ impl DartGenerationRecord {
                 return Err("Dart last_verified snapshot belongs to a different project".to_owned());
             }
         }
-        if self.current.verified && self.last_verified.as_ref() != Some(&self.current) {
+        if self.current.verified && wire["current"] != wire["last_verified"] {
             return Err(
                 "verified Dart current snapshot must equal last_verified snapshot".to_owned(),
             );

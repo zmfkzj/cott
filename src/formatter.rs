@@ -770,6 +770,9 @@ impl<'a> Printer<'a> {
             ClauseKind::Ensures { guard, condition } => {
                 self.ensures_expression_line(indent, "ensures ", guard.as_ref(), condition);
             }
+            ClauseKind::EnsuresTable { .. } | ClauseKind::EnsuresPreserves { .. } => {
+                self.ensures_sugar(indent, "ensures ", &clause.kind);
+            }
             ClauseKind::Error { error, guard, when } => {
                 let mut prefix = format!("error {}", qname(error));
                 if let Some(guard) = guard {
@@ -846,6 +849,9 @@ impl<'a> Printer<'a> {
                     guard.as_ref(),
                     condition,
                 );
+            }
+            ClauseKind::EnsuresTable { .. } | ClauseKind::EnsuresPreserves { .. } => {
+                self.ensures_sugar(1, &format!("{prefix}ensures "), &rule_clause.kind);
             }
             ClauseKind::Error { error, guard, when } => {
                 let mut rendered = format!("{prefix}error {}", qname(error));
@@ -1078,6 +1084,47 @@ impl<'a> Printer<'a> {
         }
     }
 
+    fn ensures_sugar(&mut self, indent: usize, prefix: &str, kind: &ClauseKind) {
+        match kind {
+            ClauseKind::EnsuresTable { key, rows } => {
+                self.push(indent, format!("{prefix}table {}:", self.expr(key, 0)));
+                self.inline_for(&key.span);
+                for row in rows {
+                    self.leading(row.span.start, indent + 1);
+                    self.expression_line(
+                        indent + 1,
+                        &format!("{} => ", self.pattern(&row.pattern)),
+                        &row.value,
+                    );
+                    self.inline_for(&row.span);
+                }
+            }
+            ClauseKind::EnsuresPreserves {
+                result,
+                source,
+                except,
+            } => {
+                let mut rendered = format!(
+                    "{prefix}preserves {} from {}",
+                    self.expr(result, 0),
+                    self.expr(source, 0),
+                );
+                if !except.is_empty() {
+                    rendered.push_str(" except ");
+                    rendered.push_str(
+                        &except
+                            .iter()
+                            .map(|field| field.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    );
+                }
+                self.push(indent, rendered);
+            }
+            _ => unreachable!("only ensures sugar is formatted here"),
+        }
+    }
+
     fn ensures_expression_line(
         &mut self,
         indent: usize,
@@ -1285,7 +1332,9 @@ fn clause_group(clause: &Clause) -> u8 {
         ClauseKind::Requires { .. } => 2,
         ClauseKind::Transitions { .. } => 3,
         ClauseKind::Modifies { .. } => 4,
-        ClauseKind::Ensures { .. } => 5,
+        ClauseKind::Ensures { .. }
+        | ClauseKind::EnsuresTable { .. }
+        | ClauseKind::EnsuresPreserves { .. } => 5,
         ClauseKind::Error { .. } => 6,
         ClauseKind::Effects { .. } => 7,
     }
@@ -1304,7 +1353,9 @@ fn rule_clause_group(clause: &RuleClause) -> u8 {
             ClauseKind::Requires { .. } => 2,
             ClauseKind::Transitions { .. } => 3,
             ClauseKind::Modifies { .. } => 4,
-            ClauseKind::Ensures { .. } => 5,
+            ClauseKind::Ensures { .. }
+            | ClauseKind::EnsuresTable { .. }
+            | ClauseKind::EnsuresPreserves { .. } => 5,
             ClauseKind::Error { .. } => 6,
             ClauseKind::Effects { .. } => 7,
         }

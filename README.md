@@ -11,21 +11,20 @@ and checks implementation conformance, artifact identity, and observed evidence.
 completely formalize intent, and a passing check is not a general proof that an implementation
 is correct. The product is typed authoring and evidence, not a speed claim.
 
-`architecture.md` is the normative implemented v1.0 language contract. The Python compatibility
-identity remains package `1.0.0`, Canonical IR schema `8`, generation schema/domain `7`
-(`cott.generation.v7`), Python runtime ABI `7`, contract-test strategy schema `5`, and diagnostics
-schema `1`. Kotlin uses the same package and Canonical IR but a distinct closed generation schema
-`1`, domain `cott.kotlin.generation.v1`, and runtime ABI `1`; it never stores Kotlin truth in
-Python-only fields. Readers and runtimes reject records and identities from the other backend.
-Dart has its own generation schema `1`, domain `cott.dart.generation.v1`, and runtime ABI `1`.
-Its Dart package is directly consumable by Flutter; no Kotlin bridge is required.
+`architecture.md` is the normative implemented v1.0 language contract. The package remains `1.0.0`,
+Canonical IR schema `8`, contract-test strategy schema `5`, and diagnostics schema `1`.
+Python uses generation schema `8`, domain `cott.generation.v8`, and runtime ABI `7`.
+Kotlin uses generation schema `2`, domain `cott.kotlin.generation.v2`, and runtime ABI `1`.
+Dart uses generation schema `2`, domain `cott.dart.generation.v2`, and runtime ABI `2`.
+These are separate closed target identities: readers and runtimes reject other backends and old
+records. Dart packages are directly consumable by Flutter; no Kotlin bridge is required.
 
 If these docs and repository source disagree, the source files and closed schema validators are
 authoritative; documentation must be corrected rather than inventing a compatibility path.
 
 Implemented v0.8 `.cott` source remains source-compatible with unchanged semantics. Serialized and
-generated artifacts are exact-identity: regenerate them after a package mismatch; Cott provides no
-legacy reader.
+generated artifacts are exact-identity: regenerate them after a schema, ABI, or package mismatch.
+Normal readers reject old records; there are no compatibility readers or generated aliases.
 
 ## Contract and evidence
 
@@ -160,7 +159,7 @@ compiler-owned Kotlin sources and an unverified record, omitting unresolved call
 `generate --target kotlin` writes only eligible durable implementation sources and also publishes
 an unverified snapshot. Only the explicit `verify` command compiles the complete module, runs the
 sandboxed bounded contract runner, writes `library/cott-module.jar`, and certifies
-`current.verified = true` with `current == last_verified`. Source, manifest, implementation, tool,
+`.snapshots[.current].verified = true` with `current == last_verified`. Source, manifest, implementation, tool,
 or managed-byte drift fails closed.
 
 Kotlin/JVM erases ordinary type parameters. Cott therefore projects associated types to additional
@@ -225,6 +224,24 @@ immutable values and protocol lifecycles. Generic APIs use explicit `CottType<T>
 Dart types cannot recover Cott distinctions; checked views enforce Cott variance instead of relying
 on Dart covariance. Const generics use `CottConst` witnesses. Cancellation is cooperative and guard
 ownership is explicit; arbitrary `Future` preemption is never claimed.
+
+Dart ABI `2` projects a whole nonempty, nongeneric enum to a native Dart enum only when every
+variant is payloadless. Cott author syntax is unchanged; callers and implementations use the exact
+member spelling `Kind.Local`, without parentheses. `Kind.values`, `value.name`, `value.index` and
+exhaustive constant-pattern switches are native Dart operations:
+
+```dart
+String label(Kind kind) => switch (kind) {
+  Kind.Local => 'local',
+  Kind.Remote => 'remote',
+};
+```
+
+The old variant classes for these eligible enums are removed, not retained as aliases. An enum with
+any payload or generic parameter remains a sealed arbitrary-value ADT with generated variant class
+constructors, even for its payloadless variants. `Option` and `Result` remain generic ADTs.
+The sole member-name escape is an enum member matching its enum type: `Kind.Kind` becomes
+`Kind.Kind$`, still native. Its canonical identity is unchanged; native `.name` reflects the `$`.
 
 Verification requires Linux bubblewrap and Landlock ABI `>=3`. The filesystem policy is applied
 before Dart VM threads start. It denies process-memory access while permitting the VM's own
@@ -299,12 +316,32 @@ initial prompt snapshot; later accepted wave candidates are used for validation 
 that initial `prompt_hash`. Emit and generate always leave the current snapshot unverified. Only
 `verify` rebuilds the managed target and certifies evidence without editing source contracts. It
 refuses pending unresolved work and does not export old managed implementations that are not in the
-current facade. `current` is the last emitted epoch; `last_verified` is the historical certified
-baseline, and a verified Kotlin current snapshot must equal it exactly. An already deployed
-snapshot keeps its old contract until `emit` or `generate`; runtime does not read authored `.cott`
-live. Python same-v7 records without `tools.cott_intent` derive fingerprints from the recorded
-`contract_surface`; absence is never treated as fresh, and missing manifest or rule input evidence
-invalidates conservatively.
+current facade. `current` references the last emitted epoch; `last_verified` references the historical
+certified baseline or is `null`. A verified current snapshot has the same reference as `last_verified`.
+An already deployed snapshot keeps its old contract until `emit` or `generate`; runtime does not read
+authored `.cott` live. Valid Python records without `tools.cott_intent` derive fingerprints from the
+recorded contract surface; absence is never fresh, and missing manifest or rule evidence invalidates
+conservatively. This is not a reader for old schemas.
+
+The closed `generation.json` envelope has exactly `schema_version`, `current`, `last_verified`, and
+`snapshots`. Both references are snapshot content digests, and `snapshots` maps those digests to full
+snapshot objects. It contains exactly one or two reachable blobs; equal references store the object
+once. Read the verification flag with `jq '.snapshots[.current].verified' generation.json`, not by
+treating `current` as an object. Unused, dangling, or tampered blobs are rejected.
+
+Snapshot content identity includes all verification evidence, `AgentRun` data, and the `verified`
+flag. It is independent of `generation_id`, which excludes the existing volatile fields and hashes
+the normalized generation identity in an explicit target-domain wrapper. Both use the structural
+JSON digest: SHA-256 over `cott.snapshot.v1` plus NUL and tagged, length-delimited values, with f64
+IEEE bits for floating-point numbers—not a hash of raw JSON text. See architecture §16.1 for the
+envelope and exact identity rules.
+
+The record is self-contained: saving a diff baseline or relocating/deploying it needs no external
+snapshot cache or sidecar. Regenerated output requires the new runtime loader and its self-contained
+deployment record. The bounded one-time repository cutover uses compiler-linked transactional
+conversion to preserve source and `AgentRun` evidence, clear verification, then run real emit/verify.
+It is not a public migration command or normal old-record reader. Old certification never carries
+to a new schema or ABI, and editing source hashes cannot bless changed agent code.
 
 `generate --agent` accepts three direct adapters: `codex`, `claude`, and `omp`. `claude` directly
 invokes official native Claude Code `>=2.1.89`; an OMP run that selects a Claude model remains

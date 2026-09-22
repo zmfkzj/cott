@@ -19,13 +19,13 @@ Dart target은 SDK `>=3.13.3,<4.0.0`을 사용하고 portable package를 Flutter
 Dart runtime 검증 host에는 Linux bubblewrap과 Landlock ABI `>=3`이 필요하다.
 
 Canonical IR schema는 세 backend 모두 **v8**이고 diagnostics schema는 **v1**이다. Python의
-닫힌 compatibility identity는 generation schema/domain **v7**/`cott.generation.v7`, runtime
-ABI **7**, contract-test strategy schema **v5**로 그대로 유지한다. Kotlin은 별도의 닫힌
-generation schema **v1**, domain `cott.kotlin.generation.v1`, runtime ABI **1**을 사용하며
+닫힌 compatibility identity는 generation schema/domain **v8**/`cott.generation.v8`, runtime
+ABI **7**, contract-test strategy schema **v5**다. Kotlin은 별도의 닫힌
+generation schema **v2**, domain `cott.kotlin.generation.v2`, runtime ABI **1**을 사용하며
 Python의 `public_python_symbols`·`python_symbol` 같은 field를 재사용하지 않는다. 각 reader와
 runtime은 다른 backend 또는 다른 version의 record를 거부한다. `[project].version`은 compiler
 version이 아니라 공개 API version이고 예제 project는 `0.1.0`을 유지한다.
-Dart는 독립 generation schema **v1**, domain `cott.dart.generation.v1`, runtime ABI **1**을
+Dart는 독립 generation schema **v2**, domain `cott.dart.generation.v2`, runtime ABI **2**를
 사용하며 Python/Kotlin record나 target-specific field를 재사용하지 않는다.
 
 구현된 v0.8 `.cott` source는 v1.0에서도 의미를 바꾸지 않고 유효하다. source compatibility는
@@ -33,7 +33,10 @@ serialized artifact compatibility가 아니다. 생성 target의 public ABI는 f
 canonical constructor, nominal/runtime type identity와 validation behavior의 합이다. incompatible
 ABI change는 해당 target ABI bump가 필요하다. package 또는 target identity가 다르면 artifact는
 stale이며 `emit` 또는 `generate`로 재생성해야 하고 `verify`와 runtime은 이를 fail closed한다.
-호환되지 않는 wire record용 legacy reader나 변환 경로는 없다.
+일반 reader는 호환되지 않는 wire record를 거부하며 legacy reader나 compatibility alias는 없다.
+이번 repository cutover에 한정된 compiler-linked transaction conversion은 source·`AgentRun`
+evidence를 보존하고 verification을 해제한 뒤 실제 emit·verify를 요구한다. 공개 migrate command가
+아니며 이전 certification을 새 schema·ABI에 승계하거나 source hash를 손으로 인증하지 않는다.
 
 `emit python`, `emit kotlin`, `verify`는 agent를 호출하지 않는다. `cott prompt`는 provider나
 target compiler/checker 없이 초기 generation prompt만 렌더하고 publication과 journal recovery를
@@ -405,7 +408,9 @@ Python 공개 ABI는 `CottList[T]`, `CottSet[T]`, `FrozenMap[K, V]`, native `tup
 
 `Dyn[Trait]`는 exact nominal trait specialization을 가진 runtime wrapper다. source에서 trait에만 하나의 argument로 적용하고, Python에서는 `Dyn(value=<compiler-generated concrete>, trait=<exact Trait Protocol>)`로만 만든다. wrapper와 concrete 모두 compiler-owned exact trait carrier여야 하며 structural substitute·forged wrapper·다른 generic specialization은 거부한다. dynamic method call은 `dyn.value.method(...)`만 허용하고 inherited closure의 exact member를 dispatch한다.
 ### 5.5 어휘와 선언 문법
-source는 UTF-8이다. identifier는 ASCII `[A-Za-z_][A-Za-z0-9_]*`로 제한한다. module·function·field·parameter·resource state는 `snake_case`, type·trait·enum variant는 `UpperCamelCase`, constant는 `UPPER_SNAKE_CASE`다. `module`, `use`, `alias`, `newtype`, `where`, `struct`, `enum`, `trait`, `impl`, `specialize`, `for`, `state`, `resource`, `initial`, `terminal`, `transition`, `transitions`, `invariant`, `init`, `const`, `external`, `type`, `fn`, `async`, `self`, `doc`, `rule`, `override`, `delete`, `remove`, `requires`, `modifies`, `ensures`, `when`, `with`, `matches`, `error`, `effects`, `old`, `true`, `false`, `and`, `or`, `not`은 keyword다. `result`는 pattern 없는 `ensures` expression scope에서만 예약되는 contextual keyword이므로 field와 payload에서는 사용할 수 있다. prelude type 이름도 user declaration으로 가릴 수 없다.
+source는 UTF-8이다. identifier는 ASCII `[A-Za-z_][A-Za-z0-9_]*`로 제한한다. module·function·field·parameter·resource state는 `snake_case`, type·trait·enum variant는 `UpperCamelCase`, constant는 `UPPER_SNAKE_CASE`다. `module`, `use`, `alias`, `newtype`, `where`, `struct`, `enum`, `trait`, `impl`, `specialize`, `for`, `state`, `resource`, `initial`, `terminal`, `transition`, `transitions`, `invariant`, `init`, `const`, `external`, `type`, `fn`, `async`, `self`, `doc`, `rule`, `override`, `delete`, `remove`, `requires`, `modifies`, `ensures`, `when`, `with`, `matches`, `error`, `effects`, `old`, `true`, `false`, `and`, `or`, `not`은 keyword다. `result`는 §10.3의 `ensures` scope 규칙을 따르는 contextual keyword이므로 field와 payload에서는 사용할 수 있다. guard 없는 `ensures`와 input을 scrutinee로 삼는 guard의 condition은 반환값 전체를 가리키는 `result`를 사용할 수 있지만, result-scrutinee guard와 그 shorthand의 condition은 pattern binding을 사용한다. prelude type 이름도 user declaration으로 가릴 수 없다.
+
+`table`, `preserves`, `from`, `except`는 아래 `ensures` sugar 위치에서만 해석하는 contextual word이며 전역 예약어가 아니다.
 
 Python target validation은 CPython 3.14 hard keyword와 단독 `_`를 identifier로 거부하고 `_cott_` prefix 또는 `__`로 시작하거나 끝나는 user name도 예약한다. target projection 뒤 모든 이름에 같은 검사를 적용하므로 emitter가 identifier를 escape하거나 rename하지 않는다.
 
@@ -472,8 +477,14 @@ parameter     = parameter_name, ":", type ;
 
 function_clause = doc_block | "rule", qname, NEWLINE | "requires", guarded_condition, NEWLINE
                 | "ensures", guarded_condition, NEWLINE
+                | ensures_table | ensures_preserves
                 | "error", qname, [ "with", expression, "matches", pattern ], [ "when", expression ], NEWLINE
                 | "effects", "[", [ qname, { ",", qname } ], "]", NEWLINE ;
+ensures_table = "ensures", "table", expression, ":", NEWLINE,
+                INDENT, table_row, { table_row }, DEDENT ;
+table_row     = qname, "=>", expression, NEWLINE ;
+ensures_preserves = "ensures", "preserves", "result", "from", expression,
+                    [ "except", field_name, { ",", field_name } ], NEWLINE ;
 init_clause   = doc_block | "requires", guarded_condition, NEWLINE | "ensures", guarded_condition, NEWLINE ;
 method_clause = function_clause | "transitions", "self", ".", field_name, ":", qname, "->", qname,
                   { ",", "self", ".", field_name, ":", qname, "->", qname }, NEWLINE
@@ -529,7 +540,11 @@ external declaration은 target이나 source path를 갖지 않는 semantic named
 
 function block에는 `doc` 최대 하나, `rule`, `requires`·`ensures`·`error` 각 0개 이상, `effects` 최대 하나가 이 순서로 온다. `rule`은 explicit clauses보다 앞에 오며 적용된 rule의 effective clauses와 effects를 합성한다. clause add는 추가, override는 같은 의무 치환, delete는 제거다. effects Add는 지정 key를 합집합하고, Override는 inherited effect set을 지정 set으로 바꾸며, Delete는 지정 effect key만 제거한다. 무시되는 action은 없다. 적용 전 inherited generic은 effective clause·guard·type에 치환하고, 호출부의 expression·result·guard type과 호환되어야 한다. Unit으로 낮춘 unguarded `result`를 다른 반환 type에 붙이지 않는다. error와 variant guard 동일성은 전체 canonical `SymbolId`다. 같은 module 정의 span은 유지하고, 원본 파일을 schema가 담을 수 없는 cross-module 복제 clause·effect·expression·pattern span은 적용 지점 span으로 재배치한다. top-level `doc`은 바로 다음 type, resource, rule 또는 constant declaration에 붙으며 orphan·중복 doc은 오류다.
 
+기존 `rule`은 acyclic expansion으로 끝나는 제한된 clause helper이지 호출 가능한 계약 함수가 아니다. 일반 rule을 적용한 뒤 callable의 concrete scope에서 아래 `ensures table`·`ensures preserves`를 작성할 수 있다. 그러나 rule declaration 안에서는 callable-local parameter·result의 concrete 환경이 없으므로 이 sugar를 거부한다. 임의 helper call·재귀·무제한 계산은 추가하지 않는다.
+
 expression precedence는 낮은 순서로 boolean implication `=>`, `or`, `and`, unary `not`, comparison, `+ -`, `* / %`, unary `+ -`, field/`.len`, primary다. `=>`는 right-associative이며 `A => B`는 `not A or B`와 같은 HIR·Canonical IR로 낮춘다. 두 operand는 `Bool`이어야 한다. clause의 match guard가 우선하므로 `ensures Pattern => condition`과 `scrutinee matches Pattern => condition`은 그대로 guard로 parse하고, `ensures` 선두의 단일 identifier는 계속 result binding pattern이다. boolean implication을 그 자리에서 쓰려면 `(flag) => condition`처럼 괄호식이나 복합식으로 시작한다. comparison은 `== != < <= > >=`이며 연쇄 비교를 허용한다. primary는 scalar literal, `Unit` literal `()`, 현재 scope의 name·constant·enum singleton과 괄호식, method `ensures`에서만 쓰는 `old(self.field)`이다. 임의 call, index, collection literal과 attribute method call은 계약 표현식에 없다.
+
+formatter도 implication과 match guard의 구별에 필요한 괄호를 보존하므로 format 뒤 guard의 의미로 바뀌지 않는다.
 
 arithmetic operand는 같은 numeric type이어야 한다. `/`는 float에만, `%`는 integer에만 허용하고 unary `-`는 unsigned type에 허용하지 않는다. integer contract 중간값은 declared width를 넘을 수 있는 mathematical integer며 remainder는 `0 <= r < abs(divisor)`인 Euclidean remainder다. emitter는 `%`를 Python operator가 아니라 `cott_runtime._cott_euclidean_mod`로 낮춘다. zero divisor는 compile-time constant에서 semantic error, runtime clause에서 `CottContractViolation`이다. `F32` 중간 결과는 매 연산 후 binary32, `F64`는 binary64로 평가한다. compiler constant evaluator와 runtime clause·refinement evaluator는 같은 규칙을 쓴다.
 
@@ -538,7 +553,7 @@ pattern = "_" | binding_name
         | qname, [ "(", [ pattern, { ",", pattern } ], ")" ] ;
 ```
 
-`scrutinee matches pattern => condition`은 `requires`, `ensures`, invariant의 통일된 guard다. guard가 match할 때만 condition을 평가하며 binding은 condition scope에만 들어간다. `ensures Pattern => condition`은 호환 syntax로 `result matches Pattern => condition`이다. `error E with scrutinee matches pattern [when condition]`은 error guard와 optional boolean obligation을 함께 쓴다. pattern의 payload arity와 타입은 scrutinee type에 대해 검사한다.
+`scrutinee matches pattern => condition`은 `requires`, `ensures`, invariant의 통일된 guard다. guard가 match할 때만 condition을 평가하며 binding은 해당 clause의 condition scope에만 들어가고 뒤 clause로 전파되지 않는다. `ensures Pattern => condition`은 호환 syntax로 `result matches Pattern => condition`이다. 이 두 result-scrutinee 형태의 condition은 `result` 대신 pattern binding을 사용하지만, `ensures key matches Kind.X => result == ...`처럼 input을 match하는 condition은 `result`를 유지한다. guard가 `requires`, refinement 또는 invariant에 반환값 `result`를 추가하지는 않는다. `error E with scrutinee matches pattern [when condition]`은 error guard와 optional boolean obligation을 함께 쓴다. pattern의 payload arity와 타입은 scrutinee type에 대해 검사한다.
 
 ---
 
@@ -823,7 +838,7 @@ target-private helper와 public Dart signature로 emit한다. Module 내 functio
 
 refinement, `requires`, `ensures`, `error`, struct/impl invariant와 rule clause는 하나의 정규화된 순수 표현식 언어와 통일된 match guard를 사용한다.
 
-허용 대상은 숫자·문자열·boolean·`Unit` literal, 현재 declaration parameter·constant, `ensures`의 `result`, struct/refinement/impl의 `self`, cott field와 `.len`, method `ensures`의 `old(self.field)`, 산술·연쇄 비교·동등성·`and`·`or`·`not`이다. struct invariant에서만 `starts_with(Str, Str)`, `ends_with(Str, Str)`, `contains(Str, Str)`, `unique_by(List[T], T.field)`, `descending_by(List[T], T.field)`의 다섯 total intrinsic을 추가로 허용한다. 후자의 selector는 resolve된 nominal element field여야 하며 runtime callable·문자열 selector가 아니다. `unique_by`는 canonical Cott equality를, `descending_by`는 orderable scalar의 non-increasing order를 검사한다. 빈/singleton list는 둘 다 참이다. guard의 scrutinee는 그 clause의 base scope에서 평가되고 pattern binding은 guard condition에만 보인다. `requires`와 invariant guard는 matched 경우에만 obligation을 만든다; `ensures` guard는 normal return 뒤 match한 경우에만 검사한다. legacy `ensures Pattern => condition`은 result scrutinee shorthand다.
+허용 대상은 숫자·문자열·boolean·`Unit` literal, 현재 declaration parameter·constant, §10.3의 scope 규칙을 따르는 `ensures`의 `result`, struct/refinement/impl의 `self`, cott field와 `.len`, method `ensures`의 `old(self.field)`, 산술·연쇄 비교·동등성·`and`·`or`·`not`이다. struct invariant에서만 `starts_with(Str, Str)`, `ends_with(Str, Str)`, `contains(Str, Str)`, `unique_by(List[T], T.field)`, `descending_by(List[T], T.field)`의 다섯 total intrinsic을 추가로 허용한다. 후자의 selector는 resolve된 nominal element field여야 하며 runtime callable·문자열 selector가 아니다. `unique_by`는 canonical Cott equality를, `descending_by`는 orderable scalar의 non-increasing order를 검사한다. 빈/singleton list는 둘 다 참이다. guard의 scrutinee는 그 clause의 base scope에서 평가되고 pattern binding은 guard condition에만 보인다. `requires`와 invariant guard는 matched 경우에만 obligation을 만든다; `ensures` guard는 normal return 뒤 match한 경우에만 검사한다. legacy `ensures Pattern => condition`은 result scrutinee shorthand다.
 
 선언되지 않은 ambient 이름, file/network/database/clock/random 접근, object method와 임의 Python function call, state change와 nondeterministic expression은 금지한다. 표현식의 모든 이름과 type은 HIR에서 해석한다. 숫자 literal은 문맥 type을 따르고 연쇄 비교는 short-circuit `and`로 정규화한다. equality operand는 같은 resolved non-trait cott value type이어야 하며 type parameter, trait 또는 `Opaque`를 transitive하게 포함할 수 없다. 모든 refinement, guard condition, `requires`, `ensures`, invariant와 `when`의 최종 type은 `Bool`이어야 한다.
 
@@ -858,7 +873,7 @@ ensures Result.Ok(part) => part.len == length
 ensures Result.Err(SliceError.OutOfBounds) => offset + length > values.len
 ```
 
-pattern이 없으면 expression scope는 function argument, constant와 반환값 전체를 가리키는 `result`다. pattern이 있으면 일치하는 반환에서만 expression을 검사하고 scope는 function argument, constant와 그 pattern binding이며 `result`는 사용할 수 없다. impl method는 두 scope 모두에 `self`를 더하고 §7의 제한된 `old(self.field)` snapshot도 사용할 수 있다. 반환 type 검사 후 source order의 모든 applicable `ensures`를 검사한다.
+guard가 없으면 expression scope는 function argument, constant와 반환값 전체를 가리키는 `result`다. input을 scrutinee로 삼는 guard는 match한 경우에만 condition을 검사하며, 이 scope를 유지하고 해당 pattern binding을 추가한다. 따라서 `ensures key matches Kind.X => result == ...`는 유효하다. 반면 `ensures result matches Pattern => condition`과 그 shorthand `ensures Pattern => condition`은 일치하는 반환에서만 condition을 검사하고 scope는 function argument, constant와 그 pattern binding이며 condition에서 `result`는 사용할 수 없다. 모든 pattern binding은 해당 clause의 condition에만 보이며 뒤 clause로 전파되지 않는다. impl method는 각 scope에 `self`를 더하고 §7의 제한된 `old(self.field)` snapshot도 사용할 수 있다. 반환 type 검사 후 source order의 모든 applicable `ensures`를 검사한다.
 
 `Result[T, E]` 반환 callable의 최종 resolved contract에 `error` 절이 하나 이상 있으면 적어도 하나의 정확한 top-level `ensures Result.Ok(binding) => Bool`이 있어야 한다. 이것이 성공 의무의 유일한 표기다. wildcard·`Result.Err`·중첩/별칭/boolean result 검사로는 충족하지 않으며, 여러 Ok `ensures`는 각각 독립 의무다. rule expansion·override/delete 뒤에 lint하므로 source fragment가 아니라 effective contract가 판정 대상이다. 없으면 callable span에 `Result contract with errors requires a guarded Result.Ok ensures success obligation`을 낸다.
 
@@ -869,6 +884,27 @@ fn append[T](
 ) -> List[T]:
     ensures result.len == values.len + 1
 ```
+
+두 authoring sugar는 HIR에서 기존 typed `ensures` 의무로 낮추며 실행 구현을 만들지 않는다.
+
+```cott
+enum Kind:
+    Local
+    Remote
+
+fn label(key: Kind) -> Str:
+    ensures table key:
+        Kind.Local => "local"
+        Kind.Remote => "remote"
+```
+
+`table`의 key는 모든 variant가 zero-payload인 finite enum이어야 한다. 각 row는 정확한 variant를 한 번씩 모두 열거하고, 해당 key가 match할 때 `result == row_value`라는 의무를 row 순서로 만든다. input key의 `Kind.Local => "local"` row는 `ensures key matches Kind.Local => result == "local"`과 같은 의무다. 누락·중복·다른 enum variant·payload pattern은 오류다. row value는 기존 expression/equality type 규칙을 따르며 table을 executable lookup body나 구현 정당성 증명으로 취급하지 않는다.
+
+```cott
+ensures preserves result from mark except value, image_bytes
+```
+
+`result`와 `mark`는 generic argument까지 동일하고 완전히 concrete한 immutable struct type이어야 한다. 제외하지 않은 field마다 `result.field == mark.field`를 struct의 canonical declaration order로 만든다. `except`가 없으면 모든 field를 보존한다. 없는 field·중복 exclusion·모든 field 제외는 오류이며, 남은 field에도 기존 equality admissibility가 적용된다. 이 선언은 복사 구현을 생성하지 않는다.
 
 ### 10.4 오류 조건
 
@@ -1228,7 +1264,7 @@ integer canonical value는 sign을 포함한 base-10 string, `F32`·`F64`는 wid
 
 declaration, field, parameter와 contract clause array는 source order를 보존한다. 의미가 set인 effect와 import는 fully qualified name으로 정렬한다. source span은 raw UTF-8의 0-based start·exclusive-end byte offset과 1-based line·Unicode-scalar column을 함께 가진다. 한 IR module의 span.file은 그 module source다. 다른 module에서 복사한 확장 node는 적용 지점 span을 쓰며 호출부 텍스트에 외국 byte offset을 붙이지 않는다. schema에 없는 field는 거부한다. IR JSON은 sorted key, insignificant whitespace 없음, final newline 하나로 canonicalize하고 schema version을 `generation_id`에 포함한다.
 
-normative schema는 repository의 `schemas/canonical-ir.schema.json` (v8), `schemas/generation.schema.json` (v7), `schemas/diagnostics.schema.json` (v1), `schemas/contract-test.schema.json` (v5)이다. 모두 JSON Schema Draft 2020-12이며 compiler binary가 embed하고 IR/generation/diagnostic/contract-strategy writer와 reader가 해당 current schema를 검증한다. v7 IR, v6 generation, ABI 6, v4 strategy의 reader/default/shim은 없다.
+normative schema는 repository의 `schemas/canonical-ir.schema.json` (v8), `schemas/generation.schema.json` (v8), `schemas/kotlin-generation.schema.json` (v2), `schemas/dart-generation.schema.json` (v2), `schemas/diagnostics.schema.json` (v1), `schemas/contract-test.schema.json` (v5)이다. 모두 JSON Schema Draft 2020-12이며 compiler binary가 embed하고 writer와 reader가 해당 current schema를 검증한다. 이전 IR·generation·ABI·strategy의 reader/default/shim은 없다. Package version은 `1.0.0`으로 유지한다.
 
 ```json
 {
@@ -1404,84 +1440,128 @@ generated/
 ```
 `tests/generated/<module path>/<callable>.json`은 compiler가 실행하는 deterministic managed contract-test strategy v5다. callable은 free function의 `<function>` 또는 impl method의 `<Concrete>/<method>`다. 닫힌 object는 `schema_version`, `symbol`, `seed`, seven existing limits, `callable_kind`, `return_kind`, `classification`, ordered `clause_ids`, ordered `obligations:[{clause_id, role:"success"|"conditional_error"}]`, 그리고 `scenario:null|{id,required_effects,fixtures,steps,lifecycle_limit,limits}`를 가진다. scenario의 `steps`는 64개 이하이고 limits는 effective `verification.fixtures` ceiling이다. generated Python source는 strategy를 해석하지 않는다.
 
-`cott_runtime` ABI **7**는 numeric alias `I8`…`U64`·`F32`·`F64`, `Option`·`Result`, `Ok`·`Err`·`Some`·`Nothing`, `Unit`·`UNIT`, `Opaque`, `Dyn`, `CottList`·`CottSet`·`FrozenMap`·`CottArray`·`CottBuffer`, numeric metadata, `JsonValue` union·variant와 `CottContractViolation`의 유일한 runtime identity 원본이다. ABI 7은 canonical struct construction/invariant, fixture adapter activation과 closed v7 generation snapshot validation을 포함한다. `Any`는 `typing.Any`, `Unknown`은 `object`, iterator protocol은 기존 direct Python typing projection을 쓴다. runtime ABI value가 expected ABI 7와 다르면 facade load는 실패한다.
+`cott_runtime` ABI **7**는 numeric alias `I8`…`U64`·`F32`·`F64`, `Option`·`Result`, `Ok`·`Err`·`Some`·`Nothing`, `Unit`·`UNIT`, `Opaque`, `Dyn`, `CottList`·`CottSet`·`FrozenMap`·`CottArray`·`CottBuffer`, numeric metadata, `JsonValue` union·variant와 `CottContractViolation`의 유일한 runtime identity 원본이다. ABI 7은 canonical struct construction/invariant와 fixture adapter activation을 유지하며 새 loader는 closed v8 generation reference envelope를 검증한다. `Any`는 `typing.Any`, `Unknown`은 `object`, iterator protocol은 기존 direct Python typing projection을 쓴다. runtime ABI value가 expected ABI 7와 다르면 facade load는 실패한다.
 
 Python environment 하나에는 generated cott project 하나만 설치한다. `cott_runtime`과 각 facade는 normalized `[project].name`, `[project].version`, runtime ABI 7를 embed하고 서로 다르면 import를 거부한다. `generated/python`은 public cott module, runtime과 verified local implementation copy를 함께 담는 단일 runtime/package root이며 `<module>_types.py`는 user type·constant만 정의한다.
 
-`facade_exports(IR, resolved)`는 모든 public non-callable, resolved public free function, every selected slot이 explicit implementation, specialization 또는 verified trait default facade로 resolved된 impl class의 합집합이다. unresolved explicit sync/async impl method만 `generation.json.current.unresolved`에 기록한다. default/specialization-selected method에는 durable agent implementation source·record가 없다.
+`facade_exports(IR, resolved)`는 모든 public non-callable, resolved public free function, every selected slot이 explicit implementation, specialization 또는 verified trait default facade로 resolved된 impl class의 합집합이다. unresolved explicit sync/async impl method만 generation record의 `.snapshots[.current].unresolved`에 기록한다. default/specialization-selected method에는 durable agent implementation source·record가 없다.
 
 `impl Concrete for Trait [+ Trait ...]`는 agent가 class를 작성하는 기능이 아니다. emitter는 ordinary `@final` class, declaration-order state slot, `_cott_lock`, compiler-owned init과 selected sync/async method wrapper를 생성한다. explicit slot은 canonical helper를 call/await하고 default·specialization slot은 exact verified free-function facade를 receiver-first로 call/await한다. wrapper는 associated projection이 치환된 ABI, init/invariant, non-resource modifies와 resource transition checks를 적용한다.
 
-`generation.json`은 두 snapshot을 가진다.
+`generation.json`의 closed envelope는 정확히 `schema_version`, `current`, `last_verified`,
+`snapshots` 네 key만 가진다.
 
-* `current`: 마지막 성공 emit/generate apply의 입력·구현·관리 파일 hash, unresolved 집합, `tools.cott_intent`와 `verified` 상태. 현재 emitted epoch baseline이다.
-* `last_verified`: 마지막 full verify의 정규화 계약 snapshot, Python 공개 표면과 관리 파일 hash 또는 최초 검증 전 `null`. 역사적 certified baseline이며 current를 대체하지 않는다.
+* `current`: 마지막 성공 emit/generate apply snapshot의 content digest다. 참조한 full object는
+  입력·구현·관리 파일 hash, unresolved 집합, `tools.cott_intent`와 `verified` 상태를 포함한다.
+* `last_verified`: 마지막 full verify snapshot의 content digest 또는 최초 검증 전 `null`이다.
+  역사적 certified baseline이며 current를 대체하지 않는다.
+* `snapshots`: digest에서 full snapshot object로 가는 map이다. 두 참조로 도달 가능한 blob만
+  정확히 1~2개 저장한다. `current == last_verified`면 같은 object를 한 번만 저장한다.
 
-record의 필수 field를 보여 주는 다음 JSON은 객체·배열 entry 일부를 지면상 생략한 비규범 fragment이며, 그 자체로 schema-conformant record가 아니다. 실제 `contract_surface`와 `public_python_symbols`는 아래 규칙대로 축약 없이 저장한다.
+다음은 Python schema 8의 reference envelope 예시다. Envelope key와 참조 구조는 실제 형식이고,
+`sha256:...` digest와 일부 내부 entry는 설명용 축약이므로 그대로 쓸 수 있는 인증 record는 아니다.
+실제 blob에는 모든 target-specific field와 evidence를 축약 없이 저장한다.
 
 ```json
 {
-  "schema_version": 7,
-  "current": {
-    "generation_id": "sha256:...",
-    "verified": false,
-    "project_version": "0.1.0",
-    "compatibility": {"generation_schema": 7, "canonical_ir_schema": 8, "runtime_abi": 7, "contract_strategy_schema": 5},
-    "inputs": {"AGENTS.md": "sha256:...", "cott.toml": "sha256:...", "python/pyproject.toml": "sha256:...", "python/uv.lock": "sha256:...", "src/foo/bar.cott": "sha256:..."},
-    "tools": {
-      "compiler": {"version": "1.0.0", "executable": "/canonical/cott", "content_hash": "sha256:..."},
-      "runtime": {"abi": "7", "version": "1.0.0"},
-      "python": {"implementation": "cpython", "version": "3.14.6", "cache_tag": "cpython-314", "os": "darwin", "machine": "arm64", "platform": "macosx-15.0-arm64", "executable": "/canonical/python", "content_hash": "sha256:..."},
-      "basedpyright": {"version": "...", "executable": "/canonical/basedpyright", "content_hash": "sha256:..."}
-    },
-    "ir": {"foo.bar": "sha256:..."},
-    "contract_surface": {"foo.bar": {"declarations": [{"kind": "function", "name": "foo.bar.process_bar"}]}},
-    "public_python_symbols": {"foo.bar": ["process_bar"]},
-    "implementations": [
-      {
-        "cott_symbol": "foo.bar.process_bar",
-        "owner": "agent",
-        "python_symbol": "_cott_impl.foo.bar.process_bar:process_bar",
-        "source_origin": "python/_cott_impl/foo/bar/process_bar.py",
-        "runtime_origin": "generated/python/_cott_impl/foo/bar/process_bar.py",
-        "content_hash": "sha256:..."
-      }
-    ],
-    "dependencies": [
-      {
-        "name": "provider",
-        "version": "10.4.0",
-        "lock_artifact_hash": "sha256:...",
-        "installed_metadata_hash": "sha256:...",
-        "imports": {"provider.InputPayload": {"origin": "provider/InputPayload.py", "content_hash": "sha256:..."}}
-      }
-    ],
-    "managed_files": {
-      "generated/python/_cott_impl/foo/bar/process_bar.py": "sha256:...",
-      "generated/python/foo/bar.py": "sha256:..."
-    },
-    "unresolved": [],
-    "verification": null,
-    "semantic_coverage": {
-      "clauses": [],
-      "summary": {"observed": 0, "unobserved": 0, "trust_declaration": 0, "unknown": 0},
-      "policy": {"selected": 0, "passed": true, "violations": []}
-    },
-    "agent_runs": []
-  },
-  "last_verified": null
+  "schema_version": 8,
+  "current": "sha256:...",
+  "last_verified": null,
+  "snapshots": {
+    "sha256:...": {
+      "generation_id": "sha256:...",
+      "verified": false,
+      "project_version": "0.1.0",
+      "compatibility": {"generation_schema": 8, "canonical_ir_schema": 8, "runtime_abi": 7, "contract_strategy_schema": 5},
+      "inputs": {"AGENTS.md": "sha256:...", "cott.toml": "sha256:...", "python/pyproject.toml": "sha256:...", "python/uv.lock": "sha256:...", "src/foo/bar.cott": "sha256:..."},
+      "tools": {
+        "compiler": {"version": "1.0.0", "executable": "/canonical/cott", "content_hash": "sha256:..."},
+        "runtime": {"abi": "7", "version": "1.0.0"},
+        "python": {"implementation": "cpython", "version": "3.14.6", "cache_tag": "cpython-314", "os": "darwin", "machine": "arm64", "platform": "macosx-15.0-arm64", "executable": "/canonical/python", "content_hash": "sha256:..."},
+        "basedpyright": {"version": "...", "executable": "/canonical/basedpyright", "content_hash": "sha256:..."}
+      },
+      "ir": {"foo.bar": "sha256:..."},
+      "contract_surface": {"foo.bar": {"declarations": [{"kind": "function", "name": "foo.bar.process_bar"}]}},
+      "public_python_symbols": {"foo.bar": ["process_bar"]},
+      "implementations": [
+        {
+          "cott_symbol": "foo.bar.process_bar",
+          "owner": "agent",
+          "python_symbol": "_cott_impl.foo.bar.process_bar:process_bar",
+          "source_origin": "python/_cott_impl/foo/bar/process_bar.py",
+          "runtime_origin": "generated/python/_cott_impl/foo/bar/process_bar.py",
+          "content_hash": "sha256:..."
+        }
+      ],
+      "dependencies": [
+        {
+          "name": "provider",
+          "version": "10.4.0",
+          "lock_artifact_hash": "sha256:...",
+          "installed_metadata_hash": "sha256:...",
+          "imports": {"provider.InputPayload": {"origin": "provider/InputPayload.py", "content_hash": "sha256:..."}}
+        }
+      ],
+      "managed_files": {
+        "generated/python/_cott_impl/foo/bar/process_bar.py": "sha256:...",
+        "generated/python/foo/bar.py": "sha256:..."
+      },
+      "unresolved": [],
+      "verification": null,
+      "semantic_coverage": {
+        "clauses": [],
+        "summary": {"observed": 0, "unobserved": 0, "trust_declaration": 0, "unknown": 0},
+        "policy": {"selected": 0, "passed": true, "violations": []}
+      },
+      "agent_runs": []
+    }
+  }
 }
 ```
 
-project-owned path는 project-relative POSIX path이고 dependency import origin만 distribution-relative POSIX path다. hash는 raw file bytes의 SHA-256 lowercase hex다. map key와 set-derived array를 정렬한 UTF-8 JSON으로 쓰며 file 끝 newline 하나만 둔다. `generation.json` 자체는 self-reference를 피하려고 `managed_files`에서 제외한다. `generation_id`는 canonical object `{"current": <normalized current>, "domain": "cott.generation.v7", "schema_version": 7}`의 hash이며 normalized current에서는 `generation_id`·`verified`·`verification`·`semantic_coverage`·`agent_runs`를 뺀다. coverage/policy는 semantic identity의 alternate source가 아니라 verification result이므로 generation identity를 바꾸지 않는다. `last_verified`는 pointer가 아니라 certified current snapshot의 deep copy다.
+Project-owned path는 project-relative POSIX path이고 dependency import origin만
+distribution-relative POSIX path다. Input·managed file content hash는 raw file bytes의 SHA-256
+lowercase hex다. Record는 map key와 set-derived array를 정렬한 UTF-8 JSON, 끝 newline 하나로
+쓰며 `generation.json` 자체는 self-reference를 피하려고 `managed_files`에서 제외한다.
 
-`current.tools.cott_intent`는 generation-7 identity를 바꾸지 않는 확장 metadata다. 닫힌 필드는 `version: 1`과 callable별 `hashes` map뿐이며 각 값은 `sha256:` digest다. fingerprint는 선택 context의 canonical JSON과 domain `cott.intent`를 hash한다. context는 `doc`, 적용된 rule과 그 base, 계약 상수, 참조 type, incoming scenario, retained generator rule 식별자를 포함한다. `cott_intent`가 없는 same-v7 record는 `current.contract_surface`와 현재 rule bytes에서 fingerprint를 derive한다. 부재를 fresh로 가정하지 않는다. `cott.toml` 또는 rules input hash 증거가 없거나 불일치하면 agent-owned source를 보수적으로 전부 invalidate한다. manifest-owned binding은 intent 변경으로 agent 작업이 되지 않는다.
+Snapshot content digest는 blob의 **전체** JSON value를 포함한다. `generation_id`, `verified`,
+`verification`, `semantic_coverage`와 전체 `AgentRun` evidence도 제외하지 않는다. SHA-256 입력은
+domain `cott.snapshot.v1` 뒤 NUL byte와 tagged·length-delimited structural value encoding이다.
+Object key는 정렬하고 array 순서는 보존하며 floating-point value는 f64 IEEE bits로 encode한다.
+Raw JSON text의 byte hash가 아니므로 들여쓰기나 object key 순서가 content identity를 바꾸지 않는다.
 
-`agent_runs`는 현재 agent implementation content hash와 일치하는 callable별 마지막 successful run만 담는다. 이후 emit·verify에서도 hash가 같으면 보존하고 agent 재생성 시 교체하며 user edit로 hash가 달라지면 제거한다. `current.unresolved`에 있고 authentic `AgentRun` hash가 일치하는 pending source는 emit과 checkpoint를 반복해도 기존 bytes를 유지하며 `generate`가 재생성할 때까지 그 소유권을 유지한다. path 또는 content hash가 기록과 다른 tampered agent file은 거부한다. 실패·폐기된 run과 무제한 history는 generation record에 누적하지 않는다.
+`generation_id`는 이와 독립적이다. Python은
+`{"current": <normalized current>, "domain": "cott.generation.v8", "schema_version": 8}` wrapper를
+같은 structural digest로 계산한다. Kotlin/Dart도 자신의 explicit target-domain identity wrapper를
+쓴다. Normalized snapshot에서는 기존 volatile field인 `generation_id`, `verified`, `verification`,
+`semantic_coverage`, `agent_runs`를 뺀다. 따라서 evidence나 verification state 변경은 blob digest를
+바꾸지만 generation identity를 바꾸지 않는다.
+
+Reader는 정확한 envelope와 각 target의 full snapshot schema, 모든 content digest와 generation
+identity, 참조 closure를 검증한다. Unknown key, old inline format, unused·dangling·tampered blob은
+거부한다. Verified current는 certified baseline과 같은 참조여야 한다. Snapshot cache나 외부 sidecar는
+없으며 baseline 보관·record relocation·deployment는 이 한 파일만으로 두 snapshot을 해석한다.
+Regenerated runtime output은 새 loader와 self-contained deployment record를 함께 사용해야 한다.
+이 규칙은 별도 target payload나 dependency를 불필요하게 만든다는 뜻이 아니다.
+
+Wire record에서 current field는 `.snapshots[.current]`로 접근한다. 예를 들어
+`jq '.snapshots[.current].verified' generated/generation.json`으로 인증 bit를 읽는다.
+이하 snapshot field는 이 참조를 해석한 object를 뜻한다.
+
+Current snapshot의 `tools.cott_intent`는 닫힌 `version: 1`과 callable별 `hashes` map이며 각 값은
+`sha256:` digest다. Fingerprint는 선택 context의 canonical JSON과 domain `cott.intent`를 hash한다.
+Context는 `doc`, 적용된 rule과 그 base, 계약 상수, 참조 type, incoming scenario, retained generator
+rule 식별자를 포함한다. `cott_intent`가 없는 유효한 schema-8 Python record는 참조한
+`contract_surface`와 현재 rule bytes에서 fingerprint를 derive한다. 이는 old-schema reader가 아니며
+부재를 fresh로 가정하지 않는다. `cott.toml` 또는 rules input hash 증거가 없거나 불일치하면
+agent-owned source를 보수적으로 전부 invalidate한다. Manifest-owned binding은 intent 변경으로
+agent 작업이 되지 않는다.
+
+`agent_runs`는 현재 agent implementation content hash와 일치하는 callable별 마지막 successful run만 담는다. 이후 emit·verify에서도 hash가 같으면 보존하고 agent 재생성 시 교체하며 user edit로 hash가 달라지면 제거한다. `.snapshots[.current].unresolved`에 있고 authentic `AgentRun` hash가 일치하는 pending source는 emit과 checkpoint를 반복해도 기존 bytes를 유지하며 `generate`가 재생성할 때까지 그 소유권을 유지한다. path 또는 content hash가 기록과 다른 tampered agent file은 거부한다. 실패·폐기된 run과 무제한 history는 generation record에 누적하지 않는다.
 
 implementation record의 `cott_symbol`은 free function 또는 `<module>.<Concrete>.<method>`이며 `python_symbol`은 file의 유일한 canonical contract function만 가리킨다. record kind는 `function`, `async_function`, `impl_method`, `async_impl_method` 중 하나이고 callable kind도 함께 기록한다. 같은 file의 private helper와 permitted `Final` constant는 별도 symbol·binding·facade export·provenance record를 만들지 않고 file 전체 `content_hash`로 함께 provenance된다. explicit async impl method에는 manifest binding이 없고 agent-owned exact `async def` helper만 허용된다.
 
-canonical executable path와 binary hash를 포함하므로 `generation_id`는 같은 machine·tool installation의 generation instance identity이지 cross-machine reproducible build ID가 아니다. portable 비교는 Canonical IR, `contract_surface`, `public_python_symbols`, durable implementation content hash와 normalized lock·dependency identity를 사용한다. exact tool·runtime identity와 machine-specific constant를 embed한 managed artifact hash는 같은 target environment 안에서만 비교한다. `generation.json`은 machine-local state이고 wheel에 포함하지 않는다.
+canonical executable path와 binary hash를 포함하므로 `generation_id`는 같은 machine·tool installation의 generation instance identity이지 cross-machine reproducible build ID가 아니다. portable 비교는 Canonical IR, `contract_surface`, `public_python_symbols`, durable implementation content hash와 normalized lock·dependency identity를 사용한다. exact tool·runtime identity와 machine-specific constant를 embed한 managed artifact hash는 같은 target environment 안에서만 비교한다. 이 machine-specific evidence와 record의 self-contained relocation은 별개다. 배포에는 원본 record를 그대로 포함하며 외부 snapshot 저장소에 의존하지 않는다.
 
 `dependencies`는 허용된 external import마다 normalized distribution name·version, 현재 platform에서 lock이 선택한 `lock_artifact_hash`, 관찰한 installed metadata content hash와 distribution-relative module origin·content hash를 기록한다. lock artifact hash는 기대값이고 immutable archive나 검증 가능한 installer receipt가 없는 MVP 설치 환경에서 installed bytes가 그 archive에서 왔음을 증명하지 않는다. 이 연결은 명시적 신뢰 선언이며 loader는 verify가 관찰해 고정한 installed bytes를 검사한다. dependency origin은 symlink가 아닌 regular file이어야 하며 uv cache가 설치한 hardlink는 허용하고 매 load에서 content hash를 재검사한다. generated module과 standard library는 제외하며 후자는 exact CPython provenance로 고정한다. 16.5.1의 verified Cott facade import도 external dependency가 아니며 implementation AST와 Canonical IR에 대해 별도로 검증한다. 그 밖의 project-local import는 허용하지 않는다.
 
@@ -1489,7 +1569,7 @@ canonical executable path와 binary hash를 포함하므로 `generation_id`는 �
 
 `inputs`는 manifest, 모든 `.cott` source와 manifest가 참조하는 rules·target project metadata·존재하는 lockfile의 raw byte hash를 정렬해 담는다. `cott.toml`이 target manifest이므로 별도 숨은 설정은 없다.
 
-실제 byte를 바꾼 `fmt`, `emit`과 부분 generate는 `current`를 새 emitted epoch로 두고 `current.verified = false`로 갱신하되 `last_verified`를 그대로 보존한다. full verify만 두 snapshot을 현재 세대로 함께 갱신한다. 파일 drift는 저장된 bit가 `true`여도 snapshot을 무효화하므로 cott와 배포 gate는 hash를 재계산한다. 이미 배포된 artifact는 `emit` 또는 `generate` 전까지 옛 계약을 유지한다.
+실제 byte를 바꾼 `fmt`, `emit`과 부분 generate는 `current`를 새 emitted epoch의 digest로 두고 `.snapshots[.current].verified = false`로 갱신하되 `last_verified` 참조와 그 blob을 보존한다. full verify만 evidence를 완성한 뒤 두 참조를 같은 certified blob의 digest로 갱신하고 더는 참조하지 않는 blob을 제거한다. 파일 drift는 저장된 bit가 `true`여도 snapshot을 무효화하므로 cott와 배포 gate는 hash를 재계산한다. 이미 배포된 artifact는 `emit` 또는 `generate` 전까지 옛 계약을 유지한다.
 
 ---
 
@@ -1629,9 +1709,15 @@ bounded proof engine은 `bounded-dnf-difference-constraints` v2만 사용한다.
 
 automatic input generator uses IR hash and callable FQN seed, at most configured `candidate_limit` candidates, container length 0–3, recursive `JsonValue` depth 4, recursive nominal node budget 64 and configured strategy lifecycle budget. It allocates only productive terminating recursive branches. Factory has no source literal, and `Dyn` requires a compiler-owned initialized concrete case; without one the clause is `미관찰`. impl method instantiates recorded `init_cases` in source order; an impossible required state candidate is `미관찰`. Struct candidate that fails its canonical invariant is discarded deterministically rather than being mistaken for an implementation failure.
 
+bounded candidate 탐색은 계약 literal과 boundary 값, deterministic candidate breadth-first 전략으로 positive case에 도달할 기회를 넓힌다. 동일한 유한 budget 안의 탐색일 뿐 모든 입력을 열거하거나 함수 전체의 정확성을 증명하지 않으며, candidate·실제 observation이 없으면 그 부재를 그대로 기록한다.
+
 automatic contract tests execute pure sync/async free functions and impl methods whose resolved transitive effect set is empty and whose return is not `Never`, each in a separate deny-by-default OS sandbox. A valid fixture-authorized scenario additionally executes its selected effectful facade. For `AsyncIterator`/`AsyncGenerator`, the pure runner uses the same per-operation wrapper enforcement, observes at most `lifecycle_limit` actual operations, checks send/yield ABI and contract evidence, and calls `aclose` when available. The configured prefix is an observation budget, not a lifecycle-enforcement boundary. effectful or `Never` callable without such a scenario remains `신뢰 선언` or `미관찰`; the runner does not import a facade solely to execute it.
 
-For each requires-valid generated case the runner records `eligible_cases`, `applicable_cases`, `satisfied_cases`, `condition_false_cases` and deterministic first witness for every success/conditional-error obligation. It evaluates every conditional-error predicate; when several apply, only the source-order first clause must match the returned `Err`, while lower clauses retain condition/applicability counts without contradiction or satisfaction. An `Err` never satisfies an Ok obligation. A pure callable with valid cases but no observed Ok leaves each success obligation as stable `unobserved` evidence with its exact counters and no fabricated witness; default verification does not reject it solely for that absence. The required top-level Ok success-obligation lint remains, and semantic coverage policy can deny selected unobserved clauses, including always-Err implementations. Zero valid cases remains unobserved. Proof reports success-region and conditional-error reachability as `proved`/`disproved`/`unknown`, but never upgrades implementation coverage. contract report retains exact ids/spans and separate proof/runtime/test evidence.
+각 requires-valid generated case의 `eligible_cases`, `applicable_cases`, `satisfied_cases`, `condition_false_cases`와 deterministic first witness는 emitted facade가 실제 평가한 predicate observation에서 얻는다. guard scrutinee를 평가해 match한 경우에만 predicate를 한 번 평가하며, unmatched guard는 predicate 성공 관찰이 아니다. conditional error도 실제 guard/predicate 결과를 기록하고 여러 clause가 applicable하면 source-order 첫 clause만 반환 `Err`를 만족시켜야 한다. 후순위 clause는 applicability를 유지하지만 satisfaction을 꾸미지 않는다. `Err`는 Ok obligation을 만족하지 않는다.
+
+observation은 exact callable·invocation·impl method scope에 귀속한다. runner가 반환값·IR을 보고 사후에 predicate를 재평가하거나 추측하지 않으며, 이전에 observed였다는 이유로 현재의 누락·불명확한 evidence를 observed로 유지하는 fallback도 없다. Python observer token과 sink는 compiler-private이며 implementation이 공급하거나 교체할 수 없다. 이는 target ABI나 evidence/record schema 변경이 아니다.
+
+valid case가 있어도 실제 Ok 관찰이 없으면 해당 success obligation은 정확한 counter와 witness 부재를 가진 `unobserved`다. 기본 verification은 그 부재만으로 거부하지 않으며, zero valid cases도 unobserved다. 필요한 top-level Ok obligation lint와 selected coverage policy는 그대로 적용한다. unsupported·불명확한 evidence는 honest `unknown`으로 남는다. policy가 선택한 clause는 명시적 allowance가 있어야 해당 status를 허용하고, 선택되지 않은 clause는 gate하지 않는다. bounded proof의 success/error-region reachability 결과 `proved`·`disproved`·`unknown`은 implementation coverage를 승격하지 않는다. report는 exact id/span과 proof/runtime/test evidence를 분리한다.
 
 `CottContractViolation`은 `Exception`의 하위 타입이며 `cott_runtime`에서 import한다. `symbol`, `phase`, clause `span`, expected·actual summary와 original `Exception` cause를 보존한다. verified loader의 identity·origin·hash preflight 실패도 target 호출 전에 `phase = "provenance"`인 이 exception으로 발생한다. facade exception boundary는 lazy load·symbol lookup과 invocation 전체를 감싼다. existing contract violation은 재포장하지 않고, module load `Exception`은 `implementation-load`, implementation `Exception`은 invocation violation으로 변환한다. `CancelledError` is re-raised after the async wrapper's cancellation invariant handling; other `BaseException` is not captured.
 
@@ -1731,7 +1817,7 @@ cache miss 또는 stamp drift의 loader preflight는 target 실행 전에 record
 
 `target.python.source`는 compiler input과 durable implementation root일 뿐 runtime import path가 아니다. 이 root에는 cott public module, compiler-owned `*_types` 또는 `cott_runtime`을 정의할 수 없다. runtime·BasedPyright는 generated root 뒤에 standard library와 locked distribution만 사용하고 stub root는 runtime path에서 제외한다. Python build는 모든 local runtime file을 generated root에서만 포함한다. independent installed-wheel whole-origin verification과 package installation은 v1.0 범위에서 제외하고 post-v1.0 roadmap으로 남긴다. v1.0에서는 embedded provenance check, 즉 exact metadata와 실제 imported regular-file origin·content hash의 preflight를 필수로 한다.
 
-해석된 public free function과 every emitted impl class만 facade와 `__all__`에 포함한다. 미구현 free function 또는 impl method에는 placeholder를 만들지 않고 `current.unresolved`에 기록하며, unresolved method가 있는 impl class 자체도 emit하지 않는다. `cott verify`는 unresolved pending이 하나라도 있거나 verified facade projection이 전체 IR과 다르면 실패한다. 현재 facade에 없는 옛 managed implementation은 export하지 않는다.
+해석된 public free function과 every emitted impl class만 facade와 `__all__`에 포함한다. 미구현 free function 또는 impl method에는 placeholder를 만들지 않고 `.snapshots[.current].unresolved`에 기록하며, unresolved method가 있는 impl class 자체도 emit하지 않는다. `cott verify`는 unresolved pending이 하나라도 있거나 verified facade projection이 전체 IR과 다르면 실패한다. 현재 facade에 없는 옛 managed implementation은 export하지 않는다.
 
 ### 16.7 Facade 우회 감사
 
@@ -1764,7 +1850,7 @@ network mode는 `Disabled` 또는 `IsolatedLoopback`이다. 후자는 host netwo
 
 `[[verification.coverage.rules]]`는 exact canonical callable `symbol`, nonempty sorted-unique `clauses=["ensures:2","error:5"]`, 그리고 `allow_unobserved`, `allow_trust_declaration`, `allow_unknown` boolean만 가진 deny-unknown policy다. duplicate `(symbol, clause)` selection, invalid selector/qname와 empty clause list는 manifest error다. rule이 없으면 selected clause도 gate도 없다. selected clause는 manifest allowance가 없을 때 해당 status로 deterministic violation이 되고 unselected clause는 gate하지 않는다.
 
-verify는 모든 evidence를 먼저 finalize하고 `current.verified=true`, closed `semantic_coverage={clauses,summary,policy}`와 `last_verified`를 atomic publish한다. 그 뒤 policy violation이면 verification certification을 되돌리지 않고 sorted violation과 coverage summary를 출력하여 distinct exit code `8`로 실패한다. policy passed이면 ordinary verify success다. runtime loader는 artifact `verified`만 보고 project coverage policy를 재평가하지 않는다. 따라서 policy-failed yet artifact-verified snapshot도 loadable이며 policy를 runtime의 두 번째 truth boundary로 만들지 않는다.
+verify는 모든 evidence를 먼저 finalize하고 `.snapshots[.current].verified=true`, closed `semantic_coverage={clauses,summary,policy}`를 가진 blob과 같은 `current`·`last_verified` 참조를 atomic publish한다. 그 뒤 policy violation이면 verification certification을 되돌리지 않고 sorted violation과 coverage summary를 출력하여 distinct exit code `8`로 실패한다. policy passed이면 ordinary verify success다. runtime loader는 artifact `verified`만 보고 project coverage policy를 재평가하지 않는다. 따라서 policy-failed yet artifact-verified snapshot도 loadable이며 policy를 runtime의 두 번째 truth boundary로 만들지 않는다.
 
 ### 16.10 유지 example generation-first policy
 
@@ -1800,7 +1886,7 @@ implementation-to-implementation call, duplicated validation, nominal-wrapper-on
 callable별 progress를 stderr에 기록한다. 한 generate 호출의 초기 prompt와 `prompt_hash`는
 invocation 시작의 immutable resolution snapshot만 사용한다. 이후 wave candidate는 validation에만
 쓰인다. Agent 또는 final bundle validation이 실패해도 source audit를 통과한 candidate는
-`current.verified = false` checkpoint로 publish하고 exit `5`를 유지한다. 다음 generate는
+`.snapshots[.current].verified = false` checkpoint로 publish하고 exit `5`를 유지한다. 다음 generate는
 unresolved callable만 재개한다. 성공한 generate도 certification이 아니며 explicit verify만
 `verified = true`를 publish한다.
 
@@ -1889,17 +1975,17 @@ witness다. Canonical IR을 바꾸거나 witness를 silent omission하지 않는
 `cott emit kotlin`은 agent, kotlinc, Java 또는 user code를 실행하지 않는다. Current IR,
 runtime, facade, implementation copy와 `generation.json`을 transaction으로 publish하되 unresolved
 callable facade와 placeholder/stub은 만들지 않는다. `emit ir`은 IR scope와 record만 갱신한다.
-두 emit과 `generate --target kotlin`은 언제나 `current.verified = false`, `verification = null`로
+두 emit과 `generate --target kotlin`은 언제나 `.snapshots[.current].verified = false`, snapshot의 `verification = null`로
 publish하고 historical `last_verified`를 보존한다.
 
 ### 16A.3 compilation, runtime evidence와 certification
 
-Kotlin generation record는 Python record와 구별되는 closed object다. Top-level
-`schema_version = 1`; snapshot은 `target = "kotlin"`, compiler package `1.0.0`, Canonical IR
-`8`, runtime ABI `1`, `public_symbols`, target symbol/source/runtime origin, managed file hash,
-tools, evidence와 semantic coverage를 사용한다. Domain은 `cott.kotlin.generation.v1`이다.
-Python `public_python_symbols`, `python_symbol`, generation v7 또는 runtime ABI 7을 Kotlin
-truth로 재사용하지 않는다.
+Kotlin generation record는 Python record와 구별되는 closed object다. §16.1의 reference envelope에
+`schema_version = 2`를 쓰며 `snapshots`의 full object는 `target = "kotlin"`, compiler package
+`1.0.0`, Canonical IR `8`, runtime ABI `1`, `public_symbols`, target symbol/source/runtime origin,
+managed file hash, tools, evidence와 semantic coverage를 사용한다. Generation domain은
+`cott.kotlin.generation.v2`다. Python `public_python_symbols`, `python_symbol`, generation v8
+또는 runtime ABI 7을 Kotlin truth로 재사용하지 않는다.
 
 오직 `cott verify`만 Kotlin snapshot을 certify한다. Verify는 unresolved가 없고 current
 source/manifest/implementation input 및 emitted managed source가 expected bytes와 일치해야
@@ -1935,15 +2021,14 @@ Full verification이 성공하면 `library/cott-module.jar`와 exact compiler-di
 JAR를 `runtime-libs/kotlinx-coroutines-core-jvm.jar`로 managed publish하고 complete evidence를
 기록한다. Kotlin stdlib version/hash는 required dependency로 기록하지만 Kotlin compiler 또는
 Android Gradle plugin이 제공하므로 두 번째 copy를 bundle하지 않는다. Certification은
-`current.verified = true`와 `last_verified == current`를 함께 atomic publish하는 verify-only
+`.snapshots[.current].verified = true`와 `last_verified == current`를 함께 atomic publish하는 verify-only
 transition이다. Emit, generate 또는 실제 fmt 변경은 current를 unverified로 만들고 history만
 유지한다. Coverage policy violation은 evidence와 certified snapshot을 보존한 채 exit `8`로
 gate하고 deploy는 passed policy를 요구한다.
 
 ### 16A.4 deploy와 Android consumer 경계
 
-Kotlin deploy는 verified, fully resolved, policy-passed, non-drifted current snapshot을 새
-directory에 atomic no-replace 방식으로 package한다. Payload는 다음뿐이다.
+Kotlin deploy는 verified, fully resolved, policy-passed, non-drifted current snapshot을 기본적으로 새 directory에 atomic no-replace 방식으로 package한다. 기존 deployment의 `--replace`는 18.7.1의 ownership-checked atomic exchange 규칙을 따른다. Payload는 다음뿐이다.
 
 ```text
 cott-module.jar
@@ -2006,9 +2091,10 @@ installation과 device lifecycle을 소유한다. Android device에서 Python을
 
 ### 16B.1 닫힌 target과 라이브러리 경계
 
-Dart는 package `1.0.0`, Canonical IR `8`, generation schema `1`, domain
-`cott.dart.generation.v1`, runtime ABI `1`을 사용한다. `DartGenerationRecord`는 별도의 closed
-validator를 통과하며 Python/Kotlin record를 baseline이나 runtime identity로 받지 않는다.
+Dart는 package `1.0.0`, Canonical IR `8`, generation schema `2`, domain
+`cott.dart.generation.v2`, runtime ABI `2`를 사용한다. `DartGenerationRecord`는 §16.1의
+self-contained reference envelope와 별도 closed snapshot validator를 통과하며 Python/Kotlin
+record를 baseline이나 runtime identity로 받지 않는다.
 
 ```toml
 [project]
@@ -2051,6 +2137,8 @@ Authored source hash와 managed part hash는 다르다. Public import는
 Free wrapper는 callable별 library이며 stateful owner와 method wrapper/parts는 같은 private
 library에 둔다. 공개 setter/schema로 state나 seal을 우회할 수 없다.
 
+Private type module import alias는 `_cott_t_` 뒤에 각 module segment의 `_`를 `_u`로 escape하고 segment를 `__`로 연결한다. 예를 들어 `foo_bar.baz`는 `_cott_t_foo_ubar__baz`다. 이 injective spelling은 canonical symbol, public facade import와 hash identity 규칙을 바꾸지 않는 implementation-source cutover이며 native-enum runtime ABI 2 변경과 별개다. Compatibility alias는 없다. Manifest-owned source는 새 alias로 갱신할 수 있지만, authenticated agent-owned source를 cosmetic edit한 뒤 기존 record로 신뢰를 갱신해서는 안 된다. legitimate regeneration과 source/record hash 검증이 필요하며 Cott가 옛 source를 자동 migration한다고 보장하지 않는다.
+
 ### 16B.2 정확한 Dart ABI
 
 I8/I16/I32/U8/U16/U32는 범위 검사한 Dart `int`, I64/U64는 `BigInt`다. Contract 정수 연산은
@@ -2071,6 +2159,34 @@ Recursive descriptor forwarding은 값 graph edge가 아니며 별도 cycle/dept
 Value graph의 active cycle·depth·node 제한, shared DAG identity, immutable snapshot과 deep
 equality를 보존한다. Nonconstant struct defaults는 private omission marker와 runtime constructor
 검증으로 처리한다. Cott 함수 parameter default나 enum payload default 문법을 추가하지 않는다.
+
+모든 immutable struct에는 named extension `<Struct>$CopyWith`를 생성하여 일반적으로 `value.copyWith(field: replacement)`를 쓴다. `<Struct>$CopyWith(value).copyWith(...)`라는 explicit extension invocation도 가능하다. extension은 generated checked generic view의 implementer에게 새 instance member 구현을 요구하지 않는다. Cott field는 snake_case이므로 `copyWith`라는 source field와의 충돌 migration을 가정하지 않는다. 생략한 field는 constructor default로 초기화하지 않고 정확한 저장값을 유지하며, 명시적 default override·`Nothing`·zero·`false`와 canonical `Any`가 허용하는 `null`은 omission과 구별한다. 저장된 type/const witness를 전달하고 canonical constructor와 invariant 검사를 다시 실행한다.
+
+`optionFromNullable<T extends Object>(T? value)`와 `optionToNullable<T extends Object>(CottOption<T> value)`는 nonnullable payload `T`에만 사용한다. null은 `Nothing`, nonnull은 `Some`에 대응하며 nullable payload의 `Some(null)`을 `Nothing`으로 손실 변환하지 않는다. 일반 `Option[Any]`는 계속 명시적 variant로 다룬다. `CottBytes.readOnlyView`는 immutable storage의 zero-copy `List<int>` view이고 `toUint8List()`는 계속 수정 가능한 defensive copy다.
+
+Dart runtime ABI **2**는 비어 있지 않고 type/const generic parameter가 없으며 모든 variant가
+payloadless인 enum 선언 전체를 native Dart `enum`으로 투영한다. 일반 member spelling은 Cott와
+정확히 같고 constructor call이 아니다: `Kind.Local`, cross-module에서는
+`_cott_t_api__values.Kind.Local`이다. 이전 `KindLocal()` per-variant class는 제거하며 alias를
+남기지 않는다. Enum 자기 이름과 같은 member는 Dart 제한을 피하려고 `$`를 붙여 `Kind.Kind$`로
+투영한다. `$`는 Cott identifier에 없으므로 충돌하지 않으며 이 경우도 native enum이다.
+Canonical variant identity는 바꾸지 않고 native `.name`은 이 target escape를 반영한다.
+
+Public caller와 agent implementation은 `Kind.values`, `value.name`, `value.index` 및 native
+equality/hash를 사용할 수 있다. Payloadless variant equality는 native enum identity와 같다.
+Exhaustive switch는 class pattern 대신 member constant pattern을 쓴다:
+
+```dart
+String label(Kind kind) => switch (kind) {
+  Kind.Local => 'local',
+  Kind.Remote => 'remote',
+};
+```
+
+한 variant라도 payload가 있거나 generic parameter가 있으면 enum 전체는 기존 sealed
+arbitrary-value ADT와 generated variant class constructor를 유지한다. 그 안의 payloadless
+variant도 class constructor이며 legacy alias가 아니다. `Option`·`Result`는 계속 generic ADT다.
+Cott author syntax, Canonical IR 8, package `1.0.0`은 이 projection 변경으로 바꾸지 않는다.
 
 Async callable은 `Future<T>`다. Iterator/Generator 및 async protocol은 typed callback source와
 명시적인 next/send/return/raise/close lifecycle을 사용하며 단순 Stream으로 정보를 버리지 않는다.
@@ -2144,6 +2260,7 @@ Dart deployment는 새 directory의 `lib/`, compiler-owned `pubspec.yaml`, uncha
 보존한다. `verification/cott-module.dill`은 native 검증용이지 portable Flutter library가 아니므로
 배포하지 않는다. 계약·원래 generated layout·authoring copy·runner·SDK·cache·추론한 app asset도
 제외한다. Flutter는 deployed directory를 path dependency로 가져와 자신의 platform용으로 compile한다.
+기본 publication은 no-replace이며, 기존 deployment 교체는 18.7.1의 `--replace` exchange·recovery 규칙을 따른다.
 
 `examples/integrations/flutter-counter/tool/setup.dart`는 emit/verify/no-replace deploy 후 Flutter
 pub get을 실행한다. App은 public `example.counter` facade만 사용한다. Flutter `3.47.4`/
@@ -2180,7 +2297,9 @@ sole semantic authority이고 다른 prose/source는 이를 override하지 않�
 사용하고 accepted wave candidate는 validation에만 쓴다. `cott prompt` JSON은 target과 무관하게
 `{symbol, intent_hash, prompt_hash, generation_required, context, prompt}`다.
 
-FORMAL DECLARATIONS는 선택된 선언의 canonical 구조를 그대로 싣되, 각 contract expression·guard·condition·refinement는 그 span이 가리키는 **저자 Cott 원문 문자열**로 싣는다. span·`source_order`·`doc`은 이 view에서 제거하고 `doc`은 CURRENT INTENT가 단독으로 소유한다. authored source를 읽을 수 없거나 span이 source를 벗어나면 prompt는 실패하며 축약되지 않은 대체본을 내지 않는다. 이 view는 prompt 전용이고 `context`와 `tools.cott_intent` fingerprint는 stripped canonical context를 그대로 쓴다.
+FORMAL DECLARATIONS는 이미 선택·해석된 canonical semantic context만 투영한다. 선언 object 안의 expression과 pattern은 `kind(field=value,...)` constructor notation으로 압축하며 nested constructor·ordered list·JSON-quoted string으로 구조를 모호함 없이 보존한다. 이는 formatter가 출력한 Cott source가 아니다. 각 expression/pattern의 resolved type, fully qualified reference/binding symbol, exact enum variant, const argument, canonical operator/intrinsic을 유지한다. 정수는 exact decimal string, `f32`·`f64`는 signed zero까지 보존하는 IEEE hexadecimal `bits`다. guard는 scrutinee를 pattern에 match하고 binding은 sibling expression/`when` scope에만 들어가며 non-match는 predicate 관찰이나 의무를 만들지 않는다.
+
+선언·clause 순서와 `clause_id`·identity는 보존하고 diagnostic span·`source_order`·`doc`만 이 view에서 뺀다. `doc`은 CURRENT INTENT가 소유한다. source coordinate는 진단용이지 semantic text의 authority가 아니므로 disk/source를 다시 읽거나 span으로 원문을 자르지 않고, 선택 closure 밖의 선언을 넓게 재확장하지 않는다. prompt-only projection이며 `context`와 `tools.cott_intent` fingerprint 계약은 바꾸지 않는다.
 
 초기 CURRENT INTENT의 관련 `doc`은 닫힌 선언 집합에서 오며 applied rule `doc`을 authored `doc`에
 합쳐 semantic constraint로 승격하지 않는다.
@@ -2208,7 +2327,7 @@ hashed implementation detail이고 public behavior가 되면 Cott declaration으
 
 #### 17.2.1 에이전트 실행 계약
 
-선택 범위의 미구현 callable은 fully qualified symbol 정렬 순서로 처리한다. `-j <jobs>` (또는 `--jobs`)는 1..=64이며 기본값은 1이다. 기본값에서는 callable별 agent process를 순차 실행한다. 더 큰 값에서는 최대 `jobs`개의 callable을 정렬된 wave로 함께 실행한다. 모든 초기 prompt와 `prompt_hash`는 generate 시작의 한 immutable resolution snapshot에서 렌더한다. 이후 수락한 candidate는 다음 wave의 validation에만 쓰이며 광고된 초기 prompt를 바꾸지 않는다. 성공한 candidate는 symbol 순서로 merge한다. agent 또는 final validation 실패는 isolated workspace를 정리하지만, source audit를 통과한 candidate는 `current.verified = false` checkpoint로 publish하고 exit `5`를 유지한다. 다음 generate는 unresolved만 재개한다. `agent_runs`에는 최종 검증 성공 run만 이 실행 순서로 남긴다.
+선택 범위의 미구현 callable은 fully qualified symbol 정렬 순서로 처리한다. `-j <jobs>` (또는 `--jobs`)는 1..=64이며 기본값은 1이다. 기본값에서는 callable별 agent process를 순차 실행한다. 더 큰 값에서는 최대 `jobs`개의 callable을 정렬된 wave로 함께 실행한다. 모든 초기 prompt와 `prompt_hash`는 generate 시작의 한 immutable resolution snapshot에서 렌더한다. 이후 수락한 candidate는 다음 wave의 validation에만 쓰이며 광고된 초기 prompt를 바꾸지 않는다. 성공한 candidate는 symbol 순서로 merge한다. agent 또는 final validation 실패는 isolated workspace를 정리하지만, source audit를 통과한 candidate는 `.snapshots[.current].verified = false` checkpoint로 publish하고 exit `5`를 유지한다. 다음 generate는 unresolved만 재개한다. `agent_runs`에는 최종 검증 성공 run만 이 실행 순서로 남긴다.
 
 각 에이전트 adapter는 실행 파일, prompt 전달 방식, 작업 디렉터리, 환경 변수, 종료 상태를 명시한다.
 
@@ -2220,12 +2339,14 @@ v1.0의 exact main-process argv template는 다음과 같다. 각 항목은 shel
 * Claude: `claude --bare --print --input-format text --output-format json --permission-mode dontAsk --tools Read,Write --allowedTools Read,Write --disallowedTools Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__* --no-session-persistence`; exact UTF-8 prompt bytes는 stdin으로 전달하고 child cwd는 isolated workspace다.
 * OMP: `omp -p --cwd <workspace> --no-session --no-rules --no-skills --no-extensions --no-lsp --no-pty --no-title --tools read,grep,glob,edit,write --approval-mode yolo --max-time <seconds>s --config <scratch>/omp.yaml @<absolute-prompt-file>`; compiler는 OMP 본 실행 전에 exact prompt bytes를 workspace 밖 scratch의 create-new regular file에 쓰고, 그 absolute path 앞에 `@`를 붙인 마지막 단일 argv로 전달한다.
 
+공식 OMP 설치가 `#!/usr/bin/env bun` package launcher이면 inherited PATH에서 Bun을 한 번 resolve하고 canonical regular single-link executable과 content hash를 고정한다. version probe와 본 실행은 shell 없이 `bun <canonical launcher> <기존 adapter argv>`로 호출한다. selected launcher의 provenance는 유지하고 Bun hash는 각 실행 전과 generation 후에 다시 확인한다. package metadata에서 필요한 dependency/optional dependency/peer closure를 구해 개별 package 내용을 read-only로 mount하며 전체 `node_modules`나 HOME을 열지 않는다. 설치 경계 밖으로 나가는 package/symlink, 누락된 필수 dependency, unsafe Bun은 거부한다. sandbox PATH는 `/usr/bin:/bin`으로 유지하고 version probe의 network/credential 정책도 바꾸지 않는다. package 내용은 read-only mount이며 동시 host package-manager 변경에 대한 별도 snapshot은 아니다.
+
 다음 environment allowlist는 main generation process에만 적용하며 version preflight에는 적용하지 않는다. 공통 environment name은 `HOME`, `PATH`, `PYTHONDONTWRITEBYTECODE`, `TMPDIR`이며 host에 존재할 때만 `SSL_CERT_FILE`, `SSL_CERT_DIR`, `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`를 추가한다. Codex는 존재하는 `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `CODEX_HOME`만, Claude는 존재하는 `ANTHROPIC_API_KEY`만, OMP는 존재하는 `PI_CODING_AGENT_DIR`만 추가한다. Claude에는 항상 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`도 설정한다. Claude에는 OAuth, auth-token, base-url, cloud, provider, customization 관련 environment name을 전달하지 않는다. 그 밖의 host environment는 전달하지 않는다.
 
 * shell을 사용하지 않고 executable과 각 인자를 분리하여 실행한다.
 * main process 실행 전에 executable의 canonical regular-file path, version과 content hash를 기록한다. Claude native-entrypoint rejection은 위와 같이 `claude --version` probe 전에 수행한다.
 * 작업 디렉터리는 17.4의 격리된 staging workspace다.
-* 실제 project root는 agent sandbox namespace에서 보이지 않는다. 대상 계약, 직접 참조 helper 계약, 필요한 binding·rule·기존 구현과 compiler-owned facade는 staging의 read-only copy로만 제공하고 현재 implementation file과 별도 scratch directory만 쓸 수 있다. Codex credential path와 OMP native-addon cache만 project 밖에서 read-only로 열며, OMP의 `config.yml`과 `agent.db`는 매 실행 scratch로 복사하고 원본 credential directory는 열지 않는다. 이 sandbox를 강제할 수 없는 platform에서는 agent generate를 거부한다.
+* 실제 project root는 agent sandbox namespace에서 보이지 않는다. 대상 계약, 직접 참조 helper 계약, 필요한 binding·rule·기존 구현과 compiler-owned facade는 staging의 read-only copy로만 제공하고 현재 implementation file과 별도 scratch directory만 쓸 수 있다. Codex credential path, OMP native-addon cache와 위에서 검증한 OMP runtime/package closure만 project 밖에서 read-only로 열며, OMP의 `config.yml`과 `agent.db`는 매 실행 scratch로 복사하고 원본 credential directory는 열지 않는다. 이 sandbox를 강제할 수 없는 platform에서는 agent generate를 거부한다.
 * prompt는 shell 문자열로 조합하지 않는다. Codex와 Claude만 stdin을 사용하며, OMP의 prompt file은 workspace mutation audit 범위 밖의 scratch에만 둔다.
 * 환경 변수는 compiler version에 고정된 adapter별 name allowlist만 전달한다. secret value는 기록하지 않고 전달한 name만 기록한다.
 * `PYTHONDONTWRITEBYTECODE=1`을 설정하고 `TMPDIR`, type checker·test cache와 agent 임시 상태를 scratch directory로 보낸다.
@@ -2350,13 +2471,13 @@ emit·generate는 durable journal로 generation.json을 마지막에 포함해 �
 project lock 해제
 ```
 
-staging facade는 embedded identity·runtime origin·hash를 generated copy에서 검사하며 `current.verified` bit를 요구하지 않는다. full verify 성공 시 `current`와 `last_verified`를 같은 snapshot으로 기록하고, emit·generate는 `last_verified`를 보존한다.
+staging facade는 embedded identity·runtime origin·hash를 generated copy에서 검사하며 `.snapshots[.current].verified` bit를 요구하지 않는다. full verify 성공 시 `current`와 `last_verified`를 같은 certified snapshot digest로 기록하고, emit·generate는 `last_verified` 참조와 그 full blob을 보존한다.
 
 full verify에는 agent 선택 범위가 없고 agent를 호출하지 않는다. staging에서 재생성한 managed set과 actual project set이 정확히 같아야 하며 검증 record 외 차이는 폐기한다.
 
 free-function binding을 해석하지 못하거나 그 external import에 필요한 lock entry가 없으면 agent 호출 전에 실패한다. facade import가 exact module의 declared public free function으로 해석되지 않거나 금지된 형태면 같은 시점에 실패한다. implementation file이 canonical name/signature, same-file private helper/`Final` policy 또는 allowed `self` method call rule을 어기면 같은 시점에 실패한다. agent 결과의 facade·external import는 호출 직후 같은 규칙으로 다시 검사한다. clean checkout에서도 이번 세대 type module과 facade를 먼저 만들므로 이전 generated file에 의존하지 않는다.
 
-특정 callable generate에서 agent가 바꿀 수 있는 durable source는 선택된 free-function 또는 impl-method file뿐이지만 compiler-owned 관리 집합은 항상 전부 재생성·반영한다. `last_verified`가 있으면 그 baseline에 존재한 비선택 declaration의 canonical `contract_surface` record는 byte-identical해야 하고 비선택 public symbol은 현재 `public_python_symbols`에도 남아야 한다. 새 declaration 추가는 허용한다. 최초 검증 전 `last_verified = null`이면 이 guard 없이 선택 범위를 생성하고 `current.verified = false`로 기록한다.
+특정 callable generate에서 agent가 바꿀 수 있는 durable source는 선택된 free-function 또는 impl-method file뿐이지만 compiler-owned 관리 집합은 항상 전부 재생성·반영한다. `last_verified`가 있으면 참조한 baseline에 존재한 비선택 declaration의 canonical `contract_surface` record는 byte-identical해야 하고 비선택 public symbol은 현재 `public_python_symbols`에도 남아야 한다. 새 declaration 추가는 허용한다. 최초 검증 전 `last_verified = null`이면 이 guard 없이 선택 범위를 생성하고 `.snapshots[.current].verified = false`로 기록한다.
 
 compiler 산출물은 결정적으로 다시 만들 수 있지만 agent implementation은 durable한 비결정적 source다.
 
@@ -2438,7 +2559,7 @@ cott fmt --check
 cott emit ir
 ```
 
-이 명령은 `<artifact-root>/ir` scope와 `<artifact-root>/generation.json`만 원자 갱신하고 다른 compiler-owned managed bytes는 그대로 둔다. non-IR managed hash는 기존 trusted 값을 유지하고, IR-only emission이 무관한 managed 편집을 새 baseline으로 기록하지 않는다. `current.verified = false`이며 `last_verified`를 보존한다.
+이 명령은 `<artifact-root>/ir` scope와 `<artifact-root>/generation.json`만 원자 갱신하고 다른 compiler-owned managed bytes는 그대로 둔다. non-IR managed hash는 기존 trusted 값을 유지하고, IR-only emission이 무관한 managed 편집을 새 baseline으로 기록하지 않는다. `.snapshots[.current].verified = false`이며 `last_verified` 참조와 blob을 보존한다.
 
 기존 target 산출물을 유지할 때는 current callable kind/intent와 일치하는
 implementation·AgentRun·source input hash만 보존한다. 신규, intent-changed 또는 pending 대상은
@@ -2454,8 +2575,8 @@ cott emit dart
 
 Manifest가 선택한 target과 explicit emit target은 일치해야 한다. 세 명령은 agent나 target
 compiler 없이 compiler-owned source를 staging에서 만들고 원자 갱신한다. 미구현 callable은
-facade에서 생략하고 `current.unresolved`에 기록하며 placeholder를 만들지 않는다. Authentic
-pending agent source는 소유권을 유지한다. 결과는 항상 `current.verified = false`이고
+facade에서 생략하고 `.snapshots[.current].unresolved`에 기록하며 placeholder를 만들지 않는다. Authentic
+pending agent source는 소유권을 유지한다. 결과는 항상 `.snapshots[.current].verified = false`이고
 `last_verified`를 보존하므로 배포 가능한 certification이 아니다.
 
 ### 18.6 구현 생성
@@ -2475,7 +2596,7 @@ unresolved callable이 있으면 `--agent`가 필수이고 허용 값은 `codex`
 및 fresh accepted source는 재사용하고 stale/unresolved source만 target별 `implementation.py`,
 `implementation.kt`, `implementation.dart` candidate로 생성한다. Source audit와 complete-candidate validation은 실제
 target 규칙을 사용하고 failure checkpoint는 정확한 pending source provenance를 남긴다. 모든
-generate 결과는 `current.verified = false`; 배포 gate는 explicit full `cott verify`다.
+generate 결과는 `.snapshots[.current].verified = false`; 배포 gate는 explicit full `cott verify`다.
 
 ### 18.6.1 Prompt 검사
 
@@ -2519,12 +2640,12 @@ implementation input에서 expected IR/Python/stub/docs/test artifact를 staging
 managed set과 byte-for-byte 비교한다. Unresolved pending, missing/extra/hand-edited managed file과
 start snapshot drift는 hard failure다. Current facade에 없는 old implementation은 export하지
 않는다. Verify는 source/managed file을 고치지 않고 artifact verification이 성공한 뒤
-`generation.json`만 journal transaction으로 갱신해 same snapshot의
-`current.verified = true`, complete evidence/`semantic_coverage`, `last_verified`를 publish한다.
+`generation.json`만 journal transaction으로 갱신해 complete evidence/`semantic_coverage`와
+`.snapshots[.current].verified = true`를 가진 blob 및 같은 `current`·`last_verified` 참조를 publish한다.
 Selected coverage policy 위반은 certified record를 되돌리지 않고 exit `8`로 gate만 실패시킨다.
 
 위 bullet은 Python target의 세부 verification inventory다. Kotlin verify는 16A.3의 별도
-generation-1/runtime-1 pipeline으로 expected Kotlin source를 byte-compare하고 exact
+generation-2/runtime-1 pipeline으로 expected Kotlin source를 byte-compare하고 exact
 kotlinc/JDK/stdlib/coroutine/classpath/compile-only identity를 확인한 뒤 sandbox에서
 `cott-module.jar`와 real public-facade runner를 compile/run한다. Kotlin도 unresolved와 drift를
 거부하며, complete evidence와 `semantic_coverage`를 가진 `current == last_verified` snapshot만
@@ -2542,10 +2663,9 @@ cott deploy [--output <dir>] [--replace] [--project <dir>] [--format json]
 기준이다. 기본적으로 기존 target은 비어 있어도 덮어쓰지 않는다. `--replace`는 output이 **이 project의
 이전 Cott deployment**일 때만 교체를 허용한다: no-follow로 확인한 실제 directory이고, symlink가 아니며,
 project root·contract source·target source·generated artifact root와 그 조상이 아니고, 이 target의
-generation record로 parse되는 regular single-link `generation.json`을 담고 있어야 한다. 그 외 기존
-경로는 `--replace`가 있어도 그대로 거부한다. 교체는 완성된 staged tree를 sibling temp에 만든 뒤
-`RENAME_NOREPLACE` rename으로 기존 tree를 옆으로 옮기고 staged tree를 제자리에 넣은 다음 옛 tree를
-지우는 swap이며, 실패하면 이전 deployment를 되돌리고 temp를 남기지 않는다. deploy 자격 판정
+generation record로 parse되는 regular single-link `generation.json`을 담고 있어야 한다. target과 project identity를 검증하며 Python은 배포된 runtime identity도 기록된 hash로 검증한다. record가 parse된다는 사실만으로 같은 project의 소유권을 인정하지 않는다. 그 외 기존 경로는 `--replace`가 있어도 거부한다.
+
+교체는 완성하고 fsync한 sibling tree와 기존 complete tree 사이의 실제 `RENAME_EXCHANGE`다. 두 번의 `RENAME_NOREPLACE`로 흉내 내지 않으므로 output pathname이 사라지는 구간이 없다. durable journal과 ownership marker의 일치 증거, no-follow lock 아래 recovery로 자신이 소유한 tree만 처리한다. exchange·durable fsync·locking 등 필요한 filesystem capability가 없으면 unsafe fallback 없이 fail closed한다. commit 전 복구와 commit 뒤 old-tree cleanup을 구별하고, commit 뒤에는 일부 삭제된 old tree로 rollback하지 않는다. cleanup이 실패해도 NEW deployment는 계속 사용할 수 있고 journal/ownership state는 복구 가능하게 남긴다. pathname의 연속 가시성은 여러 번 open하는 reader에게 한 snapshot을 보장한다는 뜻은 아니다. deploy 자격 판정
 (verified·unresolved·drift·coverage policy)은 `--replace`와 무관하게 동일하다. Project input,
 managed artifact, `.cott`,
 `.venv`, unsafe parent/target과 겹치는 output은 거부한다. Project lock/recovery 뒤 읽기만 하고
@@ -2553,7 +2673,7 @@ source, managed artifact 또는 generation record를 갱신하지 않으며 agen
 호출하지 않는다.
 
 gate는 closed generation schema/identity와 현재 compiler/runtime package version, project version,
-`current.verified`, empty unresolved, passed semantic-coverage policy다. source inventory를 다시
+`.snapshots[.current].verified`, empty unresolved, passed semantic-coverage policy다. source inventory를 다시
 발견하여 manifest·rules·target metadata·lock·선택 implementation을 포함한 기록된 input hash와
 비교하고, 전체 managed inventory와 실제 bytes를 확인한다. 대상 regular file과 parent는 symlink와
 hardlink를 허용하지 않는다. 읽은 input snapshot을 publication 직전에 다시 비교한다.
@@ -2579,8 +2699,7 @@ dependency가 production export에 없으면 실패한다. Dependency-free Pytho
 호출하지 않는다. Interpreter와 external distribution 자체는 bundle에 복사하지 않으며 destination이
 기록된 CPython patch·OS·architecture 및 dependency identity를 만족해야 한다.
 
-private sibling staging에 payload를 쓰고 fsync한 뒤 기존 init의 atomic no-replace rename으로
-directory 전체를 publish한다. 실패한 staging은 제거하며 기존 output을 지우거나 수정하지 않는다.
+새 output의 기본 publication은 private sibling staging에 payload를 쓰고 fsync한 뒤 atomic no-replace rename으로 directory 전체를 publish한다. 이 경로는 기존 output을 지우거나 수정하지 않으며 실패한 owned staging만 cleanup한다. `--replace`는 위의 별도 exchange·journal recovery 규칙을 따른다.
 성공하면 output path 한 줄과 exit `0`, CLI/manifest 오류는 `2`, snapshot/dependency gate 오류는
 `4`, lock/output/publication 오류는 `6`이다. JSON은 기존 diagnostics schema v1 envelope를 사용한다.
 
@@ -2829,10 +2948,11 @@ tests/
 └── manual/
 ```
 
-`.cott/lock`, `.cott/transactions`와 source project의 `<artifact-root>/generation.json`은
-machine-local state다. Release baseline으로 따로 보관한 record는 `cott diff --baseline`에
-명시할 수 있다. Runtime deployment에는 source-control 여부와 무관하게 verified
-`generation.json`의 byte-identical copy가 포함된다.
+`.cott/lock`와 `.cott/transactions`는 machine-local state다. Source project의
+`<artifact-root>/generation.json`은 machine-specific evidence를 포함하지만 snapshot 참조는 파일
+안에서 모두 해석된다. Release baseline으로 보관한 단일 record를 `cott diff --baseline`에 명시할
+수 있다. Runtime deployment는 source-control 여부와 무관하게 verified `generation.json`의
+byte-identical self-contained copy를 포함하며 외부 snapshot cache나 sidecar를 요구하지 않는다.
 
 ### 19.4 닫힌 manifest와 target 선택
 
@@ -2919,8 +3039,8 @@ Kotlin dependency는 manifest JAR input이며 Cott가 resolve/download하지 않
 managed Python install/lock/sync를 위임하고 Kotlin init은 configured local toolchain만 probe한다.
 
 Python external import에는 기존 lock/dependency provenance가 필수다. 각 target
-`generation.json`은 `current`와 `last_verified`, implementation owner, target symbol,
-source/runtime origin, content hash와 managed set을 자신의 closed schema로 기록한다. Kotlin
+`generation.json`은 `current`·`last_verified` 참조와 `snapshots` map을 가지며 full blob에
+implementation owner, target symbol, source/runtime origin, content hash와 managed set을 자신의 closed schema로 기록한다. Kotlin
 classpath/compile-only는 raw input hash와 canonical tool metadata에 함께 기록한다.
 Dart source/private parts와 frozen pub/archived dependency closure는 16B를 따른다. Ordinary Flutter
 app dependency resolution은 Flutter가 소유하며 Cott verification은 offline이다.
@@ -3030,9 +3150,9 @@ parse error가 있으면 file을 쓰지 않으며 `cott fmt --check`는 formatte
 * sync/async free function·trait/impl method, task-aware reentrant async impl lock, bounded protocol observation
 * finite facade-only scenario state machine, closed fs/http/clock/failure fixtures, compiler-owned Linux isolated-loopback sandbox, bounded trace/transcript와 cleanup/atomicity evidence
 * `COTT-K101` shadow warning, authored/deployed facade bypass audit, deterministic canonical-evidence inventory와 separated certification/coverage-policy gate
-* Python closed generation v7/domain `cott.generation.v7`/runtime ABI7/strategy v5와 Kotlin closed
-  generation v1/domain `cott.kotlin.generation.v1`/runtime ABI1, 공통 Canonical IR v8,
-  Dart generation v1/domain `cott.dart.generation.v1`/runtime ABI1, diagnostics schema v1 및 project API version identity
+* Python closed generation v8/domain `cott.generation.v8`/runtime ABI7/strategy v5와 Kotlin closed
+  generation v2/domain `cott.kotlin.generation.v2`/runtime ABI1, 공통 Canonical IR v8,
+  Dart generation v2/domain `cott.dart.generation.v2`/runtime ABI2, diagnostics schema v1 및 project API version identity
 * Python facade/stub/runtime/verified loader, Kotlin JVM17 module JAR, Dart portable package, target별
   static ABI·sandboxed bounded proof/runner, `current`/`last_verified` provenance,
   `tools.cott_intent` version 1, prompt/generate/diff/deploy
@@ -3059,7 +3179,7 @@ v1.0은 다음을 모두 자동 검증할 때 완료다.
    generate와 explicit verify를 수행하고 target public projection/facade/runtime이 동일 IR을
    소비한다.
 2. 모든 declaration/type/clause/scenario/fixture가 Canonical IR v8와 target별 closed Python
-   v7/v5, Kotlin generation v1 또는 Dart generation v1 record를 통과하고 cross-target/legacy identity를 fail closed한다.
+   generation v8/strategy v5, Kotlin generation v2 또는 Dart generation v2 reference record를 통과하고 cross-target/legacy identity를 fail closed한다.
 3. struct invariant의 syntax/order/type/intrinsic selector, canonical bytes/hash, direct construction, defaults/generic/recursive values와 forged facade input/return rejection을 확인한다.
 4. Result error contract의 top-level Ok success obligation lint, source-order conditional predicate priority, branch reachability와 bounded runner counts/witness를 확인하며 unobserved Ok evidence는 semantic coverage policy로 선택해 gate한다.
 5. pure candidate generation은 refinement/requires/invariant를 만족하고 invalid constructor candidate를 결정적으로 skip하며 zero valid case를 observation으로 위장하지 않는다.
@@ -3212,7 +3332,7 @@ MVP compiler host와 runtime target은 같은 OS family·architecture의 `x86_64
 
 ### 결정 25
 
-`generation.json`과 `generation_id`, exact tool·runtime identity와 managed artifact hash는 machine-local state다. cross-machine diff는 ID 자체가 아니라 normalized contract·public symbol, durable implementation content와 normalized lock·dependency identity를 비교한다.
+`generation_id`, exact tool·runtime identity와 managed artifact hash는 machine-specific generation evidence다. cross-machine diff는 ID 자체가 아니라 normalized contract·public symbol, durable implementation content와 normalized lock·dependency identity를 비교한다. `generation.json`의 digest 참조는 같은 파일의 `snapshots` map으로 닫히므로 baseline 보관과 deployment relocation에 외부 snapshot cache나 sidecar를 요구하지 않는다.
 
 ### 결정 26
 
@@ -3243,8 +3363,9 @@ library로 import하거나 compiler-private state/control을 직접 참조하지
 ### 결정 31
 
 Manifest는 Python/Kotlin/Dart target 하나만 선택한다. Kotlin과 Dart는 Python compatibility
-field를 재사용하지 않는 독립 generation-1/runtime-1 backend다. 각각의 domain은
-`cott.kotlin.generation.v1`와 `cott.dart.generation.v1`이며 explicit verify만
+field를 재사용하지 않는 독립 backend다. Kotlin은 generation-2/runtime-1 및
+`cott.kotlin.generation.v2`, Dart는 generation-2/runtime-2 및 `cott.dart.generation.v2`를 쓴다.
+모든 target은 self-contained snapshot-reference record를 사용하고 explicit verify만
 `current == last_verified` certification을 publish한다.
 
 ### 결정 32

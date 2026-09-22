@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use cott::contract_test::{Classification, ContractTestStrategy, derive_strategies};
@@ -861,134 +861,85 @@ fn malformed_function_ir_is_rejected() {
 }
 #[test]
 fn contract_runner_observes_local_result_error_variant() {
-    if !Command::new("python3")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-    {
+    let Some(output) = run_emitted_contract_runner(
+        "module demo\n\nenum Failure:\n    Bad\n\nfn run(succeed: Bool) -> Result[Bool, Failure]:\n    ensures Result.Ok(value) => value == succeed\n    error Failure.Bad\n",
+        &[(
+            "demo.run",
+            "from cott_runtime import Err, Ok, Result\nfrom demo_types import Failure_Bad\n\ndef run(succeed: bool) -> Result[bool, Failure_Bad]:\n    if succeed:\n        return Ok(value=True)\n    return Err(error=Failure_Bad())\n",
+        )],
+        &["demo.run"],
+    ) else {
         return;
-    }
-
-    let mut number = 0;
-    let root = loop {
-        let path = std::env::temp_dir().join(format!(
-            "cott-contract-runner-{}-{number}",
-            std::process::id()
-        ));
-        number += 1;
-        match fs::create_dir(&path) {
-            Ok(()) => break path,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => panic!("contract runner fixture directory: {error}"),
-        }
     };
-
-    for (relative, bytes) in render_runtime("demo", "0.4.0") {
-        let path = root.join(relative);
-        fs::create_dir_all(path.parent().expect("runtime file parent")).expect("runtime parent");
-        fs::write(path, bytes).expect("runtime file");
-    }
-    fs::write(
-        root.join("demo.py"),
-        "import dataclasses\nfrom cott_runtime import Err, Result\n\n@dataclasses.dataclass(frozen=True)\nclass Failure_Bad:\n    pass\n\ndef run() -> Result[bool, Failure_Bad]:\n    return Err(error=Failure_Bad())\n",
-    )
-    .expect("fixture module");
-
-    let request = json!({
-        "modules": [{
-            "declarations": [{
-                "annotations": [],
-                "body": null,
-                "contract": {
-                    "clauses": [{
-                        "clause_id": 0,
-                        "guard": null,
-                        "kind": "error",
-                        "priority": null,
-                        "span": span(),
-                        "variant": "demo.Failure.Bad",
-                        "when": null
-                    }],
-                    "effects": []
-                },
-                "doc": null,
-                "generics": [],
-                "callable_kind": "sync",
-                "kind": "function",
-                "name": "demo.run",
-                "parameters": [],
-                "public": true,
-                "return_type": {"kind": "primitive", "name": "bool"},
-                "source_order": 0,
-                "span": span()
-            }],
-            "imports": [],
-            "module": "demo",
-            "schema_version": 6,
-            "source": "demo.cott"
-        }],
-        "runtime_validation": "boundary",
-        "strategies": [{
-            "callable_kind": "sync",
-            "return_kind": "value",
-            "classification": "pure",
-            "clause_ids": ["error:0"],
-            "schema_version": 4,
-            "seed": "sha256:test",
-            "symbol": "demo.run",
-            "proof_node_limit": 1024,
-            "proof_branch_limit": 256,
-            "candidate_limit": 64,
-            "node_limit": 64,
-            "container_length_limit": 3,
-            "json_depth_limit": 4,
-            "lifecycle_limit": 3
-        }]
-    });
-    let mut child = Command::new("python3")
-        .args(["-c", include_str!("../src/contract_runner.py")])
-        .current_dir(&root)
-        .env("PYTHONPATH", &root)
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .env("PYTHONHASHSEED", "0")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("contract runner should start");
-    child
-        .stdin
-        .take()
-        .expect("contract runner stdin")
-        .write_all(request.to_string().as_bytes())
-        .expect("contract runner request");
-    let output = child
-        .wait_with_output()
-        .expect("contract runner should finish");
-    fs::remove_dir_all(&root).expect("contract runner fixture cleanup");
     assert!(
         output.status.success(),
-        "contract runner failed: {}",
+        "{}",
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
-    assert_eq!(
-        report["contracts"][0]["evidence"][0]["valid_cases"],
-        json!(1)
-    );
-    assert_eq!(
-        report["contracts"][0]["evidence"][0]["grade"],
-        json!("test observation")
-    );
+    let contracts = report["contracts"].as_array().expect("reported contracts");
+    assert_eq!(contracts.len(), 2);
+    for contract in contracts {
+        let evidence = &contract["evidence"][0];
+        assert_eq!(evidence["valid_cases"], 1);
+        assert_eq!(evidence["grade"], "test observation");
+    }
+    let success = &contracts[0]["evidence"][0];
+    assert_eq!(success["eligible_cases"], 2);
+    assert_eq!(success["applicable_cases"], 1);
+    assert_eq!(success["satisfied_cases"], 1);
 }
 
 fn run_contract_runner(source: &str, request: Value) -> Option<std::process::Output> {
+    let mut files = render_runtime("demo", "0.4.0");
+    files.insert(PathBuf::from("demo.py"), source.as_bytes().to_vec());
+    run_contract_runner_files(files, Path::new("."), request)
+}
+
+fn run_contract_runner_files(
+    mut files: std::collections::BTreeMap<PathBuf, Vec<u8>>,
+    python_dir: &Path,
+    request: Value,
+) -> Option<std::process::Output> {
     if !Command::new("python3")
         .arg("--version")
         .output()
         .is_ok_and(|output| output.status.success())
     {
         return None;
+    }
+    if let Some(bytes) = files.get_mut(Path::new("generation.json")) {
+        // Record the interpreter that actually executes these emitted fixtures,
+        // including its executable digest; keep runtime provenance checks active.
+        let output = Command::new("python3")
+            .args([
+                "-c",
+                r#"import hashlib,json,pathlib,platform,sys,sysconfig
+e=pathlib.Path(sys.executable).resolve()
+print(json.dumps({"cache_tag":sys.implementation.cache_tag,"content_hash":"sha256:"+hashlib.sha256(e.read_bytes()).hexdigest(),"executable":str(e),"implementation":sys.implementation.name,"machine":platform.machine(),"os":sys.platform,"platform":sysconfig.get_platform(),"version":platform.python_version()}))
+"#,
+            ])
+            .output()
+            .expect("Python should inspect fixture provenance");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let python_tools: Value =
+            serde_json::from_slice(&output.stdout).expect("Python tool evidence JSON");
+        let mut record: cott::provenance::GenerationRecord =
+            serde_json::from_slice(bytes).expect("emitted generation record");
+        for snapshot in std::iter::once(&mut record.current).chain(record.last_verified.iter_mut())
+        {
+            snapshot.tools["python"] = python_tools.clone();
+            snapshot
+                .compute_generation_id()
+                .expect("recompute fixture generation identity");
+        }
+        *bytes = record
+            .canonical_bytes()
+            .expect("serialize fixture generation record");
     }
     let root = std::env::temp_dir().join(format!(
         "cott-contract-runner-{}-{}",
@@ -999,16 +950,15 @@ fn run_contract_runner(source: &str, request: Value) -> Option<std::process::Out
             .as_nanos()
     ));
     fs::create_dir(&root).expect("contract runner fixture directory");
-    for (relative, bytes) in render_runtime("demo", "0.4.0") {
+    for (relative, bytes) in files {
         let path = root.join(relative);
         fs::create_dir_all(path.parent().expect("runtime file parent")).expect("runtime parent");
         fs::write(path, bytes).expect("runtime file");
     }
-    fs::write(root.join("demo.py"), source).expect("fixture module");
     let mut child = Command::new("python3")
         .args(["-c", include_str!("../src/contract_runner.py")])
-        .current_dir(&root)
-        .env("PYTHONPATH", &root)
+        .current_dir(root.join(python_dir))
+        .env("PYTHONPATH", root.join(python_dir))
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("PYTHONHASHSEED", "0")
         .stdin(Stdio::piped())
@@ -1029,13 +979,114 @@ fn run_contract_runner(source: &str, request: Value) -> Option<std::process::Out
     Some(output)
 }
 
+/// Exercise compiler-emitted boundaries, not a runner-side interpretation of
+/// their predicates. Candidate-only tests below deliberately use broader Python
+/// annotation shapes and provide their own explicit checked facade instead.
+fn run_emitted_contract_runner(
+    source: &str,
+    implementations: &[(&str, &str)],
+    symbols: &[&str],
+) -> Option<std::process::Output> {
+    use cott::binding::{BindingOwner, ResolvedBinding};
+    use cott::compiler::{SourceFile, parse_project};
+    use cott::python::artifact_plan::{PythonArtifactPlan, PythonCallableKind};
+
+    let mut config = cott::manifest::ProjectConfig::parse(
+        Path::new("cott.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.4.0\"\nsource = \"src\"\n\
+         [target.python]\nsource = \"python\"\ngenerated = \"generated/python\"\n\
+         stubs = \"generated/stubs\"\ninterpreter = \".venv/bin/python\"\n\
+         type_checker = \".venv/bin/basedpyright\"\nruntime_validation = \"boundary\"\n",
+    )
+    .expect("fixture manifest");
+    let parsed = parse_project([SourceFile::new("src/demo.cott", source)]).expect("fixture parse");
+    let hir = cott::hir::lower(Path::new("src"), parsed).expect("fixture lower");
+    let ir = cott::ir::render(&hir).expect("fixture canonical IR");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("fixture plan");
+    let callables = plan.callables();
+    let bindings = implementations
+        .iter()
+        .map(|(symbol, source)| {
+            let callable = callables
+                .iter()
+                .find(|callable| callable.cott_symbol == *symbol)
+                .expect("fixture callable");
+            let mut relative = PathBuf::from("_cott_impl").join(&callable.module);
+            let implementation_function = match &callable.kind {
+                PythonCallableKind::Function | PythonCallableKind::AsyncFunction => {
+                    callable.name.clone()
+                }
+                PythonCallableKind::ImplMethod { concrete }
+                | PythonCallableKind::AsyncImplMethod { concrete } => {
+                    relative.push(concrete);
+                    format!("_cott_impl_{concrete}_{}", callable.name)
+                }
+            };
+            relative.push(format!("{}.py", callable.name));
+            let manifest_owned = matches!(
+                callable.kind,
+                PythonCallableKind::Function | PythonCallableKind::AsyncFunction
+            );
+            let implementation_module = format!(
+                "{}.{symbol}",
+                if manifest_owned {
+                    "cott_bindings"
+                } else {
+                    "_cott_impl"
+                }
+            );
+            if manifest_owned {
+                config.python.implementations.insert(
+                    (*symbol).to_owned(),
+                    format!("{implementation_module}:{implementation_function}"),
+                );
+            }
+            ResolvedBinding {
+                module: callable.module.clone(),
+                function: callable.name.clone(),
+                cott_symbol: callable.cott_symbol.clone(),
+                kind: callable.kind.clone(),
+                implementation_module: implementation_module.clone(),
+                implementation_function,
+                owner: if manifest_owned {
+                    BindingOwner::Manifest
+                } else {
+                    BindingOwner::Agent
+                },
+                source: PathBuf::from("python")
+                    .join(format!("{}.py", implementation_module.replace('.', "/"))),
+                generated_relative: relative,
+                bytes: source.as_bytes().to_vec(),
+                sha256: sha256_hex(source.as_bytes()),
+            }
+        })
+        .collect::<Vec<_>>();
+    let emission =
+        cott::python_emit::emit(&config, &plan, &ir, &bindings).expect("fixture emission");
+    let strategies = derive_strategies(&ir, &VerificationConfig::default())
+        .expect("fixture strategies")
+        .into_iter()
+        .filter(|strategy| symbols.contains(&strategy.symbol.as_str()))
+        .collect::<Vec<_>>();
+    let modules = ir
+        .modules
+        .iter()
+        .map(|module| serde_json::from_slice::<Value>(&module.bytes).unwrap())
+        .collect::<Vec<_>>();
+    run_contract_runner_files(
+        emission.files,
+        Path::new("python"),
+        json!({"modules": modules, "runtime_validation": "boundary", "strategies": strategies}),
+    )
+}
+
 fn runner_strategy(symbol: &str, clause_ids: Vec<String>) -> Value {
     json!({
         "callable_kind": "sync",
         "return_kind": "value",
         "classification": "pure",
         "clause_ids": clause_ids,
-        "schema_version": 4,
+        "schema_version": 5,
         "seed": "sha256:test",
         "symbol": symbol,
         "proof_node_limit": 1024,
@@ -1064,29 +1115,11 @@ fn runner_literal(value: Value) -> Value {
     runner_expression("literal", json!({"value": value}))
 }
 
-fn runner_parameter(name: &str) -> Value {
-    runner_expression(
-        "parameter_ref",
-        json!({"symbol": format!("demo.Counter.{name}")}),
-    )
-}
-
 fn runner_self_field(name: &str) -> Value {
     runner_expression(
         "field",
         json!({"base": runner_expression("self_ref", json!({})), "name": name}),
     )
-}
-
-fn runner_old_field(name: &str) -> Value {
-    runner_expression(
-        "old_state_field",
-        json!({"field": format!("demo.Counter.{name}")}),
-    )
-}
-
-fn runner_binary(op: &str, left: Value, right: Value) -> Value {
-    runner_expression("binary", json!({"op": op, "left": left, "right": right}))
 }
 
 fn runner_comparison(left: Value, operator: &str, right: Value) -> Value {
@@ -1096,20 +1129,16 @@ fn runner_comparison(left: Value, operator: &str, right: Value) -> Value {
     )
 }
 
-fn runner_clause(kind: &str, clause_id: u64, expression: Value) -> Value {
-    json!({"clause_id": clause_id, "expression": expression, "guard": null, "kind": kind, "span": span()})
+fn runner_nonnegative_result() -> Value {
+    let mut result = runner_expression("result_ref", json!({}));
+    result["type"] = json!({"kind": "primitive", "name": "i32"});
+    let mut zero = runner_literal(json!({"kind": "integer", "value": "0"}));
+    zero["type"] = json!({"kind": "primitive", "name": "i32"});
+    runner_comparison(result, "greater_equal", zero)
 }
 
-fn runner_conditional_error_clause(clause_id: u64, variant: &str) -> Value {
-    json!({
-        "clause_id": clause_id,
-        "guard": null,
-        "kind": "error",
-        "priority": clause_id,
-        "span": span(),
-        "variant": variant,
-        "when": runner_literal(json!({"kind": "bool", "value": true}))
-    })
+fn runner_clause(kind: &str, clause_id: u64, expression: Value) -> Value {
+    json!({"clause_id": clause_id, "expression": expression, "guard": null, "kind": kind, "span": span()})
 }
 
 fn runner_function(name: &str, clauses: Vec<Value>) -> Value {
@@ -1214,22 +1243,11 @@ fn runner_request(declaration: Value, strategies: Vec<Value>) -> Value {
 
 #[test]
 fn contract_runner_uses_first_applicable_conditional_error() {
-    let declaration = runner_function(
-        "demo.run",
-        vec![
-            runner_conditional_error_clause(0, "demo.Failure.First"),
-            runner_conditional_error_clause(1, "demo.Failure.Second"),
-        ],
-    );
-    let mut strategy =
-        runner_strategy("demo.run", vec!["error:0".to_owned(), "error:1".to_owned()]);
-    strategy["obligations"] = json!([
-        {"clause_id": "error:0", "role": "conditional_error"},
-        {"clause_id": "error:1", "role": "conditional_error"},
-    ]);
-    let request = runner_request(declaration, vec![strategy]);
-    let source = "from cott_runtime import Err, Result\n\nclass Failure_First:\n    pass\n\nclass Failure_Second:\n    pass\n\ndef run() -> Result[int, object]:\n    return Err(error=Failure_First())\n";
-    let Some(output) = run_contract_runner(source, request.clone()) else {
+    let source = "module demo\n\nenum Failure:\n    First\n    Second\n\nfn run(fail: Bool) -> Result[I32, Failure]:\n    ensures Result.Ok(value) => value > 0\n    error Failure.First when fail\n    error Failure.Second when fail\n";
+    let implementation = "from cott_runtime import Err, Ok, Result\nfrom demo_types import Failure_First, Failure_Second\n\ndef run(fail: bool) -> Result[int, Failure_First | Failure_Second]:\n    if fail:\n        return Err(error=Failure_First())\n    return Ok(value=1)\n";
+    let Some(output) =
+        run_emitted_contract_runner(source, &[("demo.run", implementation)], &["demo.run"])
+    else {
         return;
     };
     assert!(
@@ -1238,46 +1256,47 @@ fn contract_runner_uses_first_applicable_conditional_error() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
-    let first = &report["contracts"][0]["evidence"][0];
-    let second = &report["contracts"][1]["evidence"][0];
+    let success = &report["contracts"][0]["evidence"][0];
+    assert_eq!(success["grade"], "test observation");
+    assert_eq!(success["applicable_cases"], 1);
+    assert_eq!(success["satisfied_cases"], 1);
+    let first = &report["contracts"][1]["evidence"][0];
+    let second = &report["contracts"][2]["evidence"][0];
     assert_eq!(first["grade"], "test observation");
-    assert_eq!(first["eligible_cases"], 1);
+    assert_eq!(first["eligible_cases"], 2);
     assert_eq!(first["applicable_cases"], 1);
     assert_eq!(first["satisfied_cases"], 1);
     assert_eq!(second["grade"], "unobserved");
-    assert_eq!(second["eligible_cases"], 1);
-    assert_eq!(second["applicable_cases"], 1);
+    assert_eq!(second["eligible_cases"], 2);
+    assert_eq!(second["applicable_cases"], 0);
     assert_eq!(second["satisfied_cases"], 0);
+    assert_eq!(
+        second["condition_false_cases"], 1,
+        "only the successful case has a false predicate; the shadowed error is skipped"
+    );
 
-    let wrong_source = "from cott_runtime import Err, Result\n\nclass Failure_First:\n    pass\n\nclass Failure_Second:\n    pass\n\ndef run() -> Result[int, object]:\n    return Err(error=Failure_Second())\n";
-    let Some(wrong) = run_contract_runner(wrong_source, request) else {
+    let wrong = implementation.replace(
+        "return Err(error=Failure_First())",
+        "return Err(error=Failure_Second())",
+    );
+    let Some(output) = run_emitted_contract_runner(source, &[("demo.run", &wrong)], &["demo.run"])
+    else {
         return;
     };
-    assert!(!wrong.status.success());
-    assert!(
-        String::from_utf8_lossy(&wrong.stderr)
-            .contains("conditional error clause error:0 failed independently")
-    );
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("CottContractViolation") && error.contains("demo.run"));
 }
 
 #[test]
 fn contract_runner_keeps_unobserved_success_as_evidence() {
-    let mut success = runner_clause(
-        "ensures",
-        0,
-        runner_literal(json!({"kind": "bool", "value": true})),
-    );
-    success["guard"] = json!({
-        "pattern": {"arguments": [], "kind": "result_ok"},
-        "scrutinee": runner_expression("result_ref", json!({})),
-        "span": span()
-    });
-    let declaration = runner_function("demo.run", vec![success]);
-    let mut strategy = runner_strategy("demo.run", vec!["ensures:0".to_owned()]);
-    strategy["obligations"] = json!([{"clause_id": "ensures:0", "role": "success"}]);
-    let Some(output) = run_contract_runner(
-        "from cott_runtime import Err, Result\n\ndef run() -> Result[int, object]:\n    return Err(error=object())\n",
-        runner_request(declaration, vec![strategy]),
+    let Some(output) = run_emitted_contract_runner(
+        "module demo\n\nenum Failure:\n    Bad\n\nfn run() -> Result[I32, Failure]:\n    ensures Result.Ok(value) => value > 0\n    error Failure.Bad\n",
+        &[(
+            "demo.run",
+            "from cott_runtime import Err, Result\nfrom demo_types import Failure_Bad\n\ndef run() -> Result[int, Failure_Bad]:\n    return Err(error=Failure_Bad())\n",
+        )],
+        &["demo.run"],
     ) else {
         return;
     };
@@ -1289,10 +1308,6 @@ fn contract_runner_keeps_unobserved_success_as_evidence() {
     let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
     let evidence = &report["contracts"][0]["evidence"][0];
     assert_eq!(evidence["grade"], "unobserved");
-    assert_eq!(
-        evidence["reason"],
-        "no generated case exercised this conditional clause"
-    );
     assert_eq!(evidence["eligible_cases"], 1);
     assert_eq!(evidence["applicable_cases"], 0);
     assert_eq!(evidence["satisfied_cases"], 0);
@@ -1303,14 +1318,10 @@ fn contract_runner_keeps_unobserved_success_as_evidence() {
 fn contract_runner_generates_homogeneous_tuple_candidates() {
     let declaration = runner_function(
         "demo.accepts_tuple",
-        vec![runner_clause(
-            "ensures",
-            0,
-            runner_literal(json!({"kind": "bool", "value": true})),
-        )],
+        vec![runner_clause("ensures", 0, runner_nonnegative_result())],
     );
     let Some(output) = run_contract_runner(
-        "def accepts_tuple(value: tuple[int, ...]) -> int:\n    return len(value)\n",
+        "from cott_runtime import CottContractViolation, _cott_contract_condition\n\ndef accepts_tuple(value: tuple[int, ...]) -> int:\n    result = len(value)\n    if not _cott_contract_condition(result >= 0, 'demo.accepts_tuple', 'ensures:0'):\n        raise CottContractViolation('negative length', symbol='demo.accepts_tuple', phase='ensures')\n    return result\n",
         runner_request(
             declaration,
             vec![runner_strategy(
@@ -1337,13 +1348,9 @@ fn contract_runner_generates_homogeneous_tuple_candidates() {
 fn contract_runner_constructs_terminating_recursive_enum_candidates_stably() {
     let declaration = runner_function(
         "demo.accepts_tree",
-        vec![runner_clause(
-            "ensures",
-            0,
-            runner_literal(json!({"kind": "bool", "value": true})),
-        )],
+        vec![runner_clause("ensures", 0, runner_nonnegative_result())],
     );
-    let source = "from __future__ import annotations\nimport dataclasses\n\n@dataclasses.dataclass(frozen=True)\nclass Tree_Leaf:\n    value: int\n\n@dataclasses.dataclass(frozen=True)\nclass Tree_Branch:\n    child: Tree\n\nTree = Tree_Leaf | Tree_Branch\n\ndef accepts_tree(value: Tree) -> int:\n    return 0\n";
+    let source = "from __future__ import annotations\nimport dataclasses\nfrom cott_runtime import CottContractViolation, _cott_contract_condition\n\n@dataclasses.dataclass(frozen=True)\nclass Tree_Leaf:\n    value: int\n\n@dataclasses.dataclass(frozen=True)\nclass Tree_Branch:\n    child: Tree\n\nTree = Tree_Leaf | Tree_Branch\n\ndef accepts_tree(value: Tree) -> int:\n    result = 0\n    while isinstance(value, Tree_Branch):\n        result += 1\n        value = value.child\n    assert isinstance(value, Tree_Leaf)\n    if not _cott_contract_condition(result >= 0, 'demo.accepts_tree', 'ensures:0'):\n        raise CottContractViolation('negative depth', symbol='demo.accepts_tree', phase='ensures')\n    return result\n";
     let request = runner_request(
         declaration,
         vec![runner_strategy(
@@ -1461,14 +1468,10 @@ fn contract_runner_distinguishes_candidate_depth_and_node_exhaustion() {
 fn contract_runner_observes_empty_containers_with_unavailable_elements() {
     let declaration = runner_function(
         "demo.accepts_empty",
-        vec![runner_clause(
-            "ensures",
-            0,
-            runner_literal(json!({"kind": "bool", "value": true})),
-        )],
+        vec![runner_clause("ensures", 0, runner_nonnegative_result())],
     );
     let Some(output) = run_contract_runner(
-        "import typing\nimport cott_runtime\n\ndef accepts_empty(values: cott_runtime.CottList[typing.Any], mapping: cott_runtime.FrozenMap[object, typing.Annotated[int, cott_runtime.CottExternal('outside')]], array: cott_runtime.CottArray[typing.Any, typing.Literal[0]]) -> int:\n    return len(values) + len(mapping) + len(array)\n",
+        "import typing\nimport cott_runtime\n\ndef accepts_empty(values: cott_runtime.CottList[typing.Any], mapping: cott_runtime.FrozenMap[object, typing.Annotated[int, cott_runtime.CottExternal('outside')]], array: cott_runtime.CottArray[typing.Any, typing.Literal[0]]) -> int:\n    result = len(values) + len(mapping) + len(array)\n    assert result == 0, 'unavailable elements must not be synthesized'\n    if not cott_runtime._cott_contract_condition(result >= 0, 'demo.accepts_empty', 'ensures:0'):\n        raise cott_runtime.CottContractViolation('negative length', symbol='demo.accepts_empty', phase='ensures')\n    return result\n",
         runner_request(
             declaration,
             vec![runner_strategy(
@@ -1495,14 +1498,10 @@ fn contract_runner_observes_empty_containers_with_unavailable_elements() {
 fn contract_runner_observes_recursive_empty_container_candidate() {
     let declaration = runner_function(
         "demo.accepts_node",
-        vec![runner_clause(
-            "ensures",
-            0,
-            runner_literal(json!({"kind": "bool", "value": true})),
-        )],
+        vec![runner_clause("ensures", 0, runner_nonnegative_result())],
     );
     let Some(output) = run_contract_runner(
-        "from __future__ import annotations\nimport dataclasses\nimport cott_runtime\n\n@dataclasses.dataclass(frozen=True)\nclass Node:\n    children: cott_runtime.CottList[Node]\n\ndef accepts_node(value: Node) -> int:\n    return len(value.children)\n",
+        "from __future__ import annotations\nimport dataclasses\nimport cott_runtime\n\n@dataclasses.dataclass(frozen=True)\nclass Node:\n    children: cott_runtime.CottList[Node]\n\ndef accepts_node(value: Node) -> int:\n    result = len(value.children)\n    if not cott_runtime._cott_contract_condition(result >= 0, 'demo.accepts_node', 'ensures:0'):\n        raise cott_runtime.CottContractViolation('negative length', symbol='demo.accepts_node', phase='ensures')\n    return result\n",
         runner_request(
             declaration,
             vec![runner_strategy(
@@ -1529,14 +1528,10 @@ fn contract_runner_observes_recursive_empty_container_candidate() {
 fn contract_runner_observes_recursive_generic_enum_empty_variant() {
     let declaration = runner_function(
         "demo.accepts_tree",
-        vec![runner_clause(
-            "ensures",
-            0,
-            runner_literal(json!({"kind": "bool", "value": true})),
-        )],
+        vec![runner_clause("ensures", 0, runner_nonnegative_result())],
     );
     let Some(output) = run_contract_runner(
-        "from __future__ import annotations\nimport dataclasses\nimport typing\n\nT = typing.TypeVar('T')\n\n@dataclasses.dataclass(frozen=True)\nclass Tree_Empty(typing.Generic[T]):\n    pass\n\n@dataclasses.dataclass(frozen=True)\nclass Tree_Node(typing.Generic[T]):\n    child: Tree[T]\n\nTree = Tree_Empty[T] | Tree_Node[T]\n\ndef accepts_tree(value: Tree[typing.Any]) -> int:\n    return 0\n",
+        "from __future__ import annotations\nimport dataclasses\nimport typing\nfrom cott_runtime import CottContractViolation, _cott_contract_condition\n\nT = typing.TypeVar('T')\n\n@dataclasses.dataclass(frozen=True)\nclass Tree_Empty(typing.Generic[T]):\n    pass\n\n@dataclasses.dataclass(frozen=True)\nclass Tree_Node(typing.Generic[T]):\n    child: Tree[T]\n\nTree = Tree_Empty[T] | Tree_Node[T]\n\ndef accepts_tree(value: Tree[typing.Any]) -> int:\n    result = 0\n    while isinstance(value, Tree_Node):\n        result += 1\n        value = value.child\n    assert isinstance(value, Tree_Empty)\n    if not _cott_contract_condition(result >= 0, 'demo.accepts_tree', 'ensures:0'):\n        raise CottContractViolation('negative depth', symbol='demo.accepts_tree', phase='ensures')\n    return result\n",
         runner_request(
             declaration,
             vec![runner_strategy(
@@ -1713,7 +1708,7 @@ fn contract_runner_matches_generic_dyn_candidates_by_origin_and_exact_specificat
     );
     let declaration = runner_impl(vec![accepts, rejects]);
     let Some(output) = run_contract_runner(
-        "import typing\nimport cott_runtime\n\nT = typing.TypeVar('T')\n\nclass GenericTrait(typing.Protocol[T]):\n    _cott_trait = True\n    def read(self) -> T: ...\n\nclass Counter:\n    _cott_traits = (GenericTrait,)\n    _cott_trait_specs = (GenericTrait[cott_runtime.I32],)\n\n    def __init__(self) -> None:\n        self.count = 0\n        self.guard = 0\n\n    def read(self) -> cott_runtime.I32:\n        return 0\n\n    def accepts(self, value: cott_runtime.Dyn[GenericTrait[cott_runtime.I32]]) -> int:\n        return value.value.read()\n\n    def rejects(self, value: cott_runtime.Dyn[GenericTrait[str]]) -> int:\n        raise AssertionError('Dyn with the wrong generic specification must not be selected')\n",
+        "import typing\nimport cott_runtime\n\nT = typing.TypeVar('T')\n\nclass GenericTrait(typing.Protocol[T]):\n    _cott_trait = True\n    def read(self) -> T: ...\n\nclass Counter:\n    _cott_traits = (GenericTrait,)\n    _cott_trait_specs = (GenericTrait[cott_runtime.I32],)\n\n    def __init__(self) -> None:\n        self.count = 0\n        self.guard = 0\n        if not cott_runtime._cott_contract_condition(self.count >= 0, 'demo.Counter.init', 'invariant:0'):\n            raise cott_runtime.CottContractViolation('negative count', symbol='demo.Counter.init', phase='invariant')\n\n    def read(self) -> cott_runtime.I32:\n        return self.count\n\n    def accepts(self, value: cott_runtime.Dyn[GenericTrait[cott_runtime.I32]]) -> int:\n        result = value.value.read()\n        if not cott_runtime._cott_contract_condition(self.count >= 0, 'demo.Counter.accepts', 'invariant:0'):\n            raise cott_runtime.CottContractViolation('negative count', symbol='demo.Counter.accepts', phase='invariant')\n        return result\n\n    def rejects(self, value: cott_runtime.Dyn[GenericTrait[str]]) -> int:\n        raise AssertionError('Dyn with the wrong generic specification must not be selected')\n",
         runner_request(
             declaration,
             vec![
@@ -1786,87 +1781,74 @@ fn contract_runner_marks_factory_inputs_unobserved_without_executing() {
 
 #[test]
 fn contract_runner_does_not_consume_iterator_returns() {
-    let declaration = runner_function(
-        "demo.stream",
-        vec![runner_clause(
-            "requires",
-            0,
-            runner_literal(json!({"kind": "bool", "value": true})),
+    let Some(output) = run_emitted_contract_runner(
+        "module demo\n\nfn stream() -> Iterator[I32]:\n    requires true\n",
+        &[(
+            "demo.stream",
+            "import collections.abc\n\nclass Trap(collections.abc.Iterator):\n    def __iter__(self):\n        raise AssertionError('iterator return was consumed')\n\n    def __next__(self):\n        raise AssertionError('iterator return was consumed')\n\ndef stream() -> collections.abc.Iterator[int]:\n    return Trap()\n",
         )],
-    );
-    let Some(output) = run_contract_runner(
-        "import collections.abc\n\nclass Trap(collections.abc.Iterator):\n    def __iter__(self):\n        raise AssertionError('iterator return was consumed')\n\n    def __next__(self):\n        raise AssertionError('iterator return was consumed')\n\ndef stream() -> collections.abc.Iterator[int]:\n    return Trap()\n",
-        runner_request(
-            declaration,
-            vec![runner_strategy(
-                "demo.stream",
-                vec!["requires:0".to_owned()],
-            )],
-        ),
+        &["demo.stream"],
     ) else {
         return;
     };
     assert!(
         output.status.success(),
-        "contract runner failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
-    let evidence = &report["contracts"][0]["evidence"][0];
-    assert_eq!(evidence["grade"], json!("test observation"));
-    assert_eq!(evidence["valid_cases"], json!(1));
-}
-
-#[test]
-fn contract_runner_evaluates_free_function_result_ref() {
-    let declaration = runner_function(
-        "demo.identity",
-        vec![runner_clause(
-            "ensures",
-            0,
-            runner_comparison(
-                runner_expression("result_ref", json!({})),
-                "equal",
-                runner_expression("parameter_ref", json!({"symbol": "demo.identity.value"})),
-            ),
-        )],
-    );
-    let Some(output) = run_contract_runner(
-        "def identity(value: int) -> int:\n    return value\n",
-        runner_request(
-            declaration,
-            vec![runner_strategy(
-                "demo.identity",
-                vec!["ensures:0".to_owned()],
-            )],
-        ),
-    ) else {
-        return;
-    };
-    assert!(
-        output.status.success(),
-        "contract runner failed: {}",
+        "{}",
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
     assert_eq!(
         report["contracts"][0]["evidence"][0]["grade"],
-        json!("test observation")
+        "test observation"
     );
+    assert_eq!(report["contracts"][0]["evidence"][0]["valid_cases"], 1);
+}
+
+#[test]
+fn contract_runner_observes_free_function_result_at_the_emitted_boundary() {
+    let source = "module demo\n\nfn identity(value: I32) -> I32:\n    ensures result == value\n";
+    let Some(output) = run_emitted_contract_runner(
+        source,
+        &[(
+            "demo.identity",
+            "def identity(value: int) -> int:\n    return value\n",
+        )],
+        &["demo.identity"],
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    assert_eq!(
+        report["contracts"][0]["evidence"][0]["grade"],
+        "test observation"
+    );
+    let Some(wrong) = run_emitted_contract_runner(
+        source,
+        &[(
+            "demo.identity",
+            "def identity(value: int) -> int:\n    return 0\n",
+        )],
+        &["demo.identity"],
+    ) else {
+        return;
+    };
+    assert!(!wrong.status.success());
+    assert!(String::from_utf8_lossy(&wrong.stderr).contains("CottContractViolation"));
 }
 
 #[test]
 fn contract_runner_bounds_json_value_candidates() {
     let declaration = runner_function(
         "demo.accepts_json",
-        vec![runner_clause(
-            "ensures",
-            0,
-            runner_literal(json!({"kind": "bool", "value": true})),
-        )],
+        vec![runner_clause("ensures", 0, runner_nonnegative_result())],
     );
     let Some(output) = run_contract_runner(
-        "import sys\nsys.setrecursionlimit(32)\nfrom cott_runtime import JsonValue\n\ndef accepts_json(value: JsonValue) -> int:\n    return 0\n",
+        "import sys\nsys.setrecursionlimit(32)\nfrom cott_runtime import JsonValue, JsonArray, JsonObject, CottContractViolation, _cott_contract_condition\n\ndef accepts_json(value: JsonValue) -> int:\n    result = len(value.value) if isinstance(value, (JsonArray, JsonObject)) else 0\n    if not _cott_contract_condition(result >= 0, 'demo.accepts_json', 'ensures:0'):\n        raise CottContractViolation('negative container size', symbol='demo.accepts_json', phase='ensures')\n    return result\n",
         runner_request(
             declaration,
             vec![runner_strategy(
@@ -1894,214 +1876,149 @@ fn contract_runner_bounds_json_value_candidates() {
 
 #[test]
 fn contract_runner_observes_impl_old_modifies_invariants_and_errors() {
-    let advance = runner_method(
-        "advance",
-        vec!["demo.Counter.count"],
-        json!({
-            "requires": [runner_clause("requires", 0, runner_comparison(runner_parameter("amount"), "greater_equal", runner_literal(json!({"kind": "integer", "value": "0"}))))],
-            "ensures": [
-                runner_clause("ensures", 1, runner_comparison(runner_expression("result_ref", json!({})), "equal", runner_self_field("count"))),
-                runner_clause("ensures", 2, runner_comparison(runner_binary("add", runner_old_field("count"), runner_parameter("amount")), "equal", runner_self_field("count")))
-            ],
-            "errors": []
-        }),
-    );
-    let fail = runner_method(
-        "fail",
-        vec!["demo.Counter.count"],
-        json!({
-            "requires": [],
-            "ensures": [],
-            "errors": [json!({
-                "clause_id": 0,
-                "guard": null,
-                "kind": "error",
-                "priority": null,
-                "span": span(),
-                "variant": "demo.Failure.Bad",
-                "when": runner_comparison(runner_parameter("amount"), "less", runner_literal(json!({"kind": "integer", "value": "0"})))
-            })]
-        }),
-    );
-    let declaration = runner_impl(vec![advance, fail]);
-    let Some(output) = run_contract_runner(
-        "import dataclasses\nfrom cott_runtime import Err, Ok, Result\n\n@dataclasses.dataclass(frozen=True)\nclass Failure_Bad:\n    pass\n\nclass Counter:\n    def __init__(self) -> None:\n        self.count = 0\n        self.guard = 0\n\n    def advance(self, amount: int) -> int:\n        self.count += amount\n        return self.count\n\n    def fail(self, amount: int) -> Result[int, Failure_Bad]:\n        if amount < 0:\n            return Err(error=Failure_Bad())\n        self.count += amount\n        return Ok(value=self.count)\n",
-        runner_request(
-            declaration,
-            vec![
-                runner_strategy("demo.Counter.init", vec!["invariant:0".to_owned()]),
-                runner_strategy(
-                    "demo.Counter.advance",
-                    vec![
-                        "requires:0".to_owned(),
-                        "ensures:1".to_owned(),
-                        "ensures:2".to_owned(),
-                        "modifies:demo.Counter.count".to_owned(),
-                        "invariant:0".to_owned(),
-                    ],
-                ),
-                runner_strategy(
-                    "demo.Counter.fail",
-                    vec![
-                        "error:0".to_owned(),
-                        "modifies:demo.Counter.count".to_owned(),
-                        "invariant:0".to_owned(),
-                    ],
-                ),
-            ],
-        ),
+    let source = r#"module demo
+
+enum Failure:
+    Bad
+
+trait Operations:
+    fn advance(self, amount: I32) -> I32
+    fn fail(self, amount: I32) -> Result[I32, Failure]
+
+impl Counter for Operations:
+    state:
+        count: I32 = 0
+        guard: I32 = 0
+    invariant self.count >= 0
+    fn advance(self, amount: I32) -> I32:
+        requires amount >= 0
+        modifies self.count
+        ensures result == self.count
+        ensures old(self.count) + amount == self.count
+    fn fail(self, amount: I32) -> Result[I32, Failure]:
+        modifies self.count
+        error Failure.Bad when amount < 0
+"#;
+    let Some(output) = run_emitted_contract_runner(
+        source,
+        &[
+            (
+                "demo.Counter.advance",
+                "from __future__ import annotations\n\ndef _cott_impl_Counter_advance(self: Counter, amount: int) -> int:\n    self.count += amount\n    return self.count\n",
+            ),
+            (
+                "demo.Counter.fail",
+                "from __future__ import annotations\nfrom cott_runtime import Err, Ok, Result\nfrom demo_types import Failure_Bad\n\ndef _cott_impl_Counter_fail(self: Counter, amount: int) -> Result[int, Failure_Bad]:\n    if amount < 0:\n        return Err(error=Failure_Bad())\n    self.count += amount\n    return Ok(value=self.count)\n",
+            ),
+        ],
+        &[
+            "demo.Counter.init",
+            "demo.Counter.advance",
+            "demo.Counter.fail",
+        ],
     ) else {
         return;
     };
     assert!(
         output.status.success(),
-        "contract runner failed: {}",
+        "{}",
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
     assert!(
         report["contracts"]
             .as_array()
-            .expect("contracts")
+            .unwrap()
             .iter()
             .all(|contract| contract["evidence"][0]["grade"] == "test observation"),
-        "unexpected report: {report}"
+        "{report}"
     );
 }
 
 #[test]
 fn contract_runner_rejects_impl_forbidden_mutation_and_invariant_failure() {
-    let bad_modifies = runner_method(
-        "bad_modifies",
-        vec!["demo.Counter.count"],
-        json!({"requires": [], "ensures": [], "errors": []}),
-    );
-    let bad_invariant = runner_method(
-        "bad_invariant",
-        vec!["demo.Counter.count"],
-        json!({"requires": [], "ensures": [], "errors": []}),
-    );
-    let declaration = runner_impl(vec![bad_modifies, bad_invariant]);
-    let source = "class Counter:\n    def __init__(self) -> None:\n        self.count = 0\n        self.guard = 0\n\n    def bad_modifies(self, amount: int) -> int:\n        self.guard = amount\n        return self.count\n\n    def bad_invariant(self, amount: int) -> int:\n        self.count = -1\n        return self.count\n";
-    let Some(modifies) = run_contract_runner(
-        source,
-        runner_request(
-            declaration.clone(),
-            vec![runner_strategy(
-                "demo.Counter.bad_modifies",
-                vec![
-                    "modifies:demo.Counter.count".to_owned(),
-                    "invariant:0".to_owned(),
-                ],
-            )],
-        ),
-    ) else {
-        return;
-    };
-    assert!(!modifies.status.success());
-    assert!(String::from_utf8_lossy(&modifies.stderr).contains("modifies clause"));
+    let source = r#"module demo
 
-    let Some(invariant) = run_contract_runner(
-        source,
-        runner_request(
-            declaration,
-            vec![runner_strategy(
-                "demo.Counter.bad_invariant",
-                vec![
-                    "modifies:demo.Counter.count".to_owned(),
-                    "invariant:0".to_owned(),
-                ],
-            )],
+trait Operations:
+    fn bad_modifies(self, amount: I32) -> I32
+    fn bad_invariant(self, amount: I32) -> I32
+
+impl Counter for Operations:
+    state:
+        count: I32 = 0
+        guard: I32 = 0
+    invariant self.count >= 0
+    fn bad_modifies(self, amount: I32) -> I32:
+        modifies self.count
+    fn bad_invariant(self, amount: I32) -> I32:
+        modifies self.count
+"#;
+    let implementations = [
+        (
+            "demo.Counter.bad_modifies",
+            "from __future__ import annotations\n\ndef _cott_impl_Counter_bad_modifies(self: Counter, amount: int) -> int:\n    self.guard = amount\n    return self.count\n",
         ),
-    ) else {
-        return;
-    };
-    assert!(!invariant.status.success());
-    assert!(String::from_utf8_lossy(&invariant.stderr).contains("invariant clause"));
+        (
+            "demo.Counter.bad_invariant",
+            "from __future__ import annotations\n\ndef _cott_impl_Counter_bad_invariant(self: Counter, amount: int) -> int:\n    self.count = -1\n    return self.count\n",
+        ),
+    ];
+    for symbol in ["demo.Counter.bad_modifies", "demo.Counter.bad_invariant"] {
+        let Some(output) = run_emitted_contract_runner(source, &implementations, &[symbol]) else {
+            return;
+        };
+        assert!(
+            !output.status.success(),
+            "{symbol} must fail at its boundary"
+        );
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains("CottContractViolation") && error.contains(symbol),
+            "{error}"
+        );
+    }
 }
 
 #[test]
 fn contract_runner_constructs_methods_only_from_init_validated_cases() {
-    let mut declaration = runner_impl(vec![runner_method(
-        "read",
-        vec![],
-        json!({
-            "requires": [],
-            "ensures": [runner_clause(
-                "ensures",
-                3,
-                runner_comparison(
-                    runner_expression("result_ref", json!({})),
-                    "equal",
-                    runner_self_field("count"),
-                ),
-            )],
-            "errors": []
-        }),
-    )]);
-    declaration["init"] = json!({
-        "contracts": {
-            "doc": null,
-            "requires": [runner_clause(
-                "requires",
-                1,
-                runner_comparison(
-                    runner_parameter("count"),
-                    "greater",
-                    runner_literal(json!({"kind": "integer", "value": "0"})),
-                ),
-            )],
-            "ensures": [runner_clause(
-                "ensures",
-                2,
-                runner_comparison(runner_self_field("count"), "equal", runner_parameter("count")),
-            )]
-        },
-        "parameters": [{
-            "default": null,
-            "kind": "positional",
-            "name": "count",
-            "source_order": 0,
-            "span": span(),
-            "type": {"kind": "primitive", "name": "i32"}
-        }],
-        "span": span()
-    });
-    let Some(output) = run_contract_runner(
-        "class Counter:\n    def __init__(self, count: int) -> None:\n        if count <= 0:\n            raise AssertionError(\"invalid constructor candidate invoked\")\n        self.count = count\n        self.guard = 0\n\n    def read(self) -> int:\n        return self.count\n",
-        runner_request(
-            declaration,
-            vec![
-                runner_strategy(
-                    "demo.Counter.init",
-                    vec![
-                        "requires:1".to_owned(),
-                        "ensures:2".to_owned(),
-                        "invariant:0".to_owned(),
-                    ],
-                ),
-                runner_strategy(
-                    "demo.Counter.read",
-                    vec!["ensures:3".to_owned(), "invariant:0".to_owned()],
-                ),
-            ],
-        ),
+    let source = r#"module demo
+
+trait Reader:
+    fn read(self) -> I32
+
+impl Counter for Reader:
+    state:
+        count: I32
+    invariant self.count > 0
+    init(count: I32):
+        requires count > 0
+        ensures self.count == count
+    fn read(self) -> I32:
+        ensures result == self.count
+"#;
+    let Some(output) = run_emitted_contract_runner(
+        source,
+        &[(
+            "demo.Counter.read",
+            "from __future__ import annotations\n\ndef _cott_impl_Counter_read(self: Counter) -> int:\n    assert self.count > 0, 'invalid constructor case reached method'\n    return self.count\n",
+        )],
+        &["demo.Counter.init", "demo.Counter.read"],
     ) else {
         return;
     };
     assert!(
         output.status.success(),
-        "contract runner failed: {}",
+        "{}",
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
     assert!(
         report["contracts"]
             .as_array()
-            .expect("contracts")
+            .unwrap()
             .iter()
             .all(|contract| contract["evidence"][0]["grade"] == "test observation"),
-        "unexpected report: {report}"
+        "{report}"
     );
 }
 
@@ -2273,29 +2190,19 @@ fn contract_runner_trusts_effectful_async_protocol_declarations() {
 
 #[test]
 fn contract_runner_awaits_async_impl_methods() {
-    let mut method = runner_method(
-        "read",
-        vec![],
-        json!({"requires": [], "ensures": [], "errors": []}),
-    );
-    method["callable_kind"] = json!("async");
-    method["return_type"] = json!({
-        "kind": "async_iterator",
-        "item": {"kind": "primitive", "name": "i32"},
-    });
-    let declaration = runner_impl(vec![method]);
-    let mut strategy = runner_strategy("demo.Counter.read", vec!["invariant:0".to_owned()]);
-    strategy["callable_kind"] = json!("async");
-    strategy["return_kind"] = json!("async_iterator");
-    let Some(output) = run_contract_runner(
-        "import collections.abc\n\nclass Stream(collections.abc.AsyncIterator):\n    def __init__(self): self.step = 0; self.closed = False\n    def __aiter__(self): return self\n    async def __anext__(self):\n        if self.closed or self.step == 3: raise StopAsyncIteration\n        self.step += 1\n        return self.step\n    async def aclose(self): self.closed = True\n\nclass Counter:\n    def __init__(self) -> None:\n        self.count = 0\n        self.guard = 0\n\n    async def read(self) -> collections.abc.AsyncIterator[int]:\n        return Stream()\n",
-        runner_request(declaration, vec![strategy]),
+    let Some(output) = run_emitted_contract_runner(
+        "module demo\n\ntrait Reader:\n    async fn read(self) -> AsyncIterator[I32]\n\nimpl Counter for Reader:\n    state:\n        count: I32 = 0\n    invariant self.count >= 0\n    async fn read(self) -> AsyncIterator[I32]:\n        ensures true\n",
+        &[(
+            "demo.Counter.read",
+            "from __future__ import annotations\nimport collections.abc\n\nclass Stream(collections.abc.AsyncIterator):\n    def __init__(self): self.step = 0; self.closed = False\n    def __aiter__(self): return self\n    async def __anext__(self):\n        if self.closed or self.step == 3: raise StopAsyncIteration\n        self.step += 1\n        return self.step\n    async def aclose(self): self.closed = True\n\nasync def _cott_impl_Counter_read(self: Counter) -> collections.abc.AsyncIterator[int]:\n    return Stream()\n",
+        )],
+        &["demo.Counter.read"],
     ) else {
         return;
     };
     assert!(
         output.status.success(),
-        "contract runner failed: {}",
+        "{}",
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
@@ -2344,7 +2251,11 @@ fn contract_runner_awaits_async_functions_and_detects_task_leaks() {
         vec![runner_clause(
             "ensures",
             0,
-            runner_literal(json!({"kind": "bool", "value": true})),
+            runner_comparison(
+                runner_expression("result_ref", json!({})),
+                "equal",
+                runner_expression("parameter_ref", json!({"symbol": "demo.run.value"})),
+            ),
         )],
     );
     declaration["callable_kind"] = json!("async");
@@ -2353,7 +2264,7 @@ fn contract_runner_awaits_async_functions_and_detects_task_leaks() {
     let request = runner_request(declaration.clone(), vec![strategy.clone()]);
 
     let Some(output) = run_contract_runner(
-        "import asyncio\npre_existing = asyncio.create_task(asyncio.Event().wait())\nexpected = iter((-1, 0, 1, 2, 255))\n\nasync def run(value: int) -> int:\n    assert value == next(expected)\n    async def child() -> int:\n        return value\n    return await asyncio.create_task(child())\n",
+        "import asyncio\nfrom cott_runtime import CottContractViolation, _cott_contract_condition\npre_existing = asyncio.create_task(asyncio.Event().wait())\nexpected = iter((-1, 0, 1, 2, 255))\n\nasync def run(value: int) -> int:\n    assert value == next(expected)\n    async def child() -> int:\n        return value\n    result = await asyncio.create_task(child())\n    if not _cott_contract_condition(result == value, 'demo.run', 'ensures:0'):\n        raise CottContractViolation('changed result', symbol='demo.run', phase='ensures')\n    return result\n",
         request,
     ) else {
         return;
@@ -2368,14 +2279,18 @@ fn contract_runner_awaits_async_functions_and_detects_task_leaks() {
     assert!(report["contracts"][0]["evidence"][0]["reason"].is_null());
 
     let Some(sync) = run_contract_runner(
-        "def run(value: int) -> int:\n    return value\n",
+        "from cott_runtime import CottContractViolation, _cott_contract_condition\n\ndef run(value: int) -> int:\n    result = value\n    if not _cott_contract_condition(result == value, 'demo.run', 'ensures:0'):\n        raise CottContractViolation('changed result', symbol='demo.run', phase='ensures')\n    return result\n",
         runner_request(
             runner_function(
                 "demo.run",
                 vec![runner_clause(
                     "ensures",
                     0,
-                    runner_literal(json!({"kind": "bool", "value": true})),
+                    runner_comparison(
+                        runner_expression("result_ref", json!({})),
+                        "equal",
+                        runner_expression("parameter_ref", json!({"symbol": "demo.run.value"})),
+                    ),
                 )],
             ),
             vec![runner_strategy("demo.run", vec!["ensures:0".to_owned()])],
@@ -2396,10 +2311,8 @@ fn contract_runner_awaits_async_functions_and_detects_task_leaks() {
         return;
     };
     assert!(!violation.status.success());
-    assert!(
-        String::from_utf8_lossy(&violation.stderr)
-            .contains("demo.run: facade contract violation for generated valid case: bad")
-    );
+    let error = String::from_utf8_lossy(&violation.stderr);
+    assert!(error.contains("CottContractViolation") && error.contains("demo.run"));
 
     let Some(cancellation) = run_contract_runner(
         "import asyncio\n\nasync def run() -> int:\n    raise asyncio.CancelledError\n",

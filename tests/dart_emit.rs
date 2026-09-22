@@ -206,6 +206,70 @@ struct SharedNode:
 }
 
 #[test]
+fn finite_payloadless_enums_project_to_native_dart_enums() {
+    let (config, plan) = fixture(
+        r#"module api.shapes
+
+enum Kind:
+    Kind
+    Local
+    Remote
+
+enum Payload:
+    Empty
+    Value(value: I32)
+
+enum Wrapped[T]:
+    Absent
+
+const DEFAULT_KIND: Kind = Kind.Local
+"#,
+    );
+    let emission = emit(&config, &plan, &[]).expect("native enum package emits");
+    let types =
+        std::str::from_utf8(&emission.files[Path::new("dart/lib/src/types/api/shapes.dart")])
+            .unwrap();
+
+    assert!(
+        types.contains("\nenum Kind implements cott_runtime.CottVariant {\n")
+            && types.contains("  Kind$('api.shapes.Kind.Kind'),\n")
+            && types.contains("  Local('api.shapes.Kind.Local'),\n")
+            && types.contains("  Remote('api.shapes.Kind.Remote');\n")
+            && types.contains("  const Kind(this.cottVariant);"),
+        "{types}"
+    );
+    assert!(
+        !types.contains("KindLocal")
+            && !types.contains("KindRemote")
+            && !types.contains("sealed class Kind"),
+        "eligible enums must not keep obsolete variant classes: {types}"
+    );
+    assert!(
+        types.contains("cott_runtime.CottList<String> get cottFieldNames => _cott_no_field_names;")
+            && types
+                .contains("cott_runtime.CottList<Object?> get cottPayload => _cott_no_payload;")
+            && types.matches("_cott_no_field_names = ").count() == 1,
+        "native metadata must reuse one shared empty list per module: {types}"
+    );
+    assert!(
+        types.contains("final Kind DEFAULT_KIND = Kind.Local;"),
+        "{types}"
+    );
+    assert!(
+        types.contains("sealed class Payload implements cott_runtime.CottVariant")
+            && types.contains("final class PayloadEmpty extends Payload")
+            && types.contains("final class PayloadValue extends Payload")
+            && types.contains("sealed class Wrapped<T>")
+            && types.contains("final class WrappedAbsent<T> extends Wrapped<T>"),
+        "payload and generic enums must keep sealed value-carrying classes: {types}"
+    );
+    assert_eq!(
+        emission.public_symbols["api.shapes"],
+        ["DEFAULT_KIND", "Kind", "Payload", "Wrapped"]
+    );
+}
+
+#[test]
 fn multiple_declaration_callable_and_associated_bounds_are_projectable() {
     let (config, plan) = fixture(
         r#"module api.bounds
@@ -230,4 +294,136 @@ fn retain[T: Left + Right](value: T) -> T
         .expect("multiple callable and inherited associated bounds should project");
     emit(&config, &plan, &[])
         .expect("multiple declaration and trait-associated bounds should emit");
+}
+
+#[test]
+fn readable_module_prefixes_remain_injective_across_type_and_value_emission() {
+    let (config, _) = fixture("module api.values\n\nfn run(value: I32) -> I32\n");
+    let modules = [
+        ("a_.b", "_cott_t_a_u__b", "Left"),
+        ("a._b", "_cott_t_a___ub", "Right"),
+        ("a__b", "_cott_t_a_u_ub", "Flat"),
+        ("a.b", "_cott_t_a__b", "Nested"),
+        ("foo_bar.baz", "_cott_t_foo_ubar__baz", "Readable"),
+    ];
+    let mut sources = modules
+        .iter()
+        .map(|(module, _, name)| {
+            SourceFile::new(
+                format!("src/{}.cott", module.replace('.', "/")),
+                format!("module {module}\n\nstruct {name}:\n    value: I32\n"),
+            )
+        })
+        .collect::<Vec<_>>();
+    sources.push(SourceFile::new(
+        "src/api/values.cott",
+        r#"module api.values
+
+use a_.b.{Left}
+use a._b.{Right}
+use a__b.{Flat}
+use a.b.{Nested}
+use foo_bar.baz.{Readable}
+
+struct Bundle:
+    left: Left
+    right: Right
+    flat: Flat
+    nested: Nested
+    readable: Readable
+
+enum Choice:
+    On
+    Off
+
+fn choose(value: Choice) -> Choice:
+    ensures result == Choice.On
+
+fn retain(value: Bundle) -> Bundle
+"#,
+    ));
+    let ir = render(
+        &lower(
+            Path::new("src"),
+            parse_project(sources).expect("boundary module names parse"),
+        )
+        .expect("distinct underscore and dotted module names lower"),
+    )
+    .expect("boundary module names retain canonical identities");
+    let plan = DartPlan::from_ir(&ir).expect("boundary module names project");
+    let choose = agent_binding(
+        &plan,
+        "api.values.choose",
+        "return _cott_t_api__values.Choice.On;",
+    );
+    let retain = agent_binding(&plan, "api.values.retain", "return value;");
+    for binding in [&choose, &retain] {
+        cott::dart::binding::validate_candidate(
+            &config,
+            &plan,
+            callable(&plan, &binding.cott_symbol),
+            &Default::default(),
+            &binding.bytes,
+        )
+        .expect("distinct legal modules must not collide in compiler import authority");
+    }
+    let emission = emit(&config, &plan, &[choose, retain])
+        .expect("distinct legal modules must not collide during package emission");
+    let types =
+        std::str::from_utf8(&emission.files[Path::new("dart/lib/src/types/api/values.dart")])
+            .unwrap();
+    for (module, prefix, name) in modules {
+        let ty = json!({"kind":"named","name":format!("{module}.{name}"),"args":[]});
+        assert_eq!(render_type(&plan, &ty).unwrap(), format!("{prefix}.{name}"));
+        let path = module.replace('.', "/");
+        assert!(
+            types.contains(&format!(
+                "import 'package:dart_emit/src/types/{path}.dart' as {prefix};"
+            )),
+            "{types}"
+        );
+        assert!(
+            emission
+                .files
+                .contains_key(Path::new(&format!("dart/lib/modules/{path}.dart")))
+        );
+        assert_eq!(emission.public_symbols[module], [name]);
+    }
+    let wrapper = std::str::from_utf8(
+        &emission.files[Path::new("dart/lib/src/wrappers/api/values/choose.dart")],
+    )
+    .unwrap();
+    assert!(
+        wrapper.contains("_cott_t_api__values.Choice.On") && !wrapper.contains("ChoiceOn"),
+        "{wrapper}"
+    );
+    assert!(
+        wrapper.contains(
+            "import 'package:dart_emit/src/types/api/values.dart' as _cott_t_api__values;"
+        ),
+        "{wrapper}"
+    );
+    assert_eq!(
+        implementation_signature(&plan, callable(&plan, "api.values.choose")).unwrap(),
+        "_cott_t_api__values.Choice _cott_api_values_choose(_cott_t_api__values.Choice value)"
+    );
+}
+
+#[test]
+fn scalar_agent_helpers_are_not_confused_with_nominal_import_aliases() {
+    let (config, plan) = fixture("module t\n\nfn run(value: I32) -> I32\n");
+    let callable = callable(&plan, "t.run");
+    let source = "int _cott_t_run(int value) { return value; }\n";
+    assert_eq!(
+        implementation_signature(&plan, callable).unwrap(),
+        "int _cott_t_run(int value)"
+    );
+    cott::dart::binding::validate_candidate(
+        &config,
+        &plan,
+        callable,
+        &Default::default(),
+        source.as_bytes(),
+    )
+    .expect("unchanged scalar helper names remain accepted even under module t");
 }

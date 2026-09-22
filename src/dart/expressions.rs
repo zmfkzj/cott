@@ -1,14 +1,15 @@
 use serde_json::{Map, Value};
 
 use super::types::{
-    dart_string, enum_variant_name, escape_identifier, internal_name, local_name,
-    render_canonical_symbol, render_const_witness, render_named_arguments, render_type_contextual,
-    render_type_witness_values, render_value_contextual,
+    DartEnumProjection, dart_string, enum_variant_name, escape_identifier, internal_name,
+    local_name, render_canonical_symbol, render_const_witness, render_named_arguments,
+    render_type_contextual, render_type_witness_values, render_value_contextual,
 };
 
 pub(crate) fn render_expression_contextual(
     expression: &Value,
     module: Option<&str>,
+    projection: &DartEnumProjection,
 ) -> Result<String, String> {
     let object = expression
         .as_object()
@@ -19,6 +20,7 @@ pub(crate) fn render_expression_contextual(
             required(object.get("value"), "literal expression.value")?,
             object.get("type"),
             module,
+            projection,
         ),
         "parameter_ref" | "binding_ref" => escape_identifier(local_name(required_string(
             object.get("symbol"),
@@ -33,7 +35,10 @@ pub(crate) fn render_expression_contextual(
         ),
         "enum_singleton_ref" => {
             let symbol = required_string(object.get("symbol"), "enum singleton reference.symbol")?;
-            let variant = enum_variant_name(symbol, module)?;
+            let variant = enum_variant_name(symbol, module, projection)?;
+            if projection.is_native_variant(symbol) {
+                return Ok(variant);
+            }
             let type_arguments = render_named_arguments(object.get("type"), module)?;
             let constructor = if type_arguments.is_empty() {
                 variant
@@ -83,7 +88,8 @@ pub(crate) fn render_expression_contextual(
             "({}).{}",
             render_expression_contextual(
                 required(object.get("base"), "field expression.base")?,
-                module
+                module,
+                projection
             )?,
             escape_identifier(required_string(
                 object.get("name"),
@@ -94,10 +100,11 @@ pub(crate) fn render_expression_contextual(
             "cott_runtime.CottRuntime.length({})",
             render_expression_contextual(
                 required(object.get("value"), "len expression.value")?,
-                module
+                module,
+                projection
             )?
         )),
-        "intrinsic" => render_intrinsic(object, module),
+        "intrinsic" => render_intrinsic(object, module, projection),
         "fixture_path" | "fixture_url" => {
             let fixture = escape_identifier(local_name(required_string(
                 object.get("fixture"),
@@ -116,9 +123,9 @@ pub(crate) fn render_expression_contextual(
                 }
             ))
         }
-        "unary" => render_unary(expression, object, module),
-        "binary" => render_binary(expression, object, module),
-        "comparison_chain" => render_comparison_chain(object, module),
+        "unary" => render_unary(expression, object, module, projection),
+        "binary" => render_binary(expression, object, module, projection),
+        "comparison_chain" => render_comparison_chain(object, module, projection),
         other => Err(format!(
             "unsupported canonical contract expression kind `{other}`"
         )),
@@ -130,18 +137,22 @@ pub(crate) fn render_guard(
     predicate: &Value,
     non_match: bool,
     module: Option<&str>,
+    projection: &DartEnumProjection,
 ) -> Result<String, String> {
     let guard = guard
         .as_object()
         .ok_or_else(|| "canonical match guard must be an object".to_owned())?;
-    let scrutinee =
-        render_expression_contextual(required(guard.get("scrutinee"), "guard.scrutinee")?, module)?;
+    let scrutinee = render_expression_contextual(
+        required(guard.get("scrutinee"), "guard.scrutinee")?,
+        module,
+        projection,
+    )?;
     let (condition, bindings) = render_pattern(
         required(guard.get("pattern"), "guard.pattern")?,
         "_cott_match_value",
         module,
     )?;
-    let predicate = render_expression_contextual(predicate, module)?;
+    let predicate = render_expression_contextual(predicate, module, projection)?;
     let fallback = if non_match { "true" } else { "false" };
     let binding_lines = if bindings.is_empty() {
         String::new()
@@ -153,15 +164,45 @@ pub(crate) fn render_guard(
     ))
 }
 
+pub(crate) fn render_guarded_statement(
+    guard: Option<&Value>,
+    statement: &str,
+    module: Option<&str>,
+    projection: &DartEnumProjection,
+) -> Result<String, String> {
+    let Some(guard) = guard.filter(|value| !value.is_null()) else {
+        return Ok(statement.to_owned());
+    };
+    let scrutinee = render_expression_contextual(
+        required(guard.get("scrutinee"), "guard.scrutinee")?,
+        module,
+        projection,
+    )?;
+    let (condition, bindings) = render_pattern(
+        required(guard.get("pattern"), "guard.pattern")?,
+        "_cott_match_value",
+        module,
+    )?;
+    let bindings = if bindings.is_empty() {
+        String::new()
+    } else {
+        format!(" {};", bindings.join("; "))
+    };
+    Ok(format!(
+        "{{ final _cott_match_value = {scrutinee}; if ({condition}) {{{bindings} {statement} }} }}"
+    ))
+}
+
 pub(crate) fn render_condition(
     expression: &Value,
     guard: Option<&Value>,
     non_match: bool,
     module: Option<&str>,
+    projection: &DartEnumProjection,
 ) -> Result<String, String> {
     match guard.filter(|value| !value.is_null()) {
-        Some(guard) => render_guard(guard, expression, non_match, module),
-        None => render_expression_contextual(expression, module),
+        Some(guard) => render_guard(guard, expression, non_match, module, projection),
+        None => render_expression_contextual(expression, module, projection),
     }
 }
 
@@ -199,10 +240,14 @@ pub(crate) fn clause_label(clause: &Value) -> Result<String, String> {
     ))
 }
 
-fn render_intrinsic(object: &Map<String, Value>, module: Option<&str>) -> Result<String, String> {
+fn render_intrinsic(
+    object: &Map<String, Value>,
+    module: Option<&str>,
+    projection: &DartEnumProjection,
+) -> Result<String, String> {
     let arguments = required_array(object.get("arguments"), "intrinsic expression.arguments")?
         .iter()
-        .map(|expression| render_expression_contextual(expression, module))
+        .map(|expression| render_expression_contextual(expression, module, projection))
         .collect::<Result<Vec<_>, _>>()?;
     let first = arguments
         .first()
@@ -250,10 +295,12 @@ fn render_unary(
     expression: &Value,
     object: &Map<String, Value>,
     module: Option<&str>,
+    projection: &DartEnumProjection,
 ) -> Result<String, String> {
     let operand = render_expression_contextual(
         required(object.get("operand"), "unary expression.operand")?,
         module,
+        projection,
     )?;
     let op = required_string(object.get("op"), "unary expression.op")?;
     if integer_type(expression.get("type")) {
@@ -283,14 +330,17 @@ fn render_binary(
     expression: &Value,
     object: &Map<String, Value>,
     module: Option<&str>,
+    projection: &DartEnumProjection,
 ) -> Result<String, String> {
     let left = render_expression_contextual(
         required(object.get("left"), "binary expression.left")?,
         module,
+        projection,
     )?;
     let right = render_expression_contextual(
         required(object.get("right"), "binary expression.right")?,
         module,
+        projection,
     )?;
     let op = required_string(object.get("op"), "binary expression.op")?;
     if matches!(op, "or" | "and") {
@@ -346,10 +396,11 @@ fn render_binary(
 fn render_comparison_chain(
     object: &Map<String, Value>,
     module: Option<&str>,
+    projection: &DartEnumProjection,
 ) -> Result<String, String> {
     let operands = required_array(object.get("operands"), "comparison expression.operands")?
         .iter()
-        .map(|expression| render_expression_contextual(expression, module))
+        .map(|expression| render_expression_contextual(expression, module, projection))
         .collect::<Result<Vec<_>, _>>()?;
     let operators = required_array(object.get("operators"), "comparison expression.operators")?;
     if operands.len() != operators.len() + 1 {

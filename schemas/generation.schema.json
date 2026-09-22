@@ -1,16 +1,27 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cott.dev/schema/generation/v7",
-  "title": "cott generation record v7",
+  "$id": "https://cott.dev/schema/generation/v8",
+  "title": "cott generation record v8",
   "type": "object",
-  "required": ["schema_version", "current", "last_verified"],
+  "required": ["schema_version", "current", "last_verified", "snapshots"],
   "additionalProperties": false,
   "properties": {
-    "schema_version": {"const": 7},
-    "current": {"$ref": "#/$defs/snapshot"},
-    "last_verified": {"anyOf": [{"$ref": "#/$defs/snapshot"}, {"type": "null"}]}
+    "schema_version": {"const": 8},
+    "current": {"$ref": "#/$defs/digest"},
+    "last_verified": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+    "snapshots": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 2,
+      "patternProperties": {"^sha256:[0-9a-f]{64}$": {"$ref": "#/$defs/snapshot"}},
+      "additionalProperties": false
+    }
   },
   "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
     "snapshot": {
       "type": "object",
       "required": ["generation_id", "verified", "project_version", "compatibility", "inputs", "tools", "ir", "contract_surface", "public_python_symbols", "implementations", "dependencies", "managed_files", "unresolved", "verification", "semantic_coverage", "agent_runs"],
@@ -50,7 +61,7 @@
       "required": ["generation_schema", "canonical_ir_schema", "runtime_abi", "contract_strategy_schema"],
       "additionalProperties": false,
       "properties": {
-        "generation_schema": {"const": 7},
+        "generation_schema": {"const": 8},
         "canonical_ir_schema": {"const": 8},
         "runtime_abi": {"const": 7},
         "contract_strategy_schema": {"const": 5}

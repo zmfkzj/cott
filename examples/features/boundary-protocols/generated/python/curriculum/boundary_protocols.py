@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from curriculum.boundary_protocols_types import HandleBundle, HandleError, HandleError_InvalidHandle, TextBuffer
 
@@ -17,7 +18,7 @@ def wrap_handle(raw_id: U64) -> Result[HandleBundle, HandleError]:
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
-    if _expected_error is None and ((raw_id == 0)):
+    if _expected_error is None and (_cott_contract_condition(((raw_id == 0)), "curriculum.boundary_protocols.wrap_handle", "error:2:condition")):
         _expected_error = HandleError_InvalidHandle
         _expected_error_span = {"end_byte":463,"end_column":53,"end_line":19,"start_byte":415,"start_column":5,"start_line":19}
         _expected_error_clause = "error:2"
@@ -43,11 +44,14 @@ def wrap_handle(raw_id: U64) -> Result[HandleBundle, HandleError]:
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.boundary_protocols.wrap_handle", phase="error", span={"end_byte":481,"end_column":1,"end_line":23,"start_byte":176,"start_column":1,"start_line":12}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.boundary_protocols.wrap_handle", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "curriculum.boundary_protocols.wrap_handle", _expected_error_clause)
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             bundle = _cott_match_value.value
-            return ((((bundle).raw_id == raw_id) and ((bundle).raw_id > 0)))
+            return (_cott_contract_condition(((((bundle).raw_id == raw_id) and ((bundle).raw_id > 0))), "curriculum.boundary_protocols.wrap_handle", "ensures:1"))
+        _cott_contract_condition((False), "curriculum.boundary_protocols.wrap_handle", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.boundary_protocols.wrap_handle", clause="ensures:1", phase="ensures", span={"end_byte":409,"end_column":79,"end_line":17,"start_byte":335,"start_column":5,"start_line":17}, expected="true", actual="false")
@@ -71,7 +75,7 @@ def extract_handle_id(bundle: HandleBundle) -> U64:
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.boundary_protocols.extract_handle_id", phase="implementation-call", span={"end_byte":663,"end_column":1,"end_line":32,"start_byte":481,"start_column":1,"start_line":23}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, U64, path="$.return")
-    if not ((_result > 0)):
+    if not (_cott_contract_condition(((_result > 0)), "curriculum.boundary_protocols.extract_handle_id", "ensures:1")):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.boundary_protocols.extract_handle_id", clause="ensures:1", phase="ensures", span={"end_byte":645,"end_column":23,"end_line":28,"start_byte":627,"start_column":5,"start_line":28}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, U64, path="$.return", validator=_cott_validate_abi)
     return _result

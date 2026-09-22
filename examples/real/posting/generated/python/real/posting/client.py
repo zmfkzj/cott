@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from real.posting.client_types import Header, HttpMethod, HttpMethod_Custom, HttpMethod_Delete, HttpMethod_Get, HttpMethod_Head, HttpMethod_Options, HttpMethod_Patch, HttpMethod_Post, HttpMethod_Put, PostingError, PostingError_InvalidArguments, PostingError_InvalidRequest, PostingError_NetworkFailed, Request, Response
 
@@ -39,11 +40,16 @@ def parse_method(source: str) -> Result[HttpMethod, PostingError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.posting.client.parse_method", phase="error", span={"end_byte":778,"end_column":1,"end_line":46,"start_byte":500,"start_column":1,"start_line":35}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.posting.client.parse_method", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.posting.client.parse_method", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is PostingError_InvalidRequest:
+        _cott_contract_condition(True, "real.posting.client.parse_method", "error:2")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             method = _cott_match_value.value
-            return ((len(source) > 0))
+            return (_cott_contract_condition(((len(source) > 0)), "real.posting.client.parse_method", "ensures:1"))
+        _cott_contract_condition((False), "real.posting.client.parse_method", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.posting.client.parse_method", clause="ensures:1", phase="ensures", span={"end_byte":721,"end_column":48,"end_line":40,"start_byte":678,"start_column":5,"start_line":40}, expected="true", actual="false")
@@ -78,11 +84,18 @@ def parse_arguments(arguments: CottList[str]) -> Result[Request, PostingError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.posting.client.parse_arguments", phase="error", span={"end_byte":1092,"end_column":1,"end_line":58,"start_byte":778,"start_column":1,"start_line":46}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.posting.client.parse_arguments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.posting.client.parse_arguments", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is PostingError_InvalidArguments:
+        _cott_contract_condition(True, "real.posting.client.parse_arguments", "error:2")
+    if type(_result) is Err and type(_result.error) is PostingError_InvalidRequest:
+        _cott_contract_condition(True, "real.posting.client.parse_arguments", "error:3")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             request = _cott_match_value.value
-            return ((len(arguments) >= 2))
+            return (_cott_contract_condition(((len(arguments) >= 2)), "real.posting.client.parse_arguments", "ensures:1"))
+        _cott_contract_condition((False), "real.posting.client.parse_arguments", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.posting.client.parse_arguments", clause="ensures:1", phase="ensures", span={"end_byte":995,"end_column":53,"end_line":51,"start_byte":947,"start_column":5,"start_line":51}, expected="true", actual="false")
@@ -117,11 +130,18 @@ def send_request(request: Request) -> Result[Response, PostingError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.posting.client.send_request", phase="error", span={"end_byte":1422,"end_column":1,"end_line":70,"start_byte":1092,"start_column":1,"start_line":58}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.posting.client.send_request", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.posting.client.send_request", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is PostingError_InvalidRequest:
+        _cott_contract_condition(True, "real.posting.client.send_request", "error:2")
+    if type(_result) is Err and type(_result.error) is PostingError_NetworkFailed:
+        _cott_contract_condition(True, "real.posting.client.send_request", "error:3")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             response = _cott_match_value.value
-            return (((response).status > 0))
+            return (_cott_contract_condition((((response).status > 0)), "real.posting.client.send_request", "ensures:1"))
+        _cott_contract_condition((False), "real.posting.client.send_request", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.posting.client.send_request", clause="ensures:1", phase="ensures", span={"end_byte":1321,"end_column":55,"end_line":63,"start_byte":1271,"start_column":5,"start_line":63}, expected="true", actual="false")
@@ -176,11 +196,20 @@ def execute(arguments: CottList[str]) -> Result[str, PostingError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.posting.client.execute", phase="error", span={"end_byte":1929,"end_column":1,"end_line":89,"start_byte":1590,"start_column":1,"start_line":77}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.posting.client.execute", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.posting.client.execute", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is PostingError_InvalidArguments:
+        _cott_contract_condition(True, "real.posting.client.execute", "error:2")
+    if type(_result) is Err and type(_result.error) is PostingError_InvalidRequest:
+        _cott_contract_condition(True, "real.posting.client.execute", "error:3")
+    if type(_result) is Err and type(_result.error) is PostingError_NetworkFailed:
+        _cott_contract_condition(True, "real.posting.client.execute", "error:4")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             rendered = _cott_match_value.value
-            return ((len(rendered) > 0))
+            return (_cott_contract_condition(((len(rendered) > 0)), "real.posting.client.execute", "ensures:1"))
+        _cott_contract_condition((False), "real.posting.client.execute", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.posting.client.execute", clause="ensures:1", phase="ensures", span={"end_byte":1789,"end_column":52,"end_line":82,"start_byte":1742,"start_column":5,"start_line":82}, expected="true", actual="false")

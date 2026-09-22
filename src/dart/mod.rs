@@ -7,6 +7,8 @@ use serde_json::Value;
 use crate::ir::CanonicalIr;
 use crate::python::artifact_plan::{PythonArtifactPlan, PythonCallable};
 
+use self::types::DartEnumProjection;
+
 pub mod binding;
 pub(crate) mod dependencies;
 pub mod emit;
@@ -26,6 +28,7 @@ pub struct DartPlan {
     pub modules: Vec<DartModule>,
     callables: Vec<DartCallable>,
     contract_surface: Value,
+    enum_projection: DartEnumProjection,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,7 +87,7 @@ impl DartPlan {
             })
             .collect();
         let contract_surface = canonical.contract_surface();
-        let modules = canonical
+        let modules: Vec<DartModule> = canonical
             .modules
             .into_iter()
             .map(|module| DartModule {
@@ -93,16 +96,23 @@ impl DartPlan {
                 declarations: module.declarations,
             })
             .collect();
+        let enum_projection = DartEnumProjection::from_modules(&modules)?;
         Ok(Self {
             ir: ir.clone(),
             modules,
             callables,
             contract_surface,
+            enum_projection,
         })
     }
 
     pub fn callables(&self) -> &[DartCallable] {
         &self.callables
+    }
+
+    /// The single deterministic Cott-to-Dart enum projection for this plan.
+    pub(crate) fn enum_projection(&self) -> &DartEnumProjection {
+        &self.enum_projection
     }
 
     pub fn contract_surface(&self) -> &Value {

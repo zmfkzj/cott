@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from curriculum.alphabetical_file_groups_types import FileGroupError, FileGroupError_EmptyFilename, FileMove
 
@@ -43,11 +44,16 @@ folder. Select "misc" when the leading code point is not a letter."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.alphabetical_file_groups.classify_filename", phase="error", span={"end_byte":618,"end_column":1,"end_line":23,"start_byte":136,"start_column":1,"start_line":10}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.alphabetical_file_groups.classify_filename", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "curriculum.alphabetical_file_groups.classify_filename", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is FileGroupError_EmptyFilename:
+        _cott_contract_condition(True, "curriculum.alphabetical_file_groups.classify_filename", "error:2")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             move = _cott_match_value.value
-            return (((move).filename == filename))
+            return (_cott_contract_condition((((move).filename == filename)), "curriculum.alphabetical_file_groups.classify_filename", "ensures:1"))
+        _cott_contract_condition((False), "curriculum.alphabetical_file_groups.classify_filename", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.alphabetical_file_groups.classify_filename", clause="ensures:1", phase="ensures", span={"end_byte":576,"end_column":57,"end_line":19,"start_byte":524,"start_column":5,"start_line":19}, expected="true", actual="false")
@@ -86,11 +92,16 @@ succeeds with an empty move list."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.alphabetical_file_groups.group_filenames", phase="error", span={"end_byte":1084,"end_column":1,"end_line":35,"start_byte":618,"start_column":1,"start_line":23}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.alphabetical_file_groups.group_filenames", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "curriculum.alphabetical_file_groups.group_filenames", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is FileGroupError_EmptyFilename:
+        _cott_contract_condition(True, "curriculum.alphabetical_file_groups.group_filenames", "error:2")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             moves = _cott_match_value.value
-            return ((len(moves) == len(filenames)))
+            return (_cott_contract_condition(((len(moves) == len(filenames))), "curriculum.alphabetical_file_groups.group_filenames", "ensures:1"))
+        _cott_contract_condition((False), "curriculum.alphabetical_file_groups.group_filenames", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.alphabetical_file_groups.group_filenames", clause="ensures:1", phase="ensures", span={"end_byte":1043,"end_column":59,"end_line":32,"start_byte":989,"start_column":5,"start_line":32}, expected="true", actual="false")

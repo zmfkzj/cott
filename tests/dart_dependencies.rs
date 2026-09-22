@@ -7,8 +7,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use serde_json::Value;
 use tar::{Builder, EntryType, Header};
+
+#[path = "support/snapshot.rs"]
+mod snapshot_wire;
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
@@ -454,11 +456,10 @@ fn prerelease_and_build_ranges_use_full_pub_version_ordering() {
 
     let output = fixture.run(&["emit", "dart"]);
     assert!(output.status.success(), "{}", stderr(&output));
-    let generation: Value = serde_json::from_slice(
+    let generation = snapshot_wire::read(
         &fs::read(fixture.path().join("generated/generation.json"))
             .expect("Dart generation record"),
-    )
-    .expect("generation JSON");
+    );
     let packages = generation["current"]["dependencies"]["packages"]
         .as_array()
         .expect("dependency packages");
@@ -529,11 +530,10 @@ fn authenticated_hosted_and_project_path_closure_has_portable_identity() {
     let fixture = mixed_closure_fixture("portable-closure", "missing-dart");
     let output = fixture.run(&["emit", "dart"]);
     assert!(output.status.success(), "{}", stderr(&output));
-    let generation: Value = serde_json::from_slice(
+    let generation = snapshot_wire::read(
         &fs::read(fixture.path().join("generated/generation.json"))
             .expect("Dart generation record"),
-    )
-    .expect("generation JSON");
+    );
     let packages = generation["current"]["dependencies"]["packages"]
         .as_array()
         .expect("dependency packages");
@@ -569,11 +569,10 @@ fn authenticated_hosted_and_path_closure_vendors_for_native_verification() {
     assert!(emitted.status.success(), "{}", stderr(&emitted));
     let verified = fixture.run(&["verify"]);
     assert!(verified.status.success(), "{}", stderr(&verified));
-    let generation: Value = serde_json::from_slice(
+    let generation = snapshot_wire::read(
         &fs::read(fixture.path().join("generated/generation.json"))
             .expect("verified generation record"),
-    )
-    .expect("generation JSON");
+    );
     let clauses = generation["current"]["semantic_coverage"]["clauses"]
         .as_array()
         .expect("semantic clauses")

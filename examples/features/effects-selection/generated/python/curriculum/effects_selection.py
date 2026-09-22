@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from curriculum.effects_selection_types import EffectError, EffectError_InputMissing, EffectError_OperationFailed
 
@@ -39,11 +40,18 @@ def read_text(source: Path) -> Result[str, EffectError]:
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.effects_selection.read_text", phase="error", span={"end_byte":403,"end_column":1,"end_line":19,"start_byte":119,"start_column":1,"start_line":7}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.effects_selection.read_text", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "curriculum.effects_selection.read_text", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is EffectError_InputMissing:
+        _cott_contract_condition(True, "curriculum.effects_selection.read_text", "error:2")
+    if type(_result) is Err and type(_result.error) is EffectError_OperationFailed:
+        _cott_contract_condition(True, "curriculum.effects_selection.read_text", "error:3")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             text = _cott_match_value.value
-            return ((len(text) >= 0))
+            return (_cott_contract_condition(((len(text) >= 0)), "curriculum.effects_selection.read_text", "ensures:1"))
+        _cott_contract_condition((False), "curriculum.effects_selection.read_text", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.effects_selection.read_text", clause="ensures:1", phase="ensures", span={"end_byte":302,"end_column":45,"end_line":12,"start_byte":262,"start_column":5,"start_line":12}, expected="true", actual="false")
@@ -79,11 +87,18 @@ def copy_text(source: Path, destination: Path) -> Result[U64, EffectError]:
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.effects_selection.copy_text", phase="error", span={"end_byte":736,"end_column":1,"end_line":31,"start_byte":403,"start_column":1,"start_line":19}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.effects_selection.copy_text", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "curriculum.effects_selection.copy_text", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is EffectError_InputMissing:
+        _cott_contract_condition(True, "curriculum.effects_selection.copy_text", "error:2")
+    if type(_result) is Err and type(_result.error) is EffectError_OperationFailed:
+        _cott_contract_condition(True, "curriculum.effects_selection.copy_text", "error:3")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             written = _cott_match_value.value
-            return ((written >= 0))
+            return (_cott_contract_condition(((written >= 0)), "curriculum.effects_selection.copy_text", "ensures:1"))
+        _cott_contract_condition((False), "curriculum.effects_selection.copy_text", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.effects_selection.copy_text", clause="ensures:1", phase="ensures", span={"end_byte":623,"end_column":47,"end_line":24,"start_byte":581,"start_column":5,"start_line":24}, expected="true", actual="false")
@@ -96,7 +111,7 @@ def fetch_local(url: str) -> Result[str, EffectError]:
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
-    if _expected_error is None and ((url == "")):
+    if _expected_error is None and (_cott_contract_condition(((url == "")), "curriculum.effects_selection.fetch_local", "error:2:condition")):
         _expected_error = EffectError_OperationFailed
         _expected_error_span = {"end_byte":972,"end_column":53,"end_line":38,"start_byte":924,"start_column":5,"start_line":38}
         _expected_error_clause = "error:2"
@@ -122,11 +137,16 @@ def fetch_local(url: str) -> Result[str, EffectError]:
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.effects_selection.fetch_local", phase="error", span={"end_byte":1035,"end_column":1,"end_line":43,"start_byte":736,"start_column":1,"start_line":31}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.effects_selection.fetch_local", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "curriculum.effects_selection.fetch_local", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is EffectError_OperationFailed:
+        _cott_contract_condition(True, "curriculum.effects_selection.fetch_local", "error:3")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             text = _cott_match_value.value
-            return ((len(text) >= 0))
+            return (_cott_contract_condition(((len(text) >= 0)), "curriculum.effects_selection.fetch_local", "ensures:1"))
+        _cott_contract_condition((False), "curriculum.effects_selection.fetch_local", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.effects_selection.fetch_local", clause="ensures:1", phase="ensures", span={"end_byte":918,"end_column":45,"end_line":36,"start_byte":878,"start_column":5,"start_line":36}, expected="true", actual="false")
@@ -223,11 +243,16 @@ def store_and_load(database: Path, key: str, value: str) -> Result[str, EffectEr
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.effects_selection.store_and_load", phase="error", span={"end_byte":1781,"end_column":1,"end_line":69,"start_byte":1466,"start_column":1,"start_line":58}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.effects_selection.store_and_load", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "curriculum.effects_selection.store_and_load", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is EffectError_OperationFailed:
+        _cott_contract_condition(True, "curriculum.effects_selection.store_and_load", "error:2")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             stored = _cott_match_value.value
-            return ((stored == value))
+            return (_cott_contract_condition(((stored == value)), "curriculum.effects_selection.store_and_load", "ensures:1"))
+        _cott_contract_condition((False), "curriculum.effects_selection.store_and_load", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.effects_selection.store_and_load", clause="ensures:1", phase="ensures", span={"end_byte":1695,"end_column":49,"end_line":63,"start_byte":1651,"start_column":5,"start_line":63}, expected="true", actual="false")
@@ -257,7 +282,7 @@ def sample_index(limit: U8, seed: U64) -> U8:
     """Choose one index below limit from a deterministic seeded random stream."""
     limit = _cott_validate_abi(limit, U8, path="$.limit")
     seed = _cott_validate_abi(seed, U64, path="$.seed")
-    if not ((limit > 0)):
+    if not (_cott_contract_condition(((limit > 0)), "curriculum.effects_selection.sample_index", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="curriculum.effects_selection.sample_index", clause="requires:1", phase="requires", span={"end_byte":2081,"end_column":23,"end_line":81,"start_byte":2063,"start_column":5,"start_line":81}, expected="true", actual="false")
     try:
         _implementation = _cott_load("_cott_impl/curriculum/effects_selection/sample_index.py", "79454884c5715cdff59e8d82a15c581d2dd6b7c36bb4ba532ec97c8ec5b9c9ff", "sample_index", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.sample_index")
@@ -273,7 +298,7 @@ def sample_index(limit: U8, seed: U64) -> U8:
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.sample_index", phase="implementation-call", span={"end_byte":2133,"end_column":1,"end_line":87,"start_byte":1917,"start_column":1,"start_line":76}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, U8, path="$.return")
-    if not ((_result < limit)):
+    if not (_cott_contract_condition(((_result < limit)), "curriculum.effects_selection.sample_index", "ensures:2")):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.effects_selection.sample_index", clause="ensures:2", phase="ensures", span={"end_byte":2109,"end_column":27,"end_line":83,"start_byte":2087,"start_column":5,"start_line":83}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, U8, path="$.return", validator=_cott_validate_abi)
     return _result

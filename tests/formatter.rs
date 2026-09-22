@@ -438,3 +438,52 @@ fn check(a: Bool, b: Bool, c: Bool) -> Unit:
     assert_eq!(output, expected);
     assert_eq!(formatted(&output), output);
 }
+
+#[test]
+fn preserves_contract_sugar_rows_comments_and_contextual_names_idempotently() {
+    let source = r#"module demo.sugar
+fn labels(key:Kind,table:Bool,preserves:Bool,from:Bool,except:Bool)->Str:
+  ensures table and preserves and from and except
+  ensures table key: # complete
+    Kind.Imported=>"imported" # imported
+    # local row
+    Kind.Local=>"local"
+  ensures result.len>0
+fn update(mark:Mark)->Mark:
+  ensures preserves result from mark except changed,payload
+"#;
+    let output = formatted(source);
+    assert!(output.contains("    ensures table key:  # complete\n        Kind.Imported => \"imported\"  # imported\n        # local row\n        Kind.Local => \"local\"\n"));
+    assert!(output.contains("    ensures preserves result from mark except changed, payload\n"));
+    assert!(output.contains("    ensures table and preserves and from and except\n"));
+    assert_eq!(formatted(&output), output);
+}
+
+#[test]
+fn ensures_implication_parentheses_and_result_patterns_survive_formatting() {
+    let source = r#"module demo.guards
+fn check(flag:Bool,other:Bool)->Bool:
+  ensures (flag)=>other
+  ensures (flag)=>other=>true
+  ensures (flag=>other)=>true
+  ensures result matches Option.Some(value)=>value
+"#;
+    let output = formatted(source);
+    let reparsed = cott::parser::parse(&output).expect("formatted guard syntax");
+    let cott::ast::Declaration::Function(function) = &reparsed.declarations[0] else {
+        panic!("function")
+    };
+    let cott::ast::FunctionBody::Clauses { clauses, .. } = &function.body else {
+        panic!("clauses")
+    };
+    assert!(clauses[..3].iter().all(|clause| matches!(
+        clause.kind,
+        cott::ast::ClauseKind::Ensures { guard: None, .. }
+    )));
+    assert!(
+        matches!(&clauses[3].kind, cott::ast::ClauseKind::Ensures { guard: Some(guard), .. }
+        if matches!(&guard.pattern.kind, cott::ast::PatternKind::Variant { path, .. }
+            if path.segments == ["Option", "Some"]))
+    );
+    assert_eq!(formatted(&output), output);
+}

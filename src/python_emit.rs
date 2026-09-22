@@ -2006,6 +2006,7 @@ fn render_types(
     let mut out = String::from(
         "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport dataclasses as _dataclasses\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import Annotated, Any, Final, ForwardRef, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable\n\nfrom cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_descending_by, _cott_ends_with, _cott_euclidean_mod, _cott_normalize_f32, _cott_starts_with, _cott_unique_by, _cott_validate_abi, _cott_validated_construction\n",
     );
+    out.push_str("from cott_runtime import _cott_contract_condition\n");
     for (source, name, alias) in external_imports(module, external_types) {
         writeln!(out, "from {source} import {name} as {alias}").unwrap();
     }
@@ -2219,6 +2220,7 @@ fn render_type_declaration(
                     .get("name")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
+                let condition = observed_condition(&condition, symbol, "refinement");
                 writeln!(
                     out,
                     "        if not ({condition}):\n            raise CottContractViolation({}, symbol={}, phase=\"refinement\", span={span}, expected=\"true\", actual=\"false\")",
@@ -3181,6 +3183,7 @@ fn render_struct_post_init(
             .and_then(Value::as_str)
             .unwrap_or_default(),
         8,
+        None,
     );
     out.push('\n');
 }
@@ -3703,6 +3706,7 @@ fn render_facade(
     let mut out = String::from(
         "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport asyncio as _asyncio\nimport dataclasses as _dataclasses\nimport threading as _threading\nfrom pathlib import Path\nfrom typing import Any, Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol\n",
     );
+    out.push_str("from cott_runtime import _cott_contract_condition\n");
     let names = exported_names(module);
     let mut local_imports = type_exported_names(module);
     local_imports.extend(function_bound_protocol_names(module));
@@ -4184,6 +4188,7 @@ fn render_impl_classes(
             implementation,
             &format!("{}.{}", module.module, name),
             8,
+            None,
         );
 
         for method in resolved_impl_methods(implementation, modules)
@@ -4434,6 +4439,7 @@ fn render_impl_classes(
                     implementation,
                     &format!("{}.{}", module.module, name),
                     12,
+                    Some(&cott_symbol),
                 );
                 writeln!(
                     out,
@@ -4449,6 +4455,7 @@ fn render_impl_classes(
                 implementation,
                 &format!("{}.{}", module.module, name),
                 12,
+                Some(&cott_symbol),
             );
             writeln!(
                 out,
@@ -4554,6 +4561,7 @@ fn render_async_exception_finalization(
         implementation,
         &format!("{}.{}", module.module, concrete),
         16,
+        Some(cott_symbol),
     );
 }
 
@@ -4746,6 +4754,7 @@ fn render_invariants(
     implementation: &serde_json::Map<String, Value>,
     symbol: &str,
     indent: usize,
+    observation_symbol: Option<&str>,
 ) {
     let prefix = " ".repeat(indent);
     for invariant in implementation
@@ -4767,6 +4776,8 @@ fn render_invariants(
                 .and_then(Value::as_u64)
                 .unwrap_or_default()
         );
+        let expression =
+            observed_condition(&expression, observation_symbol.unwrap_or(symbol), &label);
         let condition = render_match_function(
             out,
             (!guard.is_null()).then_some(&guard),
@@ -4774,6 +4785,7 @@ fn render_invariants(
             &format!("_cott_match_{}", label.replace(':', "_")),
             indent,
             true,
+            (observation_symbol.unwrap_or(symbol), &label),
         )
         .map(|name| format!("{name}()"))
         .unwrap_or(expression);
@@ -4874,6 +4886,14 @@ fn render_test_only_contract(
         out.push_str(line);
     }
 }
+fn observed_condition(expression: &str, symbol: &str, clause: &str) -> String {
+    format!(
+        "_cott_contract_condition(({expression}), {}, {})",
+        json_string(symbol),
+        json_string(clause),
+    )
+}
+
 fn render_match_function(
     out: &mut String,
     guard: Option<&Value>,
@@ -4881,6 +4901,7 @@ fn render_match_function(
     name: &str,
     indent: usize,
     non_match: bool,
+    observation: (&str, &str),
 ) -> Option<String> {
     let guard = guard?.as_object()?;
     let scrutinee = render_contract_expression(guard.get("scrutinee")?);
@@ -4895,6 +4916,16 @@ fn render_match_function(
         writeln!(out, "{bound}{binding}").unwrap();
     }
     writeln!(out, "{bound}return ({predicate})").unwrap();
+    writeln!(
+        out,
+        "{nested}{}",
+        observed_condition(
+            "False",
+            observation.0,
+            &format!("{}:applicable", observation.1)
+        ),
+    )
+    .unwrap();
     writeln!(
         out,
         "{nested}return {}",
@@ -4922,6 +4953,11 @@ fn render_preconditions(
         }
         let expression = render_contract_expression(clause.get("expression").unwrap());
         let label = clause_label(clause);
+        let symbol = function
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let expression = observed_condition(&expression, symbol, &label);
         let condition = render_match_function(
             out,
             clause.get("guard").filter(|guard| !guard.is_null()),
@@ -4929,14 +4965,11 @@ fn render_preconditions(
             &format!("_cott_match_{}", label.replace(':', "_")),
             4,
             true,
+            (symbol, &label),
         )
         .map(|name| format!("{name}()"))
         .unwrap_or(expression);
         let span = serde_json::to_string(clause.get("span").unwrap()).expect("span serializes");
-        let symbol = function
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
         writeln!(
             out,
             "    if not ({condition}):\n        raise CottContractViolation(\"requires clause failed\", symbol={}, clause={}, phase=\"requires\", span={span}, expected=\"true\", actual=\"false\")",
@@ -4960,6 +4993,14 @@ fn render_preconditions(
                 .filter(|value| !value.is_null())
                 .map(render_contract_expression)
                 .unwrap_or_else(|| "True".to_owned());
+            let predicate = observed_condition(
+                &predicate,
+                function
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                &format!("{label}:condition"),
+            );
             let condition = render_match_function(
                 out,
                 clause.get("guard").filter(|guard| !guard.is_null()),
@@ -4967,13 +5008,20 @@ fn render_preconditions(
                 &format!("_cott_match_{}", label.replace(':', "_")),
                 4,
                 false,
+                (
+                    function
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    &label,
+                ),
             )
             .map(|name| format!("{name}()"))
             .or_else(|| {
                 clause
                     .get("when")
                     .filter(|value| !value.is_null())
-                    .map(render_contract_expression)
+                    .map(|_| predicate)
             });
             let Some(condition) = condition else {
                 continue;
@@ -5038,6 +5086,31 @@ fn render_postconditions(
             json_string(symbol),
         )
         .unwrap();
+        writeln!(
+            out,
+            "    if _expected_error_clause is not None:\n        _cott_contract_condition(True, {}, _expected_error_clause)",
+            json_string(symbol),
+        )
+        .unwrap();
+        for clause in &errors {
+            if clause.get("guard").is_none_or(Value::is_null)
+                && clause.get("when").is_none_or(Value::is_null)
+            {
+                let variant = enum_variant_name(
+                    clause
+                        .get("variant")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                );
+                writeln!(
+                    out,
+                    "    if type(_result) is Err and type(_result.error) is {variant}:\n        _cott_contract_condition(True, {}, {})",
+                    json_string(symbol),
+                    json_string(&clause_label(clause)),
+                )
+                .unwrap();
+            }
+        }
     }
     for clause in clauses {
         if clause.get("kind").and_then(Value::as_str) != Some("ensures") {
@@ -5046,6 +5119,7 @@ fn render_postconditions(
         let label = clause_label(clause);
         let span = serde_json::to_string(clause.get("span").unwrap()).expect("span serializes");
         let expression = render_contract_expression(clause.get("expression").unwrap());
+        let expression = observed_condition(&expression, symbol, &label);
         let guard = clause.get("guard").filter(|guard| !guard.is_null());
         let condition = render_match_function(
             out,
@@ -5054,6 +5128,7 @@ fn render_postconditions(
             &format!("_cott_match_{}", label.replace(':', "_")),
             4,
             true,
+            (symbol, &label),
         )
         .map(|name| format!("{name}()"))
         .unwrap_or(expression);

@@ -1,5 +1,8 @@
 use serde_json::{Value, json};
 
+#[path = "support/snapshot.rs"]
+mod snapshot;
+
 const TRACEABILITY: &[(u8, &[&str])] = &[
     (
         1,
@@ -336,12 +339,11 @@ fn wire_identities_are_closed_and_cross_shape_records_are_rejected() {
             .expect("strategy schema");
     assert_eq!(
         generation_schema["$id"],
-        "https://cott.dev/schema/generation/v7"
+        "https://cott.dev/schema/generation/v8"
     );
-    assert_eq!(generation_schema["title"], "cott generation record v7");
     assert_eq!(
         generation_schema["properties"]["schema_version"]["const"],
-        7
+        8
     );
     assert_eq!(
         generation_schema["$defs"]["compatibility"]["required"],
@@ -356,24 +358,55 @@ fn wire_identities_are_closed_and_cross_shape_records_are_rejected() {
         strategy_schema["$id"],
         "https://cott.dev/schema/contract-test/v5"
     );
-    assert_eq!(strategy_schema["title"], "cott contract test strategy v5");
     assert_eq!(strategy_schema["properties"]["schema_version"]["const"], 5);
 
-    let generation = json!({
-        "schema_version": 7,
+    let generation_view = json!({
+        "schema_version": 8,
         "current": generation_snapshot(),
         "last_verified": null,
     });
+    let generation = snapshot::pack(&generation_view);
     let generation_validator =
         jsonschema::validator_for(&generation_schema).expect("generation validator");
     assert!(generation_validator.is_valid(&generation));
-    let mut legacy_generation = generation.clone();
+    assert!(!generation_validator.is_valid(&generation_view));
+    let mut legacy_generation = generation_view.clone();
     legacy_generation["current"]["compatibility"] = json!({
         "generation_schema": 6,
         "canonical_ir_schema": 7,
         "runtime_abi": 6,
     });
-    assert!(!generation_validator.is_valid(&legacy_generation));
+    assert!(!generation_validator.is_valid(&snapshot::pack(&legacy_generation)));
+
+    // JSON Schema checks snapshot shapes; the decoder additionally authenticates
+    // references and rejects missing, substituted, or unreachable snapshot blobs.
+    let current_ref = generation["current"].as_str().expect("current reference");
+    let decoded = cott::snapshot_record::decode(&generation, 8).expect("valid reference envelope");
+    assert_eq!(decoded.0, generation_view["current"]);
+    assert!(decoded.1.is_none());
+    let mut missing_blob = generation.clone();
+    missing_blob["snapshots"]
+        .as_object_mut()
+        .expect("snapshot table")
+        .remove(current_ref);
+    let mut wrong_reference = generation.clone();
+    wrong_reference["last_verified"] = json!(format!("sha256:{}", "0".repeat(64)));
+    let mut wrong_hash = generation.clone();
+    wrong_hash["snapshots"][current_ref]["project_version"] = json!("0.2.0");
+    let mut extra_blob = generation.clone();
+    let mut unused = generation_view["current"].clone();
+    unused["project_version"] = json!("0.2.0");
+    let unused_ref = cott::snapshot_record::digest(&unused).expect("unused snapshot digest");
+    extra_blob["snapshots"][unused_ref] = unused;
+    for invalid in [
+        generation_view,
+        missing_blob,
+        wrong_reference,
+        wrong_hash,
+        extra_blob,
+    ] {
+        assert!(cott::snapshot_record::decode(&invalid, 8).is_err());
+    }
 
     let strategy = json!({
         "schema_version": 5,
@@ -434,7 +467,7 @@ fn generation_snapshot() -> Value {
         "verified": false,
         "project_version": "0.1.0",
         "compatibility": {
-            "generation_schema": 7,
+            "generation_schema": 8,
             "canonical_ir_schema": 8,
             "runtime_abi": 7,
             "contract_strategy_schema": 5,

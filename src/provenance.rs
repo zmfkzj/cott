@@ -4,9 +4,7 @@ use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::hash::sha256_hex;
-
-pub const GENERATION_SCHEMA_VERSION: u32 = 7;
+pub const GENERATION_SCHEMA_VERSION: u32 = 8;
 pub const CANONICAL_IR_SCHEMA_VERSION: u32 = 8;
 pub const RUNTIME_ABI_VERSION: u32 = 7;
 pub const CONTRACT_STRATEGY_SCHEMA_VERSION: u32 = 5;
@@ -38,12 +36,43 @@ impl GenerationCompatibility {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GenerationRecord {
     pub schema_version: u32,
     pub current: GenerationSnapshot,
     pub last_verified: Option<GenerationSnapshot>,
+}
+
+impl Serialize for GenerationRecord {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let current = serde_json::to_value(&self.current).map_err(serde::ser::Error::custom)?;
+        let last_verified = self
+            .last_verified
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(serde::ser::Error::custom)?;
+        crate::snapshot_record::encode(self.schema_version, &current, last_verified.as_ref())
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for GenerationRecord {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = crate::snapshot_record::deserialize_json(deserializer)?;
+        let (current, last_verified) =
+            crate::snapshot_record::decode(&wire, GENERATION_SCHEMA_VERSION)
+                .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            schema_version: GENERATION_SCHEMA_VERSION,
+            current: serde_json::from_value(current).map_err(serde::de::Error::custom)?,
+            last_verified: last_verified
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(serde::de::Error::custom)?,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -331,8 +360,8 @@ pub struct StreamDigest {
 
 impl GenerationSnapshot {
     pub fn compute_generation_id(&mut self) -> Result<(), String> {
-        let identity = canonical_json(&normalized_generation_identity(self)?)?;
-        self.generation_id = format!("sha256:{}", sha256_hex(&identity));
+        self.generation_id =
+            crate::snapshot_record::digest(&normalized_generation_identity(self)?)?;
         Ok(())
     }
 }
@@ -346,7 +375,7 @@ impl GenerationRecord {
     }
 
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
-        let value: Value = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+        let value = crate::snapshot_record::parse_json(bytes)?;
         validate(&value)?;
         let record: Self = serde_json::from_value(value).map_err(|error| error.to_string())?;
         record.validate_identities()?;
@@ -410,7 +439,7 @@ fn normalized_generation_identity(snapshot: &GenerationSnapshot) -> Result<Value
         object.remove(key);
     }
     Ok(json!({
-        "domain": "cott.generation.v7",
+        "domain": "cott.generation.v8",
         "schema_version": GENERATION_SCHEMA_VERSION,
         "current": current,
     }))

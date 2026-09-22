@@ -68,6 +68,12 @@ impl EnvRestore {
         }
         Self { saved }
     }
+
+    fn with_path(mut self, path: &Path) -> Self {
+        self.saved.push(("PATH", std::env::var_os("PATH")));
+        unsafe { std::env::set_var("PATH", path) };
+        self
+    }
 }
 impl Drop for EnvRestore {
     fn drop(&mut self) {
@@ -109,6 +115,72 @@ fn fake_adapter_with_version_probe(workspace: &Path, version_probe: &str, body: 
             .expect("make fake agent executable");
     }
     executable
+}
+
+fn bun_omp_fixture(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let modules = root.join("installation/node_modules");
+    let package = modules.join("@oh-my-pi/pi-coding-agent");
+    let dependency = modules.join(".store/fixture-data@1/node_modules/fixture-data");
+    let runtime_dir = root.join("runtime");
+    fs::create_dir_all(package.join("dist")).expect("OMP package");
+    fs::create_dir_all(&dependency).expect("dependency");
+    fs::create_dir(&runtime_dir).expect("runtime");
+    fs::write(
+        package.join("package.json"),
+        r#"{"name":"@oh-my-pi/pi-coding-agent","bin":{"omp":"dist/cli.js"},"dependencies":{"fixture-data":"1"}}"#,
+    )
+    .expect("OMP package metadata");
+    fs::write(
+        dependency.join("package.json"),
+        r#"{"name":"fixture-data"}"#,
+    )
+    .expect("dependency metadata");
+    fs::write(dependency.join("version"), "omp/18.2.7\n").expect("dependency version");
+    fs::write(dependency.join("candidate"), "generated through Bun\n").expect("dependency content");
+    symlink(&dependency, modules.join("fixture-data")).expect("package manager dependency link");
+    let unrelated = modules.join("unrelated");
+    fs::create_dir(&unrelated).expect("unrelated package");
+    fs::write(unrelated.join("secret"), "unrelated package data").expect("unrelated data");
+    fs::write(runtime_dir.join("secret"), "outside runtime data").expect("runtime sibling data");
+    let bun = runtime_dir.join("bun");
+    fs::write(
+        &bun,
+        "#!/bin/sh\nscript=$1\nshift\nexec /bin/sh \"$script\" \"$@\"\n",
+    )
+    .expect("Bun-like runtime");
+    fs::set_permissions(&bun, fs::Permissions::from_mode(0o755)).expect("runtime permissions");
+    let script = package.join("dist/cli.js");
+    fs::write(
+        &script,
+        format!(
+            r#"#!/usr/bin/env bun
+set -eu
+[ ! -e '{runtime_secret}' ]
+[ ! -e '{unrelated_secret}' ]
+[ "$PATH" = /usr/bin:/bin ]
+[ -z "${{ANTHROPIC_API_KEY+x}}" ]
+if (printf changed > '{dependency}/candidate') 2>/dev/null; then exit 10; fi
+if [ "$1" = --version ]; then
+    [ -z "${{PI_CODING_AGENT_DIR+x}}" ]
+    printf probed > "$TMPDIR/version-seen"
+    cat '{dependency}/version'
+    exit 0
+fi
+[ "$(cat "$TMPDIR/version-seen")" = probed ]
+if (printf changed > sibling.py) 2>/dev/null; then exit 11; fi
+if (printf changed > new-file.py) 2>/dev/null; then exit 12; fi
+cat '{dependency}/candidate' > implementation.py
+"#,
+            runtime_secret = runtime_dir.join("secret").display(),
+            unrelated_secret = unrelated.join("secret").display(),
+            dependency = modules.join("fixture-data").display(),
+        ),
+    )
+    .expect("OMP entrypoint");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("script permissions");
+    (script, runtime_dir, dependency)
 }
 
 fn fake_adapter(workspace: &Path, version: &str, body: &str) -> PathBuf {
@@ -397,6 +469,113 @@ fn claude_golden_argv_stdin_environment_json_and_provenance() {
             .windows(b"anthropic-secret-api-key".len())
             .any(|window| window == b"anthropic-secret-api-key")
     );
+}
+
+#[test]
+fn omp_bun_package_runs_both_phases_with_only_its_runtime_closure() {
+    let (temp, workspace, scratch, target) = fixture();
+    let (executable, runtime_dir, dependency) = bun_omp_fixture(&temp.root);
+    fs::write(workspace.join("sibling.py"), "untouched").expect("workspace sibling");
+    let entrypoint_bytes = fs::read(&executable).expect("entrypoint bytes");
+    let _lock = _hold_env_lock();
+    let _environment = EnvRestore::controlled(&scratch, &executable).with_path(&runtime_dir);
+    let Some(result) = run_or_skip(
+        AgentKind::Omp,
+        executable.clone(),
+        &workspace,
+        &scratch,
+        &target,
+        b"generate",
+    ) else {
+        return;
+    };
+    let candidate = result.expect("sandboxed Bun OMP");
+    assert_eq!(candidate.adapter_version, "18.2.7");
+    assert_eq!(candidate.implementation, b"generated through Bun\n");
+    assert_eq!(candidate.executable, executable);
+    assert_eq!(
+        candidate.executable_hash,
+        format!("sha256:{}", sha256_hex(&entrypoint_bytes))
+    );
+    assert_eq!(
+        fs::read_to_string(dependency.join("candidate")).expect("dependency"),
+        "generated through Bun\n"
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.join("sibling.py")).expect("sibling"),
+        "untouched"
+    );
+    assert!(!workspace.join("new-file.py").exists());
+}
+
+#[test]
+fn omp_bun_rejects_missing_and_unsafe_runtimes_before_running() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _lock = _hold_env_lock();
+    for case in ["missing", "hardlink", "nonexecutable", "directory"] {
+        let (temp, workspace, scratch, target) = fixture();
+        let (executable, runtime_dir, _) = bun_omp_fixture(&temp.root);
+        let bun = runtime_dir.join("bun");
+        match case {
+            "missing" => fs::remove_file(&bun).expect("remove runtime"),
+            "hardlink" => fs::hard_link(&bun, runtime_dir.join("other-bun")).expect("hardlink"),
+            "nonexecutable" => fs::set_permissions(&bun, fs::Permissions::from_mode(0o644))
+                .expect("nonexecutable runtime"),
+            "directory" => {
+                fs::remove_file(&bun).expect("remove runtime");
+                fs::create_dir(&bun).expect("runtime directory");
+            }
+            _ => unreachable!(),
+        }
+        let _environment = EnvRestore::controlled(&scratch, &executable).with_path(&runtime_dir);
+        let error = run_agent(
+            AgentKind::Omp,
+            executable,
+            &workspace,
+            &scratch,
+            &target,
+            b"generate".to_vec(),
+            10,
+        )
+        .expect_err(case);
+        assert!(error.contains("OMP Bun runtime"), "{case}: {error}");
+        assert!(
+            !target.exists(),
+            "{case} must fail before the version probe"
+        );
+    }
+}
+
+#[test]
+fn omp_bun_rejects_dependency_links_outside_the_installation() {
+    use std::os::unix::fs::symlink;
+
+    let (temp, workspace, scratch, target) = fixture();
+    let (executable, runtime_dir, dependency) = bun_omp_fixture(&temp.root);
+    let outside = temp.root.join("outside/node_modules/fixture-data");
+    fs::create_dir_all(outside.parent().expect("outside parent")).expect("outside directory");
+    fs::rename(&dependency, &outside).expect("move dependency outside installation");
+    let link = temp.root.join("installation/node_modules/fixture-data");
+    fs::remove_file(&link).expect("remove package link");
+    symlink(outside, &link).expect("escaping dependency link");
+    let _lock = _hold_env_lock();
+    let _environment = EnvRestore::controlled(&scratch, &executable).with_path(&runtime_dir);
+    let error = run_agent(
+        AgentKind::Omp,
+        executable,
+        &workspace,
+        &scratch,
+        &target,
+        b"generate".to_vec(),
+        10,
+    )
+    .expect_err("escaping package must fail");
+    assert!(
+        error.contains("unsafe OMP runtime package location"),
+        "{error}"
+    );
+    assert!(!target.exists());
 }
 
 #[test]

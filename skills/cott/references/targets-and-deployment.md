@@ -8,9 +8,9 @@ Cott package `1.0.0`, Canonical IR schema `8`, and diagnostics schema `1` are sh
 
 | Target | Generation identity | Runtime ABI | Contract strategy |
 | --- | --- | --- | --- |
-| Python | schema `7`, `cott.generation.v7` | `7` | schema `5` |
-| Kotlin | schema `1`, `cott.kotlin.generation.v1` | `1` | target-owned |
-| Dart | schema `1`, `cott.dart.generation.v1` | `1` | target-owned |
+| Python | schema `8`, `cott.generation.v8` | `7` | schema `5` |
+| Kotlin | schema `2`, `cott.kotlin.generation.v2` | `1` | target-owned |
+| Dart | schema `2`, `cott.dart.generation.v2` | `2` | target-owned |
 
 Never copy fields, generation records, bindings, managed output, or accepted implementation source between targets. A manifest with no target or more than one target is invalid.
 
@@ -101,18 +101,48 @@ Use the exact signature and imports rendered by `cott prompt <fully.qualified.ca
 
 Dart implementations are transformed into compiler-owned private parts. Do not add `library`, `part`, or `export` directives. Kotlin and Dart erased/runtime type distinctions use compiler-generated witnesses; do not replace them with reflection, runtime type text, unchecked casts, or phantom associated wrappers.
 
+Private Dart type-module aliases use `_cott_t_` plus module segments, escaping `_` as `_u` and
+joining segments with `__`: `foo_bar.baz` becomes `_cott_t_foo_ubar__baz`. Use the prompt's aliases;
+they do not change canonical names or public facade imports. Preserve authenticated agent bytes;
+do not cosmetically edit accepted sources and then refresh their hashes by hand.
+
 ## Consume only public facades
 
 - Python callers import the generated Cott module facade. They do not import or re-export `_cott_impl`, `cott_bindings`, stubs, or generated internals.
 - Kotlin callers depend on the verified `cott-module.jar` and import the generated Cott package. They do not add raw generated source or import/re-export `cott_impl` or `cott_bindings`.
 - Dart callers import `package:<project>/modules/<module>.dart`. They do not import implementation parts, raw state, seals, or private runtime controls.
 
+For Dart ABI `2`, a whole nonempty enum with no type/const generics and only payloadless variants
+is a native enum. Preserve exact Cott spelling: use `Kind.Local`, not `KindLocal()` or
+`Kind.Local()`. `Kind.values`, `value.name`, and `value.index` are native Dart operations, and a
+switch can exhaustively match constant members without a wildcard:
+
+```dart
+String label(Kind kind) => switch (kind) {
+  Kind.Local => 'local',
+  Kind.Remote => 'remote',
+};
+```
+
+The eligible enum's former variant classes are removed without aliases. Any payload or generic
+parameter keeps the entire enum as a sealed arbitrary-value ADT with generated variant class
+constructors, including payloadless variants. `Option` and `Result` remain generic ADTs.
+These are target projection rules, not changes to `.cott` author syntax.
+The only member-name escape is a member matching its enum type: `Kind.Kind$`, not `Kind.Kind`.
+It remains native; its canonical identity is unchanged, while native `.name` includes the `$`.
+
+Dart structs retain the named `<Struct>$CopyWith` extension and `value.copyWith(...)`; omitted
+fields preserve exact stored values and explicit overrides rerun the canonical constructor.
+Nullable Option helpers require `T extends Object`, so `Some(null)` is never conflated with
+`Nothing`. General `Option[Any]` uses explicit variants. `CottBytes.readOnlyView` is zero-copy and
+read-only; `toUint8List()` returns a mutable defensive copy.
+
 Android/Gradle owns UI, manifests, resources, dependency resolution, DEX, APK/AAB, signing, installation, and devices. Flutter owns UI, plugins, platform scaffolds, assets, APK/AAB, and web compilation. Cott owns only the typed module, its verification, and its deployment package.
 
 ## Preserve the publication lifecycle
 
 1. `cott emit ir` updates only Canonical IR scope and `generation.json`.
-2. `cott emit python|kotlin|dart` must match the selected manifest target. It invokes no agent or target compiler and always leaves `current.verified = false`.
+2. `cott emit python|kotlin|dart` must match the selected manifest target. It invokes no agent or target compiler and always leaves `.snapshots[.current].verified = false` in the record.
 3. `cott generate ... --target python|kotlin|dart` invokes the selected adapter only for eligible unresolved callables. It also leaves the snapshot unverified.
 4. `cott verify` rebuilds the complete selected target, rejects unresolved work or source/managed drift, runs the real target verifier, and is the only command that certifies the current snapshot.
 5. `cott deploy` accepts only a verified, fully resolved, policy-passing, unchanged snapshot and publishes to a new destination. It never overwrites, generates, verifies, or infers application resources.
@@ -124,3 +154,31 @@ Deploy payloads are target-specific:
 - Dart: portable `lib/`, compiler-owned `pubspec.yaml`, unchanged generation and dependency records, and the authenticated runtime `vendor/` closure. Kernel, runner, SDK, contracts, and caches are excluded.
 
 Treat a successful `emit` or `generate` as publication of an unverified development snapshot, not a release. Treat successful `verify` as certification of that exact snapshot. Treat successful `deploy` as packaging, not application build or device validation.
+
+## Read and relocate a generation record
+
+`generation.json` is a closed envelope with exactly four keys: `schema_version`, `current`,
+`last_verified`, and `snapshots`. `current` is a content digest; `last_verified` is a digest or
+`null`. `snapshots` maps each reachable digest to a full snapshot object. Exactly one or two blobs
+are stored; identical current/last-verified references share one. For example:
+
+```bash
+jq '.snapshots[.current].verified' generated/generation.json
+jq 'if .last_verified == null then null else .snapshots[.last_verified] end' generated/generation.json
+```
+
+Snapshot content identity includes full evidence, `AgentRun` data, and the verified flag.
+`generation_id` instead excludes the existing volatile fields in a normalized target-domain
+identity wrapper. Both use SHA-256 over the `cott.snapshot.v1` domain plus NUL and a structural
+encoding of tagged, length-delimited values and f64 IEEE bits—not raw JSON text. Input and managed
+file hashes still cover raw file bytes. See architecture §16.1 for the envelope sample.
+
+Readers reject old formats, unused/dangling blobs, and digest/content tampering. There is no
+external snapshot cache or sidecar: one record contains everything needed to resolve both
+snapshots when saved as a diff baseline or relocated into deployment. Generated output must use
+the new runtime loader and carry its self-contained deployment record.
+
+The bounded one-time repository conversion is compiler-linked and transactional: preserve source
+and `AgentRun` evidence, clear verification, then run real emit and verify. It is not a public
+migration command or a compatibility reader. Old certification does not carry across schema/ABI
+changes; never edit hashes to bless changed source. The package version remains `1.0.0`.

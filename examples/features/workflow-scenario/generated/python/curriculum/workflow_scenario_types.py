@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Annotated, Any, Final, ForwardRef, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_descending_by, _cott_ends_with, _cott_euclidean_mod, _cott_normalize_f32, _cott_starts_with, _cott_unique_by, _cott_validate_abi, _cott_validated_construction
+from cott_runtime import _cott_contract_condition
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SearchStatus_Loading:
@@ -40,9 +41,9 @@ class SearchSnapshot:
             object.__setattr__(self, "result", _cott_validate_abi(self.result, str, path="$.result"))
         if not _cott_validated_construction():
             object.__setattr__(self, "status", _cott_validate_abi(self.status, SearchStatus, path="$.status"))
-        if not (((self).request_id > 0)):
+        if not (_cott_contract_condition((((self).request_id > 0)), "curriculum.workflow_scenario.SearchSnapshot", "invariant:0")):
             raise CottContractViolation("invariant failed", symbol="curriculum.workflow_scenario.SearchSnapshot", clause="invariant:0", phase="invariant", span={"end_byte":240,"end_column":34,"end_line":14,"start_byte":211,"start_column":5,"start_line":14}, expected="true", actual="false")
-        if not (((self).applied_request_id <= (self).request_id)):
+        if not (_cott_contract_condition((((self).applied_request_id <= (self).request_id)), "curriculum.workflow_scenario.SearchSnapshot", "invariant:1")):
             raise CottContractViolation("invariant failed", symbol="curriculum.workflow_scenario.SearchSnapshot", clause="invariant:1", phase="invariant", span={"end_byte":297,"end_column":57,"end_line":15,"start_byte":245,"start_column":5,"start_line":15}, expected="true", actual="false")
 
 @final
@@ -60,7 +61,7 @@ class SearchResult:
             object.__setattr__(self, "query", _cott_validate_abi(self.query, str, path="$.query"))
         if not _cott_validated_construction():
             object.__setattr__(self, "result", _cott_validate_abi(self.result, str, path="$.result"))
-        if not (((self).request_id > 0)):
+        if not (_cott_contract_condition((((self).request_id > 0)), "curriculum.workflow_scenario.SearchResult", "invariant:0")):
             raise CottContractViolation("invariant failed", symbol="curriculum.workflow_scenario.SearchResult", clause="invariant:0", phase="invariant", span={"end_byte":405,"end_column":34,"end_line":22,"start_byte":376,"start_column":5,"start_line":22}, expected="true", actual="false")
 
 @final
@@ -90,7 +91,7 @@ class SaveSnapshot:
             object.__setattr__(self, "text", _cott_validate_abi(self.text, str, path="$.text"))
         if not _cott_validated_construction():
             object.__setattr__(self, "status", _cott_validate_abi(self.status, SaveStatus, path="$.status"))
-        if not (((self).revision > 0)):
+        if not (_cott_contract_condition((((self).revision > 0)), "curriculum.workflow_scenario.SaveSnapshot", "invariant:0")):
             raise CottContractViolation("invariant failed", symbol="curriculum.workflow_scenario.SaveSnapshot", clause="invariant:0", phase="invariant", span={"end_byte":556,"end_column":32,"end_line":33,"start_byte":529,"start_column":5,"start_line":33}, expected="true", actual="false")
 
 @final
@@ -108,7 +109,7 @@ class SaveReceipt:
             object.__setattr__(self, "text", _cott_validate_abi(self.text, str, path="$.text"))
         if not _cott_validated_construction():
             object.__setattr__(self, "status", _cott_validate_abi(self.status, SaveStatus, path="$.status"))
-        if not (((self).revision > 0)):
+        if not (_cott_contract_condition((((self).revision > 0)), "curriculum.workflow_scenario.SaveReceipt", "invariant:0")):
             raise CottContractViolation("invariant failed", symbol="curriculum.workflow_scenario.SaveReceipt", clause="invariant:0", phase="invariant", span={"end_byte":665,"end_column":32,"end_line":40,"start_byte":638,"start_column":5,"start_line":40}, expected="true", actual="false")
 
 """Start an immutable public search snapshot for the supplied request."""

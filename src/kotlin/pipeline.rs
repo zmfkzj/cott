@@ -679,7 +679,10 @@ pub(crate) fn deploy(
         .baseline
         .as_ref()
         .ok_or_else(|| Failure::new(4, "deployment requires generation.json"))?;
-    if !record.current.verified || record.last_verified.as_ref() != Some(&record.current) {
+    let certified = record
+        .current_is_last_verified()
+        .map_err(|message| Failure::new(4, message))?;
+    if !record.current.verified || !certified {
         return Err(Failure::new(
             4,
             "deployment requires a verified current Kotlin snapshot; run `cott verify`",

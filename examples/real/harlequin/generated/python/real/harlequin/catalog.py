@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from real.harlequin.catalog_types import CatalogColumn, CatalogError, CatalogError_ConnectionMissing, CatalogError_Failed, CatalogError_LimitExceeded, CatalogError_NamespaceMissing, CatalogMatch, CatalogMatchKind, CatalogMatchKind_Column, CatalogMatchKind_Relation, CatalogRelation, CatalogScope, CatalogSnapshot, CompletionRequest, CompletionResult, RelationKind, RelationKind_Table, RelationKind_View
 from real.harlequin.core_types import Connection, DatabaseTarget, SqlClientError
@@ -39,11 +40,16 @@ def catalog_relations(database: DatabaseTarget) -> Result[CottList[CatalogRelati
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.catalog.catalog_relations", phase="error", span={"end_byte":1310,"end_column":1,"end_line":66,"start_byte":1083,"start_column":1,"start_line":59}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.catalog.catalog_relations", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.catalog.catalog_relations", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is SqlClientError_SqliteFailure:
+        _cott_contract_condition(True, "real.harlequin.catalog.catalog_relations", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             relations = _cott_match_value.value
-            return ((len(relations) <= 100000))
+            return (_cott_contract_condition(((len(relations) <= 100000)), "real.harlequin.catalog.catalog_relations", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.catalog.catalog_relations", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.catalog_relations", clause="ensures:0", phase="ensures", span={"end_byte":1239,"end_column":60,"end_line":60,"start_byte":1184,"start_column":5,"start_line":60}, expected="true", actual="false")
@@ -78,11 +84,16 @@ def catalog_columns(database: DatabaseTarget, relation: str) -> Result[CottList[
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.catalog.catalog_columns", phase="error", span={"end_byte":1554,"end_column":1,"end_line":76,"start_byte":1310,"start_column":1,"start_line":66}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.catalog.catalog_columns", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.catalog.catalog_columns", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is SqlClientError_SqliteFailure:
+        _cott_contract_condition(True, "real.harlequin.catalog.catalog_columns", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             columns = _cott_match_value.value
-            return ((len(columns) <= 65535))
+            return (_cott_contract_condition(((len(columns) <= 65535)), "real.harlequin.catalog.catalog_columns", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.catalog.catalog_columns", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.catalog_columns", clause="ensures:0", phase="ensures", span={"end_byte":1483,"end_column":55,"end_line":70,"start_byte":1433,"start_column":5,"start_line":70}, expected="true", actual="false")
@@ -117,11 +128,16 @@ def search_catalog(database: DatabaseTarget, term: str) -> Result[CottList[Catal
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.catalog.search_catalog", phase="error", span={"end_byte":1807,"end_column":1,"end_line":86,"start_byte":1554,"start_column":1,"start_line":76}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.catalog.search_catalog", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.catalog.search_catalog", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is SqlClientError_SqliteFailure:
+        _cott_contract_condition(True, "real.harlequin.catalog.search_catalog", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             catalog_matches = _cott_match_value.value
-            return ((len(catalog_matches) <= 1000))
+            return (_cott_contract_condition(((len(catalog_matches) <= 1000)), "real.harlequin.catalog.search_catalog", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.catalog.search_catalog", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.search_catalog", clause="ensures:0", phase="ensures", span={"end_byte":1736,"end_column":70,"end_line":80,"start_byte":1671,"start_column":5,"start_line":80}, expected="true", actual="false")
@@ -156,11 +172,22 @@ def refresh_catalog(connection: Connection, scope: CatalogScope) -> Result[Catal
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.catalog.refresh_catalog", phase="error", span={"end_byte":2180,"end_column":1,"end_line":99,"start_byte":1807,"start_column":1,"start_line":86}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.catalog.refresh_catalog", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.catalog.refresh_catalog", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is CatalogError_ConnectionMissing:
+        _cott_contract_condition(True, "real.harlequin.catalog.refresh_catalog", "error:1")
+    if type(_result) is Err and type(_result.error) is CatalogError_NamespaceMissing:
+        _cott_contract_condition(True, "real.harlequin.catalog.refresh_catalog", "error:2")
+    if type(_result) is Err and type(_result.error) is CatalogError_Failed:
+        _cott_contract_condition(True, "real.harlequin.catalog.refresh_catalog", "error:3")
+    if type(_result) is Err and type(_result.error) is CatalogError_LimitExceeded:
+        _cott_contract_condition(True, "real.harlequin.catalog.refresh_catalog", "error:4")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             snapshot = _cott_match_value.value
-            return ((len((snapshot).relations) <= 100000))
+            return (_cott_contract_condition(((len((snapshot).relations) <= 100000)), "real.harlequin.catalog.refresh_catalog", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.catalog.refresh_catalog", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.refresh_catalog", clause="ensures:0", phase="ensures", span={"end_byte":1991,"end_column":68,"end_line":90,"start_byte":1928,"start_column":5,"start_line":90}, expected="true", actual="false")
@@ -184,7 +211,7 @@ def complete_sql(request: CompletionRequest, snapshot: CatalogSnapshot) -> Compl
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.catalog.complete_sql", phase="implementation-call", span={"end_byte":2353,"end_column":1,"end_line":104,"start_byte":2180,"start_column":1,"start_line":99}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, CompletionResult, path="$.return")
-    if not ((len((_result).candidates) <= (request).maximum_candidates)):
+    if not (_cott_contract_condition(((len((_result).candidates) <= (request).maximum_candidates)), "real.harlequin.catalog.complete_sql", "ensures:0")):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.complete_sql", clause="ensures:0", phase="ensures", span={"end_byte":2335,"end_column":64,"end_line":100,"start_byte":2276,"start_column":5,"start_line":100}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, CompletionResult, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -218,11 +245,16 @@ def find_catalog(snapshot: CatalogSnapshot, term: str, maximum_matches: U64) -> 
             raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.catalog.find_catalog", phase="error", span={"end_byte":2604,"end_column":1,"end_line":114,"start_byte":2353,"start_column":1,"start_line":104}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.catalog.find_catalog", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.harlequin.catalog.find_catalog", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is CatalogError_LimitExceeded:
+        _cott_contract_condition(True, "real.harlequin.catalog.find_catalog", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             found = _cott_match_value.value
-            return ((len(found) <= maximum_matches))
+            return (_cott_contract_condition(((len(found) <= maximum_matches)), "real.harlequin.catalog.find_catalog", "ensures:0"))
+        _cott_contract_condition((False), "real.harlequin.catalog.find_catalog", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.find_catalog", clause="ensures:0", phase="ensures", span={"end_byte":2549,"end_column":61,"end_line":109,"start_byte":2493,"start_column":5,"start_line":109}, expected="true", actual="false")

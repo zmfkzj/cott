@@ -20,12 +20,16 @@ Normal emission creates compiler-owned artifacts. Full verification certifies th
 
 | Path | Exact recorded fields | Interpretation |
 | --- | --- | --- |
-| `current.verification.limits` | `proof_node_limit`, `proof_branch_limit`, `candidate_limit`, `lifecycle_limit` | The effective non-default budget: `257`, `65`, `17`, and `5`. |
-| `current.verification.contract_proofs` | `algorithm`, `version`, `limits`, `contracts` | Each proof obligation has `kind`, `symbol`, `status`, optional `clauses`, `reason`, and `model`. `status` is the separate static proof result (`proved`, `disproved`, or `unknown`), not an execution claim. |
-| `current.verification.static` | `checker`, `runtime_signatures`, `grade`, `status` | Static signature/type-check capability; its `grade` is `static proof`. |
-| `current.verification.runtime_capability` | `grade`, `sandbox`, `status` | Runtime verification capability; its `grade` is `runtime check`. |
-| `current.verification.contract_tests.contracts[]` | `symbol`, `clause_id`, `span`, `evidence[]` | Every clause keeps distinct test evidence. Each `evidence[]` entry has `grade`, `mode`, `valid_cases`, and `reason`; only exercised valid cases earn `test observation`. A zero-case or unhit conditional clause is `unobserved` with its reason. |
-| `current.semantic_coverage` | `clauses`, `summary`, `policy` | The semantic-policy result joined from canonical clause inventory and runner evidence, including selected-count, pass/fail, and violations. |
+| `.snapshots[.current].verification.limits` | `proof_node_limit`, `proof_branch_limit`, `candidate_limit`, `lifecycle_limit` | The effective non-default budget: `257`, `65`, `17`, and `5`. |
+| `.snapshots[.current].verification.contract_proofs` | `algorithm`, `version`, `limits`, `contracts` | Each proof obligation has `kind`, `symbol`, `status`, optional `clauses`, `reason`, and `model`. `status` is the separate static proof result (`proved`, `disproved`, or `unknown`), not an execution claim. |
+| `.snapshots[.current].verification.static` | `checker`, `runtime_signatures`, `grade`, `status` | Static signature/type-check capability; its `grade` is `static proof`. |
+| `.snapshots[.current].verification.runtime_capability` | `grade`, `sandbox`, `status` | Runtime verification capability; its `grade` is `runtime check`. |
+| `.snapshots[.current].verification.contract_tests.contracts[]` | `symbol`, `clause_id`, `span`, `evidence[]` | Every clause keeps distinct test evidence. Each `evidence[]` entry has `grade`, `mode`, `valid_cases`, and `reason`; only exercised valid cases earn `test observation`. A zero-case or unhit conditional clause is `unobserved` with its reason. |
+| `.snapshots[.current].semantic_coverage` | `clauses`, `summary`, `policy` | The semantic-policy result joined from canonical clause inventory and runner evidence, including selected-count, pass/fail, and violations. |
+
+These paths are `jq` selectors: `current` is a digest reference into the record's self-contained
+`snapshots` map. For example, run
+`jq '.snapshots[.current].semantic_coverage' generated/generation.json`.
 
 `[[verification.coverage.rules]]` selects the real `curriculum.contracts_evidence.assess_label` clauses `ensures:2` and `error:5`. It allows neither `unobserved`, `trust declaration`, nor `unknown`; the valid, missing, short, and successful facade cases make the selected success and conditional-error obligations meaningful coverage targets.
 

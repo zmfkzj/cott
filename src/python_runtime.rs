@@ -9,6 +9,7 @@ import asyncio as _asyncio
 import dataclasses as _dataclasses
 import ast as _ast
 import contextlib as _contextlib
+import contextvars as _contextvars
 import hashlib as _hashlib
 import importlib.metadata as _metadata
 import json as _json
@@ -51,6 +52,67 @@ _N = TypeVar("_N", bound=int)
 
 _COTT_PROTOCOL_META = type(Protocol)
 _COTT_DYN_SEAL = object()
+
+_cott_contract_observer: _contextvars.ContextVar[object | None] = _contextvars.ContextVar(
+    "_cott_contract_observer", default=None
+)
+_cott_contract_sinks: dict[object, list[tuple[str, str, bool]]] = {}
+_cott_contract_scopes: dict[tuple[int, object | None], list[object]] = {}
+_cott_contract_invalid: set[object] = set()
+_cott_contract_lock = _threading.Lock()
+
+
+def _cott_contract_owner() -> tuple[int, object | None]:
+    try:
+        task = _asyncio.current_task()
+    except RuntimeError:
+        task = None
+    return _threading.get_ident(), task
+
+
+@_contextlib.contextmanager
+def _cott_observe_contracts() -> Iterator[list[tuple[str, str, bool]]]:
+    events: list[tuple[str, str, bool]] = []
+    identity = object()
+    owner = _cott_contract_owner()
+    token = _cott_contract_observer.set(identity)
+    with _cott_contract_lock:
+        _cott_contract_sinks[identity] = events
+        _cott_contract_scopes.setdefault(owner, []).append(identity)
+    try:
+        yield events
+    finally:
+        unchanged = _cott_contract_observer.get() is identity
+        with _cott_contract_lock:
+            scopes = _cott_contract_scopes[owner]
+            invalid = identity in _cott_contract_invalid or not unchanged or scopes[-1] is not identity
+            scopes.remove(identity)
+            if not scopes:
+                del _cott_contract_scopes[owner]
+            del _cott_contract_sinks[identity]
+            _cott_contract_invalid.discard(identity)
+        _cott_contract_observer.reset(token)
+        if invalid:
+            raise CottContractViolation("contract observation context changed", phase="evidence")
+
+
+def _cott_contract_condition(condition: bool, symbol: str, clause: str) -> bool:
+    passed = bool(condition)
+    identity = _cott_contract_observer.get()
+    if identity is None and not _cott_contract_scopes:
+        return passed
+    owner = _cott_contract_owner()
+    with _cott_contract_lock:
+        scopes = _cott_contract_scopes.get(owner)
+        if identity is None and not scopes:
+            return passed
+        events = _cott_contract_sinks.get(identity) if type(identity) is object else None
+        if events is None or (scopes and scopes[-1] is not identity):
+            _cott_contract_invalid.update(_cott_contract_sinks)
+            raise CottContractViolation("contract observation context changed", phase="evidence")
+        events.append((symbol, clause, passed))
+    return passed
+
 
 
 @_final
@@ -1733,6 +1795,110 @@ def _cott_is_semantic_coverage(value: object) -> bool:
     return violation_keys == sorted(violation_keys) and len(set(violation_keys)) == len(violation_keys)
 
 
+def _cott_snapshot_digest(value: object) -> str:
+    digest = _hashlib.sha256(b"cott.snapshot.v1\0")
+
+    def length(size: int) -> None:
+        digest.update(size.to_bytes(8, "big"))
+
+    def encode(item: object) -> None:
+        if item is None:
+            digest.update(b"n")
+        elif type(item) is bool:
+            digest.update(b"t" if item else b"f")
+        elif type(item) is int:
+            if not -(1 << 63) <= item < (1 << 64):
+                raise ValueError("snapshot integer is outside the JSON integer range")
+            encoded = str(item).encode("ascii")
+            digest.update(b"i")
+            length(len(encoded))
+            digest.update(encoded)
+        elif type(item) is float:
+            if not _math.isfinite(item):
+                raise ValueError("snapshot float must be finite")
+            digest.update(b"d")
+            digest.update(_struct.pack(">d", item))
+        elif type(item) is str:
+            encoded = item.encode("utf-8")
+            digest.update(b"s")
+            length(len(encoded))
+            digest.update(encoded)
+        elif type(item) is list:
+            digest.update(b"a")
+            length(len(item))
+            for element in item:
+                encode(element)
+        elif type(item) is dict:
+            if any(type(key) is not str for key in item):
+                raise ValueError("snapshot object keys must be strings")
+            digest.update(b"o")
+            length(len(item))
+            for key in sorted(item):
+                encode(key)
+                encode(item[key])
+        else:
+            raise ValueError("snapshot contains a non-JSON value")
+
+    encode(value)
+    return "sha256:" + digest.hexdigest()
+
+
+def _cott_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object key: {key}")
+        result[key] = value
+    return result
+
+
+def _cott_json_integer(value: str) -> int:
+    # Rust's writer never emits integer -0; accepting it as Python int(0) would
+    # disagree with serde_json's signed floating-point zero interpretation.
+    if value == "-0":
+        raise ValueError("noncanonical JSON integer zero")
+    result = int(value)
+    if not -(1 << 63) <= result < (1 << 64):
+        raise ValueError("JSON integer is outside the snapshot integer range")
+    return result
+
+
+def _cott_json_constant(value: str) -> Never:
+    raise ValueError(f"nonfinite JSON constant: {value}")
+
+
+def _cott_resolve_generation_record(record: object) -> tuple[dict[object, object], dict[object, object] | None]:
+    if (
+        type(record) is not dict
+        or set(record) != {"schema_version", "current", "last_verified", "snapshots"}
+        or type(record["schema_version"]) is not int
+        or record["schema_version"] != 8
+        or not _cott_is_digest(record["current"])
+        or (record["last_verified"] is not None and not _cott_is_digest(record["last_verified"]))
+        or type(record["snapshots"]) is not dict
+    ):
+        raise _cott_violation("generation record is malformed")
+    reachable = {record["current"]}
+    if record["last_verified"] is not None:
+        reachable.add(record["last_verified"])
+    snapshots = record["snapshots"]
+    if set(snapshots) != reachable:
+        raise _cott_violation("generation snapshot references are dangling or unreferenced")
+    for reference, snapshot in snapshots.items():
+        if type(snapshot) is not dict:
+            raise _cott_violation("generation snapshot must be an object")
+        try:
+            actual = _cott_snapshot_digest(snapshot)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise _cott_violation(f"generation snapshot is malformed: {error}") from error
+        if actual != reference:
+            raise _cott_violation("generation snapshot digest mismatch")
+    return (
+        snapshots[record["current"]],
+        snapshots[record["last_verified"]] if record["last_verified"] is not None else None,
+    )
+
+
 def _cott_validate_generation_snapshot(snapshot: object, label: str) -> dict[object, object]:
     required = {
         "generation_id", "verified", "project_version", "compatibility", "inputs", "tools", "ir",
@@ -1751,7 +1917,7 @@ def _cott_validate_generation_snapshot(snapshot: object, label: str) -> dict[obj
         }
         or any(type(compatibility[key]) is not int for key in compatibility)
         or compatibility != {
-            "generation_schema": 7,
+            "generation_schema": 8,
             "canonical_ir_schema": 8,
             "runtime_abi": 7,
             "contract_strategy_schema": 5,
@@ -1844,14 +2010,8 @@ def _cott_validate_generation_identity(snapshot: dict[object, object]) -> str:
     current = dict(snapshot)
     for key in ("generation_id", "verified", "verification", "semantic_coverage", "agent_runs"):
         current.pop(key)
-    expected_id = _cott_sha256(
-        _json.dumps(
-            {"domain": "cott.generation.v7", "schema_version": 7, "current": current},
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode()
-        + b"\n"
+    expected_id = _cott_snapshot_digest(
+        {"domain": "cott.generation.v8", "schema_version": 8, "current": current}
     )
     if generation_id != expected_id:
         raise _cott_violation("generation identity mismatch")
@@ -1862,18 +2022,16 @@ def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symb
     artifact_root = root.parent if root.name == "python" else root
     generation_path = artifact_root / "generation.json"
     try:
-        current_record = _json.loads(_cott_regular_file_bytes(generation_path, "generation record"))
+        current_record = _json.loads(
+            _cott_regular_file_bytes(generation_path, "generation record"),
+            object_pairs_hook=_cott_json_object,
+            parse_int=_cott_json_integer,
+            parse_constant=_cott_json_constant,
+        )
     except (TypeError, ValueError) as error:
         raise _cott_violation(f"generation record is malformed: {error}") from error
-    if (
-        type(current_record) is not dict
-        or set(current_record) != {"schema_version", "current", "last_verified"}
-        or type(current_record["schema_version"]) is not int
-        or current_record["schema_version"] != 7
-    ):
-        raise _cott_violation("generation record is malformed")
-    current = _cott_validate_generation_snapshot(current_record["current"], "current")
-    last_verified = current_record["last_verified"]
+    current, last_verified = _cott_resolve_generation_record(current_record)
+    current = _cott_validate_generation_snapshot(current, "current")
     if last_verified is not None:
         last_verified = _cott_validate_generation_snapshot(last_verified, "last verified")
         if not last_verified["verified"]:

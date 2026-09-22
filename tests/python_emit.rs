@@ -15,6 +15,9 @@ use cott::project::{discover_sources_from_paths, load_config_with_paths};
 use cott::python::artifact_plan::{PythonArtifactPlan, PythonCallableKind};
 use cott::python_emit::emit;
 
+#[path = "support/snapshot.rs"]
+mod snapshot;
+
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 struct TempDir {
     path: PathBuf,
@@ -150,6 +153,61 @@ fn emit_sources_with_external_types_result(
         .expect("source should render");
     let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
     emit(&config, &plan, &ir, &[]).map(|emission| emission.files)
+}
+
+fn execute_emitted_python(
+    files: &std::collections::BTreeMap<PathBuf, Vec<u8>>,
+    extra_files: &[(&str, &[u8])],
+    script: &str,
+) {
+    let identity = Command::new("python3")
+        .args([
+            "-c",
+            "import hashlib, json, platform, sys, sysconfig; from pathlib import Path; executable = Path(sys.executable).resolve(); print(json.dumps(dict(implementation=sys.implementation.name, version=platform.python_version(), cache_tag=sys.implementation.cache_tag, os=sys.platform, machine=platform.machine(), platform=sysconfig.get_platform(), executable=str(executable), content_hash='sha256:' + hashlib.sha256(executable.read_bytes()).hexdigest())))",
+        ])
+        .output()
+        .expect("python3 should report its runtime identity");
+    assert!(identity.status.success(), "Python identity probe failed");
+    let temp = TempDir::new();
+    for (relative, content) in files {
+        let path = temp.path.join(relative);
+        fs::create_dir_all(path.parent().expect("generated artifact parent"))
+            .expect("generated artifact parent should be writable");
+        fs::write(path, content).expect("generated artifact should be writable");
+    }
+    for (relative, content) in extra_files {
+        let path = temp.path.join(relative);
+        fs::create_dir_all(path.parent().expect("fixture parent"))
+            .expect("fixture parent should be writable");
+        fs::write(path, content).expect("fixture should be writable");
+    }
+    // Bind the artifact to the interpreter executing this test, retaining loader validation.
+    let mut generation: cott::provenance::GenerationRecord =
+        serde_json::from_slice(bytes(files, "generation.json")).expect("generation record");
+    generation.current.tools["python"] =
+        serde_json::from_slice(&identity.stdout).expect("Python identity JSON");
+    generation
+        .current
+        .compute_generation_id()
+        .expect("native generation identity");
+    fs::write(
+        temp.path.join("generation.json"),
+        generation
+            .canonical_bytes()
+            .expect("native generation record"),
+    )
+    .expect("native generation record should be writable");
+    let output = Command::new("python3")
+        .args(["-c", script])
+        .current_dir(temp.path.join("python"))
+        .output()
+        .expect("python3 should execute generated contracts");
+    assert!(
+        output.status.success(),
+        "generated contracts failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -392,10 +450,8 @@ fn emits_complete_deterministic_python_artifact_tree() {
     assert!(facade.contains("run"));
     assert!(facade.contains("__all__"));
     assert!(facade.contains("(_result).data == data"));
-    let generation: serde_json::Value =
-        serde_json::from_slice(bytes(&first.files, "generation.json"))
-            .expect("generation record should be JSON");
-    assert_eq!(generation["schema_version"], 7);
+    let generation = snapshot::read(bytes(&first.files, "generation.json"));
+    assert_eq!(generation["schema_version"], 8);
     assert_eq!(generation["current"]["verified"], false);
     assert!(generation["current"].get("project").is_none());
     assert!(generation["current"].get("entry").is_none());
@@ -445,9 +501,7 @@ fn unresolved_functions_are_omitted_from_facade_exports() {
     assert!(!facade.contains("\"run\""));
     assert!(!facade.contains("def run"));
     let stub = String::from_utf8_lossy(bytes(&emitted.files, "stubs/app.pyi"));
-    let generation: serde_json::Value =
-        serde_json::from_slice(bytes(&emitted.files, "generation.json"))
-            .expect("generation record should be JSON");
+    let generation = snapshot::read(bytes(&emitted.files, "generation.json"));
     let unresolved = &generation["current"]["unresolved"][0];
     assert_eq!(unresolved["cott_symbol"], "app.run");
     assert_eq!(unresolved["kind"], "function");
@@ -577,7 +631,7 @@ impl CounterState for Counter:
         count: I32 = 0
     invariant self.count >= 0
     init(handle: Resource, title: Str, urgency: I32, count: I32):
-        requires count >= 0
+        requires count >= -1
         ensures self.count == count
     fn advance(self, amount: I32) -> I32:
         modifies self.count
@@ -596,7 +650,7 @@ impl CounterState for Counter:
         parse_project(discover_sources_from_paths(&paths).expect("sources")).expect("parse");
     let ir = render(&lower(&paths.source_dir, parsed).expect("lower")).expect("render");
     let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
-    let helper = b"def _cott_impl_CounterState_advance(self: CounterState, amount: int) -> int:\n    self.count += amount\n    return self.count\n";
+    let helper = b"from __future__ import annotations\n\ndef _cott_impl_CounterState_advance(self: CounterState, amount: int) -> int:\n    self.count += amount\n    return self.count\n";
     let binding = ResolvedBinding {
         module: "app".to_owned(),
         function: "advance".to_owned(),
@@ -614,7 +668,7 @@ impl CounterState for Counter:
         bytes: helper.to_vec(),
         sha256: sha256_hex(helper),
     };
-    let emission = emit(&config, &plan, &ir, &[binding]).expect("impl should emit");
+    let emission = emit(&config, &plan, &ir, &[binding.clone()]).expect("impl should emit");
     let facade = String::from_utf8_lossy(bytes(&emission.files, "python/app.py"));
     let stub = String::from_utf8_lossy(bytes(&emission.files, "stubs/app.pyi"));
     assert!(facade.contains("@final\nclass CounterState:"));
@@ -624,42 +678,14 @@ impl CounterState for Counter:
     assert!(facade.contains(
         "    handle: Resource\n    title: str\n    urgency: I32\n    completed: bool\n    count: I32\n    __slots__"
     ));
-    assert!(facade.contains("with self._cott_lock:"));
-    assert!(facade.contains("_cott_old_count = self.count"));
-    assert!(facade.contains("if self.handle is not _cott_old_handle:"));
-    assert!(facade.contains("_cott_impl_CounterState_advance"));
     assert!(facade.contains("def advance(self: CounterState, amount: I32) -> I32:"));
-    let init_ensure = "        if not (((self).count == count)):";
-    let init_invariant = "        if not (((self).count >= 0)):";
-    let method_invariant = "            if not (((self).count >= 0)):";
-    assert_eq!(
-        facade
-            .lines()
-            .filter(|line| *line == init_invariant)
-            .count(),
-        1,
-        "init invariant must be inside __init__:\n{facade}"
-    );
-    assert_eq!(
-        facade
-            .lines()
-            .filter(|line| *line == method_invariant)
-            .count(),
-        1,
-        "method invariant must remain inside its lock:\n{facade}"
-    );
-    assert!(
-        facade.find(init_ensure).unwrap() < facade.find(init_invariant).unwrap(),
-        "init ensures must precede init invariants:\n{facade}"
-    );
     assert!(stub.contains("@final\nclass CounterState:"));
     assert!(stub.contains(
         "    handle: Resource\n    title: str\n    urgency: I32\n    completed: bool\n    count: I32\n    def __init__"
     ));
     assert!(!stub.contains("_cott_lock"));
     assert!(stub.contains("def advance(self: CounterState, amount: I32) -> I32: ..."));
-    let generation: serde_json::Value =
-        serde_json::from_slice(bytes(&emission.files, "generation.json")).expect("generation JSON");
+    let generation = snapshot::read(bytes(&emission.files, "generation.json"));
     let implementation = &generation["current"]["implementations"][0];
     assert_eq!(implementation["kind"], "impl_method");
     assert_eq!(implementation["concrete"], "CounterState");
@@ -683,6 +709,73 @@ impl CounterState for Counter:
             .to_string()
             .contains("\"span\"")
     );
+    let external = [(
+        "python/vendor/resource.py",
+        b"class Resource:\n    pass\n".as_slice(),
+    )];
+    execute_emitted_python(
+        &emission.files,
+        &external,
+        r#"from app import CounterState, Resource
+from cott_runtime import CottContractViolation
+
+def reject(operation, phase, symbol):
+    try:
+        operation()
+    except CottContractViolation as error:
+        assert (error.phase, error.symbol) == (phase, symbol), vars(error)
+    else:
+        raise AssertionError(f"{phase} contract accepted invalid behavior")
+
+handle = Resource()
+reject(lambda: CounterState(handle, "counter", 1, -2), "requires", "app.CounterState")
+reject(lambda: CounterState(handle, "counter", 1, -1), "invariant", "app.CounterState")
+counter = CounterState(handle, "counter", 1, 3)
+assert counter.count == 3 and counter.handle is handle
+assert counter.advance(2) == 5 and counter.count == 5
+assert counter.advance(-1) == 4 and counter.count == 4
+reject(lambda: counter.advance(-5), "invariant", "app.CounterState")
+"#,
+    );
+    for (body, phase) in [
+        (
+            "    self.count += amount\n    return self.count + 1\n",
+            "ensures",
+        ),
+        (
+            "    self.count += amount + 1\n    return self.count\n",
+            "ensures",
+        ),
+        (
+            "    self.title = 'changed'\n    self.count += amount\n    return self.count\n",
+            "modifies",
+        ),
+    ] {
+        let mut faulty_binding = binding.clone();
+        faulty_binding.bytes = format!(
+            "from __future__ import annotations\n\ndef _cott_impl_CounterState_advance(self: CounterState, amount: int) -> int:\n{body}"
+        )
+        .into_bytes();
+        faulty_binding.sha256 = sha256_hex(&faulty_binding.bytes);
+        let faulty =
+            emit(&config, &plan, &ir, &[faulty_binding]).expect("faulty helper should emit");
+        execute_emitted_python(
+            &faulty.files,
+            &external,
+            &format!(
+                r#"from app import CounterState, Resource
+from cott_runtime import CottContractViolation
+counter = CounterState(Resource(), "counter", 1, 3)
+try:
+    counter.advance(2)
+except CottContractViolation as error:
+    assert error.phase == "{phase}" and error.symbol == "app.CounterState.advance", vars(error)
+else:
+    raise AssertionError("invalid method implementation escaped its contract")
+"#
+            ),
+        );
+    }
 }
 
 #[test]
@@ -816,7 +909,7 @@ impl DoorController for Controller:
         parse_project(discover_sources_from_paths(&paths).expect("sources")).expect("parse");
     let ir = render(&lower(&paths.source_dir, parsed).expect("lower")).expect("render");
     let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
-    let helper = b"from lifecycle_types import Door_Closed\n\ndef _cott_impl_DoorController_close(self: DoorController) -> int:\n    self.door = Door_Closed()\n    self.count = 1\n    return 1\n";
+    let helper = b"from __future__ import annotations\nfrom lifecycle_types import Door_Closed\n\ndef _cott_impl_DoorController_close(self: DoorController) -> int:\n    self.door = Door_Closed()\n    self.count = 1\n    return 1\n";
     let binding = ResolvedBinding {
         module: "controller".to_owned(),
         function: "close".to_owned(),
@@ -838,7 +931,7 @@ impl DoorController for Controller:
         emit(&config, &plan, &ir, &[binding.clone()]).expect("resource transition should emit");
     assert_eq!(
         emission.files,
-        emit(&config, &plan, &ir, &[binding])
+        emit(&config, &plan, &ir, &[binding.clone()])
             .expect("repeat emission")
             .files,
         "resource transition emission must be byte-deterministic"
@@ -861,44 +954,57 @@ impl DoorController for Controller:
         "stub must expose the resolved method:\n{stub}"
     );
 
-    let locked = facade
-        .find("        with self._cott_lock:")
-        .expect("method lock");
-    let snapshot = facade
-        .find("            _cott_old_door = self.door")
-        .expect("resource snapshot");
-    let abi = facade
-        .find("            self.door = _cott_validate_abi(self.door, Door, path=\"$.door\")")
-        .expect("resource ABI validation");
-    let source = facade
-        .find("            if _cott_old_door is not Door_Open():")
-        .expect("exact transition source identity check");
-    let target = facade
-        .find("            if self.door is not Door_Closed():")
-        .expect("exact transition target identity check");
-    let ensures = facade
-        .find("            if not (((self).count == 1)):")
-        .expect("method ensures");
-    let invariant = facade
-        .find("            if not (((self).count >= 0)):")
-        .expect("method invariant");
-    assert!(
-        locked < snapshot
-            && snapshot < abi
-            && abi < source
-            && source < target
-            && target < ensures
-            && ensures < invariant,
-        "resource transition checks must run under lock after ABI validation, before ensures and invariants:\n{facade}"
+    execute_emitted_python(
+        &emission.files,
+        &[],
+        r#"from controller import DoorController
+from lifecycle_types import Door_Open, Door_Closed
+from cott_runtime import CottContractViolation
+
+controller = DoorController(Door_Open())
+assert controller.close() == 1
+assert controller.door is Door_Closed() and controller.count == 1
+try:
+    controller.close()
+except CottContractViolation as error:
+    assert error.phase == "transitions" and error.symbol == "controller.DoorController.close", vars(error)
+else:
+    raise AssertionError("transition accepted a closed source state")
+"#,
     );
-    assert!(
-        facade.contains(
-            "raise CottContractViolation(\"resource transition source failed\", symbol=\"controller.DoorController.close\", phase=\"transitions\""
-        ) && facade.contains(
-            "raise CottContractViolation(\"resource transition target failed\", symbol=\"controller.DoorController.close\", phase=\"transitions\""
+    for (body, phase) in [
+        ("    self.count = 1\n    return 1\n", "transitions"),
+        (
+            "    self.door = Door_Closed()\n    self.count = 2\n    return 2\n",
+            "ensures",
         ),
-        "source and target must be mandatory transition checks:\n{facade}"
-    );
+    ] {
+        let mut faulty_binding = binding.clone();
+        faulty_binding.bytes = format!(
+            "from __future__ import annotations\nfrom lifecycle_types import Door_Closed\n\ndef _cott_impl_DoorController_close(self: DoorController) -> int:\n{body}"
+        )
+        .into_bytes();
+        faulty_binding.sha256 = sha256_hex(&faulty_binding.bytes);
+        let faulty =
+            emit(&config, &plan, &ir, &[faulty_binding]).expect("faulty helper should emit");
+        execute_emitted_python(
+            &faulty.files,
+            &[],
+            &format!(
+                r#"from controller import DoorController
+from lifecycle_types import Door_Open
+from cott_runtime import CottContractViolation
+controller = DoorController(Door_Open())
+try:
+    controller.close()
+except CottContractViolation as error:
+    assert error.phase == "{phase}" and error.symbol == "controller.DoorController.close", vars(error)
+else:
+    raise AssertionError("invalid resource transition escaped its contract")
+"#
+            ),
+        );
+    }
 }
 
 #[test]
@@ -1335,8 +1441,7 @@ fn emits_async_free_function_facade_stub_and_provenance() {
     let emission = emit(&config, &plan, &ir, &[binding]).expect("async emission");
     let facade = String::from_utf8_lossy(bytes(&emission.files, "python/app.py"));
     let stub = String::from_utf8_lossy(bytes(&emission.files, "stubs/app.pyi"));
-    let generation: serde_json::Value =
-        serde_json::from_slice(bytes(&emission.files, "generation.json")).expect("generation");
+    let generation = snapshot::read(bytes(&emission.files, "generation.json"));
     assert!(facade.contains("async def run(value: I32) -> I32:"));
     assert!(facade.contains("_result = await _implementation(value)"));
     assert!(stub.contains("async def run(value: I32) -> I32: ..."));
@@ -1388,8 +1493,7 @@ fn emits_async_impl_methods_with_reentrant_lock_and_finalization() {
     let facade = String::from_utf8_lossy(bytes(&emission.files, "python/app.py"));
     let types = String::from_utf8_lossy(bytes(&emission.files, "python/app_types.py"));
     let stub = String::from_utf8_lossy(bytes(&emission.files, "stubs/app.pyi"));
-    let generation: serde_json::Value =
-        serde_json::from_slice(bytes(&emission.files, "generation.json")).expect("generation");
+    let generation = snapshot::read(bytes(&emission.files, "generation.json"));
     assert!(types.contains("async def advance(self, amount: I32) -> I32:"));
     assert!(facade.contains("async def advance(self: CounterState, amount: I32) -> I32:"));
     assert!(facade.contains("async with self._cott_lock:"));
@@ -1990,8 +2094,7 @@ scenario check for run:
     )]);
     let facade = String::from_utf8_lossy(bytes(&files, "python/workflow.py"));
     let types = String::from_utf8_lossy(bytes(&files, "python/workflow_types.py"));
-    let generation: Value = serde_json::from_slice(bytes(&files, "generation.json"))
-        .expect("generation record should be JSON");
+    let generation = snapshot::read(bytes(&files, "generation.json"));
     assert!(!facade.contains("def check("), "{facade}");
     assert!(!facade.contains("\"check\""), "{facade}");
     assert!(!types.contains("\"check\""), "{types}");
@@ -2050,5 +2153,74 @@ struct BrowserState:
     assert!(
         types.contains("_cott_descending_by((self).history, \"visited_at\")"),
         "{types}"
+    );
+}
+
+#[test]
+fn guarded_invariant_evidence_survives_mutation_without_vacuous_or_nested_credit() {
+    if Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let files = emit_sources(&[(
+        "model.cott",
+        r#"module model
+
+struct Gate:
+    value: Option[I32]
+    invariant self.value matches Option.Some(item) => item > 0
+
+newtype Positive(I32)
+    where self > 0
+"#,
+    )]);
+    let temp = TempDir::new();
+    for (relative, content) in &files {
+        let path = temp.path.join(relative);
+        fs::create_dir_all(path.parent().expect("generated artifact parent"))
+            .expect("generated artifact parent");
+        fs::write(path, content).expect("generated artifact");
+    }
+    let output = Command::new("python3")
+        .args(["-c", r#"from cott_runtime import CottContractViolation, Some, Nothing, _cott_observe_contracts
+from model_types import Gate, Positive
+
+with _cott_observe_contracts() as absent:
+    value = Gate(value=Nothing())
+    object.__setattr__(value, "value", Some(value=1))
+assert absent == [("model.Gate", "invariant:0:applicable", False)], absent
+
+with _cott_observe_contracts() as mixed:
+    value = Gate(value=(Gate(value=Nothing()), Some(value=1))[1])
+    object.__setattr__(value, "value", Nothing())
+assert mixed == [("model.Gate", "invariant:0:applicable", False), ("model.Gate", "invariant:0", True)], mixed
+
+with _cott_observe_contracts() as outer:
+    with _cott_observe_contracts() as inner:
+        Gate(value=Some(value=2))
+    Gate(value=Nothing())
+assert outer == [("model.Gate", "invariant:0:applicable", False)]
+assert inner == [("model.Gate", "invariant:0", True)]
+
+with _cott_observe_contracts() as failed:
+    try:
+        Gate(value=Some(value=0))
+    except CottContractViolation as error:
+        assert error.phase == "invariant"
+    else:
+        raise AssertionError("matched false condition did not fail closed")
+assert failed == [("model.Gate", "invariant:0", False)], failed
+
+with _cott_observe_contracts() as refinement:
+    Positive(value=1)
+assert refinement == [("model.Positive", "refinement", True)], refinement
+"#])
+        .current_dir(temp.path.join("python"))
+        .output()
+        .expect("python3 should execute generated guards");
+    assert!(
+        output.status.success(),
+        "guarded evidence regression:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }

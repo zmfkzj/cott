@@ -1615,7 +1615,9 @@ impl Parser {
                     ClauseKind::Requires { .. } => 2,
                     ClauseKind::Modifies { .. } => 3,
                     ClauseKind::Transitions { .. } => 3,
-                    ClauseKind::Ensures { .. } => 3,
+                    ClauseKind::Ensures { .. }
+                    | ClauseKind::EnsuresTable { .. }
+                    | ClauseKind::EnsuresPreserves { .. } => 3,
                     ClauseKind::Error { .. } => 4,
                     ClauseKind::Effects { .. } => 5,
                 };
@@ -1915,7 +1917,9 @@ impl Parser {
                 ClauseKind::Requires { .. } => 1,
                 ClauseKind::Transitions { .. } => 2,
                 ClauseKind::Modifies { .. } => 3,
-                ClauseKind::Ensures { .. } => 4,
+                ClauseKind::Ensures { .. }
+                | ClauseKind::EnsuresTable { .. }
+                | ClauseKind::EnsuresPreserves { .. } => 4,
                 ClauseKind::Error { .. } => 5,
                 ClauseKind::Effects { .. } => 6,
                 ClauseKind::Rule { .. } => unreachable!(),
@@ -1991,14 +1995,7 @@ impl Parser {
             });
         }
         if self.at(&TokenKind::Keyword(Keyword::Ensures)) {
-            let st = self.bump().span;
-            let (guard, condition) = self.parse_ensures_condition(false)?;
-            let end = condition.span.clone();
-            self.newline();
-            return Some(Clause {
-                span: Self::join(st, end),
-                kind: ClauseKind::Ensures { guard, condition },
-            });
+            return self.parse_ensures_clause(false);
         }
         self.error("expected init clause", self.span_here());
         None
@@ -2053,14 +2050,7 @@ impl Parser {
             });
         }
         if self.at(&TokenKind::Keyword(Keyword::Ensures)) {
-            let st = self.bump().span;
-            let (guard, condition) = self.parse_ensures_condition(true)?;
-            let end = condition.span.clone();
-            self.newline();
-            return Some(Clause {
-                span: Self::join(st, end),
-                kind: ClauseKind::Ensures { guard, condition },
-            });
+            return self.parse_ensures_clause(true);
         }
         if self.at(&TokenKind::Keyword(Keyword::Doc))
             || self.at(&TokenKind::Keyword(Keyword::Requires))
@@ -2092,6 +2082,104 @@ impl Parser {
                 }),
                 condition,
             ))
+        })();
+        self.allow_old = previous;
+        parsed
+    }
+
+    fn contextual_name(&self, offset: usize, name: &str) -> bool {
+        matches!(
+            self.tokens.get(self.pos + offset).map(|token| &token.kind),
+            Some(TokenKind::Name(value)) if value == name
+        )
+    }
+
+    fn parse_ensures_clause(&mut self, allow_old: bool) -> Option<Clause> {
+        let start = self.keyword(Keyword::Ensures)?.span;
+        // A colon-terminated header cannot be an existing ensures expression.
+        let table = self.contextual_name(0, "table")
+            && self.tokens[self.pos + 1..]
+                .iter()
+                .take_while(|token| token.kind != TokenKind::Newline)
+                .last()
+                .is_some_and(|token| token.kind == TokenKind::Colon);
+        let preserves = self.contextual_name(0, "preserves")
+            && self.contextual_name(1, "result")
+            && self.contextual_name(2, "from");
+        let previous = std::mem::replace(&mut self.allow_old, allow_old);
+        let parsed = (|| {
+            if table {
+                self.bump();
+                let key = self.parse_expr()?;
+                self.expect(TokenKind::Colon, "expected `:` after ensures table key")?;
+                self.newline();
+                self.expect(TokenKind::Indent, "expected indented ensures table rows")?;
+                self.skip_newlines();
+                let mut rows = Vec::new();
+                while !self.at(&TokenKind::Dedent) && !self.eof() {
+                    let pattern = self.parse_pattern()?;
+                    self.expect(TokenKind::FatArrow, "expected `=>` after table variant")?;
+                    let value = self.parse_expr()?;
+                    rows.push(EnsuresTableRow {
+                        span: Self::join(pattern.span.clone(), value.span.clone()),
+                        pattern,
+                        value,
+                    });
+                    self.newline();
+                    self.skip_newlines();
+                }
+                let end = rows
+                    .last()
+                    .map(|row| row.span.clone())
+                    .unwrap_or(key.span.clone());
+                self.expect(TokenKind::Dedent, "expected end of ensures table")?;
+                return Some(Clause {
+                    span: Self::join(start, end),
+                    kind: ClauseKind::EnsuresTable { key, rows },
+                });
+            }
+            if preserves {
+                self.bump();
+                let result = self.bump();
+                let result = Expr {
+                    span: result.span.clone(),
+                    kind: ExprKind::Name(QualifiedName::single(result.span, "result")),
+                };
+                self.bump(); // contextual `from`
+                let source = self.parse_expr()?;
+                let mut except = Vec::new();
+                if self.contextual_name(0, "except") {
+                    self.bump();
+                    loop {
+                        let (name, span) = self.name("excluded struct field")?;
+                        except.push(PreservedFieldExclusion { span, name });
+                        if !self.at(&TokenKind::Comma) {
+                            break;
+                        }
+                        self.bump();
+                    }
+                }
+                let end = except
+                    .last()
+                    .map(|field| field.span.clone())
+                    .unwrap_or(source.span.clone());
+                self.newline();
+                return Some(Clause {
+                    span: Self::join(start, end),
+                    kind: ClauseKind::EnsuresPreserves {
+                        result,
+                        source,
+                        except,
+                    },
+                });
+            }
+            let (guard, condition) = self.parse_ensures_condition(allow_old)?;
+            let end = condition.span.clone();
+            self.newline();
+            Some(Clause {
+                span: Self::join(start, end),
+                kind: ClauseKind::Ensures { guard, condition },
+            })
         })();
         self.allow_old = previous;
         parsed
@@ -2165,14 +2253,7 @@ impl Parser {
             });
         }
         if self.at(&TokenKind::Keyword(Keyword::Ensures)) {
-            let st = self.bump().span;
-            let (guard, condition) = self.parse_ensures_condition(false)?;
-            let end = condition.span.clone();
-            self.newline();
-            return Some(Clause {
-                span: Self::join(st, end),
-                kind: ClauseKind::Ensures { guard, condition },
-            });
+            return self.parse_ensures_clause(false);
         }
         if self.at(&TokenKind::Keyword(Keyword::Error)) {
             let st = self.bump().span;

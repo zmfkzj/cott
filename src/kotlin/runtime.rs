@@ -1794,6 +1794,11 @@ public object CottRuntime {
         block: suspend () -> T,
     ): T = runWithCoroutineContext(coroutineContext + ObservationElement(observation), block)
 
+    internal suspend fun runObservedCheck(block: () -> Boolean) {
+        val observation = currentSuspendObservation()
+        if (observation == null) block() else withTestObservation(observation, block)
+    }
+
     public fun <T> withFixtureContext(fixtures: CottFixtureContext, block: () -> T): T {
         val previous = threadFixtures.get()
         threadFixtures.set(fixtures)
@@ -3064,7 +3069,19 @@ public data class CottInvariant(
     public val clause: String,
     public val check: () -> Boolean,
     public val span: CottSpan? = null,
-)
+) {
+    public companion object {
+        public fun checked(clause: String, check: () -> Unit, span: CottSpan? = null): CottInvariant =
+            CottInvariant(clause, CheckedInvariant(check), span)
+    }
+}
+
+private class CheckedInvariant(private val check: () -> Unit) : () -> Boolean {
+    override fun invoke(): Boolean {
+        check()
+        return true
+    }
+}
 
 public class CottStateSnapshot internal constructor(
     internal val values: Map<String, Any?>,
@@ -3165,6 +3182,10 @@ public class CottResourceContract public constructor(
 
     private fun validateInvariants() {
         invariants.forEach { invariant ->
+            if (invariant.check is CheckedInvariant) {
+                invariant.check()
+                return@forEach
+            }
             CottRuntime.invariant(
                 invariant.check(), symbol, invariant.clause, invariant.span,
                 expected = invariant.clause, actual = "false",
@@ -3174,6 +3195,10 @@ public class CottResourceContract public constructor(
 
     private suspend fun validateInvariantsSuspend() {
         for (invariant in invariants) {
+            if (invariant.check is CheckedInvariant) {
+                CottRuntime.runObservedCheck(invariant.check)
+                continue
+            }
             CottRuntime.invariantSuspend(
                 invariant.check(), symbol, invariant.clause, invariant.span,
                 expected = invariant.clause, actual = "false",

@@ -96,6 +96,10 @@ fn bounded_output(label: &str, command: &mut Command, scratch: &Path, timeout: D
 }
 
 fn run_dart(driver_source: &str) {
+    run_dart_with_rejected_consumers(driver_source, &[]);
+}
+
+fn run_dart_with_rejected_consumers(driver_source: &str, rejected: &[&str]) {
     let dart = PathBuf::from(
         std::env::var_os("COTT_DART")
             .expect("COTT_DART must be the absolute path to the pinned Dart executable"),
@@ -124,14 +128,14 @@ fn run_dart(driver_source: &str) {
         .expect("driver directory should be writable");
     fs::write(&driver, driver_source).expect("Dart driver should be writable");
 
-    let mut command = Command::new(dart);
+    let mut command = Command::new(&dart);
     command
         .arg("run")
         .arg(&driver)
         .current_dir(&package_root)
         .env_clear()
-        .env("HOME", home)
-        .env("PUB_CACHE", pub_cache);
+        .env("HOME", &home)
+        .env("PUB_CACHE", &pub_cache);
     let output = bounded_output(
         "dart-runtime-regression",
         &mut command,
@@ -139,10 +143,39 @@ fn run_dart(driver_source: &str) {
         DART_RUNTIME_TIMEOUT,
     );
     assert_command_succeeded("Dart runtime regression", output);
+    for (index, expression) in rejected.iter().enumerate() {
+        let rejected_driver = package_root.join(format!("bin/rejected_{index}.dart"));
+        fs::write(
+            &rejected_driver,
+            format!("import '../lib/cott_runtime.dart';\nvoid main() {{ {expression}; }}\n"),
+        )
+        .expect("rejected Dart consumer should be writable");
+        let mut compile = Command::new(&dart);
+        compile
+            .args(["compile", "kernel"])
+            .arg(&rejected_driver)
+            .arg("-o")
+            .arg(package_root.join(format!("rejected_{index}.dill")))
+            .current_dir(&package_root)
+            .env_clear()
+            .env("HOME", &home)
+            .env("PUB_CACHE", &pub_cache);
+        let output = bounded_output(
+            &format!("rejected-consumer-{index}"),
+            &mut compile,
+            &temp.path,
+            DART_RUNTIME_TIMEOUT,
+        );
+        assert!(
+            !output.status.success(),
+            "nullable Option consumer unexpectedly compiled: {expression}"
+        );
+    }
 }
 
 const PRELUDE: &str = r#"
 import 'dart:async';
+import 'dart:typed_data';
 import '../lib/cott_runtime.dart';
 
 Never fail(String message) => throw StateError(message);
@@ -182,6 +215,51 @@ Future<void> expectCancellation(Future<void> Function() body, String message) as
   fail(message);
 }
 "#;
+
+#[test]
+#[ignore = "requires COTT_DART=/tmp/cott-dart-toolchain/dart-sdk/bin/dart"]
+fn dart_runtime_option_nullable_helpers_are_lossless_only_for_nonnullable_payloads() {
+    run_dart_with_rejected_consumers(
+        &format!(
+            r#"{PRELUDE}
+void main() {{
+  expect(optionFromNullable<int>(null) == const Nothing<int>() &&
+      optionToNullable<int>(const Nothing<int>()) == null,
+      'nullable absence must round-trip');
+  expect(optionFromNullable<int>(optionToNullable<int>(const Some<int>(0))) ==
+      const Some<int>(0), 'zero payload was confused with absence');
+  expect(optionToNullable<bool>(optionFromNullable<bool>(false)) == false,
+      'false payload was confused with absence');
+  expect(optionToNullable<String>(optionFromNullable<String>('')) == '',
+      'empty payload was confused with absence');
+  final payload = Object();
+  expect(identical(optionToNullable<Object>(optionFromNullable<Object>(payload)),
+      payload), 'nullable conversion copied or replaced its nonnull payload');
+  const nullablePayload = Some<Object?>(null);
+  expect(switch (nullablePayload) {{
+    Some<Object?>(:final value) => value == null,
+  }}, 'ordinary Option[Any] must retain Some(null)');
+  final dynamic convert = optionToNullable;
+  var rejected = false;
+  try {{
+    convert(const Some<dynamic>(null));
+  }} on TypeError {{
+    rejected = true;
+  }} on CottContractViolation {{
+    rejected = true;
+  }}
+  expect(rejected, 'dynamic must not collapse a present null payload');
+}}
+"#
+        ),
+        &[
+            "optionFromNullable<int?>(1)",
+            "optionToNullable<Object?>(const Some<Object?>(null))",
+            "optionToNullable(const Some<Object?>(null))",
+            "optionToNullable<dynamic>(const Some<dynamic>(null))",
+        ],
+    );
+}
 
 #[test]
 #[ignore = "requires COTT_DART=/tmp/cott-dart-toolchain/dart-sdk/bin/dart"]
@@ -351,6 +429,24 @@ void main() {{
   expectUnsupported(() => map['a'] = 3, 'CottMap mutation succeeded');
   expect(CottRuntime.deepEqual(CottList([array]), CottList([array])),
       'immutable value graph did not compare canonically');
+
+  final inputBytes = Uint8List.fromList([0, 255]);
+  final bytes = CottBytes(inputBytes);
+  final view = bytes.readOnlyView;
+  final mutableCopy = bytes.toUint8List();
+  inputBytes[0] = 19;
+  mutableCopy[1] = 3;
+  expect(bytes[0] == 0 && bytes[1] == 255 && view[0] == 0 && view[1] == 255,
+      'bytes retained mutable input or returned mutable backing storage');
+  expectUnsupported(() => view[0] = 7, 'byte view element mutation succeeded');
+  expectUnsupported(() => view.length = 0, 'byte view resize succeeded');
+  expectUnsupported(() => view.add(1), 'byte view append succeeded');
+  expect(mutableCopy[1] == 3 && inputBytes[0] == 19,
+      'defensive byte copies must remain mutable');
+  final bufferCopy = buffer.toUint8List();
+  bufferCopy[0] = 9;
+  expect(buffer[0] == 0 && buffer.dimension.value == BigInt.two,
+      'mutable buffer copy changed its exact immutable value');
 
   final animal = CottTypes.external<Animal>('Animal', (value) => value is Animal);
   final dog = CottTypes.external<Dog>(
@@ -622,4 +718,71 @@ fn dart_runtime_renderer_uses_artifact_relative_package_layout() {
     assert!(source.contains("const String cottProjectName = 'sample_package';"));
     assert!(source.contains("const String cottProjectVersion = '2.3.4';"));
     assert!(!source.contains("__COTT_"));
+}
+
+#[test]
+#[ignore = "requires COTT_DART=/tmp/cott-dart-toolchain/dart-sdk/bin/dart"]
+fn checked_resource_invariants_keep_exact_nested_and_mutated_evidence() {
+    run_dart(&format!(
+        r#"{PRELUDE}
+
+CottResourceContract resource(void Function() check) => CottResourceContract(
+  symbol: 'model.Gate',
+  fields: const [],
+  modifies: const [],
+  transitions: const [],
+  invariants: [CottInvariant.checked(clause: 'invariant:0', check: check)],
+);
+
+Future<void> main() async {{
+  var enabled = false;
+  var guardReads = 0;
+  var conditionReads = 0;
+  final gate = resource(() {{
+    guardReads += 1;
+    final matched = enabled;
+    if (matched) {{
+      conditionReads += 1;
+      CottRuntime.invariant(true, 'model.Gate', clause: 'invariant:0');
+    }}
+  }});
+  final absent = CottObservation();
+  CottRuntime.withTestObservation(absent, gate.validateInitial);
+  enabled = true;
+  expect(absent.observations().isEmpty, 'false guard gained post-check credit');
+  expect(guardReads == 1 && conditionReads == 0, 'false guard evaluated its condition');
+
+  final mixed = CottObservation();
+  await CottRuntime.withTestObservationAsync(mixed, () async {{
+    gate.validateInitial();
+    enabled = false;
+    await Future<void>.delayed(Duration.zero);
+    gate.validateInitial();
+  }});
+  expect(mixed.observations().length == 1 && mixed.observations().first.passed == true,
+      'mixed guard did not retain exactly the successful evaluation');
+  expect(guardReads == 3 && conditionReads == 1, 'guard or condition evaluated more than once');
+
+  final inner = resource(() {{
+    CottRuntime.invariant(true, 'model.Gate', clause: 'invariant:0');
+  }});
+  final outer = resource(() {{
+    inner.validateInitial();
+    if (enabled) CottRuntime.invariant(true, 'model.Gate', clause: 'invariant:0');
+  }});
+  final nested = CottObservation();
+  CottRuntime.withTestObservation(nested, outer.validateInitial);
+  expect(nested.observations().length == 1,
+      'nested same-symbol check made an unmatched outer guard observable');
+
+  final failed = CottObservation();
+  expectViolation(
+    () => CottRuntime.withTestObservation(failed,
+        resource(() => CottRuntime.invariant(false, 'model.Gate', clause: 'invariant:0')).validateInitial),
+    'matched false resource invariant was accepted',
+  );
+  expect(failed.observations().single.passed == false, 'failed condition lost evidence');
+}}
+"#
+    ));
 }

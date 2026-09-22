@@ -800,3 +800,74 @@ fun main(): Unit = runBlocking {
 "#,
     );
 }
+
+#[test]
+#[ignore = "requires COTT_KOTLIN_HOME with Kotlin 2.2.10 and JAVA_HOME with JDK 17"]
+fn checked_resource_invariants_preserve_guard_and_coroutine_observations() {
+    compile_and_run(
+        r#"package cott_native_regression
+
+import cott_runtime.CottContractViolation
+import cott_runtime.CottInvariant
+import cott_runtime.CottObservation
+import cott_runtime.CottResourceContract
+import cott_runtime.CottRuntime
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+
+private fun resource(check: () -> Unit): CottResourceContract =
+    CottResourceContract("model.Gate", emptyList(), emptySet(), emptyList(),
+        listOf(CottInvariant.checked("invariant:0", check)))
+
+fun main(): Unit = runBlocking {
+    var enabled = false
+    var guardReads = 0
+    var conditionReads = 0
+    val gate = resource {
+        guardReads += 1
+        val matched = enabled
+        if (matched) {
+            conditionReads += 1
+            CottRuntime.invariant(true, "model.Gate", clause = "invariant:0")
+        }
+    }
+    val absent = CottObservation()
+    CottRuntime.withTestObservation(absent) { gate.validateInitial() }
+    enabled = true
+    check(absent.observations().isEmpty())
+    check(guardReads == 1 && conditionReads == 0)
+
+    val mixed = CottObservation()
+    CottRuntime.withTestObservationSuspend(mixed) {
+        withContext(Dispatchers.Default) {
+            gate.validateNormalSuspend(gate.snapshot())
+            enabled = false
+            gate.validateNormalSuspend(gate.snapshot())
+        }
+    }
+    check(mixed.observations().single().passed)
+    check(guardReads == 3 && conditionReads == 1)
+
+    val inner = resource { CottRuntime.invariant(true, "model.Gate", clause = "invariant:0") }
+    val outer = resource {
+        inner.validateInitial()
+        if (enabled) CottRuntime.invariant(true, "model.Gate", clause = "invariant:0")
+    }
+    val nested = CottObservation()
+    CottRuntime.withTestObservation(nested) { outer.validateInitial() }
+    check(nested.observations().size == 1)
+
+    val failed = CottObservation()
+    try {
+        CottRuntime.withTestObservation(failed) {
+            resource { CottRuntime.invariant(false, "model.Gate", clause = "invariant:0") }.validateInitial()
+        }
+        error("matched false condition was accepted")
+    } catch (_: CottContractViolation) {
+        check(!failed.observations().single().passed)
+    }
+}
+"#,
+    );
+}

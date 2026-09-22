@@ -17,6 +17,9 @@ use cott::kotlin::provenance::{
 use cott::provenance::{AgentRun, AgentStatus, SemanticCoverage, StreamDigest};
 use serde_json::{Value, json};
 
+#[path = "support/snapshot.rs"]
+mod snapshot_wire;
+
 fn digest(byte: char) -> String {
     format!("sha256:{}", byte.to_string().repeat(64))
 }
@@ -91,9 +94,7 @@ fn record() -> DartGenerationRecord {
 }
 
 fn serialized(value: &Value) -> Vec<u8> {
-    let mut bytes = serde_json::to_vec(value).expect("JSON fixture must serialize");
-    bytes.push(b'\n');
-    bytes
+    snapshot_wire::bytes(value)
 }
 
 fn agent_run() -> AgentRun {
@@ -195,10 +196,117 @@ fn dart_record_round_trips_canonical_bytes_and_rejects_other_backends() {
     assert_eq!(parsed.canonical_bytes().unwrap(), bytes);
 
     assert!(DartGenerationRecord::parse(&kotlin_record_bytes()).is_err());
-    let mut kotlin_shaped = serde_json::to_value(&record).unwrap();
+    let mut kotlin_shaped = snapshot_wire::expand(serde_json::to_value(&record).unwrap());
     kotlin_shaped["current"]["target"] = json!("kotlin");
     kotlin_shaped["current"]["public_kotlin_symbols"] = json!({"api": ["run"]});
     assert!(DartGenerationRecord::parse(&serialized(&kotlin_shaped)).is_err());
+}
+
+#[test]
+fn snapshot_references_deduplicate_certification_but_not_verification_history() {
+    let pending = agent_snapshot();
+    let mut certified = pending.clone();
+    certified.verified = true;
+    certified.verification = json!({"status": "passed"});
+    certified.compute_generation_id().unwrap();
+    assert_eq!(pending.generation_id, certified.generation_id);
+
+    let certified_record = DartGenerationRecord {
+        schema_version: DART_GENERATION_SCHEMA_VERSION,
+        current: certified.clone(),
+        last_verified: Some(certified.clone()),
+    };
+    let certified_wire = serde_json::to_value(&certified_record).unwrap();
+    assert_eq!(certified_wire["current"], certified_wire["last_verified"]);
+    assert_eq!(certified_wire["snapshots"].as_object().unwrap().len(), 1);
+    assert_eq!(
+        DartGenerationRecord::parse(&serde_json::to_vec(&certified_wire).unwrap()).unwrap(),
+        certified_record
+    );
+
+    let pending_record = DartGenerationRecord {
+        schema_version: DART_GENERATION_SCHEMA_VERSION,
+        current: pending,
+        last_verified: Some(certified),
+    };
+    let wire = serde_json::to_value(&pending_record).unwrap();
+    assert_ne!(wire["current"], wire["last_verified"]);
+    assert_eq!(wire["snapshots"].as_object().unwrap().len(), 2);
+    assert_eq!(
+        DartGenerationRecord::parse(&serde_json::to_vec(&wire).unwrap()).unwrap(),
+        pending_record
+    );
+
+    for field in ["agent_runs", "verification"] {
+        let mut tampered = wire.clone();
+        let reference = tampered["last_verified"].as_str().unwrap().to_owned();
+        if field == "agent_runs" {
+            tampered["snapshots"][&reference]["agent_runs"][0]["duration_ms"] = json!(11);
+        } else {
+            tampered["snapshots"][&reference]["verification"]["status"] = json!("tampered");
+        }
+        assert!(
+            DartGenerationRecord::parse(&serde_json::to_vec(&tampered).unwrap()).is_err(),
+            "{field} changes must invalidate the snapshot reference even when generation_id is unchanged"
+        );
+    }
+}
+
+#[test]
+fn certified_snapshots_require_exact_verification_evidence() {
+    let mut current = snapshot();
+    current.verified = true;
+    current.verification = json!({"elapsed": 0.0});
+    current.compute_generation_id().unwrap();
+    let mut last_verified = current.clone();
+    last_verified.verification["elapsed"] = json!(-0.0);
+    let record = DartGenerationRecord {
+        schema_version: DART_GENERATION_SCHEMA_VERSION,
+        current,
+        last_verified: Some(last_verified),
+    };
+    assert!(record.canonical_bytes().is_err());
+    let wire = cott::snapshot_record::encode(
+        DART_GENERATION_SCHEMA_VERSION,
+        &serde_json::to_value(&record.current).unwrap(),
+        Some(&serde_json::to_value(&record.last_verified).unwrap()),
+    )
+    .unwrap();
+    assert!(DartGenerationRecord::parse(&serde_json::to_vec(&wire).unwrap()).is_err());
+}
+
+#[test]
+fn dart_wire_rejects_legacy_records_dangling_and_unreachable_snapshots() {
+    let wire = serde_json::to_value(record()).unwrap();
+    let expanded = snapshot_wire::expand(wire.clone());
+    assert!(DartGenerationRecord::parse(&serde_json::to_vec(&expanded).unwrap()).is_err());
+    assert!(serde_json::from_value::<DartGenerationRecord>(expanded).is_err());
+
+    let mut legacy_version = wire.clone();
+    legacy_version["schema_version"] = json!(1);
+    assert!(DartGenerationRecord::parse(&serde_json::to_vec(&legacy_version).unwrap()).is_err());
+
+    let mut dangling = wire.clone();
+    dangling["current"] = json!(digest('0'));
+    assert!(DartGenerationRecord::parse(&serde_json::to_vec(&dangling).unwrap()).is_err());
+
+    let mut unreachable = wire.clone();
+    let mut other = snapshot();
+    other.project_version = "1.2.4".to_owned();
+    other.compute_generation_id().unwrap();
+    let other = serde_json::to_value(other).unwrap();
+    let reference = cott::snapshot_record::digest(&other).unwrap();
+    unreachable["snapshots"][&reference] = other;
+    assert!(DartGenerationRecord::parse(&serde_json::to_vec(&unreachable).unwrap()).is_err());
+
+    let mut unknown = wire.clone();
+    unknown["unexpected"] = json!(true);
+    assert!(DartGenerationRecord::parse(&serde_json::to_vec(&unknown).unwrap()).is_err());
+
+    let serialized = serde_json::to_string(&wire).unwrap();
+    let duplicate = format!("{{\"schema_version\":2,{}", &serialized[1..]);
+    assert!(DartGenerationRecord::parse(duplicate.as_bytes()).is_err());
+    assert!(serde_json::from_str::<DartGenerationRecord>(&duplicate).is_err());
 }
 
 #[test]
@@ -267,9 +375,9 @@ fn parser_rejects_canonical_digest_tampering_and_backend_abi_swaps() {
     for (field, incompatible) in [
         ("compiler_version", json!("0.9.0")),
         ("canonical_ir_schema", json!(7)),
-        ("runtime_abi", json!(2)),
+        ("runtime_abi", json!(1)),
     ] {
-        let mut value = serde_json::to_value(record()).unwrap();
+        let mut value = snapshot_wire::expand(serde_json::to_value(record()).unwrap());
         value["current"][field] = incompatible;
         assert!(
             DartGenerationRecord::parse(&serialized(&value)).is_err(),
@@ -277,11 +385,11 @@ fn parser_rejects_canonical_digest_tampering_and_backend_abi_swaps() {
         );
     }
 
-    let mut value = serde_json::to_value(record()).unwrap();
+    let mut value = snapshot_wire::expand(serde_json::to_value(record()).unwrap());
     value["current"]["managed_files"]["dart/lib/modules/api.dart"] = json!(digest('9'));
     assert!(DartGenerationRecord::parse(&serialized(&value)).is_err());
 
-    let mut value = serde_json::to_value(record()).unwrap();
+    let mut value = snapshot_wire::expand(serde_json::to_value(record()).unwrap());
     value["current"]["dependencies"]["unexpected"] = json!(true);
     assert!(DartGenerationRecord::parse(&serialized(&value)).is_err());
 }
@@ -495,12 +603,14 @@ fn agent_owned_source_requires_matching_intent_and_successful_run_identity() {
         assert!(malformed.compute_generation_id().is_err());
     }
 
-    let mut unknown_run_field = serde_json::to_value(DartGenerationRecord {
-        schema_version: DART_GENERATION_SCHEMA_VERSION,
-        current: agent_snapshot(),
-        last_verified: None,
-    })
-    .unwrap();
+    let mut unknown_run_field = snapshot_wire::expand(
+        serde_json::to_value(DartGenerationRecord {
+            schema_version: DART_GENERATION_SCHEMA_VERSION,
+            current: agent_snapshot(),
+            last_verified: None,
+        })
+        .unwrap(),
+    );
     unknown_run_field["current"]["agent_runs"][0]["python_symbol"] = json!("forbidden");
     assert!(DartGenerationRecord::parse(&serialized(&unknown_run_field)).is_err());
 }

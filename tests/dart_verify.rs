@@ -6,6 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
 
+#[path = "support/snapshot.rs"]
+mod snapshot_wire;
+
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 struct TempDir {
@@ -149,7 +152,7 @@ fn assert_pending_generation_preserved(fixture: &Fixture, expected: &[u8]) {
         actual, expected,
         "rejected verification must preserve the pending generation"
     );
-    let generation: Value = serde_json::from_slice(&actual).expect("preserved generation JSON");
+    let generation = snapshot_wire::read(&actual);
     assert_eq!(generation["current"]["verified"], false);
     assert!(generation["current"]["verification"].is_null());
     assert!(generation["last_verified"].is_null());
@@ -173,10 +176,9 @@ fn assert_native_verifies(label: &str, source: &str, binding: &str) {
         "the matching control must establish a working SDK and runner: {}",
         stderr(&verified)
     );
-    let generation: Value = serde_json::from_slice(
+    let generation = snapshot_wire::read(
         &fs::read(fixture.root().join("generated/generation.json")).expect("generation record"),
-    )
-    .expect("generation JSON");
+    );
     assert_eq!(generation["current"]["verified"], true);
     assert_eq!(generation["last_verified"], generation["current"]);
 }
@@ -270,9 +272,8 @@ fn malformed_dependency_record_is_rejected_without_publication() {
     let emitted = fixture.run(&["emit", "dart"]);
     assert_eq!(emitted.status.code(), Some(0), "{}", stderr(&emitted));
     let generation_path = fixture.root().join("generated/generation.json");
-    let mut generation: Value =
-        serde_json::from_slice(&fs::read(&generation_path).expect("generation record"))
-            .expect("generation JSON");
+    let mut generation =
+        snapshot_wire::read(&fs::read(&generation_path).expect("generation record"));
     generation["current"]["dependencies"]["packages"] = serde_json::json!([{
         "name": "forged",
         "version": "1.0.0",
@@ -282,7 +283,7 @@ fn malformed_dependency_record_is_rejected_without_publication() {
         "dependencies": [],
         "runtime": true
     }]);
-    let malformed_bytes = serde_json::to_vec(&generation).expect("serialize malformed record");
+    let malformed_bytes = snapshot_wire::bytes(&generation);
     fs::write(&generation_path, &malformed_bytes).expect("write malformed record");
     let rejected = fixture.run(&["verify"]);
     assert_eq!(rejected.status.code(), Some(4));
@@ -329,10 +330,9 @@ fn native_verifier_records_positive_applicable_facade_evidence() {
             .join("generated/dart/verification/cott-module.dill")
             .is_file()
     );
-    let generation: Value = serde_json::from_slice(
+    let generation = snapshot_wire::read(
         &fs::read(fixture.root().join("generated/generation.json")).expect("generation record"),
-    )
-    .expect("generation JSON");
+    );
     assert_eq!(generation["current"]["verified"], true);
     assert_eq!(generation["last_verified"], generation["current"]);
     let diff = fixture.run_native(&["diff", "--format", "json", "--exit-code"]);
@@ -379,10 +379,9 @@ fn native_type_only_package_is_analyzed_and_kernel_compiled() {
     assert_eq!(emitted.status.code(), Some(0), "{}", stderr(&emitted));
     let verified = fixture.run_native(&["verify"]);
     assert_eq!(verified.status.code(), Some(0), "{}", stderr(&verified));
-    let generation: Value = serde_json::from_slice(
+    let generation = snapshot_wire::read(
         &fs::read(fixture.root().join("generated/generation.json")).expect("generation record"),
-    )
-    .expect("generation JSON");
+    );
     assert!(
         fixture
             .root()
@@ -498,10 +497,9 @@ fn locked_path_dependency_drift_is_rejected_before_certification() {
         "restoring the locked dependency must prove the SDK path is healthy: {}",
         stderr(&verified)
     );
-    let generation: Value = serde_json::from_slice(
+    let generation = snapshot_wire::read(
         &fs::read(fixture.root().join("generated/generation.json")).expect("generation record"),
-    )
-    .expect("generation JSON");
+    );
     assert_eq!(generation["current"]["verified"], true);
     assert_eq!(generation["last_verified"], generation["current"]);
     assert!(

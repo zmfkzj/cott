@@ -7,16 +7,30 @@
 implementations are checked projections; generated target facades are the only public import path.
 Runtime code does not read authored `.cott` live.
 
-`architecture.md` is the normative implemented v1.0 contract. Preserve the Python closed identity:
-package `1.0.0`, Canonical IR schema `8`, generation schema/domain `7`
-(`cott.generation.v7`), runtime ABI `7`, contract-test strategy schema `5`, and diagnostics schema
-`1`. Kotlin shares package `1.0.0` and Canonical IR `8` but has separate closed generation schema
-`1`, domain `cott.kotlin.generation.v1`, and runtime ABI `1`. Dart independently uses generation
-schema `1`, domain `cott.dart.generation.v1`, runtime ABI `1`, package `1.0.0` and Canonical IR `8`.
+`architecture.md` is the normative implemented v1.0 contract. Package `1.0.0`, Canonical IR schema
+`8`, contract-test strategy schema `5`, and diagnostics schema `1` remain unchanged.
+Python uses generation schema `8`, domain `cott.generation.v8`, and runtime ABI `7`.
+Kotlin uses generation schema `2`, domain `cott.kotlin.generation.v2`, and runtime ABI `1`.
+Dart uses generation schema `2`, domain `cott.dart.generation.v2`, and runtime ABI `2`.
 Never put one backend's truth in another backend's fields or accept its record. Do not add legacy
 readers, partial profiles, unsandboxed fallbacks, or a second source of truth. When documentation and implementation
 source disagree, the source files and closed schema validators are authoritative; update the docs
 rather than preserving a contradictory convention.
+Keep the existing current/last-verified lifecycle and verification equality invariant, but use the
+closed wire envelope `{schema_version,current,last_verified,snapshots}`. `current` is a content
+digest, `last_verified` is a content digest or null, and `snapshots` maps exactly the one or two
+reachable digests to full snapshot objects. Equal references store one blob; reject unused,
+dangling, tampered, or old-format records. JSON callers read `.snapshots[.current].verified`.
+Snapshot digests cover full evidence, `AgentRun`, and verification state. `generation_id` separately
+excludes the existing volatile fields and uses the normalized target-domain identity wrapper.
+Both use the `cott.snapshot.v1` plus NUL structural SHA-256 digest with tagged length-delimited
+values and f64 IEEE bits, not raw JSON byte hashing. File content hashes remain raw-byte SHA-256.
+Records are self-contained for relocation, saved baselines, and deployment; no external snapshot
+cache or sidecars. New generated output requires the new runtime loader and deployment record.
+Normal readers reject old schemas. The bounded one-time compiler-linked transaction conversion
+preserves source/AgentRun evidence, clears certification, then requires real emit and verify.
+It is not a public migration command; never hand-bless source hashes or carry old certification
+across a schema/ABI cutover.
 
 ## Architecture & Data Flow
 
@@ -37,12 +51,12 @@ cott check / fmt / emit / generate / prompt / verify / diff / deploy
   constants, types, incoming scenarios, retained generator-rule identifiers) as
   `tools.cott_intent` version 1 hashes.
 - `src/binding.rs`, `src/python_emit.rs`, `src/python_runtime.rs`, `src/python_verify.rs`, and
-  `src/contract_test.rs` own the unchanged Python generation-7/runtime-7 backend.
+  `src/contract_test.rs` own the Python generation-8/runtime-7 backend.
 - `src/kotlin/{binding,emit,runtime,provenance,pipeline,verify,runner,prompt,generation}.rs` own the
-  distinct Kotlin generation-1/runtime-1 module pipeline. Do not reuse Python record fields or
+  distinct Kotlin generation-2/runtime-1 module pipeline. Do not reuse Python record fields or
   weaken either validator.
 - `src/dart/{binding,emit,types,expressions,runtime,provenance,pipeline,dependencies,verify,runner,prompt,generation}.rs`
-  own the independent Dart generation-1/runtime-1 package backend. `src/sandbox/landlock.rs` applies
+  own the independent Dart generation-2/runtime-2 package backend. `src/sandbox/landlock.rs` applies
   Dart runtime filesystem confinement before VM threads; do not move it into already-threaded Dart code.
 - `src/agent.rs`, `src/sandbox.rs`, `src/transaction.rs`, and `src/cli.rs` own external execution,
   containment, crash-safe publication, inspection lock, target dispatch, command grammar, and exit
@@ -116,9 +130,15 @@ cott lsp
 
 `deploy` packages a verified, fully resolved snapshot with passing coverage policy and unchanged
 input/managed bytes into `<project>/dist/<name>-<version>/` or `--output` (relative to the calling
-working directory). Existing output is never overwritten unless `--replace` is given, which
-atomically swaps in a freshly staged tree only when the output is a prior Cott deployment of the
-same project (real no-follow directory holding a parseable `generation.json` for this target).
+working directory). Existing output is never overwritten unless `--replace` is given. Replacement
+requires a real no-follow prior Cott deployment with this target's closed record and the same
+project identity; Python additionally hash-verifies the deployed runtime identity. A parseable
+`generation.json` alone is insufficient. Swap complete sibling trees with real `RENAME_EXCHANGE`,
+not two `RENAME_NOREPLACE` moves with an output-missing gap. Durable journal/marker ownership
+proof and no-follow locking govern recovery. Never roll back to a partially deleted old tree
+after commit: post-commit cleanup failure leaves the NEW deployment usable and retains recoverable
+state. Unsupported filesystem capabilities fail closed, without an unsafe fallback. Continuous
+pathname visibility is not a multi-open reader snapshot guarantee.
 Python deployment preserves runtime code
 under `python/`, authored adapters, unchanged `generation.json`, exact `.python-version`, and
 hash-pinned production `requirements.txt`. Kotlin deployment preserves `cott-module.jar`, unchanged
@@ -131,13 +151,13 @@ generated layout, tests, authoring implementation copies, and caches. Deploy nev
 re-verifies, runs an agent, or infers application resources.
 
 `emit` and `generate` publish through the project transaction and always leave
-`current.verified = false`; only explicit `verify` certifies a snapshot. Target emit never invokes
+`.snapshots[.current].verified = false` in the record; only explicit `verify` certifies a snapshot. Target emit never invokes
 an agent. Unresolved callables are omitted from the callable facade. `emit ir` rewrites only IR
 scope and `generation.json`; non-IR managed hashes stay trusted recorded values and cannot bless
 unrelated on-disk edits. Pending unresolved agent sources with authentic `AgentRun` provenance keep
 their old bytes across repeated emit and checkpoint until regeneration. Manifest-owned bindings
-are excluded from intent regeneration. Same-v7 fallback derivation applies only to Python records;
-Kotlin and Dart remain separate closed generation schema 1 targets. Missing manifest/rule evidence and source/path/hash
+are excluded from intent regeneration. Missing intent metadata fallback applies only to valid
+current-schema Python records; Kotlin and Dart have separate generation schema 2 contracts. Missing manifest/rule evidence and source/path/hash
 drift invalidate conservatively. `generate` invokes the selected agent only for eligible unresolved
 callables and freezes all advertised initial prompts before accepting any wave candidate.
 
@@ -147,14 +167,21 @@ only the initial bytes. The requested write path is `implementation.py` for Pyth
 `implementation.kt` for Kotlin and `implementation.dart` for Dart. Context is the scoped transitive
 declaration closure, including explicit references, `constant_ref`, applied rules/bases, relevant scenarios, and scoped
 `cott-domain` directives. Prompt sections stay separated: authority, current intent, formal
-declarations, project rules, references, target output rules, and feedback. Formal source is
-authoritative; rules and references never override it.
+declarations, project rules, references, target output rules, and feedback. Formal declarations
+are authoritative; rules and references never override them. `FORMAL DECLARATIONS` projects only
+the selected resolved canonical context, without source rereads, span slicing, or broad
+re-expansion. Expression/pattern strings use unambiguous `kind(field=value,...)` constructors,
+nested constructors, ordered lists and JSON-quoted strings, not formatted Cott source. Preserve
+resolved types, fully qualified symbols/bindings, variant identities, exact integer values and
+IEEE float bits, operators and guard binding scopes. Coordinates are diagnostic only; omit
+spans/source_order/doc from this view while keeping clause identities/order. CURRENT INTENT owns
+doc. The `context` and intent fingerprint contracts remain unchanged.
 
 `verify` rebuilds and checks the complete selected target without a result cache, refuses unresolved
 work, and publishes certification only after real target verification. Kotlin verify uses
 kotlinc `>=2.2.10`, JDK `>=17`, JVM target 17, compiler-distribution stdlib and coroutine `1.8.0`,
 then compiles `library/cott-module.jar` and executes the bounded runner in the existing sandbox.
-For Kotlin and Dart, `current.verified = true` requires `current == last_verified`. Emit, generate, and
+For Kotlin and Dart, `.snapshots[.current].verified = true` requires `current == last_verified`. Emit, generate, and
 actual format edits retain history but invalidate current certification. An already deployed
 snapshot keeps its old contract until a later deployment.
 
@@ -195,11 +222,33 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
 - Functions support parameters, generics/bounds, `requires`, `ensures`, conditional `error`, and
   closed `effects`. Contract expressions are typed in HIR and generated wrappers apply the configured
   validation mode without weakening provenance or implementation-state checks.
+- An input-scrutinee guard such as `ensures key matches Kind.X => result == ...` retains the
+  return-value `result` in its condition, alongside clause-local pattern bindings. In contrast,
+  `ensures result matches Pattern => condition` and its shorthand `ensures Pattern => condition`
+  expose pattern bindings, not `result`, to the condition. Bindings never leak into later clauses,
+  and guards do not introduce return-value `result` into `requires`, refinements, or invariants.
+- `ensures table key:` has indented rows such as `Kind.Local => "local"`. Require exhaustive,
+  unique zero-payload enum variants and lower each row to a guarded result-equality obligation,
+  never an executable implementation. `ensures preserves result from mark except value, image_bytes`
+  requires the same concrete struct and generic arguments, preserving nonexcluded fields in
+  canonical field order. Reject unknown/duplicate exclusions and excluding every field.
+  `table`, `preserves`, `from`, `except` are contextual, not globally reserved.
+- Ordinary acyclic rules may precede either sugar in a callable, but sugar inside rule declarations
+  is rejected for lack of a callable-local concrete environment. Rules remain restricted,
+  terminating clause helpers; arbitrary calls and recursion are unavailable. Preserve implication
+  versus match-guard disambiguation, including formatter-required parentheses.
 - Scenario fixtures are closed and facade-only. Effectful HTTP observation is available only through
   compiler-owned Linux isolated loopback; unavailable isolation is `unobserved`, never an
   unsandboxed or host-network substitute.
 - Semantic coverage is the closed join of Canonical IR clause inventory and runner evidence. Only
   manifest-selected clauses are policy-gated; certification is not a second runtime truth boundary.
+- Evidence comes from actual emitted predicate observations in the exact callable/invocation/method
+  scope: evaluate once and only after the guard matches. No runner post-hoc reevaluation/guessing
+  and no "previously observed" fallback may upgrade missing or unknown evidence. Python's
+  compiler-private observer tokens/sinks cannot be supplied by implementations; target ABI and
+  record/evidence schemas stay unchanged. Deterministic bounded literal/boundary/candidate
+  breadth-first exploration improves positive reachability, not full-function correctness.
+  Preserve honest unknown/unobserved statuses and explicit policy allowances.
 
 ### Python Implementations
 
@@ -258,9 +307,36 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
 - Public consumers import `package:<name>/modules/<module>.dart`. Implementations are Dart-library
   private parts; stateful methods share their owner-private library. Do not expose raw state/seals,
   public unchecked setters, or private implementation import paths.
+- Private type-module aliases are `_cott_t_` plus segments with `_` escaped as `_u`, joined by
+  `__`: `foo_bar.baz` becomes `_cott_t_foo_ubar__baz`. Canonical symbols, public facade imports and
+  hash identity rules are unchanged by alias spelling. This alias cutover is separate from the
+  native-enum runtime ABI 2 change; neither supplies compatibility aliases or an automatic old-source reader.
+  Manifest-owned sources may update aliases. Authenticated agent-owned bytes require legitimate
+  regeneration, not cosmetic edits followed by blessing; preserve source/record hash checks.
 - I64/U64 use `BigInt`; small integer bounds and F32 rounding remain exact. Generic/associated
   distinctions use explicit `CottType<T>` witnesses and checked variance views; consts use
   `CottConst`. Never substitute `Any`, Dart covariance, or runtimeType text for canonical evidence.
+- Every immutable struct exposes named extension `<Struct>$CopyWith` and `value.copyWith(...)`;
+  explicit `<Struct>$CopyWith(value).copyWith(...)` is also available. An extension adds no
+  instance-member implementation requirement to checked generic view implementers. Cott fields
+  must be snake_case; do not invent a migration for an invalid source field named `copyWith`.
+  Omitted fields keep exact stored values, not constructor defaults; explicit overrides including
+  `Nothing`, zero, false and canonical-Any null are distinct from omission. Forward stored
+  witnesses and rerun the canonical constructor/invariants.
+- `optionFromNullable<T extends Object>`/`optionToNullable<T extends Object>` accept only
+  nonnullable payload types; never conflate `Some(null)` with `Nothing`. General `Option[Any]`
+  still uses explicit variants. `CottBytes.readOnlyView` is a zero-copy read-only `List<int>`;
+  `toUint8List()` stays a mutable defensive copy.
+- Native Dart enums apply to a whole nonempty enum with no type/const generic parameters and no
+  variant payloads. Preserve exact Cott member spelling: `Kind.Local`, never `KindLocal()` or
+  `Kind.Local()`. Public callers and implementations use native `.values`, `.name`, `.index` and
+  exhaustive constant patterns such as `switch (kind) { Kind.Local => ..., Kind.Remote => ... }`.
+  Remove the old per-variant classes and aliases for eligible declarations. Enums with any payload
+  or generic parameter remain sealed arbitrary-value ADTs with generated class constructors,
+  including their payloadless variants. `Option` and `Result` remain generic ADTs. This projection
+  changes Dart runtime ABI to `2`, not Cott author syntax or the package version.
+  If a member matches its own enum type name, append `$`: `Kind.Kind$`. It remains native,
+  canonical identity stays unchanged, and native `.name` reflects the target-language escape.
 - Cancellation is cooperative. Structured tasks and exact live guard/mutation leases are explicit;
   inherited Zone data never grants task ownership and arbitrary Futures are not preempted.
 - Freeze manifest, rules, Cott/Dart sources and pub metadata once. Missing authentic agent source

@@ -51,6 +51,137 @@ pub enum PythonFileRole {
     GeneratedImplementation,
 }
 
+impl PythonFileRole {
+    /// Only compiler-emitted facade and runtime code carries clause-evidence
+    /// authority. Every other role is untrusted input: authored project code,
+    /// manifest bindings and agent implementations must never read, forge or
+    /// patch a contract observation.
+    fn emits_contract_evidence(self) -> bool {
+        matches!(self, Self::GeneratedFacade | Self::GeneratedRuntime)
+    }
+
+    /// Implementation sources are executed inside the verified process, so the
+    /// stricter reflection rules that already govern binding text apply to them
+    /// as well.
+    fn is_implementation(self) -> bool {
+        matches!(
+            self,
+            Self::ManifestBinding | Self::DurableImplementation | Self::GeneratedImplementation
+        )
+    }
+}
+
+/// Namespace the generated runtime reserves for contract-evidence machinery:
+/// the observation hook, the observer variable, the sink registry and every
+/// future member. Matching by reserved prefix rather than by a fixed list keeps
+/// the boundary closed when the runtime grows another private collaborator.
+const CONTRACT_EVIDENCE_PREFIXES: &[&str] = &["_cott_contract", "_cott_observe"];
+
+/// Python data-model names an untrusted source may legitimately use, including
+/// the exception-chaining attributes a binding needs to map a raised cause onto
+/// a declared domain error. Every other dunder reaches a namespace, a
+/// descriptor, a frame or a type graph, so the audit denies by default: a newly
+/// added CPython attribute cannot become a silent evidence bypass.
+/// `__traceback__` stays denied: frames lead straight back to module globals.
+const SAFE_PROTOCOL_DUNDERS: &[&str] = &[
+    "__abs__",
+    "__add__",
+    "__aenter__",
+    "__aexit__",
+    "__aiter__",
+    "__anext__",
+    "__bool__",
+    "__call__",
+    "__cause__",
+    "__contains__",
+    "__context__",
+    "__delitem__",
+    "__enter__",
+    "__eq__",
+    "__exit__",
+    "__float__",
+    "__floordiv__",
+    "__future__",
+    "__ge__",
+    "__getitem__",
+    "__gt__",
+    "__hash__",
+    "__index__",
+    "__init__",
+    "__int__",
+    "__iter__",
+    "__le__",
+    "__len__",
+    "__lt__",
+    "__match_args__",
+    "__mod__",
+    "__mul__",
+    "__ne__",
+    "__neg__",
+    "__next__",
+    "__pos__",
+    "__post_init__",
+    "__repr__",
+    "__round__",
+    "__setitem__",
+    "__slots__",
+    "__str__",
+    "__sub__",
+    "__suppress_context__",
+    "__truediv__",
+];
+
+/// Interpreter introspection that reaches live contract evidence without ever
+/// naming it: context enumeration hands out the observer variable itself, frame
+/// walking hands out module globals, and the object graph hands out both.
+const INTROSPECTION_NAMES: &[&str] = &[
+    "ContextVar",
+    "_getframe",
+    "contextvars",
+    "copy_context",
+    "currentframe",
+    "f_back",
+    "f_globals",
+    "f_locals",
+    "get_context",
+    "get_objects",
+    "get_referents",
+    "get_referrers",
+    "setprofile",
+    "settrace",
+];
+
+/// Builtins that read or write an attribute chosen at runtime.
+const REFLECTION_BUILTINS: [&str; 6] = ["delattr", "dir", "getattr", "hasattr", "setattr", "vars"];
+
+fn contract_evidence_api(name: &str) -> bool {
+    CONTRACT_EVIDENCE_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
+/// Reports the reserved prefix a text fragment leaks, so protected-string
+/// reflection is caught without depending on any single spelling.
+fn reserved_evidence_prefix(text: &str) -> Option<&'static str> {
+    CONTRACT_EVIDENCE_PREFIXES
+        .iter()
+        .copied()
+        .find(|prefix| text.contains(prefix))
+}
+
+fn introspection_name(name: &str) -> bool {
+    INTROSPECTION_NAMES.contains(&name)
+}
+
+fn is_dunder(name: &str) -> bool {
+    name.len() > 4 && name.starts_with("__") && name.ends_with("__")
+}
+
+/// A dunder outside the data-model allowlist is a reflection hook.
+fn reflective_dunder(name: &str) -> bool {
+    is_dunder(name) && !SAFE_PROTOCOL_DUNDERS.contains(&name)
+}
+
 /// The Python syntax which introduced an import reference.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ImportForm {
@@ -82,16 +213,44 @@ pub struct FacadeBoundaryDiagnostic {
     pub message: String,
 }
 
+/// How far a boundary violation reaches: every untrusted source, or only the
+/// implementation sources that run inside the verified process.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EvidenceScope {
+    Untrusted,
+    Implementation,
+}
+
+/// One compiler-private contract-evidence violation, before its file is known.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct EvidenceViolation {
+    range: std::ops::Range<usize>,
+    scope: EvidenceScope,
+    message: String,
+}
+
+/// Everything one Python parse proves about a file's boundary behaviour.
+struct PythonAudit {
+    references: Vec<ImportReference>,
+    evidence: Vec<EvidenceViolation>,
+}
+
 /// Parses one authored or materialized Python file and records every static or
 /// recognized dynamic import without inspecting comments or strings.
 pub fn inspect_python_imports(source: &str) -> Result<Vec<ImportReference>, String> {
+    Ok(inspect_python_source(source)?.references)
+}
+
+fn inspect_python_source(source: &str) -> Result<PythonAudit, String> {
     let suite = ast::Suite::parse(source, "<facade-boundary>")
         .map_err(|error| format!("cannot audit Python imports: {error}"))?;
     let mut visitor = PythonImportVisitor {
         source,
         importlib_modules: BTreeSet::new(),
         import_module_functions: BTreeSet::new(),
+        runtime_derived: BTreeSet::new(),
         references: Vec::new(),
+        evidence: Vec::new(),
     };
     for statement in suite {
         visitor.visit_statement(&statement);
@@ -105,32 +264,72 @@ pub fn inspect_python_imports(source: &str) -> Result<Vec<ImportReference>, Stri
         ))
     });
     visitor.references.dedup();
-    Ok(visitor.references)
+    visitor.evidence.sort_by(|left, right| {
+        (left.range.start, left.range.end, &left.message).cmp(&(
+            right.range.start,
+            right.range.end,
+            &right.message,
+        ))
+    });
+    visitor.evidence.dedup();
+    Ok(PythonAudit {
+        references: visitor.references,
+        evidence: visitor.evidence,
+    })
 }
 
 /// Audits one file after its ownership role has been resolved. All roles may
-/// define their own private implementation, but none may import a private root.
+/// define their own private implementation, but none may import a private root,
+/// and only compiler-emitted facade and runtime code may touch clause evidence.
 pub fn audit_facade_file(
     path: &Path,
     source: &str,
-    _role: PythonFileRole,
+    role: PythonFileRole,
 ) -> Vec<FacadeBoundaryDiagnostic> {
-    audit_facade_boundary(path, source)
+    let audit = match inspect_python_source(source) {
+        Ok(audit) => audit,
+        Err(message) => return vec![parse_failure(path, message)],
+    };
+    let mut diagnostics = facade_diagnostics(path, audit.references);
+    if !role.emits_contract_evidence() {
+        let implementation = role.is_implementation();
+        diagnostics.extend(
+            audit
+                .evidence
+                .into_iter()
+                .filter(|violation| implementation || violation.scope == EvidenceScope::Untrusted)
+                .map(|violation| FacadeBoundaryDiagnostic {
+                    path: path.to_path_buf(),
+                    range: Some(violation.range),
+                    message: violation.message,
+                }),
+        );
+    }
+    ordered_diagnostics(diagnostics)
 }
 
 /// Audits a project-owned Python file for attempts to bypass the generated facade.
 pub fn audit_facade_boundary(path: &Path, source: &str) -> Vec<FacadeBoundaryDiagnostic> {
     let references = match inspect_python_imports(source) {
         Ok(references) => references,
-        Err(message) => {
-            return vec![FacadeBoundaryDiagnostic {
-                path: path.to_path_buf(),
-                range: None,
-                message,
-            }];
-        }
+        Err(message) => return vec![parse_failure(path, message)],
     };
-    let mut diagnostics = references
+    ordered_diagnostics(facade_diagnostics(path, references))
+}
+
+fn parse_failure(path: &Path, message: String) -> FacadeBoundaryDiagnostic {
+    FacadeBoundaryDiagnostic {
+        path: path.to_path_buf(),
+        range: None,
+        message,
+    }
+}
+
+fn facade_diagnostics(
+    path: &Path,
+    references: Vec<ImportReference>,
+) -> Vec<FacadeBoundaryDiagnostic> {
+    references
         .into_iter()
         .filter_map(|reference| {
             let message = match reference.target {
@@ -156,7 +355,12 @@ pub fn audit_facade_boundary(path: &Path, source: &str) -> Vec<FacadeBoundaryDia
                 message,
             })
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+fn ordered_diagnostics(
+    mut diagnostics: Vec<FacadeBoundaryDiagnostic>,
+) -> Vec<FacadeBoundaryDiagnostic> {
     diagnostics.sort_by(|left, right| {
         (
             &left.path,
@@ -177,7 +381,9 @@ struct PythonImportVisitor<'a> {
     source: &'a str,
     importlib_modules: BTreeSet<String>,
     import_module_functions: BTreeSet<String>,
+    runtime_derived: BTreeSet<String>,
     references: Vec<ImportReference>,
+    evidence: Vec<EvidenceViolation>,
 }
 
 impl PythonImportVisitor<'_> {
@@ -205,6 +411,83 @@ impl PythonImportVisitor<'_> {
             form: ImportForm::DynamicImport,
             target,
         });
+    }
+
+    fn push_evidence(
+        &mut self,
+        range: ast::text_size::TextRange,
+        scope: EvidenceScope,
+        message: String,
+    ) {
+        self.evidence.push(EvidenceViolation {
+            range: usize::from(range.start())..usize::from(range.end()),
+            scope,
+            message,
+        });
+    }
+
+    /// Rejects any untrusted definition of a compiler-private evidence name,
+    /// including one smuggled in as an import alias.
+    fn check_definition(&mut self, name: &str, range: ast::text_size::TextRange) {
+        if contract_evidence_api(name) {
+            self.push_evidence(
+                range,
+                EvidenceScope::Untrusted,
+                format!(
+                    "contract evidence boundary: compiler-private `{name}` must not be defined"
+                ),
+            );
+        }
+    }
+
+    fn is_dynamic_import(&self, function: &ast::Expr) -> bool {
+        match function {
+            ast::Expr::Name(name) => {
+                name.id.as_str() == "__import__"
+                    || self.import_module_functions.contains(name.id.as_str())
+            }
+            ast::Expr::Attribute(attribute) => {
+                attribute.attr.as_str() == "import_module"
+                    && matches!(
+                        &*attribute.value,
+                        ast::Expr::Name(name)
+                            if self.importlib_modules.contains(name.id.as_str())
+                    )
+            }
+            _ => false,
+        }
+    }
+
+    /// Recognizes every expression that derives from the Cott runtime: a module
+    /// handle or alias, any name imported from the runtime package, a class
+    /// built on one, and every attribute, subscript, call or await reached from
+    /// such a value. Meta chains stay derived, so a descriptor, a namespace or a
+    /// subclass reached from a public runtime class is still runtime authority.
+    fn is_runtime_derived(&self, expression: &ast::Expr) -> bool {
+        match expression {
+            ast::Expr::Name(name) => self.runtime_derived.contains(name.id.as_str()),
+            ast::Expr::Attribute(node) => self.is_runtime_derived(&node.value),
+            ast::Expr::Subscript(node) => {
+                self.is_runtime_derived(&node.value)
+                    || (is_module_table(&node.value)
+                        && constant_string(&node.slice) == Some("cott_runtime"))
+            }
+            ast::Expr::Call(node) => {
+                self.is_runtime_derived(&node.func)
+                    || (self.is_dynamic_import(&node.func)
+                        && node.args.first().and_then(constant_string) == Some("cott_runtime"))
+            }
+            ast::Expr::Await(node) => self.is_runtime_derived(&node.value),
+            _ => false,
+        }
+    }
+
+    fn bind_runtime_derived(&mut self, target: &ast::Expr, value: &ast::Expr) {
+        if let ast::Expr::Name(name) = target
+            && self.is_runtime_derived(value)
+        {
+            self.runtime_derived.insert(name.id.as_str().to_owned());
+        }
     }
 
     fn visit_statements(&mut self, statements: &[ast::Stmt]) {
@@ -248,37 +531,85 @@ impl PythonImportVisitor<'_> {
                     if module == "importlib" {
                         self.importlib_modules.insert(binding.to_owned());
                     }
+                    if module == "cott_runtime" || module.starts_with("cott_runtime.") {
+                        self.runtime_derived.insert(binding.to_owned());
+                    }
+                    if root_module(module).is_some_and(introspection_name) {
+                        self.push_evidence(
+                            alias.range,
+                            EvidenceScope::Implementation,
+                            format!("runtime introspection `{module}` is not allowed"),
+                        );
+                    }
+                    self.check_definition(binding, alias.range);
                     self.push_literal(alias.range, ImportForm::Import, module);
                 }
             }
             ast::Stmt::ImportFrom(node) => {
-                let Some(module) = node.module.as_ref().map(|module| module.as_str()) else {
-                    return;
-                };
+                let module = node.module.as_ref().map(|module| module.as_str());
                 for alias in &node.names {
+                    let name = alias.name.as_str();
                     let binding = alias
                         .asname
                         .as_ref()
-                        .map_or(alias.name.as_str(), |name| name.as_str());
-                    if module == "importlib" && alias.name.as_str() == "import_module" {
+                        .map_or(name, |binding| binding.as_str());
+                    if module == Some("importlib") && name == "import_module" {
                         self.import_module_functions.insert(binding.to_owned());
                     }
+                    let from_runtime =
+                        module.is_some_and(|module| root_module(module) == Some("cott_runtime"));
+                    if from_runtime || name == "cott_runtime" {
+                        self.runtime_derived.insert(binding.to_owned());
+                    }
+                    if contract_evidence_api(name) {
+                        self.push_evidence(
+                            alias.range,
+                            EvidenceScope::Untrusted,
+                            format!(
+                                "contract evidence boundary: compiler-private `{name}` must not be imported"
+                            ),
+                        );
+                    } else if introspection_name(name)
+                        || module.and_then(root_module).is_some_and(introspection_name)
+                    {
+                        self.push_evidence(
+                            alias.range,
+                            EvidenceScope::Implementation,
+                            format!("runtime introspection `{name}` is not allowed"),
+                        );
+                    } else {
+                        self.check_definition(binding, alias.range);
+                    }
                 }
+                let Some(module) = module else {
+                    return;
+                };
                 self.push_literal(node.range, ImportForm::ImportFrom, module);
             }
-            ast::Stmt::FunctionDef(node) => self.visit_definition(
-                &node.args,
-                &node.decorator_list,
-                node.returns.as_deref(),
-                &node.body,
-            ),
-            ast::Stmt::AsyncFunctionDef(node) => self.visit_definition(
-                &node.args,
-                &node.decorator_list,
-                node.returns.as_deref(),
-                &node.body,
-            ),
+            ast::Stmt::FunctionDef(node) => {
+                self.check_definition(node.name.as_str(), node.range);
+                self.visit_definition(
+                    &node.args,
+                    &node.decorator_list,
+                    node.returns.as_deref(),
+                    &node.body,
+                );
+            }
+            ast::Stmt::AsyncFunctionDef(node) => {
+                self.check_definition(node.name.as_str(), node.range);
+                self.visit_definition(
+                    &node.args,
+                    &node.decorator_list,
+                    node.returns.as_deref(),
+                    &node.body,
+                );
+            }
             ast::Stmt::ClassDef(node) => {
+                self.check_definition(node.name.as_str(), node.range);
+                // A subclass of a runtime class inherits its authority.
+                if node.bases.iter().any(|base| self.is_runtime_derived(base)) {
+                    self.runtime_derived.insert(node.name.as_str().to_owned());
+                }
                 node.bases
                     .iter()
                     .for_each(|base| self.visit_expression(base));
@@ -300,9 +631,15 @@ impl PythonImportVisitor<'_> {
                 .iter()
                 .for_each(|value| self.visit_expression(value)),
             ast::Stmt::Assign(node) => {
-                node.targets
-                    .iter()
-                    .for_each(|value| self.visit_expression(value));
+                for target in &node.targets {
+                    self.bind_runtime_derived(target, &node.value);
+                    // A name target binds; only its definition is a boundary event.
+                    if let ast::Expr::Name(name) = target {
+                        self.check_definition(name.id.as_str(), name.range);
+                    } else {
+                        self.visit_expression(target);
+                    }
+                }
                 self.visit_expression(&node.value);
             }
             ast::Stmt::TypeAlias(node) => self.visit_expression(&node.value),
@@ -312,7 +649,13 @@ impl PythonImportVisitor<'_> {
             }
             ast::Stmt::AnnAssign(node) => {
                 if let Some(value) = &node.value {
+                    self.bind_runtime_derived(&node.target, value);
                     self.visit_expression(value);
+                }
+                if let ast::Expr::Name(name) = &*node.target {
+                    self.check_definition(name.id.as_str(), name.range);
+                } else {
+                    self.visit_expression(&node.target);
                 }
             }
             ast::Stmt::For(node) => {
@@ -403,23 +746,21 @@ impl PythonImportVisitor<'_> {
     fn visit_expression(&mut self, expression: &ast::Expr) {
         match expression {
             ast::Expr::Call(node) => {
-                let dynamic_import = match &*node.func {
-                    ast::Expr::Name(name) => {
-                        name.id.as_str() == "__import__"
-                            || self.import_module_functions.contains(name.id.as_str())
-                    }
-                    ast::Expr::Attribute(attribute) => {
-                        attribute.attr.as_str() == "import_module"
-                            && matches!(
-                                &*attribute.value,
-                                ast::Expr::Name(name)
-                                    if self.importlib_modules.contains(name.id.as_str())
-                            )
-                    }
-                    _ => false,
-                };
-                if dynamic_import {
+                if self.is_dynamic_import(&node.func) {
                     self.push_dynamic(node);
+                }
+                if is_reflection_builtin(&node.func)
+                    && node
+                        .args
+                        .iter()
+                        .any(|argument| self.is_runtime_derived(argument))
+                {
+                    self.push_evidence(
+                        node.range,
+                        EvidenceScope::Untrusted,
+                        "contract evidence boundary: reflection over a Cott runtime object is not allowed"
+                            .to_owned(),
+                    );
                 }
                 self.visit_expression(&node.func);
                 node.args
@@ -492,7 +833,70 @@ impl PythonImportVisitor<'_> {
                 .values
                 .iter()
                 .for_each(|value| self.visit_expression(value)),
-            ast::Expr::Attribute(node) => self.visit_expression(&node.value),
+            ast::Expr::Name(node) => {
+                let name = node.id.as_str();
+                if contract_evidence_api(name) {
+                    self.push_evidence(
+                        node.range,
+                        EvidenceScope::Untrusted,
+                        format!(
+                            "contract evidence boundary: compiler-private `{name}` must not be referenced"
+                        ),
+                    );
+                } else if introspection_name(name) {
+                    self.push_evidence(
+                        node.range,
+                        EvidenceScope::Implementation,
+                        format!("runtime introspection `{name}` is not allowed"),
+                    );
+                }
+            }
+            ast::Expr::Attribute(node) => {
+                let attribute = node.attr.as_str();
+                if contract_evidence_api(attribute) {
+                    self.push_evidence(
+                        node.range,
+                        EvidenceScope::Untrusted,
+                        format!(
+                            "contract evidence boundary: compiler-private `{attribute}` must not be accessed"
+                        ),
+                    );
+                } else if reflective_dunder(attribute) && self.is_runtime_derived(&node.value) {
+                    self.push_evidence(
+                        node.range,
+                        EvidenceScope::Untrusted,
+                        format!(
+                            "contract evidence boundary: reflective attribute `{attribute}` of a Cott runtime object must not be used"
+                        ),
+                    );
+                } else if reflective_dunder(attribute) {
+                    self.push_evidence(
+                        node.range,
+                        EvidenceScope::Implementation,
+                        format!("runtime reflection `{attribute}` is not allowed"),
+                    );
+                } else if introspection_name(attribute) {
+                    self.push_evidence(
+                        node.range,
+                        EvidenceScope::Implementation,
+                        format!("runtime introspection `{attribute}` is not allowed"),
+                    );
+                }
+                self.visit_expression(&node.value);
+            }
+            ast::Expr::Constant(node) => {
+                if let ast::Constant::Str(text) = &node.value
+                    && let Some(prefix) = reserved_evidence_prefix(text)
+                {
+                    self.push_evidence(
+                        node.range,
+                        EvidenceScope::Untrusted,
+                        format!(
+                            "contract evidence boundary: reserved name prefix `{prefix}` must not appear in a string"
+                        ),
+                    );
+                }
+            }
             ast::Expr::Subscript(node) => {
                 self.visit_expression(&node.value);
                 self.visit_expression(&node.slice);
@@ -576,6 +980,37 @@ fn dotted_module(value: &str) -> bool {
 fn private_root(target: &str) -> Option<&str> {
     let root = target.split('.').next()?;
     matches!(root, "_cott_impl" | "cott_bindings").then_some(root)
+}
+
+fn root_module(target: &str) -> Option<&str> {
+    target.split('.').next().filter(|root| !root.is_empty())
+}
+
+fn constant_string(expression: &ast::Expr) -> Option<&str> {
+    match expression {
+        ast::Expr::Constant(node) => match &node.value {
+            ast::Constant::Str(text) => Some(text.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Recognizes the interpreter module table, however it was imported.
+fn is_module_table(expression: &ast::Expr) -> bool {
+    match expression {
+        ast::Expr::Attribute(node) => node.attr.as_str() == "modules",
+        ast::Expr::Name(node) => node.id.as_str() == "modules",
+        _ => false,
+    }
+}
+
+fn is_reflection_builtin(function: &ast::Expr) -> bool {
+    match function {
+        ast::Expr::Name(node) => REFLECTION_BUILTINS.contains(&node.id.as_str()),
+        ast::Expr::Attribute(node) => REFLECTION_BUILTINS.contains(&node.attr.as_str()),
+        _ => false,
+    }
 }
 
 /// Resolution separates absent durable sources from invalid sources so
@@ -1681,12 +2116,18 @@ fn validate_source(
                 add_error(String::from("builtin reflection is not allowed"))
             }
             "getattr" | "setattr" | "delattr" | "hasattr" | "dir" | "vars" | "globals"
-            | "locals" | "__getattr__" | "__getattribute__" | "attrgetter" | "methodcaller" => {
+            | "locals" | "attrgetter" | "methodcaller" => {
                 add_error(format!("runtime reflection `{token}` is not allowed"))
             }
-            "__file__" | "__path__" | "__spec__" | "__loader__" | "__package__" => {
+            name if reflective_dunder(name) => {
                 add_error(format!("runtime reflection `{token}` is not allowed"))
             }
+            name if introspection_name(name) => {
+                add_error(format!("runtime introspection `{token}` is not allowed"))
+            }
+            name if contract_evidence_api(name) => add_error(format!(
+                "contract evidence boundary: compiler-private `{token}` is not allowed"
+            )),
             "agent" | "agents" => add_error(String::from("agent operations are not allowed")),
             "async" if !is_async_function(&callable.kind) => {
                 add_error(String::from("async implementation is not allowed"))
@@ -4365,7 +4806,6 @@ fn stdlib_modules() -> HashSet<&'static str> {
         "fnmatch",
         "fractions",
         "functools",
-        "gc",
         "getopt",
         "glob",
         "gzip",
@@ -4375,7 +4815,6 @@ fn stdlib_modules() -> HashSet<&'static str> {
         "html",
         "http",
         "importlib",
-        "inspect",
         "io",
         "itertools",
         "json",

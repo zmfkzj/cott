@@ -2455,3 +2455,439 @@ fn implication_rejects_non_boolean_operands() {
         );
     }
 }
+
+fn authoring_semantic_ir(sources: Vec<SourceFile>) -> Vec<serde_json::Value> {
+    let parsed = parse_project(sources).expect("authoring fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("authoring fixture should lower");
+    render(&project)
+        .expect("canonical IR")
+        .modules
+        .iter()
+        .map(|module| {
+            let mut value = load(&module.bytes).expect("canonical IR should load");
+            strip_spans(&mut value);
+            value
+        })
+        .collect()
+}
+
+fn assert_authoring_error(source: &str, expected: &str) {
+    let parsed = parse_project([SourceFile::new("src/authoring.cott", source)])
+        .expect("negative authoring fixture should parse");
+    let errors = lower(Path::new("src"), parsed).expect_err("invalid authoring contract must fail");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.diagnostic.message.contains(expected)),
+        "missing {expected:?} in {errors:#?}\n{source}"
+    );
+    assert!(
+        errors
+            .iter()
+            .all(|error| error.path == Path::new("src/authoring.cott")
+                && error.diagnostic.span.end <= source.len()
+                && error.diagnostic.span.start < error.diagnostic.span.end)
+    );
+    let positions = errors
+        .iter()
+        .map(|error| (error.diagnostic.span.start, error.diagnostic.span.end))
+        .collect::<Vec<_>>();
+    assert!(positions.windows(2).all(|pair| pair[0] <= pair[1]));
+}
+
+#[test]
+fn enum_tables_expand_in_source_order_with_canonical_aliases_and_constants() {
+    let models = r#"module models
+enum Kind[T]:
+    Local
+    Imported
+alias SelectedKind = Kind[I32]
+const LOCAL: Str = "local"
+"#;
+    let function = |clauses: &str| {
+        format!(
+            "module authoring\nuse models.{{SelectedKind}}\nfn label(key: SelectedKind) -> Str:\n{clauses}    ensures result.len > 0\n"
+        )
+    };
+    let sugar = function(
+        "    ensures bound => bound.len >= 0\n    ensures table key:\n        models.SelectedKind.Imported => \"imported\"\n        models.Kind.Local => models.LOCAL\n",
+    );
+    let manual = function(
+        "    ensures bound => bound.len >= 0\n    ensures key matches models.Kind.Imported => result == \"imported\"\n    ensures key matches models.Kind.Local => result == models.LOCAL\n",
+    );
+    assert_eq!(
+        authoring_semantic_ir(vec![
+            SourceFile::new("src/models.cott", models),
+            SourceFile::new("src/authoring.cott", sugar),
+        ]),
+        authoring_semantic_ir(vec![
+            SourceFile::new("src/models.cott", models),
+            SourceFile::new("src/authoring.cott", manual),
+        ]),
+    );
+}
+
+#[test]
+fn preservation_uses_substituted_struct_fields_in_declaration_order() {
+    let models = r#"module models
+const SIZE: U32 = 2
+struct Mark[T, const N: U32]:
+    z_value: T
+    image_bytes: Bytes
+    a_values: Array[T, N]
+    defect_type: Str = "default"
+alias ConcreteMark = Mark[I32, SIZE]
+"#;
+    let function = |clauses: &str| {
+        format!(
+            "module authoring\nfn update(mark: models.ConcreteMark) -> models.Mark[I32, models.SIZE]:\n{clauses}    ensures result.defect_type == \"changed\"\n"
+        )
+    };
+    assert_eq!(
+        authoring_semantic_ir(vec![
+            SourceFile::new("src/models.cott", models),
+            SourceFile::new(
+                "src/authoring.cott",
+                function(
+                    "    ensures preserves result from mark except defect_type, image_bytes\n"
+                )
+            ),
+        ]),
+        authoring_semantic_ir(vec![
+            SourceFile::new("src/models.cott", models),
+            SourceFile::new(
+                "src/authoring.cott",
+                function(
+                    "    ensures result.z_value == mark.z_value\n    ensures result.a_values == mark.a_values\n"
+                )
+            ),
+        ]),
+    );
+}
+
+#[test]
+fn sugar_composes_with_reused_acyclic_rules_and_impl_contracts() {
+    let source = |table: &str, preserves: &str| {
+        format!(
+            r#"module authoring
+enum Kind:
+    Local
+    Imported
+struct Mark:
+    value: I32
+    changed: Bool = false
+rule Base:
+    requires true
+rule Ready(Base):
+    requires not false
+fn label(key: Kind) -> Str:
+    rule Ready
+{table}
+fn update(mark: Mark) -> Mark:
+    rule Ready
+{preserves}
+trait Operations:
+    fn label(self, key: Kind) -> Str
+    fn update(self, mark: Mark) -> Mark
+impl Worker for Operations:
+    fn label(self, key: Kind) -> Str:
+{method_table}
+    fn update(self, mark: Mark) -> Mark:
+{method_preserves}
+"#,
+            method_table = table
+                .lines()
+                .map(|line| format!("    {line}\n"))
+                .collect::<String>(),
+            method_preserves = preserves
+                .lines()
+                .map(|line| format!("    {line}\n"))
+                .collect::<String>(),
+        )
+    };
+    let sugar = source(
+        "    ensures table key:\n        Kind.Local => \"local\"\n        Kind.Imported => \"imported\"\n",
+        "    ensures preserves result from mark except changed\n",
+    );
+    let manual = source(
+        "    ensures key matches Kind.Local => result == \"local\"\n    ensures key matches Kind.Imported => result == \"imported\"\n",
+        "    ensures result.value == mark.value\n",
+    );
+    assert_eq!(
+        authoring_semantic_ir(vec![SourceFile::new("src/authoring.cott", sugar)]),
+        authoring_semantic_ir(vec![SourceFile::new("src/authoring.cott", manual)]),
+    );
+}
+
+#[test]
+fn tables_reject_nonfinite_incomplete_duplicate_foreign_and_payload_rows() {
+    let prelude = "module authoring\nenum Kind:\n    Local\n    Imported\nalias Alias = Kind\nenum Foreign:\n    Local\nenum Payload:\n    Item(value: I32)\n";
+    for (key_type, rows, expected) in [
+        (
+            "Bool",
+            "        Kind.Local => \"local\"\n",
+            "finite enum type",
+        ),
+        (
+            "Payload",
+            "        Payload.Item(value) => \"item\"\n",
+            "zero-payload variants",
+        ),
+        (
+            "Kind",
+            "        Kind.Local => \"local\"\n",
+            "missing variant(s): authoring.Kind.Imported",
+        ),
+        (
+            "Kind",
+            "        Kind.Local => \"local\"\n        Alias.Local => \"again\"\n        Kind.Imported => \"imported\"\n",
+            "duplicate ensures table variant",
+        ),
+        (
+            "Kind",
+            "        Foreign.Local => \"local\"\n        Kind.Imported => \"imported\"\n",
+            "does not belong",
+        ),
+        (
+            "Kind",
+            "        Kind.Unknown => \"local\"\n        Kind.Imported => \"imported\"\n",
+            "unknown enum variant",
+        ),
+        (
+            "Kind",
+            "        Kind.Local(value) => \"local\"\n        Kind.Imported => \"imported\"\n",
+            "cannot bind payload",
+        ),
+        (
+            "Kind",
+            "        _ => \"local\"\n        Kind.Imported => \"imported\"\n",
+            "must name zero-payload enum variants",
+        ),
+        (
+            "Kind",
+            "        Kind.Local => true\n        Kind.Imported => \"imported\"\n",
+            "comparison operands",
+        ),
+    ] {
+        let source =
+            format!("{prelude}fn label(key: {key_type}) -> Str:\n    ensures table key:\n{rows}");
+        assert_authoring_error(&source, expected);
+    }
+}
+
+#[test]
+fn tables_use_existing_equality_errors_and_do_not_leak_pattern_bindings() {
+    assert_authoring_error(
+        "module authoring\nenum Kind:\n    Local\nfn label[T](key: Kind, value: T) -> T:\n    ensures table key:\n        Kind.Local => value\n",
+        "comparison operands",
+    );
+    assert_authoring_error(
+        "module authoring\nenum Kind:\n    Local\nfn label(key: Kind) -> Str:\n    ensures previous => previous.len > 0\n    ensures table key:\n        Kind.Local => previous\n",
+        "unknown",
+    );
+    assert_authoring_error(
+        "module authoring\nenum Kind:\n    Local\nfn label(key: Kind) -> Str:\n    ensures table key:\n        Kind.Local(value) => value\n    ensures value == \"leaked\"\n",
+        "unknown",
+    );
+}
+
+#[test]
+fn preservation_rejects_invalid_exclusions_nominal_types_and_vacuity() {
+    let prelude = "module authoring\nstruct Mark[T]:\n    value: T\n    changed: Bool\nstruct Other:\n    value: I32\n    changed: Bool\n";
+    for (generics, argument, result, tail, expected) in [
+        (
+            "",
+            "Mark[I32]",
+            "Mark[I32]",
+            " except absent",
+            "unknown preserved struct field",
+        ),
+        (
+            "",
+            "Mark[I32]",
+            "Mark[I32]",
+            " except changed, changed",
+            "duplicate preserved field exclusion",
+        ),
+        (
+            "",
+            "Mark[I32]",
+            "Mark[I32]",
+            " except value, changed",
+            "at least one struct field",
+        ),
+        ("", "Other", "Mark[I32]", "", "same concrete struct type"),
+        (
+            "",
+            "Mark[Str]",
+            "Mark[I32]",
+            "",
+            "same concrete struct type",
+        ),
+        (
+            "[T]",
+            "Mark[T]",
+            "Mark[T]",
+            " except value",
+            "concrete immutable struct",
+        ),
+    ] {
+        let source = format!(
+            "{prelude}fn update{generics}(mark: {argument}) -> {result}:\n    ensures preserves result from mark{tail}\n"
+        );
+        assert_authoring_error(&source, expected);
+    }
+    assert_authoring_error(
+        "module authoring\nstruct Mark:\n    value: Opaque[\"token\"]\nfn update(mark: Mark) -> Mark:\n    ensures preserves result from mark\n",
+        "comparison operands",
+    );
+}
+
+#[test]
+fn preservation_rejects_non_struct_and_mutable_result_forms() {
+    let prelude = r#"module authoring
+trait Reader:
+    fn read(self) -> I32
+impl Mutable for Reader:
+    state:
+        value: I32 = 0
+    fn read(self) -> I32:
+        ensures result == self.value
+resource Handle:
+    initial Open
+    state Open
+    state Closed
+    terminal Closed
+    transition Open -> Closed
+external type Remote
+newtype Wrapped(I32)
+"#;
+    for ty in [
+        "I32",
+        "Reader",
+        "Mutable",
+        "Handle",
+        "Dyn[Reader]",
+        "Remote",
+        "Wrapped",
+    ] {
+        let source = format!(
+            "{prelude}fn update(mark: {ty}) -> {ty}:\n    ensures preserves result from mark\n"
+        );
+        assert_authoring_error(&source, "concrete immutable struct");
+    }
+}
+
+#[test]
+fn rules_explicitly_reject_sugar_without_a_callable_scope() {
+    for clause in [
+        "    ensures table key:\n        Kind.Local => \"local\"\n",
+        "    ensures preserves result from mark\n",
+    ] {
+        assert_authoring_error(
+            &format!("module authoring\nrule Unsupported:\n{clause}"),
+            "require a callable scope",
+        );
+    }
+}
+
+#[test]
+fn parse_format_parse_preserves_ensures_guard_and_implication_semantics() {
+    let source = r#"module authoring
+fn logical(flag: Bool, other: Bool) -> Bool:
+    ensures (flag)
+    ensures (flag) => other
+    ensures (flag) => other => result
+    ensures (flag => other) => result
+fn binding() -> Bool:
+    ensures flag => flag
+fn optional() -> Option[Bool]:
+    ensures Option.Some(value) => value
+"#;
+    let cst = cott::syntax::Cst::parse(source).expect("lex");
+    let ast = cott::parser::parse_cst(&cst).expect("parse");
+    let formatted =
+        String::from_utf8(cott::formatter::format(&cst, &ast).expect("format")).expect("UTF-8");
+    assert_eq!(
+        authoring_semantic_ir(vec![SourceFile::new("src/authoring.cott", source)]),
+        authoring_semantic_ir(vec![SourceFile::new("src/authoring.cott", formatted)]),
+    );
+}
+
+#[test]
+fn preservation_reads_frozen_fields_including_defaults_from_a_source_expression() {
+    let source = |clauses: &str| {
+        format!(
+            r#"module authoring
+struct Mark:
+    len: U64 = 7
+    payload: Bytes
+    labels: List[Str]
+struct Input:
+    mark: Mark
+fn copy(input: Input) -> Mark:
+{clauses}
+"#
+        )
+    };
+    assert_eq!(
+        authoring_semantic_ir(vec![SourceFile::new(
+            "src/authoring.cott",
+            source("    ensures preserves result from input.mark\n")
+        )]),
+        authoring_semantic_ir(vec![SourceFile::new(
+            "src/authoring.cott",
+            source(
+                "    ensures result.len == input.mark.len\n    ensures result.payload == input.mark.payload\n    ensures result.labels == input.mark.labels\n"
+            )
+        )]),
+    );
+}
+
+#[test]
+fn formatting_sugar_preserves_typed_function_and_impl_obligations() {
+    let source = r#"module authoring
+enum Kind:
+  Local
+  Imported
+struct Mark:
+  value:I32=9
+  changed:Bool
+trait Operations:
+  fn label(self,key:Kind)->Str
+  fn update(self,mark:Mark)->Mark
+impl Worker for Operations:
+  fn label(self,key:Kind)->Str:
+    ensures table key:
+      Kind.Imported=>"imported"
+      Kind.Local=>"local"
+  fn update(self,mark:Mark)->Mark:
+    ensures preserves result from mark except changed
+fn copy(mark:Mark)->Mark:
+  ensures preserves result from mark
+"#;
+    let cst = cott::syntax::Cst::parse(source).expect("lex");
+    let ast = cott::parser::parse_cst(&cst).expect("parse");
+    let formatted =
+        String::from_utf8(cott::formatter::format(&cst, &ast).expect("format")).expect("UTF-8");
+    assert_eq!(
+        authoring_semantic_ir(vec![SourceFile::new("src/authoring.cott", source)]),
+        authoring_semantic_ir(vec![SourceFile::new("src/authoring.cott", formatted)]),
+    );
+}
+
+#[test]
+fn preservation_does_not_choose_between_ambiguous_imported_structs() {
+    let parsed = parse_project([
+        SourceFile::new("src/left.cott", "module left\nstruct Mark:\n    value: I32\n"),
+        SourceFile::new("src/right.cott", "module right\nstruct Mark:\n    value: I32\n"),
+        SourceFile::new("src/authoring.cott", "module authoring\nuse left.{Mark}\nuse right.{Mark}\nfn copy(mark: Mark) -> Mark:\n    ensures preserves result from mark\n"),
+    ]).expect("ambiguous imports should parse");
+    let errors = lower(Path::new("src"), parsed).expect_err("ambiguous nominal type");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.path == Path::new("src/authoring.cott")
+                && error.diagnostic.message.contains("duplicate import"))
+    );
+}

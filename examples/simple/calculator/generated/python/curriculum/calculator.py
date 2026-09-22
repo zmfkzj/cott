@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from curriculum.calculator_types import CalculatorError, CalculatorError_DivideByZero, CalculatorOp, CalculatorOp_Add, CalculatorOp_Divide, CalculatorOp_Multiply, CalculatorOp_Subtract
 
@@ -19,7 +20,7 @@ def calculate(left: F64, operator: CalculatorOp, right: F64) -> Result[F64, Calc
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
-    if _expected_error is None and (((operator == CalculatorOp_Divide()) and (right == 0))):
+    if _expected_error is None and (_cott_contract_condition((((operator == CalculatorOp_Divide()) and (right == 0))), "curriculum.calculator.calculate", "error:2:condition")):
         _expected_error = CalculatorError_DivideByZero
         _expected_error_span = {"end_byte":707,"end_column":93,"end_line":19,"start_byte":619,"start_column":5,"start_line":19}
         _expected_error_clause = "error:2"
@@ -45,11 +46,14 @@ def calculate(left: F64, operator: CalculatorOp, right: F64) -> Result[F64, Calc
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.calculator.calculate", phase="error", span={"end_byte":708,"end_column":1,"end_line":20,"start_byte":135,"start_column":1,"start_line":12}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.calculator.calculate", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "curriculum.calculator.calculate", _expected_error_clause)
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             value = _cott_match_value.value
-            return ((((((operator == CalculatorOp_Add()) and (value == (left + right))) or ((operator == CalculatorOp_Subtract()) and (value == (left - right)))) or ((operator == CalculatorOp_Multiply()) and (value == (left * right)))) or (((operator == CalculatorOp_Divide()) and (right != 0)) and (value == (left / right)))))
+            return (_cott_contract_condition(((((((operator == CalculatorOp_Add()) and (value == (left + right))) or ((operator == CalculatorOp_Subtract()) and (value == (left - right)))) or ((operator == CalculatorOp_Multiply()) and (value == (left * right)))) or (((operator == CalculatorOp_Divide()) and (right != 0)) and (value == (left / right))))), "curriculum.calculator.calculate", "ensures:1"))
+        _cott_contract_condition((False), "curriculum.calculator.calculate", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.calculator.calculate", clause="ensures:1", phase="ensures", span={"end_byte":613,"end_column":301,"end_line":17,"start_byte":317,"start_column":5,"start_line":17}, expected="true", actual="false")

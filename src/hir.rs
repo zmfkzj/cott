@@ -3442,6 +3442,17 @@ impl<'a> OwnedLower<'a> {
         expr_span: Span,
         base_errored: bool,
     ) -> HirExpr {
+        if let Some(ty) = self.named_field_type(&base.ty, name) {
+            return HirExpr {
+                span: expr_span,
+                ty,
+                reference: None,
+                kind: HirExprKind::Field {
+                    base: Box::new(base),
+                    name: name.to_owned(),
+                },
+            };
+        }
         if name == "len" {
             let valid = owned_len_allowed(&base.ty);
             if !valid && !base_errored {
@@ -3461,17 +3472,6 @@ impl<'a> OwnedLower<'a> {
                 reference: None,
                 kind: HirExprKind::Len {
                     value: Box::new(base),
-                },
-            };
-        }
-        if let Some(ty) = self.named_field_type(&base.ty, name) {
-            return HirExpr {
-                span: expr_span,
-                ty,
-                reference: None,
-                kind: HirExprKind::Field {
-                    base: Box::new(base),
-                    name: name.to_owned(),
                 },
             };
         }
@@ -4372,6 +4372,251 @@ impl<'a> OwnedLower<'a> {
         )
     }
 
+    fn expand_ensures_sugar(
+        &mut self,
+        module: usize,
+        clause: &ast::Clause,
+        env: &HashMap<String, (SymbolId, HirType, bool)>,
+    ) -> Vec<ast::Clause> {
+        let equality = |span: Span, left: Expr, right: Expr, guard| ast::Clause {
+            span: span.clone(),
+            kind: ClauseKind::Ensures {
+                guard,
+                condition: Expr {
+                    span,
+                    kind: ExprKind::Comparison {
+                        first: Box::new(left),
+                        rest: vec![(CompareOp::Equal, right)],
+                    },
+                },
+            },
+        };
+        match &clause.kind {
+            ClauseKind::EnsuresTable { key, rows } => {
+                let before = self.errors.len();
+                let key_type = self.expr(module, key, env).ty;
+                if self.errors.len() != before {
+                    return Vec::new();
+                }
+                let variants = match &key_type {
+                    HirType::Named { symbol, .. } => self
+                        .modules
+                        .iter()
+                        .position(|candidate| candidate == &symbol.module)
+                        .and_then(|index| {
+                            self.parsed.sources[index]
+                                .syntax
+                                .declarations
+                                .iter()
+                                .find_map(|declaration| match declaration {
+                                    Declaration::Enum(value)
+                                        if value.name == symbol.name
+                                            && value
+                                                .variants
+                                                .iter()
+                                                .all(|variant| variant.parameters.is_empty()) =>
+                                    {
+                                        Some(
+                                            value
+                                                .variants
+                                                .iter()
+                                                .map(|variant| {
+                                                    SymbolId::new(
+                                                        symbol.module.clone(),
+                                                        format!("{}.{}", symbol.name, variant.name),
+                                                    )
+                                                })
+                                                .collect::<Vec<_>>(),
+                                        )
+                                    }
+                                    _ => None,
+                                })
+                        }),
+                    _ => None,
+                };
+                let Some(variants) = variants.filter(|variants| !variants.is_empty()) else {
+                    self.error(module, key.span.clone(),
+                        "ensures table key must have a finite enum type with only zero-payload variants");
+                    return Vec::new();
+                };
+                let mut seen = HashSet::new();
+                let mut expanded = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let PatternKind::Variant { path, arguments } = &row.pattern.kind else {
+                        self.error(
+                            module,
+                            row.pattern.span.clone(),
+                            "ensures table rows must name zero-payload enum variants",
+                        );
+                        continue;
+                    };
+                    if !arguments.is_empty() {
+                        self.error(
+                            module,
+                            row.pattern.span.clone(),
+                            "ensures table rows cannot bind payload patterns",
+                        );
+                        continue;
+                    }
+                    let Some((variant, _)) =
+                        self.pattern_argument_types(module, &key_type, path, 0)
+                    else {
+                        continue;
+                    };
+                    if !seen.insert(variant.clone()) {
+                        self.error(
+                            module,
+                            row.pattern.span.clone(),
+                            format!("duplicate ensures table variant `{}`", variant.as_string()),
+                        );
+                        continue;
+                    }
+                    let result = Expr {
+                        span: row.value.span.clone(),
+                        kind: ExprKind::Name(ast::QualifiedName::single(
+                            row.value.span.clone(),
+                            "result",
+                        )),
+                    };
+                    expanded.push(equality(
+                        row.span.clone(),
+                        result,
+                        row.value.clone(),
+                        Some(ast::MatchGuard {
+                            span: row.pattern.span.clone(),
+                            scrutinee: key.clone(),
+                            pattern: row.pattern.clone(),
+                        }),
+                    ));
+                }
+                let missing = variants
+                    .iter()
+                    .filter(|variant| !seen.contains(*variant))
+                    .map(SymbolId::as_string)
+                    .collect::<Vec<_>>();
+                if !missing.is_empty() {
+                    self.error(
+                        module,
+                        clause.span.clone(),
+                        format!(
+                            "ensures table is missing variant(s): {}",
+                            missing.join(", ")
+                        ),
+                    );
+                }
+                expanded
+            }
+            ClauseKind::EnsuresPreserves {
+                result,
+                source,
+                except,
+            } => {
+                let before = self.errors.len();
+                let result_type = self.expr(module, result, env).ty;
+                let source_type = self.expr(module, source, env).ty;
+                if self.errors.len() != before {
+                    return Vec::new();
+                }
+                if result_type != source_type {
+                    self.error(module, clause.span.clone(),
+                        "ensures preserves requires the same concrete struct type and generic arguments");
+                    return Vec::new();
+                }
+                let fields = match &result_type {
+                    HirType::Named { symbol, .. } if !owned_has_unresolved_type(&result_type) => {
+                        self.modules
+                            .iter()
+                            .position(|candidate| candidate == &symbol.module)
+                            .and_then(|index| {
+                                self.parsed.sources[index]
+                                    .syntax
+                                    .declarations
+                                    .iter()
+                                    .find_map(|declaration| match declaration {
+                                        Declaration::Struct(value) if value.name == symbol.name => {
+                                            Some(
+                                                value
+                                                    .fields
+                                                    .iter()
+                                                    .map(|field| field.name.clone())
+                                                    .collect::<Vec<_>>(),
+                                            )
+                                        }
+                                        _ => None,
+                                    })
+                            })
+                    }
+                    _ => None,
+                };
+                let Some(fields) = fields else {
+                    self.error(
+                        module,
+                        clause.span.clone(),
+                        "ensures preserves requires a concrete immutable struct result",
+                    );
+                    return Vec::new();
+                };
+                let mut excluded = HashSet::new();
+                for field in except {
+                    if !fields.contains(&field.name) {
+                        self.error(
+                            module,
+                            field.span.clone(),
+                            format!("unknown preserved struct field `{}`", field.name),
+                        );
+                    }
+                    if !excluded.insert(field.name.as_str()) {
+                        self.error(
+                            module,
+                            field.span.clone(),
+                            format!("duplicate preserved field exclusion `{}`", field.name),
+                        );
+                    }
+                }
+                let mut expanded = Vec::new();
+                for name in fields {
+                    if excluded.contains(name.as_str()) {
+                        continue;
+                    }
+                    let field = |base: &Expr| Expr {
+                        span: base.span.clone(),
+                        // Match the parser's qualified-name representation of ordinary
+                        // projections; `.len` and projections from expressions use Field.
+                        kind: match &base.kind {
+                            ExprKind::Name(path)
+                                if name != "len"
+                                    && path.segments.first().is_some_and(|name| name != "self") =>
+                            {
+                                let mut path = path.clone();
+                                path.segments.push(name.clone());
+                                ExprKind::Name(path)
+                            }
+                            _ => ExprKind::Field {
+                                base: Box::new(base.clone()),
+                                name: name.clone(),
+                            },
+                        },
+                    };
+                    expanded.push(equality(
+                        clause.span.clone(),
+                        field(result),
+                        field(source),
+                        None,
+                    ));
+                }
+                if expanded.is_empty() {
+                    self.error(
+                        module,
+                        clause.span.clone(),
+                        "ensures preserves must preserve at least one struct field",
+                    );
+                }
+                expanded
+            }
+            _ => unreachable!("only ensures sugar is expanded"),
+        }
+    }
+
     fn contract(
         &mut self,
         module: usize,
@@ -4384,7 +4629,9 @@ impl<'a> OwnedLower<'a> {
         let mut contract = HirContract::default();
         let mut doc = None;
         let mut applied = Vec::new();
-        for (clause_id, clause) in clauses.iter().enumerate() {
+        let mut expansion_offset = 0;
+        for (source_clause_id, clause) in clauses.iter().enumerate() {
+            let clause_id = source_clause_id + expansion_offset;
             match &clause.kind {
                 ClauseKind::Documentation(value) => {
                     doc = Some(HirDoc {
@@ -4438,13 +4685,15 @@ impl<'a> OwnedLower<'a> {
                         kind: HirClauseKind::Requires { guard, expression },
                     });
                 }
-                ClauseKind::Ensures { guard, condition } => {
-                    let mut clause_env = env.clone();
+                ClauseKind::Ensures { .. }
+                | ClauseKind::EnsuresTable { .. }
+                | ClauseKind::EnsuresPreserves { .. } => {
+                    let mut ensures_env = env.clone();
                     if let Some(old_fields) = old_fields {
-                        clause_env.extend(old_fields.clone());
+                        ensures_env.extend(old_fields.clone());
                     }
                     if allow_result {
-                        clause_env.insert(
+                        ensures_env.insert(
                             "result".to_owned(),
                             (
                                 SymbolId::new(self.modules[module].clone(), "result"),
@@ -4453,30 +4702,48 @@ impl<'a> OwnedLower<'a> {
                             ),
                         );
                     }
-                    let (guard, mut clause_env) = match guard {
-                        Some(guard) => {
-                            let (guard, clause_env) = self.match_guard(module, guard, &clause_env);
-                            (Some(guard), clause_env)
-                        }
-                        None => (None, clause_env),
+                    let expanded;
+                    let obligations = if matches!(clause.kind, ClauseKind::Ensures { .. }) {
+                        std::slice::from_ref(clause)
+                    } else {
+                        expanded = self.expand_ensures_sugar(module, clause, &ensures_env);
+                        expansion_offset += expanded.len().saturating_sub(1);
+                        expanded.as_slice()
                     };
-                    if guard.is_some() {
-                        clause_env.remove("result");
+                    for (offset, obligation) in obligations.iter().enumerate() {
+                        let ClauseKind::Ensures { guard, condition } = &obligation.kind else {
+                            unreachable!("ensures sugar expands only into ensures clauses");
+                        };
+                        let (guard, mut clause_env) = match guard {
+                            Some(guard) => {
+                                let (guard, clause_env) =
+                                    self.match_guard(module, guard, &ensures_env);
+                                (Some(guard), clause_env)
+                            }
+                            None => (None, ensures_env.clone()),
+                        };
+                        if guard.as_ref().is_some_and(|guard| {
+                            matches!(guard.scrutinee.kind, HirExprKind::ResultRef)
+                                && !matches!(&guard.pattern.kind,
+                                    HirPatternKind::Variant { arguments, .. } if arguments.is_empty())
+                        }) {
+                            clause_env.remove("result");
+                        }
+                        let before = self.errors.len();
+                        let expression = self.expr(module, condition, &clause_env);
+                        self.expect_boolean(
+                            module,
+                            condition.span.clone(),
+                            &expression,
+                            before,
+                            "contract condition must be boolean",
+                        );
+                        contract.clauses.push(HirClause {
+                            clause_id: (clause_id + offset) as u32,
+                            span: obligation.span.clone(),
+                            kind: HirClauseKind::Ensures { guard, expression },
+                        });
                     }
-                    let before = self.errors.len();
-                    let expression = self.expr(module, condition, &clause_env);
-                    self.expect_boolean(
-                        module,
-                        condition.span.clone(),
-                        &expression,
-                        before,
-                        "contract condition must be boolean",
-                    );
-                    contract.clauses.push(HirClause {
-                        clause_id: clause_id as u32,
-                        span: clause.span.clone(),
-                        kind: HirClauseKind::Ensures { guard, expression },
-                    });
                 }
                 ClauseKind::Error { error, guard, when } => {
                     let resolved = self.error_variant(module, error);
@@ -4654,6 +4921,27 @@ impl<'a> OwnedLower<'a> {
         );
         let Some(owner) = self.resolve(module, &prefix, &path.span) else {
             return None;
+        };
+        let owner = if self.declarations.get(&owner) == Some(&OwnedDeclKind::Alias) {
+            let Some((alias_module, target)) = self.alias_target(&owner) else {
+                return None;
+            };
+            match self.ty(alias_module, &target, &GenericScope::default()) {
+                HirType::Named {
+                    symbol,
+                    args: alias_args,
+                } if alias_args == *args => symbol,
+                _ => {
+                    self.error(
+                        module,
+                        path.span.clone(),
+                        "pattern alias does not match the enum type and generic arguments",
+                    );
+                    return None;
+                }
+            }
+        } else {
+            owner
         };
         if &owner != expected_owner
             || !matches!(
@@ -5512,6 +5800,10 @@ impl<'a> OwnedLower<'a> {
                         action,
                         kind: HirClauseKind::Ensures { guard, expression },
                     });
+                }
+                ClauseKind::EnsuresTable { .. } | ClauseKind::EnsuresPreserves { .. } => {
+                    self.error(module, clause.span.clone(),
+                        "ensures table and preserves require a callable scope; use them after applying a rule, not inside a rule");
                 }
                 ClauseKind::Error { error, guard, when } => {
                     let resolved = self.error_variant(module, error);
@@ -10081,6 +10373,17 @@ fn owned_visit_clause_kind<F: FnMut(&ast::QualifiedName)>(kind: &ast::ClauseKind
                 owned_visit_match_guard(guard, visit);
             }
             owned_visit_expr(condition, visit);
+        }
+        ast::ClauseKind::EnsuresTable { key, rows } => {
+            owned_visit_expr(key, visit);
+            for row in rows {
+                owned_visit_pattern(&row.pattern, visit);
+                owned_visit_expr(&row.value, visit);
+            }
+        }
+        ast::ClauseKind::EnsuresPreserves { result, source, .. } => {
+            owned_visit_expr(result, visit);
+            owned_visit_expr(source, visit);
         }
         ast::ClauseKind::Error { error, guard, when } => {
             visit(error);

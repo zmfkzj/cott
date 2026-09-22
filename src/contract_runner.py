@@ -608,62 +608,6 @@ def evaluate(expression, environment, module, receiver=None, result=None, old=No
     raise ValueError(f"unsupported canonical expression {kind}")
 
 
-def match_pattern(pattern, value, environment, module):
-    kind = pattern["kind"]
-    if kind == "wildcard":
-        return True
-    if kind == "binding":
-        environment[local(pattern.get("name") or pattern["symbol"])] = value
-        return True
-    if kind in ("variant", "result_ok", "result_err", "option_some", "option_none", "enum"):
-        variants = {
-            "result_ok": cott_runtime.Ok,
-            "result_err": cott_runtime.Err,
-            "option_some": cott_runtime.Some,
-            "option_none": cott_runtime.Nothing,
-        }
-        variant = variants.get(kind) or resolve_symbol(pattern["symbol"], module)
-        if type(value) is not variant:
-            return False
-        for index, nested in enumerate(pattern.get("arguments", ())):
-            if variant in (cott_runtime.Ok, cott_runtime.Some):
-                field_value = value.value
-            elif variant is cott_runtime.Err:
-                field_value = value.error
-            else:
-                field_value = getattr(value, dataclasses.fields(type(value))[index].name)
-            if not match_pattern(nested, field_value, environment, module):
-                return False
-        return True
-    raise ValueError(f"unsupported canonical pattern {kind}")
-
-
-def guard_environment(clause, environment, module, receiver=None, result=None, old=None):
-    scoped = dict(environment)
-    guard = clause.get("guard")
-    if guard is None:
-        return True, scoped
-    value = evaluate(guard["scrutinee"], scoped, module, receiver, result, old)
-    return match_pattern(guard["pattern"], value, scoped, module), scoped
-
-def requires_holds(clause, environment, module, receiver=None, result=None, old=None):
-    matched, scoped = guard_environment(clause, environment, module, receiver, result, old)
-    return not matched or evaluate(clause["expression"], scoped, module, receiver, result, old)
-
-
-def condition_matches(clause, environment, module, receiver=None, result=None, old=None):
-    matched, scoped = guard_environment(clause, environment, module, receiver, result, old)
-    return matched and (
-        clause.get("when") is None
-        or evaluate(clause["when"], scoped, module, receiver, result, old)
-    )
-
-
-def checked_clause_environment(clause, environment, module, receiver=None, result=None, old=None):
-    return guard_environment(clause, environment, module, receiver, result, old)
-
-
-
 def callable_hints(function):
     target = function.__init__ if inspect.isclass(function) else function
     return typing.get_type_hints(target, include_extras=True)
@@ -881,72 +825,40 @@ def obligation_stats(strategy):
     }
 
 
-def record_contract_observations(
-    clauses, observed, stats, environment, module, case_id, *, receiver=None, result=None, old=None
-):
-    conditional_errors = [
+def validate_contract_observations(events):
+    for symbol, clause, condition in events:
+        if not condition and not clause.endswith((":applicable", ":condition")):
+            raise AssertionError(f"{symbol}: evaluated clause {clause} failed")
+
+
+def record_contract_observations(clauses, observed, stats, events, symbols, case_id):
+    validate_contract_observations(events)
+    passed = {
         clause
-        for clause in clauses
-        if clause["kind"] == "error"
-        and (clause.get("guard") is not None or clause.get("when") is not None)
-        and condition_matches(clause, environment, module, receiver, result, old)
-    ]
-    first_conditional_error = min(
-        enumerate(conditional_errors),
-        key=lambda item: item[1].get("priority")
-        if item[1].get("priority") is not None
-        else item[0],
-        default=(None, None),
-    )[1]
+        for symbol, clause, condition in events
+        if symbol in symbols and condition
+    }
+    rejected = {
+        clause
+        for symbol, clause, condition in events
+        if symbol in symbols and not condition
+    }
     for clause in clauses:
         key = clause_key(clause)
-        if clause["kind"] == "requires":
+        if key in passed:
             observed[key] += 1
+        stat = stats.get(key)
+        if stat is None:
             continue
-        if clause["kind"] == "ensures":
-            matched, scoped = checked_clause_environment(
-                clause, environment, module, receiver, result, old
-            )
-            stat = stats.get(key)
-            if stat is not None:
-                stat["eligible_cases"] += 1
-            if not matched:
-                if stat is not None:
-                    stat["condition_false_cases"] += 1
-                continue
-            if stat is not None:
-                stat["applicable_cases"] += 1
-            if not evaluate(clause["expression"], scoped, module, receiver, result, old):
-                raise AssertionError(f"ensures clause {key} failed independently")
-            observed[key] += 1
-            if stat is not None:
+        stat["eligible_cases"] += 1
+        applicable = key in passed if clause["kind"] != "error" else f"{key}:condition" in passed
+        if applicable:
+            stat["applicable_cases"] += 1
+            if key in passed:
                 stat["satisfied_cases"] += 1
                 stat["first_witness"] = stat["first_witness"] or {"case_id": case_id}
-            continue
-        if clause["kind"] != "error":
-            continue
-        matches = (
-            type(result) is cott_runtime.Err
-            and type(result.error) is resolve_symbol(clause["variant"], module)
-        )
-        stat = stats.get(key)
-        if clause.get("guard") is not None or clause.get("when") is not None:
-            if stat is not None:
-                stat["eligible_cases"] += 1
-            if clause in conditional_errors:
-                if stat is not None:
-                    stat["applicable_cases"] += 1
-                if clause is first_conditional_error:
-                    if not matches:
-                        raise AssertionError(f"conditional error clause {key} failed independently")
-                    observed[key] += 1
-                    if stat is not None:
-                        stat["satisfied_cases"] += 1
-                        stat["first_witness"] = stat["first_witness"] or {"case_id": case_id}
-            elif stat is not None:
-                stat["condition_false_cases"] += 1
-        elif matches:
-            observed[key] += 1
+        elif f"{key}:applicable" in rejected or f"{key}:condition" in rejected:
+            stat["condition_false_cases"] += 1
 
 
 async def bounded(awaitable, symbol, action):
@@ -1143,24 +1055,21 @@ async def run_function(module_value, declaration, strategy):
     hints = callable_hints(function)
     cases = invoke_cases(function, strategy)
     candidate_reason = input_candidate_reason(function, strategy) if not cases else None
-    requirements = [clause for clause in clauses if clause["kind"] == "requires"]
     for args, kwargs, environment in cases:
-        try:
-            if not all(requires_holds(clause, environment, module) for clause in requirements):
-                continue
-        except Exception as error:
-            raise AssertionError(f"{symbol}: independent requires evaluation failed: {error}") from error
-        try:
-            result = await invoke_facade(function, args, kwargs, symbol, callable_kind)
-        except cott_runtime.CottContractViolation as error:
-            raise AssertionError(f"{symbol}: facade contract violation for generated valid case: {error}") from error
-        result = cott_runtime._cott_validate_abi(result, hints["return"])
-        if lifecycle is None:
-            lifecycle = await observe_protocol(result, strategy, hints, symbol)
-        elif strategy["return_kind"] != "value":
-            await close_protocol(result, symbol)
+        with cott_runtime._cott_observe_contracts() as events:
+            try:
+                result = await invoke_facade(function, args, kwargs, symbol, callable_kind)
+            except cott_runtime.CottContractViolation as error:
+                if error.phase == "requires" and error.symbol == symbol:
+                    continue
+                raise AssertionError(f"{symbol}: facade contract violation: {error}") from error
+            result = cott_runtime._cott_validate_abi(result, hints["return"])
+            if lifecycle is None:
+                lifecycle = await observe_protocol(result, strategy, hints, symbol)
+            elif strategy["return_kind"] != "value":
+                await close_protocol(result, symbol)
         record_contract_observations(
-            clauses, observed, stats, environment, module, f"case:{valid_cases}", result=result
+            clauses, observed, stats, events, {symbol}, f"case:{valid_cases}"
         )
         valid_cases += 1
     if valid_cases == 0:
@@ -1188,33 +1097,19 @@ def run_initializer(module, implementation, strategy):
         return clauses, observed, grade, reason, raw_cases
     valid_cases = 0
     accepted = []
-    requirements = [clause for clause in clauses if clause["kind"] == "requires"]
     for args, kwargs, environment in raw_cases:
-        try:
-            if not all(requires_holds(clause, environment, module) for clause in requirements):
-                continue
-        except Exception as error:
-            raise AssertionError(f"{symbol}: independent requires evaluation failed: {error}") from error
-        try:
-            receiver = facade(*args, **kwargs)
-        except cott_runtime.CottContractViolation as error:
-            raise AssertionError(f"{symbol}: facade contract violation for generated valid case: {error}") from error
+        with cott_runtime._cott_observe_contracts() as events:
+            try:
+                facade(*args, **kwargs)
+            except cott_runtime.CottContractViolation as error:
+                if error.phase == "requires" and error.symbol in {symbol, implementation["name"]}:
+                    continue
+                raise AssertionError(f"{symbol}: facade contract violation: {error}") from error
         valid_cases += 1
         accepted.append((args, kwargs, environment))
-        for clause in clauses:
-            clause_id = clause_key(clause)
-            if clause["kind"] == "requires":
-                observed[clause_id] += 1
-            elif clause["kind"] in ("ensures", "invariant"):
-                matched, clause_environment = checked_clause_environment(
-                    clause, environment, module, receiver=receiver, result=receiver
-                )
-                if matched:
-                    if not evaluate(
-                        clause["expression"], clause_environment, module, receiver=receiver, result=receiver
-                    ):
-                        raise AssertionError(f"{symbol}: {clause['kind']} clause {clause_id} failed independently")
-                    observed[clause_id] += 1
+        record_contract_observations(
+            clauses, observed, {}, events, {symbol, implementation["name"]}, f"case:{valid_cases}"
+        )
     if valid_cases == 0:
         return clauses, observed, "unobserved", (
             candidate_reason
@@ -1255,7 +1150,6 @@ async def run_method(module, implementation, method, strategy, constructor_cases
     candidate_reason = input_candidate_reason(bound_method, strategy, (probe,)) if not cases else None
     valid_cases = 0
     lifecycle = None
-    requirements = [clause for clause in clauses if clause["kind"] == "requires"]
     state = [local(field["name"]) for field in implementation.get("state", ())]
     permitted = {local(field) for field in method.get("modifies", ())}
     permitted.update(local(transition["field"]) for transition in method.get("transitions", ()))
@@ -1265,38 +1159,25 @@ async def run_method(module, implementation, method, strategy, constructor_cases
         args, kwargs, _ = constructor
         receiver = facade(*args, **kwargs)
         method_args, method_kwargs, environment = case
-        try:
-            if not all(
-                requires_holds(clause, environment, module, receiver=receiver)
-                for clause in requirements
-            ):
-                continue
-        except Exception as error:
-            raise AssertionError(f"{symbol}: independent requires evaluation failed: {error}") from error
         old = {field: getattr(receiver, field) for field in state}
         bound_method = getattr(receiver, method_name)
         hints = callable_hints(bound_method)
-        try:
-            result = await invoke_facade(
-                bound_method, method_args, method_kwargs, symbol, strategy["callable_kind"]
-            )
-        except cott_runtime.CottContractViolation as error:
-            raise AssertionError(f"{symbol}: facade contract violation for generated valid case: {error}") from error
-        result = cott_runtime._cott_validate_abi(result, hints["return"])
-        if lifecycle is None:
-            lifecycle = await observe_protocol(result, strategy, hints, symbol)
-        elif strategy["return_kind"] != "value":
-            await close_protocol(result, symbol)
+        with cott_runtime._cott_observe_contracts() as events:
+            try:
+                result = await invoke_facade(
+                    bound_method, method_args, method_kwargs, symbol, strategy["callable_kind"]
+                )
+            except cott_runtime.CottContractViolation as error:
+                if error.phase == "requires" and error.symbol == symbol:
+                    continue
+                raise AssertionError(f"{symbol}: facade contract violation: {error}") from error
+            result = cott_runtime._cott_validate_abi(result, hints["return"])
+            if lifecycle is None:
+                lifecycle = await observe_protocol(result, strategy, hints, symbol)
+            elif strategy["return_kind"] != "value":
+                await close_protocol(result, symbol)
         record_contract_observations(
-            clauses,
-            observed,
-            stats,
-            environment,
-            module,
-            f"case:{valid_cases}",
-            receiver=receiver,
-            result=result,
-            old=old,
+            clauses, observed, stats, events, {symbol}, f"case:{valid_cases}"
         )
         for clause in clauses:
             key = clause_key(clause)
@@ -1305,14 +1186,6 @@ async def run_method(module, implementation, method, strategy, constructor_cases
                     if field not in permitted and getattr(receiver, field) is not old[field]:
                         raise AssertionError(f"{symbol}: modifies clause {key} failed independently")
                 observed[key] += 1
-            elif clause["kind"] == "invariant":
-                matched, scoped = checked_clause_environment(
-                    clause, environment, module, receiver, result, old
-                )
-                if matched:
-                    if not evaluate(clause["expression"], scoped, module, receiver, result, old):
-                        raise AssertionError(f"{symbol}: invariant clause {key} failed independently")
-                    observed[key] += 1
         valid_cases += 1
     if valid_cases == 0:
         return clauses, observed, "unobserved", (
@@ -1614,13 +1487,17 @@ async def main():
     contracts = []
     lifecycle = []
     scenarios = []
+    scenario_observations = []
     for module_value in request["modules"]:
         for declaration in module_value["declarations"]:
             if declaration["kind"] != "scenario":
                 continue
             strategy = strategies.get(declaration["name"])
             if strategy is not None and strategy.get("scenario") is not None:
-                scenarios.append(await run_scenario(module_value, strategy, request))
+                with cott_runtime._cott_observe_contracts() as events:
+                    scenarios.append(await run_scenario(module_value, strategy, request))
+                validate_contract_observations(events)
+                scenario_observations.append((strategy["scenario"]["id"], events))
     for module_value in request["modules"]:
         for declaration in module_value["declarations"]:
             if declaration["kind"] == "function":
@@ -1694,6 +1571,27 @@ async def main():
                     contracts.extend(evidence(symbol, clauses, observed, grade, reason, request, stats))
                     if observation is not None:
                         lifecycle.append(observation)
+    for scenario_id, events in scenario_observations:
+        passed = {(symbol, clause) for symbol, clause, condition in events if condition}
+        for contract in contracts:
+            symbol, key = contract["symbol"], contract["clause_id"]
+            if (symbol, key) not in passed:
+                continue
+            item = {
+                "grade": "test observation",
+                "mode": request["runtime_validation"],
+                "valid_cases": 1,
+                "reason": None,
+            }
+            if any(obligation["clause_id"] == key for obligation in strategies[symbol].get("obligations", ())):
+                item.update({
+                    "eligible_cases": 1,
+                    "applicable_cases": 1,
+                    "satisfied_cases": 1,
+                    "condition_false_cases": 0,
+                    "first_witness": {"case_id": f"scenario:{scenario_id}"},
+                })
+            contract["evidence"].append(item)
     print(json.dumps({"contracts": contracts, "lifecycle": lifecycle, "scenarios": scenarios}, sort_keys=True, separators=(",", ":")))
 
 

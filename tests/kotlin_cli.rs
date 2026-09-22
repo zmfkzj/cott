@@ -18,6 +18,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[path = "support/snapshot.rs"]
+mod snapshot;
+
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
 struct TempDir {
@@ -154,12 +157,19 @@ fn kotlin_ir_and_full_emit_record_truthful_pending_state() {
         String::from_utf8_lossy(&ir.stderr)
     );
     let generation = project.path.join("generated/generation.json");
-    let record: serde_json::Value =
-        serde_json::from_slice(&fs::read(&generation).expect("generation record"))
-            .expect("generation JSON");
-    assert_eq!(record["schema_version"], 1);
+    let published = fs::read(&generation).expect("generation record");
+    let envelope: serde_json::Value = serde_json::from_slice(&published).expect("generation JSON");
+    assert_eq!(envelope["schema_version"], 2);
+    assert!(
+        envelope["current"]
+            .as_str()
+            .is_some_and(|reference| envelope["snapshots"].get(reference).is_some()),
+        "the published record must resolve its own current snapshot"
+    );
+    let record = snapshot::read(&published);
     assert_eq!(record["current"]["target"], "kotlin");
     assert_eq!(record["current"]["verified"], false);
+    assert_eq!(record["last_verified"], serde_json::Value::Null);
     assert_eq!(
         record["current"]["unresolved"],
         serde_json::json!(["demo.main.main"])
@@ -191,9 +201,7 @@ fn kotlin_ir_and_full_emit_record_truthful_pending_state() {
             .join("generated/kotlin/demo/main/Facade.kt")
             .is_file()
     );
-    let record: serde_json::Value =
-        serde_json::from_slice(&fs::read(generation).expect("generation record"))
-            .expect("generation JSON");
+    let record = snapshot::read(&fs::read(generation).expect("generation record"));
     assert_eq!(
         record["current"]["unresolved"],
         serde_json::json!(["demo.main.main"])

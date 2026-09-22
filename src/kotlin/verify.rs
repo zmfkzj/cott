@@ -818,6 +818,7 @@ fn contract_report(
             let aliases = observation_aliases(&strategy.symbol);
             let mut phases = BTreeSet::new();
             let mut valid_cases = BTreeSet::new();
+            let mut valid_scenarios = BTreeSet::new();
             for event in &case_events {
                 if event.get("status").and_then(Value::as_str) != Some("passed") {
                     continue;
@@ -835,8 +836,7 @@ fn contract_report(
                         .get("symbol")
                         .and_then(Value::as_str)
                         .ok_or("Kotlin clause observation has no symbol")?;
-                    if !guarded
-                        && aliases.contains(observation_symbol)
+                    if aliases.contains(observation_symbol)
                         && observation.get("clause").and_then(Value::as_str)
                             == Some(clause_id.as_str())
                         && observation.get("passed").and_then(Value::as_bool) == Some(true)
@@ -861,15 +861,13 @@ fn contract_report(
                     .and_then(Value::as_array)
                     .ok_or("Kotlin scenario observations are not an array")?
                 {
-                    if !guarded
-                        && aliases.contains(
-                            observation
-                                .get("symbol")
-                                .and_then(Value::as_str)
-                                .ok_or("Kotlin scenario observation has no symbol")?,
-                        )
-                        && observation.get("clause").and_then(Value::as_str)
-                            == Some(clause_id.as_str())
+                    if aliases.contains(
+                        observation
+                            .get("symbol")
+                            .and_then(Value::as_str)
+                            .ok_or("Kotlin scenario observation has no symbol")?,
+                    ) && observation.get("clause").and_then(Value::as_str)
+                        == Some(clause_id.as_str())
                         && observation.get("passed").and_then(Value::as_bool) == Some(true)
                     {
                         phases.insert(
@@ -879,17 +877,18 @@ fn contract_report(
                                 .unwrap_or("contract")
                                 .to_owned(),
                         );
+                        valid_scenarios.insert(required_event_string(event, "scenario_id")?);
                     }
                 }
             }
-            let evidence = if !valid_cases.is_empty() || !phases.is_empty() {
+            let evidence = if !valid_cases.is_empty() || !valid_scenarios.is_empty() {
                 vec![json!({
-                    "applicable_cases": valid_cases.len(),
+                    "applicable_cases": valid_cases.len() + valid_scenarios.len(),
                     "grade": "runtime check",
                     "phases": phases,
                     "positive_applicable": true,
                     "status": "passed",
-                    "valid_cases": valid_cases.len(),
+                    "valid_cases": valid_cases.len() + valid_scenarios.len(),
                 })]
             } else {
                 let reason = program
@@ -898,7 +897,7 @@ fn contract_report(
                     .cloned()
                     .unwrap_or_else(|| {
                         if guarded {
-                            "runtime clause hook does not expose whether a guarded clause was positively applicable"
+                            "no matched guarded clause condition completed successfully"
                                 .to_owned()
                         } else if clause_id.starts_with("error:") {
                             "individual Result error branch was not reached by a positive applicable case; aggregate first-error priority remained enforced"

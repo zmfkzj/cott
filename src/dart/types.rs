@@ -1,6 +1,89 @@
-use serde_json::Value;
+use std::collections::BTreeSet;
+
+use serde_json::{Map, Value};
 
 use crate::hash::sha256_hex;
+
+use super::DartModule;
+
+/// Deterministic Cott-to-Dart projection of enum declarations.
+///
+/// A Cott enum becomes a native Dart `enum` when the whole declaration can be
+/// modelled by a finite set of constant members: it declares at least one
+/// variant, no variant carries a payload, and the declaration takes no type or
+/// const generics. Payload-carrying and generic enums keep the sealed
+/// value-carrying class hierarchy because a Dart `enum` cannot represent
+/// arbitrary runtime instances or per-instance generic witness arguments.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DartEnumProjection {
+    native: BTreeSet<String>,
+}
+
+impl DartEnumProjection {
+    pub(crate) fn from_modules(modules: &[DartModule]) -> Result<Self, String> {
+        let mut native = BTreeSet::new();
+        for module in modules {
+            for declaration in &module.declarations {
+                let Some(declaration) = declaration
+                    .as_object()
+                    .filter(|object| object.get("kind").and_then(Value::as_str) == Some("enum"))
+                else {
+                    continue;
+                };
+                let name = string(declaration.get("name"), "enum.name")?;
+                if projects_to_native_enum(declaration)? {
+                    native.insert(name.to_owned());
+                }
+            }
+        }
+        Ok(Self { native })
+    }
+
+    /// `true` when `canonical` names an enum emitted as a native Dart `enum`.
+    pub(crate) fn is_native(&self, canonical: &str) -> bool {
+        self.native.contains(canonical)
+    }
+
+    /// `true` when `symbol` names a variant of a native Dart `enum`, which is
+    /// a constant member reference rather than a constructed class.
+    pub(crate) fn is_native_variant(&self, symbol: &str) -> bool {
+        module_of(symbol).is_some_and(|owner| self.is_native(owner))
+    }
+}
+
+fn projects_to_native_enum(declaration: &Map<String, Value>) -> Result<bool, String> {
+    if !array(declaration.get("generics"), "enum.generics")?.is_empty() {
+        return Ok(false);
+    }
+    let variants = array(declaration.get("variants"), "enum.variants")?;
+    if variants.is_empty() {
+        return Ok(false);
+    }
+    for variant in variants {
+        if !array(variant.get("fields"), "enum variant.fields")?.is_empty() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The Dart member name of one native enum variant.
+///
+/// Members keep the exact Cott variant spelling. The single target-language
+/// exception is a variant spelled like its own enum, which Dart rejects as a
+/// member shadowing the enum type: such a member gains a `$` suffix. `$` is
+/// outside the Cott identifier alphabet, so the escape stays injective and
+/// can never collide with another declared variant. The canonical variant
+/// identity carried by the member is unchanged.
+pub(crate) fn native_enum_member(enum_local: &str, variant_local: &str) -> Result<String, String> {
+    let owner = escape_identifier(enum_local)?;
+    let member = escape_identifier(variant_local)?;
+    Ok(if member == owner {
+        format!("{member}$")
+    } else {
+        member
+    })
+}
 
 const DART_KEYWORDS: &[&str] = &[
     "abstract",
@@ -492,6 +575,7 @@ pub(crate) fn render_value_contextual(
     value: &Value,
     expected_type: Option<&Value>,
     module: Option<&str>,
+    projection: &DartEnumProjection,
 ) -> Result<String, String> {
     let object = value
         .as_object()
@@ -531,7 +615,8 @@ pub(crate) fn render_value_contextual(
                 render_value_contextual(
                     value,
                     expected_type.and_then(|ty| ty.get("item")),
-                    module
+                    module,
+                    projection
                 )?
             )),
             None => match expected_type.and_then(|ty| ty.get("item")) {
@@ -552,6 +637,7 @@ pub(crate) fn render_value_contextual(
                     required(object.get("value"), "result value.value")?,
                     expected_type.and_then(|ty| ty.get(field)),
                     module,
+                    projection,
                 )?
             ))
         }
@@ -570,7 +656,7 @@ pub(crate) fn render_value_contextual(
                     } else {
                         item_type
                     };
-                    render_value_contextual(item, expected, module)
+                    render_value_contextual(item, expected, module, projection)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             match string(object.get("kind"), "container value.kind")? {
@@ -613,8 +699,8 @@ pub(crate) fn render_value_contextual(
                     }
                     Ok(format!(
                         "cott_runtime.CottMapEntry({}, {})",
-                        render_value_contextual(&entry[0], key_type, module)?,
-                        render_value_contextual(&entry[1], value_type, module)?
+                        render_value_contextual(&entry[0], key_type, module, projection)?,
+                        render_value_contextual(&entry[1], value_type, module, projection)?
                     ))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
@@ -651,6 +737,7 @@ pub(crate) fn render_value_contextual(
                             required(field.get("value"), "named value field.value")?,
                             None,
                             module,
+                            projection,
                         )?
                     ))
                 })
@@ -672,8 +759,11 @@ pub(crate) fn render_value_contextual(
             )
         }
         "enum" => {
-            let variant =
-                enum_variant_name(string(object.get("variant"), "enum value.variant")?, module)?;
+            let symbol = string(object.get("variant"), "enum value.variant")?;
+            let variant = enum_variant_name(symbol, module, projection)?;
+            if projection.is_native_variant(symbol) {
+                return Ok(variant);
+            }
             let type_arguments = render_named_arguments(expected_type, module)?;
             let constructor = if type_arguments.is_empty() {
                 variant
@@ -686,7 +776,7 @@ pub(crate) fn render_value_contextual(
                 .map(|(index, field)| {
                     Ok(format!(
                         "field{index}: {}",
-                        render_value_contextual(field, None, module)?
+                        render_value_contextual(field, None, module, projection)?
                     ))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
@@ -911,7 +1001,20 @@ fn unary_type(
 }
 
 pub(crate) fn module_prefix(module: &str) -> String {
-    format!("_cott_t_{}", &sha256_hex(module.as_bytes())[..16])
+    let extra = module
+        .bytes()
+        .filter(|byte| matches!(byte, b'_' | b'.'))
+        .count();
+    let mut prefix = String::with_capacity("_cott_t_".len() + module.len() + extra);
+    prefix.push_str("_cott_t_");
+    for character in module.chars() {
+        match character {
+            '_' => prefix.push_str("_u"),
+            '.' => prefix.push_str("__"),
+            _ => prefix.push(character),
+        }
+    }
+    prefix
 }
 
 pub(crate) fn consumer_module_prefix(module: &str) -> String {
@@ -933,9 +1036,13 @@ pub(crate) fn render_canonical_symbol(
     })
 }
 
+/// Renders the Dart reference for a canonical enum variant: a constant member
+/// of the native Dart `enum` when the owning declaration projects natively,
+/// otherwise the concatenated sealed-subclass name.
 pub(crate) fn enum_variant_name(
     symbol: &str,
     current_module: Option<&str>,
+    projection: &DartEnumProjection,
 ) -> Result<String, String> {
     let (enum_name, variant) = symbol
         .rsplit_once('.')
@@ -944,11 +1051,19 @@ pub(crate) fn enum_variant_name(
         .rsplit_once('.')
         .ok_or_else(|| format!("enum variant owner `{enum_name}` has no module"))?;
     let module = module_of(enum_name).expect("checked module");
-    let local = format!(
-        "{}{}",
-        escape_identifier(enum_local)?,
-        escape_identifier(variant)?
-    );
+    let local = if projection.is_native(enum_name) {
+        format!(
+            "{}.{}",
+            escape_identifier(enum_local)?,
+            native_enum_member(enum_local, variant)?
+        )
+    } else {
+        format!(
+            "{}{}",
+            escape_identifier(enum_local)?,
+            escape_identifier(variant)?
+        )
+    };
     Ok(if current_module == Some(module) {
         local
     } else {

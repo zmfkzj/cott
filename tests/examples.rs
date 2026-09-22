@@ -1,6 +1,5 @@
 use cott::provenance::{
-    GENERATION_SCHEMA_VERSION, GenerationCompatibility, GenerationRecord, GenerationSnapshot,
-    RUNTIME_ABI_VERSION,
+    GenerationCompatibility, GenerationRecord, GenerationSnapshot, RUNTIME_ABI_VERSION,
 };
 
 use std::collections::BTreeSet;
@@ -11,6 +10,9 @@ use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+#[path = "support/snapshot.rs"]
+mod snapshot;
 
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
@@ -443,11 +445,11 @@ fn assert_public_projection(root: &Path, example: &Example, implementations_gene
 }
 
 fn assert_generation_identity(generation: &serde_json::Value) {
-    assert_eq!(generation["schema_version"], 7);
+    assert_eq!(generation["schema_version"], 8);
     assert_eq!(
         generation["current"]["compatibility"],
         serde_json::json!({
-            "generation_schema": 7,
+            "generation_schema": 8,
             "canonical_ir_schema": 8,
             "runtime_abi": 7,
             "contract_strategy_schema": 5,
@@ -480,13 +482,12 @@ fn update_generation_record(
             generation.display()
         ),
     };
-    let mut record: GenerationRecord = serde_json::from_slice(&original).unwrap_or_else(|error| {
+    let mut record = GenerationRecord::parse(&original).unwrap_or_else(|error| {
         panic!(
-            "deserialize copied generation record {} without validation: {error}",
+            "parse copied generation record {}: {error}",
             generation.display()
         )
     });
-    record.schema_version = GENERATION_SCHEMA_VERSION;
     for snapshot in std::iter::once(&mut record.current).chain(record.last_verified.iter_mut()) {
         update(snapshot);
         snapshot
@@ -776,8 +777,7 @@ fn real_inventory_has_canonical_origins_and_verified_generated_shape() {
 
         let generation_path = project.join("generated/generation.json");
         let bytes = fs::read(&generation_path).expect("real projects need generation metadata");
-        let generation: serde_json::Value =
-            serde_json::from_slice(&bytes).expect("generation metadata should be JSON");
+        let generation: serde_json::Value = snapshot::read(&bytes);
         GenerationRecord::parse(&bytes).expect("generation metadata must use the current schema");
         assert_generation_identity(&generation);
         assert_eq!(generation["current"]["verified"], true);
@@ -863,11 +863,10 @@ fn every_curriculum_example_is_formatted_checked_emitted_and_verified() {
         );
         assert_public_projection(&project.path, example, true);
 
-        let generation: serde_json::Value = serde_json::from_slice(
+        let generation: serde_json::Value = snapshot::read(
             &fs::read(project.path.join("generated/generation.json"))
                 .expect("generation record should be readable"),
-        )
-        .expect("generation record should be JSON");
+        );
         assert_generation_metadata(&generation);
         let implementations = generation["current"]["implementations"]
             .as_array()
@@ -986,11 +985,10 @@ fn modular_order_management_example_emits_verifies_and_runs() {
         String::from_utf8_lossy(&emitted.stderr)
     );
 
-    let generation: serde_json::Value = serde_json::from_slice(
+    let generation: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("generation record should be readable"),
-    )
-    .expect("generation record should be JSON");
+    );
 
     let implementations = generation["current"]["implementations"]
         .as_array()
@@ -1089,11 +1087,10 @@ fn feature_examples_are_formatted_checked_emitted_verified_and_run() {
             "{feature} failed to emit: {}",
             String::from_utf8_lossy(&emitted.stderr)
         );
-        let generation: serde_json::Value = serde_json::from_slice(
+        let generation: serde_json::Value = snapshot::read(
             &fs::read(project.path.join("generated/generation.json"))
                 .expect("generation record should be readable"),
-        )
-        .expect("generation record should be JSON");
+        );
         assert_generation_metadata(&generation);
 
         if feature == "features/workflow-scenario" {
@@ -1161,11 +1158,10 @@ fn feature_examples_are_formatted_checked_emitted_verified_and_run() {
             String::from_utf8_lossy(&verified.stderr)
         );
         if feature == "features/workflow-scenario" {
-            let generation: serde_json::Value = serde_json::from_slice(
+            let generation: serde_json::Value = snapshot::read(
                 &fs::read(project.path.join("generated/generation.json"))
                     .expect("verified generation record should be readable"),
-            )
-            .expect("verified generation record should be JSON");
+            );
             let scenarios = generation["current"]["verification"]["contract_tests"]["scenarios"]
                 .as_array()
                 .expect("verification should record scenario evidence");
@@ -1193,11 +1189,10 @@ fn feature_examples_are_formatted_checked_emitted_verified_and_run() {
             );
         }
         if feature == "features/effects-selection" {
-            let generation: serde_json::Value = serde_json::from_slice(
+            let generation: serde_json::Value = snapshot::read(
                 &fs::read(project.path.join("generated/generation.json"))
                     .expect("verified generation record should be readable"),
-            )
-            .expect("verified generation record should be JSON");
+            );
             let scenarios = generation["current"]["verification"]["contract_tests"]["scenarios"]
                 .as_array()
                 .expect("verification should record effect scenarios");
@@ -1236,8 +1231,7 @@ fn fastapi_hello_projects_external_request_through_testclient_when_available() {
     let project = copied_project("integrations/fastapi-hello");
     let verified_generation_bytes = fs::read(project.path.join("generated/generation.json"))
         .expect("copied generation record should be readable");
-    let verified_generation: serde_json::Value = serde_json::from_slice(&verified_generation_bytes)
-        .expect("copied generation record should be JSON");
+    let verified_generation: serde_json::Value = snapshot::read(&verified_generation_bytes);
     let verified_starlette_installed = verified_generation["current"]["dependencies"]
         .as_array()
         .expect("committed dependencies should be an array")
@@ -1262,11 +1256,10 @@ fn fastapi_hello_projects_external_request_through_testclient_when_available() {
         "integrations/fastapi-hello failed cott emit python: {}",
         String::from_utf8_lossy(&emitted.stderr)
     );
-    let emitted_generation: serde_json::Value = serde_json::from_slice(
+    let emitted_generation: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("emitted generation record should be readable"),
-    )
-    .expect("emitted generation record should be JSON");
+    );
     assert_generation_identity(&emitted_generation);
     let starlette = emitted_generation["current"]["dependencies"]
         .as_array()
@@ -1298,11 +1291,10 @@ fn fastapi_hello_projects_external_request_through_testclient_when_available() {
     )
     .expect("restore copied verified generation record");
     let pre_retarget_generation = retarget_generation_to_python(&project.path, &interpreter);
-    let retargeted_generation: serde_json::Value = serde_json::from_slice(
+    let retargeted_generation: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("retargeted generation record should be readable"),
-    )
-    .expect("retargeted generation record should be JSON");
+    );
     assert_generation_identity(&retargeted_generation);
     let starlette = retargeted_generation["current"]["dependencies"]
         .as_array()

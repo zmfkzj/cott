@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use cott::binding::{
-    audit_facade_boundary, inspect_python_imports, resolve_bindings, resolve_implementations,
-    validate_candidate,
+    PythonFileRole, audit_facade_boundary, audit_facade_file, inspect_python_imports,
+    resolve_bindings, resolve_implementations, validate_candidate,
 };
 use cott::compiler::{SourceFile, parse_project};
 use cott::hir::lower;
@@ -18,6 +18,9 @@ use cott::provenance::{
     UnresolvedRecord,
 };
 use cott::python::artifact_plan::{PythonArtifactPlan, PythonCallableKind};
+
+#[path = "support/snapshot.rs"]
+mod snapshot;
 
 struct Fixture {
     config: ProjectConfig,
@@ -613,7 +616,7 @@ fn async_impl_methods_are_agent_only_and_require_exact_async_helpers() {
     fs::create_dir_all(path.parent().expect("async impl method has a parent")).unwrap();
     fs::write(&path, bytes).unwrap();
     record_agent_provenance(&fixture, "api.service.ReaderState.read", &path, bytes);
-    let record: serde_json::Value = serde_json::from_slice(
+    let record = snapshot::read(
         &fs::read(
             fixture
                 .paths
@@ -623,8 +626,7 @@ fn async_impl_methods_are_agent_only_and_require_exact_async_helpers() {
                 .join("generation.json"),
         )
         .unwrap(),
-    )
-    .unwrap();
+    );
     assert_eq!(
         record["current"]["implementations"][0]["kind"],
         "async_impl_method"
@@ -870,7 +872,7 @@ fn resolves_provenance_backed_impl_methods_to_their_helper() {
     fs::create_dir_all(path.parent().expect("impl method has a parent")).unwrap();
     fs::write(&path, bytes).unwrap();
     record_agent_provenance(&fixture, "api.service.ReaderState.read", &path, bytes);
-    let record: serde_json::Value = serde_json::from_slice(
+    let record = snapshot::read(
         &fs::read(
             fixture
                 .paths
@@ -880,8 +882,7 @@ fn resolves_provenance_backed_impl_methods_to_their_helper() {
                 .join("generation.json"),
         )
         .expect("method generation record"),
-    )
-    .expect("method generation record is JSON");
+    );
     let implementation = &record["current"]["implementations"][0];
     assert_eq!(implementation["kind"], "impl_method");
     assert_eq!(implementation["callable_kind"], "sync");
@@ -948,9 +949,7 @@ fn rejects_malformed_impl_method_provenance_records() {
         .parent()
         .expect("generated Python directory has a parent")
         .join("generation.json");
-    let record: serde_json::Value =
-        serde_json::from_slice(&fs::read(&generation).expect("method generation record"))
-            .expect("method generation record is JSON");
+    let record = snapshot::read(&fs::read(&generation).expect("method generation record"));
     for missing in ["kind", "callable_kind", "concrete", "method"] {
         let mut incomplete = record.clone();
         incomplete["current"]["implementations"][0]
@@ -959,20 +958,14 @@ fn rejects_malformed_impl_method_provenance_records() {
             .remove(missing);
 
         assert!(
-            GenerationRecord::parse(
-                &serde_json::to_vec(&incomplete).expect("malformed provenance serializes")
-            )
-            .is_err(),
+            GenerationRecord::parse(&snapshot::bytes(&incomplete)).is_err(),
             "generation provenance must reject an impl method record missing `{missing}`"
         );
     }
     let mut mismatched = record.clone();
     mismatched["current"]["implementations"][0]["method"] = serde_json::json!("other");
     assert!(
-        GenerationRecord::parse(
-            &serde_json::to_vec(&mismatched).expect("mismatched provenance serializes")
-        )
-        .is_err(),
+        GenerationRecord::parse(&snapshot::bytes(&mismatched)).is_err(),
         "generation provenance must reject a method record whose symbol does not match"
     );
 }
@@ -2254,6 +2247,10 @@ fn retains_unsafe_source_rejections() {
             b"import unlocked_package\n\ndef run() -> object:\n    return None\n",
             "external distribution import 'unlocked_package' is not selected in uv.lock",
         ),
+        (
+            b"from cott_runtime import _cott_contract_condition\n\ndef run() -> object:\n    return _cott_contract_condition(True, \"api.service.run\", \"ensures\")\n",
+            "contract evidence boundary: compiler-private `_cott_contract_condition` is not allowed",
+        ),
     ];
 
     for (source, expected) in cases {
@@ -2311,6 +2308,188 @@ fn import_audit_ignores_comments_and_strings_and_orders_references() {
             .collect::<Vec<_>>(),
         vec!["z", "a"]
     );
+}
+
+#[test]
+fn contract_evidence_api_is_closed_to_untrusted_python() {
+    let forged = concat!(
+        "import cott_runtime as runtime\n",
+        "import sys\n",
+        "from cott_runtime import _cott_observe_contracts\n",
+        "escape = sys.modules[\"cott_runtime\"]\n",
+        "\n",
+        "def run() -> object:\n",
+        "    runtime._cott_contract_observer.set([])\n",
+        "    patched = escape.__dict__\n",
+        "    forged = getattr(runtime, \"_cott\" + \"_contract_condition\")\n",
+        "    with _cott_observe_contracts() as events:\n",
+        "        return (patched, forged, events)\n",
+    );
+    let messages = |role| {
+        audit_facade_file(PathBuf::from("app.py").as_path(), forged, role)
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        messages(PythonFileRole::Authored),
+        vec![
+            "contract evidence boundary: compiler-private `_cott_observe_contracts` must not be imported",
+            "contract evidence boundary: compiler-private `_cott_contract_observer` must not be accessed",
+            "contract evidence boundary: reflective attribute `__dict__` of a Cott runtime object must not be used",
+            "contract evidence boundary: reflection over a Cott runtime object is not allowed",
+            "contract evidence boundary: compiler-private `_cott_observe_contracts` must not be referenced",
+        ]
+    );
+    assert_eq!(
+        messages(PythonFileRole::GeneratedImplementation),
+        messages(PythonFileRole::Authored)
+    );
+    assert!(messages(PythonFileRole::GeneratedFacade).is_empty());
+    assert!(messages(PythonFileRole::GeneratedRuntime).is_empty());
+}
+
+#[test]
+fn contract_evidence_audit_keeps_public_runtime_use_legal() {
+    let authored = concat!(
+        "import cott_runtime\n",
+        "from cott_runtime import CottList, Dyn\n",
+        "\n",
+        "def build(values: object) -> object:\n",
+        "    observed = cott_runtime.CottArray(values)\n",
+        "    return (CottList(values), Dyn, observed, cott_runtime.UNIT)\n",
+    );
+    assert!(
+        audit_facade_file(
+            PathBuf::from("app.py").as_path(),
+            authored,
+            PythonFileRole::Authored
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn contract_evidence_audit_rejects_forged_definitions_and_name_strings() {
+    let forged = concat!(
+        "def _cott_contract_condition(condition: bool, symbol: str, clause: str) -> bool:\n",
+        "    return True\n",
+        "\n",
+        "\n",
+        "def install(module: object) -> None:\n",
+        "    module.__dict__[\"_cott_contract_condition\"] = _cott_contract_condition\n",
+    );
+    assert_eq!(
+        audit_facade_file(
+            PathBuf::from("app.py").as_path(),
+            forged,
+            PythonFileRole::Authored
+        )
+        .into_iter()
+        .map(|diagnostic| diagnostic.message)
+        .collect::<Vec<_>>(),
+        vec![
+            "contract evidence boundary: compiler-private `_cott_contract_condition` must not be defined",
+            "contract evidence boundary: reserved name prefix `_cott_contract` must not appear in a string",
+            "contract evidence boundary: compiler-private `_cott_contract_condition` must not be referenced",
+        ]
+    );
+}
+
+#[test]
+fn contract_evidence_audit_closes_meta_chains_from_imported_runtime_classes() {
+    let forged = concat!(
+        "from cott_runtime import CottContractViolation, I32, Nothing, Option\n",
+        "\n",
+        "\n",
+        "class Sneaky(CottContractViolation):\n",
+        "    pass\n",
+        "\n",
+        "\n",
+        "def run() -> object:\n",
+        "    namespace = CottContractViolation.__init__.__globals__\n",
+        "    escalated = Sneaky.__mro__\n",
+        "    typed: Option[I32] = Nothing()\n",
+        "    return (namespace, escalated, typed)\n",
+    );
+    assert_eq!(
+        audit_facade_file(
+            PathBuf::from("app.py").as_path(),
+            forged,
+            PythonFileRole::Authored
+        )
+        .into_iter()
+        .map(|diagnostic| diagnostic.message)
+        .collect::<Vec<_>>(),
+        vec![
+            "contract evidence boundary: reflective attribute `__globals__` of a Cott runtime object must not be used",
+            "contract evidence boundary: reflective attribute `__mro__` of a Cott runtime object must not be used",
+        ]
+    );
+}
+
+#[test]
+fn rejects_forged_contract_evidence_in_validated_implementations() {
+    let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    let cases: &[(&[u8], &str)] = &[
+        (
+            b"from cott_runtime import CottContractViolation, I32, Nothing, Option\n\ndef run() -> object:\n    ns = CottContractViolation.__init__.__globals__\n    events = ns[\"_cott_\" + \"contract_observer\"].get()\n    if events is not None:\n        events.append((\"api.service.run\", \"ensures:0\", True))\n    return Nothing()\n",
+            "runtime reflection `__globals__` is not allowed",
+        ),
+        (
+            b"from contextvars import copy_context\n\ndef run() -> object:\n    for variable, events in copy_context().items():\n        if variable.name == \"_cott_\" + \"contract_observer\":\n            events.append((\"api.service.run\", \"ensures:0\", True))\n    return None\n",
+            "runtime introspection `copy_context` is not allowed",
+        ),
+        (
+            b"import asyncio\n\ndef run() -> object:\n    context = asyncio.current_task().get_context()\n    return context\n",
+            "runtime introspection `get_context` is not allowed",
+        ),
+        (
+            b"import inspect\n\ndef run() -> object:\n    return inspect.currentframe()\n",
+            "runtime introspection `currentframe` is not allowed",
+        ),
+        (
+            b"from cott_runtime import CottList\n\ndef run() -> object:\n    return CottList.__subclasses__()\n",
+            "runtime reflection `__subclasses__` is not allowed",
+        ),
+    ];
+    for (source, expected) in cases {
+        let error = validate_candidate(
+            &fixture.config,
+            &fixture.paths,
+            &fixture.plan,
+            "api.service.run",
+            source,
+        )
+        .expect_err("evidence forgery must fail");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn accepts_implementations_using_public_runtime_classes() {
+    let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        b"from cott_runtime import CottContractViolation, I32, Nothing, Option\n\ndef run() -> object:\n    value: Option[I32] = Nothing()\n    if value is None:\n        raise CottContractViolation(\"unreachable\", symbol=\"api.service.run\", phase=\"ensures\")\n    return None\n",
+    )
+    .expect("public runtime classes remain usable");
+}
+
+#[test]
+fn accepts_exception_chaining_and_fixture_helpers_in_implementations() {
+    let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        b"from cott_runtime import CottContractViolation, Err, Ok, _cott_fixture_read\n\ndef run() -> object:\n    try:\n        return Ok(value=_cott_fixture_read(\"input.txt\").decode(\"utf-8\"))\n    except CottContractViolation as error:\n        if isinstance(error.__cause__, FileNotFoundError):\n            return Err(error=\"missing input\")\n        return Err(error=str(error.__context__))\n",
+    )
+    .expect("exception chaining and compiler fixture helpers stay available");
 }
 
 fn replan(fixture: &Fixture, source: &str) -> PythonArtifactPlan {
@@ -2753,13 +2932,13 @@ fn malformed_intent_metadata_is_rejected() {
 }
 
 #[test]
-fn metadata_absent_same_v7_record_reuses_unchanged_inputs() {
+fn metadata_absent_same_v8_record_reuses_unchanged_inputs() {
     let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
     let (path, bytes) = write_unit_impl(&fixture, "run");
     record_agent_provenance(&fixture, "api.service.run", &path, &bytes);
     drop_recorded_intent(&fixture);
     let resolution = resolve_implementations(&fixture.config, &fixture.paths, &fixture.plan)
-        .expect("unchanged same-v7 records reuse without cott_intent");
+        .expect("unchanged same-v8 records reuse without cott_intent");
     assert_eq!(resolution.resolved.len(), 1);
     assert_eq!(resolution.resolved[0].cott_symbol, "api.service.run");
     assert!(resolution.intent_changed.is_empty());

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from curriculum.contracts_evidence_types import AcceptedLabel, BaselineLabelRule, LabelAssessment, LabelEvidenceError, LabelEvidenceError_Legacy, LabelEvidenceError_Missing, LabelEvidenceError_TooShort, LabelRequest, RefinedLabelRule
 
@@ -16,7 +17,7 @@ def assess_label(request: LabelRequest) -> Result[LabelAssessment, LabelEvidence
 minimum are declared errors; successful labels are nominally refined and
 meet the request's minimum length."""
     request = _cott_validate_abi(request, LabelRequest, path="$.request")
-    if not (((request).minimum_length > 0)):
+    if not (_cott_contract_condition((((request).minimum_length > 0)), "curriculum.contracts_evidence.assess_label", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="curriculum.contracts_evidence.assess_label", clause="requires:1", phase="requires", span={"end_byte":987,"end_column":40,"end_line":39,"start_byte":952,"start_column":5,"start_line":39}, expected="true", actual="false")
     _expected_error = None
     _expected_error_span = None
@@ -25,7 +26,8 @@ meet the request's minimum length."""
         _cott_match_value = (request).label
         if type(_cott_match_value) is Some and True:
             text = _cott_match_value.value
-            return ((len(text) < (request).minimum_length))
+            return (_cott_contract_condition(((len(text) < (request).minimum_length)), "curriculum.contracts_evidence.assess_label", "error:5:condition"))
+        _cott_contract_condition((False), "curriculum.contracts_evidence.assess_label", "error:5:applicable")
         return False
     if _expected_error is None and (_cott_match_error_5()):
         _expected_error = LabelEvidenceError_TooShort
@@ -53,11 +55,16 @@ meet the request's minimum length."""
             raise CottContractViolation("returned error is not allowed", symbol="curriculum.contracts_evidence.assess_label", phase="error", span={"end_byte":1339,"end_column":1,"end_line":48,"start_byte":643,"start_column":1,"start_line":32}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.contracts_evidence.assess_label", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "curriculum.contracts_evidence.assess_label", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is LabelEvidenceError_Missing:
+        _cott_contract_condition(True, "curriculum.contracts_evidence.assess_label", "error:4")
     def _cott_match_ensures_2() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             value = _cott_match_value.value
-            return ((len((value).text) >= (request).minimum_length))
+            return (_cott_contract_condition(((len((value).text) >= (request).minimum_length)), "curriculum.contracts_evidence.assess_label", "ensures:2"))
+        _cott_contract_condition((False), "curriculum.contracts_evidence.assess_label", "ensures:2:applicable")
         return True
     if not (_cott_match_ensures_2()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.contracts_evidence.assess_label", clause="ensures:2", phase="ensures", span={"end_byte":1061,"end_column":73,"end_line":41,"start_byte":993,"start_column":5,"start_line":41}, expected="true", actual="false")
@@ -65,7 +72,8 @@ meet the request's minimum length."""
         _cott_match_value = _result
         if type(_cott_match_value) is Err and type(_cott_match_value.error) is LabelEvidenceError_TooShort and True:
             actual = getattr(_cott_match_value.error, _dataclasses.fields(type(_cott_match_value.error))[0].name)
-            return ((len(actual) < (request).minimum_length))
+            return (_cott_contract_condition(((len(actual) < (request).minimum_length)), "curriculum.contracts_evidence.assess_label", "ensures:3"))
+        _cott_contract_condition((False), "curriculum.contracts_evidence.assess_label", "ensures:3:applicable")
         return True
     if not (_cott_match_ensures_3()):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.contracts_evidence.assess_label", clause="ensures:3", phase="ensures", span={"end_byte":1160,"end_column":99,"end_line":42,"start_byte":1066,"start_column":5,"start_line":42}, expected="true", actual="false")

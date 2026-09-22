@@ -1831,8 +1831,6 @@ fn configured_rule_bytes(
 
 fn render_generation_prompt(
     plan: &PythonArtifactPlan,
-    ir: &crate::ir::CanonicalIr,
-    paths: &ProjectPaths,
     callable: &PythonCallable,
     rules: &[u8],
     references: &[ResolvedBinding],
@@ -1841,17 +1839,9 @@ fn render_generation_prompt(
     feedback: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     let context = intent::context(&plan.contract_surface(), &callable.cott_symbol, rules)?;
-    let canonical = plan
-        .modules
-        .iter()
-        .map(|module| (module.module.as_str(), &module.declarations))
-        .collect::<BTreeMap<_, _>>();
-    let module_sources = crate::prompt_declarations::module_sources(ir, &paths.source_dir)?;
     render_prompt(
         callable,
         &context,
-        &canonical,
-        &module_sources,
         references,
         external_types,
         existing,
@@ -2114,8 +2104,6 @@ fn prompt_project(project_argument: Option<PathBuf>, symbol: String, format: Out
     };
     let prompt = match render_generation_prompt(
         &plan,
-        &ir,
-        &paths,
         callable,
         &rules,
         &resolution.resolved,
@@ -3116,8 +3104,6 @@ fn generate_project(
                 let result = (|| {
                     let prompt = render_generation_prompt(
                         &plan,
-                        &ir,
-                        &paths,
                         callable,
                         &rules,
                         bindings,
@@ -3164,8 +3150,6 @@ fn generate_project(
                                 feedback.push_str(&validation_error);
                                 let retry_prompt = render_generation_prompt(
                                     &plan,
-                                    &ir,
-                                    &paths,
                                     callable,
                                     &rules,
                                     bindings,

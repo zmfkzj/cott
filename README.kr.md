@@ -10,22 +10,20 @@ Cott는 그 선언을 고정하고, scoped generation prompt를 렌더하며, in
 않으며, 통과한 검사는 구현 전반의 정확성 증명이 아니다. 제품은 typed authoring과 evidence이며
 속도 주장이 아니다.
 
-`architecture.md`는 구현된 v1.0 언어 계약의 규범 문서다. Python의 닫힌 호환성 identity는
-package `1.0.0`, Canonical IR schema `8`, generation schema/domain `7`
-(`cott.generation.v7`), Python runtime ABI `7`, contract-test strategy schema `5`, diagnostics
-schema `1`로 그대로 유지된다. Kotlin은 같은 package와 Canonical IR을 사용하지만 별도의 닫힌
-generation schema `1`, domain `cott.kotlin.generation.v1`, runtime ABI `1`을 사용하며
-Python-only field에 Kotlin truth를 저장하지 않는다. reader와 runtime은 다른 backend의 record와
-identity를 거부한다.
-Dart는 별도의 generation schema `1`, domain `cott.dart.generation.v1`, runtime ABI `1`을
-사용한다. 생성된 Dart package를 Flutter가 직접 소비하며 Kotlin bridge는 필요 없다.
+`architecture.md`는 구현된 v1.0 언어 계약의 규범 문서다. Package `1.0.0`, Canonical IR schema `8`,
+contract-test strategy schema `5`, diagnostics schema `1`은 유지한다.
+Python은 generation schema `8`, domain `cott.generation.v8`, runtime ABI `7`을 사용한다.
+Kotlin은 generation schema `2`, domain `cott.kotlin.generation.v2`, runtime ABI `1`을 사용한다.
+Dart는 generation schema `2`, domain `cott.dart.generation.v2`, runtime ABI `2`를 사용한다.
+각 target의 닫힌 identity는 독립적이며 reader와 runtime은 다른 backend나 이전 record를 거부한다.
+생성된 Dart package를 Flutter가 직접 소비하며 Kotlin bridge는 필요 없다.
 
 이 문서와 repository source가 다르면 source file과 closed schema validator가 authority다.
 Contradictory compatibility path를 만들지 말고 문서를 implementation에 맞게 고친다.
 
 구현된 v0.8 `.cott` source는 의미를 바꾸지 않고 source-compatible 상태로 유지된다. Serialized 및
-generated artifact는 exact-identity다. package mismatch 뒤에는 다시 생성해야 하며, Cott는 legacy
-reader를 제공하지 않는다.
+generated artifact는 exact-identity이므로 schema·ABI·package mismatch 뒤에는 다시 생성한다.
+일반 reader는 이전 record를 거부하며 compatibility reader나 generated alias는 제공하지 않는다.
 
 ## 계약과 evidence
 
@@ -158,7 +156,7 @@ cott deploy --project path/to/module --output dist/example-module
 `generate --target kotlin`은 eligible durable implementation source만 쓰고 항상 unverified
 snapshot을 publish한다. 오직 명시적인 `verify`만 complete module을 compile하고 sandboxed
 bounded contract runner를 실행해 `library/cott-module.jar`를 쓰며
-`current.verified = true`와 `current == last_verified`를 인증한다. source, manifest,
+`.snapshots[.current].verified = true`와 `current == last_verified`를 인증한다. source, manifest,
 implementation, tool 또는 managed byte drift는 fail closed한다.
 
 Kotlin/JVM은 ordinary type parameter를 erase한다. 따라서 Cott는 associated type을 추가 bounded
@@ -225,6 +223,24 @@ value와 protocol lifecycle을 검사한다. Dart type만으로 구별할 수 �
 명시적인 `CottType<T>` witness와 checked view로 검사하며 Dart covariance를 그대로 신뢰하지
 않는다. Const generic은 `CottConst` witness를 쓴다. Cancellation은 cooperative이고 guard
 ownership은 명시적이다. 임의의 `Future`를 강제로 중단했다고 주장하지 않는다.
+
+Dart ABI `2`는 비어 있지 않고 generic parameter가 없으며 모든 variant가 payloadless인 enum
+선언 전체를 native Dart enum으로 투영한다. Cott author syntax는 바꾸지 않는다. Caller와 구현은
+괄호 없이 정확한 Cott member spelling인 `Kind.Local`을 쓴다. `Kind.values`, `value.name`,
+`value.index`와 exhaustive constant-pattern switch를 그대로 사용할 수 있다.
+
+```dart
+String label(Kind kind) => switch (kind) {
+  Kind.Local => 'local',
+  Kind.Remote => 'remote',
+};
+```
+
+해당 enum의 이전 variant class는 alias 없이 제거한다. Payload나 generic parameter가 하나라도
+있으면 선언 전체가 sealed arbitrary-value ADT로 남고 payloadless variant도 generated class
+constructor를 쓴다. `Option`과 `Result`는 계속 generic ADT다.
+Member 이름이 enum type 이름과 같을 때만 `Kind.Kind`를 `Kind.Kind$`로 escape하며 여전히 native
+enum이다. Canonical identity는 그대로이고 native `.name`에는 `$`가 반영된다.
 
 Verify host에는 Linux bubblewrap과 Landlock ABI `>=3`이 필요하다. Dart VM thread 생성 전에
 filesystem policy를 적용해 process memory 접근을 거부하면서 VM의 `/proc/self/maps`와
@@ -296,11 +312,30 @@ accepted durable implementation은 intent fingerprint가 바뀌지 않으면 재
 Emit과 generate는 항상 current snapshot을 unverified로 둔다. 오직 `verify`만 source contract를
 편집하지 않고 managed target을 다시 만들고 evidence를 certify한다. Pending unresolved를
 거부하며 현재 facade에 없는 옛 managed implementation을 export하지 않는다. `current`는 마지막
-emit epoch이고 `last_verified`는 인증된 역사 baseline이며 verified Kotlin current는 둘과 정확히
-같아야 한다. 이미 배포된 snapshot은 `emit` 또는 `generate` 전까지 옛 계약을 유지하고 runtime은
-authored `.cott`를 live로 읽지 않는다. `tools.cott_intent`가 없는 Python same-v7 record는
-기록된 `contract_surface`에서 fingerprint를 derive한다. 부재를 fresh로 보지 않으며 manifest나
-rule input evidence가 없으면 보수적으로 invalidate한다.
+emit epoch의 참조이고 `last_verified`는 인증된 역사 baseline의 참조 또는 `null`이다. Verified
+current는 `last_verified`와 같은 참조여야 한다. 이미 배포된 snapshot은 `emit` 또는 `generate`
+전까지 옛 계약을 유지하고 runtime은 authored `.cott`를 live로 읽지 않는다. 유효한 Python record에
+`tools.cott_intent`가 없으면 기록된 contract surface에서 fingerprint를 derive한다. 부재를 fresh로
+보지 않으며 manifest나 rule evidence가 없으면 보수적으로 invalidate한다. 이전 schema reader는 아니다.
+
+닫힌 `generation.json` envelope의 key는 정확히 `schema_version`, `current`, `last_verified`,
+`snapshots`다. 두 참조는 snapshot content digest이고 `snapshots`는 digest에서 full snapshot
+object로 가는 map이다. 참조 가능한 blob만 정확히 1~2개 저장하며 같은 참조는 한 번만 저장한다.
+검증 flag는 `jq '.snapshots[.current].verified' generation.json`으로 읽는다. `current`를 object로
+읽지 않으며 unused·dangling·tampered blob은 거부한다.
+
+Snapshot content identity는 전체 verification evidence·`AgentRun`·`verified` flag를 포함한다.
+기존 volatile field를 제외한 normalized generation identity를 명시적인 target-domain wrapper로
+묶는 `generation_id`와 별개다. 둘 다 `cott.snapshot.v1` 뒤 NUL, tagged·length-delimited value와
+float의 f64 IEEE bits에 SHA-256을 적용하는 structural JSON digest를 쓴다. Raw JSON text의
+hash가 아니다. Envelope와 정확한 identity 규칙은 architecture §16.1을 따른다.
+
+Record는 self-contained이므로 diff baseline 보관이나 relocation·deploy에 외부 snapshot cache나
+sidecar가 필요 없다. Regenerated output에는 새 runtime loader와 self-contained deployment
+record가 필요하다. 일회성 repository cutover만 compiler-linked transaction conversion으로 source와
+`AgentRun` evidence를 보존하고 verification을 해제한 뒤 실제 emit·verify를 수행한다. 공개 migration
+command나 일반 old-record reader가 아니다. 이전 certification은 새 schema·ABI로 승계되지 않으며
+source hash를 손으로 바꿔 변경된 agent code를 인증해서는 안 된다.
 
 `generate --agent`는 `codex`, `claude`, `omp` 세 direct adapter를 받는다. `claude`는 official
 native Claude Code `>=2.1.89`를 직접 호출하며, OMP가 Claude model을 선택한 실행은 여전히

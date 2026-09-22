@@ -18,6 +18,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[path = "support/snapshot.rs"]
+mod snapshot_wire;
+
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
 struct TempDir {
@@ -166,10 +169,8 @@ fn dart_ir_and_full_emit_record_truthful_pending_state() {
         String::from_utf8_lossy(&ir.stderr)
     );
     let generation = project.path.join("generated/generation.json");
-    let record: serde_json::Value =
-        serde_json::from_slice(&fs::read(&generation).expect("generation record"))
-            .expect("generation JSON");
-    assert_eq!(record["schema_version"], 1);
+    let record = snapshot_wire::read(&fs::read(&generation).expect("generation record"));
+    assert_eq!(record["schema_version"], 2);
     assert_eq!(record["current"]["target"], "dart");
     assert_eq!(record["current"]["verified"], false);
     assert_eq!(
@@ -199,9 +200,7 @@ fn dart_ir_and_full_emit_record_truthful_pending_state() {
             .join("generated/dart/lib/modules/demo/main.dart")
             .is_file()
     );
-    let record: serde_json::Value =
-        serde_json::from_slice(&fs::read(generation).expect("generation record"))
-            .expect("generation JSON");
+    let record = snapshot_wire::read(&fs::read(generation).expect("generation record"));
     assert_eq!(
         record["current"]["unresolved"],
         serde_json::json!(["demo.main.main"])
@@ -723,6 +722,63 @@ fn deploy_publishes_only_the_verified_portable_dart_package_without_overwrite() 
         leftovers.is_empty(),
         "Dart replace left temporary directories: {leftovers:?}"
     );
+
+    // A valid record for another project is not ownership evidence for demo,
+    // even when its target and version match.
+    let mut foreign_record = record.clone();
+    foreign_record.current.project_name = "foreign".to_owned();
+    foreign_record
+        .current
+        .compute_generation_id()
+        .expect("foreign fixture identity");
+    foreign_record.last_verified = Some(foreign_record.current.clone());
+    let foreign_bytes = foreign_record
+        .canonical_bytes()
+        .expect("foreign fixture record");
+    fs::write(output.join("generation.json"), &foreign_bytes).expect("foreign deployment record");
+    let rejected = run(&project.path, &["deploy", "--replace"]);
+    assert_eq!(rejected.status.code(), Some(6));
+    assert_eq!(
+        fs::read(output.join("generation.json")).unwrap(),
+        foreign_bytes
+    );
+    assert_eq!(
+        fs::read(output.join("lib/cott_runtime.dart")).unwrap(),
+        runtime_before
+    );
+    fs::write(output.join("generation.json"), &generation_bytes)
+        .expect("restore deployment record");
+
+    #[cfg(unix)]
+    {
+        let alias = project.path.join("linked-dist");
+        std::os::unix::fs::symlink(dist, &alias).expect("deployment ancestor symlink");
+        let alias_output = alias.join("demo-0.1.0");
+        let rejected = run(
+            &project.path,
+            &[
+                "deploy",
+                "--replace",
+                "--output",
+                alias_output.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(rejected.status.code(), Some(6));
+        assert_eq!(
+            fs::read(output.join("generation.json")).unwrap(),
+            generation_bytes
+        );
+
+        let retained = project.path.join("retained-generation.json");
+        fs::rename(output.join("generation.json"), &retained).expect("retain deployment record");
+        std::os::unix::fs::symlink(&retained, output.join("generation.json"))
+            .expect("generation symlink");
+        let rejected = run_bounded(&project.path, &["deploy", "--replace"]);
+        assert_eq!(rejected.status.code(), Some(6));
+        assert_eq!(fs::read(&retained).unwrap(), generation_bytes);
+        fs::remove_file(output.join("generation.json")).expect("remove test symlink");
+        fs::rename(retained, output.join("generation.json")).expect("restore deployment record");
+    }
 
     fs::write(
         project

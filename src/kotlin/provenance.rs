@@ -1,24 +1,53 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::ser::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Value, json};
 
-use crate::hash::sha256_hex;
 use crate::provenance::{AgentRun, SemanticCoverage};
+use crate::snapshot_record;
 
 use super::KotlinOwner;
 
-pub const KOTLIN_GENERATION_SCHEMA_VERSION: u32 = 1;
+pub const KOTLIN_GENERATION_SCHEMA_VERSION: u32 = 2;
 pub const KOTLIN_RUNTIME_ABI_VERSION: u32 = 1;
-const KOTLIN_GENERATION_DOMAIN: &str = "cott.kotlin.generation.v1";
+const KOTLIN_GENERATION_DOMAIN: &str = "cott.kotlin.generation.v2";
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+/// In-memory Kotlin generation record.
+///
+/// The on-disk form is the portable snapshot envelope produced by
+/// [`snapshot_record`]: `current`/`last_verified` are digest references into a
+/// self-contained `snapshots` map, so an identical verified history is stored
+/// once.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KotlinGenerationRecord {
     pub schema_version: u32,
     pub current: KotlinGenerationSnapshot,
     pub last_verified: Option<KotlinGenerationSnapshot>,
+}
+
+impl Serialize for KotlinGenerationRecord {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let current = serde_json::to_value(&self.current).map_err(S::Error::custom)?;
+        let last_verified = self
+            .last_verified
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(S::Error::custom)?;
+        snapshot_record::encode(self.schema_version, &current, last_verified.as_ref())
+            .map_err(S::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for KotlinGenerationRecord {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = snapshot_record::deserialize_json(deserializer)?;
+        Self::from_wire(&wire).map_err(D::Error::custom)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -59,21 +88,29 @@ pub struct KotlinBindingRecord {
 impl KotlinGenerationSnapshot {
     pub fn compute_generation_id(&mut self) -> Result<(), String> {
         validate_snapshot_contents(self)?;
-        let identity = canonical_json(&normalized_generation_identity(self)?)?;
-        self.generation_id = format!("sha256:{}", sha256_hex(&identity));
+        self.generation_id = snapshot_record::digest(&normalized_generation_identity(self)?)?;
         Ok(())
+    }
+
+    /// Content digest of the complete snapshot, including `verified`,
+    /// verification evidence and agent runs.
+    ///
+    /// This is the envelope reference key and the only sound equality test for
+    /// two snapshots: `serde_json::Value` equality conflates `-0.0` with `0.0`
+    /// and integers with floats inside the opaque `tools`, `contract_surface`
+    /// and `verification` payloads.
+    pub fn snapshot_digest(&self) -> Result<String, String> {
+        let value = serde_json::to_value(self)
+            .map_err(|error| format!("serialize Kotlin generation snapshot: {error}"))?;
+        snapshot_record::digest(&value)
     }
 }
 
 impl KotlinGenerationRecord {
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
-        let value: Value = serde_json::from_slice(bytes)
+        let wire = snapshot_record::parse_json(bytes)
             .map_err(|error| format!("invalid Kotlin generation JSON: {error}"))?;
-        validate_schema(&value)?;
-        let record: Self = serde_json::from_value(value)
-            .map_err(|error| format!("invalid Kotlin generation record: {error}"))?;
-        record.validate_identities()?;
-        Ok(record)
+        Self::from_wire(&wire)
     }
 
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
@@ -82,6 +119,34 @@ impl KotlinGenerationRecord {
             .map_err(|error| format!("serialize Kotlin generation record: {error}"))?;
         validate_schema(&value)?;
         canonical_json(&value)
+    }
+
+    fn from_wire(wire: &Value) -> Result<Self, String> {
+        validate_schema(wire)?;
+        let (current, last_verified) =
+            snapshot_record::decode(wire, KOTLIN_GENERATION_SCHEMA_VERSION)?;
+        let record = Self {
+            schema_version: KOTLIN_GENERATION_SCHEMA_VERSION,
+            current: serde_json::from_value(current)
+                .map_err(|error| format!("invalid Kotlin generation record: {error}"))?,
+            last_verified: last_verified
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|error| format!("invalid Kotlin generation record: {error}"))?,
+        };
+        record.validate_identities()?;
+        Ok(record)
+    }
+
+    /// True when a verified history exists and is byte-identical to `current`.
+    ///
+    /// Compares full snapshot digests so the envelope stores exactly one
+    /// snapshot for a certified record.
+    pub fn current_is_last_verified(&self) -> Result<bool, String> {
+        let Some(last_verified) = &self.last_verified else {
+            return Ok(false);
+        };
+        Ok(last_verified.snapshot_digest()? == self.current.snapshot_digest()?)
     }
 
     fn validate_identities(&self) -> Result<(), String> {
@@ -102,7 +167,7 @@ impl KotlinGenerationRecord {
                 );
             }
         }
-        if self.current.verified && self.last_verified.as_ref() != Some(&self.current) {
+        if self.current.verified && !self.current_is_last_verified()? {
             return Err(
                 "verified Kotlin current snapshot must equal last_verified snapshot".to_owned(),
             );

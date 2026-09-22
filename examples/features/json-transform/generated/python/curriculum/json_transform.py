@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from curriculum.json_transform_types import JsonChain, JsonChain_End, JsonChain_Link, JsonTransformError, JsonTransformError_MissingField, JsonTransformError_NotAnObject
 
@@ -15,7 +16,7 @@ async def wrap_scalar_json(key: str, value: str) -> JsonValue:
     """Wrap a string key-value pair into a structured JsonValue object."""
     key = _cott_validate_abi(key, str, path="$.key")
     value = _cott_validate_abi(value, str, path="$.value")
-    if not ((len(key) > 0)):
+    if not (_cott_contract_condition(((len(key) > 0)), "curriculum.json_transform.wrap_scalar_json", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="curriculum.json_transform.wrap_scalar_json", clause="requires:1", phase="requires", span={"end_byte":357,"end_column":25,"end_line":16,"start_byte":337,"start_column":5,"start_line":16}, expected="true", actual="false")
     try:
         _implementation = _cott_load("_cott_impl/curriculum/json_transform/wrap_scalar_json.py", "cc780ae75bdfa330553729f1da036b1c28229fea17b8737941699234719b9d6d", "wrap_scalar_json", expected_project_name="json-transform", expected_cott_symbol="curriculum.json_transform.wrap_scalar_json")

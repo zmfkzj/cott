@@ -20,12 +20,16 @@ PYTHONPATH=generated/python .venv/bin/python python/app.py
 
 | 경로 | 정확한 기록 field | 의미 |
 | --- | --- | --- |
-| `current.verification.limits` | `proof_node_limit`, `proof_branch_limit`, `candidate_limit`, `lifecycle_limit` | 적용된 non-default budget: `257`, `65`, `17`, `5`입니다. |
-| `current.verification.contract_proofs` | `algorithm`, `version`, `limits`, `contracts` | 각 proof obligation에는 `kind`, `symbol`, `status`, 선택적 `clauses`, `reason`, `model`이 있습니다. `status`는 실행 주장이 아닌 별도의 static proof 결과(`proved`, `disproved`, `unknown`)입니다. |
-| `current.verification.static` | `checker`, `runtime_signatures`, `grade`, `status` | static signature/type-check capability이며 `grade`는 `static proof`입니다. |
-| `current.verification.runtime_capability` | `grade`, `sandbox`, `status` | runtime verification capability이며 `grade`는 `runtime check`입니다. |
-| `current.verification.contract_tests.contracts[]` | `symbol`, `clause_id`, `span`, `evidence[]` | 모든 clause가 별도 test evidence를 유지합니다. 각 `evidence[]` entry는 `grade`, `mode`, `valid_cases`, `reason`을 가지며, 실제로 실행한 valid case만 `test observation`을 얻습니다. case가 없거나 conditional clause가 실행되지 않으면 이유와 함께 `unobserved`입니다. |
-| `current.semantic_coverage` | `clauses`, `summary`, `policy` | canonical clause inventory와 runner evidence를 join한 semantic-policy 결과로 selected-count, pass/fail, violation을 포함합니다. |
+| `.snapshots[.current].verification.limits` | `proof_node_limit`, `proof_branch_limit`, `candidate_limit`, `lifecycle_limit` | 적용된 non-default budget: `257`, `65`, `17`, `5`입니다. |
+| `.snapshots[.current].verification.contract_proofs` | `algorithm`, `version`, `limits`, `contracts` | 각 proof obligation에는 `kind`, `symbol`, `status`, 선택적 `clauses`, `reason`, `model`이 있습니다. `status`는 실행 주장이 아닌 별도의 static proof 결과(`proved`, `disproved`, `unknown`)입니다. |
+| `.snapshots[.current].verification.static` | `checker`, `runtime_signatures`, `grade`, `status` | static signature/type-check capability이며 `grade`는 `static proof`입니다. |
+| `.snapshots[.current].verification.runtime_capability` | `grade`, `sandbox`, `status` | runtime verification capability이며 `grade`는 `runtime check`입니다. |
+| `.snapshots[.current].verification.contract_tests.contracts[]` | `symbol`, `clause_id`, `span`, `evidence[]` | 모든 clause가 별도 test evidence를 유지합니다. 각 `evidence[]` entry는 `grade`, `mode`, `valid_cases`, `reason`을 가지며, 실제로 실행한 valid case만 `test observation`을 얻습니다. case가 없거나 conditional clause가 실행되지 않으면 이유와 함께 `unobserved`입니다. |
+| `.snapshots[.current].semantic_coverage` | `clauses`, `summary`, `policy` | canonical clause inventory와 runner evidence를 join한 semantic-policy 결과로 selected-count, pass/fail, violation을 포함합니다. |
+
+이 경로는 `jq` selector입니다. `current`는 self-contained record의 `snapshots` map에 대한
+digest 참조입니다. 예를 들어
+`jq '.snapshots[.current].semantic_coverage' generated/generation.json`으로 읽습니다.
 
 `[[verification.coverage.rules]]`는 실제 `curriculum.contracts_evidence.assess_label`의 `ensures:2`, `error:5` clause를 선택합니다. `unobserved`, `trust declaration`, `unknown`은 어느 것도 허용하지 않으며, 유효·누락·짧음·성공 facade case가 선택된 성공 및 조건부-error obligation을 의미 있는 coverage 대상으로 만듭니다.
 

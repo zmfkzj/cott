@@ -650,6 +650,15 @@ pub enum ClauseKind {
         guard: Option<MatchGuard>,
         condition: Expr,
     },
+    EnsuresTable {
+        key: Expr,
+        rows: Vec<EnsuresTableRow>,
+    },
+    EnsuresPreserves {
+        result: Expr,
+        source: Expr,
+        except: Vec<PreservedFieldExclusion>,
+    },
     Error {
         error: QualifiedName,
         guard: Option<MatchGuard>,
@@ -658,6 +667,19 @@ pub enum ClauseKind {
     Effects {
         effects: Vec<QualifiedName>,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EnsuresTableRow {
+    pub span: Span,
+    pub pattern: Pattern,
+    pub value: Expr,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreservedFieldExclusion {
+    pub span: Span,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

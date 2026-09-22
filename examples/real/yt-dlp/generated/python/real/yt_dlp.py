@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from real.yt_dlp_types import ArchiveRequest, Authentication, AuthenticationKind, AuthenticationKind_Anonymous, AuthenticationKind_BrowserCookies, AuthenticationKind_Cookies, AuthenticationKind_Credentials, AuthenticationKind_Netrc, CertificatePolicy, CertificatePolicy_Insecure, CertificatePolicy_Verify, CliInput, DownloadPlan, ExecutionReport, ExecutionRequest, ExternalToolRequest, ExtractorDescriptor, ExtractorWorkaround, ExtractorWorkaround_ForceGeneric, ExtractorWorkaround_LegacyServerConnect, ExtractorWorkaround_NoCheckCertificates, ExtractorWorkaround_NoPlaylist, FormatContainer, FormatContainer_Any, FormatContainer_Audio, FormatContainer_Best, FormatContainer_Video, FormatContainer_Worst, FormatDescriptor, FormatRequest, FragmentPolicy, GeoBypassMode, GeoBypassMode_Country, GeoBypassMode_Default, GeoBypassMode_Disabled, GeoBypassMode_IpBlock, InputKind, InputKind_Argument, InputKind_BatchFile, InputKind_ConfigFile, JsonMode, JsonMode_Lines, JsonMode_Single, LiveMode, LiveMode_Default, LiveMode_FromStart, LiveMode_Wait, LiveRequest, LogLevel, LogLevel_Debug, LogLevel_Info, LogLevel_Quiet, LogLevel_Warning, MediaError, MediaError_ArchiveFailure, MediaError_AuthenticationFailed, MediaError_BatchReadFailed, MediaError_CertificateFailure, MediaError_CookieFailure, MediaError_ExternalToolMissing, MediaError_ExtractorMissing, MediaError_FormatUnavailable, MediaError_GeoRestricted, MediaError_HttpStatus, MediaError_InvalidConfig, MediaError_InvalidInput, MediaError_InvalidRange, MediaError_InvalidShortcut, MediaError_InvalidTemplate, MediaError_LogFailure, MediaError_NetworkFailure, MediaError_OutputFailure, MediaError_PathFailure, MediaError_PluginRejected, MediaError_PostProcessFailed, MediaError_RetryExhausted, MediaError_SizeLimit, MediaError_SubtitleUnavailable, MediaError_UnsupportedUrl, MediaError_UpdateUnavailable, MediaError_WorkaroundRejected, MediaItem, MetadataRequest, NetworkPolicy, OutputRequest, PlaylistMode, PlaylistMode_Flat, PlaylistMode_Playlist, PlaylistMode_Random, PlaylistMode_Reverse, PlaylistMode_Single, PlaylistRange, PlaylistRequest, PluginDescriptor, PostProcessRequest, PostProcessorKind, PostProcessorKind_ConvertThumbnails, PostProcessorKind_EmbedMetadata, PostProcessorKind_EmbedSubtitle, PostProcessorKind_EmbedThumbnail, PostProcessorKind_ExtractAudio, PostProcessorKind_Fixup, PostProcessorKind_RecodeVideo, PostProcessorKind_RemuxVideo, PostProcessorKind_SplitChapters, PostProcessorKind_SponsorBlock, PresentationRequest, ProxyMode, ProxyMode_Direct, ProxyMode_Http, ProxyMode_Socks, ShortcutKind, ShortcutKind_Search, ShortcutKind_SearchAll, ShortcutKind_Url, ShortcutRequest, SimulationMode, SimulationMode_Download, SimulationMode_PrintOnly, SimulationMode_Simulate, SimulationMode_SkipDownload, SubtitleMode, SubtitleMode_All, SubtitleMode_Automatic, SubtitleMode_Manual, SubtitleMode_None, SubtitleRequest, ThumbnailRequest, TransferReceipt, TransferRequest, UpdatePolicy, UpdatePolicy_Apply, UpdatePolicy_Check, UpdatePolicy_Master, UpdatePolicy_Never, UpdatePolicy_Nightly, UpdateRequest, VideoFilterRequest, WorkaroundPolicy
 
@@ -38,11 +39,16 @@ def parse_arguments(arguments: CottList[str]) -> Result[CottList[CliInput], Medi
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.parse_arguments", phase="error", span={"end_byte":6805,"end_column":1,"end_line":355,"start_byte":6612,"start_column":1,"start_line":348}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.parse_arguments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.parse_arguments", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidInput:
+        _cott_contract_condition(True, "real.yt_dlp.parse_arguments", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             inputs = _cott_match_value.value
-            return ((len(inputs) <= len(arguments)))
+            return (_cott_contract_condition(((len(inputs) <= len(arguments))), "real.yt_dlp.parse_arguments", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.parse_arguments", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.parse_arguments", clause="ensures:0", phase="ensures", span={"end_byte":6752,"end_column":61,"end_line":349,"start_byte":6696,"start_column":5,"start_line":349}, expected="true", actual="false")
@@ -76,11 +82,16 @@ def build_shortcut_url(request: ShortcutRequest) -> Result[str, MediaError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.build_shortcut_url", phase="error", span={"end_byte":6978,"end_column":1,"end_line":362,"start_byte":6805,"start_column":1,"start_line":355}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.build_shortcut_url", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.build_shortcut_url", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidShortcut:
+        _cott_contract_condition(True, "real.yt_dlp.build_shortcut_url", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             url = _cott_match_value.value
-            return ((len(url) > 0))
+            return (_cott_contract_condition(((len(url) > 0)), "real.yt_dlp.build_shortcut_url", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.build_shortcut_url", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.build_shortcut_url", clause="ensures:0", phase="ensures", span={"end_byte":6922,"end_column":42,"end_line":356,"start_byte":6885,"start_column":5,"start_line":356}, expected="true", actual="false")
@@ -114,11 +125,18 @@ def validate_workarounds(policy: WorkaroundPolicy) -> Result[WorkaroundPolicy, M
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.validate_workarounds", phase="error", span={"end_byte":7239,"end_column":1,"end_line":370,"start_byte":6978,"start_column":1,"start_line":362}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.validate_workarounds", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.validate_workarounds", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_CertificateFailure:
+        _cott_contract_condition(True, "real.yt_dlp.validate_workarounds", "error:1")
+    if type(_result) is Err and type(_result.error) is MediaError_WorkaroundRejected:
+        _cott_contract_condition(True, "real.yt_dlp.validate_workarounds", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             valid = _cott_match_value.value
-            return (((valid).certificate == (policy).certificate))
+            return (_cott_contract_condition((((valid).certificate == (policy).certificate)), "real.yt_dlp.validate_workarounds", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.validate_workarounds", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.validate_workarounds", clause="ensures:0", phase="ensures", span={"end_byte":7140,"end_column":72,"end_line":363,"start_byte":7073,"start_column":5,"start_line":363}, expected="true", actual="false")
@@ -152,11 +170,16 @@ def configure_presentation(request: PresentationRequest) -> Result[Unit, MediaEr
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.configure_presentation", phase="error", span={"end_byte":7438,"end_column":1,"end_line":377,"start_byte":7239,"start_column":1,"start_line":370}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.configure_presentation", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.configure_presentation", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_LogFailure:
+        _cott_contract_condition(True, "real.yt_dlp.configure_presentation", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             configured = _cott_match_value.value
-            return ((configured == UNIT))
+            return (_cott_contract_condition(((configured == UNIT)), "real.yt_dlp.configure_presentation", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.configure_presentation", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.configure_presentation", clause="ensures:0", phase="ensures", span={"end_byte":7377,"end_column":54,"end_line":371,"start_byte":7328,"start_column":5,"start_line":371}, expected="true", actual="false")
@@ -190,11 +213,16 @@ def load_config(path: Path) -> Result[CottList[CliInput], MediaError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.load_config", phase="error", span={"end_byte":7620,"end_column":1,"end_line":384,"start_byte":7438,"start_column":1,"start_line":377}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.load_config", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.load_config", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidConfig:
+        _cott_contract_condition(True, "real.yt_dlp.load_config", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             inputs = _cott_match_value.value
-            return ((len(inputs) <= 100000))
+            return (_cott_contract_condition(((len(inputs) <= 100000)), "real.yt_dlp.load_config", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.load_config", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.load_config", clause="ensures:0", phase="ensures", span={"end_byte":7557,"end_column":54,"end_line":378,"start_byte":7508,"start_column":5,"start_line":378}, expected="true", actual="false")
@@ -229,11 +257,16 @@ def parse_batch_urls(batch: str, comment_prefixes: CottList[str]) -> Result[Cott
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.parse_batch_urls", phase="error", span={"end_byte":7820,"end_column":1,"end_line":391,"start_byte":7620,"start_column":1,"start_line":384}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.parse_batch_urls", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.parse_batch_urls", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidInput:
+        _cott_contract_condition(True, "real.yt_dlp.parse_batch_urls", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             urls = _cott_match_value.value
-            return ((len(urls) <= len(batch)))
+            return (_cott_contract_condition(((len(urls) <= len(batch))), "real.yt_dlp.parse_batch_urls", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.parse_batch_urls", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.parse_batch_urls", clause="ensures:0", phase="ensures", span={"end_byte":7767,"end_column":53,"end_line":385,"start_byte":7719,"start_column":5,"start_line":385}, expected="true", actual="false")
@@ -268,11 +301,18 @@ def load_batch_urls(path: Path, comment_prefixes: CottList[str]) -> Result[CottL
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.load_batch_urls", phase="error", span={"end_byte":8062,"end_column":1,"end_line":399,"start_byte":7820,"start_column":1,"start_line":391}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.load_batch_urls", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.load_batch_urls", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_BatchReadFailed:
+        _cott_contract_condition(True, "real.yt_dlp.load_batch_urls", "error:1")
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidInput:
+        _cott_contract_condition(True, "real.yt_dlp.load_batch_urls", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             urls = _cott_match_value.value
-            return ((len(urls) <= 100000))
+            return (_cott_contract_condition(((len(urls) <= 100000)), "real.yt_dlp.load_batch_urls", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.load_batch_urls", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.load_batch_urls", clause="ensures:0", phase="ensures", span={"end_byte":7963,"end_column":50,"end_line":392,"start_byte":7918,"start_column":5,"start_line":392}, expected="true", actual="false")
@@ -307,11 +347,16 @@ def resolve_inputs(inputs: CottList[CliInput], config: CottList[CliInput]) -> Re
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.resolve_inputs", phase="error", span={"end_byte":8281,"end_column":1,"end_line":406,"start_byte":8062,"start_column":1,"start_line":399}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.resolve_inputs", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.resolve_inputs", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidInput:
+        _cott_contract_condition(True, "real.yt_dlp.resolve_inputs", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             urls = _cott_match_value.value
-            return ((len(urls) <= (len(inputs) + len(config))))
+            return (_cott_contract_condition(((len(urls) <= (len(inputs) + len(config)))), "real.yt_dlp.resolve_inputs", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.resolve_inputs", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.resolve_inputs", clause="ensures:0", phase="ensures", span={"end_byte":8228,"end_column":67,"end_line":400,"start_byte":8166,"start_column":5,"start_line":400}, expected="true", actual="false")
@@ -345,11 +390,16 @@ def validate_network(policy: NetworkPolicy) -> Result[NetworkPolicy, MediaError]
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.validate_network", phase="error", span={"end_byte":8474,"end_column":1,"end_line":413,"start_byte":8281,"start_column":1,"start_line":406}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.validate_network", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.validate_network", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidInput:
+        _cott_contract_condition(True, "real.yt_dlp.validate_network", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             valid = _cott_match_value.value
-            return (((valid).socket_timeout_ms > 0))
+            return (_cott_contract_condition((((valid).socket_timeout_ms > 0)), "real.yt_dlp.validate_network", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.validate_network", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.validate_network", clause="ensures:0", phase="ensures", span={"end_byte":8421,"end_column":60,"end_line":407,"start_byte":8366,"start_column":5,"start_line":407}, expected="true", actual="false")
@@ -383,11 +433,18 @@ def resolve_authentication(request: Authentication) -> Result[Authentication, Me
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.resolve_authentication", phase="error", span={"end_byte":8743,"end_column":1,"end_line":421,"start_byte":8474,"start_column":1,"start_line":413}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.resolve_authentication", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.resolve_authentication", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_AuthenticationFailed:
+        _cott_contract_condition(True, "real.yt_dlp.resolve_authentication", "error:1")
+    if type(_result) is Err and type(_result.error) is MediaError_CookieFailure:
+        _cott_contract_condition(True, "real.yt_dlp.resolve_authentication", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             authenticated = _cott_match_value.value
-            return (((authenticated).kind == (request).kind))
+            return (_cott_contract_condition((((authenticated).kind == (request).kind)), "real.yt_dlp.resolve_authentication", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.resolve_authentication", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.resolve_authentication", clause="ensures:0", phase="ensures", span={"end_byte":8638,"end_column":75,"end_line":414,"start_byte":8568,"start_column":5,"start_line":414}, expected="true", actual="false")
@@ -421,11 +478,16 @@ def select_geo_route(policy: NetworkPolicy) -> Result[NetworkPolicy, MediaError]
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.select_geo_route", phase="error", span={"end_byte":8954,"end_column":1,"end_line":428,"start_byte":8743,"start_column":1,"start_line":421}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.select_geo_route", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.select_geo_route", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_GeoRestricted:
+        _cott_contract_condition(True, "real.yt_dlp.select_geo_route", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             route = _cott_match_value.value
-            return (((route).proxy_mode == (policy).proxy_mode))
+            return (_cott_contract_condition((((route).proxy_mode == (policy).proxy_mode)), "real.yt_dlp.select_geo_route", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.select_geo_route", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.select_geo_route", clause="ensures:0", phase="ensures", span={"end_byte":8893,"end_column":70,"end_line":422,"start_byte":8828,"start_column":5,"start_line":422}, expected="true", actual="false")
@@ -477,11 +539,16 @@ def load_plugins(paths: CottList[Path]) -> Result[CottList[PluginDescriptor], Me
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.load_plugins", phase="error", span={"end_byte":9226,"end_column":1,"end_line":438,"start_byte":9025,"start_column":1,"start_line":431}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.load_plugins", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.load_plugins", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_PluginRejected:
+        _cott_contract_condition(True, "real.yt_dlp.load_plugins", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             plugins = _cott_match_value.value
-            return ((len(plugins) <= 100000))
+            return (_cott_contract_condition(((len(plugins) <= 100000)), "real.yt_dlp.load_plugins", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.load_plugins", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.load_plugins", clause="ensures:0", phase="ensures", span={"end_byte":9162,"end_column":56,"end_line":432,"start_byte":9111,"start_column":5,"start_line":432}, expected="true", actual="false")
@@ -516,11 +583,18 @@ def choose_extractor(url: str, extractors: CottList[ExtractorDescriptor]) -> Res
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.choose_extractor", phase="error", span={"end_byte":9496,"end_column":1,"end_line":449,"start_byte":9226,"start_column":1,"start_line":438}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.choose_extractor", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.choose_extractor", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_UnsupportedUrl:
+        _cott_contract_condition(True, "real.yt_dlp.choose_extractor", "error:1")
+    if type(_result) is Err and type(_result.error) is MediaError_ExtractorMissing:
+        _cott_contract_condition(True, "real.yt_dlp.choose_extractor", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             extractor = _cott_match_value.value
-            return ((extractor).enabled)
+            return (_cott_contract_condition(((extractor).enabled), "real.yt_dlp.choose_extractor", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.choose_extractor", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.choose_extractor", clause="ensures:0", phase="ensures", span={"end_byte":9403,"end_column":54,"end_line":442,"start_byte":9354,"start_column":5,"start_line":442}, expected="true", actual="false")
@@ -558,11 +632,24 @@ def extract_media(url: str, extractor: ExtractorDescriptor, authentication: Auth
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.extract_media", phase="error", span={"end_byte":10039,"end_column":1,"end_line":469,"start_byte":9496,"start_column":1,"start_line":449}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.extract_media", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.extract_media", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_AuthenticationFailed:
+        _cott_contract_condition(True, "real.yt_dlp.extract_media", "error:2")
+    if type(_result) is Err and type(_result.error) is MediaError_GeoRestricted:
+        _cott_contract_condition(True, "real.yt_dlp.extract_media", "error:3")
+    if type(_result) is Err and type(_result.error) is MediaError_HttpStatus:
+        _cott_contract_condition(True, "real.yt_dlp.extract_media", "error:4")
+    if type(_result) is Err and type(_result.error) is MediaError_NetworkFailure:
+        _cott_contract_condition(True, "real.yt_dlp.extract_media", "error:5")
+    if type(_result) is Err and type(_result.error) is MediaError_UnsupportedUrl:
+        _cott_contract_condition(True, "real.yt_dlp.extract_media", "error:6")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             items = _cott_match_value.value
-            return ((len(items) <= 100000))
+            return (_cott_contract_condition(((len(items) <= 100000)), "real.yt_dlp.extract_media", "ensures:1"))
+        _cott_contract_condition((False), "real.yt_dlp.extract_media", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.extract_media", clause="ensures:1", phase="ensures", span={"end_byte":9832,"end_column":52,"end_line":459,"start_byte":9785,"start_column":5,"start_line":459}, expected="true", actual="false")
@@ -597,11 +684,16 @@ def expand_playlist_ranges(items: CottList[MediaItem], ranges: CottList[Playlist
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.expand_playlist_ranges", phase="error", span={"end_byte":10369,"end_column":1,"end_line":479,"start_byte":10039,"start_column":1,"start_line":469}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.expand_playlist_ranges", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.expand_playlist_ranges", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidRange:
+        _cott_contract_condition(True, "real.yt_dlp.expand_playlist_ranges", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             selected = _cott_match_value.value
-            return ((((len(ranges) == 0) and (len(selected) == len(items))) or ((len(ranges) > 0) and (len(selected) <= (len(items) * len(ranges))))))
+            return (_cott_contract_condition(((((len(ranges) == 0) and (len(selected) == len(items))) or ((len(ranges) > 0) and (len(selected) <= (len(items) * len(ranges)))))), "real.yt_dlp.expand_playlist_ranges", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.expand_playlist_ranges", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.expand_playlist_ranges", clause="ensures:0", phase="ensures", span={"end_byte":10316,"end_column":148,"end_line":473,"start_byte":10173,"start_column":5,"start_line":473}, expected="true", actual="false")
@@ -637,11 +729,18 @@ def select_playlist(items: CottList[MediaItem], request: PlaylistRequest) -> Res
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.select_playlist", phase="error", span={"end_byte":10746,"end_column":1,"end_line":494,"start_byte":10369,"start_column":1,"start_line":479}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.select_playlist", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.select_playlist", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidRange:
+        _cott_contract_condition(True, "real.yt_dlp.select_playlist", "error:2")
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidInput:
+        _cott_contract_condition(True, "real.yt_dlp.select_playlist", "error:3")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             selected = _cott_match_value.value
-            return ((len(selected) <= len(items)))
+            return (_cott_contract_condition(((len(selected) <= len(items))), "real.yt_dlp.select_playlist", "ensures:1"))
+        _cott_contract_condition((False), "real.yt_dlp.select_playlist", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.select_playlist", clause="ensures:1", phase="ensures", span={"end_byte":10653,"end_column":61,"end_line":487,"start_byte":10597,"start_column":5,"start_line":487}, expected="true", actual="false")
@@ -676,11 +775,18 @@ def resolve_live_media(items: CottList[MediaItem], request: LiveRequest) -> Resu
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.resolve_live_media", phase="error", span={"end_byte":11028,"end_column":1,"end_line":505,"start_byte":10746,"start_column":1,"start_line":494}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.resolve_live_media", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.resolve_live_media", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidInput:
+        _cott_contract_condition(True, "real.yt_dlp.resolve_live_media", "error:1")
+    if type(_result) is Err and type(_result.error) is MediaError_RetryExhausted:
+        _cott_contract_condition(True, "real.yt_dlp.resolve_live_media", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             selected = _cott_match_value.value
-            return ((len(selected) <= len(items)))
+            return (_cott_contract_condition(((len(selected) <= len(items))), "real.yt_dlp.resolve_live_media", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.resolve_live_media", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.resolve_live_media", clause="ensures:0", phase="ensures", span={"end_byte":10925,"end_column":61,"end_line":498,"start_byte":10869,"start_column":5,"start_line":498}, expected="true", actual="false")
@@ -715,11 +821,16 @@ def filter_video(items: CottList[MediaItem], request: VideoFilterRequest) -> Res
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.filter_video", phase="error", span={"end_byte":11261,"end_column":1,"end_line":515,"start_byte":11028,"start_column":1,"start_line":505}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.filter_video", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.filter_video", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidInput:
+        _cott_contract_condition(True, "real.yt_dlp.filter_video", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             selected = _cott_match_value.value
-            return ((len(selected) <= len(items)))
+            return (_cott_contract_condition(((len(selected) <= len(items))), "real.yt_dlp.filter_video", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.filter_video", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.filter_video", clause="ensures:0", phase="ensures", span={"end_byte":11208,"end_column":61,"end_line":509,"start_byte":11152,"start_column":5,"start_line":509}, expected="true", actual="false")
@@ -754,11 +865,18 @@ def filter_formats(formats: CottList[FormatDescriptor], request: FormatRequest) 
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.filter_formats", phase="error", span={"end_byte":11548,"end_column":1,"end_line":526,"start_byte":11261,"start_column":1,"start_line":515}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.filter_formats", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.filter_formats", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_FormatUnavailable:
+        _cott_contract_condition(True, "real.yt_dlp.filter_formats", "error:1")
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidInput:
+        _cott_contract_condition(True, "real.yt_dlp.filter_formats", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             selected = _cott_match_value.value
-            return ((len(selected) <= len(formats)))
+            return (_cott_contract_condition(((len(selected) <= len(formats))), "real.yt_dlp.filter_formats", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.filter_formats", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.filter_formats", clause="ensures:0", phase="ensures", span={"end_byte":11456,"end_column":63,"end_line":519,"start_byte":11398,"start_column":5,"start_line":519}, expected="true", actual="false")
@@ -782,7 +900,7 @@ def sort_formats(formats: CottList[FormatDescriptor], fields: CottList[str]) -> 
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.sort_formats", phase="implementation-call", span={"end_byte":11698,"end_column":1,"end_line":531,"start_byte":11548,"start_column":1,"start_line":526}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, CottList[FormatDescriptor], path="$.return")
-    if not ((len(_result) == len(formats))):
+    if not (_cott_contract_condition(((len(_result) == len(formats))), "real.yt_dlp.sort_formats", "ensures:0")):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.sort_formats", clause="ensures:0", phase="ensures", span={"end_byte":11680,"end_column":38,"end_line":527,"start_byte":11647,"start_column":5,"start_line":527}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, CottList[FormatDescriptor], path="$.return", validator=_cott_validate_abi)
     return _result
@@ -816,11 +934,16 @@ def select_subtitles(item: MediaItem, request: SubtitleRequest) -> Result[CottLi
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.select_subtitles", phase="error", span={"end_byte":12021,"end_column":1,"end_line":542,"start_byte":11698,"start_column":1,"start_line":531}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.select_subtitles", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.select_subtitles", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_SubtitleUnavailable:
+        _cott_contract_condition(True, "real.yt_dlp.select_subtitles", "error:2")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             subtitles = _cott_match_value.value
-            return ((len(subtitles) <= 100000))
+            return (_cott_contract_condition(((len(subtitles) <= 100000)), "real.yt_dlp.select_subtitles", "ensures:1"))
+        _cott_contract_condition((False), "real.yt_dlp.select_subtitles", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.select_subtitles", clause="ensures:1", phase="ensures", span={"end_byte":11954,"end_column":60,"end_line":536,"start_byte":11899,"start_column":5,"start_line":536}, expected="true", actual="false")
@@ -896,11 +1019,16 @@ def render_output_path(item: MediaItem, template: str, missing_placeholder: str)
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.render_output_path", phase="error", span={"end_byte":12519,"end_column":1,"end_line":559,"start_byte":12204,"start_column":1,"start_line":548}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.render_output_path", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.render_output_path", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidTemplate:
+        _cott_contract_condition(True, "real.yt_dlp.render_output_path", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             path = _cott_match_value.value
-            return ((len(path) <= (len(template) * ((((len((item).id) + len((item).title)) + len((item).ext)) + len(missing_placeholder)) + 20))))
+            return (_cott_contract_condition(((len(path) <= (len(template) * ((((len((item).id) + len((item).title)) + len((item).ext)) + len(missing_placeholder)) + 20)))), "real.yt_dlp.render_output_path", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.render_output_path", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.render_output_path", clause="ensures:0", phase="ensures", span={"end_byte":12463,"end_column":137,"end_line":553,"start_byte":12331,"start_column":5,"start_line":553}, expected="true", actual="false")
@@ -935,11 +1063,18 @@ def resolve_output_path(item: MediaItem, request: OutputRequest) -> Result[Path,
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.resolve_output_path", phase="error", span={"end_byte":12752,"end_column":1,"end_line":567,"start_byte":12519,"start_column":1,"start_line":559}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.resolve_output_path", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.resolve_output_path", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidTemplate:
+        _cott_contract_condition(True, "real.yt_dlp.resolve_output_path", "error:1")
+    if type(_result) is Err and type(_result.error) is MediaError_PathFailure:
+        _cott_contract_condition(True, "real.yt_dlp.resolve_output_path", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             path = _cott_match_value.value
-            return ((path != (request).temp))
+            return (_cott_contract_condition(((path != (request).temp)), "real.yt_dlp.resolve_output_path", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.resolve_output_path", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.resolve_output_path", clause="ensures:0", phase="ensures", span={"end_byte":12663,"end_column":52,"end_line":560,"start_byte":12616,"start_column":5,"start_line":560}, expected="true", actual="false")
@@ -973,11 +1108,16 @@ def read_download_archive(request: ArchiveRequest) -> Result[CottList[str], Medi
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.read_download_archive", phase="error", span={"end_byte":12955,"end_column":1,"end_line":574,"start_byte":12752,"start_column":1,"start_line":567}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.read_download_archive", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.read_download_archive", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_ArchiveFailure:
+        _cott_contract_condition(True, "real.yt_dlp.read_download_archive", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             entries = _cott_match_value.value
-            return ((len(entries) <= 100000))
+            return (_cott_contract_condition(((len(entries) <= 100000)), "real.yt_dlp.read_download_archive", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.read_download_archive", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.read_download_archive", clause="ensures:0", phase="ensures", span={"end_byte":12891,"end_column":56,"end_line":568,"start_byte":12840,"start_column":5,"start_line":568}, expected="true", actual="false")
@@ -1033,11 +1173,16 @@ def write_download_archive(path: Path, items: CottList[MediaItem]) -> Result[Uni
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.write_download_archive", phase="error", span={"end_byte":13289,"end_column":1,"end_line":588,"start_byte":13090,"start_column":1,"start_line":581}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.write_download_archive", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.write_download_archive", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_ArchiveFailure:
+        _cott_contract_condition(True, "real.yt_dlp.write_download_archive", "error:1")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             saved = _cott_match_value.value
-            return ((saved == UNIT))
+            return (_cott_contract_condition(((saved == UNIT)), "real.yt_dlp.write_download_archive", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.write_download_archive", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.write_download_archive", clause="ensures:0", phase="ensures", span={"end_byte":13224,"end_column":44,"end_line":582,"start_byte":13185,"start_column":5,"start_line":582}, expected="true", actual="false")
@@ -1072,11 +1217,18 @@ def plan_fragments(request: TransferRequest, policy: FragmentPolicy) -> Result[C
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.plan_fragments", phase="error", span={"end_byte":13557,"end_column":1,"end_line":599,"start_byte":13289,"start_column":1,"start_line":588}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.plan_fragments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.plan_fragments", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidInput:
+        _cott_contract_condition(True, "real.yt_dlp.plan_fragments", "error:1")
+    if type(_result) is Err and type(_result.error) is MediaError_SizeLimit:
+        _cott_contract_condition(True, "real.yt_dlp.plan_fragments", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             fragments = _cott_match_value.value
-            return ((len(fragments) <= 100000))
+            return (_cott_contract_condition(((len(fragments) <= 100000)), "real.yt_dlp.plan_fragments", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.plan_fragments", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.plan_fragments", clause="ensures:0", phase="ensures", span={"end_byte":13473,"end_column":60,"end_line":592,"start_byte":13418,"start_column":5,"start_line":592}, expected="true", actual="false")
@@ -1088,7 +1240,7 @@ def transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaErr
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
-    if _expected_error is None and (((request).max_bytes == 0)):
+    if _expected_error is None and (_cott_contract_condition((((request).max_bytes == 0)), "real.yt_dlp.transfer_media", "error:4:condition")):
         _expected_error = MediaError_InvalidInput
         _expected_error_span = {"end_byte":13990,"end_column":62,"end_line":605,"start_byte":13933,"start_column":5,"start_line":605}
         _expected_error_clause = "error:4"
@@ -1114,11 +1266,24 @@ def transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaErr
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.transfer_media", phase="error", span={"end_byte":14197,"end_column":1,"end_line":614,"start_byte":13557,"start_column":1,"start_line":599}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.transfer_media", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.transfer_media", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_UnsupportedUrl:
+        _cott_contract_condition(True, "real.yt_dlp.transfer_media", "error:5")
+    if type(_result) is Err and type(_result.error) is MediaError_HttpStatus:
+        _cott_contract_condition(True, "real.yt_dlp.transfer_media", "error:6")
+    if type(_result) is Err and type(_result.error) is MediaError_NetworkFailure:
+        _cott_contract_condition(True, "real.yt_dlp.transfer_media", "error:7")
+    if type(_result) is Err and type(_result.error) is MediaError_OutputFailure:
+        _cott_contract_condition(True, "real.yt_dlp.transfer_media", "error:8")
+    if type(_result) is Err and type(_result.error) is MediaError_SizeLimit:
+        _cott_contract_condition(True, "real.yt_dlp.transfer_media", "error:9")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             receipt = _cott_match_value.value
-            return (((receipt).url == (request).url))
+            return (_cott_contract_condition((((receipt).url == (request).url)), "real.yt_dlp.transfer_media", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.transfer_media", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.transfer_media", clause="ensures:0", phase="ensures", span={"end_byte":13701,"end_column":61,"end_line":600,"start_byte":13645,"start_column":5,"start_line":600}, expected="true", actual="false")
@@ -1126,7 +1291,8 @@ def transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaErr
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             receipt = _cott_match_value.value
-            return (((receipt).destination == (request).destination))
+            return (_cott_contract_condition((((receipt).destination == (request).destination)), "real.yt_dlp.transfer_media", "ensures:1"))
+        _cott_contract_condition((False), "real.yt_dlp.transfer_media", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.transfer_media", clause="ensures:1", phase="ensures", span={"end_byte":13778,"end_column":77,"end_line":601,"start_byte":13706,"start_column":5,"start_line":601}, expected="true", actual="false")
@@ -1134,7 +1300,8 @@ def transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaErr
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             receipt = _cott_match_value.value
-            return (((receipt).bytes_written <= (request).max_bytes))
+            return (_cott_contract_condition((((receipt).bytes_written <= (request).max_bytes)), "real.yt_dlp.transfer_media", "ensures:2"))
+        _cott_contract_condition((False), "real.yt_dlp.transfer_media", "ensures:2:applicable")
         return True
     if not (_cott_match_ensures_2()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.transfer_media", clause="ensures:2", phase="ensures", span={"end_byte":13855,"end_column":77,"end_line":602,"start_byte":13783,"start_column":5,"start_line":602}, expected="true", actual="false")
@@ -1142,7 +1309,8 @@ def transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaErr
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             receipt = _cott_match_value.value
-            return (((receipt).simulated == (request).simulate))
+            return (_cott_contract_condition((((receipt).simulated == (request).simulate)), "real.yt_dlp.transfer_media", "ensures:3"))
+        _cott_contract_condition((False), "real.yt_dlp.transfer_media", "ensures:3:applicable")
         return True
     if not (_cott_match_ensures_3()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.transfer_media", clause="ensures:3", phase="ensures", span={"end_byte":13927,"end_column":72,"end_line":603,"start_byte":13860,"start_column":5,"start_line":603}, expected="true", actual="false")
@@ -1177,11 +1345,26 @@ def transfer_fragments(fragments: CottList[TransferRequest], policy: FragmentPol
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.transfer_fragments", phase="error", span={"end_byte":14647,"end_column":1,"end_line":629,"start_byte":14197,"start_column":1,"start_line":614}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.transfer_fragments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.transfer_fragments", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidInput:
+        _cott_contract_condition(True, "real.yt_dlp.transfer_fragments", "error:1")
+    if type(_result) is Err and type(_result.error) is MediaError_HttpStatus:
+        _cott_contract_condition(True, "real.yt_dlp.transfer_fragments", "error:2")
+    if type(_result) is Err and type(_result.error) is MediaError_NetworkFailure:
+        _cott_contract_condition(True, "real.yt_dlp.transfer_fragments", "error:3")
+    if type(_result) is Err and type(_result.error) is MediaError_OutputFailure:
+        _cott_contract_condition(True, "real.yt_dlp.transfer_fragments", "error:4")
+    if type(_result) is Err and type(_result.error) is MediaError_RetryExhausted:
+        _cott_contract_condition(True, "real.yt_dlp.transfer_fragments", "error:5")
+    if type(_result) is Err and type(_result.error) is MediaError_SizeLimit:
+        _cott_contract_condition(True, "real.yt_dlp.transfer_fragments", "error:6")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             receipts = _cott_match_value.value
-            return ((len(receipts) == len(fragments)))
+            return (_cott_contract_condition(((len(receipts) == len(fragments))), "real.yt_dlp.transfer_fragments", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.transfer_fragments", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.transfer_fragments", clause="ensures:0", phase="ensures", span={"end_byte":14398,"end_column":65,"end_line":618,"start_byte":14338,"start_column":5,"start_line":618}, expected="true", actual="false")
@@ -1237,11 +1420,18 @@ def plan_post_processing(item: MediaItem, request: PostProcessRequest) -> Result
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.plan_post_processing", phase="error", span={"end_byte":15124,"end_column":1,"end_line":647,"start_byte":14727,"start_column":1,"start_line":632}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.plan_post_processing", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.plan_post_processing", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_ExternalToolMissing:
+        _cott_contract_condition(True, "real.yt_dlp.plan_post_processing", "error:2")
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidInput:
+        _cott_contract_condition(True, "real.yt_dlp.plan_post_processing", "error:3")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             planned = _cott_match_value.value
-            return ((len(planned) <= len((request).kinds)))
+            return (_cott_contract_condition(((len(planned) <= len((request).kinds))), "real.yt_dlp.plan_post_processing", "ensures:1"))
+        _cott_contract_condition((False), "real.yt_dlp.plan_post_processing", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.plan_post_processing", clause="ensures:1", phase="ensures", span={"end_byte":15030,"end_column":67,"end_line":640,"start_byte":14968,"start_column":5,"start_line":640}, expected="true", actual="false")
@@ -1275,11 +1465,18 @@ def run_post_processing(requests: CottList[ExternalToolRequest]) -> Result[Unit,
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.run_post_processing", phase="error", span={"end_byte":15384,"end_column":1,"end_line":655,"start_byte":15124,"start_column":1,"start_line":647}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.run_post_processing", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.run_post_processing", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_ExternalToolMissing:
+        _cott_contract_condition(True, "real.yt_dlp.run_post_processing", "error:1")
+    if type(_result) is Err and type(_result.error) is MediaError_PostProcessFailed:
+        _cott_contract_condition(True, "real.yt_dlp.run_post_processing", "error:2")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             completed = _cott_match_value.value
-            return ((completed == UNIT))
+            return (_cott_contract_condition(((completed == UNIT)), "real.yt_dlp.run_post_processing", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.run_post_processing", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.run_post_processing", clause="ensures:0", phase="ensures", span={"end_byte":15264,"end_column":52,"end_line":648,"start_byte":15217,"start_column":5,"start_line":648}, expected="true", actual="false")
@@ -1313,11 +1510,20 @@ def apply_update(request: UpdateRequest) -> Result[Unit, MediaError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.apply_update", phase="error", span={"end_byte":15648,"end_column":1,"end_line":664,"start_byte":15384,"start_column":1,"start_line":655}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.apply_update", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.apply_update", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_UpdateUnavailable:
+        _cott_contract_condition(True, "real.yt_dlp.apply_update", "error:1")
+    if type(_result) is Err and type(_result.error) is MediaError_NetworkFailure:
+        _cott_contract_condition(True, "real.yt_dlp.apply_update", "error:2")
+    if type(_result) is Err and type(_result.error) is MediaError_OutputFailure:
+        _cott_contract_condition(True, "real.yt_dlp.apply_update", "error:3")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             updated = _cott_match_value.value
-            return ((updated == UNIT))
+            return (_cott_contract_condition(((updated == UNIT)), "real.yt_dlp.apply_update", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.apply_update", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.apply_update", clause="ensures:0", phase="ensures", span={"end_byte":15500,"end_column":48,"end_line":656,"start_byte":15457,"start_column":5,"start_line":656}, expected="true", actual="false")
@@ -1351,11 +1557,68 @@ def execute(request: ExecutionRequest) -> Result[ExecutionReport, MediaError]:
             raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.execute", phase="error", span={"end_byte":16876,"end_column":1,"end_line":697,"start_byte":15648,"start_column":1,"start_line":664}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.execute", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "real.yt_dlp.execute", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidConfig:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:1")
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidInput:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:2")
+    if type(_result) is Err and type(_result.error) is MediaError_AuthenticationFailed:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:3")
+    if type(_result) is Err and type(_result.error) is MediaError_BatchReadFailed:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:4")
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidShortcut:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:5")
+    if type(_result) is Err and type(_result.error) is MediaError_CertificateFailure:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:6")
+    if type(_result) is Err and type(_result.error) is MediaError_WorkaroundRejected:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:7")
+    if type(_result) is Err and type(_result.error) is MediaError_LogFailure:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:8")
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidRange:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:9")
+    if type(_result) is Err and type(_result.error) is MediaError_CookieFailure:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:10")
+    if type(_result) is Err and type(_result.error) is MediaError_GeoRestricted:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:11")
+    if type(_result) is Err and type(_result.error) is MediaError_ExtractorMissing:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:12")
+    if type(_result) is Err and type(_result.error) is MediaError_PluginRejected:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:13")
+    if type(_result) is Err and type(_result.error) is MediaError_UnsupportedUrl:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:14")
+    if type(_result) is Err and type(_result.error) is MediaError_FormatUnavailable:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:15")
+    if type(_result) is Err and type(_result.error) is MediaError_SubtitleUnavailable:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:16")
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidTemplate:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:17")
+    if type(_result) is Err and type(_result.error) is MediaError_ArchiveFailure:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:18")
+    if type(_result) is Err and type(_result.error) is MediaError_PathFailure:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:19")
+    if type(_result) is Err and type(_result.error) is MediaError_HttpStatus:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:20")
+    if type(_result) is Err and type(_result.error) is MediaError_NetworkFailure:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:21")
+    if type(_result) is Err and type(_result.error) is MediaError_OutputFailure:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:22")
+    if type(_result) is Err and type(_result.error) is MediaError_SizeLimit:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:23")
+    if type(_result) is Err and type(_result.error) is MediaError_RetryExhausted:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:24")
+    if type(_result) is Err and type(_result.error) is MediaError_ExternalToolMissing:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:25")
+    if type(_result) is Err and type(_result.error) is MediaError_PostProcessFailed:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:26")
+    if type(_result) is Err and type(_result.error) is MediaError_UpdateUnavailable:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:27")
     def _cott_match_ensures_0() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             report = _cott_match_value.value
-            return (((report).simulated == ((request).simulation != SimulationMode_Download())))
+            return (_cott_contract_condition((((report).simulated == ((request).simulation != SimulationMode_Download()))), "real.yt_dlp.execute", "ensures:0"))
+        _cott_contract_condition((False), "real.yt_dlp.execute", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
         raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.execute", clause="ensures:0", phase="ensures", span={"end_byte":15826,"end_column":101,"end_line":665,"start_byte":15730,"start_column":5,"start_line":665}, expected="true", actual="false")

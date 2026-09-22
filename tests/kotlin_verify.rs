@@ -6,6 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
 
+#[path = "support/snapshot.rs"]
+mod snapshot;
+
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
@@ -355,12 +358,15 @@ public final class HostExit {
     assert_success("forged-evidence host JAR creation", archived);
 }
 
-fn assert_current_unverified(fixture: &Fixture) {
-    let generation: Value = serde_json::from_slice(
+fn generation_view(fixture: &Fixture) -> Value {
+    snapshot::read(
         &fs::read(fixture.root.join("generated/generation.json"))
-            .expect("read rejected verification generation record"),
+            .expect("read Kotlin generation record"),
     )
-    .expect("parse rejected verification generation record");
+}
+
+fn assert_current_unverified(fixture: &Fixture) {
+    let generation = generation_view(fixture);
     assert_eq!(
         generation["current"]["verified"], false,
         "verification rejection must not certify the current snapshot"
@@ -508,13 +514,13 @@ fn valid_fixture_produces_a_real_jar_and_executed_clause_evidence() {
         "verification must publish its hashed coroutine runtime"
     );
 
-    let generation: Value = serde_json::from_slice(
-        &fs::read(fixture.root.join("generated/generation.json"))
-            .expect("read Kotlin generation record"),
-    )
-    .expect("parse Kotlin generation record");
+    let generation = generation_view(&fixture);
     let current = &generation["current"];
     assert_eq!(current["verified"], true);
+    assert_eq!(
+        generation["last_verified"], *current,
+        "a certified record must expand to one shared snapshot"
+    );
     assert_eq!(current["tools"]["kotlin"]["version"], "2.2.10");
     assert_eq!(
         current["tools"]["runtime_dependencies"]["kotlin_stdlib"]["required"],
@@ -577,11 +583,7 @@ fn type_only_module_verifies_deploys_and_runs_from_a_native_consumer() {
         fixture.cott(&["emit", "kotlin"]),
     );
     assert_success("type-only Kotlin verification", fixture.cott(&["verify"]));
-    let generation: Value = serde_json::from_slice(
-        &fs::read(fixture.root.join("generated/generation.json"))
-            .expect("read type-only generation record"),
-    )
-    .expect("parse type-only generation record");
+    let generation = generation_view(&fixture);
     let current = &generation["current"];
     assert_eq!(current["verified"], true);
     let contract_tests = &current["verification"]["contract_tests"];
@@ -632,6 +634,16 @@ fn type_only_module_verifies_deploys_and_runs_from_a_native_consumer() {
             "type-only deployment omitted `{relative}`"
         );
     }
+    let deployed = fs::read(deployment.join("generation.json")).expect("deployed record");
+    let deployed_view = snapshot::read(&deployed);
+    assert_eq!(deployed_view["current"]["verified"], true);
+    assert_eq!(deployed_view["current"], deployed_view["last_verified"]);
+    assert_eq!(
+        deployed,
+        fs::read(fixture.root.join("generated/generation.json"))
+            .expect("published generation record"),
+        "deployment must copy the self-contained record verbatim"
+    );
     compile_and_run_type_only_consumer(&fixture, &kotlin_home, &java_home);
 }
 

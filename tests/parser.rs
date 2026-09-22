@@ -1526,3 +1526,76 @@ fn check(a: Bool, b: Bool, c: Bool, value: Option[I32]) -> Result[I32, Failure]:
         } if matches!(&left.kind, ExprKind::Binary { op: BinaryOp::And, .. })
     ));
 }
+
+#[test]
+fn ensures_authoring_words_are_contextual_and_tables_own_their_rows() {
+    let file = parse(
+        r#"module contextual
+
+fn labels(key: Kind, table: Bool, preserves: Bool, from: Bool, except: Bool) -> Str:
+    ensures table
+    ensures preserves and from and except
+    ensures table key:
+        Kind.Imported => "imported"
+        Kind.Local => "local"
+    ensures result.len > 0
+
+fn update(mark: Mark) -> Mark:
+    ensures preserves result from mark except changed, payload
+"#,
+    )
+    .expect("contextual syntax should parse");
+    let Declaration::Function(labels) = &file.declarations[0] else {
+        panic!("function")
+    };
+    let cott::ast::FunctionBody::Clauses { clauses, .. } = &labels.body else {
+        panic!("clauses")
+    };
+    assert!(matches!(&clauses[0].kind, ClauseKind::Ensures {
+        guard: None, condition: cott::ast::Expr { kind: ExprKind::Name(name), .. }
+    } if name.segments == ["table"]));
+    assert!(matches!(
+        &clauses[1].kind,
+        ClauseKind::Ensures { guard: None, .. }
+    ));
+    let ClauseKind::EnsuresTable { rows, .. } = &clauses[2].kind else {
+        panic!("table")
+    };
+    assert_eq!(rows.len(), 2);
+    assert!(
+        matches!(&rows[0].pattern.kind, PatternKind::Variant { path, arguments }
+        if path.segments == ["Kind", "Imported"] && arguments.is_empty())
+    );
+    assert!(matches!(
+        &clauses[3].kind,
+        ClauseKind::Ensures { guard: None, .. }
+    ));
+    let Declaration::Function(update) = &file.declarations[1] else {
+        panic!("function")
+    };
+    let cott::ast::FunctionBody::Clauses { clauses, .. } = &update.body else {
+        panic!("clauses")
+    };
+    let ClauseKind::EnsuresPreserves { except, .. } = &clauses[0].kind else {
+        panic!("preserves")
+    };
+    assert_eq!(
+        except
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        ["changed", "payload"]
+    );
+}
+
+#[test]
+fn ensures_sugar_rejects_incomplete_rows_and_exclusion_lists() {
+    for source in [
+        "module invalid\nfn label(key: Kind) -> Str:\n    ensures table key:\n        Kind.Local \"local\"\n",
+        "module invalid\nfn label(key: Kind) -> Str:\n    ensures table key:\n        Kind.Local =>\n",
+        "module invalid\nfn update(mark: Mark) -> Mark:\n    ensures preserves result from mark except\n",
+        "module invalid\nfn update(mark: Mark) -> Mark:\n    ensures preserves result from mark except changed,\n",
+    ] {
+        assert_rejected(source);
+    }
+}

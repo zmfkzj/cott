@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from curriculum.workflow_scenario_types import CANCELLED_QUERY, CANCELLED_REQUEST_ID, DRAFT_TEXT, FIRST_SAVE_REVISION, LATEST_SAVE_REVISION, NEW_QUERY, NEW_REQUEST_ID, NEW_RESULT, OLD_QUERY, OLD_REQUEST_ID, PUBLISHED_TEXT, SaveReceipt, SaveSnapshot, SaveStatus, SaveStatus_Flushed, SaveStatus_Queued, SearchResult, SearchSnapshot, SearchStatus, SearchStatus_Loading, SearchStatus_Ready
 
@@ -15,7 +16,7 @@ def begin_search(request_id: U64, query: str) -> SearchSnapshot:
     """Start an immutable public search snapshot for the supplied request."""
     request_id = _cott_validate_abi(request_id, U64, path="$.request_id")
     query = _cott_validate_abi(query, str, path="$.query")
-    if not ((request_id > 0)):
+    if not (_cott_contract_condition(((request_id > 0)), "curriculum.workflow_scenario.begin_search", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="curriculum.workflow_scenario.begin_search", clause="requires:1", phase="requires", span={"end_byte":851,"end_column":28,"end_line":47,"start_byte":828,"start_column":5,"start_line":47}, expected="true", actual="false")
     try:
         _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/begin_search.py", "328931bf67335ceb8b69220b57a529fb392572827f7f463e399546129d175ae4", "begin_search", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.begin_search")
@@ -38,7 +39,7 @@ async def resolve_search(request_id: U64, query: str) -> SearchResult:
     """Resolve one immutable search result without observing host state."""
     request_id = _cott_validate_abi(request_id, U64, path="$.request_id")
     query = _cott_validate_abi(query, str, path="$.query")
-    if not ((request_id > 0)):
+    if not (_cott_contract_condition(((request_id > 0)), "curriculum.workflow_scenario.resolve_search", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="curriculum.workflow_scenario.resolve_search", clause="requires:1", phase="requires", span={"end_byte":1057,"end_column":28,"end_line":56,"start_byte":1034,"start_column":5,"start_line":56}, expected="true", actual="false")
     try:
         _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/resolve_search.py", "ecfdd7535cd9fe98d93b101d7f9792695bb3efa5e08e86c0180226b03caac8cb", "resolve_search", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.resolve_search")
@@ -82,7 +83,7 @@ def begin_save(revision: U64, text: str) -> SaveSnapshot:
     """Queue the first immutable save request."""
     revision = _cott_validate_abi(revision, U64, path="$.revision")
     text = _cott_validate_abi(text, str, path="$.text")
-    if not ((revision > 0)):
+    if not (_cott_contract_condition(((revision > 0)), "curriculum.workflow_scenario.begin_save", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="curriculum.workflow_scenario.begin_save", clause="requires:1", phase="requires", span={"end_byte":1425,"end_column":26,"end_line":72,"start_byte":1404,"start_column":5,"start_line":72}, expected="true", actual="false")
     try:
         _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/begin_save.py", "089f1535c79302a840fd788f51d0816abdef0446939f9bfb4bab097702414a0d", "begin_save", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.begin_save")
@@ -106,7 +107,7 @@ def request_save(snapshot: SaveSnapshot, revision: U64, text: str) -> SaveSnapsh
     snapshot = _cott_validate_abi(snapshot, SaveSnapshot, path="$.snapshot")
     revision = _cott_validate_abi(revision, U64, path="$.revision")
     text = _cott_validate_abi(text, str, path="$.text")
-    if not ((revision > 0)):
+    if not (_cott_contract_condition(((revision > 0)), "curriculum.workflow_scenario.request_save", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="curriculum.workflow_scenario.request_save", clause="requires:1", phase="requires", span={"end_byte":1639,"end_column":26,"end_line":81,"start_byte":1618,"start_column":5,"start_line":81}, expected="true", actual="false")
     try:
         _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/request_save.py", "641a3825e3e133289ee7e5b2fc335b8eaf87767fb3c11ae9aca8ffe7f1c8e2c1", "request_save", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.request_save")

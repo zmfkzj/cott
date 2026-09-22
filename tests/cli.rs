@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "support/snapshot.rs"]
+mod snapshot;
+
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
 struct TempDir {
@@ -235,14 +238,13 @@ fn recompute_generation_id(snapshot: &mut serde_json::Value) {
         current.remove(key);
     }
     let identity = serde_json::json!({
-        "domain": "cott.generation.v7",
-        "schema_version": 7,
+        "domain": "cott.generation.v8",
+        "schema_version": 8,
         "current": current,
     });
-    let mut bytes = serde_json::to_vec(&identity).expect("canonical generation identity");
-    bytes.push(b'\n');
-    snapshot["generation_id"] =
-        serde_json::json!(format!("sha256:{}", cott::hash::sha256_hex(&bytes)));
+    snapshot["generation_id"] = serde_json::json!(
+        cott::snapshot_record::digest(&identity).expect("normalized generation identity")
+    );
 }
 #[test]
 fn source_commands_accept_the_normative_manifest_without_entry() {
@@ -265,79 +267,50 @@ fn source_commands_accept_the_normative_manifest_without_entry() {
 
 fn retarget_generation_to_host_python(root: &Path) {
     let script = r#"import hashlib,json,pathlib,platform,sys,sysconfig
-p=pathlib.Path("generated/generation.json")
-r=json.loads(p.read_bytes())
 e=pathlib.Path(sys.executable).resolve()
-r["current"]["tools"]["python"]={"cache_tag":sys.implementation.cache_tag,"content_hash":"sha256:"+hashlib.sha256(e.read_bytes()).hexdigest(),"executable":str(e),"implementation":sys.implementation.name,"machine":platform.machine(),"os":sys.platform,"platform":sysconfig.get_platform(),"version":platform.python_version()}
-i=dict(r["current"])
-for k in ("generation_id","verified","verification","semantic_coverage","agent_runs"): i.pop(k,None)
-i={"domain":"cott.generation.v7","schema_version":7,"current":i}
-r["current"]["generation_id"]="sha256:"+hashlib.sha256(json.dumps(i,ensure_ascii=False,separators=(",",":"),sort_keys=True).encode()+b"\n").hexdigest()
-p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True)+"\n")
+print(json.dumps({"cache_tag":sys.implementation.cache_tag,"content_hash":"sha256:"+hashlib.sha256(e.read_bytes()).hexdigest(),"executable":str(e),"implementation":sys.implementation.name,"machine":platform.machine(),"os":sys.platform,"platform":sysconfig.get_platform(),"version":platform.python_version()}))
 "#;
     let output = Command::new("python3")
         .args(["-c", script])
-        .current_dir(root)
         .output()
-        .expect("host Python should retarget test provenance");
+        .expect("host Python should inspect test provenance");
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let path = root.join("generated/generation.json");
+    let mut record = snapshot::read(&fs::read(&path).expect("generation record"));
+    record["current"]["tools"]["python"] =
+        serde_json::from_slice(&output.stdout).expect("Python tool evidence");
+    recompute_generation_id(&mut record["current"]);
+    fs::write(path, snapshot::bytes(&record)).expect("retarget test provenance");
 }
 
 fn retarget_last_verified_python_symbol(root: &Path, python_symbol: &str) {
-    let script = r#"import hashlib,json,pathlib,sys
-p=pathlib.Path("generated/generation.json")
-r=json.loads(p.read_bytes())
-s=r["last_verified"]
-s["implementations"][0]["python_symbol"]=sys.argv[1]
-i=dict(s)
-for k in ("generation_id","verified","verification","semantic_coverage","agent_runs"): i.pop(k,None)
-i={"domain":"cott.generation.v7","schema_version":7,"current":i}
-s["generation_id"]="sha256:"+hashlib.sha256(json.dumps(i,ensure_ascii=False,separators=(",",":"),sort_keys=True).encode()+b"\n").hexdigest()
-p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True)+"\n")
-"#;
-    let output = Command::new("python3")
-        .args(["-c", script, python_symbol])
-        .current_dir(root)
-        .output()
-        .expect("host Python should retarget verified implementation provenance");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let path = root.join("generated/generation.json");
+    let mut record = snapshot::read(&fs::read(&path).expect("generation record"));
+    record["last_verified"]["implementations"][0]["python_symbol"] =
+        serde_json::json!(python_symbol);
+    recompute_generation_id(&mut record["last_verified"]);
+    fs::write(path, snapshot::bytes(&record)).expect("retarget verified implementation provenance");
 }
 
 fn remove_free_function_callable_metadata(root: &Path) {
-    let script = r#"import hashlib,json,pathlib
-p=pathlib.Path("generated/generation.json")
-r=json.loads(p.read_bytes())
-i=r["current"]["implementations"][0]
-for k in ("kind","callable_kind","concrete","method"): i.pop(k)
-c=dict(r["current"])
-for k in ("generation_id","verified","verification","semantic_coverage","agent_runs"): c.pop(k,None)
-i={"domain":"cott.generation.v7","schema_version":7,"current":c}
-r["current"]["generation_id"]="sha256:"+hashlib.sha256(json.dumps(i,ensure_ascii=False,separators=(",",":"),sort_keys=True).encode()+b"\n").hexdigest()
-p.write_text(json.dumps(r,ensure_ascii=False,separators=(",",":"),sort_keys=True)+"\n")
-"#;
-    let output = Command::new("python3")
-        .args(["-c", script])
-        .current_dir(root)
-        .output()
-        .expect("host Python should write incomplete generation provenance");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let path = root.join("generated/generation.json");
+    let mut record = snapshot::read(&fs::read(&path).expect("generation record"));
+    let implementation = record["current"]["implementations"][0]
+        .as_object_mut()
+        .expect("implementation provenance");
+    for field in ["kind", "callable_kind", "concrete", "method"] {
+        implementation.remove(field);
+    }
+    recompute_generation_id(&mut record["current"]);
+    fs::write(path, snapshot::bytes(&record)).expect("write incomplete generation provenance");
 }
 
 fn replace_generation_implementation_kind(path: &Path, kind: &str) -> (String, String) {
-    let mut record: serde_json::Value =
-        serde_json::from_slice(&fs::read(path).expect("generation record")).expect("valid JSON");
+    let mut record = snapshot::read(&fs::read(path).expect("generation record"));
     let snapshot = record
         .get_mut("current")
         .expect("generation record has current snapshot");
@@ -357,11 +330,7 @@ fn replace_generation_implementation_kind(path: &Path, kind: &str) -> (String, S
         .as_str()
         .expect("updated generation snapshot identity")
         .to_owned();
-    fs::write(
-        path,
-        serde_json::to_vec(&record).expect("generation record serialization"),
-    )
-    .expect("generation record should be writable");
+    fs::write(path, snapshot::bytes(&record)).expect("generation record should be writable");
     (before, after)
 }
 
@@ -405,11 +374,10 @@ fn emits_complete_tree_and_verifies_exact_bytes() {
         String::from_utf8(verified.stdout).expect("stdout must be UTF-8"),
         "verified generated/python\n"
     );
-    let record: serde_json::Value = serde_json::from_slice(
+    let record: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("verified generation record"),
-    )
-    .expect("verified generation record is JSON");
+    );
     assert_eq!(
         record["current"]["verification"]["static"]["runtime_signatures"]["app.run"]["callable_kind"],
         "function"
@@ -460,11 +428,10 @@ fn verification_limits_reach_evidence_and_generated_strategies() {
         "{}",
         String::from_utf8_lossy(&verified.stderr)
     );
-    let record: serde_json::Value = serde_json::from_slice(
+    let record: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("verified generation record"),
-    )
-    .expect("verified generation record is JSON");
+    );
     assert_eq!(
         record["current"]["verification"]["limits"],
         serde_json::json!({
@@ -519,11 +486,10 @@ fn verify_records_no_baseline_implementation_comparison() {
         "{}",
         String::from_utf8_lossy(&verified.stderr)
     );
-    let record: serde_json::Value = serde_json::from_slice(
+    let record: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("verified generation record"),
-    )
-    .expect("verified generation record is JSON");
+    );
     let verification = &record["current"]["verification"];
     for key in [
         "contract_proofs",
@@ -626,10 +592,9 @@ fn verify_records_unsupported_static_requires_as_nonfatal_unknown() {
         "{}",
         String::from_utf8_lossy(&verified.stderr)
     );
-    let record: serde_json::Value = serde_json::from_slice(
+    let record: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json")).expect("generation record"),
-    )
-    .expect("generation record is JSON");
+    );
     assert_eq!(
         record["current"]["verification"]["contract_proofs"]["contracts"][0]["status"],
         "unknown"
@@ -657,8 +622,7 @@ fn emit_refreshes_stale_compiler_and_runtime_tool_versions() {
     );
     let path = project.path.join("generated/generation.json");
     let mut record: serde_json::Value =
-        serde_json::from_slice(&fs::read(&path).expect("verified generation record"))
-            .expect("verified generation record is JSON");
+        snapshot::read(&fs::read(&path).expect("verified generation record"));
     record["current"]["tools"]["compiler"] = serde_json::json!({
         "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "executable": "/old/cott",
@@ -667,11 +631,7 @@ fn emit_refreshes_stale_compiler_and_runtime_tool_versions() {
     record["current"]["tools"]["runtime"]["abi"] = serde_json::json!("0");
     record["current"]["tools"]["runtime"]["version"] = serde_json::json!("0.0.0");
     recompute_generation_id(&mut record["current"]);
-    fs::write(
-        &path,
-        serde_json::to_vec(&record).expect("stale generation record serialization"),
-    )
-    .expect("stale generation record should be writable");
+    fs::write(&path, snapshot::bytes(&record)).expect("stale generation record should be writable");
 
     let emitted = cott(&project.path, &["emit", "python"]);
     assert!(
@@ -680,8 +640,7 @@ fn emit_refreshes_stale_compiler_and_runtime_tool_versions() {
         String::from_utf8_lossy(&emitted.stderr)
     );
     let regenerated: serde_json::Value =
-        serde_json::from_slice(&fs::read(&path).expect("regenerated record"))
-            .expect("regenerated record is JSON");
+        snapshot::read(&fs::read(&path).expect("regenerated record"));
     assert_eq!(
         regenerated["current"]["tools"]["compiler"]["version"],
         env!("CARGO_PKG_VERSION")
@@ -729,19 +688,14 @@ fn emit_rejects_stale_generation_compatibility_without_mutating_managed_tree() {
     assert!(cott(&project.path, &["emit", "python"]).status.success());
     let path = project.path.join("generated/generation.json");
     let mut record: serde_json::Value =
-        serde_json::from_slice(&fs::read(&path).expect("generation record"))
-            .expect("generation record is JSON");
+        snapshot::read(&fs::read(&path).expect("generation record"));
     record["current"]["compatibility"] = serde_json::json!({
         "generation_schema": 5,
         "canonical_ir_schema": 6,
         "runtime_abi": 5
     });
     recompute_generation_id(&mut record["current"]);
-    fs::write(
-        &path,
-        serde_json::to_vec(&record).expect("stale generation record serialization"),
-    )
-    .expect("stale generation record should be writable");
+    fs::write(&path, snapshot::bytes(&record)).expect("stale generation record should be writable");
     let before = file_snapshot(&project.path.join("generated"));
 
     let rejected = cott(&project.path, &["emit", "python"]);
@@ -776,11 +730,10 @@ fn verify_compares_implementation_identity_without_importing_the_baseline() {
     )
     .expect("verified generation record should be copyable");
     retarget_last_verified_python_symbol(&project.path, "effectful_baseline:run");
-    let compared_generation_id: serde_json::Value = serde_json::from_slice::<serde_json::Value>(
+    let compared_generation_id: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("retargeted generation record"),
-    )
-    .expect("retargeted generation record is JSON")["last_verified"]["generation_id"]
+    )["last_verified"]["generation_id"]
         .clone();
     fs::write(
         project.path.join("python/cott_bindings/app/run.py"),
@@ -812,11 +765,10 @@ fn verify_compares_implementation_identity_without_importing_the_baseline() {
         "{}",
         String::from_utf8_lossy(&verified.stderr)
     );
-    let record: serde_json::Value = serde_json::from_slice(
+    let record: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("verified generation record"),
-    )
-    .expect("verified generation record is JSON");
+    );
     let comparison = &record["current"]["verification"]["implementation_comparison"];
     assert_eq!(comparison["status"], "compared");
     assert_eq!(comparison["baseline_generation_id"], compared_generation_id);
@@ -899,10 +851,9 @@ fn async_callable_kind_changes_generation_identity_and_breaks_contracts() {
     let baseline = project.path.join("sync-baseline.json");
     fs::copy(project.path.join("generated/generation.json"), &baseline)
         .expect("sync generation record should be copyable");
-    let sync_record: serde_json::Value = serde_json::from_slice(
+    let sync_record: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json")).expect("sync generation record"),
-    )
-    .expect("sync generation record is JSON");
+    );
     fs::write(
         project.path.join("src/app.cott"),
         "module app\n\nasync fn run() -> I32\n",
@@ -921,10 +872,9 @@ fn async_callable_kind_changes_generation_identity_and_breaks_contracts() {
         "{}",
         String::from_utf8_lossy(&emitted.stderr)
     );
-    let async_record: serde_json::Value = serde_json::from_slice(
+    let async_record: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json")).expect("async generation record"),
-    )
-    .expect("async generation record is JSON");
+    );
     assert_eq!(
         sync_record["current"]["implementations"][0]["kind"],
         "function"
@@ -952,11 +902,10 @@ fn async_callable_kind_changes_generation_identity_and_breaks_contracts() {
         "{}",
         String::from_utf8_lossy(&verified.stderr)
     );
-    let verified_record: serde_json::Value = serde_json::from_slice(
+    let verified_record: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("verified async generation record"),
-    )
-    .expect("verified async generation record is JSON");
+    );
     assert_eq!(
         verified_record["current"]["implementations"][0]["kind"],
         "async_function"
@@ -1071,7 +1020,7 @@ esac
 }
 
 #[test]
-fn emit_rejects_incomplete_schema3_free_function_provenance() {
+fn emit_rejects_incomplete_free_function_provenance() {
     let project = project();
     let initial = cott(&project.path, &["emit", "python"]);
     assert!(
@@ -1081,11 +1030,10 @@ fn emit_rejects_incomplete_schema3_free_function_provenance() {
     );
     remove_free_function_callable_metadata(&project.path);
 
-    let legacy: serde_json::Value = serde_json::from_slice(
+    let legacy: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("incomplete generation record"),
-    )
-    .expect("incomplete generation record is JSON");
+    );
     let implementation = &legacy["current"]["implementations"][0];
     for field in ["kind", "callable_kind", "concrete", "method"] {
         assert!(implementation.get(field).is_none(), "missing `{field}`");
@@ -1339,10 +1287,9 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
             .expect("durable candidate"),
         "from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n"
     );
-    let record: serde_json::Value = serde_json::from_slice(
+    let record: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json")).expect("generation record"),
-    )
-    .expect("generation record is JSON");
+    );
     let run = &record["current"]["agent_runs"][0];
     assert_eq!(run["symbol"], "app.run");
     assert_eq!(run["adapter"], "claude");
@@ -1512,10 +1459,9 @@ esac
         .expect("durable method helper"),
         "from api.service import ReaderState\nfrom cott_runtime import I32\n\n\ndef _cott_impl_ReaderState_read(self: ReaderState, amount: I32) -> I32:\n    return amount\n"
     );
-    let record: serde_json::Value = serde_json::from_slice(
+    let record: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json")).expect("generated method record"),
-    )
-    .expect("generated method record is JSON");
+    );
     let implementation = &record["current"]["implementations"][0];
     assert_eq!(implementation["kind"], "impl_method");
     assert_eq!(implementation["concrete"], "ReaderState");
@@ -1846,11 +1792,10 @@ fn process_bar_generation_records_unresolved_and_verified_transitions() {
             );
         }
     }
-    let initial: serde_json::Value = serde_json::from_slice(
+    let initial: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("initial generation record"),
-    )
-    .expect("initial generation JSON");
+    );
     assert_eq!(initial["current"]["verified"], false);
     assert_eq!(initial["current"]["implementations"], serde_json::json!([]));
     let unresolved = initial["current"]["unresolved"]
@@ -2046,11 +1991,10 @@ esac
         );
     }
 
-    let generated: serde_json::Value = serde_json::from_slice(
+    let generated: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("generated generation record"),
-    )
-    .expect("generated generation JSON");
+    );
     assert_eq!(generated["current"]["verified"], false);
     assert_eq!(generated["current"]["unresolved"], serde_json::json!([]));
     assert_eq!(
@@ -2193,11 +2137,10 @@ esac
         "{}",
         String::from_utf8_lossy(&verified.stderr)
     );
-    let verified_record: serde_json::Value = serde_json::from_slice(
+    let verified_record: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("verified generation record"),
-    )
-    .expect("verified generation JSON");
+    );
     assert_eq!(verified_record["current"]["verified"], true);
     assert_eq!(verified_record["current"], verified_record["last_verified"]);
     assert_eq!(
@@ -2272,14 +2215,13 @@ fn diff_enforces_version_compatibility_and_emits_closed_json() {
     )
     .expect("baseline should be copyable");
     let baseline: serde_json::Value =
-        serde_json::from_slice(&fs::read(project.path.join("baseline.json")).expect("baseline"))
-            .expect("baseline should be JSON");
-    assert_eq!(baseline["schema_version"], 7);
+        snapshot::read(&fs::read(project.path.join("baseline.json")).expect("baseline"));
+    assert_eq!(baseline["schema_version"], 8);
     assert_eq!(baseline["current"]["project_version"], "0.1.0");
     assert_eq!(
         baseline["current"]["compatibility"],
         serde_json::json!({
-            "generation_schema": 7,
+            "generation_schema": 8,
             "canonical_ir_schema": 8,
             "runtime_abi": 7,
             "contract_strategy_schema": 5
@@ -2369,10 +2311,12 @@ fn diff_enforces_version_compatibility_and_emits_closed_json() {
     assert_eq!(incompatible.status.code(), Some(7));
     assert!(String::from_utf8_lossy(&incompatible.stdout).contains("VERSION INCOMPATIBLE"));
 
-    let bad = fs::read_to_string(project.path.join("baseline.json")).expect("baseline");
+    let mut bad = snapshot::read(&fs::read(project.path.join("baseline.json")).expect("baseline"));
+    bad["current"]["compatibility"]["runtime_abi"] = serde_json::json!(1);
+    recompute_generation_id(&mut bad["current"]);
     fs::write(
         project.path.join("bad-baseline.json"),
-        bad.replace("\"runtime_abi\":7", "\"runtime_abi\":1"),
+        snapshot::bytes(&bad),
     )
     .expect("invalid baseline should be writable");
     let rejected = cott(&project.path, &["diff", "--baseline", "bad-baseline.json"]);
@@ -2390,10 +2334,9 @@ fn diff_reports_target_local_drift_only_for_matching_platform() {
         String::from_utf8_lossy(&emitted.stderr)
     );
     let baseline_path = project.path.join("baseline.json");
-    let mut baseline: serde_json::Value = serde_json::from_slice(
+    let mut baseline: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json")).expect("generation record"),
-    )
-    .expect("generation record is JSON");
+    );
     baseline["current"]["tools"]["python"]["version"] = serde_json::json!("3.14.7");
     baseline["current"]["tools"]["basedpyright"] = serde_json::json!({
         "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -2416,11 +2359,7 @@ fn diff_reports_target_local_drift_only_for_matching_platform() {
         "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     );
     recompute_generation_id(&mut baseline["current"]);
-    fs::write(
-        &baseline_path,
-        serde_json::to_vec(&baseline).expect("baseline serialization"),
-    )
-    .expect("baseline should be writable");
+    fs::write(&baseline_path, snapshot::bytes(&baseline)).expect("baseline should be writable");
 
     let same_target = cott(
         &project.path,
@@ -2448,11 +2387,8 @@ fn diff_reports_target_local_drift_only_for_matching_platform() {
 
     baseline["current"]["tools"]["python"]["machine"] = serde_json::json!("other-machine");
     recompute_generation_id(&mut baseline["current"]);
-    fs::write(
-        &baseline_path,
-        serde_json::to_vec(&baseline).expect("cross-target baseline serialization"),
-    )
-    .expect("cross-target baseline should be writable");
+    fs::write(&baseline_path, snapshot::bytes(&baseline))
+        .expect("cross-target baseline should be writable");
     let cross_target = cott(
         &project.path,
         &["diff", "--baseline", "baseline.json", "--format", "json"],
@@ -2889,10 +2825,7 @@ fn write_exec(path: &Path, body: &str) {
 }
 
 fn generation_record(root: &Path) -> serde_json::Value {
-    serde_json::from_slice(
-        &fs::read(root.join("generated/generation.json")).expect("generation.json"),
-    )
-    .expect("generation JSON")
+    snapshot::read(&fs::read(root.join("generated/generation.json")).expect("generation.json"))
 }
 
 fn generate_with_omp(root: &Path, tools: &Path, extra: &[&str]) -> Output {

@@ -17,6 +17,14 @@ Treat every bodyless `.cott` module as the only public contract source. Python, 
 - Keep backend identities closed. Never accept or copy one target's generation record, runtime fields, bindings, or managed code as another target's truth.
 - Do not add legacy readers, compatibility shims, partial profiles, or unsandboxed fixture fallbacks. An unavailable isolated fixture is `unobserved`, never host filesystem or network execution.
 - `emit` and `generate` always leave the current snapshot unverified. Only explicit `cott verify` certifies it; `cott deploy` additionally requires a fully resolved, coverage-policy-passing, unchanged snapshot.
+- Read generation records through `.snapshots[.current]`, not a nested `current` object. The closed
+  envelope contains `schema_version`, digest references `current`/`last_verified`, and full blobs in
+  `snapshots`; it is self-contained for saved baselines and deployment. Normal readers reject old
+  records. See [target identities and record access](references/targets-and-deployment.md).
+- Dart ABI `2` uses native member constants such as `Kind.Local` for whole nonempty, nongeneric,
+  all-payloadless enums. Use exhaustive constant patterns, not the removed variant classes.
+  Payload/generic enums, including `Option`/`Result`, keep ADT constructors. A member matching its
+  enum type is escaped with `$` (`Kind.Kind$`), without changing its canonical identity or Cott syntax.
 - Cott builds and verifies a Kotlin/JVM module or portable Dart package. Gradle/Android and Flutter retain ownership of applications, UI, resources, platform builds, signing, installation, and devices.
 
 When working in the Cott compiler repository, `architecture.md` is the normative implemented v1.0 contract. If prose conflicts with source or a closed schema validator, follow the implementation and update the prose.

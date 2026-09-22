@@ -16,11 +16,14 @@ use cott::provenance::{
 };
 use serde_json::{Value, json};
 
+#[path = "support/snapshot.rs"]
+mod snapshot;
+
 fn digest(byte: char) -> String {
     format!("sha256:{}", byte.to_string().repeat(64))
 }
 
-fn snapshot() -> KotlinGenerationSnapshot {
+fn kotlin_snapshot() -> KotlinGenerationSnapshot {
     let mut snapshot = KotlinGenerationSnapshot {
         target: "kotlin".to_owned(),
         generation_id: String::new(),
@@ -77,7 +80,7 @@ fn snapshot() -> KotlinGenerationSnapshot {
 fn record() -> KotlinGenerationRecord {
     KotlinGenerationRecord {
         schema_version: KOTLIN_GENERATION_SCHEMA_VERSION,
-        current: snapshot(),
+        current: kotlin_snapshot(),
         last_verified: None,
     }
 }
@@ -119,6 +122,28 @@ fn serialized(value: &Value) -> Vec<u8> {
     bytes
 }
 
+fn wire(record: &KotlinGenerationRecord) -> Value {
+    serde_json::to_value(record).expect("record fixture must serialize")
+}
+
+fn snapshot_record_wire(bytes: &[u8]) -> Value {
+    serde_json::from_slice(bytes).expect("published generation record is JSON")
+}
+
+fn view(record: &KotlinGenerationRecord) -> Value {
+    snapshot::expand(wire(record))
+}
+
+fn certified_snapshot() -> KotlinGenerationSnapshot {
+    let mut certified = kotlin_snapshot();
+    certified.verified = true;
+    certified.verification = json!({"status": "passed"});
+    certified
+        .compute_generation_id()
+        .expect("certified fixture snapshot must have a valid identity");
+    certified
+}
+
 #[test]
 fn kotlin_record_round_trips_canonical_bytes() {
     let record = record();
@@ -140,7 +165,7 @@ fn kotlin_record_round_trips_canonical_bytes() {
 
 #[test]
 fn generation_identity_hashes_every_durable_kotlin_identity() {
-    let original = snapshot();
+    let original = kotlin_snapshot();
     let original_id = original.generation_id.clone();
 
     let mut changed_project = original.clone();
@@ -240,49 +265,232 @@ fn generation_identity_hashes_every_durable_kotlin_identity() {
 
 #[test]
 fn parser_rejects_hash_drift_in_relevant_identity_fields() {
-    let mut value = serde_json::to_value(record()).expect("record fixture must serialize");
-    value["current"]["project_version"] = json!("1.2.4");
-    assert!(KotlinGenerationRecord::parse(&serialized(&value)).is_err());
+    let mut drifted = view(&record());
+    drifted["current"]["project_version"] = json!("1.2.4");
+    assert!(KotlinGenerationRecord::parse(&snapshot::bytes(&drifted)).is_err());
 
-    let mut value = serde_json::to_value(record()).expect("record fixture must serialize");
-    value["current"]["managed_files"]["build/generated/kotlin/api/Facade.kt"] = json!(digest('9'));
-    assert!(KotlinGenerationRecord::parse(&serialized(&value)).is_err());
+    let mut drifted = view(&record());
+    drifted["current"]["managed_files"]["build/generated/kotlin/api/Facade.kt"] =
+        json!(digest('9'));
+    assert!(KotlinGenerationRecord::parse(&snapshot::bytes(&drifted)).is_err());
 }
 
 #[test]
 fn parser_rejects_python_unknown_and_incompatible_records() {
     assert!(KotlinGenerationRecord::parse(&python_record_bytes()).is_err());
 
-    let mut python_shaped = serde_json::to_value(record()).expect("record fixture must serialize");
+    let mut python_shaped = view(&record());
     python_shaped["current"]["target"] = json!("python");
     python_shaped["current"]["public_python_symbols"] = json!({"api": ["run"]});
-    assert!(KotlinGenerationRecord::parse(&serialized(&python_shaped)).is_err());
+    assert!(KotlinGenerationRecord::parse(&snapshot::bytes(&python_shaped)).is_err());
 
-    let mut unknown_record = serde_json::to_value(record()).expect("record fixture must serialize");
+    let mut unknown_record = wire(&record());
     unknown_record["unexpected"] = json!(true);
     assert!(KotlinGenerationRecord::parse(&serialized(&unknown_record)).is_err());
 
-    let mut python_binding = serde_json::to_value(record()).expect("record fixture must serialize");
+    let mut python_binding = view(&record());
     python_binding["current"]["implementations"][0]["python_symbol"] = json!("cott_impl.api:run");
-    assert!(KotlinGenerationRecord::parse(&serialized(&python_binding)).is_err());
+    assert!(KotlinGenerationRecord::parse(&snapshot::bytes(&python_binding)).is_err());
 
     for (field, incompatible) in [
-        ("schema_version", json!(7)),
         ("compiler_version", json!("0.9.0")),
         ("canonical_ir_schema", json!(7)),
         ("runtime_abi", json!(7)),
     ] {
-        let mut value = serde_json::to_value(record()).expect("record fixture must serialize");
-        if field == "schema_version" {
-            value[field] = incompatible;
-        } else {
-            value["current"][field] = incompatible;
-        }
+        let mut incompatible_view = view(&record());
+        incompatible_view["current"][field] = incompatible;
         assert!(
-            KotlinGenerationRecord::parse(&serialized(&value)).is_err(),
+            KotlinGenerationRecord::parse(&snapshot::bytes(&incompatible_view)).is_err(),
             "incompatible {field} must fail closed"
         );
     }
+
+    let mut superseded = wire(&record());
+    superseded["schema_version"] = json!(1);
+    assert!(
+        KotlinGenerationRecord::parse(&serialized(&superseded)).is_err(),
+        "the superseded Kotlin generation schema must fail closed"
+    );
+}
+
+#[test]
+fn wire_records_are_self_contained_reference_envelopes() {
+    let pending = record();
+    let envelope = wire(&pending);
+    assert_eq!(envelope["schema_version"], json!(2));
+    assert_eq!(envelope["last_verified"], Value::Null);
+    let current = envelope["current"]
+        .as_str()
+        .expect("current must be a digest reference");
+    let snapshots = envelope["snapshots"]
+        .as_object()
+        .expect("snapshots must be an object");
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(
+        snapshots.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![current],
+        "the only stored snapshot must be the referenced one"
+    );
+    assert!(
+        snapshots[current].get("target").is_some(),
+        "stored snapshots must be complete objects, not nested references"
+    );
+
+    let certified = certified_snapshot();
+    let verified = KotlinGenerationRecord {
+        schema_version: KOTLIN_GENERATION_SCHEMA_VERSION,
+        current: certified.clone(),
+        last_verified: Some(certified),
+    };
+    let envelope = wire(&verified);
+    assert_eq!(envelope["current"], envelope["last_verified"]);
+    assert_eq!(
+        envelope["snapshots"]
+            .as_object()
+            .expect("snapshots must be an object")
+            .len(),
+        1,
+        "an identical verified history must be stored once"
+    );
+    let bytes = verified
+        .canonical_bytes()
+        .expect("certified record must serialize");
+    assert_eq!(
+        KotlinGenerationRecord::parse(&bytes).expect("certified record must parse"),
+        verified
+    );
+}
+
+#[test]
+fn diverging_history_keeps_both_snapshots_reachable() {
+    let certified = certified_snapshot();
+    let mut advanced = kotlin_snapshot();
+    advanced.project_version = "1.2.4".to_owned();
+    advanced
+        .compute_generation_id()
+        .expect("advanced pending snapshot remains structurally valid");
+    let diverged = KotlinGenerationRecord {
+        schema_version: KOTLIN_GENERATION_SCHEMA_VERSION,
+        current: advanced,
+        last_verified: Some(certified),
+    };
+    let bytes = diverged
+        .canonical_bytes()
+        .expect("diverging Kotlin history must serialize");
+    let envelope = snapshot_record_wire(&bytes);
+    assert_ne!(envelope["current"], envelope["last_verified"]);
+    assert_eq!(
+        envelope["snapshots"]
+            .as_object()
+            .expect("snapshots must be an object")
+            .len(),
+        2
+    );
+    let parsed =
+        KotlinGenerationRecord::parse(&bytes).expect("diverging Kotlin history must parse");
+    assert_eq!(parsed, diverged);
+    assert!(!parsed.current.verified);
+    assert_eq!(
+        parsed
+            .last_verified
+            .expect("verified history")
+            .project_version,
+        "1.2.3"
+    );
+}
+
+#[test]
+fn tampered_envelopes_never_reach_snapshot_semantics() {
+    let certified = certified_snapshot();
+    let mut advanced = kotlin_snapshot();
+    advanced.project_version = "1.2.4".to_owned();
+    advanced
+        .compute_generation_id()
+        .expect("advanced pending snapshot remains structurally valid");
+    let diverged = KotlinGenerationRecord {
+        schema_version: KOTLIN_GENERATION_SCHEMA_VERSION,
+        current: advanced,
+        last_verified: Some(certified),
+    };
+    let bytes = diverged
+        .canonical_bytes()
+        .expect("diverging Kotlin history must serialize");
+    let envelope = snapshot_record_wire(&bytes);
+
+    let mut content_drift = envelope.clone();
+    let current = envelope["current"]
+        .as_str()
+        .expect("current digest reference")
+        .to_owned();
+    content_drift["snapshots"][&current]["project_version"] = json!("9.9.9");
+    assert!(
+        KotlinGenerationRecord::parse(&serialized(&content_drift)).is_err(),
+        "a snapshot stored under the wrong digest must be rejected"
+    );
+
+    let mut dangling = envelope.clone();
+    dangling["current"] = json!(digest('7'));
+    assert!(
+        KotlinGenerationRecord::parse(&serialized(&dangling)).is_err(),
+        "a dangling current reference must be rejected"
+    );
+
+    let mut dangling_history = envelope.clone();
+    dangling_history["last_verified"] = json!(digest('8'));
+    assert!(
+        KotlinGenerationRecord::parse(&serialized(&dangling_history)).is_err(),
+        "a dangling last_verified reference must be rejected"
+    );
+
+    let mut unreachable = envelope.clone();
+    unreachable["snapshots"][digest('9')] = envelope["snapshots"][&current].clone();
+    assert!(
+        KotlinGenerationRecord::parse(&serialized(&unreachable)).is_err(),
+        "an unreferenced snapshot blob must be rejected"
+    );
+
+    let mut invalid_reference = envelope.clone();
+    invalid_reference["current"] = json!("not-a-digest");
+    assert!(
+        KotlinGenerationRecord::parse(&serialized(&invalid_reference)).is_err(),
+        "a malformed digest reference must be rejected"
+    );
+
+    let mut nested_reference = envelope.clone();
+    nested_reference["snapshots"][&current] = json!(current);
+    assert!(
+        KotlinGenerationRecord::parse(&serialized(&nested_reference)).is_err(),
+        "a nested snapshot reference must be rejected"
+    );
+
+    let mut missing_map = envelope;
+    missing_map
+        .as_object_mut()
+        .expect("wire record is an object")
+        .remove("snapshots");
+    assert!(
+        KotlinGenerationRecord::parse(&serialized(&missing_map)).is_err(),
+        "a record without its snapshot store must be rejected"
+    );
+}
+
+#[test]
+fn matching_schema_version_cannot_admit_another_target() {
+    let mut dart_shaped = view(&record());
+    dart_shaped["current"]["target"] = json!("dart");
+    dart_shaped["current"]["runtime_abi"] = json!(2);
+    assert!(
+        KotlinGenerationRecord::parse(&snapshot::bytes(&dart_shaped)).is_err(),
+        "the Dart target shares generation schema 2 and must still be refused"
+    );
+
+    let mut dart_symbols = view(&record());
+    dart_symbols["current"]["target"] = json!("dart");
+    dart_symbols["current"]["public_dart_symbols"] = json!({"api": ["run"]});
+    assert!(
+        KotlinGenerationRecord::parse(&snapshot::bytes(&dart_symbols)).is_err(),
+        "a Dart-shaped snapshot must not satisfy the Kotlin record"
+    );
 }
 
 #[test]
@@ -293,7 +501,7 @@ fn malformed_intent_and_unsafe_project_names_cannot_receive_an_identity() {
         json!({"version": 1, "hashes": {"api.run": "sha256:not-a-digest"}}),
         json!({"version": 1, "hashes": {}, "python_symbol": "forbidden"}),
     ] {
-        let mut malformed = snapshot();
+        let mut malformed = kotlin_snapshot();
         malformed.tools["cott_intent"] = intent;
         assert!(malformed.compute_generation_id().is_err());
     }
@@ -308,7 +516,7 @@ fn malformed_intent_and_unsafe_project_names_cannot_receive_an_identity() {
     ];
     unsafe_names.push("a".repeat(65));
     for name in unsafe_names {
-        let mut malformed = snapshot();
+        let mut malformed = kotlin_snapshot();
         malformed.project_name = name;
         assert!(malformed.compute_generation_id().is_err());
     }
@@ -322,7 +530,7 @@ fn malformed_origins_and_unsorted_symbols_cannot_receive_an_identity() {
         "kotlin//api/run.kt",
         "api/run.py",
     ] {
-        let mut malformed = snapshot();
+        let mut malformed = kotlin_snapshot();
         malformed.implementations[0].source_origin = source.to_owned();
         assert!(
             malformed.compute_generation_id().is_err(),
@@ -336,7 +544,7 @@ fn malformed_origins_and_unsorted_symbols_cannot_receive_an_identity() {
         "cott_impl/api/run.kt",
         "kotlin/api/run.py",
     ] {
-        let mut malformed = snapshot();
+        let mut malformed = kotlin_snapshot();
         malformed.implementations[0].runtime_origin = runtime.to_owned();
         assert!(
             malformed.compute_generation_id().is_err(),
@@ -344,7 +552,7 @@ fn malformed_origins_and_unsorted_symbols_cannot_receive_an_identity() {
         );
     }
 
-    let mut duplicate_public = snapshot();
+    let mut duplicate_public = kotlin_snapshot();
     duplicate_public
         .public_symbols
         .get_mut("api")
@@ -352,26 +560,26 @@ fn malformed_origins_and_unsorted_symbols_cannot_receive_an_identity() {
         .push("run".to_owned());
     assert!(duplicate_public.compute_generation_id().is_err());
 
-    let mut unsorted_public = snapshot();
+    let mut unsorted_public = kotlin_snapshot();
     unsorted_public.public_symbols.insert(
         "api".to_owned(),
         vec!["run".to_owned(), "Payload".to_owned()],
     );
     assert!(unsorted_public.compute_generation_id().is_err());
 
-    let mut duplicate_implementation = snapshot();
+    let mut duplicate_implementation = kotlin_snapshot();
     duplicate_implementation
         .implementations
         .push(duplicate_implementation.implementations[0].clone());
     assert!(duplicate_implementation.compute_generation_id().is_err());
 
-    let mut keyword_target = snapshot();
+    let mut keyword_target = kotlin_snapshot();
     keyword_target.implementations[0].target_symbol = "cott_impl.when.fun".to_owned();
     keyword_target
         .compute_generation_id()
         .expect("raw target identity may contain Kotlin keywords");
 
-    let mut unicode_target = snapshot();
+    let mut unicode_target = kotlin_snapshot();
     unicode_target.implementations[0].target_symbol = "cott_impl.δοκιμή.τρέξε".to_owned();
     unicode_target
         .compute_generation_id()
@@ -380,17 +588,17 @@ fn malformed_origins_and_unsorted_symbols_cannot_receive_an_identity() {
 
 #[test]
 fn certified_current_and_last_verified_move_together() {
-    let mut missing_evidence = snapshot();
+    let mut missing_evidence = kotlin_snapshot();
     missing_evidence.verified = true;
     assert!(missing_evidence.compute_generation_id().is_err());
 
-    let mut unresolved = snapshot();
+    let mut unresolved = kotlin_snapshot();
     unresolved.verified = true;
     unresolved.verification = json!({"status": "passed"});
     unresolved.unresolved.push("api.missing".to_owned());
     assert!(unresolved.compute_generation_id().is_err());
 
-    let mut certified = snapshot();
+    let mut certified = kotlin_snapshot();
     certified.verified = true;
     certified.verification = json!({"status": "passed"});
     certified
@@ -407,7 +615,7 @@ fn certified_current_and_last_verified_move_together() {
     let inconsistent_history = KotlinGenerationRecord {
         schema_version: KOTLIN_GENERATION_SCHEMA_VERSION,
         current: certified.clone(),
-        last_verified: Some(snapshot()),
+        last_verified: Some(kotlin_snapshot()),
     };
     assert!(inconsistent_history.canonical_bytes().is_err());
     let mut other_project = certified.clone();
@@ -417,7 +625,7 @@ fn certified_current_and_last_verified_move_together() {
         .expect("other project snapshot remains internally valid");
     let foreign_history = KotlinGenerationRecord {
         schema_version: KOTLIN_GENERATION_SCHEMA_VERSION,
-        current: snapshot(),
+        current: kotlin_snapshot(),
         last_verified: Some(other_project),
     };
     assert!(foreign_history.canonical_bytes().is_err());

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Annotated, Any, Final, ForwardRef, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_descending_by, _cott_ends_with, _cott_euclidean_mod, _cott_normalize_f32, _cott_starts_with, _cott_unique_by, _cott_validate_abi, _cott_validated_construction
+from cott_runtime import _cott_contract_condition
 MAX_PAYLOAD_SIZE: Final[U32] = 8192
 
 @final
@@ -16,7 +17,7 @@ class Probability:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "value", _cott_validate_abi(self.value, F32, path="$.value"))
-        if not ((0 <= self.value <= 1)):
+        if not (_cott_contract_condition(((0 <= self.value <= 1)), "foo.bar.Probability", "refinement")):
             raise CottContractViolation("Probability refinement failed", symbol="foo.bar.Probability", phase="refinement", span={"end_byte":105,"end_column":29,"end_line":6,"start_byte":87,"start_column":11,"start_line":6}, expected="true", actual="false")
 
     __hash__ = None
@@ -27,7 +28,7 @@ class PayloadSize:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "value", _cott_validate_abi(self.value, U32, path="$.value"))
-        if not ((1 <= self.value <= MAX_PAYLOAD_SIZE)):
+        if not (_cott_contract_condition(((1 <= self.value <= MAX_PAYLOAD_SIZE)), "foo.bar.PayloadSize", "refinement")):
             raise CottContractViolation("PayloadSize refinement failed", symbol="foo.bar.PayloadSize", phase="refinement", span={"end_byte":171,"end_column":40,"end_line":9,"start_byte":142,"start_column":11,"start_line":9}, expected="true", actual="false")
 
 @final

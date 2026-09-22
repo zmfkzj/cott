@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 use cott::compiler::{ProjectDiagnostic, SourceFile, parse_project};
 use cott::hir::{
-    HirClauseKind, HirDeclaration, HirPatternKind, HirType, ModuleId, PrimitiveType, SymbolId,
-    lower, lower_with_effects,
+    HirClauseKind, HirDeclaration, HirExprKind, HirPatternKind, HirType, ModuleId, PrimitiveType,
+    SymbolId, lower, lower_with_effects,
 };
 
 fn source(path: &str, text: &str) -> SourceFile {
@@ -848,36 +848,149 @@ fn legacy(value: I32) -> Result[I32, Failure]:
 
 #[test]
 fn rejects_v02_match_guard_bindings_outside_their_clause() {
-    let errors = lower_diagnostics([source(
-        "src/v02_guard_scope.cott",
-        r#"module v02_guard_scope
-
-fn leaks(value: Option[I32]) -> Unit:
-    requires value matches Option.Some(item) => item > 0
-    ensures item > 0
-"#,
-    )]);
-    assert!(errors.iter().any(|error| {
-        error.path == Path::new("src/v02_guard_scope.cott")
-            && error.diagnostic.message.contains("item")
-    }));
+    for clause in [
+        "requires value matches Option.Some(item) => item > 0",
+        "ensures value matches Option.Some(item) => item > 0",
+        "ensures Option.Some(item) => item > 0",
+        "ensures result matches Option.Some(item) => item > 0",
+    ] {
+        let text = format!(
+            "module v02_guard_scope\n\nfn leaks(value: Option[I32]) -> Option[I32]:\n    {clause}\n    ensures item > 0\n"
+        );
+        let errors = lower_diagnostics([source("src/v02_guard_scope.cott", &text)]);
+        let start = text.rfind("item").expect("out-of-scope binding");
+        assert!(
+            errors.iter().any(|error| {
+                error.path == Path::new("src/v02_guard_scope.cott")
+                    && error.diagnostic.span.start == start
+                    && error.diagnostic.span.end == start + "item".len()
+            }),
+            "expected the later clause to reject the binding from `{clause}`: {errors:#?}"
+        );
+    }
 }
 
 #[test]
-fn rejects_result_reference_in_guarded_ensures_condition() {
-    let errors = lower_diagnostics([source(
+fn accepts_typed_result_and_binding_references_in_input_guarded_ensures() {
+    let project = lower_project([source(
         "src/v02_guarded_result.cott",
         r#"module v02_guarded_result
 
-fn choose(value: Option[U32]) -> U32:
-    ensures value matches Option.Some(item) => result == item
+fn choose(value: Option[U32]) -> Bool:
+    ensures value matches Option.Some(item) => result == (item > 0)
+    ensures value matches Option.Some(item) => result == (item > 1)
 "#,
     )]);
-    assert!(errors.iter().any(|error| {
-        error.path == Path::new("src/v02_guarded_result.cott")
-            && error.diagnostic.message.contains("result")
-            && error.diagnostic.span.start < error.diagnostic.span.end
-    }));
+    let HirDeclaration::Function(function) = &project.modules[0].declarations[0] else {
+        panic!("expected choose function");
+    };
+    assert_eq!(function.contract.clauses.len(), 2);
+    for clause in &function.contract.clauses {
+        let HirClauseKind::Ensures {
+            guard: Some(guard),
+            expression,
+        } = &clause.kind
+        else {
+            panic!("expected input-guarded ensures");
+        };
+        assert!(matches!(
+            &guard.scrutinee.kind,
+            HirExprKind::ParameterRef(symbol) if symbol.name == "value"
+        ));
+        let HirPatternKind::Variant { arguments, .. } = &guard.pattern.kind else {
+            panic!("expected Option.Some pattern");
+        };
+        let HirPatternKind::Binding { symbol, .. } = &arguments[0].kind else {
+            panic!("expected item binding");
+        };
+        assert_eq!(arguments[0].ty, HirType::Primitive(PrimitiveType::U32));
+        let HirExprKind::ComparisonChain { operands, .. } = &expression.kind else {
+            panic!("expected result equality");
+        };
+        assert!(matches!(operands[0].kind, HirExprKind::ResultRef));
+        assert_eq!(operands[0].ty, HirType::Primitive(PrimitiveType::Bool));
+        let HirExprKind::ComparisonChain { operands, .. } = &operands[1].kind else {
+            panic!("expected payload comparison");
+        };
+        assert_eq!(operands[0].kind, HirExprKind::BindingRef(symbol.clone()));
+        assert_eq!(operands[0].ty, HirType::Primitive(PrimitiveType::U32));
+    }
+}
+
+#[test]
+fn rejects_result_reference_in_result_payload_guarded_ensures() {
+    for guard in ["Option.Some(item)", "result matches Option.Some(item)"] {
+        let text = format!(
+            "module guarded_result\n\nfn choose() -> Option[U32]:\n    ensures {guard} => result == result\n"
+        );
+        let errors = lower_diagnostics([source("src/guarded_result.cott", &text)]);
+        let condition = text.find("=> ").expect("guarded condition") + "=> ".len();
+        for start in [condition, text.rfind("result").expect("second result")] {
+            assert!(
+                errors.iter().any(|error| {
+                    error.diagnostic.span.start == start
+                        && error.diagnostic.span.end == start + "result".len()
+                }),
+                "expected result to be unavailable after `{guard}`: {errors:#?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn rejects_result_reference_in_requires_and_invariants() {
+    for clause in [
+        "requires result == 0",
+        "requires value matches Option.Some(item) => result == item",
+    ] {
+        let text =
+            format!("module result_scope\n\nfn choose(value: Option[U32]) -> U32:\n    {clause}\n");
+        let errors = lower_diagnostics([source("src/result_scope.cott", &text)]);
+        let start = text.rfind("result").expect("result reference");
+        assert!(
+            errors.iter().any(|error| {
+                error.diagnostic.span.start == start
+                    && error.diagnostic.span.end == start + "result".len()
+            }),
+            "expected result to be unavailable in `{clause}`: {errors:#?}"
+        );
+    }
+
+    for condition in [
+        "result == 0",
+        "self.current matches Option.Some(item) => result == item",
+    ] {
+        let text = format!(
+            "module result_scope\n\ntrait Reader:\n    fn read(self) -> U32\n\nimpl Controller for Reader:\n    state:\n        current: Option[U32]\n    invariant {condition}\n    init(current: Option[U32]):\n        requires true\n    fn read(self) -> U32:\n        ensures result == 0\n"
+        );
+        let errors = lower_diagnostics([source("src/result_scope.cott", &text)]);
+        let start = text.find("result == ").expect("invariant result reference");
+        assert!(
+            errors.iter().any(|error| {
+                error.diagnostic.span.start == start
+                    && error.diagnostic.span.end == start + "result".len()
+            }),
+            "expected result to be unavailable in invariant `{condition}`: {errors:#?}"
+        );
+    }
+}
+
+#[test]
+fn rejects_input_guard_bindings_that_shadow_parameters_or_result() {
+    for binding in ["value", "result"] {
+        let text = format!(
+            "module guard_shadow\n\nfn choose(value: Option[U32]) -> U32:\n    ensures value matches Option.Some({binding}) => true\n"
+        );
+        let errors = lower_diagnostics([source("src/guard_shadow.cott", &text)]);
+        let start = text.rfind(binding).expect("shadowing binding");
+        assert!(
+            errors.iter().any(|error| {
+                error.diagnostic.span.start == start
+                    && error.diagnostic.span.end == start + binding.len()
+            }),
+            "expected the pattern to reject shadowing `{binding}`: {errors:#?}"
+        );
+    }
 }
 
 #[test]

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
+from cott_runtime import _cott_contract_condition
 
 from frogmouth.navigation_types import NavigationError, NavigationError_EmptyInput, NavigationError_UnsupportedScheme
 from frogmouth.model_types import Location
@@ -41,11 +42,18 @@ def resolve_location(value: str, working_directory: Path) -> Result[Location, Na
             raise CottContractViolation("returned error is not allowed", symbol="frogmouth.navigation.resolve_location", phase="error", span={"end_byte":518,"end_column":1,"end_line":21,"start_byte":148,"start_column":1,"start_line":9}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="frogmouth.navigation.resolve_location", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
+    if _expected_error_clause is not None:
+        _cott_contract_condition(True, "frogmouth.navigation.resolve_location", _expected_error_clause)
+    if type(_result) is Err and type(_result.error) is NavigationError_EmptyInput:
+        _cott_contract_condition(True, "frogmouth.navigation.resolve_location", "error:2")
+    if type(_result) is Err and type(_result.error) is NavigationError_UnsupportedScheme:
+        _cott_contract_condition(True, "frogmouth.navigation.resolve_location", "error:3")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             location = _cott_match_value.value
-            return ((len((location).target) > 0))
+            return (_cott_contract_condition(((len((location).target) > 0)), "frogmouth.navigation.resolve_location", "ensures:1"))
+        _cott_contract_condition((False), "frogmouth.navigation.resolve_location", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
         raise CottContractViolation("ensures clause failed", symbol="frogmouth.navigation.resolve_location", clause="ensures:1", phase="ensures", span={"end_byte":418,"end_column":59,"end_line":14,"start_byte":364,"start_column":5,"start_line":14}, expected="true", actual="false")
@@ -68,7 +76,7 @@ def display_location(location: Location) -> str:
     except Exception as _error:
         raise CottContractViolation("implementation raised an undeclared exception", symbol="frogmouth.navigation.display_location", phase="implementation-call", span={"end_byte":609,"end_column":1,"end_line":25,"start_byte":518,"start_column":1,"start_line":21}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, str, path="$.return")
-    if not ((len(_result) > 0)):
+    if not (_cott_contract_condition(((len(_result) > 0)), "frogmouth.navigation.display_location", "ensures:0")):
         raise CottContractViolation("ensures clause failed", symbol="frogmouth.navigation.display_location", clause="ensures:0", phase="ensures", span={"end_byte":592,"end_column":27,"end_line":22,"start_byte":570,"start_column":5,"start_line":22}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result

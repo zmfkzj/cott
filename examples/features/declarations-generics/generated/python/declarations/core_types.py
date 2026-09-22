@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Annotated, Any, Final, ForwardRef, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_descending_by, _cott_ends_with, _cott_euclidean_mod, _cott_normalize_f32, _cott_starts_with, _cott_unique_by, _cott_validate_abi, _cott_validated_construction
+from cott_runtime import _cott_contract_condition
 T = TypeVar("T", covariant=True)
 N = TypeVar("N", bound=U64)
 
@@ -21,7 +22,7 @@ class NonEmptyLabel:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "value", _cott_validate_abi(self.value, str, path="$.value"))
-        if not ((len(self.value) > 0)):
+        if not (_cott_contract_condition(((len(self.value) > 0)), "declarations.core.NonEmptyLabel", "refinement")):
             raise CottContractViolation("NonEmptyLabel refinement failed", symbol="declarations.core.NonEmptyLabel", phase="refinement", span={"end_byte":124,"end_column":23,"end_line":8,"start_byte":112,"start_column":11,"start_line":8}, expected="true", actual="false")
 
 @final

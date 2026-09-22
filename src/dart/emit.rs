@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+use std::ops::Deref;
 use std::path::{Component, Path, PathBuf};
 
 use serde_json::{Map, Value};
@@ -13,14 +14,14 @@ use super::binding::partition_source;
 use super::expressions::{clause_label, render_condition, render_span};
 use super::runtime::render_runtime;
 use super::types::{
-    self, DartTypeContext, associated_type_name, dart_string, enum_variant_name, escape_identifier,
-    local_name, module_of, module_prefix, render_canonical_symbol, render_const_kind,
-    render_const_value, render_const_witness, render_type_contextual, render_value_contextual,
-    trait_marker,
+    self, DartEnumProjection, DartTypeContext, associated_type_name, dart_string,
+    enum_variant_name, escape_identifier, local_name, module_of, module_prefix,
+    render_canonical_symbol, render_const_kind, render_const_value, render_const_witness,
+    render_type_contextual, render_value_contextual, trait_marker,
 };
 use super::{DartBinding, DartCallable, DartEmission, DartModule, DartOwner, DartPlan};
 
-const DART_RUNTIME_ABI: i32 = 1;
+const DART_RUNTIME_ABI: i32 = 2;
 
 pub fn render_type(plan: &DartPlan, ty: &Value) -> Result<String, String> {
     let declarations = declaration_index(plan)?;
@@ -56,9 +57,10 @@ pub(crate) fn render_consumer_type(
 pub(crate) fn render_consumer_expression(
     expression: &Value,
     aliases: &BTreeMap<String, String>,
+    projection: &DartEnumProjection,
 ) -> Result<String, String> {
     rewrite_consumer_prefixes(
-        super::expressions::render_expression_contextual(expression, None)?,
+        super::expressions::render_expression_contextual(expression, None, projection)?,
         aliases,
     )
 }
@@ -108,8 +110,16 @@ pub(crate) fn render_consumer_symbol(
 pub(crate) fn render_consumer_enum_variant(
     symbol: &str,
     aliases: &BTreeMap<String, String>,
+    projection: &DartEnumProjection,
 ) -> Result<String, String> {
-    rewrite_consumer_prefixes(enum_variant_name(symbol, None)?, aliases)
+    rewrite_consumer_prefixes(enum_variant_name(symbol, None, projection)?, aliases)
+}
+
+pub(crate) fn render_consumer_resource_state(
+    symbol: &str,
+    aliases: &BTreeMap<String, String>,
+) -> Result<String, String> {
+    rewrite_consumer_prefixes(resource_state_name(symbol, None)?, aliases)
 }
 
 pub(crate) fn render_consumer_type_witnesses(
@@ -199,7 +209,7 @@ pub(crate) fn render_consumer_callable_witnesses(
 fn resolve_consumer_associated_type(
     parameter: &AssociatedParameter,
     type_arguments: &BTreeMap<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<Value, String> {
     let base = resolve_consumer_projection_base(&parameter.base, type_arguments, declarations)?;
     let object = base
@@ -245,7 +255,7 @@ fn resolve_consumer_associated_type(
 fn resolve_consumer_projection_base(
     value: &Value,
     type_arguments: &BTreeMap<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<Value, String> {
     let Some(object) = value.as_object() else {
         return Err("consumer projection base must be a canonical type object".to_owned());
@@ -514,16 +524,32 @@ pub fn emit(
     })
 }
 
+/// The canonical declaration index paired with the plan's enum projection, so
+/// every emission path resolves enum variants through one deterministic map.
+#[derive(Clone)]
+struct DeclarationIndex<'a> {
+    entries: BTreeMap<String, (&'a str, &'a Map<String, Value>)>,
+    projection: &'a DartEnumProjection,
+}
+
+impl<'a> Deref for DeclarationIndex<'a> {
+    type Target = BTreeMap<String, (&'a str, &'a Map<String, Value>)>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
 #[derive(Clone)]
 struct EmissionTypeContext<'a> {
-    declarations: &'a BTreeMap<String, (&'a str, &'a Map<String, Value>)>,
+    declarations: &'a DeclarationIndex<'a>,
     projections: BTreeMap<String, String>,
     trait_scope: BTreeMap<(String, String), String>,
     named_arguments: BTreeMap<String, Vec<String>>,
 }
 
 impl<'a> EmissionTypeContext<'a> {
-    fn new(declarations: &'a BTreeMap<String, (&'a str, &'a Map<String, Value>)>) -> Self {
+    fn new(declarations: &'a DeclarationIndex<'a>) -> Self {
         Self {
             declarations,
             projections: BTreeMap::new(),
@@ -795,7 +821,7 @@ fn render_parameters_contextual(
 
 fn bound_requires_existential_projection(
     bound: &Value,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<bool, String> {
     Ok(is_trait_type(bound, declarations)
         && !trait_slot_definitions(bound, declarations)?.is_empty())
@@ -803,7 +829,7 @@ fn bound_requires_existential_projection(
 
 fn declaration_type_parameters(
     declaration: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<(String, Vec<BoundCheck>), String> {
     let context = EmissionTypeContext::new(declarations);
     let mut parameters = Vec::new();
@@ -856,7 +882,7 @@ fn declaration_type_parameters(
 
 fn callable_rendering<'a>(
     declaration: &Map<String, Value>,
-    declarations: &'a BTreeMap<String, (&'a str, &'a Map<String, Value>)>,
+    declarations: &'a DeclarationIndex<'a>,
     trait_scope: BTreeMap<(String, String), String>,
 ) -> Result<CallableRendering<'a>, String> {
     let mut associated = BTreeMap::<String, AssociatedParameter>::new();
@@ -1005,7 +1031,7 @@ fn insert_bound_associated_parameters(
     base: &Value,
     bound: &Value,
     associated: &mut BTreeMap<String, AssociatedParameter>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<(), String> {
     if !is_trait_type(bound, declarations) {
         return Ok(());
@@ -1026,7 +1052,7 @@ fn render_bound_descriptor(
     bound: &Value,
     base: &Value,
     context: &EmissionTypeContext<'_>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     external_types: &BTreeMap<String, String>,
 ) -> Result<String, String> {
     if is_trait_type(bound, declarations) {
@@ -1048,7 +1074,7 @@ fn render_bound_checks(
     checks: &[BoundCheck],
     symbol: &str,
     context: &EmissionTypeContext<'_>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     external_types: &BTreeMap<String, String>,
     indent: usize,
 ) -> Result<(), String> {
@@ -1159,10 +1185,8 @@ fn validate_modules(plan: &DartPlan) -> Result<(), String> {
     Ok(())
 }
 
-fn declaration_index<'a>(
-    plan: &'a DartPlan,
-) -> Result<BTreeMap<String, (&'a str, &'a Map<String, Value>)>, String> {
-    let mut declarations = BTreeMap::new();
+fn declaration_index<'a>(plan: &'a DartPlan) -> Result<DeclarationIndex<'a>, String> {
+    let mut entries = BTreeMap::new();
     for module in &plan.modules {
         for (index, declaration) in module.declarations.iter().enumerate() {
             let declaration = declaration.as_object().ok_or_else(|| {
@@ -1199,7 +1223,7 @@ fn declaration_index<'a>(
                     "unsupported canonical declaration kind `{kind}` for `{name}`"
                 ));
             }
-            if declarations
+            if entries
                 .insert(name.to_owned(), (kind, declaration))
                 .is_some()
             {
@@ -1207,7 +1231,10 @@ fn declaration_index<'a>(
             }
         }
     }
-    Ok(declarations)
+    Ok(DeclarationIndex {
+        entries,
+        projection: plan.enum_projection(),
+    })
 }
 
 fn validate_bindings(
@@ -1584,7 +1611,7 @@ fn public_target_names(module: &DartModule) -> Result<Vec<String>, String> {
 fn render_markers(
     config: &DartProjectConfig,
     plan: &DartPlan,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<String, String> {
     let mut constants = BTreeMap::<String, Value>::new();
     let mut opaques = BTreeSet::<String>::new();
@@ -1701,7 +1728,7 @@ fn render_markers(
 
 fn render_existential_trait_reference(
     trait_ref: &Value,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<String, String> {
     let object = trait_ref
         .as_object()
@@ -1837,7 +1864,7 @@ fn render_types_file(
     config: &DartProjectConfig,
     plan: &DartPlan,
     module: &DartModule,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     bindings: &BTreeMap<&str, &DartBinding>,
 ) -> Result<String, String> {
     let mut out = generated_header().to_owned();
@@ -1899,11 +1926,10 @@ fn render_types_file(
             writeln!(out, "export '{uri}' show {name};").expect("writing to String cannot fail");
         }
     }
-    if module
-        .declarations
-        .iter()
-        .any(type_declaration_has_defaults)
-    {
+    if module.declarations.iter().any(|declaration| {
+        type_declaration_has_defaults(declaration)
+            || declaration.get("kind").and_then(Value::as_str) == Some("struct")
+    }) {
         out.push_str(
             "\nenum _cott_omission { value }\nconst _cott_omitted = _cott_omission.value;\n",
         );
@@ -1922,6 +1948,16 @@ fn render_types_file(
             })
     }) {
         render_private_carrier(&mut out, &module.name)?;
+    }
+    if module.declarations.iter().any(|declaration| {
+        declaration
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| declarations.projection.is_native(name))
+    }) {
+        out.push_str(
+            "\nfinal cott_runtime.CottList<String> _cott_no_field_names = cott_runtime.CottList(const <String>[]);\nfinal cott_runtime.CottList<Object?> _cott_no_payload = cott_runtime.CottList(const <Object?>[]);\n",
+        );
     }
     for declaration in &module.declarations {
         let object = declaration
@@ -2007,7 +2043,7 @@ fn render_external(
 fn render_alias(
     out: &mut String,
     declaration: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<(), String> {
     let canonical = required_string(declaration, "name", "alias")?;
     let (generics, _) = declaration_type_parameters(declaration, declarations)?;
@@ -2029,7 +2065,7 @@ fn render_newtype(
     out: &mut String,
     config: &DartProjectConfig,
     declaration: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<(), String> {
     let canonical = required_string(declaration, "name", "newtype")?;
     let module = module_of(canonical);
@@ -2128,7 +2164,7 @@ fn render_newtype(
         let mut refinement = refinement.clone();
         rewrite_refinement_receiver(&mut refinement);
         rewrite_const_references(&mut refinement, declaration, &witness_fields);
-        let condition = render_condition(&refinement, None, true, module)?;
+        let condition = render_condition(&refinement, None, true, module, declarations.projection)?;
         writeln!(
             out,
             "    final _cott_result = value;\n    cott_runtime.CottRuntime.checkContract({condition}, {}, 'refinement', clause: 'refinement', span: {}, expected: 'true', actual: 'false');",
@@ -2246,7 +2282,7 @@ fn descriptor_for_constructor(
     ty: &Value,
     declaration: &Map<String, Value>,
     witnesses: &[WitnessField],
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     external_types: &BTreeMap<String, String>,
 ) -> Result<String, String> {
     let mut descriptor = descriptor_for_nominal(ty, declaration, declarations, external_types)?;
@@ -2284,7 +2320,7 @@ fn render_plain_nominal_type_factory(
     fields: &[(String, Value)],
     const_witnesses: &[WitnessField],
     module: Option<&str>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     external_types: &BTreeMap<String, String>,
     indent: usize,
 ) -> Result<(), String> {
@@ -2389,7 +2425,7 @@ fn render_nominal_carrier_methods(
     type_witnesses: &[WitnessField],
     const_witnesses: &[WitnessField],
     module: Option<&str>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     external_types: &BTreeMap<String, String>,
     indent: usize,
 ) -> Result<(), String> {
@@ -2575,7 +2611,7 @@ fn render_struct(
     out: &mut String,
     config: &DartProjectConfig,
     declaration: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<(), String> {
     let canonical = required_string(declaration, "name", "struct")?;
     let module = module_of(canonical);
@@ -2624,7 +2660,7 @@ fn render_struct(
             parameters.push(format!("Object? {escaped} = _cott_omitted"));
             default_initializers.push(format!(
                 "{escaped} = cott_runtime.CottRuntime.abi(identical({escaped}, _cott_omitted) ? {} : {escaped}, {}, mode: cott_runtime.RuntimeValidation.boundary, path: {})",
-                render_value_contextual(default, field.get("type"), module)?,
+                render_value_contextual(default, field.get("type"), module, declarations.projection)?,
                 descriptor_for_constructor(
                     required(field, "type", canonical)?,
                     declaration,
@@ -2708,7 +2744,15 @@ fn render_struct(
         )
         .expect("writing to String cannot fail");
     }
-    render_invariant_calls(out, declaration, canonical, 4, module, &witnesses)?;
+    render_invariant_calls(
+        out,
+        declaration,
+        canonical,
+        4,
+        module,
+        &witnesses,
+        declarations.projection,
+    )?;
     writeln!(out, "  }}").expect("writing to String cannot fail");
     render_field_metadata(out, canonical, fields, 2)?;
     if fields.is_empty() {
@@ -2766,6 +2810,61 @@ fn render_struct(
         2,
     )?;
     writeln!(out, "}}").expect("writing to String cannot fail");
+    let arguments = generic_names(declaration)?;
+    let applied = if arguments.is_empty() {
+        name.clone()
+    } else {
+        format!("{name}<{}>", arguments.join(", "))
+    };
+    let mut copy_parameters = Vec::new();
+    let mut copy_fields = Vec::new();
+    for field in fields {
+        let field = field.as_object().expect("validated struct field");
+        let field_name = required_string(field, "name", canonical)?;
+        let escaped = escape_identifier(field_name)?;
+        copy_parameters.push(format!("Object? {escaped} = _cott_omitted"));
+        let value = if field.get("default").is_some_and(|value| !value.is_null()) {
+            // Defaulted constructor parameters already admit the omission sentinel
+            // and perform their own descriptor adaptation before storing the field.
+            escaped.clone()
+        } else {
+            let descriptor = descriptor_for_nominal(
+                required(field, "type", canonical)?,
+                declaration,
+                declarations,
+                &config.dart.external_types,
+            )?;
+            format!(
+                "cott_runtime.CottRuntime.abi({escaped}, {descriptor}, mode: cott_runtime.RuntimeValidation.boundary, path: {})",
+                dart_string(&format!("$.{field_name}")),
+            )
+        };
+        copy_fields.push(format!(
+            "{escaped}: _cott_omitted == {escaped} ? this.{escaped} : {value}",
+        ));
+    }
+    copy_fields.extend(
+        witnesses
+            .iter()
+            .map(|witness| format!("{}: this.{}", witness.public_name, witness.public_name)),
+    );
+    let copy_witnesses = type_witnesses
+        .iter()
+        .map(|witness| format!("this.{}", witness.public_name))
+        .collect::<Vec<_>>();
+    let copy_constructor = render_constructor_invocation(&applied, &copy_witnesses, &copy_fields);
+    let copy_parameters = if copy_parameters.is_empty() {
+        String::new()
+    } else {
+        format!("{{{}}}", copy_parameters.join(", "))
+    };
+    // Keep convenience methods outside the canonical record interface. The dollar
+    // sign cannot occur in a Cott identifier, so the extension name is unique.
+    writeln!(
+        out,
+        "\n/// Copies exact stored fields unless overridden, then revalidates the value.\nextension {name}$CopyWith{generics} on {applied} {{\n  {applied} copyWith({copy_parameters}) => {copy_constructor};\n}}",
+    )
+    .expect("writing to String cannot fail");
     Ok(())
 }
 
@@ -2818,13 +2917,47 @@ fn render_field_metadata(
     Ok(())
 }
 
+/// Emits a native Dart `enum` for a declaration the projection accepted: a
+/// finite set of constant members that keeps the canonical variant identity
+/// while Dart owns `==`, `hashCode`, `index` and `values`.
+fn render_native_enum(
+    out: &mut String,
+    declaration: &Map<String, Value>,
+    canonical: &str,
+) -> Result<(), String> {
+    let name = escape_identifier(local_name(canonical))?;
+    let variants = required_array(declaration, "variants", canonical)?;
+    let mut members = Vec::with_capacity(variants.len());
+    for variant in variants {
+        let variant = variant
+            .as_object()
+            .ok_or_else(|| format!("enum `{canonical}` variant must be an object"))?;
+        let symbol = required_string(variant, "symbol", canonical)?;
+        members.push(format!(
+            "  {}({})",
+            types::native_enum_member(local_name(canonical), local_name(symbol))?,
+            dart_string(symbol)
+        ));
+    }
+    writeln!(
+        out,
+        "\nenum {name} implements cott_runtime.CottVariant {{\n{};\n\n  const {name}(this.cottVariant);\n  @override\n  final String cottVariant;\n  @override\n  String get cottTypeIdentity => cottVariant;\n  @override\n  cott_runtime.CottList<String> get cottFieldNames => _cott_no_field_names;\n  @override\n  cott_runtime.CottList<Object?> get cottPayload => _cott_no_payload;\n  @override\n  Object? cottField(String name) => cott_runtime.CottRuntime.violation('unknown canonical field', symbol: cottTypeIdentity, phase: 'field', actual: name);\n}}",
+        members.join(",\n")
+    )
+    .expect("writing to String cannot fail");
+    Ok(())
+}
+
 fn render_enum(
     out: &mut String,
     config: &DartProjectConfig,
     declaration: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<(), String> {
     let canonical = required_string(declaration, "name", "enum")?;
+    if declarations.projection.is_native(canonical) {
+        return render_native_enum(out, declaration, canonical);
+    }
     let module = module_of(canonical);
     let name = escape_identifier(local_name(canonical))?;
     let (generics, extra_bounds) = declaration_type_parameters(declaration, declarations)?;
@@ -2867,7 +3000,7 @@ fn render_enum(
             .as_object()
             .ok_or_else(|| format!("enum `{canonical}` variant must be an object"))?;
         let variant_symbol = required_string(variant, "symbol", canonical)?;
-        let variant_name = enum_variant_name(variant_symbol, module)?;
+        let variant_name = enum_variant_name(variant_symbol, module, declarations.projection)?;
         let fields = required_array(variant, "fields", variant_symbol)?;
         let witnesses = const_witness_fields(declaration)?;
         let type_witnesses = type_witness_fields(declaration)?;
@@ -2912,7 +3045,7 @@ fn render_enum(
                 parameters.push(format!("Object? field{index} = _cott_omitted"));
                 initializers.push(format!(
                     "{property} = cott_runtime.CottRuntime.abi(identical(field{index}, _cott_omitted) ? {} : field{index}, {}, mode: cott_runtime.RuntimeValidation.boundary, path: {})",
-                    render_value_contextual(default, field.get("type"), module)?,
+                    render_value_contextual(default, field.get("type"), module, declarations.projection)?,
                     descriptor_for_constructor(
                         required_value(field, "type", variant_symbol)?,
                         declaration,
@@ -3064,7 +3197,7 @@ fn render_enum(
 fn render_enum_type_factory(
     out: &mut String,
     declaration: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     external_types: &BTreeMap<String, String>,
     module: Option<&str>,
 ) -> Result<(), String> {
@@ -3102,7 +3235,7 @@ fn render_enum_type_factory(
         let symbol = required_value(variant, "symbol", canonical)?
             .as_str()
             .ok_or_else(|| format!("variant on `{canonical}` has non-string symbol"))?;
-        let variant_name = enum_variant_name(symbol, module)?;
+        let variant_name = enum_variant_name(symbol, module, declarations.projection)?;
         let variant_applied = format!("{variant_name}<{}>", applied_names.join(", "));
         let fields = required_array(
             variant
@@ -3263,7 +3396,7 @@ fn render_variant_metadata(
 fn render_trait(
     out: &mut String,
     declaration: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<(), String> {
     let canonical = required_string(declaration, "name", "trait")?;
     let module = module_of(canonical);
@@ -3401,7 +3534,7 @@ fn render_trait(
 fn render_rule(
     out: &mut String,
     declaration: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<(), String> {
     let canonical = required_string(declaration, "name", "rule")?;
     let name = escape_identifier(local_name(canonical))?;
@@ -3449,7 +3582,7 @@ fn render_resource(out: &mut String, declaration: &Map<String, Value>) -> Result
 fn render_const(
     out: &mut String,
     declaration: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<(), String> {
     let canonical = required_string(declaration, "name", "const")?;
     let ty = required(declaration, "type", canonical)?;
@@ -3461,7 +3594,8 @@ fn render_const(
         render_value_contextual(
             required(declaration, "value", canonical)?,
             Some(ty),
-            module_of(canonical)
+            module_of(canonical),
+            declarations.projection,
         )?
     )
     .expect("writing to String cannot fail");
@@ -3570,6 +3704,7 @@ fn render_invariant_calls(
     indent: usize,
     module: Option<&str>,
     witnesses: &[WitnessField],
+    projection: &DartEnumProjection,
 ) -> Result<(), String> {
     let prefix = " ".repeat(indent);
     let fields = required_array(declaration, "fields", symbol)?
@@ -3593,7 +3728,7 @@ fn render_invariant_calls(
         if let Some(guard) = &mut guard {
             rewrite_const_references(guard, declaration, witnesses);
         }
-        let condition = render_condition(&expression, guard.as_ref(), true, module)?;
+        let condition = render_condition(&expression, None, true, module, projection)?;
         let clause = format!(
             "invariant:{}",
             invariant
@@ -3601,12 +3736,21 @@ fn render_invariant_calls(
                 .and_then(Value::as_u64)
                 .ok_or_else(|| format!("invariant on `{symbol}` is missing clause_id"))?
         );
-        writeln!(
-            out,
-            "{prefix}cott_runtime.CottRuntime.invariant({condition}, {}, clause: {}, span: {}, expected: 'true', actual: 'false');",
+        let statement = format!(
+            "cott_runtime.CottRuntime.invariant({condition}, {}, clause: {}, span: {}, expected: 'true', actual: 'false');",
             dart_string(symbol),
             dart_string(&clause),
             render_span(invariant.get("span"))?
+        );
+        writeln!(
+            out,
+            "{prefix}{}",
+            super::expressions::render_guarded_statement(
+                guard.as_ref(),
+                &statement,
+                module,
+                projection
+            )?
         )
         .expect("writing to String cannot fail");
     }
@@ -3631,7 +3775,7 @@ pub(crate) fn implementation_imports(
 fn render_contextual_type(
     ty: &Value,
     module: Option<&str>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<String, String> {
     let context = EmissionTypeContext::new(declarations);
     render_type_contextual(ty, module, Some(&context))
@@ -3704,7 +3848,7 @@ fn declaration_trait_ref(declaration: &Map<String, Value>) -> Result<Value, Stri
 
 fn trait_specializations_from_ref(
     trait_ref: &Value,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<Vec<Value>, String> {
     let root_identity = serde_json::to_string(trait_ref)
         .map_err(|error| format!("serialize root trait specialization: {error}"))?;
@@ -3744,7 +3888,7 @@ fn trait_specializations_from_ref(
 
 fn trait_slot_definitions(
     trait_ref: &Value,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<Vec<TraitSlot>, String> {
     let mut slots = Vec::new();
     let mut seen = BTreeSet::new();
@@ -3779,7 +3923,7 @@ fn trait_slot_definitions(
     Ok(slots)
 }
 
-fn is_trait_type(ty: &Value, declarations: &BTreeMap<String, (&str, &Map<String, Value>)>) -> bool {
+fn is_trait_type(ty: &Value, declarations: &DeclarationIndex<'_>) -> bool {
     let Some(name) = ty
         .as_object()
         .filter(|object| object.get("kind").and_then(Value::as_str) == Some("named"))
@@ -3824,7 +3968,7 @@ fn collect_associated_projections(
 fn associated_slot_bounds(
     trait_name: &str,
     slot_name: &str,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<Vec<Value>, String> {
     let (kind, declaration) = declarations
         .get(trait_name)
@@ -3893,7 +4037,7 @@ fn selected_method_slot<'a>(
 
 fn selected_method_generics(
     slot: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<Value, String> {
     let trait_method = required_string(slot, "trait_method", "selected method")?;
     let (trait_name, method_name) = trait_method
@@ -3936,7 +4080,7 @@ fn resolved_method_declaration(
     callable: &DartCallable,
     owner: &Map<String, Value>,
     slot: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<Value, String> {
     let mut declaration_value = callable.declaration.clone();
     let declaration = declaration_value.as_object_mut().ok_or_else(|| {
@@ -3961,7 +4105,7 @@ fn resolved_method_declaration(
 
 fn selected_owner_const_witnesses(
     slot: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<Vec<OwnerConstWitness>, String> {
     let trait_ref = required(slot, "trait_ref", "selected method")?
         .as_object()
@@ -4127,7 +4271,7 @@ fn substitute_associated_types(value: &mut Value, implementation: &Map<String, V
 fn render_trait_reference(
     trait_ref: &Value,
     implementation: Option<&Map<String, Value>>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     context: Option<&EmissionTypeContext<'_>>,
     module: Option<&str>,
 ) -> Result<String, String> {
@@ -4195,7 +4339,7 @@ fn render_trait_reference(
 
 fn trait_specializations(
     implementation: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<Vec<Value>, String> {
     let mut pending = required_array(implementation, "traits", "implementation")?.clone();
     let mut resolved = BTreeMap::<String, Value>::new();
@@ -4229,7 +4373,7 @@ fn trait_specializations(
 fn trait_descriptor(
     trait_ref: &Value,
     implementation: Option<&Map<String, Value>>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<String, String> {
     let object = trait_ref
         .as_object()
@@ -4244,7 +4388,7 @@ fn trait_descriptor(
 
 fn implementation_bound_checks(
     implementation: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     external_types: &BTreeMap<String, String>,
 ) -> Result<Vec<BoundCheck>, String> {
     let canonical = required_string(implementation, "name", "implementation")?;
@@ -4289,7 +4433,7 @@ fn implementation_bound_checks(
 fn render_implementation_descriptor(
     out: &mut String,
     implementation: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<(), String> {
     let canonical = required_string(implementation, "name", "implementation")?;
     let name = escape_identifier(local_name(canonical))?;
@@ -4312,7 +4456,7 @@ fn render_implementation_descriptor(
 
 fn descriptor_for(
     ty: &Value,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     external_types: &BTreeMap<String, String>,
 ) -> Result<String, String> {
     let object = ty
@@ -4464,7 +4608,7 @@ fn descriptor_for(
 fn descriptor_for_named(
     ty: &Value,
     object: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     external_types: &BTreeMap<String, String>,
 ) -> Result<String, String> {
     let name = required_string(object, "name", "named type")?;
@@ -4573,7 +4717,7 @@ fn render_checked_nominal_descriptor(
     object: &Map<String, Value>,
     _type_arguments: &[String],
     _variances: &[&str],
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     external_types: &BTreeMap<String, String>,
 ) -> Result<String, String> {
     let mut parameters = Vec::new();
@@ -4614,7 +4758,7 @@ fn render_checked_nominal_descriptor(
 fn descriptor_for_nominal(
     ty: &Value,
     declaration: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     external_types: &BTreeMap<String, String>,
 ) -> Result<String, String> {
     let context = EmissionTypeContext::new(declarations);
@@ -4622,6 +4766,12 @@ fn descriptor_for_nominal(
     for witness in type_witness_fields(declaration)? {
         rendered = rendered.replace(
             &format!("_cott_type_{}", safe_internal_name(&witness.generic)),
+            &witness.public_name,
+        );
+    }
+    for witness in const_witness_fields(declaration)? {
+        rendered = rendered.replace(
+            &format!("_cott_const_{}", safe_internal_name(&witness.generic)),
             &witness.public_name,
         );
     }
@@ -4633,7 +4783,7 @@ fn descriptor_for_nominal(
 
 fn descriptor_for_contextual(
     ty: &Value,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     external_types: &BTreeMap<String, String>,
     context: &EmissionTypeContext<'_>,
 ) -> Result<String, String> {
@@ -4722,7 +4872,7 @@ fn render_callable_wrapper(
     plan: &DartPlan,
     callable: &DartCallable,
     binding: &DartBinding,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<String, String> {
     let mut owner_witnesses = Vec::new();
     let declaration_value = if let Some(owner) = callable.owner.as_ref() {
@@ -4830,6 +4980,7 @@ fn render_callable_wrapper(
         2,
         &locals,
         None,
+        declarations.projection,
     )?;
     render_expected_errors(
         &mut out,
@@ -4840,6 +4991,7 @@ fn render_callable_wrapper(
         &locals,
         None,
         true,
+        declarations.projection,
     )?;
     let mut call_arguments = Vec::new();
     if callable.owner.is_some() {
@@ -4897,6 +5049,7 @@ fn render_callable_wrapper(
             2,
             &locals,
             None,
+            declarations.projection,
         )?;
         render_error_contracts(&mut out, config, declaration, &callable.symbol, 2)?;
         out.push_str("  return _cott_result;\n");
@@ -4951,7 +5104,7 @@ fn render_parameter_validation(
     out: &mut String,
     config: &DartProjectConfig,
     declaration: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     context: &EmissionTypeContext<'_>,
     indent: usize,
 ) -> Result<BTreeMap<String, String>, String> {
@@ -4976,6 +5129,7 @@ fn render_parameter_validation(
                         .get("name")
                         .and_then(Value::as_str)
                         .and_then(module_of),
+                    declarations.projection,
                 )?
             )
             .expect("writing to String cannot fail");
@@ -5111,6 +5265,7 @@ fn render_contract_clauses(
     indent: usize,
     locals: &BTreeMap<String, String>,
     module: Option<&str>,
+    projection: &DartEnumProjection,
 ) -> Result<(), String> {
     let clauses = contract_clauses(declaration)
         .filter(|clause| {
@@ -5150,15 +5305,24 @@ fn render_contract_clauses(
         if let Some(guard) = &mut guard {
             rewrite_const_references_for_callable(guard, declaration);
         }
-        let condition = render_condition(&expression, guard.as_ref(), true, module)?;
+        let condition = render_condition(&expression, None, true, module, projection)?;
         let label = clause_label(clause)?;
-        writeln!(
-            out,
-            "{nested}cott_runtime.CottRuntime.checkContract({condition}, {}, {}, clause: {}, span: {}, expected: 'true', actual: 'false');",
+        let statement = format!(
+            "cott_runtime.CottRuntime.checkContract({condition}, {}, {}, clause: {}, span: {}, expected: 'true', actual: 'false');",
             dart_string(symbol),
             dart_string(kind),
             dart_string(&label),
             render_span(clause.get("span"))?
+        );
+        writeln!(
+            out,
+            "{nested}{}",
+            super::expressions::render_guarded_statement(
+                guard.as_ref(),
+                &statement,
+                module,
+                projection
+            )?
         )
         .expect("writing to String cannot fail");
     }
@@ -5175,6 +5339,7 @@ fn render_expected_errors(
     locals: &BTreeMap<String, String>,
     module: Option<&str>,
     declare: bool,
+    projection: &DartEnumProjection,
 ) -> Result<(), String> {
     let errors = contract_clauses(declaration)
         .filter(|clause| clause.get("kind").and_then(Value::as_str) == Some("error"))
@@ -5184,7 +5349,7 @@ fn render_expected_errors(
     }
     let prefix = " ".repeat(indent);
     if declare {
-        writeln!(out, "{prefix}String? _cott_expected_error = null;")
+        writeln!(out, "{prefix}String? _cott_expected_error = null;\n{prefix}String? _cott_expected_error_clause = null;")
             .expect("writing to String cannot fail");
     }
     writeln!(
@@ -5205,7 +5370,7 @@ fn render_expected_errors(
                 let mut expression = expression.clone();
                 rewrite_parameter_references(&mut expression, locals);
                 rewrite_const_references_for_callable(&mut expression, declaration);
-                render_condition(&expression, guard.as_ref(), false, module)?
+                render_condition(&expression, guard.as_ref(), false, module, projection)?
             }
             None if guard.as_ref().is_some_and(|guard| !guard.is_null()) => {
                 let literal = serde_json::json!({
@@ -5218,6 +5383,7 @@ fn render_expected_errors(
                     &literal,
                     false,
                     module,
+                    projection,
                 )?
             }
             None => continue,
@@ -5228,8 +5394,9 @@ fn render_expected_errors(
             .ok_or_else(|| format!("error clause on `{symbol}` is missing variant"))?;
         writeln!(
             out,
-            "{nested}if (_cott_expected_error == null && ({condition})) _cott_expected_error = {};",
-            dart_string(variant)
+            "{nested}if (_cott_expected_error == null && ({condition})) {{ _cott_expected_error = {}; _cott_expected_error_clause = {}; }}",
+            dart_string(variant),
+            dart_string(&clause_label(clause)?),
         )
         .expect("writing to String cannot fail");
     }
@@ -5262,12 +5429,37 @@ fn render_error_contracts(
         .collect::<Vec<_>>();
     writeln!(
         out,
-        "{prefix}if (cott_runtime.CottRuntime.shouldValidate({})) {{\n{prefix}  final _cott_actual_error = _cott_result is cott_runtime.Err<Object?, Object?> ? _cott_result.error : null;\n{prefix}  final _cott_actual_error_variant = _cott_actual_error is cott_runtime.CottVariant ? _cott_actual_error.cottVariant : null;\n{prefix}  const _cott_allowed_errors = <String>{{{}}};\n{prefix}  cott_runtime.CottRuntime.checkContract(_cott_expected_error != null ? _cott_actual_error_variant == _cott_expected_error : _cott_actual_error == null || _cott_allowed_errors.contains(_cott_actual_error_variant), {}, 'error', clause: 'error-return', expected: _cott_expected_error ?? '$_cott_allowed_errors', actual: _cott_actual_error_variant ?? _cott_actual_error?.runtimeType.toString());\n{prefix}}}",
+        "{prefix}if (cott_runtime.CottRuntime.shouldValidate({})) {{\n{prefix}  final _cott_actual_error = cott_runtime.CottRuntime.resultError(_cott_result);\n{prefix}  final _cott_actual_error_variant = _cott_actual_error is cott_runtime.CottVariant ? _cott_actual_error.cottVariant : null;\n{prefix}  const _cott_allowed_errors = <String>{{{}}};\n{prefix}  cott_runtime.CottRuntime.checkContract(_cott_expected_error != null ? _cott_actual_error_variant == _cott_expected_error : _cott_actual_error == null || _cott_allowed_errors.contains(_cott_actual_error_variant), {}, 'error', clause: 'error-return', expected: _cott_expected_error ?? '$_cott_allowed_errors', actual: _cott_actual_error_variant ?? _cott_actual_error?.runtimeType.toString());",
         runtime_mode(config),
         unconditional.join(", "),
         dart_string(symbol)
     )
     .expect("writing to String cannot fail");
+    for clause in errors {
+        let label = clause_label(clause)?;
+        let variant = required_string(
+            clause.as_object().ok_or("error clause must be an object")?,
+            "variant",
+            symbol,
+        )?;
+        let applicable = if clause.get("guard").is_none_or(Value::is_null)
+            && clause.get("when").is_none_or(Value::is_null)
+        {
+            format!("_cott_actual_error_variant == {}", dart_string(variant))
+        } else {
+            format!("_cott_expected_error_clause == {}", dart_string(&label))
+        };
+        writeln!(
+            out,
+            "{prefix}  if ({applicable}) cott_runtime.CottRuntime.checkContract(_cott_actual_error_variant == {}, {}, 'error', clause: {}, span: {});",
+            dart_string(variant),
+            dart_string(symbol),
+            dart_string(&label),
+            render_span(clause.get("span"))?,
+        )
+        .expect("writing to String cannot fail");
+    }
+    writeln!(out, "{prefix}}}").expect("writing to String cannot fail");
     Ok(())
 }
 
@@ -5276,7 +5468,7 @@ fn render_facade_file(
     module: &DartModule,
     callables: &BTreeMap<String, &DartCallable>,
     bindings: &BTreeMap<&str, &DartBinding>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<String, String> {
     let mut out = generated_header().to_owned();
     writeln!(
@@ -5365,7 +5557,7 @@ fn render_implementation_library(
     config: &DartProjectConfig,
     plan: &DartPlan,
     implementation: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     callables: &BTreeMap<String, &DartCallable>,
     bindings: &BTreeMap<&str, &DartBinding>,
 ) -> Result<String, String> {
@@ -5576,6 +5768,7 @@ fn render_implementation_library(
             4,
             &initializer_locals,
             module,
+            declarations.projection,
         )?;
     }
     for field in state {
@@ -5606,6 +5799,7 @@ fn render_implementation_library(
                     })?,
                 field.get("type"),
                 module,
+                declarations.projection,
             )?
         };
         writeln!(
@@ -5632,6 +5826,7 @@ fn render_implementation_library(
             4,
             &initializer_locals,
             module,
+            declarations.projection,
         )?;
     }
     writeln!(
@@ -5762,7 +5957,7 @@ fn render_resource_factory(
     out: &mut String,
     config: &DartProjectConfig,
     implementation: &Map<String, Value>,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
     state: &[Value],
 ) -> Result<(), String> {
     let canonical = required_string(implementation, "name", "implementation")?;
@@ -5803,9 +5998,10 @@ fn render_resource_factory(
         .map(|invariant| {
             let expression = render_condition(
                 required_value(invariant, "expression", canonical)?,
-                invariant.get("guard"),
+                None,
                 true,
                 module_of(canonical),
+                declarations.projection,
             )?;
             let clause = format!(
                 "invariant:{}",
@@ -5814,9 +6010,20 @@ fn render_resource_factory(
                     .and_then(Value::as_u64)
                     .ok_or_else(|| "implementation invariant is missing clause_id".to_owned())?
             );
-            Ok(format!(
-                "cott_runtime.CottInvariant(clause: {}, check: () => {expression}, span: {})",
+            let statement = format!(
+                "cott_runtime.CottRuntime.invariant({expression}, symbol, clause: {}, span: {}, expected: 'true', actual: 'false');",
                 dart_string(&clause),
+                render_span(invariant.get("span"))?
+            );
+            Ok(format!(
+                "cott_runtime.CottInvariant.checked(clause: {}, check: () {{ {} }}, span: {})",
+                dart_string(&clause),
+                super::expressions::render_guarded_statement(
+                    invariant.get("guard"),
+                    &statement,
+                    module_of(canonical),
+                    declarations.projection,
+                )?,
                 render_span(invariant.get("span"))?
             ))
         })
@@ -5837,7 +6044,7 @@ fn render_impl_method(
     slot: &Value,
     callable: &DartCallable,
     target: &str,
-    declarations: &BTreeMap<String, (&str, &Map<String, Value>)>,
+    declarations: &DeclarationIndex<'_>,
 ) -> Result<(), String> {
     let slot = slot
         .as_object()
@@ -5902,7 +6109,7 @@ fn render_impl_method(
     let errors = contract_clauses(method)
         .any(|clause| clause.get("kind").and_then(Value::as_str) == Some("error"));
     if errors {
-        out.push_str("    String? _cott_expected_error = null;\n");
+        out.push_str("    String? _cott_expected_error = null;\n    String? _cott_expected_error_clause = null;\n");
     }
     let state = required_array(implementation, "state", &callable.symbol)?;
     let old_state_fields = old_state_field_references(method)?;
@@ -6012,6 +6219,7 @@ fn render_impl_method(
             indent,
             &locals,
             None,
+            declarations.projection,
         )?;
         render_expected_errors(
             out,
@@ -6022,6 +6230,7 @@ fn render_impl_method(
             &locals,
             None,
             false,
+            declarations.projection,
         )?;
         let prefix = " ".repeat(indent);
         for field in state {
@@ -6102,6 +6311,7 @@ fn render_impl_method(
             8,
             &locals,
             None,
+            declarations.projection,
         )?;
         render_error_contracts(out, config, method, &callable.symbol, 8)?;
         out.push_str("        return _cott_result;\n");

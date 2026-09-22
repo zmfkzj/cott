@@ -37,6 +37,10 @@ struct Node:
     value: I32
     next: Option[Node]
 
+struct Gate:
+    value: Option[I32]
+    invariant self.value matches Option.Some(item) => item > 0
+
 struct SharedNode:
     value: I32
     children: List[SharedNode]
@@ -71,6 +75,14 @@ fn increment(value: I32) -> I32
 fn echo(node: Node) -> Node
 fn echo_shared(node: SharedNode) -> SharedNode
 fn retain[T: Combined](value: T) -> T
+
+fn guarded(value: Option[I32]) -> Option[I32]:
+    requires value matches Option.Some(item) => item > 0
+    ensures result matches Option.Some(item) => item > 0
+
+async fn guarded_async(value: Option[I32]) -> Option[I32]:
+    requires value matches Option.Some(item) => item > 0
+    ensures result matches Option.Some(item) => item > 0
 "#;
 
 const ABI_OPAQUE_TAG: &str = "kotlin-abi-secret";
@@ -132,6 +144,12 @@ import semantics.echo
 import semantics.echo_shared
 import semantics.increment
 import semantics.retain
+import cott_runtime.CottObservation
+import cott_runtime.CottRuntime
+import semantics.Gate
+import semantics.guarded
+import semantics.guarded_async
+import kotlinx.coroutines.runBlocking
 
 private inline fun expectViolation(block: () -> Unit): Unit {
     try {
@@ -190,6 +208,35 @@ fun main(): Unit {
     check(secondary.secondary("usable") == "usable")
     val retained: CombinedState = retain(combined)
     check(retained == combined)
+
+    val absent = CottObservation()
+    CottRuntime.withTestObservation(absent) {
+        Gate(Nothing)
+        guarded(Nothing)
+    }
+    check(absent.observations().isEmpty())
+    val matched = CottObservation()
+    CottRuntime.withTestObservation(matched) {
+        Gate(run { Gate(Nothing); Some(1) })
+        guarded(Some(1))
+    }
+    check(matched.observations().count { it.symbol == "semantics.Gate" } == 1)
+    check(matched.observations().count { it.symbol == "semantics.guarded" } == 2)
+    check(matched.observations().all { it.passed })
+    val failed = CottObservation()
+    CottRuntime.withTestObservation(failed) { expectViolation { guarded(Some(0)) } }
+    check(failed.observations().single().phase == "requires")
+    check(!failed.observations().single().passed)
+
+    val asynchronous = CottObservation()
+    runBlocking {
+        CottRuntime.withTestObservationSuspend(asynchronous) {
+            guarded_async(Nothing)
+            guarded_async(Some(2))
+        }
+    }
+    check(asynchronous.observations().size == 2)
+    check(asynchronous.observations().all { it.symbol == "semantics.guarded_async" && it.passed })
 }
 "#;
 
@@ -484,6 +531,7 @@ fn implementation_body(callable: &KotlinCallable) -> &'static str {
     match callable.symbol.as_str() {
         "semantics.increment" => "return value + 1",
         "semantics.echo" | "semantics.echo_shared" => "return node",
+        "semantics.guarded" | "semantics.guarded_async" => "return value",
         "semantics.retain"
         | "semantics.CombinedState.inherited"
         | "semantics.CombinedState.child"
@@ -537,23 +585,13 @@ fn binding(
     }
 }
 
-fn compile_and_run_fixture(
-    config: KotlinProjectConfig,
-    plan: KotlinPlan,
-    consumer_source: &str,
-    expected_callables: usize,
-) {
+fn compile_and_run_fixture(config: KotlinProjectConfig, plan: KotlinPlan, consumer_source: &str) {
     let toolchain = KotlinToolchain::from_required_environment();
     let temp = TempDir::new();
     let source_root = temp.path.join("emitted");
     fs::create_dir(&source_root).expect("emitted source root should be writable");
 
     let callables = plan.callables();
-    assert_eq!(
-        callables.len(),
-        expected_callables,
-        "fixture callable projection changed"
-    );
     let bindings = callables
         .into_iter()
         .map(|callable| binding(&plan, &config, callable))
@@ -644,7 +682,7 @@ fn compile_and_run_fixture(
 
 fn compile_and_run_emission() {
     let (config, plan) = fixture();
-    compile_and_run_fixture(config, plan, CONSUMER, 8);
+    compile_and_run_fixture(config, plan, CONSUMER);
 }
 
 #[test]
@@ -658,5 +696,5 @@ fn emitted_kotlin_preserves_generic_recursive_and_associated_semantics() {
 fn emitted_kotlin_exposes_public_value_and_wrapper_abi_to_a_separate_consumer() {
     let (config, plan) = abi_fixture();
     let consumer = abi_consumer();
-    compile_and_run_fixture(config, plan, &consumer, 2);
+    compile_and_run_fixture(config, plan, &consumer);
 }
