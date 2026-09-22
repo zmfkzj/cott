@@ -181,7 +181,23 @@ fn prompt_is_provider_free_exact_scoped_and_hashed() {
     assert!(text.contains("implementation.dart"));
     assert!(text.contains("int _cott_sample_alpha(int value)"));
     assert!(text.contains("package:generation_fixture/cott_runtime.dart"));
-    assert!(text.contains("\"name\": \"sample.alpha\""));
+    let formal: serde_json::Value = serde_json::from_str(
+        text.split_once("```json\n")
+            .expect("formal declarations JSON")
+            .1
+            .split_once("\n```")
+            .expect("closed formal declarations JSON")
+            .0,
+    )
+    .expect("valid formal declarations JSON");
+    assert!(
+        formal["sample"]["declarations"]
+            .as_array()
+            .expect("selected module declarations")
+            .iter()
+            .any(|declaration| declaration["name"] == "sample.alpha"),
+        "selected callable is missing from formal declarations"
+    );
     assert!(
         !text.contains("sample.beta"),
         "unrelated callable leaked into prompt"

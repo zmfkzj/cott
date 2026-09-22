@@ -105,9 +105,8 @@ pub(crate) fn render_generation_prompt(
     if current_intent.is_empty() {
         current_intent.push_str("(no documentation selected)\n");
     }
-    let formal_declarations =
-        serde_json::to_string_pretty(&prompt_declarations::scoped_declarations(declarations)?)
-            .map_err(|error| format!("serialize formal Dart declarations: {error}"))?;
+    let formal_declarations = prompt_declarations::render_scoped_declarations(declarations)
+        .map_err(|error| format!("serialize formal Dart declarations: {error}"))?;
 
     let mut identities = BTreeSet::new();
     collect_identities(declarations, &mut identities);

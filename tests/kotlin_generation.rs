@@ -158,7 +158,23 @@ fn prompt_is_scoped_hashed_and_does_not_invoke_tools() {
     assert!(text.contains("alpha"));
     assert!(text.contains("N : cott_runtime.CottConst"));
     assert!(text.contains("_cott_const_N: N"));
-    assert!(text.contains("\"name\": \"sample.alpha\""));
+    let formal: serde_json::Value = serde_json::from_str(
+        text.split_once("```json\n")
+            .expect("formal declarations JSON")
+            .1
+            .split_once("\n```")
+            .expect("closed formal declarations JSON")
+            .0,
+    )
+    .expect("valid formal declarations JSON");
+    assert!(
+        formal["sample"]["declarations"]
+            .as_array()
+            .expect("selected module declarations")
+            .iter()
+            .any(|declaration| declaration["name"] == "sample.alpha"),
+        "selected callable is missing from formal declarations"
+    );
     assert!(
         !text.contains("sample.beta"),
         "unrelated callable leaked into prompt"

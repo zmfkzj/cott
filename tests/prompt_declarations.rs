@@ -3,7 +3,7 @@ use std::path::Path;
 use cott::compiler::{SourceFile, parse_project};
 use cott::hir::lower;
 use cott::ir::render;
-use cott::prompt_declarations::scoped_declarations;
+use cott::prompt_declarations::{render_scoped_declarations, scoped_declarations};
 use cott::python::artifact_plan::PythonArtifactPlan;
 use serde_json::{Value, json};
 
@@ -288,6 +288,13 @@ fn literal_evidence_and_refinement_identity_survive_compaction() {
         "json_default": {"kind": "json", "value": raw_json.clone()}
     }]}});
     let projected = scoped_declarations(&selected).unwrap();
+    let rendered = render_scoped_declarations(&selected).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&rendered).unwrap(),
+        projected,
+        "minified prompt JSON must preserve the complete projection"
+    );
+    assert!(rendered.len() < serde_json::to_string_pretty(&projected).unwrap().len());
     let declaration = &projected["values"]["declarations"][0];
     assert_eq!(
         declaration["refinement"]["identity"],

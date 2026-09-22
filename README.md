@@ -64,6 +64,51 @@ declarations. Proof and sampling are bounded: unsupported or budget-exhausted bo
 `unknown`; unavailable execution observation is `unobserved` or trust according to the capability.
 Neither is invented success.
 
+Successful `verify` prints the observed, trust-declaration, unknown and unobserved clause counts,
+the selected policy count and its result, and each remaining unknown/unobserved clause with its
+recorded reason. These are the results of that verification run, not a guess from an older record.
+JSON mode carries the same information as diagnostic notes without changing the diagnostics schema.
+
+### Review requirements, not just passing clauses
+
+Use the same review for Python, Kotlin, and Dart. Cott checks the declared contract;
+it does not decide whether prose describes every required behavior.
+
+| Requirement to review | What to put in the contract or acceptance checks |
+| --- | --- |
+| A canonical list | Exact values and order, not only `result.len`. A five-element list can still contain duplicates or the wrong order. |
+| A finite enum-to-value mapping | An exhaustive `ensures table` with a row for each variant. |
+| A copy/update operation | The changed field's postcondition plus `ensures preserves result from input except changed_field`. |
+| An optional or guarded value | Both matching and nonmatching cases; inspect evidence for the condition after the guard actually matches. |
+| A derived summary | Its relationship to the source data, not only arithmetic consistency among caller-supplied totals. |
+| Unknown stored input | An explicit fallback or error policy, including case sensitivity and retired aliases. |
+
+For example, a complete mapping is shorter and easier to review than repeated implications:
+
+```cott
+module labels
+
+enum Kind:
+    Local
+    Imported
+
+fn storage_key(kind: Kind) -> Str:
+    ensures table kind:
+        Kind.Local => "local"
+        Kind.Imported => "imported"
+    effects []
+```
+
+The table is a set of obligations, not an executable implementation. Inspect the resolved
+obligations and relevant scenarios with `cott prompt <callable>` before generation. A scenario
+call exercises the declared boundary; an explicit assertion is needed for an additional expected
+result that the callable's contract does not already constrain. Keep independent public-facade
+acceptance checks for requirements not captured by the contract. Passing them does not silently
+upgrade Cott's recorded semantic coverage.
+
+Review every `allow_unknown` or `allow_unobserved` policy exception against its actual clause
+and evidence reason. A policy allowance accepts a remaining gap; it does not fill it.
+
 Typed Python plus independent tests is a valid baseline for the same task. Cott is worth its cost
 when a stable public facade and a provenance/evidence boundary matter. The primary comparison is
 the same AI model generating through Cott versus generating Python directly. Human authoring and
@@ -100,6 +145,30 @@ Every example is an independent project. For a Python project, use this sequence
 repository root and replace `<project>` with an indexed Python path below.
 
 Discover the installed package and commands with `cott --version` (or `cott -V`) and `cott --help`.
+
+Choose commands by the work needed rather than rerunning the whole sequence after every edit:
+
+| Need | Command | Publication / agent behavior |
+| --- | --- | --- |
+| Check authored contracts | `cott check`, `cott fmt --check` | No artifact publication or agent invocation. |
+| Review one callable's resolved input | `cott prompt <callable> --format json` | No agent or target compiler; includes `generation_required`, `context`, and exact `prompt` bytes. |
+| Refresh emitted artifacts | `cott emit <target>` | No agent; publishes an unverified snapshot. |
+| Implement changed intent | `cott generate [<callable>] --agent <agent> --target <target>` | Invokes the agent only for eligible unresolved work; publishes an unverified snapshot. |
+| Certify current artifacts | `cott verify` | Runs the selected target's real verification and coverage policy, without an agent. |
+| Inspect semantic changes | `cott diff` | Does not generate or certify implementations. |
+| Deliver a certified package | `cott deploy` | Does not generate or re-verify; requires deployable recorded evidence and unchanged bytes. |
+
+The existing-project commands in the table accept `--project <dir>`; `init` instead takes a
+positional destination, and `lsp` accepts no options. Calling `generate` is not evidence that an agent
+ran: an already resolved callable needs no regeneration. `emit` is not certification, and a
+separate application smoke test is not a substitute for `verify`. Run consumer acceptance checks
+against a candidate deployment before replacing the package used by an application.
+
+During compiler development, use the same explicit executable for every command, for example
+`target/debug/cott --version`, `target/debug/cott --help`, and
+`target/debug/cott check --project <dir>`. The version identifies the package release, not the
+exact compiler build; inspect supported targets in help and retain recorded tool identities.
+Do not assume another `cott` on PATH has the same capabilities.
 
 ```bash
 project=examples/<project>

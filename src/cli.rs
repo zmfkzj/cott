@@ -41,6 +41,7 @@ use crate::provenance::{
     AgentRun, AgentStatus, ClauseCoverage, CoveragePolicyResult, CoverageStatus, CoverageSummary,
     CoverageViolation, GenerationRecord, SemanticCoverage, SourceSpan as ProvenanceSpan,
     StreamDigest, UnresolvedKind, UnresolvedRecord, compare_implementation_identities,
+    display_semantic_coverage,
 };
 use crate::python::artifact_plan::{PythonArtifactPlan, PythonCallable, PythonCallableKind};
 use crate::python_emit::{Emission, EmitDiagnostic, emit};
@@ -49,6 +50,8 @@ use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession, Tr
 use crate::version::{is_at_least, parse_version};
 
 const USAGE: &str = "Cott compiles contracts into verifiable Python, Kotlin, and Dart.\n\nUsage:\n  cott init <path> [--target python|kotlin|dart] [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python|kotlin|dart [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--replace] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
+
+const WORKFLOW: &str = "\nChoose the smallest step for the change:\n  check / fmt --check   Inspect authored contracts without publishing artifacts.\n  prompt <callable>     Inspect the exact initial agent input without running an agent.\n  emit <target>         Publish target artifacts without an agent; leaves them unverified.\n  generate [callable]   Generate eligible unresolved implementations, not every callable.\n  verify               Run target checks and coverage policy; never invokes an agent.\n  diff                 Inspect semantic changes against the recorded baseline.\n  deploy               Publish a verified snapshot; never generates or re-verifies.\n\nOnly explicit verify certifies a snapshot. Coverage is bounded, not a proof of\nrequirement completeness; inspect unknown/unobserved clauses and policy allowances.\nUse --version and --help from the same compiler executable used for the project.\n";
 
 #[cfg(test)]
 thread_local! {
@@ -157,7 +160,7 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
     match parse_command(&arguments) {
         Ok(Command::Lsp) => crate::lsp::run(),
         Ok(Command::Help) => {
-            print!("{USAGE}");
+            print!("{USAGE}{WORKFLOW}");
             0
         }
         Ok(Command::Version) => {
@@ -4320,10 +4323,13 @@ fn finish_kotlin_path(result: Result<PathBuf, crate::kotlin::pipeline::Failure>)
     }
 }
 
-fn finish_kotlin_verification(result: Result<PathBuf, crate::kotlin::pipeline::Failure>) -> i32 {
+fn finish_kotlin_verification(
+    result: Result<(PathBuf, SemanticCoverage), crate::kotlin::pipeline::Failure>,
+) -> i32 {
     match result {
-        Ok(path) => {
+        Ok((path, coverage)) => {
             println!("verified {}", path.display());
+            println!("{}", display_semantic_coverage(&coverage));
             0
         }
         Err(failure) => {
@@ -4360,10 +4366,13 @@ fn finish_dart_path(result: Result<PathBuf, crate::dart::pipeline::Failure>) -> 
     }
 }
 
-fn finish_dart_verification(result: Result<PathBuf, crate::dart::pipeline::Failure>) -> i32 {
+fn finish_dart_verification(
+    result: Result<(PathBuf, SemanticCoverage), crate::dart::pipeline::Failure>,
+) -> i32 {
     match result {
-        Ok(path) => {
+        Ok((path, coverage)) => {
             println!("verified {}", path.display());
+            println!("{}", display_semantic_coverage(&coverage));
             0
         }
         Err(failure) => {
@@ -4476,8 +4485,9 @@ fn prompt_for_target(project: Option<PathBuf>, symbol: String, format: OutputFor
 fn verify_python_project(project: Option<PathBuf>) -> i32 {
     match plan(project) {
         Ok(plan) => match verify(&plan) {
-            Ok(()) => {
+            Ok(coverage) => {
                 println!("verified {}", generated_path(&plan.paths));
+                println!("{}", display_semantic_coverage(&coverage));
                 0
             }
             Err(messages) => {
@@ -5734,7 +5744,7 @@ fn safe_relative_path(path: &Path) -> bool {
             .components()
             .all(|component| matches!(component, Component::Normal(_)))
 }
-fn verify(plan: &PlannedProject) -> Result<(), Vec<String>> {
+fn verify(plan: &PlannedProject) -> Result<SemanticCoverage, Vec<String>> {
     let artifact_root = artifact_root_for_paths(&plan.paths).map_err(|message| vec![message])?;
     let session = &plan.session;
     let actual = collect_tree(&artifact_root).map_err(|message| vec![message])?;
@@ -5807,7 +5817,6 @@ fn verify(plan: &PlannedProject) -> Result<(), Vec<String>> {
         );
     let coverage = semantic_coverage(&verification, &plan.config.verification.coverage)
         .map_err(|message| vec![message])?;
-    let policy = coverage.policy.clone();
     let mut record = expected_record;
     let intent = record.current.tools.get(intent::TOOL_KEY).cloned();
     record.current.tools = evidence.tools;
@@ -5846,10 +5855,13 @@ fn verify(plan: &PlannedProject) -> Result<(), Vec<String>> {
     session
         .apply(&snapshot, &changes)
         .map_err(|error| vec![error.to_string()])?;
-    if !policy.passed {
-        return Err(policy
+    if !record.current.semantic_coverage.policy.passed {
+        return Err(record
+            .current
+            .semantic_coverage
+            .policy
             .violations
-            .into_iter()
+            .iter()
             .map(|violation| {
                 format!(
                     "{COVERAGE_POLICY_PREFIX}{}:{}:{}-{}: {}",
@@ -5862,7 +5874,7 @@ fn verify(plan: &PlannedProject) -> Result<(), Vec<String>> {
             })
             .collect());
     }
-    Ok(())
+    Ok(record.current.semantic_coverage)
 }
 
 const COVERAGE_POLICY_PREFIX: &str = "semantic coverage policy failed: ";

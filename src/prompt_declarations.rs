@@ -23,6 +23,14 @@ pub fn scoped_declarations(selected: &Value) -> Result<Value, String> {
     compact(selected)
 }
 
+/// Render the presentation projection as minified JSON for prompt embedding.
+///
+/// This changes only JSON whitespace; the selected context and its fingerprint
+/// input remain untouched.
+pub fn render_scoped_declarations(selected: &Value) -> Result<String, String> {
+    serde_json::to_string(&scoped_declarations(selected)?).map_err(|error| error.to_string())
+}
+
 fn diagnostic(key: &str) -> bool {
     matches!(key, "span" | "source_order" | "doc")
 }

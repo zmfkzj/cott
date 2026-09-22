@@ -525,8 +525,9 @@ pub fn render_prompt(
     append_intent_docs(declarations, symbol, &mut prompt);
     prompt.push_str("\nFORMAL DECLARATIONS\n");
     prompt.push_str(prompt_declarations::FORMAT);
-    let formal = prompt_declarations::scoped_declarations(declarations)?;
-    prompt.push_str(&serde_json::to_string_pretty(&formal).map_err(|error| error.to_string())?);
+    prompt.push_str(&prompt_declarations::render_scoped_declarations(
+        declarations,
+    )?);
     prompt.push('\n');
     prompt.push_str("\nPROJECT RULES\n");
     prompt.push_str(project_rules);

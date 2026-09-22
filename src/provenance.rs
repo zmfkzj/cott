@@ -150,6 +150,68 @@ pub struct SemanticCoverage {
     pub policy: CoveragePolicyResult,
 }
 
+pub(crate) struct SemanticCoverageDisplay<'a>(&'a SemanticCoverage);
+
+pub(crate) fn display_semantic_coverage(
+    coverage: &SemanticCoverage,
+) -> SemanticCoverageDisplay<'_> {
+    SemanticCoverageDisplay(coverage)
+}
+
+impl std::fmt::Display for SemanticCoverageDisplay<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let coverage = self.0;
+        write!(
+            formatter,
+            "semantic coverage: observed={} trust_declaration={} unknown={} unobserved={}\n\
+             semantic coverage policy: selected={} passed={}; passing policy permits the recorded evidence and is not proof of correctness",
+            coverage.summary.observed,
+            coverage.summary.trust_declaration,
+            coverage.summary.unknown,
+            coverage.summary.unobserved,
+            coverage.policy.selected,
+            coverage.policy.passed,
+        )?;
+        for clause in coverage.clauses.iter().filter(|clause| {
+            matches!(
+                clause.status,
+                CoverageStatus::Unknown | CoverageStatus::Unobserved
+            )
+        }) {
+            let status = match clause.status {
+                CoverageStatus::Unknown => "unknown",
+                CoverageStatus::Unobserved => "unobserved",
+                CoverageStatus::Observed | CoverageStatus::TrustDeclaration => {
+                    unreachable!("filtered semantic coverage status")
+                }
+            };
+            write!(
+                formatter,
+                "\nsemantic coverage gap: symbol={} clause={} status={} reason=",
+                clause.symbol, clause.clause_id, status,
+            )?;
+            let mut wrote_reason = false;
+            for reason in clause
+                .evidence
+                .iter()
+                .filter_map(|entry| entry.get("reason"))
+                .filter_map(Value::as_str)
+                .filter(|reason| !reason.trim().is_empty())
+            {
+                if wrote_reason {
+                    formatter.write_str(", ")?;
+                }
+                write!(formatter, "{reason:?}")?;
+                wrote_reason = true;
+            }
+            if !wrote_reason {
+                formatter.write_str("no evidence reason recorded")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnresolvedKind {

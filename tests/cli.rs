@@ -370,10 +370,6 @@ fn emits_complete_tree_and_verifies_exact_bytes() {
         "{}",
         String::from_utf8_lossy(&verified.stderr)
     );
-    assert_eq!(
-        String::from_utf8(verified.stdout).expect("stdout must be UTF-8"),
-        "verified generated/python\n"
-    );
     let record: serde_json::Value = snapshot::read(
         &fs::read(project.path.join("generated/generation.json"))
             .expect("verified generation record"),

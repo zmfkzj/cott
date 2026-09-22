@@ -2301,6 +2301,11 @@ FORMAL DECLARATIONS는 이미 선택·해석된 canonical semantic context만 �
 
 선언·clause 순서와 `clause_id`·identity는 보존하고 diagnostic span·`source_order`·`doc`만 이 view에서 뺀다. `doc`은 CURRENT INTENT가 소유한다. source coordinate는 진단용이지 semantic text의 authority가 아니므로 disk/source를 다시 읽거나 span으로 원문을 자르지 않고, 선택 closure 밖의 선언을 넓게 재확장하지 않는다. prompt-only projection이며 `context`와 `tools.cott_intent` fingerprint 계약은 바꾸지 않는다.
 
+Python/Kotlin/Dart는 이 projection을 공통 renderer의 minified JSON으로 prompt에 넣는다.
+줄바꿈·들여쓰기·separator 공백만 제거하며 선택된 declaration/scenario, semantic value와
+배열 순서를 생략하거나 변경하지 않는다. `prompt_hash`는 실제 축소된 initial bytes를 대상으로
+계산하며, prompt 검사와 generate는 같은 rendering 경로를 사용한다.
+
 초기 CURRENT INTENT의 관련 `doc`은 닫힌 선언 집합에서 오며 applied rule `doc`을 authored `doc`에
 합쳐 semantic constraint로 승격하지 않는다.
 
@@ -2617,6 +2622,14 @@ project rule/reference source는 override하지 않는다.
 ```bash
 cott verify
 ```
+
+세 target의 성공한 `verify`는 실제 검증 결과의 semantic coverage 요약
+(`observed`, `trust_declaration`, `unknown`, `unobserved`)과 policy의 `selected`·`passed`를 출력한다.
+남은 `unknown`·`unobserved` clause는 symbol, clause ID, status와 기록된 evidence reason을
+함께 표시한다. Policy 통과는 허용한 evidence 상태가 정책에 맞는다는 뜻이며 correctness나
+요구사항 완전성의 증명이 아니다. 이 출력은 저장된 record를 다시 읽어 추측하지 않고 해당
+검증에서 얻은 coverage를 사용한다. `--format json`에서는 기존 diagnostics schema 1의 `note`로
+전달하며 certification, coverage policy, exit code와 record schema는 바꾸지 않는다.
 
 검증 범위:
 

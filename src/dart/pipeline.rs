@@ -730,7 +730,7 @@ pub(crate) fn emit(project: Option<PathBuf>, ir_only: bool) -> Result<PathBuf, F
     })
 }
 
-pub(crate) fn verify(project: Option<PathBuf>) -> Result<PathBuf, Failure> {
+pub(crate) fn verify(project: Option<PathBuf>) -> Result<(PathBuf, SemanticCoverage), Failure> {
     let loaded = load(project, false)?;
     let emission = project_emission(&loaded, &loaded.bindings)?;
     if !emission.unresolved.is_empty() {
@@ -759,10 +759,13 @@ pub(crate) fn verify(project: Option<PathBuf>) -> Result<PathBuf, Failure> {
         Some(&verification),
         false,
     )?;
-    Ok(loaded
-        .paths
-        .artifact_root
-        .join("dart/verification/cott-module.dill"))
+    Ok((
+        loaded
+            .paths
+            .artifact_root
+            .join("dart/verification/cott-module.dill"),
+        verification.coverage,
+    ))
 }
 fn coverage_failure(coverage: &SemanticCoverage) -> Failure {
     let violations = coverage
