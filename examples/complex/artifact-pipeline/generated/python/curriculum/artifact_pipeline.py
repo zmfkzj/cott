@@ -21,7 +21,7 @@ errors. Ready steps are ordered lexicographically."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/artifact_pipeline/topologically_order_steps.py", "bd63d2d9e07f1cb2d4b5180716014b3ff4deda3f0eeed2eac21fa5e38e3a2ae0", "topologically_order_steps", expected_project_name="artifact-pipeline", expected_cott_symbol="curriculum.artifact_pipeline.topologically_order_steps")
+        _implementation = _cott_load("_cott_impl/curriculum/artifact_pipeline/topologically_order_steps.py", "1d3ed05e28dad97fe43cd8dea009e9dd52b58831cf262b5ac583b1b500ae5cce", "topologically_order_steps", expected_project_name="artifact-pipeline", expected_cott_symbol="curriculum.artifact_pipeline.topologically_order_steps")
         _result = _implementation(steps)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -74,7 +74,7 @@ and construct an artifact plan, propagating any ordering error unchanged."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/artifact_pipeline/plan_pipeline.py", "e8a7ab87c45f0842b4575f513338093348f9b69db13e8e52431f3c3a7c06cfb7", "plan_pipeline", expected_project_name="artifact-pipeline", expected_cott_symbol="curriculum.artifact_pipeline.plan_pipeline")
+        _implementation = _cott_load("_cott_impl/curriculum/artifact_pipeline/plan_pipeline.py", "46b7e60d4738490b0f8bd84d385fbacb25949b4e7565ff630e282fe3586cbf3f", "plan_pipeline", expected_project_name="artifact-pipeline", expected_cott_symbol="curriculum.artifact_pipeline.plan_pipeline")
         _result = _implementation(pipeline)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

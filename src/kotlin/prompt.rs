@@ -136,6 +136,31 @@ pub(crate) fn render_generation_prompt(
     if reference_text.is_empty() {
         reference_text.push_str("\n(none)\n");
     }
+    let protocol_api = if contains_type(
+        declarations,
+        &["iterator", "async_iterator", "generator", "async_generator"],
+        None,
+    ) {
+        let (sources, factories) = super::runtime::lazy_protocol_api();
+        format!(
+            "\n# Lazy protocol runtime API\n\
+Reference only: these declarations come from the compiler-owned cott_runtime implementation. Do not copy or redefine them. Implement source interfaces in local objects; create wrappers through the CottRuntime methods below, not wrapper constructors. Descriptors are CottType values, never lambdas: for example CottTypes.STRING for Str, CottTypes.ANY for Any, and CottTypes.U64 for U64.\n\
+Source interfaces and step values in package cott_runtime:\n```kotlin\n{sources}```\n\
+Factory methods on cott_runtime.CottRuntime:\n```kotlin\n{factories}```\n\
+CottIterator<T> and CottGenerator<Y,S,R> implement Kotlin Iterator: hasNext() returns Boolean and next() returns a yielded value, NOT a CottStep. CottGenerator.nextStep() preserves Yield/Return steps; send(value) and throwInto(error) also return CottGeneratorStep. CottAsyncIterator.next() suspends and returns CottStep; CottAsyncGenerator.start(), next(), send(value), and throwInto(error) suspend and return CottGeneratorStep. Do not confuse CottStep with CottGeneratorStep. All wrappers expose close(); generator completion is available through returnValue(): CottOption<R>.\n"
+        )
+    } else {
+        String::new()
+    };
+    let json_api = if contains_type(declarations, &["primitive"], Some("json")) {
+        format!(
+            "\n# JSON runtime API\n\
+Reference only: these declarations come from package cott_runtime. Use their exact top-level class names, not JsonValue.Object or JsonValue.String. JsonValue has no parse method. Build the values directly; JsonInteger requires java.math.BigInteger, and object/array/string payloads use the value property. Do not redefine runtime classes.\n```kotlin\n{}```\n",
+            super::runtime::json_value_api()
+        )
+    } else {
+        String::new()
+    };
 
     let existing = existing.unwrap_or("(none)");
     let feedback = feedback.unwrap_or("(none)");
@@ -156,6 +181,12 @@ The canonical function must remain `internal`, must remain `suspend` exactly whe
 \n# Kotlin ABI and construction rules\n\
 Use the fully qualified types in the signature. Cott integers use the exact Kotlin primitive or `java.math.BigInteger` type shown; do not narrow, wrap around, or use floating-point arithmetic for integer contracts. `cott_runtime.CottConst` witnesses carry exact mathematical values through `.value`; every `_cott_const_*` parameter shown is semantically required. Associated Cott types are the bounded Kotlin type parameters shown in the signature, not reflection, casts, `Any?`, or a phantom wrapper.\n\
 Construct canonical values with the current runtime/public API: `cott_runtime.CottUnit`, `cott_runtime.Some(value)` / `cott_runtime.Nothing`, `cott_runtime.Ok(value)` / `cott_runtime.Err(error)`, immutable `cott_runtime.CottList`, `cott_runtime.CottSet`, `cott_runtime.FrozenMap`, `cott_runtime.CottArray`, `cott_runtime.CottBuffer`, and the nominal public constructors/factories present in the declarations. Preserve immutable snapshots and exact nominal identities. Do not define replacement runtime types or import private generated implementation packages.\n\
+For Factory[Concrete], return the compiler-owned value Concrete.cottFactory directly, using the fully qualified generated concrete class from the signature/declarations (for example my.module.Task.cottFactory). Every concrete impl exposes this value. Do not construct a factory through reflection or class literals in an implementation.\n\
+Opaque.unwrap() returns kotlin.Any, not a statically typed payload. Its tag does not reify the payload type; use the explicit payload convention in the contract with normal Kotlin type checking, rather than assigning Any directly to a primitive.\n\
+For a declared deterministic clock fixture, cott_runtime.CottRuntime.fixtureClockNs(name) (or fixtureClockNsSuspend(name) in suspend code) returns its fixed nanosecond value from the active compiler-owned context. Pass the fixture's local name; reads do not advance time. Never construct or install fixture contexts, mutate fixture authority, or replace this operation with host time.\n\
+Process termination is available only to a callable declaring the process.exit effect: call cott_runtime.CottRuntime.exitWithCode(code) with a kotlin.UByte code; it returns kotlin.Nothing by terminating the process. Direct System.exit, kotlin.system.exitProcess, Runtime.halt, and other process/verifier-control APIs remain forbidden.\n\
+{protocol_api}\
+{json_api}\
 Explicit canonical const values in the declarations are value witnesses and must be honored exactly. External projections and compile dependencies are context only; use only mappings actually declared below.\n\
 \n# External type projections\n\
 ```json\n{external_types}\n```\n\
@@ -374,6 +405,23 @@ fn collect_intent_docs(value: &Value, output: &mut String) {
             }
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+fn contains_type(value: &Value, kinds: &[&str], name: Option<&str>) -> bool {
+    match value {
+        Value::Array(values) => values.iter().any(|value| contains_type(value, kinds, name)),
+        Value::Object(object) => {
+            (object
+                .get("kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kinds.contains(&kind))
+                && name.is_none_or(|name| object.get("name").and_then(Value::as_str) == Some(name)))
+                || object
+                    .values()
+                    .any(|value| contains_type(value, kinds, name))
+        }
+        _ => false,
     }
 }
 

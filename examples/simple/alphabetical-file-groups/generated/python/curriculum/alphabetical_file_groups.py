@@ -23,7 +23,7 @@ folder. Select "misc" when the leading code point is not a letter."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/alphabetical_file_groups/classify_filename.py", "93fd4b65b654b106907e20e9bc9e0e49eb7578dc722bc92a9a50d896b2301498", "classify_filename", expected_project_name="alphabetical-file-groups", expected_cott_symbol="curriculum.alphabetical_file_groups.classify_filename")
+        _implementation = _cott_load("_cott_impl/curriculum/alphabetical_file_groups/classify_filename.py", "251269c83ce588c764a4cee837d91a7aef51f2314163d9f499d750cf88b04bf7", "classify_filename", expected_project_name="alphabetical-file-groups", expected_cott_symbol="curriculum.alphabetical_file_groups.classify_filename")
         _result = _implementation(filename)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -71,7 +71,7 @@ succeeds with an empty move list."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/alphabetical_file_groups/group_filenames.py", "a30ed05dc38cb9b469b964e3f70c3d496e80c5d16673d1234cb62945d7e77cbb", "group_filenames", expected_project_name="alphabetical-file-groups", expected_cott_symbol="curriculum.alphabetical_file_groups.group_filenames")
+        _implementation = _cott_load("_cott_impl/curriculum/alphabetical_file_groups/group_filenames.py", "7056d4b1dcd05812ab66b1e947927603ea19669ad8052bbf9d7fa6aca8eff16b", "group_filenames", expected_project_name="alphabetical-file-groups", expected_cott_symbol="curriculum.alphabetical_file_groups.group_filenames")
         _result = _implementation(filenames)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

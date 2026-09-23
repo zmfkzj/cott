@@ -870,3 +870,81 @@ printf '%s\n' 'package cott_impl.sample' '' 'internal fun gamma(value: kotlin.In
         "partial generation must not fabricate compiler evidence"
     );
 }
+
+#[test]
+fn generate_propagates_the_requested_model_into_the_agent_argv_and_provenance() {
+    let project = project("module sample\n\nfn alpha(value: I32) -> I32\n");
+    let tools = tool_path(&project.path);
+    write_exec(
+        &tools.join("omp"),
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
+[ "$1" = "--model" ] || { echo 'missing --model' >&2; exit 64; }
+[ "$2" = "anthropic/claude-opus-5-5" ] || { echo 'unexpected model value' >&2; exit 64; }
+last=
+for arg; do last=$arg; done
+case "$last" in
+  @*) : ;;
+  *) echo 'missing prompt file' >&2; exit 64 ;;
+esac
+printf '%s\n' 'package cott_impl.sample' '' 'internal fun alpha(value: kotlin.Int): kotlin.Int {' '    return value' '}' > implementation.kt
+"#,
+    );
+
+    let generated = command(
+        &project.path,
+        &tools,
+        &[
+            "generate",
+            "--agent",
+            "omp",
+            "--model",
+            "anthropic/claude-opus-5-5",
+            "--target",
+            "kotlin",
+        ],
+    );
+    // The fixture deliberately has no Kotlin toolchain; retain the real agent
+    // request in its unverified repair checkpoint rather than faking success.
+    assert_eq!(
+        generated.status.code(),
+        Some(5),
+        "{}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+
+    let record = generation_record(&project.path);
+    assert!(!record.current.verified);
+    assert!(record.current.verification.is_null());
+    assert_eq!(record.current.agent_runs.len(), 1);
+    let argv_template = &record.current.agent_runs[0].argv_template;
+    assert_eq!(
+        argv_template[..2],
+        ["--model".to_owned(), "anthropic/claude-opus-5-5".to_owned()]
+    );
+    assert_eq!(
+        argv_template[2..],
+        [
+            "-p",
+            "--cwd",
+            "<workspace>",
+            "--no-session",
+            "--no-rules",
+            "--no-skills",
+            "--no-extensions",
+            "--no-lsp",
+            "--no-pty",
+            "--no-title",
+            "--tools",
+            "read,grep,glob,edit,write",
+            "--approval-mode",
+            "yolo",
+            "--max-time",
+            "<seconds>s",
+            "--config",
+            "<overlay>",
+            "@<prompt-file>",
+        ]
+        .map(str::to_owned)
+    );
+}

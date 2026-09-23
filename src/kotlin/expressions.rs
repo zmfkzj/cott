@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use super::types::{
     escape_identifier, kotlin_string, local_name, render_const_witness, render_named_arguments,
-    render_qualified, render_value,
+    render_qualified, render_type, render_value,
 };
 
 pub(crate) fn render_expression(expression: &Value) -> Result<String, String> {
@@ -365,14 +365,15 @@ fn render_pattern(pattern: &Value, value: &str) -> Result<(String, Vec<String>),
         "binding" => Ok((
             "true".to_owned(),
             vec![format!(
-                "val {} = {value}",
+                "val {} = ({value} as {})",
                 escape_identifier(
                     object
                         .get("name")
                         .and_then(Value::as_str)
                         .or_else(|| object.get("symbol").and_then(Value::as_str).map(local_name))
                         .ok_or_else(|| "binding pattern is missing name".to_owned())?
-                )?
+                )?,
+                render_type(required(object.get("type"), "binding pattern.type")?)?
             )],
         )),
         "result_ok" | "result_err" | "option_some" | "option_none" | "enum" | "variant" => {
@@ -413,7 +414,7 @@ fn render_pattern(pattern: &Value, value: &str) -> Result<(String, Vec<String>),
                         kotlin_string(symbol)
                     ));
                     format!(
-                        "(cott_runtime.CottRuntime.variant({value}, {}) as cott_runtime.Some<*>).value",
+                        "(cott_runtime.CottRuntime.variant({value}, {}) as cott_runtime.Some<cott_runtime.CottList<kotlin.Any?>>).value",
                         kotlin_string(symbol)
                     )
                 }

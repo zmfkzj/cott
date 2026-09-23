@@ -16,7 +16,7 @@ def read_root(request: HttpRequest) -> HelloResponse:
     """Return FastAPI's official `Hello World` message and the injected request method."""
     request = _cott_validate_abi(request, HttpRequest, path="$.request")
     try:
-        _implementation = _cott_load("_cott_impl/integrations/fastapi_hello/read_root.py", "c0e1c9772f66d60a5bb9ec4e8ae3f8d0ce776ec97d0604e5f9d0af2861e97721", "read_root", expected_project_name="fastapi-hello", expected_cott_symbol="integrations.fastapi_hello.read_root")
+        _implementation = _cott_load("_cott_impl/integrations/fastapi_hello/read_root.py", "2c6dc1bc7dbb7298d4396900a0f92746f1f651d0fa9f2bed1c6ec8c813f2e24c", "read_root", expected_project_name="fastapi-hello", expected_cott_symbol="integrations.fastapi_hello.read_root")
         _result = _implementation(request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

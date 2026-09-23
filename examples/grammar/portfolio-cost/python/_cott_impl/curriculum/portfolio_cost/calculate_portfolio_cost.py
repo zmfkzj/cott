@@ -23,7 +23,7 @@ def calculate_portfolio_cost(rows: CottList[Holding]) -> Result[F64, PortfolioEr
         product = holding.shares * holding.price
         if not isfinite(product):
             return Err(error=PortfolioError_TotalOverflow())
-        total += product
+        total = total + product
         if not isfinite(total):
             return Err(error=PortfolioError_TotalOverflow())
     return Ok(value=total)

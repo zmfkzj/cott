@@ -2,7 +2,10 @@ from real.posting.client_types import Response
 
 
 def render_response(response: Response) -> str:
-    header_lines = "".join(
-        f"{header.name}: {header.value}\n" for header in response.headers
-    )
-    return f"{response.status} {response.url}\n{header_lines}\n{response.body}"
+    lines: list[str] = [f"{response.status} {response.url}"]
+    for header in response.headers:
+        lines.append(f"{header.name}: {header.value}")
+    lines.append("")
+    body = response.body.encode("utf-8", "replace").decode("utf-8", "replace")
+    lines.append(body)
+    return "\n".join(lines)

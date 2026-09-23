@@ -16,7 +16,7 @@
 `>=2.1.89`, OMP `>=17.2.12`를 지원한다. 각 실제 tool/runtime dependency의 full version과
 content hash는 target provenance에 기록한다.
 Dart target은 SDK `>=3.13.3,<4.0.0`을 사용하고 portable package를 Flutter가 직접 소비한다.
-Dart runtime 검증 host에는 Linux bubblewrap과 Landlock ABI `>=3`이 필요하다.
+Dart runtime 검증 host에는 Linux bubblewrap, 아래의 systemd user scope/cgroup v2 task 격리, Landlock ABI `>=3`이 필요하다.
 
 Canonical IR schema는 세 backend 모두 **v8**이고 diagnostics schema는 **v1**이다. Python의
 닫힌 compatibility identity는 generation schema/domain **v8**/`cott.generation.v8`, runtime
@@ -1756,7 +1756,9 @@ target annotation은 exact builtin `bool`·`str`·`bytes`, `pathlib.Path`, impor
 
 runtime signature probe는 implementation마다 별도 CPython process로 16.4.1과 같은 deny-by-default sandbox를 먼저 적용한 뒤 staged generated copy를 verified loader로 import하고 `typing.get_type_hints(include_extras=True)`만 수행하며 target function은 호출하지 않는다. 이 규칙은 effect 유무와 관계없이 모든 binding·agent implementation에 적용하며 sandbox를 강제할 수 없으면 검증을 시작하지 않는다.
 
-external top-level package는 installed `.dist-info` file inventory에서 lock의 한 distribution에 유일하게 귀속되어야 한다. namespace package, 여러 distribution이 같은 top-level package를 제공하는 경우와 inventory 밖 origin은 MVP에서 거부한다.
+external import는 최상위 package 이름이 아니라 실제 dotted module과 실행될 parent initializer의 installed `.dist-info/RECORD` 소유 관계로 판정한다. `from namespace import child`는 concrete child module이 있으면 그 origin을, symbol import는 parent module origin을 사용한다. 서로 다른 distribution이 `google` 같은 namespace를 공유해도 각 concrete origin이 lock-selected distribution 하나에 유일하게 귀속되면 허용한다. bare namespace import, 같은 module을 둘 이상이 소유하는 경우, unlocked sibling, inventory 밖 shadow origin, preloaded module의 다른 origin/search path는 거부한다.
+
+정적 binding 검사와 `prompt`는 target interpreter를 실행하지 않는다. configured interpreter의 PEP 405 환경이 있으면 `pyvenv.cfg`와 regular `.dist-info/METADATA`·CSV `RECORD`를 읽어 lock-selected name/version 및 concrete module inventory를 대조한다. 설치 환경이 없는 lock-only 입력에는 기존 distribution-name 기반 정적 사전검사가 남으며 설치 증거로 간주하지 않는다. 실제 verify와 runtime은 같은 compiler-owned import resolver로 package initializer를 실행하지 않고 regular-file origin을 해석하며, 직접 import와 실행될 parent initializer 모두의 identity·version·metadata·content hash를 기록/대조한다. wire schema와 ABI는 바뀌지 않으며 새 origin 요구를 충족하지 못한 기록은 실제 재검증해야 한다.
 
 local binding의 top-level package는 public cott package, `cott_runtime`, `_cott_impl`, CPython standard library와 locked distribution의 top-level package에서 분리해야 한다. target까지의 source parent `__init__.py`는 없거나 compiler가 생성한 빈 파일이어야 한다. 이 규칙으로 generated copy의 canonical module name과 initialization semantics를 고정한다.
 
@@ -1958,12 +1960,26 @@ path가 아니다. Gradle consumer는 compiled JAR를 dependency로 사용하므
 implementation visibility는 module boundary에서 유지되며 raw generated source를 app source set에
 합치지 않는다.
 
+Kotlin source audit은 원문 byte와 span을 유지하는 JVM grammar view를 사용한다.
+고정된 tree-sitter-kotlin-ng `1.1.0`/language ABI `14`에서 `dynamic`은 JVM 식별자로
+lexing하며 사용자 source를 치환하거나 구문 오류 검사를 생략하지 않는다. Adapter의 ABI와
+keyword table이 일치하지 않으면 fail closed한다.
+
 Alias는 transparent, newtype은 nominal, struct는 immutable, payload enum은 sealed, trait는
 associated generic parameter가 포함된 interface로 projection한다. Associated projection은
 additional bounded Kotlin type parameter로 lift하고 concrete impl assignment는 override 전에
 concrete type으로 치환한다. Abstract associated generic과 ordinary `T`에는 blanket runtime
 witness를 추가하지 않고 reflection이나 phantom `CottAssociated<Base, Marker>` wrapper도 쓰지
 않는다.
+
+Concrete `impl` 값의 ABI는 생성된 final class identity를 검사하고 동일한 instance를 유지한다.
+각 concrete class는 읽기 전용 companion 값 `Concrete.cottFactory`를 제공하므로
+`Factory[Concrete]` 구현은 class literal/reflection 없이 이를 반환한다. Factory 생성 자체로
+concrete instance를 만들거나 initializer/invariant를 실행하지 않는다.
+
+Match guard의 payload binding은 variant가 일치한 뒤 Canonical IR의 binding type을 Kotlin
+타입으로 projection해 지역 변수에 적용한다. Erased `Some<*>` payload를 그대로 `Any?`로
+남기지 않으며, 이 cast는 정적 타입 복원이지 arbitrary generic `T`의 runtime reification 증거가 아니다.
 
 JVM은 const generic parameter도 erase하므로 free const generic에는
 `_cott_const_<NAME>: cott_runtime.CottConst` value-witness parameter를 public facade와 internal
@@ -2010,6 +2026,31 @@ Ordinary `T`와 abstract associated generic은 JVM에서 erased되므로 arbitra
 unification을 주장하지 않는다. Runner가 concrete bounded type argument를 생성할 수 없거나
 abstract associated projection만 있으면 실제 관찰을 만들지 않는다. Concrete associated
 assignment와 const witness가 있는 path만 해당 concrete descriptor/value를 검사한다.
+Runner의 generic 후보는 모든 인자의 trait 제약과 모든 bound를 함께 맞추고, concrete impl의
+전체 trait type argument 및 상속 closure에서 일관된 치환을 구한다. Trait 이름만 맞춰
+다른 specialization을 넘기거나 임의의 `Int`로 덮어쓰지 않는다. 후보 annotation은 emitter와
+같은 associated-type-aware projection을 사용한다. 맞는 구현이 없거나 bounded 탐색이
+소진되면 명시적으로 unavailable을 기록하며 `Any` cast나 가짜 witness로 대체하지 않는다.
+
+Async cancellation probe에서 `requires`가 거부한 입력은 cancellation 성공이나 실패가 아니라
+`candidate_unavailable`로 기록한다. 다른 계약 위반과 실제 취소 실패는 계속 실패로 처리한다.
+
+Kotlin clock fixture는 runner가 canonical `start_ms`를 fixture local name별 immutable context에
+설치한다. `CottRuntime.fixtureClockNs(name)`과 suspend 대응 `fixtureClockNsSuspend(name)`은
+활성 context의 값을 nanosecond `ULong`으로 읽으며 변환 overflow, 없는 context/name은 거부한다.
+읽기나 scenario scheduling `tick`으로 시계를 자동 진행시키지 않고 host clock fallback도 없다.
+기존 두 인자 `CottFixtureContext` constructor는 빈 clock map을 사용한다. 구현 코드는 read hook만
+호출할 수 있고 context 생성·설치·변조는 binding audit이 거부한다. Clock scenario도 실제 facade
+호출과 인증된 runner assertion으로 검증한다. 별도 interception authority가 없는 failure/HTTP
+scenario는 계속 `unobserved`이며 clock 지원을 이유로 관찰 성공으로 올리지 않는다.
+
+`CottRuntime.exitWithCode(code: UByte): Nothing`은 실제 process 종료 코드로 전달한다.
+구현 source audit은 canonical callable에 `process.exit` 효과가 있는 경우에만 이 operation의
+직접 호출을 허용한다. Manifest binding과 agent candidate에 같은 gate를 적용하며 private helper
+호출도 해당 source owner의 권한을 따른다. Operation 또는 이를 호출하는 helper의 callable
+reference, lambda/anonymous object를 통한 지연 호출은 거부한다. 직접 `System.exit`,
+`kotlin.system.exitProcess`, `Runtime.halt`와 verifier-control/reflection 우회는 계속 금지한다.
+성공 OS 종료 상태는 verification evidence가 아니며 인증된 final completion 없이 certify하지 않는다.
 
 Runner event는 매 실행 새로 만든 256-bit key와 HMAC-SHA256으로 인증한다. Key는 one-way stdin
 pipe로만 전달하고 trusted runner가 candidate 실행 전에 전부 소비한다. Sequence와 exact JSON
@@ -2338,17 +2379,25 @@ hashed implementation detail이고 public behavior가 되면 Cott declaration으
 
 compiler release마다 adapter별 minimum supported CLI version과 exact argv template를 고정한다. v1.0은 Codex CLI `>=0.147.0`, Claude Code CLI `>=2.1.89`, OMP `>=17.2.12`를 허용한다. executable은 `PATH`에서 한 번 resolve한다. version preflight는 main generation과 별개다. Claude는 probe를 실행하기 전에 canonical regular-file executable이 `cli.js`이거나 Node shebang을 가지면 거부한다. npm `cli.js` entrypoint는 허용하지 않으며 official native Claude Code installation이 필요하다. Claude probe의 exact argv는 `claude --version`이고 shell 없이 별도 argv로 실행한다. 이 probe는 credential(기존 `ANTHROPIC_API_KEY`를 포함)을 전혀 받지 않고 network가 disabled된 containment에서 실행하며 timeout 없이 status `0`으로 끝나야 한다. stdout 전체는 valid UTF-8의 정확히 하나인 strict SemVer token이어야 하고 그 값은 `>=2.1.89`여야 한다. version output이 해석 불가능하거나 minimum version보다 낮으면 본 실행 전에 실패한다.
 
-v1.0의 exact main-process argv template는 다음과 같다. 각 항목은 shell 재해석 없이 별도 argv다. `<workspace>`·`<scratch>/omp.yaml`·`<seconds>`·`<absolute-prompt-file>`만 run별 값으로 치환한다.
+`--model`을 생략한 v1.0의 exact main-process argv template는 다음과 같다. 각 항목은 shell 재해석 없이 별도 argv다. `<workspace>`·`<scratch>/omp.yaml`·`<seconds>`·`<absolute-prompt-file>`만 run별 값으로 치환한다.
 
 * Codex: `codex exec --strict-config --ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox workspace-write --color never --cd <workspace> -`; prompt bytes는 stdin으로 전달한다.
 * Claude: `claude --bare --print --input-format text --output-format json --permission-mode dontAsk --tools Read,Write --allowedTools Read,Write --disallowedTools Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__* --no-session-persistence`; exact UTF-8 prompt bytes는 stdin으로 전달하고 child cwd는 isolated workspace다.
 * OMP: `omp -p --cwd <workspace> --no-session --no-rules --no-skills --no-extensions --no-lsp --no-pty --no-title --tools read,grep,glob,edit,write --approval-mode yolo --max-time <seconds>s --config <scratch>/omp.yaml @<absolute-prompt-file>`; compiler는 OMP 본 실행 전에 exact prompt bytes를 workspace 밖 scratch의 create-new regular file에 쓰고, 그 absolute path 앞에 `@`를 붙인 마지막 단일 argv로 전달한다.
 
-공식 OMP 설치가 `#!/usr/bin/env bun` package launcher이면 inherited PATH에서 Bun을 한 번 resolve하고 canonical regular single-link executable과 content hash를 고정한다. version probe와 본 실행은 shell 없이 `bun <canonical launcher> <기존 adapter argv>`로 호출한다. selected launcher의 provenance는 유지하고 Bun hash는 각 실행 전과 generation 후에 다시 확인한다. package metadata에서 필요한 dependency/optional dependency/peer closure를 구해 개별 package 내용을 read-only로 mount하며 전체 `node_modules`나 HOME을 열지 않는다. 설치 경계 밖으로 나가는 package/symlink, 누락된 필수 dependency, unsafe Bun은 거부한다. sandbox PATH는 `/usr/bin:/bin`으로 유지하고 version probe의 network/credential 정책도 바꾸지 않는다. package 내용은 read-only mount이며 동시 host package-manager 변경에 대한 별도 snapshot은 아니다.
+`generate --model <selector>`는 선택한 adapter의 본 실행에만 두 argv `--model`, `<selector>`를
+추가한다. Codex는 `exec` 바로 뒤, OMP/Claude는 기존 flag 앞에 추가하며 version probe는
+변하지 않는다. Selector는 nonempty UTF-8이며 앞뒤 whitespace, control character, 선행 `-`를
+거부한다. 내부 space는 하나의 인자 값으로 보존한다. `--model`은 명시적 `--agent`를 요구하며
+중복·누락·잘못된 값은 project mutation 전에 거부한다. 생략 시 provider 기본 모델을 유지한다.
+Source retry와 parallel wave에도 동일한 선택을 사용하고 실제 selector를 기존
+`AgentRun.argv_template`에 저장한다. Record schema나 credential/environment allowlist는 바꾸지 않는다.
+
+공식 OMP 설치가 `#!/usr/bin/env bun` package launcher이면 inherited PATH에서 Bun을 한 번 resolve하고 canonical regular executable과 content hash를 고정한다. 에이전트 entrypoint와 Bun runtime은 package-manager 설치의 hardlink를 허용하며 link count를 제한하지 않는다. version probe와 본 실행은 shell 없이 `bun <canonical launcher> <기존 adapter argv>`로 호출한다. selected launcher의 provenance는 유지하고 Bun hash는 각 실행 전과 generation 후에 다시 확인한다. package metadata에서 필요한 dependency/optional dependency/peer closure를 구해 개별 package 내용을 read-only로 mount하며 전체 `node_modules`나 HOME을 열지 않는다. 설치 경계 밖으로 나가는 package/symlink, 누락된 필수 dependency, unsafe Bun은 거부한다. sandbox PATH는 `/usr/bin:/bin`으로 유지하고 version probe의 network/credential 정책도 바꾸지 않는다. package 내용은 read-only mount이며 동시 host package-manager 변경에 대한 별도 snapshot은 아니다.
 
 다음 environment allowlist는 main generation process에만 적용하며 version preflight에는 적용하지 않는다. 공통 environment name은 `HOME`, `PATH`, `PYTHONDONTWRITEBYTECODE`, `TMPDIR`이며 host에 존재할 때만 `SSL_CERT_FILE`, `SSL_CERT_DIR`, `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`를 추가한다. Codex는 존재하는 `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `CODEX_HOME`만, Claude는 존재하는 `ANTHROPIC_API_KEY`만, OMP는 존재하는 `PI_CODING_AGENT_DIR`만 추가한다. Claude에는 항상 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`도 설정한다. Claude에는 OAuth, auth-token, base-url, cloud, provider, customization 관련 environment name을 전달하지 않는다. 그 밖의 host environment는 전달하지 않는다.
 
-* shell을 사용하지 않고 executable과 각 인자를 분리하여 실행한다.
+* 에이전트 executable과 각 인자는 별도 argv로 전달하며 shell 문자열로 조합하거나 재해석하지 않는다. Compiler-owned 고정 `/bin/sh` startup gate만 scope 확인을 기다린 뒤 `exec "$@"`로 bubblewrap을 실행한다.
 * main process 실행 전에 executable의 canonical regular-file path, version과 content hash를 기록한다. Claude native-entrypoint rejection은 위와 같이 `claude --version` probe 전에 수행한다.
 * 작업 디렉터리는 17.4의 격리된 staging workspace다.
 * 실제 project root는 agent sandbox namespace에서 보이지 않는다. 대상 계약, 직접 참조 helper 계약, 필요한 binding·rule·기존 구현과 compiler-owned facade는 staging의 read-only copy로만 제공하고 현재 implementation file과 별도 scratch directory만 쓸 수 있다. Codex credential path, OMP native-addon cache와 위에서 검증한 OMP runtime/package closure만 project 밖에서 read-only로 열며, OMP의 `config.yml`과 `agent.db`는 매 실행 scratch로 복사하고 원본 credential directory는 열지 않는다. 이 sandbox를 강제할 수 없는 platform에서는 agent generate를 거부한다.
@@ -2358,6 +2407,24 @@ v1.0의 exact main-process argv template는 다음과 같다. 각 항목은 shel
 * `[generator].timeout_seconds`는 1–3600이며 default는 900이다. 모든 agent child는 compiler-owned process containment에 넣는다. parent가 정상 종료해도 남은 descendant를 전부 종료·reap하고 containment가 비었음을 확인한 뒤에만 candidate path를 staging workspace handle 기준 `O_NOFOLLOW`로 열어 regular file·`st_nlink == 1`인지 `fstat`으로 확인하고 읽는다. 그 밖의 file kind, 사용자 취소·timeout·비정상 종료나 descendant 정리 실패는 transaction을 폐기한다.
 * containment에는 compiler version이 고정한 process·CPU·memory·open-file·writable-byte ceiling을 적용하고 candidate implementation file은 최대 1 MiB로 제한한다. 어떤 ceiling이라도 넘으면 agent 실패다.
 * stdout·stderr는 끝까지 drain하며 전체 byte count·SHA-256와 truncation 여부를 계산하고 사용자에게 stream별 최대 1 MiB만 보여 준다. generation record에는 raw output을 넣지 않고 이 metadata, exit code, 실행 시간, adapter·executable path·version·content hash·prompt hash만 남긴다.
+
+모든 sandbox 실행은 systemd `>=254`의 reachable user manager와 cgroup v2 `pids` controller를
+요구한다. 각 실행에 고유한 transient `.scope`를 만들고 `TasksMax = process_count + 4`를
+설정한다. `process_count`는 payload의 process/thread budget이고 4는 supervisor 여유다.
+에이전트 budget은 기존 64를 유지한다. 기존 UID 전체 task 수를 더해 `RLIMIT_NPROC`를
+덮어쓰는 방식은 제거한다. 병렬 실행은 서로 다른 scope에 속하지만 host의 기존 UID/ancestor
+cgroup 한도까지 무시하거나 해제하지는 않는다.
+
+Payload 실행 전 실제 scope membership과 `pids.max`를 읽어 정확한 kernel limit을 확인한다.
+Systemd argv environment expansion은 끄고 user bus 접속 환경은 launcher에만 전달한다.
+User bus 환경이 비어 있으면 현재 UID 소유의 private `/run/user/<uid>`에서 표준 user manager를
+찾는다. Payload 환경은 sealed memfd와 bubblewrap `--args FD`로 전달하여 credential 값을
+launcher argv에 노출하지 않는다.
+Bubblewrap은 환경을 비운 뒤 기존 allowlist만 다시 설정한다. Startup gate의 내부 handshake는
+payload stdout/stdin에 포함되지 않으며 binary stdin과 인자 bytes를 보존한다.
+Manager, controller 또는 검증 가능한 scope가 없으면 제한 없는 fallback 없이 실패한다.
+Startup도 wall timeout에 포함하며 정상 종료·오류·timeout 뒤에는 기존 process-session 정리와
+scope 전체 kill/empty 확인을 함께 수행한다.
 
 에이전트가 0이 아닌 상태로 종료되거나 timeout되면 staging과 scratch 변경을 폐기한다. stdout의 code block은 구현으로 채택하지 않으며 허용된 implementation file의 최종 bytes만 후보 입력이다. compiler는 그 후보의 끝 LF를 정확히 하나로 정규화한 뒤 검증·hash·publication하며 그 밖의 bytes는 바꾸지 않는다. 0으로 종료해도 target callable이 없거나 file이 바뀌지 않아 unresolved면 실패한다.
 Claude adapter는 stdout이 JSON object이고 `type`이 `result`, `subtype`이 `success`, `is_error`가 `false`, `result`가 string인 경우에만 성공으로 받아들인다. JSON parse 또는 어느 field 검증이든 실패하면 fail closed한다. Claude provider process의 network egress는 기존 agent와 같이 enabled 상태로 남지만, 위 argv는 network-capable Claude tool을 하나도 노출하지 않는다.
@@ -2587,12 +2654,13 @@ pending agent source는 소유권을 유지한다. 결과는 항상 `.snapshots[
 ### 18.6 구현 생성
 
 ```bash
-cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]
+cott generate [<fully.qualified.callable>] --agent codex|claude|omp [--model <selector>] --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]
 
 cott generate --agent claude --target python
 cott generate foo.bar.process_bar --agent omp --target python
 cott generate example.module.calculate --agent codex --target kotlin
 cott generate example.module.calculate --agent omp --target dart
+cott generate --agent omp --model anthropic/claude-opus-5-5 --target python -j 3
 ```
 
 Explicit `--target`은 필수고 manifest의 exactly-one target과 일치해야 한다. Selection은 exact

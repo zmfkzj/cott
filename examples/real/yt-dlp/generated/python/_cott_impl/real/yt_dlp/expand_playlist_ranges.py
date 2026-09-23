@@ -1,20 +1,17 @@
-from cott_runtime import CottList, Err, Ok, Result
+import cott_runtime
+from cott_runtime import CottList, Result
 from real.yt_dlp_types import MediaError, MediaError_InvalidRange, MediaItem, PlaylistRange
 
 
 def expand_playlist_ranges(items: CottList[MediaItem], ranges: CottList[PlaylistRange]) -> Result[CottList[MediaItem], MediaError]:
     if len(ranges) == 0:
-        return Ok(value=items)
-
+        return cott_runtime.Ok(value=items)
+    for bounds in ranges:
+        if bounds.first == 0 or bounds.first > bounds.last:
+            return cott_runtime.Err(error=MediaError_InvalidRange())
     selected: list[MediaItem] = []
-    playlist_range: PlaylistRange
-    for playlist_range in ranges:
-        if playlist_range.first == 0 or playlist_range.last == 0 or playlist_range.first > playlist_range.last:
-            return Err(error=MediaError_InvalidRange())
-
-        item: MediaItem
-        for item in items:
-            if playlist_range.first <= item.playlist_index <= playlist_range.last:
-                selected.append(item)
-
-    return Ok(value=CottList(values=tuple(selected)))
+    for span in ranges:
+        for entry in items:
+            if span.first <= entry.playlist_index <= span.last:
+                selected.append(entry)
+    return cott_runtime.Ok(value=CottList(values=selected))

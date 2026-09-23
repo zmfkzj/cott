@@ -871,3 +871,110 @@ fun main(): Unit = runBlocking {
 "#,
     );
 }
+
+#[test]
+#[ignore = "requires COTT_KOTLIN_HOME with Kotlin 2.2.10 and JAVA_HOME with JDK 17"]
+fn kotlin_fixture_clocks_are_exact_immutable_and_context_isolated() {
+    compile_and_run(
+        r#"package cott_native_regression
+
+import cott_runtime.CottContractViolation
+import cott_runtime.CottFixtureContext
+import cott_runtime.CottRuntime
+import java.nio.file.Path
+import kotlin.concurrent.thread
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+
+private class Marker : RuntimeException()
+
+private fun expectFixtureViolation(operation: () -> Unit): Unit {
+    try {
+        operation()
+        error("fixture operation was accepted")
+    } catch (violation: CottContractViolation) {
+        check(violation.phase == "fixture")
+    }
+}
+
+private suspend fun expectFixtureViolationSuspend(operation: suspend () -> Unit): Unit {
+    try {
+        operation()
+        error("suspending fixture operation was accepted")
+    } catch (violation: CottContractViolation) {
+        check(violation.phase == "fixture")
+    }
+}
+
+fun main(): Unit = runBlocking {
+    expectFixtureViolation { CottRuntime.fixtureClockNs("clock") }
+    expectFixtureViolationSuspend { CottRuntime.fixtureClockNsSuspend("clock") }
+
+    val source = mutableMapOf("clock" to 17uL)
+    val outer = CottFixtureContext(Path.of("."), emptyMap(), source)
+    source["clock"] = 99uL
+    source["added"] = 23uL
+    val inner = CottFixtureContext(Path.of("."), emptyMap(), mapOf("clock" to 23uL))
+    val legacy = CottFixtureContext(Path.of("."), emptyMap())
+    val overflowing = CottFixtureContext(
+        Path.of("."),
+        emptyMap(),
+        mapOf("clock" to (ULong.MAX_VALUE / 1_000_000uL + 1uL)),
+    )
+
+    CottRuntime.withFixtureContext(legacy) {
+        expectFixtureViolation { CottRuntime.fixtureClockNs("clock") }
+    }
+    CottRuntime.withFixtureContext(outer) {
+        check(CottRuntime.fixtureClockNs("clock") == 17_000_000uL)
+        check(CottRuntime.fixtureClockNs("clock") == 17_000_000uL)
+        expectFixtureViolation { CottRuntime.fixtureClockNs("") }
+        expectFixtureViolation { CottRuntime.fixtureClockNs("missing") }
+        expectFixtureViolation { CottRuntime.fixtureClockNs("added") }
+
+        try {
+            CottRuntime.withFixtureContext(inner) {
+                check(CottRuntime.fixtureClockNs("clock") == 23_000_000uL)
+                throw Marker()
+            }
+        } catch (_: Marker) {
+            check(CottRuntime.fixtureClockNs("clock") == 17_000_000uL)
+        }
+
+        var leakedToThread = false
+        thread {
+            expectFixtureViolation { CottRuntime.fixtureClockNs("clock") }
+            leakedToThread = true
+        }.join()
+        check(leakedToThread)
+    }
+    expectFixtureViolation { CottRuntime.fixtureClockNs("clock") }
+
+    CottRuntime.withFixtureContext(overflowing) {
+        expectFixtureViolation { CottRuntime.fixtureClockNs("clock") }
+    }
+
+    CottRuntime.withFixtureContextSuspend(outer) {
+        withContext(Dispatchers.Default) {
+            check(CottRuntime.fixtureClockNsSuspend("clock") == 17_000_000uL)
+            check(CottRuntime.fixtureClockNsSuspend("clock") == 17_000_000uL)
+            expectFixtureViolation { CottRuntime.fixtureClockNs("clock") }
+            try {
+                CottRuntime.withFixtureContextSuspend(inner) {
+                    check(CottRuntime.fixtureClockNsSuspend("clock") == 23_000_000uL)
+                    throw Marker()
+                }
+            } catch (_: Marker) {
+                check(CottRuntime.fixtureClockNsSuspend("clock") == 17_000_000uL)
+            }
+        }
+    }
+    expectFixtureViolationSuspend { CottRuntime.fixtureClockNsSuspend("clock") }
+    CottRuntime.withFixtureContextSuspend(overflowing) {
+        expectFixtureViolationSuspend { CottRuntime.fixtureClockNsSuspend("clock") }
+    }
+}
+"#,
+    );
+}

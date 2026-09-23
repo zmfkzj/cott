@@ -3,15 +3,15 @@ from real.yt_dlp_types import MediaItem, MetadataRequest
 
 
 def plan_metadata(item: MediaItem, request: MetadataRequest) -> CottList[str]:
-    planned: list[str] = []
+    outputs: list[str] = []
     if request.write_info_json:
-        planned.append(f"{item.id}.info.json")
+        outputs.append(item.id + ".info.json")
     if request.write_description:
-        planned.append(f"{item.id}.description")
+        outputs.append(item.id + ".description")
     if request.write_comments:
-        planned.append(f"{item.id}.comments.json")
+        outputs.append(item.id + ".comments.json")
     if request.write_playlist_metadata:
-        planned.append(f"{item.id}.playlist.json")
+        outputs.append(item.id + ".playlist.json")
     if request.embed:
-        planned.append(f"embed:{item.id}")
-    return CottList(values=tuple(planned))
+        outputs.append("embed:" + item.id)
+    return CottList(values=outputs)

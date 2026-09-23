@@ -799,3 +799,81 @@ pathlib.Path('implementation.dart').write_text(source, encoding='utf-8')
         "pending source must not leak into the emitted package"
     );
 }
+
+#[test]
+fn generate_propagates_the_requested_model_into_the_agent_argv_and_provenance() {
+    let project = project("module sample\n\nfn alpha(value: I32) -> I32\n", None);
+    let tools = tool_path(&project.path);
+    write_exec(
+        &tools.join("omp"),
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
+[ "$1" = "--model" ] || { echo 'missing --model' >&2; exit 64; }
+[ "$2" = "anthropic/claude-opus-5-5" ] || { echo 'unexpected model value' >&2; exit 64; }
+last=
+for arg; do last=$arg; done
+case "$last" in
+  @*) : ;;
+  *) echo 'missing prompt file' >&2; exit 64 ;;
+esac
+printf '%s\n' 'int _cott_sample_alpha(int value) {' '  return value + 1;' '}' > implementation.dart
+"#,
+    );
+
+    let generated = command(
+        &project.path,
+        &tools,
+        &[
+            "generate",
+            "--agent",
+            "omp",
+            "--model",
+            "anthropic/claude-opus-5-5",
+            "--target",
+            "dart",
+        ],
+    );
+    // The fixture deliberately has no Dart SDK; successful provider output is
+    // checkpointed, but must not be reported as a verified target.
+    assert_eq!(
+        generated.status.code(),
+        Some(5),
+        "{}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+
+    let record = generation_record(&project.path);
+    assert!(!record.current.verified);
+    assert!(record.current.verification.is_null());
+    assert_eq!(record.current.agent_runs.len(), 1);
+    let argv_template = &record.current.agent_runs[0].argv_template;
+    assert_eq!(
+        argv_template[..2],
+        ["--model".to_owned(), "anthropic/claude-opus-5-5".to_owned()]
+    );
+    assert_eq!(
+        argv_template[2..],
+        [
+            "-p",
+            "--cwd",
+            "<workspace>",
+            "--no-session",
+            "--no-rules",
+            "--no-skills",
+            "--no-extensions",
+            "--no-lsp",
+            "--no-pty",
+            "--no-title",
+            "--tools",
+            "read,grep,glob,edit,write",
+            "--approval-mode",
+            "yolo",
+            "--max-time",
+            "<seconds>s",
+            "--config",
+            "<overlay>",
+            "@<prompt-file>",
+        ]
+        .map(str::to_owned)
+    );
+}

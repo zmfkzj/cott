@@ -15,109 +15,134 @@ from real.harlequin.catalog_types import CatalogColumn, CatalogMatch, CatalogRel
 from real.harlequin.core_types import FileReference, QueryResult
 
 def render_table(result: QueryResult) -> str:
+    """Format Cell.Null as NULL, Integer/Real as str(value), Text as its stored text,
+and Blob as lowercase hexadecimal. Emit a header joined by " | " when columns
+is nonempty, then one similarly joined line for each row in input order.
+Join lines with LF without a trailing LF. No columns and no rows returns "".
+This function applies no row or width limit."""
     result = _cott_validate_abi(result, QueryResult, path="$.result")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/render/render_table.py", "42bdf8cca6c3722d9ca69cc776cf83b885ced88791d40c3846e83523b29b8a81", "render_table", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.render_table")
+        _implementation = _cott_load("_cott_impl/real/harlequin/render/render_table.py", "25c80435f43729afc74f4e4d7b8e1627f05aa41e3d92cb00ed649cffbd16f39b", "render_table", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.render_table")
         _result = _implementation(result)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.render.render_table"
         if _error.span is None:
-            _error.span = {"end_byte":940,"end_column":1,"end_line":51,"start_byte":879,"start_column":1,"start_line":48}
+            _error.span = {"end_byte":1333,"end_column":1,"end_line":59,"start_byte":879,"start_column":1,"start_line":48}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.render_table", phase="implementation-call", span={"end_byte":940,"end_column":1,"end_line":51,"start_byte":879,"start_column":1,"start_line":48}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.render_table", phase="implementation-call", span={"end_byte":1333,"end_column":1,"end_line":59,"start_byte":879,"start_column":1,"start_line":48}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.render_table", phase="implementation-call", span={"end_byte":940,"end_column":1,"end_line":51,"start_byte":879,"start_column":1,"start_line":48}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.render_table", phase="implementation-call", span={"end_byte":1333,"end_column":1,"end_line":59,"start_byte":879,"start_column":1,"start_line":48}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def render_vertical(result: QueryResult) -> str:
+    """For each row, starting at one, emit "Row N" followed by "column: value" lines
+for paired columns and values. Use the same cell text mapping as render_table.
+Preserve order, join with LF without a trailing LF; no rows returns "".
+Pair only the common length if columns and values differ."""
     result = _cott_validate_abi(result, QueryResult, path="$.result")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/render/render_vertical.py", "0e4762abb501e6330a1e77a31fe4d5d37bb92f574c555cd986a97d47b0c833ab", "render_vertical", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.render_vertical")
+        _implementation = _cott_load("_cott_impl/real/harlequin/render/render_vertical.py", "d9b9fa41d382df9e1d2765950d0a8c219973793bf99a3cbd494bff812f523919", "render_vertical", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.render_vertical")
         _result = _implementation(result)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.render.render_vertical"
         if _error.span is None:
-            _error.span = {"end_byte":1004,"end_column":1,"end_line":54,"start_byte":940,"start_column":1,"start_line":51}
+            _error.span = {"end_byte":1721,"end_column":1,"end_line":69,"start_byte":1333,"start_column":1,"start_line":59}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.render_vertical", phase="implementation-call", span={"end_byte":1004,"end_column":1,"end_line":54,"start_byte":940,"start_column":1,"start_line":51}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.render_vertical", phase="implementation-call", span={"end_byte":1721,"end_column":1,"end_line":69,"start_byte":1333,"start_column":1,"start_line":59}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.render_vertical", phase="implementation-call", span={"end_byte":1004,"end_column":1,"end_line":54,"start_byte":940,"start_column":1,"start_line":51}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.render_vertical", phase="implementation-call", span={"end_byte":1721,"end_column":1,"end_line":69,"start_byte":1333,"start_column":1,"start_line":59}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def render_result(result: QueryResult, options: RenderOptions) -> Result[str, RenderError]:
+    """terminal_width or maximum_cell_width zero returns InvalidWidth with that zero
+width. Reject a NUL in a column name or Text cell as UnsupportedCell.
+Keep only the first maximum_rows rows, preserving columns and order.
+Use the render_table cell mapping, truncating every column/cell string to
+maximum_cell_width Unicode code points before formatting. Table uses " | "
+headers/rows; Vertical uses "Row N" and "column: value" lines.
+Clip each resulting line to terminal_width code points without ellipsis.
+Join with LF and no trailing LF. If output would be empty or whitespace only,
+use "(no rows)" clipped to terminal_width so successful output is nonempty.
+Do not replace real row rendering with a debug repr of the whole QueryResult."""
     result = _cott_validate_abi(result, QueryResult, path="$.result")
     options = _cott_validate_abi(options, RenderOptions, path="$.options")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/render/render_result.py", "845e713f4ffee69c4f638ea6b43c829b143c7100afb1c8ef6e3d7923dd59d9b5", "render_result", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.render_result")
+        _implementation = _cott_load("_cott_impl/real/harlequin/render/render_result.py", "6a1043dfc2b57df3645b7ed0540b95e1cf753a3b3aa052050d49cd8e180e5e5a", "render_result", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.render_result")
         _result = _implementation(result, options)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.render.render_result"
         if _error.span is None:
-            _error.span = {"end_byte":1238,"end_column":1,"end_line":62,"start_byte":1004,"start_column":1,"start_line":54}
+            _error.span = {"end_byte":2750,"end_column":1,"end_line":90,"start_byte":1721,"start_column":1,"start_line":69}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.render_result", phase="implementation-call", span={"end_byte":1238,"end_column":1,"end_line":62,"start_byte":1004,"start_column":1,"start_line":54}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.render_result", phase="implementation-call", span={"end_byte":2750,"end_column":1,"end_line":90,"start_byte":1721,"start_column":1,"start_line":69}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.render_result", phase="implementation-call", span={"end_byte":1238,"end_column":1,"end_line":62,"start_byte":1004,"start_column":1,"start_line":54}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.render_result", phase="implementation-call", span={"end_byte":2750,"end_column":1,"end_line":90,"start_byte":1721,"start_column":1,"start_line":69}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[str, RenderError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.render.render_result", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (RenderError_InvalidWidth, RenderError_UnsupportedCell,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.render.render_result", phase="error", span={"end_byte":1238,"end_column":1,"end_line":62,"start_byte":1004,"start_column":1,"start_line":54}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.render.render_result", phase="error", span={"end_byte":2750,"end_column":1,"end_line":90,"start_byte":1721,"start_column":1,"start_line":69}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.render.render_result", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
         _cott_contract_condition(True, "real.harlequin.render.render_result", _expected_error_clause)
     if type(_result) is Err and type(_result.error) is RenderError_InvalidWidth:
-        _cott_contract_condition(True, "real.harlequin.render.render_result", "error:1")
-    if type(_result) is Err and type(_result.error) is RenderError_UnsupportedCell:
         _cott_contract_condition(True, "real.harlequin.render.render_result", "error:2")
-    def _cott_match_ensures_0() -> bool:
+    if type(_result) is Err and type(_result.error) is RenderError_UnsupportedCell:
+        _cott_contract_condition(True, "real.harlequin.render.render_result", "error:3")
+    def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             rendered = _cott_match_value.value
-            return (_cott_contract_condition(((len(rendered) > 0)), "real.harlequin.render.render_result", "ensures:0"))
-        _cott_contract_condition((False), "real.harlequin.render.render_result", "ensures:0:applicable")
+            return (_cott_contract_condition(((len(rendered) > 0)), "real.harlequin.render.render_result", "ensures:1"))
+        _cott_contract_condition((False), "real.harlequin.render.render_result", "ensures:1:applicable")
         return True
-    if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.render.render_result", clause="ensures:0", phase="ensures", span={"end_byte":1146,"end_column":52,"end_line":55,"start_byte":1099,"start_column":5,"start_line":55}, expected="true", actual="false")
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.render.render_result", clause="ensures:1", phase="ensures", span={"end_byte":2658,"end_column":52,"end_line":83,"start_byte":2611,"start_column":5,"start_line":83}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[str, RenderError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def render_catalog_relations(relations: CottList[CatalogRelation]) -> str:
+    """This diagnostic view joins the standard generated CatalogRelation string
+representation for each value with LF, preserving order. No trailing LF;
+empty input returns "". No database access or extra records are introduced."""
     relations = _cott_validate_abi(relations, CottList[CatalogRelation], path="$.relations")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/render/render_catalog_relations.py", "c37194fbbe81e640c3c12dc09948416d1d26fb99dfad504559e69c44a9a0cc39", "render_catalog_relations", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.render_catalog_relations")
+        _implementation = _cott_load("_cott_impl/real/harlequin/render/render_catalog_relations.py", "6ba7e591c09de6f69cd4ec8bde4b72820e4eaa2960c4ba2c258100131383a9a2", "render_catalog_relations", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.render_catalog_relations")
         _result = _implementation(relations)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.render.render_catalog_relations"
         if _error.span is None:
-            _error.span = {"end_byte":1324,"end_column":1,"end_line":65,"start_byte":1238,"start_column":1,"start_line":62}
+            _error.span = {"end_byte":3091,"end_column":1,"end_line":99,"start_byte":2750,"start_column":1,"start_line":90}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.render_catalog_relations", phase="implementation-call", span={"end_byte":1324,"end_column":1,"end_line":65,"start_byte":1238,"start_column":1,"start_line":62}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.render_catalog_relations", phase="implementation-call", span={"end_byte":3091,"end_column":1,"end_line":99,"start_byte":2750,"start_column":1,"start_line":90}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.render_catalog_relations", phase="implementation-call", span={"end_byte":1324,"end_column":1,"end_line":65,"start_byte":1238,"start_column":1,"start_line":62}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.render_catalog_relations", phase="implementation-call", span={"end_byte":3091,"end_column":1,"end_line":99,"start_byte":2750,"start_column":1,"start_line":90}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def render_catalog_columns(columns: CottList[CatalogColumn]) -> str:
+    """This diagnostic view joins the standard generated CatalogColumn string
+representation for each value with LF, retaining all fields and input order.
+No trailing LF; empty input returns "". It is not an inferred SQL declaration."""
     columns = _cott_validate_abi(columns, CottList[CatalogColumn], path="$.columns")
     try:
         _implementation = _cott_load("_cott_impl/real/harlequin/render/render_catalog_columns.py", "2887e8cdae1c47ae996b671bf95de8f1b36426b891476eb34641b375315037e6", "render_catalog_columns", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.render_catalog_columns")
@@ -126,72 +151,82 @@ def render_catalog_columns(columns: CottList[CatalogColumn]) -> str:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.render.render_catalog_columns"
         if _error.span is None:
-            _error.span = {"end_byte":1404,"end_column":1,"end_line":68,"start_byte":1324,"start_column":1,"start_line":65}
+            _error.span = {"end_byte":3431,"end_column":1,"end_line":108,"start_byte":3091,"start_column":1,"start_line":99}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.render_catalog_columns", phase="implementation-call", span={"end_byte":1404,"end_column":1,"end_line":68,"start_byte":1324,"start_column":1,"start_line":65}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.render_catalog_columns", phase="implementation-call", span={"end_byte":3431,"end_column":1,"end_line":108,"start_byte":3091,"start_column":1,"start_line":99}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.render_catalog_columns", phase="implementation-call", span={"end_byte":1404,"end_column":1,"end_line":68,"start_byte":1324,"start_column":1,"start_line":65}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.render_catalog_columns", phase="implementation-call", span={"end_byte":3431,"end_column":1,"end_line":108,"start_byte":3091,"start_column":1,"start_line":99}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def render_catalog_matches(catalog_matches: CottList[CatalogMatch]) -> str:
+    """This diagnostic view joins the standard generated CatalogMatch string
+representation for each value with LF, preserving order and all fields.
+No trailing LF; empty input returns ""."""
     catalog_matches = _cott_validate_abi(catalog_matches, CottList[CatalogMatch], path="$.catalog_matches")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/render/render_catalog_matches.py", "0562c59400798c8e8d6881dc68b7ef40f7f41e28d315ee1e6cfdb2672a6ecdb0", "render_catalog_matches", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.render_catalog_matches")
+        _implementation = _cott_load("_cott_impl/real/harlequin/render/render_catalog_matches.py", "cb096a1de153fa7b6713a10ebf15f704a3700c912c41ec26c85bd909fb65722f", "render_catalog_matches", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.render_catalog_matches")
         _result = _implementation(catalog_matches)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.render.render_catalog_matches"
         if _error.span is None:
-            _error.span = {"end_byte":1491,"end_column":1,"end_line":71,"start_byte":1404,"start_column":1,"start_line":68}
+            _error.span = {"end_byte":3733,"end_column":1,"end_line":117,"start_byte":3431,"start_column":1,"start_line":108}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.render_catalog_matches", phase="implementation-call", span={"end_byte":1491,"end_column":1,"end_line":71,"start_byte":1404,"start_column":1,"start_line":68}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.render_catalog_matches", phase="implementation-call", span={"end_byte":3733,"end_column":1,"end_line":117,"start_byte":3431,"start_column":1,"start_line":108}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.render_catalog_matches", phase="implementation-call", span={"end_byte":1491,"end_column":1,"end_line":71,"start_byte":1404,"start_column":1,"start_line":68}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.render_catalog_matches", phase="implementation-call", span={"end_byte":3733,"end_column":1,"end_line":117,"start_byte":3431,"start_column":1,"start_line":108}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def bundled_themes() -> CottList[Theme]:
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/render/bundled_themes.py", "2ae892c96edbf7eb71da8d5e8cd1fddd9971b64ff5f52300171735e4cad403eb", "bundled_themes", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.bundled_themes")
+        _implementation = _cott_load("_cott_impl/real/harlequin/render/bundled_themes.py", "696662dc389ded2dc5cf72a0f7826f882dd99a4d154bf6e48c2d3f4db10fd051", "bundled_themes", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.bundled_themes")
         _result = _implementation()
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.render.bundled_themes"
         if _error.span is None:
-            _error.span = {"end_byte":1543,"end_column":1,"end_line":74,"start_byte":1491,"start_column":1,"start_line":71}
+            _error.span = {"end_byte":3785,"end_column":1,"end_line":120,"start_byte":3733,"start_column":1,"start_line":117}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.bundled_themes", phase="implementation-call", span={"end_byte":1543,"end_column":1,"end_line":74,"start_byte":1491,"start_column":1,"start_line":71}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.bundled_themes", phase="implementation-call", span={"end_byte":3785,"end_column":1,"end_line":120,"start_byte":3733,"start_column":1,"start_line":117}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.bundled_themes", phase="implementation-call", span={"end_byte":1543,"end_column":1,"end_line":74,"start_byte":1491,"start_column":1,"start_line":71}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.bundled_themes", phase="implementation-call", span={"end_byte":3785,"end_column":1,"end_line":120,"start_byte":3733,"start_column":1,"start_line":117}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, CottList[Theme], path="$.return")
     _result = _cott_wrap_async_protocol(_result, CottList[Theme], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def bundled_keymaps() -> CottList[Keymap]:
+    """Return exactly two built-in keymaps, in this order. "default" contains
+ctrl+enter -> execute, ctrl+s -> save, ctrl+q -> quit.
+"vim" contains ctrl+enter -> execute, :w -> save, :q -> quit.
+Preserve the listed binding order and exact spelling. These are this Cott
+client's static defaults, not a runtime scan of upstream packages or plugins."""
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/render/bundled_keymaps.py", "975f15964b8c663b96d879eee556f881f3a7ddfbef1c301ca1ec4a0c9115ed3e", "bundled_keymaps", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.bundled_keymaps")
+        _implementation = _cott_load("_cott_impl/real/harlequin/render/bundled_keymaps.py", "0da31ff828b2899fbf630beca11c5a7e7f00cad9be932627beecd02e97a78710", "bundled_keymaps", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.bundled_keymaps")
         _result = _implementation()
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.render.bundled_keymaps"
         if _error.span is None:
-            _error.span = {"end_byte":1597,"end_column":1,"end_line":77,"start_byte":1543,"start_column":1,"start_line":74}
+            _error.span = {"end_byte":4220,"end_column":1,"end_line":131,"start_byte":3785,"start_column":1,"start_line":120}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.bundled_keymaps", phase="implementation-call", span={"end_byte":1597,"end_column":1,"end_line":77,"start_byte":1543,"start_column":1,"start_line":74}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.bundled_keymaps", phase="implementation-call", span={"end_byte":4220,"end_column":1,"end_line":131,"start_byte":3785,"start_column":1,"start_line":120}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.bundled_keymaps", phase="implementation-call", span={"end_byte":1597,"end_column":1,"end_line":77,"start_byte":1543,"start_column":1,"start_line":74}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.bundled_keymaps", phase="implementation-call", span={"end_byte":4220,"end_column":1,"end_line":131,"start_byte":3785,"start_column":1,"start_line":120}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, CottList[Keymap], path="$.return")
     _result = _cott_wrap_async_protocol(_result, CottList[Keymap], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def resolve_theme(themes: CottList[Theme], name: str) -> Option[Theme]:
+    """Return Some containing the first Theme whose name exactly equals name,
+case-sensitively; return Nothing when there is no match. Do not clone or edit it."""
     themes = _cott_validate_abi(themes, CottList[Theme], path="$.themes")
     name = _cott_validate_abi(name, str, path="$.name")
     try:
@@ -201,17 +236,19 @@ def resolve_theme(themes: CottList[Theme], name: str) -> Option[Theme]:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.render.resolve_theme"
         if _error.span is None:
-            _error.span = {"end_byte":1680,"end_column":1,"end_line":80,"start_byte":1597,"start_column":1,"start_line":77}
+            _error.span = {"end_byte":4485,"end_column":1,"end_line":139,"start_byte":4220,"start_column":1,"start_line":131}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.resolve_theme", phase="implementation-call", span={"end_byte":1680,"end_column":1,"end_line":80,"start_byte":1597,"start_column":1,"start_line":77}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.resolve_theme", phase="implementation-call", span={"end_byte":4485,"end_column":1,"end_line":139,"start_byte":4220,"start_column":1,"start_line":131}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.resolve_theme", phase="implementation-call", span={"end_byte":1680,"end_column":1,"end_line":80,"start_byte":1597,"start_column":1,"start_line":77}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.resolve_theme", phase="implementation-call", span={"end_byte":4485,"end_column":1,"end_line":139,"start_byte":4220,"start_column":1,"start_line":131}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Option[Theme], path="$.return")
     _result = _cott_wrap_async_protocol(_result, Option[Theme], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def resolve_keymap(keymaps: CottList[Keymap], name: str) -> Option[Keymap]:
+    """Return Some containing the first Keymap whose name exactly equals name,
+case-sensitively; return Nothing when there is no match. Do not clone or edit it."""
     keymaps = _cott_validate_abi(keymaps, CottList[Keymap], path="$.keymaps")
     name = _cott_validate_abi(name, str, path="$.name")
     try:
@@ -221,12 +258,12 @@ def resolve_keymap(keymaps: CottList[Keymap], name: str) -> Option[Keymap]:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.render.resolve_keymap"
         if _error.span is None:
-            _error.span = {"end_byte":1767,"end_column":1,"end_line":83,"start_byte":1680,"start_column":1,"start_line":80}
+            _error.span = {"end_byte":4755,"end_column":1,"end_line":147,"start_byte":4485,"start_column":1,"start_line":139}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.resolve_keymap", phase="implementation-call", span={"end_byte":1767,"end_column":1,"end_line":83,"start_byte":1680,"start_column":1,"start_line":80}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.resolve_keymap", phase="implementation-call", span={"end_byte":4755,"end_column":1,"end_line":147,"start_byte":4485,"start_column":1,"start_line":139}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.resolve_keymap", phase="implementation-call", span={"end_byte":1767,"end_column":1,"end_line":83,"start_byte":1680,"start_column":1,"start_line":80}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.resolve_keymap", phase="implementation-call", span={"end_byte":4755,"end_column":1,"end_line":147,"start_byte":4485,"start_column":1,"start_line":139}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Option[Keymap], path="$.return")
     _result = _cott_wrap_async_protocol(_result, Option[Keymap], path="$.return", validator=_cott_validate_abi)
     return _result
@@ -238,25 +275,25 @@ def export_result(request: ExportRequest) -> Result[Unit, RenderError]:
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/render/export_result.py", "fc722df1632a58ff24655660209f33992ddae2837a0022571088ce3954b5d04b", "export_result", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.export_result")
+        _implementation = _cott_load("_cott_impl/real/harlequin/render/export_result.py", "79c8a787985809860d4cb84e972db6fe13085af8417db440fe821b7f2cbe5ab5", "export_result", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.render.export_result")
         _result = _implementation(request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.render.export_result"
         if _error.span is None:
-            _error.span = {"end_byte":2127,"end_column":1,"end_line":94,"start_byte":1767,"start_column":1,"start_line":83}
+            _error.span = {"end_byte":5115,"end_column":1,"end_line":158,"start_byte":4755,"start_column":1,"start_line":147}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.export_result", phase="implementation-call", span={"end_byte":2127,"end_column":1,"end_line":94,"start_byte":1767,"start_column":1,"start_line":83}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.render.export_result", phase="implementation-call", span={"end_byte":5115,"end_column":1,"end_line":158,"start_byte":4755,"start_column":1,"start_line":147}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.export_result", phase="implementation-call", span={"end_byte":2127,"end_column":1,"end_line":94,"start_byte":1767,"start_column":1,"start_line":83}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.render.export_result", phase="implementation-call", span={"end_byte":5115,"end_column":1,"end_line":158,"start_byte":4755,"start_column":1,"start_line":147}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[Unit, RenderError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.render.export_result", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (RenderError_DestinationDenied, RenderError_ExportFailed,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.render.export_result", phase="error", span={"end_byte":2127,"end_column":1,"end_line":94,"start_byte":1767,"start_column":1,"start_line":83}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.render.export_result", phase="error", span={"end_byte":5115,"end_column":1,"end_line":158,"start_byte":4755,"start_column":1,"start_line":147}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.render.export_result", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -273,7 +310,7 @@ def export_result(request: ExportRequest) -> Result[Unit, RenderError]:
         _cott_contract_condition((False), "real.harlequin.render.export_result", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.render.export_result", clause="ensures:1", phase="ensures", span={"end_byte":2015,"end_column":63,"end_line":88,"start_byte":1957,"start_column":5,"start_line":88}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.render.export_result", clause="ensures:1", phase="ensures", span={"end_byte":5003,"end_column":63,"end_line":152,"start_byte":4945,"start_column":5,"start_line":152}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[Unit, RenderError], path="$.return", validator=_cott_validate_abi)
     return _result
 

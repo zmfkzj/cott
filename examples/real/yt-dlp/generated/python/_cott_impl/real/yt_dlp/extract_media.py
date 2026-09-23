@@ -1,133 +1,172 @@
-from base64 import b64encode
-from pathlib import Path
-from urllib.parse import unquote, urlsplit
-from urllib.request import Request, urlopen
+import base64
+import socket
+import ssl
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import PurePosixPath
+from typing import Final
 
 from cott_runtime import CottList, Err, Ok, Result
-from real.yt_dlp_types import (
-    Authentication,
-    AuthenticationKind_Anonymous,
-    AuthenticationKind_BrowserCookies,
-    AuthenticationKind_Cookies,
-    AuthenticationKind_Credentials,
-    AuthenticationKind_Netrc,
-    ExtractorDescriptor,
-    MediaError,
-    MediaError_AuthenticationFailed,
-    MediaError_GeoRestricted,
-    MediaError_HttpStatus,
-    MediaError_NetworkFailure,
-    MediaError_UnsupportedUrl,
-    MediaItem,
-    NetworkPolicy,
-)
+from real.yt_dlp_types import Authentication, AuthenticationKind_Anonymous, AuthenticationKind_BrowserCookies, AuthenticationKind_Cookies, AuthenticationKind_Credentials, AuthenticationKind_Netrc, ExtractorDescriptor, GeoBypassMode_Country, GeoBypassMode_Default, GeoBypassMode_Disabled, GeoBypassMode_IpBlock, MediaError, MediaError_AuthenticationFailed, MediaError_GeoRestricted, MediaError_HttpStatus, MediaError_NetworkFailure, MediaError_UnsupportedUrl, MediaItem, NetworkPolicy, ProxyMode_Direct, ProxyMode_Http, ProxyMode_Socks
+
+_DEFAULT_TIMEOUT_S: Final[float] = 20.0
+
+
+def _valid_http_url(url: str) -> bool:
+    if url == "" or any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname
+    except ValueError:
+        return False
+    return parts.scheme.lower() in ("http", "https") and host is not None and host != ""
+
+
+def _extractor_accepts(url: str, extractor: ExtractorDescriptor) -> bool:
+    if not extractor.enabled:
+        return False
+    if len(extractor.urls) == 0:
+        return True
+    for i in range(len(extractor.urls)):
+        prefix: str = extractor.urls[i]
+        if prefix != "" and url.startswith(prefix):
+            return True
+    return False
+
+
+def _host_of(url: str) -> str:
+    host = urllib.parse.urlsplit(url).hostname
+    return host if host is not None else ""
+
+
+def _basic_header(username: str, password: str) -> str:
+    token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+    return f"Basic {token}"
+
+
+def _auth_setup(extractor: ExtractorDescriptor, authentication: Authentication, headers: dict[str, str]) -> MediaError | None:
+    match authentication.kind:
+        case AuthenticationKind_Anonymous():
+            if extractor.requires_login:
+                return MediaError_AuthenticationFailed(message=f"extractor {extractor.name} requires login")
+            return None
+        case AuthenticationKind_Credentials():
+            if authentication.username == "" or authentication.password == "":
+                return MediaError_AuthenticationFailed(message="username and password are required")
+            headers["Authorization"] = _basic_header(authentication.username, authentication.password)
+            return None
+        case AuthenticationKind_Netrc():
+            return MediaError_AuthenticationFailed(message="netrc authentication requires file.read, which extract_media does not declare")
+        case AuthenticationKind_Cookies():
+            return MediaError_AuthenticationFailed(message="cookie-file authentication requires file.read, which extract_media does not declare")
+        case AuthenticationKind_BrowserCookies():
+            browser = authentication.browser.strip()
+            if browser == "":
+                return MediaError_AuthenticationFailed(message="browser name is required")
+            return MediaError_AuthenticationFailed(message=f"browser cookie extraction unavailable for {browser}")
+
+
+def _network_address(block: str) -> str | None:
+    address, slash, prefix_text = block.partition("/")
+    family = socket.AF_INET6 if ":" in address else socket.AF_INET
+    try:
+        packed = socket.inet_pton(family, address)
+    except (OSError, ValueError):
+        return None
+    bits = len(packed) * 8
+    prefix = bits
+    if slash != "":
+        if prefix_text == "" or not prefix_text.isascii() or not prefix_text.isdigit():
+            return None
+        prefix = int(prefix_text)
+        if prefix > bits:
+            return None
+    mask = ((1 << bits) - 1) ^ ((1 << (bits - prefix)) - 1)
+    network = int.from_bytes(packed, "big") & mask
+    return socket.inet_ntop(family, network.to_bytes(len(packed), "big"))
+
+
+def _geo_setup(network: NetworkPolicy, headers: dict[str, str]) -> MediaError | None:
+    match network.geo_mode:
+        case GeoBypassMode_Disabled():
+            return None
+        case GeoBypassMode_Default():
+            return None
+        case GeoBypassMode_Country():
+            country = network.geo_country.strip()
+            if len(country) != 2 or not country.isascii() or not country.isalpha():
+                return MediaError_GeoRestricted(message="invalid geo bypass country code")
+            return None
+        case GeoBypassMode_IpBlock():
+            address = _network_address(network.geo_ip_block.strip())
+            if address is None:
+                return MediaError_GeoRestricted(message="invalid geo bypass IP block")
+            headers["X-Forwarded-For"] = address
+            return None
+
+
+def _network_setup(network: NetworkPolicy, headers: dict[str, str]) -> MediaError | None:
+    if network.force_ipv4 and network.force_ipv6:
+        return MediaError_NetworkFailure(message="cannot force both IPv4 and IPv6")
+    match network.proxy_mode:
+        case ProxyMode_Direct():
+            return _geo_setup(network, headers)
+        case ProxyMode_Http():
+            if not _valid_http_url(network.proxy):
+                return MediaError_NetworkFailure(message="invalid HTTP proxy")
+            return _geo_setup(network, headers)
+        case ProxyMode_Socks():
+            return MediaError_NetworkFailure(message="SOCKS proxy is not supported")
+
+
+def _item_from_url(final_url: str, content_type: str) -> MediaItem:
+    path = PurePosixPath(urllib.parse.unquote(urllib.parse.urlsplit(final_url).path))
+    name = path.name
+    stem = path.stem if path.stem != "" else _host_of(final_url)
+    ext = path.suffix[1:].lower() if path.suffix != "" else ""
+    if ext == "":
+        subtype = content_type.split(";", 1)[0].strip().lower().rpartition("/")[2]
+        ext = subtype if subtype.isalnum() else "unknown_video"
+    return MediaItem(url=final_url, id=stem, title=name if name != "" else stem, ext=ext, playlist_index=1)
 
 
 def extract_media(url: str, extractor: ExtractorDescriptor, authentication: Authentication, network: NetworkPolicy) -> Result[CottList[MediaItem], MediaError]:
-    if url == "" or not (url.startswith("http://") or url.startswith("https://")):
+    target = url.strip()
+    if not _valid_http_url(target) or not _extractor_accepts(target, extractor):
         return Err(error=MediaError_UnsupportedUrl())
-    if not extractor.enabled:
-        return Err(error=MediaError_UnsupportedUrl())
-
-    supported: bool = False
-    prefix: str
-    for prefix in extractor.urls:
-        if url.startswith(prefix):
-            supported = True
-            break
-    if not supported:
-        return Err(error=MediaError_UnsupportedUrl())
-    if network.socket_timeout_ms == 0:
-        return Err(error=MediaError_NetworkFailure(message="socket timeout must be greater than zero"))
-
     headers: dict[str, str] = {}
-    match authentication.kind:
-        case AuthenticationKind_Anonymous():
-            if (
-                authentication.username != ""
-                or authentication.password != ""
-                or authentication.netrc_location != Path()
-                or authentication.cookie_file != Path()
-                or authentication.browser != ""
-                or authentication.profile != ""
-            ):
-                return Err(error=MediaError_AuthenticationFailed(message="anonymous authentication cannot include authentication details"))
-            if extractor.requires_login:
-                return Err(error=MediaError_AuthenticationFailed(message=f"extractor requires authentication: {extractor.name}"))
-        case AuthenticationKind_Credentials():
-            if authentication.username == "" or authentication.password == "":
-                return Err(error=MediaError_AuthenticationFailed(message="credential authentication requires a username and password"))
-            if (
-                authentication.netrc_location != Path()
-                or authentication.cookie_file != Path()
-                or authentication.browser != ""
-                or authentication.profile != ""
-            ):
-                return Err(error=MediaError_AuthenticationFailed(message="credential authentication cannot include netrc or cookie settings"))
-            credentials: bytes = f"{authentication.username}:{authentication.password}".encode("utf-8")
-            headers["Authorization"] = f"Basic {b64encode(credentials).decode('ascii')}"
-        case AuthenticationKind_Netrc():
-            if authentication.netrc_location == Path():
-                return Err(error=MediaError_AuthenticationFailed(message="netrc authentication requires a netrc location"))
-            if (
-                authentication.username != ""
-                or authentication.password != ""
-                or authentication.cookie_file != Path()
-                or authentication.browser != ""
-                or authentication.profile != ""
-            ):
-                return Err(error=MediaError_AuthenticationFailed(message="netrc authentication cannot include credentials or cookie settings"))
-        case AuthenticationKind_Cookies():
-            if authentication.cookie_file == Path():
-                return Err(error=MediaError_AuthenticationFailed(message="cookie authentication requires a cookie file"))
-            if (
-                authentication.username != ""
-                or authentication.password != ""
-                or authentication.netrc_location != Path()
-                or authentication.browser != ""
-                or authentication.profile != ""
-            ):
-                return Err(error=MediaError_AuthenticationFailed(message="cookie authentication cannot include credentials, netrc, or browser settings"))
-        case AuthenticationKind_BrowserCookies():
-            if authentication.browser == "":
-                return Err(error=MediaError_AuthenticationFailed(message="browser cookie authentication requires a browser"))
-            if (
-                authentication.username != ""
-                or authentication.password != ""
-                or authentication.netrc_location != Path()
-                or authentication.cookie_file != Path()
-            ):
-                return Err(error=MediaError_AuthenticationFailed(message="browser cookie authentication cannot include credentials, netrc, or a cookie file"))
-
-    request: Request = Request(url=url, headers=headers, method="HEAD")
-    with urlopen(request, timeout=network.socket_timeout_ms / 1000.0) as response:
-        status: int = response.status
-        final_url: str = response.geturl()
-
-    if status == 401 or status == 403 or status == 407:
-        return Err(error=MediaError_AuthenticationFailed(message=f"authentication was rejected with HTTP status {status}"))
-    if status == 451:
-        return Err(error=MediaError_GeoRestricted(message="media is unavailable from the selected geographic route"))
-    if status <= 0:
-        return Err(error=MediaError_NetworkFailure(message="network response did not include a valid HTTP status"))
-    if status < 200 or status >= 400:
+    auth_error = _auth_setup(extractor, authentication, headers)
+    if auth_error is not None:
+        return Err(error=auth_error)
+    network_error = _network_setup(network, headers)
+    if network_error is not None:
+        return Err(error=network_error)
+    timeout = network.socket_timeout_ms / 1000.0 if network.socket_timeout_ms > 0 else _DEFAULT_TIMEOUT_S
+    request = urllib.request.Request(target, headers=headers, method="HEAD")
+    if isinstance(network.proxy_mode, ProxyMode_Http):
+        proxy_parts = urllib.parse.urlsplit(network.proxy)
+        request.set_proxy(proxy_parts.netloc.rpartition("@")[2], proxy_parts.scheme.lower())
+    try:
+        with urllib.request.urlopen(request, timeout=timeout, context=ssl.create_default_context()) as response:
+            final_url: str = response.geturl()
+            content_type: str = response.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as exc:
+        status: int = exc.code
+        if status in (401, 403) and "Authorization" in headers:
+            return Err(error=MediaError_AuthenticationFailed(message=f"HTTP {status}"))
+        if status == 451:
+            return Err(error=MediaError_GeoRestricted(message="HTTP 451"))
         return Err(error=MediaError_HttpStatus(status=status))
-    if final_url == "" or not (final_url.startswith("http://") or final_url.startswith("https://")):
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, ssl.SSLError):
+            return Err(error=MediaError_NetworkFailure(message="TLS failure"))
+        return Err(error=MediaError_NetworkFailure(message="connection failure"))
+    except (TimeoutError, socket.timeout):
+        return Err(error=MediaError_NetworkFailure(message="timeout"))
+    except (OSError, ValueError):
+        return Err(error=MediaError_NetworkFailure(message="transport failure"))
+    if not _valid_http_url(final_url):
         return Err(error=MediaError_UnsupportedUrl())
-
-    path: str = urlsplit(final_url).path.rstrip("/")
-    filename: str = unquote(path.rsplit("/", 1)[-1])
-    if filename == "":
-        identifier: str = extractor.name
-        extension: str = ""
-    else:
-        stem: str
-        separator: str
-        stem, separator, extension = filename.rpartition(".")
-        if separator == "" or stem == "":
-            identifier = filename
-            extension = ""
-        else:
-            identifier = stem
-    item: MediaItem = MediaItem(url=final_url, id=identifier, title=identifier, ext=extension, playlist_index=1)
-    return Ok(value=CottList(values=(item,)))
+    return Ok(value=CottList(values=[_item_from_url(final_url, content_type)]))

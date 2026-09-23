@@ -1,4 +1,5 @@
 from cott_runtime import CottList
+
 from real.harlequin.catalog_types import CatalogRelation
 
 

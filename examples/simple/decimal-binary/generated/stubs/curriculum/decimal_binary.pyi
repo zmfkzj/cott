@@ -22,8 +22,9 @@ After the entire string is validated, more than 63 significant digits
 returns `Overflow`, so invalid characters take priority over overflow."""
 def binary_to_decimal(digits: str) -> Result[I64, ConversionError]: ...
 
-"""Routes a tagged conversion through the matching decimal or binary
-conversion operation and wraps its successful scalar result.
+"""Route DecimalToBinary through curriculum.decimal_binary.decimal_to_binary
+and BinaryToDecimal through curriculum.decimal_binary.binary_to_decimal.
+Wrap the successful scalar in the corresponding ConversionResult variant.
 
 Errors from the selected operation are returned unchanged."""
 def convert_binary_decimal(operation: Conversion) -> Result[ConversionResult, ConversionError]: ...

@@ -24,7 +24,7 @@ def validate_line(line: OrderLine) -> Result[OrderLine, OrderError]:
         _expected_error_span = {"end_byte":608,"end_column":61,"end_line":30,"start_byte":552,"start_column":5,"start_line":30}
         _expected_error_clause = "error:2"
     try:
-        _implementation = _cott_load("_cott_impl/store/order/validate_line.py", "522130eb276f3796f111e5663ee23d829be8c38d196f63e87091ec2eaf40d224", "validate_line", expected_project_name="order-management", expected_cott_symbol="store.order.validate_line")
+        _implementation = _cott_load("_cott_impl/store/order/validate_line.py", "36a318de28bb71c54a3de790a7616b4f2c5ff9829016a003afcf606970519462", "validate_line", expected_project_name="order-management", expected_cott_symbol="store.order.validate_line")
         _result = _implementation(line)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -71,7 +71,7 @@ def calculate_order(catalog: Catalog, order: Order) -> Result[OrderReceipt, Orde
         _expected_error_span = {"end_byte":919,"end_column":58,"end_line":39,"start_byte":866,"start_column":5,"start_line":39}
         _expected_error_clause = "error:2"
     try:
-        _implementation = _cott_load("_cott_impl/store/order/calculate_order.py", "6cad90fc3519db4eb670eff0cfa44dc0c67fb59abaf352e49030713cc54cbb0e", "calculate_order", expected_project_name="order-management", expected_cott_symbol="store.order.calculate_order")
+        _implementation = _cott_load("_cott_impl/store/order/calculate_order.py", "5bb63be7f1e2f4baf727a811582598b5d07b2fd85c354ae0e777503fc82f2332", "calculate_order", expected_project_name="order-management", expected_cott_symbol="store.order.calculate_order")
         _result = _implementation(catalog, order)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

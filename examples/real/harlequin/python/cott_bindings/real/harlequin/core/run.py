@@ -1,9 +1,8 @@
-from pathlib import Path
 import sys
 from typing import Never
 
 from cott_runtime import CottList, Err, Some
-from real.harlequin.core import connect, disconnect, execute_sql, parse_cli
+from real.harlequin.core import connect, disconnect, execute_statements, parse_cli
 from real.harlequin.core_types import (
     AdapterKind_DuckDb,
     Cell,
@@ -12,8 +11,6 @@ from real.harlequin.core_types import (
     Cell_Real,
     Cell_Text,
     ConnectionRequest,
-    DatabaseTarget_File,
-    DatabaseTarget_Memory,
 )
 
 
@@ -42,11 +39,7 @@ def run(arguments: CottList[str]) -> Never:
     )
     if isinstance(connected, Err):
         sys.exit(str(connected.error))
-    database = (
-        DatabaseTarget_Memory()
-        if endpoint == ":memory:"
-        else DatabaseTarget_File(path=Path(endpoint))
-    )
+    status = 0
     try:
         while True:
             try:
@@ -57,11 +50,12 @@ def run(arguments: CottList[str]) -> Never:
                 break
             if not sql.strip():
                 continue
-            outcome = execute_sql(database, sql, options.read_only)
+            outcome = execute_statements(connected.value, sql, 100000)
             if isinstance(outcome, Err):
+                status = 1
                 print(outcome.error, file=sys.stderr)
                 continue
-            for result in outcome.value:
+            for result in outcome.value.results:
                 if len(result.columns) > 0:
                     print("\t".join(result.columns))
                 for row in result.rows:
@@ -69,5 +63,8 @@ def run(arguments: CottList[str]) -> Never:
                 if len(result.columns) == 0:
                     print(f"{result.affected_rows} rows affected")
     finally:
-        disconnect(connected.value)
-    sys.exit(0)
+        closed = disconnect(connected.value)
+        if isinstance(closed, Err):
+            print("connection cleanup failed", file=sys.stderr)
+            status = 1
+    sys.exit(status)

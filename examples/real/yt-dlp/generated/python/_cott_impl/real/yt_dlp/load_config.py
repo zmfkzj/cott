@@ -1,108 +1,42 @@
+import codecs
+import shlex
 from pathlib import Path
+from typing import Final
 
-from cott_runtime import CottList, Err, Ok, Result, _cott_fixture_read
-from real.yt_dlp import parse_arguments
-from real.yt_dlp_types import CliInput, MediaError, MediaError_InvalidConfig, MediaError_InvalidInput
+from cott_runtime import CottList, Err, Ok, Result
+from real.yt_dlp_types import CliInput, InputKind_Argument, MediaError, MediaError_InvalidConfig
+
+_MAX_INPUTS: Final[int] = 100000
 
 
-def _tokenize_config(content: str) -> tuple[CottList[str], str]:
-    arguments: list[str] = []
-    token: list[str] = []
-    token_started: bool = False
-    quote: str = ""
-    index: int = 0
-    while index < len(content):
-        character: str = content[index]
-        if quote == "'":
-            if character == "'":
-                quote = ""
-            else:
-                token.append(character)
-            index += 1
-            continue
-        if quote == '"':
-            if character == '"':
-                quote = ""
-                index += 1
-                continue
-            if character == "\\":
-                index += 1
-                if index == len(content):
-                    return CottList(values=tuple(arguments)), "trailing escape in configuration"
-                if content[index] == "\n":
-                    index += 1
-                    continue
-                if content[index] != '"' and content[index] != "\\":
-                    token.append("\\")
-                token.append(content[index])
-                index += 1
-                continue
-            token.append(character)
-            index += 1
-            continue
-        if character == "#":
-            if token_started:
-                if len(arguments) == 100000:
-                    return CottList(values=tuple(arguments)), "configuration contains more than 100000 arguments"
-                arguments.append("".join(token))
-                token = []
-                token_started = False
-            while index < len(content) and content[index] != "\n":
-                index += 1
-            continue
-        if character.isspace():
-            if token_started:
-                if len(arguments) == 100000:
-                    return CottList(values=tuple(arguments)), "configuration contains more than 100000 arguments"
-                arguments.append("".join(token))
-                token = []
-                token_started = False
-            index += 1
-            continue
-        if character == "'" or character == '"':
-            quote = character
-            token_started = True
-            index += 1
-            continue
-        if character == "\\":
-            token_started = True
-            index += 1
-            if index == len(content):
-                return CottList(values=tuple(arguments)), "trailing escape in configuration"
-            if content[index] != "\n":
-                token.append(content[index])
-            index += 1
-            continue
-        token_started = True
-        token.append(character)
-        index += 1
-    if quote != "":
-        return CottList(values=tuple(arguments)), "unterminated quote in configuration"
-    if token_started:
-        if len(arguments) == 100000:
-            return CottList(values=tuple(arguments)), "configuration contains more than 100000 arguments"
-        arguments.append("".join(token))
-    return CottList(values=tuple(arguments)), ""
+def _decode(data: bytes) -> str:
+    for bom, encoding in (
+        (codecs.BOM_UTF32_BE, "utf-32-be"),
+        (codecs.BOM_UTF32_LE, "utf-32-le"),
+        (codecs.BOM_UTF8, "utf-8"),
+        (codecs.BOM_UTF16_BE, "utf-16-be"),
+        (codecs.BOM_UTF16_LE, "utf-16-le"),
+    ):
+        if data.startswith(bom):
+            return data[len(bom):].decode(encoding)
+    return data.decode("utf-8")
 
 
 def load_config(path: Path) -> Result[CottList[CliInput], MediaError]:
-    content: str = _cott_fixture_read(path).decode("utf-8-sig")
-    arguments: CottList[str]
-    message: str
-    arguments, message = _tokenize_config(content)
-    if message != "":
-        return Err(error=MediaError_InvalidConfig(path=path, message=message))
-    match parse_arguments(arguments):
-        case Ok(value=inputs):
-            if len(inputs) > 100000:
-                return Err(
-                    error=MediaError_InvalidConfig(
-                        path=path,
-                        message="configuration contains more than 100000 inputs",
-                    )
-                )
-            return Ok(value=inputs)
-        case Err(error=MediaError_InvalidInput(message=message)):
-            return Err(error=MediaError_InvalidConfig(path=path, message=message))
-        case Err():
-            return Err(error=MediaError_InvalidConfig(path=path, message="invalid configuration"))
+    try:
+        with path.open("rb") as handle:
+            data = handle.read()
+    except OSError:
+        return Err(error=MediaError_InvalidConfig(path=path, message="cannot read config file"))
+    try:
+        text = _decode(data)
+    except UnicodeDecodeError:
+        return Err(error=MediaError_InvalidConfig(path=path, message="config file is not valid text"))
+    try:
+        tokens = shlex.split(text, comments=True, posix=True)
+    except ValueError:
+        return Err(error=MediaError_InvalidConfig(path=path, message="malformed quoting in config file"))
+    if len(tokens) > _MAX_INPUTS:
+        return Err(error=MediaError_InvalidConfig(path=path, message="too many config arguments"))
+    inputs: list[CliInput] = [CliInput(kind=InputKind_Argument(), value=token) for token in tokens]
+    return Ok(value=CottList(values=inputs))

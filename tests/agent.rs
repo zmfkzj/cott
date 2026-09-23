@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use cott::agent::{
     AgentKind, CLAUDE, CODEX, OMP, ShadowFacet, adapter, has_normative_modal, parse_domain_rules,
-    render_prompt, scan_doc_candidates, sentence_has_facet,
+    render_prompt, scan_doc_candidates, sentence_has_facet, valid_model,
 };
 use cott::binding::{BindingOwner, ResolvedBinding};
 use cott::compiler::{SourceFile, parse_project};
@@ -1371,4 +1371,29 @@ fn other() -> Unit
         hashes["api.service.other"],
         unrelated_doc_hashes["api.service.other"]
     );
+}
+
+#[test]
+fn valid_model_accepts_ordinary_names_and_rejects_malformed_ones() {
+    for model in [
+        "gpt-5-codex",
+        "gpt-5-codex high",
+        "claude-opus-5-5",
+        "omp/17.2.13",
+        "a",
+    ] {
+        assert!(valid_model(model), "{model:?} should be accepted");
+    }
+    for model in [
+        "",
+        " gpt-5",
+        "gpt-5 ",
+        " gpt-5 ",
+        "-gpt-5",
+        "gpt-5\n",
+        "gpt-5\t",
+        "gpt\u{0}5",
+    ] {
+        assert!(!valid_model(model), "{model:?} should be rejected");
+    }
 }

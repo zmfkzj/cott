@@ -1205,41 +1205,31 @@ fn dependency_evidence(
         interpreter,
         vec![
             "-c".to_owned(),
-            r#"import ast,hashlib,importlib.metadata as md,json,pathlib,sys
+            r#"import ast,hashlib,importlib.metadata as md,importlib.machinery as _machinery,json,pathlib,sys
+_ast=ast
+_metadata=md
+_sys=sys
+_Path=pathlib.Path
+__COTT_IMPORT_OWNERSHIP__
 root=pathlib.Path(sys.argv[1])
 locked=json.loads(sys.argv[2])
 project_modules=set(json.loads(sys.argv[3]))
 type_projections=[root/pathlib.Path(path) for path in json.loads(sys.argv[4])]
-imports=set()
-for path in sorted(set((root/"_cott_impl").rglob("*.py"))|set(type_projections)):
- tree=ast.parse(path.read_bytes(),filename=str(path))
- for node in ast.walk(tree):
-  if isinstance(node,ast.Import):
-   imports.update(alias.name for alias in node.names)
-  elif isinstance(node,ast.ImportFrom) and node.level==0 and node.module:
-   imports.add(node.module)
-imports={name for name in imports if name not in project_modules}
-imported_modules={}
-for module in sorted(imports):
- root=module.split(".",1)[0]
- if root in sys.stdlib_module_names or root in {"cott_runtime","_cott_impl"}:
-  continue
- imported_modules.setdefault(root,[]).append(module)
-owners=md.packages_distributions()
+owners=_cott_installed_import_owners()
 imported_by={}
-for root,modules in sorted(imported_modules.items()):
- distributions=owners.get(root,[])
- if len(distributions)!=1:
-  raise RuntimeError(f"external import {root!r} belongs to {len(distributions)} installed distributions")
- name=distributions[0].lower().replace("_","-")
- if name not in locked:
-  raise RuntimeError(f"external import {root!r} resolves to unlocked distribution {name!r}")
- imported_by.setdefault(name,{})[root]=modules
+for path in sorted(set((root/"_cott_impl").rglob("*.py"))|set(type_projections)):
+ for module,name,distribution,origins in _cott_owned_external_imports(path.read_bytes(),project_modules,owners):
+  if name not in locked:
+   raise RuntimeError(f"external import {module!r} resolves to unlocked distribution {name!r}")
+  previous=imported_by.setdefault(name,(distribution,{}))
+  if previous[0] is not distribution:
+   raise RuntimeError(f"external imports resolve to multiple installations of {name!r}")
+  previous[1][module]=origins
 result={}
 for locked_name,locked_version in sorted(locked.items()):
  if locked_name not in imported_by:
   continue
- distribution=md.distribution(locked_name)
+ distribution,modules=imported_by[locked_name]
  name=distribution.metadata["Name"].lower().replace("_","-")
  version=distribution.version
  if name!=locked_name or version!=locked_version:
@@ -1247,27 +1237,19 @@ for locked_name,locked_version in sorted(locked.items()):
  metadata=distribution.read_text("METADATA")
  if metadata is None:
   raise RuntimeError(f"installed distribution {name!r} has no METADATA")
- files=[]
- roots=imported_by.get(name,{})
- modules=sorted({module for imports in roots.values() for module in imports})
- for module in modules:
-  relative_module=module.replace(".","/")
-  origins=[]
-  for relative in distribution.files or ():
+ files={}
+ for module,relatives in sorted(modules.items()):
+  for relative in relatives:
    rel=relative.as_posix()
-   if not (rel==relative_module+".py" or rel==relative_module+"/__init__.py" or (rel.startswith(relative_module+".") and (rel.endswith(".so") or rel.endswith(".pyd")))):
-    continue
    path=pathlib.Path(distribution.locate_file(relative))
    if path.is_symlink():
     raise RuntimeError(f"installed distribution {name!r} contains symlink {path}")
-   if path.is_file():
-    origins.append({"content_hash":"sha256:"+hashlib.sha256(path.read_bytes()).hexdigest(),"path":rel})
-  if not origins:
-   raise RuntimeError(f"external import {module!r} has no regular origin in installed distribution {name!r}")
-  files.extend(origins)
- result[name]={"imports":sorted(roots),"metadata_hash":"sha256:"+hashlib.sha256(metadata.encode()).hexdigest(),"origins":sorted(files,key=lambda item:(item["path"],item["content_hash"])),"version":version}
+   if not path.is_file():
+    raise RuntimeError(f"external import {module!r} has no regular origin in installed distribution {name!r}")
+   files[rel]={"content_hash":"sha256:"+hashlib.sha256(path.read_bytes()).hexdigest(),"path":rel}
+ result[name]={"imports":sorted({module.split(".",1)[0] for module in modules}),"metadata_hash":"sha256:"+hashlib.sha256(metadata.encode()).hexdigest(),"origins":[files[path] for path in sorted(files)],"version":version}
 print(json.dumps(result,sort_keys=True,separators=(",",":")))"#
-                .to_owned(),
+                .replace("__COTT_IMPORT_OWNERSHIP__", crate::python_runtime::IMPORT_OWNERSHIP),
             generated_root.display().to_string(),
             serde_json::to_string(&lock_index).map_err(|error| error.to_string())?,
             serde_json::to_string(project_modules).map_err(|error| error.to_string())?,
@@ -1446,6 +1428,8 @@ mod tests {
     }
     #[test]
     fn dependency_evidence_includes_external_type_projection_imports() {
+        let parent_source =
+            b"raise RuntimeError('ownership inspection executed a package initializer')\n";
         let root = scratch_directory().expect("fixture root");
         let outcome = (|| {
             let python_source = root.join("python");
@@ -1453,7 +1437,7 @@ mod tests {
             let generated_root = artifact_root.join("python");
             let site_packages = root.join("site-packages");
             let scratch = root.join("scratch");
-            let package = site_packages.join("external_fixture");
+            let package = site_packages.join("shared_fixture/external");
             let dist_info = site_packages.join("external_fixture-1.2.3.dist-info");
             let metadata = "Metadata-Version: 2.1\nName: external-fixture\nVersion: 1.2.3\n";
             let module_source = b"class Payload:\n    pass\n";
@@ -1489,23 +1473,37 @@ wheels = [{{ url = "https://example.test/external_fixture-1.2.3.whl", hash = "{a
             fs::write(root.join("uv.lock"), &lock)?;
             fs::write(
                 generated_root.join("api/item_types.py"),
-                "from external_fixture.requests import Payload\n",
+                "from shared_fixture.external.requests import Payload\n",
             )?;
             fs::write(
                 generated_root.join("api/item0_types.py"),
-                "from external_fixture.requests import Payload\n",
+                "from shared_fixture.external.requests import Payload\n",
             )?;
             fs::write(
                 generated_root.join("_cott_impl/api/run.py"),
                 "def run(value):\n    return value\n",
             )?;
-            fs::write(package.join("__init__.py"), b"")?;
+            fs::write(package.join("__init__.py"), parent_source)?;
             fs::write(package.join("requests.py"), module_source)?;
             fs::write(dist_info.join("METADATA"), metadata)?;
-            fs::write(dist_info.join("top_level.txt"), "external_fixture\n")?;
+            fs::write(dist_info.join("top_level.txt"), "shared_fixture\n")?;
             fs::write(
                 dist_info.join("RECORD"),
-                "external_fixture/__init__.py,,\nexternal_fixture/requests.py,,\nexternal_fixture-1.2.3.dist-info/METADATA,,\nexternal_fixture-1.2.3.dist-info/top_level.txt,,\nexternal_fixture-1.2.3.dist-info/RECORD,,\n",
+                "shared_fixture/external/__init__.py,,\nshared_fixture/external/requests.py,,\nexternal_fixture-1.2.3.dist-info/METADATA,,\nexternal_fixture-1.2.3.dist-info/top_level.txt,,\nexternal_fixture-1.2.3.dist-info/RECORD,,\n",
+            )?;
+            let other = site_packages.join("shared_fixture/other");
+            let other_metadata = site_packages.join("other_fixture-1.0.0.dist-info");
+            fs::create_dir_all(&other)?;
+            fs::create_dir_all(&other_metadata)?;
+            fs::write(other.join("__init__.py"), b"")?;
+            fs::write(
+                other_metadata.join("METADATA"),
+                "Name: other-fixture\nVersion: 1.0.0\n",
+            )?;
+            fs::write(other_metadata.join("top_level.txt"), "shared_fixture\n")?;
+            fs::write(
+                other_metadata.join("RECORD"),
+                "shared_fixture/other/__init__.py,,\n",
             )?;
             let paths = ProjectPaths {
                 root: root.clone(),
@@ -1534,13 +1532,6 @@ wheels = [{{ url = "https://example.test/external_fixture-1.2.3.whl", hash = "{a
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect::<Vec<_>>();
-            assert_eq!(
-                type_projection_paths,
-                vec![
-                    PathBuf::from("api/item0_types.py"),
-                    PathBuf::from("api/item_types.py"),
-                ]
-            );
             let dependencies = dependency_evidence(
                 "demo",
                 &paths,
@@ -1550,9 +1541,28 @@ wheels = [{{ url = "https://example.test/external_fixture-1.2.3.whl", hash = "{a
                 &scratch,
                 &project_modules,
                 &type_projection_paths,
-                &[site_packages],
+                std::slice::from_ref(&site_packages),
             )
             .map_err(std::io::Error::other)?;
+            fs::write(
+                generated_root.join("api/item_types.py"),
+                "from shared_fixture import other\n",
+            )?;
+            assert!(
+                dependency_evidence(
+                    "demo",
+                    &paths,
+                    &fs::canonicalize("/usr/bin/python3")?,
+                    &generated_root,
+                    &artifact_root,
+                    &scratch,
+                    &project_modules,
+                    &type_projection_paths,
+                    std::slice::from_ref(&site_packages),
+                )
+                .is_err(),
+                "an unlocked sibling in the same namespace must remain rejected"
+            );
             Ok::<_, std::io::Error>((
                 dependencies,
                 artifact_hash,
@@ -1570,11 +1580,14 @@ wheels = [{{ url = "https://example.test/external_fixture-1.2.3.whl", hash = "{a
             json!([{
                 "artifacts": [artifact_hash],
                 "installed": {
-                    "imports": ["external_fixture"],
+                    "imports": ["shared_fixture"],
                     "metadata_hash": metadata_hash,
                     "origins": [{
+                        "content_hash": format!("sha256:{}", sha256_hex(parent_source)),
+                        "path": "shared_fixture/external/__init__.py",
+                    }, {
                         "content_hash": origin_hash,
-                        "path": "external_fixture/requests.py",
+                        "path": "shared_fixture/external/requests.py",
                     }],
                     "version": "1.2.3",
                 },

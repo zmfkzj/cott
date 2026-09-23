@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use cott::agent::{AgentKind, AgentRunCandidate, run_agent};
+use cott::agent::{
+    AgentKind, AgentRunCandidate, AgentSelection, CLAUDE, CODEX, OMP, run_agent, valid_model,
+};
 use cott::hash::sha256_hex;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -272,8 +274,30 @@ fn run_or_skip_with_timeout(
     prompt: &[u8],
     timeout_seconds: u16,
 ) -> Option<Result<AgentRunCandidate, String>> {
-    let result = run_agent(
+    run_or_skip_with_model(
         kind,
+        None,
+        executable,
+        workspace,
+        scratch,
+        target,
+        prompt,
+        timeout_seconds,
+    )
+}
+
+fn run_or_skip_with_model(
+    kind: AgentKind,
+    model: Option<&str>,
+    executable: PathBuf,
+    workspace: &Path,
+    scratch: &Path,
+    target: &Path,
+    prompt: &[u8],
+    timeout_seconds: u16,
+) -> Option<Result<AgentRunCandidate, String>> {
+    let result = run_agent(
+        AgentSelection { kind, model },
         executable,
         workspace,
         scratch,
@@ -475,6 +499,9 @@ fn claude_golden_argv_stdin_environment_json_and_provenance() {
 fn omp_bun_package_runs_both_phases_with_only_its_runtime_closure() {
     let (temp, workspace, scratch, target) = fixture();
     let (executable, runtime_dir, dependency) = bun_omp_fixture(&temp.root);
+    fs::hard_link(&executable, temp.root.join("linked-agent")).expect("hardlinked entrypoint");
+    fs::hard_link(runtime_dir.join("bun"), temp.root.join("linked-bun"))
+        .expect("hardlinked runtime");
     fs::write(workspace.join("sibling.py"), "untouched").expect("workspace sibling");
     let entrypoint_bytes = fs::read(&executable).expect("entrypoint bytes");
     let _lock = _hold_env_lock();
@@ -513,13 +540,12 @@ fn omp_bun_rejects_missing_and_unsafe_runtimes_before_running() {
     use std::os::unix::fs::PermissionsExt;
 
     let _lock = _hold_env_lock();
-    for case in ["missing", "hardlink", "nonexecutable", "directory"] {
+    for case in ["missing", "nonexecutable", "directory"] {
         let (temp, workspace, scratch, target) = fixture();
         let (executable, runtime_dir, _) = bun_omp_fixture(&temp.root);
         let bun = runtime_dir.join("bun");
         match case {
             "missing" => fs::remove_file(&bun).expect("remove runtime"),
-            "hardlink" => fs::hard_link(&bun, runtime_dir.join("other-bun")).expect("hardlink"),
             "nonexecutable" => fs::set_permissions(&bun, fs::Permissions::from_mode(0o644))
                 .expect("nonexecutable runtime"),
             "directory" => {
@@ -530,7 +556,10 @@ fn omp_bun_rejects_missing_and_unsafe_runtimes_before_running() {
         }
         let _environment = EnvRestore::controlled(&scratch, &executable).with_path(&runtime_dir);
         let error = run_agent(
-            AgentKind::Omp,
+            AgentSelection {
+                kind: AgentKind::Omp,
+                model: None,
+            },
             executable,
             &workspace,
             &scratch,
@@ -562,7 +591,10 @@ fn omp_bun_rejects_dependency_links_outside_the_installation() {
     let _lock = _hold_env_lock();
     let _environment = EnvRestore::controlled(&scratch, &executable).with_path(&runtime_dir);
     let error = run_agent(
-        AgentKind::Omp,
+        AgentSelection {
+            kind: AgentKind::Omp,
+            model: None,
+        },
         executable,
         &workspace,
         &scratch,
@@ -730,6 +762,296 @@ fn omp_large_prompt_uses_file_argv_without_e2big() {
     );
 }
 
+fn rejects_model_in_argv(exit_code: i32) -> String {
+    format!(
+        r#"for arg do
+    if [ "$arg" = "--model" ]; then
+        exit {exit_code}
+    fi
+done"#
+    )
+}
+
+#[test]
+fn codex_requested_model_is_inserted_after_exec_and_recorded_in_argv_template() {
+    let (_temp, workspace, scratch, target) = fixture();
+    let version_probe = format!(
+        "{}\nprintf '%s\\n' 'codex-cli 0.147.1'\nexit 0",
+        rejects_model_in_argv(9)
+    );
+    let executable =
+        fake_adapter_with_version_probe(&workspace, &version_probe, &capture_body(None));
+    let _lock = _hold_env_lock();
+    let _environment = EnvRestore::controlled(&scratch, &executable);
+    let model = "gpt-5-codex high";
+    assert!(valid_model(model));
+    let prompt = b"codex prompt\n";
+    let Some(result) = run_or_skip_with_model(
+        AgentKind::Codex,
+        Some(model),
+        executable,
+        &workspace,
+        &scratch,
+        &target,
+        prompt,
+        10,
+    ) else {
+        return;
+    };
+    let candidate = result.expect("Codex run with a requested model");
+    assert_eq!(candidate.adapter_version, "0.147.1");
+    let expected_args = vec![
+        "exec".to_owned(),
+        "--model".to_owned(),
+        model.to_owned(),
+        "--strict-config".to_owned(),
+        "--ephemeral".to_owned(),
+        "--ignore-user-config".to_owned(),
+        "--ignore-rules".to_owned(),
+        "--skip-git-repo-check".to_owned(),
+        "--sandbox".to_owned(),
+        "workspace-write".to_owned(),
+        "--color".to_owned(),
+        "never".to_owned(),
+        "--cd".to_owned(),
+        workspace.display().to_string(),
+        "-".to_owned(),
+    ];
+    let expected_names = [
+        "CODEX_ACCESS_TOKEN",
+        "CODEX_API_KEY",
+        "CODEX_HOME",
+        "HOME",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "NO_PROXY",
+        "PATH",
+        "PYTHONDONTWRITEBYTECODE",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TMPDIR",
+    ];
+    assert_eq!(
+        candidate.implementation,
+        expected_capture(&expected_args, prompt, &expected_names)
+    );
+    assert_eq!(
+        candidate.environment_names,
+        expected_names
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>()
+    );
+    let mut expected_template: Vec<String> = CODEX
+        .argv_template
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    expected_template.splice(1..1, ["--model".to_owned(), model.to_owned()]);
+    assert_eq!(candidate.argv_template, expected_template);
+}
+
+#[test]
+fn omp_requested_model_is_inserted_before_flags_and_recorded_in_argv_template() {
+    let (_temp, workspace, scratch, target) = fixture();
+    let version_probe = format!(
+        "{}\nprintf '%s\\n' 'omp/17.2.13'\nexit 0",
+        rejects_model_in_argv(9)
+    );
+    let executable =
+        fake_adapter_with_version_probe(&workspace, &version_probe, &capture_body(None));
+    let _lock = _hold_env_lock();
+    let _environment = EnvRestore::controlled(&scratch, &executable);
+    let model = "omp-flagship-2 preview";
+    assert!(valid_model(model));
+    let prompt = b"omp prompt";
+    let Some(result) = run_or_skip_with_model(
+        AgentKind::Omp,
+        Some(model),
+        executable,
+        &workspace,
+        &scratch,
+        &target,
+        prompt,
+        10,
+    ) else {
+        return;
+    };
+    let candidate = result.expect("OMP run with a requested model");
+    assert_eq!(candidate.adapter_version, "17.2.13");
+    let prompt_file = fs::canonicalize(&scratch)
+        .expect("canonical scratch")
+        .join("omp-prompt-0");
+    let expected_args = vec![
+        "--model".to_owned(),
+        model.to_owned(),
+        "-p".to_owned(),
+        "--cwd".to_owned(),
+        workspace.display().to_string(),
+        "--no-session".to_owned(),
+        "--no-rules".to_owned(),
+        "--no-skills".to_owned(),
+        "--no-extensions".to_owned(),
+        "--no-lsp".to_owned(),
+        "--no-pty".to_owned(),
+        "--no-title".to_owned(),
+        "--tools".to_owned(),
+        "read,grep,glob,edit,write".to_owned(),
+        "--approval-mode".to_owned(),
+        "yolo".to_owned(),
+        "--max-time".to_owned(),
+        "10s".to_owned(),
+        "--config".to_owned(),
+        scratch.join("omp.yaml").display().to_string(),
+        format!("@{}", prompt_file.display()),
+    ];
+    let expected_names = [
+        "HOME",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "NO_PROXY",
+        "PATH",
+        "PI_CODING_AGENT_DIR",
+        "PYTHONDONTWRITEBYTECODE",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TMPDIR",
+    ];
+    assert_eq!(
+        candidate.implementation,
+        expected_capture(&expected_args, &[], &expected_names)
+    );
+    assert_eq!(
+        candidate.environment_names,
+        expected_names
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>()
+    );
+    let mut expected_template: Vec<String> =
+        OMP.argv_template.iter().map(ToString::to_string).collect();
+    expected_template.splice(0..0, ["--model".to_owned(), model.to_owned()]);
+    assert_eq!(candidate.argv_template, expected_template);
+}
+
+#[test]
+fn claude_requested_model_is_inserted_before_flags_and_recorded_in_argv_template() {
+    let (_temp, workspace, scratch, target) = fixture();
+    let version_probe = format!(
+        "{}\n[ -z \"${{ANTHROPIC_API_KEY+x}}\" ] || exit 2\nprintf '%s\\n' '2.1.89'\nexit 0",
+        rejects_model_in_argv(9)
+    );
+    let executable =
+        fake_adapter_with_version_probe(&workspace, &version_probe, &claude_capture_body());
+    let _lock = _hold_env_lock();
+    let _environment = EnvRestore::controlled(&scratch, &executable);
+    let model = "claude-opus-5-5 thinking";
+    assert!(valid_model(model));
+    let prompt = b"claude prompt\n";
+    let Some(result) = run_or_skip_with_model(
+        AgentKind::Claude,
+        Some(model),
+        executable,
+        &workspace,
+        &scratch,
+        &target,
+        prompt,
+        10,
+    ) else {
+        return;
+    };
+    let candidate = result.expect("Claude run with a requested model");
+    assert_eq!(candidate.adapter_version, "2.1.89");
+    let expected_args = vec![
+        "--model".to_owned(),
+        model.to_owned(),
+        "--bare".to_owned(),
+        "--print".to_owned(),
+        "--input-format".to_owned(),
+        "text".to_owned(),
+        "--output-format".to_owned(),
+        "json".to_owned(),
+        "--permission-mode".to_owned(),
+        "dontAsk".to_owned(),
+        "--tools".to_owned(),
+        "Read,Write".to_owned(),
+        "--allowedTools".to_owned(),
+        "Read,Write".to_owned(),
+        "--disallowedTools".to_owned(),
+        "Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__*".to_owned(),
+        "--no-session-persistence".to_owned(),
+    ];
+    let expected_names = [
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+        "DISABLE_ERROR_REPORTING",
+        "DISABLE_TELEMETRY",
+        "HOME",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "NO_PROXY",
+        "PATH",
+        "PYTHONDONTWRITEBYTECODE",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TMPDIR",
+    ];
+    assert_eq!(
+        candidate.implementation,
+        expected_capture(&expected_args, prompt, &expected_names)
+    );
+    assert_eq!(
+        candidate.environment_names,
+        expected_names
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>()
+    );
+    let mut expected_template: Vec<String> = CLAUDE
+        .argv_template
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    expected_template.splice(0..0, ["--model".to_owned(), model.to_owned()]);
+    assert_eq!(candidate.argv_template, expected_template);
+}
+
+#[test]
+fn invalid_model_fails_before_any_external_command_across_adapters() {
+    let (_temp, workspace, scratch, target) = fixture();
+    let missing_scratch = scratch.join("does-not-exist");
+    let missing_executable = workspace.join("does-not-exist-either");
+    for kind in [AgentKind::Codex, AgentKind::Omp, AgentKind::Claude] {
+        for model in ["", " gpt-5 ", "gpt\u{0}5", "-gpt-5", "gpt-5\n", "gpt-5\t"] {
+            assert!(
+                !valid_model(model),
+                "{model:?} should be rejected by valid_model"
+            );
+            let result = run_agent(
+                AgentSelection {
+                    kind,
+                    model: Some(model),
+                },
+                missing_executable.clone(),
+                &workspace,
+                &missing_scratch,
+                &target,
+                b"prompt".to_vec(),
+                10,
+            );
+            let error = result.expect_err(&format!("{kind:?} model {model:?} must be rejected"));
+            assert!(
+                error.contains("invalid agent model"),
+                "{kind:?} {model:?}: {error}"
+            );
+            assert!(
+                !target.exists(),
+                "{kind:?} {model:?} must fail before touching the target"
+            );
+        }
+    }
+}
+
 #[test]
 fn normalizes_agent_candidate_to_one_trailing_newline() {
     let (_temp, workspace, scratch, target) = fixture();
@@ -834,7 +1156,10 @@ fn preexisting_hardlink_target_is_rejected() {
     fs::hard_link(&other, &target).expect("hard link target");
     let executable = fake_adapter(&workspace, "omp/17.2.12", "exit 0");
     let result = run_agent(
-        AgentKind::Omp,
+        AgentSelection {
+            kind: AgentKind::Omp,
+            model: None,
+        },
         executable,
         &workspace,
         &scratch,
@@ -860,7 +1185,10 @@ fn preexisting_symlink_target_is_rejected() {
     symlink(&other, &target).expect("symlink target");
     let executable = fake_adapter(&workspace, "omp/17.2.12", "exit 0");
     let result = run_agent(
-        AgentKind::Omp,
+        AgentSelection {
+            kind: AgentKind::Omp,
+            model: None,
+        },
         executable,
         &workspace,
         &scratch,
@@ -1044,7 +1372,10 @@ fn claude_rejects_npm_node_entrypoints() {
     fs::set_permissions(&cli_js, fs::Permissions::from_mode(0o755))
         .expect("make cli.js executable");
     let result = run_agent(
-        AgentKind::Claude,
+        AgentSelection {
+            kind: AgentKind::Claude,
+            model: None,
+        },
         cli_js,
         &workspace,
         &scratch,
@@ -1064,7 +1395,10 @@ fn claude_rejects_npm_node_entrypoints() {
     fs::set_permissions(&node_script, fs::Permissions::from_mode(0o755))
         .expect("make node script executable");
     let result = run_agent(
-        AgentKind::Claude,
+        AgentSelection {
+            kind: AgentKind::Claude,
+            model: None,
+        },
         node_script,
         &workspace,
         &scratch,

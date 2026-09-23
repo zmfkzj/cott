@@ -181,6 +181,248 @@ internal fun answer(): kotlin.Int {
         Self { root }
     }
 
+    fn process_exit(compiler: &Path, java: &Path) -> Self {
+        let root = fixture_root();
+        fs::create_dir_all(root.join("src/example")).expect("create contract source directory");
+        fs::create_dir_all(root.join("kotlin/cott_bindings/process_exit"))
+            .expect("create Kotlin process-exit binding directory");
+        fs::write(
+            root.join("cott.toml"),
+            format!(
+                r#"[project]
+name = "verify-process-exit"
+version = "0.1.0"
+source = "src"
+
+[target.kotlin]
+source = "kotlin"
+generated = "generated/kotlin"
+compiler = {}
+java = {}
+jvm_target = 17
+runtime_validation = "boundary"
+
+[target.kotlin.implementations]
+"example.process_exit.exit_with_code" = "cott_bindings.process_exit.exit_with_code"
+"#,
+                toml_string(compiler),
+                toml_string(java),
+            ),
+        )
+        .expect("write process-exit manifest");
+        fs::write(
+            root.join("src/example/process_exit.cott"),
+            r#"module example.process_exit
+
+fn exit_with_code(code: U8) -> Never:
+    effects [process.exit]
+"#,
+        )
+        .expect("write process-exit contract");
+        fs::write(
+            root.join("kotlin/cott_bindings/process_exit/exit_with_code.kt"),
+            r#"package cott_bindings.process_exit
+
+internal fun exit_with_code(code: kotlin.UByte): kotlin.Nothing =
+    cott_runtime.CottRuntime.exitWithCode(code)
+"#,
+        )
+        .expect("write process-exit Kotlin binding");
+        Self { root }
+    }
+
+    fn clock_scenario(compiler: &Path, java: &Path) -> Self {
+        let root = fixture_root();
+        fs::create_dir_all(root.join("src/example")).expect("create contract source directory");
+        fs::create_dir_all(root.join("kotlin/cott_bindings/clock"))
+            .expect("create Kotlin clock binding directory");
+        fs::write(
+            root.join("cott.toml"),
+            format!(
+                r#"[project]
+name = "verify-clock"
+version = "0.1.0"
+source = "src"
+
+[target.kotlin]
+source = "kotlin"
+generated = "generated/kotlin"
+compiler = {}
+java = {}
+jvm_target = 17
+runtime_validation = "boundary"
+
+[target.kotlin.implementations]
+"example.clock.clock_ns" = "cott_bindings.clock.clock_ns"
+"example.clock.other_clock_ns" = "cott_bindings.clock.other_clock_ns"
+"#,
+                toml_string(compiler),
+                toml_string(java),
+            ),
+        )
+        .expect("write Kotlin clock fixture manifest");
+        fs::write(
+            root.join("src/example/clock.cott"),
+            r#"module example.clock
+
+fn clock_ns() -> U64:
+    ensures result == 17000000
+    effects [clock]
+
+fn other_clock_ns() -> U64:
+    ensures result == 29000000
+    effects [clock]
+
+scenario deterministic_clock:
+    fixtures:
+        clock clock:
+            start_ms: 17
+            tick_ms: 1
+        clock other:
+            start_ms: 29
+            tick_ms: 7
+    call first = clock_ns()
+    tick
+    call second = clock_ns()
+    call other_value = other_clock_ns()
+    assert first == 17000000
+    assert second == 17000000
+    assert other_value == 29000000
+"#,
+        )
+        .expect("write Kotlin clock contract");
+        fs::write(
+            root.join("kotlin/cott_bindings/clock/clock.kt"),
+            r#"package cott_bindings.clock
+
+internal fun clock_ns(): kotlin.ULong =
+    cott_runtime.CottRuntime.fixtureClockNs("clock")
+"#,
+        )
+        .expect("write primary Kotlin clock implementation");
+        fs::write(
+            root.join("kotlin/cott_bindings/clock/other_clock.kt"),
+            r#"package cott_bindings.clock
+
+internal fun other_clock_ns(): kotlin.ULong =
+    cott_runtime.CottRuntime.fixtureClockNs("other")
+"#,
+        )
+        .expect("write Kotlin clock implementation");
+        Self { root }
+    }
+
+    fn generic_trait(compiler: &Path, java: &Path) -> Self {
+        let root = fixture_root();
+        fs::create_dir_all(root.join("src/example")).expect("create contract source directory");
+        fs::create_dir_all(root.join("kotlin/cott_bindings/traits"))
+            .expect("create Kotlin trait binding directory");
+        fs::write(
+            root.join("cott.toml"),
+            format!(
+                r#"[project]
+name = "verify-generic-trait"
+version = "0.1.0"
+source = "src"
+
+[target.kotlin]
+source = "kotlin"
+generated = "generated/kotlin"
+compiler = {}
+java = {}
+jvm_target = 17
+runtime_validation = "boundary"
+
+[target.kotlin.implementations]
+"example.traits.echo" = "cott_bindings.traits.echo"
+"example.traits.integer_only" = "cott_bindings.traits.integer_only"
+"example.traits.SimpleTask.summary" = "cott_bindings.traits.summary"
+"example.traits.SimpleTask.display" = "cott_bindings.traits.display"
+"#,
+                toml_string(compiler),
+                toml_string(java),
+            ),
+        )
+        .expect("write generic trait manifest");
+        fs::write(
+            root.join("src/example/traits.cott"),
+            r#"module example.traits
+
+trait Summarizable:
+    type Summary
+    fn summary(self) -> Summarizable.Summary
+
+trait TaskView[T] for Summarizable:
+    fn display(self) -> T
+
+fn echo[T](value: T, receiver: TaskView[T]) -> T:
+    effects []
+
+fn integer_only(receiver: TaskView[I32]) -> I32:
+    ensures result == 7
+    effects []
+
+impl SimpleTask for TaskView[Str]:
+    type Summary = Str
+    state:
+        title: Str
+
+    init(title: Str):
+        ensures self.title == title
+
+    fn summary(self) -> Str:
+        ensures result == self.title
+        effects []
+
+    fn display(self) -> Str:
+        ensures result == self.title
+        effects []
+"#,
+        )
+        .expect("write generic trait contract");
+        for (name, source) in [
+            (
+                "echo",
+                r#"package cott_bindings.traits
+
+internal fun <T : kotlin.Any> echo(value: T, receiver: example.traits.TaskView<T, *>): T =
+    value
+"#,
+            ),
+            (
+                "integer_only",
+                r#"package cott_bindings.traits
+
+internal fun integer_only(receiver: example.traits.TaskView<kotlin.Int, *>): kotlin.Int =
+    7
+"#,
+            ),
+            (
+                "summary",
+                r#"package cott_bindings.traits
+
+internal fun summary(self: example.traits.SimpleTask): kotlin.String =
+    self.title
+"#,
+            ),
+            (
+                "display",
+                r#"package cott_bindings.traits
+
+internal fun display(self: example.traits.SimpleTask): kotlin.String =
+    self.title
+"#,
+            ),
+        ] {
+            fs::write(
+                root.join(format!("kotlin/cott_bindings/traits/{name}.kt")),
+                source,
+            )
+            .expect("write canonical Kotlin trait helper");
+        }
+        Self { root }
+    }
+
     fn cott(&self, arguments: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_cott"))
             .args(arguments)
@@ -466,6 +708,77 @@ fun main(): Unit {
     );
 }
 
+fn compile_and_run_process_exit_consumer(
+    fixture: &Fixture,
+    kotlin_home: &Path,
+    java_home: &Path,
+) -> Output {
+    let source = fixture.root.join("native-consumer/ProcessExitConsumer.kt");
+    fs::create_dir_all(source.parent().expect("native consumer source parent"))
+        .expect("create native consumer source directory");
+    fs::write(
+        &source,
+        r#"package cott_process_exit_consumer
+
+import example.process_exit.exit_with_code
+
+fun main(): kotlin.Unit {
+    exit_with_code(37.toUByte())
+}
+"#,
+    )
+    .expect("write native process-exit consumer");
+    let module = fixture.root.join("generated/library/cott-module.jar");
+    let coroutines = fixture
+        .root
+        .join("generated/runtime-libs/kotlinx-coroutines-core-jvm.jar");
+    let stdlib = kotlin_home.join("lib/kotlin-stdlib.jar");
+    let consumer = fixture
+        .root
+        .join("native-consumer/process-exit-consumer.jar");
+    let compile_classpath = std::env::join_paths([&module, &coroutines, &stdlib])
+        .expect("construct process-exit consumer compile classpath");
+    let compiled = Command::new(kotlin_home.join("bin/kotlinc"))
+        .arg(&source)
+        .args(["-no-stdlib", "-no-reflect", "-classpath"])
+        .arg(&compile_classpath)
+        .args([
+            "-jvm-target",
+            "17",
+            "-Xjdk-release=17",
+            "-module-name",
+            "cott_process_exit_consumer",
+            "-d",
+        ])
+        .arg(&consumer)
+        .env("JAVA_HOME", java_home)
+        .env(
+            "JAVA_OPTS",
+            "-Xms32m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:CompressedClassSpaceSize=64m -XX:ReservedCodeCacheSize=128m -XX:ActiveProcessorCount=2 -XX:+UseSerialGC",
+        )
+        .output()
+        .expect("compile native process-exit consumer");
+    assert_success("native process-exit consumer compilation", compiled);
+    let runtime_classpath = std::env::join_paths([&consumer, &module, &coroutines, &stdlib])
+        .expect("construct process-exit consumer runtime classpath");
+    Command::new(java_home.join("bin/java"))
+        .args([
+            "-Xms16m",
+            "-Xmx256m",
+            "-XX:MaxMetaspaceSize=128m",
+            "-XX:CompressedClassSpaceSize=64m",
+            "-XX:ReservedCodeCacheSize=64m",
+            "-XX:ActiveProcessorCount=2",
+            "-XX:+UseSerialGC",
+            "-ea",
+            "-cp",
+        ])
+        .arg(runtime_classpath)
+        .arg("cott_process_exit_consumer.ProcessExitConsumerKt")
+        .output()
+        .expect("run native process-exit consumer")
+}
+
 #[test]
 fn verify_rejects_a_missing_configured_kotlin_compiler_without_a_fake_jar() {
     let fixture = Fixture::new(Path::new("kotlinc-never-run"), Path::new("java"));
@@ -488,6 +801,52 @@ fn verify_rejects_a_missing_configured_kotlin_compiler_without_a_fake_jar() {
             .exists(),
         "failed verification must not publish a compiled artifact"
     );
+}
+
+#[test]
+#[ignore = "requires the pinned Kotlin 2.2.10/JDK 17 toolchain and bubblewrap"]
+fn option_payload_candidates_reach_nonempty_guarded_obligations() {
+    let (kotlin_home, java_home) = pinned_toolchain();
+    let fixture = Fixture::new(
+        &kotlin_home.join("bin/kotlinc"),
+        &java_home.join("bin/java"),
+    );
+    fs::write(
+        fixture.root.join("src/example/counter.cott"),
+        r#"module example.counter
+
+fn increment(current: Option[Str]) -> U64:
+    requires current matches Option.Some(text) => text.len > 0
+    ensures current matches Option.Some(text) => result == text.len
+
+    effects []
+"#,
+    )
+    .expect("write guarded optional-input contract");
+    fs::write(
+        fixture
+            .root
+            .join("kotlin/cott_bindings/counter/increment.kt"),
+        r#"package cott_bindings.counter
+
+internal fun increment(current: cott_runtime.CottOption<kotlin.String>): kotlin.ULong =
+    when (current) {
+        is cott_runtime.Some -> current.value.codePointCount(0, current.value.length).toULong()
+        cott_runtime.Nothing -> 0UL
+    }
+"#,
+    )
+    .expect("write real optional-input implementation");
+    let path = fixture.root.join("cott.toml");
+    let mut manifest = fs::read_to_string(&path).expect("read fixture manifest");
+    manifest.push_str(
+        "\n[verification]\ncandidate_limit = 17\n\n[[verification.coverage.rules]]\nsymbol = \"example.counter.increment\"\nclauses = [\"ensures:1\"]\nallow_unknown = false\nallow_unobserved = false\nallow_trust_declaration = false\n",
+    );
+    fs::write(path, manifest).expect("require actual guarded predicate evidence");
+    assert_success("optional input emission", fixture.cott(&["emit", "kotlin"]));
+    assert_success("optional input verification", fixture.cott(&["verify"]));
+    let generation = generation_view(&fixture);
+    assert_eq!(generation["current"]["verified"], true);
 }
 
 #[test]
@@ -556,6 +915,167 @@ fn valid_fixture_produces_a_real_jar_and_executed_clause_evidence() {
             .as_u64()
             .is_some_and(|observed| observed >= 3),
         "requires and ensures clauses need positive runtime evidence"
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned Kotlin 2.2.10/JDK 17 toolchain and bubblewrap"]
+fn async_precondition_failures_are_not_cancellation_failures() {
+    let (kotlin_home, java_home) = pinned_toolchain();
+    let fixture = Fixture::new(
+        &kotlin_home.join("bin/kotlinc"),
+        &java_home.join("bin/java"),
+    );
+    let contract = fixture.root.join("src/example/counter.cott");
+    let source = fs::read_to_string(&contract).expect("read owned fixture contract");
+    fs::write(
+        &contract,
+        source.replace("fn increment", "async fn increment"),
+    )
+    .expect("make fixture asynchronous");
+    let implementation = fixture
+        .root
+        .join("kotlin/cott_bindings/counter/increment.kt");
+    let source = fs::read_to_string(&implementation).expect("read owned fixture implementation");
+    fs::write(
+        &implementation,
+        source.replace("internal fun increment", "internal suspend fun increment"),
+    )
+    .expect("make fixture helper asynchronous");
+    assert_success("async fixture emission", fixture.cott(&["emit", "kotlin"]));
+    assert_success("async fixture verification", fixture.cott(&["verify"]));
+    let generation = generation_view(&fixture);
+    let report = &generation["current"]["verification"]["contract_tests"];
+    let cases = report["cases"].as_array().expect("observed callable cases");
+    assert!(cases.iter().any(|case| case["status"] == "passed"));
+    let ineligible = cases
+        .iter()
+        .filter(|case| case["status"] == "ineligible")
+        .collect::<Vec<_>>();
+    assert!(
+        !ineligible.is_empty(),
+        "fixture must exercise rejected inputs"
+    );
+    let lifecycle = report["lifecycle"]
+        .as_array()
+        .expect("cancellation evidence");
+    for case in ineligible {
+        let cancellation = lifecycle
+            .iter()
+            .find(|event| event["symbol"] == case["symbol"] && event["case"] == case["case"])
+            .expect("each candidate has cancellation evidence");
+        assert_eq!(cancellation["status"], "candidate_unavailable");
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned Kotlin 2.2.10/JDK 17 toolchain and bubblewrap"]
+fn generic_trait_candidates_preserve_specialization_and_inherited_associated_types() {
+    let (kotlin_home, java_home) = pinned_toolchain();
+    let fixture = Fixture::generic_trait(
+        &kotlin_home.join("bin/kotlinc"),
+        &java_home.join("bin/java"),
+    );
+    assert_success(
+        "generic trait Kotlin emission",
+        fixture.cott(&["emit", "kotlin"]),
+    );
+    assert_success(
+        "generic trait Kotlin verification",
+        fixture.cott(&["verify"]),
+    );
+
+    let generation = generation_view(&fixture);
+    let current = &generation["current"];
+    assert_eq!(current["verified"], true);
+    let report = &current["verification"]["contract_tests"];
+    let cases = report["cases"]
+        .as_array()
+        .expect("authenticated callable cases");
+    assert!(
+        cases
+            .iter()
+            .any(|case| { case["symbol"] == "example.traits.echo" && case["status"] == "passed" }),
+        "a concrete TaskView[Str] must produce an executed generic facade call: {report}"
+    );
+    let unavailable = report["unavailable"]
+        .as_object()
+        .expect("unavailable callable reasons");
+    assert!(
+        !unavailable.contains_key("example.traits.echo"),
+        "a supported generic trait callable must not silently become unavailable"
+    );
+    assert!(
+        !cases
+            .iter()
+            .any(|case| case["symbol"] == "example.traits.integer_only"),
+        "TaskView[Str] must never be passed as the incompatible TaskView[I32]"
+    );
+    assert!(
+        unavailable
+            .get("example.traits.integer_only")
+            .and_then(Value::as_str)
+            .is_some_and(|reason| !reason.is_empty()),
+        "a closed trait specialization without a compatible implementation needs an honest reason"
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned Kotlin 2.2.10/JDK 17 toolchain and bubblewrap"]
+fn canonical_clock_scenario_produces_authenticated_stable_named_clock_evidence() {
+    let (kotlin_home, java_home) = pinned_toolchain();
+    let fixture = Fixture::clock_scenario(
+        &kotlin_home.join("bin/kotlinc"),
+        &java_home.join("bin/java"),
+    );
+    assert_success(
+        "clock scenario Kotlin emission",
+        fixture.cott(&["emit", "kotlin"]),
+    );
+    assert_success(
+        "clock scenario Kotlin verification",
+        fixture.cott(&["verify"]),
+    );
+
+    let generation = generation_view(&fixture);
+    let current = &generation["current"];
+    assert_eq!(current["verified"], true);
+    let scenarios = current["verification"]["contract_tests"]["scenarios"]
+        .as_array()
+        .expect("clock scenario evidence");
+    let scenario = scenarios
+        .iter()
+        .find(|scenario| scenario["scenario_id"] == "example.clock.scenario.deterministic_clock")
+        .expect("authenticated deterministic clock scenario evidence");
+    assert_eq!(scenario["status"], "passed");
+    assert_eq!(scenario["assertions"], 3);
+}
+
+#[test]
+#[ignore = "requires the pinned Kotlin 2.2.10/JDK 17 toolchain and bubblewrap"]
+fn verified_process_exit_facade_terminates_a_separate_jvm_with_supplied_status() {
+    let (kotlin_home, java_home) = pinned_toolchain();
+    let fixture = Fixture::process_exit(
+        &kotlin_home.join("bin/kotlinc"),
+        &java_home.join("bin/java"),
+    );
+    assert_success(
+        "process-exit Kotlin emission",
+        fixture.cott(&["emit", "kotlin"]),
+    );
+    assert_success(
+        "process-exit Kotlin verification",
+        fixture.cott(&["verify"]),
+    );
+    assert_eq!(generation_view(&fixture)["current"]["verified"], true);
+
+    let exited = compile_and_run_process_exit_consumer(&fixture, &kotlin_home, &java_home);
+    assert_eq!(
+        exited.status.code(),
+        Some(37),
+        "the public facade must terminate its child JVM with the supplied status\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&exited.stdout),
+        String::from_utf8_lossy(&exited.stderr),
     );
 }
 
@@ -744,7 +1264,7 @@ fn manifest_class_path_is_rejected_from_real_folded_case_insensitive_jar_metadat
 
 #[test]
 #[ignore = "requires the pinned Kotlin 2.2.10/JDK 17 toolchain and bubblewrap"]
-fn declared_host_exit_with_forged_legacy_rows_cannot_authorize_verification() {
+fn external_host_exit_with_forged_legacy_rows_cannot_authorize_verification() {
     let (kotlin_home, java_home) = pinned_toolchain();
     let fixture = Fixture::forged_evidence(
         &kotlin_home.join("bin/kotlinc"),
@@ -759,12 +1279,7 @@ fn declared_host_exit_with_forged_legacy_rows_cannot_authorize_verification() {
     let rejected = fixture.cott(&["verify"]);
     assert!(
         !rejected.status.success(),
-        "declared host code cannot authorize forged stdout evidence before exiting zero"
-    );
-    let stderr = String::from_utf8_lossy(&rejected.stderr);
-    assert!(
-        stderr.contains("authenticated") || stderr.contains("authentication"),
-        "forged legacy rows must fail at the authenticated evidence boundary: {stderr}"
+        "external host exit with successful OS status cannot authorize forged stdout evidence"
     );
     assert_current_unverified(&fixture);
     assert!(

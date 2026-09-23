@@ -33,7 +33,7 @@ OutputLimitExceeded takes precedence."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/fractional_range_values/build_bounded_range.py", "ea06e3bc1ed7abf7c04fff66e55b60af95dc256258b7927e3b296df07f634662", "build_bounded_range", expected_project_name="fractional-range-values", expected_cott_symbol="curriculum.fractional_range_values.build_bounded_range")
+        _implementation = _cott_load("_cott_impl/curriculum/fractional_range_values/build_bounded_range.py", "e207bd4dec2841bc0ec418e302e4b716a7078cfaa38a5f2d9b463374db6598e1", "build_bounded_range", expected_project_name="fractional-range-values", expected_cott_symbol="curriculum.fractional_range_values.build_bounded_range")
         _result = _implementation(start, stop, step, limit)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

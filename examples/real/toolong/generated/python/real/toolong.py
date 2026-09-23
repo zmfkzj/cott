@@ -19,7 +19,7 @@ def parse_arguments(arguments: CottList[str]) -> Result[ViewerOptions, ToolongEr
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/parse_arguments.py", "bd0df7e058f57cbddde47aa9e3311b3b71c5f0a87481899452c5c2ce952a32b2", "parse_arguments", expected_project_name="toolong", expected_cott_symbol="real.toolong.parse_arguments")
+        _implementation = _cott_load("_cott_impl/real/toolong/parse_arguments.py", "0c7d4e59425ec45aa9fdc116736c454ec00cfa45a6898c81c9dd9788944bc8d3", "parse_arguments", expected_project_name="toolong", expected_cott_symbol="real.toolong.parse_arguments")
         _result = _implementation(arguments)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -63,7 +63,7 @@ def load_entries(sources: CottList[Path]) -> Result[CottList[LogEntry], ToolongE
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/load_entries.py", "c7b9d559d4a88bebffda092dd9dfb887b6ce39cb414bf80b07a6869f5a8aa5e7", "load_entries", expected_project_name="toolong", expected_cott_symbol="real.toolong.load_entries")
+        _implementation = _cott_load("_cott_impl/real/toolong/load_entries.py", "ad1e0c808742a5f6d7927bb3c456f58ae590acfede1c6ee5eee6f6bf793258b7", "load_entries", expected_project_name="toolong", expected_cott_symbol="real.toolong.load_entries")
         _result = _implementation(sources)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -105,7 +105,7 @@ def filter_entries(entries: CottList[LogEntry], contains: Option[str]) -> CottLi
     entries = _cott_validate_abi(entries, CottList[LogEntry], path="$.entries")
     contains = _cott_validate_abi(contains, Option[str], path="$.contains")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/filter_entries.py", "f12bb90139231155d801ec61e130fa01c8c0668f052abdb35136c4ad16a53571", "filter_entries", expected_project_name="toolong", expected_cott_symbol="real.toolong.filter_entries")
+        _implementation = _cott_load("_cott_impl/real/toolong/filter_entries.py", "df319414f87f74c504c062e5446d0c2221f580bee0b213affbc47b9c39e26d3e", "filter_entries", expected_project_name="toolong", expected_cott_symbol="real.toolong.filter_entries")
         _result = _implementation(entries, contains)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -125,7 +125,7 @@ def render_entries(entries: CottList[LogEntry]) -> str:
     """Render path:line and text for each entry, separated by newlines."""
     entries = _cott_validate_abi(entries, CottList[LogEntry], path="$.entries")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/render_entries.py", "6c8020ec71d266ea6fc539f6133b3b239f24657f6d1cf1ce834a57d479e86ae8", "render_entries", expected_project_name="toolong", expected_cott_symbol="real.toolong.render_entries")
+        _implementation = _cott_load("_cott_impl/real/toolong/render_entries.py", "b9fe8031ead22b13e137ad1cc95fd7182c62c20cf96da12c2fbb13db10197e16", "render_entries", expected_project_name="toolong", expected_cott_symbol="real.toolong.render_entries")
         _result = _implementation(entries)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -142,31 +142,35 @@ def render_entries(entries: CottList[LogEntry]) -> str:
     return _result
 
 def execute(arguments: CottList[str]) -> Result[str, ToolongError]:
-    """Parse arguments, load logs, apply the optional filter, and render matching entries."""
+    """Call real.toolong.parse_arguments, then real.toolong.load_entries on its
+sources. Pass the entries and parsed contains option to real.toolong.filter_entries
+and return real.toolong.render_entries of those matches.
+Return an error from parsing or loading unchanged; do not load files after
+argument parsing fails."""
     arguments = _cott_validate_abi(arguments, CottList[str], path="$.arguments")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/execute.py", "92cec9de3dd5238cd5ebec7dcbe7ca205da8ca2272ca6337479a0e42a7633e94", "execute", expected_project_name="toolong", expected_cott_symbol="real.toolong.execute")
+        _implementation = _cott_load("_cott_impl/real/toolong/execute.py", "068be9df5ba7ae5601310d68746f937121e58601807ef49ec78a3c0f20e3439d", "execute", expected_project_name="toolong", expected_cott_symbol="real.toolong.execute")
         _result = _implementation(arguments)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.toolong.execute"
         if _error.span is None:
-            _error.span = {"end_byte":1512,"end_column":1,"end_line":63,"start_byte":1187,"start_column":1,"start_line":52}
+            _error.span = {"end_byte":1757,"end_column":1,"end_line":67,"start_byte":1187,"start_column":1,"start_line":52}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.execute", phase="implementation-call", span={"end_byte":1512,"end_column":1,"end_line":63,"start_byte":1187,"start_column":1,"start_line":52}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.execute", phase="implementation-call", span={"end_byte":1757,"end_column":1,"end_line":67,"start_byte":1187,"start_column":1,"start_line":52}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.execute", phase="implementation-call", span={"end_byte":1512,"end_column":1,"end_line":63,"start_byte":1187,"start_column":1,"start_line":52}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.execute", phase="implementation-call", span={"end_byte":1757,"end_column":1,"end_line":67,"start_byte":1187,"start_column":1,"start_line":52}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[str, ToolongError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.toolong.execute", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (ToolongError_InvalidArguments, ToolongError_ReadFailed,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.toolong.execute", phase="error", span={"end_byte":1512,"end_column":1,"end_line":63,"start_byte":1187,"start_column":1,"start_line":52}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.toolong.execute", phase="error", span={"end_byte":1757,"end_column":1,"end_line":67,"start_byte":1187,"start_column":1,"start_line":52}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.toolong.execute", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -183,7 +187,7 @@ def execute(arguments: CottList[str]) -> Result[str, ToolongError]:
         _cott_contract_condition((False), "real.toolong.execute", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.toolong.execute", clause="ensures:1", phase="ensures", span={"end_byte":1411,"end_column":53,"end_line":57,"start_byte":1363,"start_column":5,"start_line":57}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.toolong.execute", clause="ensures:1", phase="ensures", span={"end_byte":1656,"end_column":53,"end_line":61,"start_byte":1608,"start_column":5,"start_line":61}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[str, ToolongError], path="$.return", validator=_cott_validate_abi)
     return _result
 

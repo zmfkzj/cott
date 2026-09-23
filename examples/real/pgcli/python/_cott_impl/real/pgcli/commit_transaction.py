@@ -4,7 +4,7 @@ from real.pgcli_types import ClientError, ClientError_TransactionFailed, Transac
 
 def commit_transaction(transaction: TransactionState) -> Result[TransactionState, ClientError]:
     if not transaction.active:
-        return Err(error=ClientError_TransactionFailed(message="cannot commit an inactive transaction"))
+        return Err(error=ClientError_TransactionFailed(message="no active transaction to commit"))
     if transaction.failed:
         return Err(error=ClientError_TransactionFailed(message="cannot commit a failed transaction"))
     return Ok(value=TransactionState(mode=transaction.mode, active=False, failed=False))

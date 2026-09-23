@@ -120,7 +120,7 @@ cott init <path> [--target python|kotlin|dart] [--name <name>] [--no-sync] [--fo
 cott check [<source.cott>] [--project <dir>] [--format json]
 cott fmt [--check] [--project <dir>] [--format json]
 cott emit ir|python|kotlin|dart [--project <dir>] [--format json]
-cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]
+cott generate [<fully.qualified.callable>] --agent codex|claude|omp [--model <model>] --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]
 cott prompt <fully.qualified.callable> [--project <dir>] [--format json]
 cott verify [--project <dir>] [--format json]
 cott deploy [--output <dir>] [--replace] [--project <dir>] [--format json]
@@ -255,9 +255,11 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
 - A manifest binding names a compatible implementation with `module:function`. A durable accepted
   agent implementation uses `python/_cott_impl/<module path>/<function>.py`; impl methods use the
   corresponding concrete-type path. Do not assume every example uses the same selection mechanism.
-- Imports may use the standard library, `cott_runtime`, exact generated `*_types` modules, or a
-  uniquely owned distribution selected by `uv.lock`. Relative, star, facade, and dynamic imports are
-  rejected where implementation auditing applies.
+- Imports may use the standard library, `cott_runtime`, exact generated `*_types` modules,
+  scoped generated callable facades, or a uniquely owned distribution selected by `uv.lock`.
+  Facade calls must name declarations in the selected context and be covered by the caller's
+  effects; do not alias or pass Cott callables as values. Relative, star, private implementation,
+  and dynamic imports are rejected where implementation auditing applies.
 - Async helpers are allowed only for declared async callables; explicit async impl methods are
   agent-only exact `async def` helpers. Do not use reflection, dynamic compilation, or suppressions.
 - Instantiate nominal values through generated type modules and standard ABI values through

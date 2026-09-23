@@ -16,71 +16,49 @@ from curriculum.cta_row_types import (
 )
 
 
+def _valid_date(value: str) -> bool:
+    if len(value) != 10 or value[2] != "/" or value[5] != "/":
+        return False
+    digits = value[:2] + value[3:5] + value[6:]
+    if not all("0" <= char <= "9" for char in digits):
+        return False
+    month = int(value[:2])
+    day = int(value[3:5])
+    year = int(value[6:])
+    if year == 0 or not 1 <= month <= 12:
+        return False
+    if month == 2:
+        leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+        maximum = 29 if leap else 28
+    elif month in (4, 6, 9, 11):
+        maximum = 30
+    else:
+        maximum = 31
+    return 1 <= day <= maximum
+
+
 def decode_row(route: str, date: str, day_type: str, rides: I64) -> Result[RideRow, RideRowError]:
+    mapped_day: DayType
     if day_type == "U":
-        decoded_day_type: DayType = DayType_SundayHoliday()
+        mapped_day = DayType_SundayHoliday()
     elif day_type == "A":
-        decoded_day_type = DayType_Saturday()
+        mapped_day = DayType_Saturday()
     elif day_type == "W":
-        decoded_day_type = DayType_Weekday()
+        mapped_day = DayType_Weekday()
     else:
         return Err(error=RideRowError_InvalidDayType())
-
-    if rides < 0 or rides > 9223372036854775807:
+    if not 0 <= rides <= 9223372036854775807:
         return Err(error=RideRowError_InvalidRidership())
-
-    route_length = len(route)
-    if route_length < 1 or route_length > 4:
+    if not 1 <= len(route) <= 4:
         return Err(error=RideRowError_InvalidRoute())
-    route_has_digit = False
-    for character in route:
-        if "0" <= character <= "9":
-            route_has_digit = True
-        elif not "A" <= character <= "Z":
+    has_digit = False
+    for char in route:
+        if "0" <= char <= "9":
+            has_digit = True
+        elif not "A" <= char <= "Z":
             return Err(error=RideRowError_InvalidRoute())
-    if not route_has_digit:
+    if not has_digit:
         return Err(error=RideRowError_InvalidRoute())
-
-    if len(date) != 10 or date[2] != "/" or date[5] != "/":
+    if not _valid_date(date):
         return Err(error=RideRowError_InvalidDate())
-    if not (
-        "0" <= date[0] <= "9"
-        and "0" <= date[1] <= "9"
-        and "0" <= date[3] <= "9"
-        and "0" <= date[4] <= "9"
-        and "0" <= date[6] <= "9"
-        and "0" <= date[7] <= "9"
-        and "0" <= date[8] <= "9"
-        and "0" <= date[9] <= "9"
-    ):
-        return Err(error=RideRowError_InvalidDate())
-
-    month = (ord(date[0]) - 48) * 10 + ord(date[1]) - 48
-    day = (ord(date[3]) - 48) * 10 + ord(date[4]) - 48
-    year = (
-        (ord(date[6]) - 48) * 1000
-        + (ord(date[7]) - 48) * 100
-        + (ord(date[8]) - 48) * 10
-        + ord(date[9])
-        - 48
-    )
-    if year < 1 or month < 1 or month > 12:
-        return Err(error=RideRowError_InvalidDate())
-
-    if month == 2:
-        maximum_day = 29 if year % 400 == 0 or (year % 4 == 0 and year % 100 != 0) else 28
-    elif month == 4 or month == 6 or month == 9 or month == 11:
-        maximum_day = 30
-    else:
-        maximum_day = 31
-    if day < 1 or day > maximum_day:
-        return Err(error=RideRowError_InvalidDate())
-
-    return Ok(
-        value=RideRow(
-            route=RouteCode(value=route),
-            date=ServiceDate(value=date),
-            day_type=decoded_day_type,
-            rides=RideCount(value=rides),
-        )
-    )
+    return Ok(value=RideRow(route=RouteCode(value=route), date=ServiceDate(value=date), day_type=mapped_day, rides=RideCount(value=rides)))

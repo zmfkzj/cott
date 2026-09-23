@@ -51,7 +51,11 @@ fn render_entries(entries: List[LogEntry]) -> Str:
 
 fn execute(arguments: List[Str]) -> Result[Str, ToolongError]:
     doc """
-    Parse arguments, load logs, apply the optional filter, and render matching entries.
+    Call real.toolong.parse_arguments, then real.toolong.load_entries on its
+    sources. Pass the entries and parsed contains option to real.toolong.filter_entries
+    and return real.toolong.render_entries of those matches.
+    Return an error from parsing or loading unchanged; do not load files after
+    argument parsing fails.
     """
 
     ensures Result.Ok(rendered) => arguments.len > 0

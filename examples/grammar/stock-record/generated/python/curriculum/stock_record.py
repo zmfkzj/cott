@@ -85,7 +85,7 @@ NegativePrice in source order. A valid record is valued by value_record."""
         _expected_error_span = {"end_byte":1244,"end_column":65,"end_line":43,"start_byte":1184,"start_column":5,"start_line":43}
         _expected_error_clause = "error:5"
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/stock_record/value_stock_record.py", "a62ead3d6f70cd51dbf43f138588c5309391c6967d29aefd37354f8345a9dfa6", "value_stock_record", expected_project_name="stock-record", expected_cott_symbol="curriculum.stock_record.value_stock_record")
+        _implementation = _cott_load("_cott_impl/curriculum/stock_record/value_stock_record.py", "1f710bb4b9c8761baa5ffe480a595fdbc738f47684a3e337792dfb683cc6be45", "value_stock_record", expected_project_name="stock-record", expected_cott_symbol="curriculum.stock_record.value_stock_record")
         _result = _implementation(record)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

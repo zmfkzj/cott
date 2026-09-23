@@ -1,32 +1,17 @@
-from real.pgcli_types import (
-    BackslashCommand,
-    BackslashCommand_Describe,
-    BackslashCommand_Help,
-    BackslashCommand_Quit,
-    BackslashCommand_Tables,
-    BackslashCommand_Unknown,
-)
+from real.pgcli_types import BackslashCommand, BackslashCommand_Describe, BackslashCommand_Help, BackslashCommand_Quit, BackslashCommand_Tables, BackslashCommand_Unknown
 
 
 def recognize_backslash(source: str) -> BackslashCommand:
-    value = source.strip()
-    if not value.startswith("\\"):
+    parts = source.strip().split(maxsplit=1)
+    if not parts:
         return BackslashCommand_Unknown()
-
-    body = value[1:]
-    index = 0
-    while index < len(body) and not body[index].isspace():
-        index += 1
-    command = body[:index]
-    if command.endswith("+"):
-        command = command[:-1]
-
-    if command == "q":
+    command = parts[0]
+    if command == "\\q":
         return BackslashCommand_Quit()
-    if command == "?":
+    if command == "\\?" or command == "\\h":
         return BackslashCommand_Help()
-    if command == "dt":
+    if command == "\\dt":
         return BackslashCommand_Tables()
-    if command == "d":
+    if command == "\\d":
         return BackslashCommand_Describe()
     return BackslashCommand_Unknown()

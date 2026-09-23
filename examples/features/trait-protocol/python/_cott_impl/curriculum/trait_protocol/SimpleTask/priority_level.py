@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from cott_runtime import I32
 from curriculum.trait_protocol import SimpleTask
 

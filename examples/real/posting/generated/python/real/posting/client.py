@@ -19,7 +19,7 @@ def parse_method(source: str) -> Result[HttpMethod, PostingError]:
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/posting/client/parse_method.py", "c7a3e668f644c430f7f7958520b5f8b25949f432f342ab64482593883a14eabb", "parse_method", expected_project_name="real-posting", expected_cott_symbol="real.posting.client.parse_method")
+        _implementation = _cott_load("_cott_impl/real/posting/client/parse_method.py", "981f7c79b35ac6afda06600b9f66046f40abd2fc737af1603770dab3e5ccd18d", "parse_method", expected_project_name="real-posting", expected_cott_symbol="real.posting.client.parse_method")
         _result = _implementation(source)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -63,7 +63,7 @@ def parse_arguments(arguments: CottList[str]) -> Result[Request, PostingError]:
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/posting/client/parse_arguments.py", "c5338299c0231280ac676c78962ebdf8ebfd4fadf81a95005c71e661403e673d", "parse_arguments", expected_project_name="real-posting", expected_cott_symbol="real.posting.client.parse_arguments")
+        _implementation = _cott_load("_cott_impl/real/posting/client/parse_arguments.py", "4407288432d83ab6810d54ab5a22d8bc6f4f7050e118b91bd57e6ac24a9f6845", "parse_arguments", expected_project_name="real-posting", expected_cott_symbol="real.posting.client.parse_arguments")
         _result = _implementation(arguments)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -152,7 +152,7 @@ def render_response(response: Response) -> str:
     """Render status and final URL, then headers and a UTF-8 replacement-decoded body."""
     response = _cott_validate_abi(response, Response, path="$.response")
     try:
-        _implementation = _cott_load("_cott_impl/real/posting/client/render_response.py", "8ba935adde0bc4951ecb92b86ebd8d298313c2bc8fadb760e6e758f970659fa5", "render_response", expected_project_name="real-posting", expected_cott_symbol="real.posting.client.render_response")
+        _implementation = _cott_load("_cott_impl/real/posting/client/render_response.py", "baadae63d7be76cf9de88896edb56e2c6291bff91c96d7e520aad63978f02ec7", "render_response", expected_project_name="real-posting", expected_cott_symbol="real.posting.client.render_response")
         _result = _implementation(response)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -169,31 +169,34 @@ def render_response(response: Response) -> str:
     return _result
 
 def execute(arguments: CottList[str]) -> Result[str, PostingError]:
-    """Parse arguments, send the request, and render its response."""
+    """Call real.posting.client.parse_arguments, pass its request to
+real.posting.client.send_request, and return the successful response rendered
+by real.posting.client.render_response. Return an error from either earlier
+operation unchanged; do not send a request after argument parsing fails."""
     arguments = _cott_validate_abi(arguments, CottList[str], path="$.arguments")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/posting/client/execute.py", "9b14a36537ae9ccc5a41a857d5c1aee7cbf210b2d9f176ea113f8b3b658ac4b3", "execute", expected_project_name="real-posting", expected_cott_symbol="real.posting.client.execute")
+        _implementation = _cott_load("_cott_impl/real/posting/client/execute.py", "35612983578e67cdc37635fc49f6c650b7440e00279e3882b7ea25d0befd2af2", "execute", expected_project_name="real-posting", expected_cott_symbol="real.posting.client.execute")
         _result = _implementation(arguments)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.posting.client.execute"
         if _error.span is None:
-            _error.span = {"end_byte":1929,"end_column":1,"end_line":89,"start_byte":1590,"start_column":1,"start_line":77}
+            _error.span = {"end_byte":2170,"end_column":1,"end_line":92,"start_byte":1590,"start_column":1,"start_line":77}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.posting.client.execute", phase="implementation-call", span={"end_byte":1929,"end_column":1,"end_line":89,"start_byte":1590,"start_column":1,"start_line":77}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.posting.client.execute", phase="implementation-call", span={"end_byte":2170,"end_column":1,"end_line":92,"start_byte":1590,"start_column":1,"start_line":77}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.posting.client.execute", phase="implementation-call", span={"end_byte":1929,"end_column":1,"end_line":89,"start_byte":1590,"start_column":1,"start_line":77}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.posting.client.execute", phase="implementation-call", span={"end_byte":2170,"end_column":1,"end_line":92,"start_byte":1590,"start_column":1,"start_line":77}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[str, PostingError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.posting.client.execute", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (PostingError_InvalidArguments, PostingError_InvalidRequest, PostingError_NetworkFailed,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.posting.client.execute", phase="error", span={"end_byte":1929,"end_column":1,"end_line":89,"start_byte":1590,"start_column":1,"start_line":77}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.posting.client.execute", phase="error", span={"end_byte":2170,"end_column":1,"end_line":92,"start_byte":1590,"start_column":1,"start_line":77}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.posting.client.execute", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -212,7 +215,7 @@ def execute(arguments: CottList[str]) -> Result[str, PostingError]:
         _cott_contract_condition((False), "real.posting.client.execute", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.posting.client.execute", clause="ensures:1", phase="ensures", span={"end_byte":1789,"end_column":52,"end_line":82,"start_byte":1742,"start_column":5,"start_line":82}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.posting.client.execute", clause="ensures:1", phase="ensures", span={"end_byte":2030,"end_column":52,"end_line":85,"start_byte":1983,"start_column":5,"start_line":85}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[str, PostingError], path="$.return", validator=_cott_validate_abi)
     return _result
 

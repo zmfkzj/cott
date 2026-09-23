@@ -1,25 +1,21 @@
 from cott_runtime import CottList, Err, Ok, Result
-from real.yt_dlp_types import (
-    ExtractorDescriptor,
-    MediaError,
-    MediaError_ExtractorMissing,
-    MediaError_UnsupportedUrl,
-)
+from real.yt_dlp_types import ExtractorDescriptor, MediaError, MediaError_ExtractorMissing, MediaError_UnsupportedUrl
 
 
 def choose_extractor(url: str, extractors: CottList[ExtractorDescriptor]) -> Result[ExtractorDescriptor, MediaError]:
-    disabled_match: ExtractorDescriptor | None = None
-    extractor: ExtractorDescriptor
+    missing_name: str | None = None
     for extractor in extractors:
-        prefix: str
-        for prefix in extractor.urls:
-            if url.startswith(prefix):
-                if extractor.enabled:
-                    return Ok(value=extractor)
-                if disabled_match is None:
-                    disabled_match = extractor
+        matched: bool = False
+        for pattern in extractor.urls:
+            if pattern != "" and url.startswith(pattern):
+                matched = True
                 break
-
-    if disabled_match is not None:
-        return Err(error=MediaError_ExtractorMissing(name=disabled_match.name))
+        if not matched:
+            continue
+        if extractor.enabled:
+            return Ok(value=extractor)
+        if missing_name is None:
+            missing_name = extractor.name
+    if missing_name is not None:
+        return Err(error=MediaError_ExtractorMissing(name=missing_name))
     return Err(error=MediaError_UnsupportedUrl())

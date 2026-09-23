@@ -37,6 +37,9 @@ struct Node:
     value: I32
     next: Option[Node]
 
+struct NamedLabel:
+    name: Str
+
 struct Gate:
     value: Option[I32]
     invariant self.value matches Option.Some(item) => item > 0
@@ -62,8 +65,19 @@ trait Combined for Child + Secondary:
 impl CombinedState for Combined:
     type Item = I32
     type Label = Str
+    state:
+        value: I32
+        name: Str
+    invariant self.value >= 0
+    invariant self.name.len > 0
+    init(value: I32, name: Str):
+        requires value >= 0
+        requires name.len > 0
+        ensures self.value == value
+        ensures self.name == name
     fn inherited(self, value: I32) -> I32:
         ensures result == value
+        ensures old(self.value) == self.value
     fn child(self, value: I32) -> I32:
         ensures result == value
     fn secondary(self, value: Str) -> Str:
@@ -83,6 +97,22 @@ fn guarded(value: Option[I32]) -> Option[I32]:
 async fn guarded_async(value: Option[I32]) -> Option[I32]:
     requires value matches Option.Some(item) => item > 0
     ensures result matches Option.Some(item) => item > 0
+
+enum NodeError:
+    Invalid
+
+fn guarded_node(value: Result[Node, NodeError]) -> Result[Node, NodeError]:
+    ensures Result.Ok(node) => node.value > 0
+
+fn conditional_error(fail: Bool) -> Result[I32, NodeError]:
+    ensures Result.Ok(value) => value == 1
+    error NodeError.Invalid when fail
+
+fn guarded_choice(value: Choice[Node]) -> Choice[Node]:
+    ensures Choice.Value(node) => node.value > 0
+
+fn echo_state(value: CombinedState) -> CombinedState
+fn state_factory() -> Factory[CombinedState]
 "#;
 
 const ABI_OPAQUE_TAG: &str = "kotlin-abi-secret";
@@ -133,6 +163,8 @@ import cott_runtime.CottOption
 import cott_runtime.CottList
 import cott_runtime.Nothing
 import cott_runtime.Some
+import cott_runtime.Ok
+import cott_runtime.Err
 import semantics.Child
 import semantics.Choice
 import semantics.Combined
@@ -149,6 +181,12 @@ import cott_runtime.CottRuntime
 import semantics.Gate
 import semantics.guarded
 import semantics.guarded_async
+import semantics.guarded_node
+import semantics.guarded_choice
+import semantics.conditional_error
+import semantics.NodeError
+import semantics.echo_state
+import semantics.state_factory
 import kotlinx.coroutines.runBlocking
 
 private inline fun expectViolation(block: () -> Unit): Unit {
@@ -198,7 +236,7 @@ fun main(): Unit {
     }
     expectViolation { echo(deep.first()) }
 
-    val combined = CombinedState()
+    val combined = CombinedState(17, "combined")
     val composite: Combined<Int, String> = combined
     val child: Child<Int> = combined
     val secondary: Secondary<String> = combined
@@ -206,6 +244,9 @@ fun main(): Unit {
     check(child.child(9) == 9)
     check(composite.combined(11) == 11)
     check(secondary.secondary("usable") == "usable")
+    check(child.inherited(-3) == -3)
+    check(combined.value == 17)
+    check(combined.cottField("name") == "combined")
     val retained: CombinedState = retain(combined)
     check(retained == combined)
 
@@ -237,6 +278,18 @@ fun main(): Unit {
     }
     check(asynchronous.observations().size == 2)
     check(asynchronous.observations().all { it.symbol == "semantics.guarded_async" && it.passed })
+    check((guarded_node(Ok(Node(1, Nothing))) as Ok<Node>).value.value == 1)
+    check(guarded_node(Err(NodeError.Invalid)) is Err<*>)
+    expectViolation { guarded_node(Ok(Node(0, Nothing))) }
+    check((conditional_error(false) as Ok<Int>).value == 1)
+    check((conditional_error(true) as Err<NodeError>).error == NodeError.Invalid)
+    check((guarded_choice(Choice.Value(Node(1, Nothing))) as Choice.Value<Node>).value.value == 1)
+    check(guarded_choice(Choice.Empty<Node>()) is Choice.Empty<Node>)
+    expectViolation { guarded_choice(Choice.Value(Node(0, Nothing))) }
+    val state = CombinedState(23, "state")
+    check(echo_state(state) === state)
+    check(state_factory().type === CombinedState::class.java)
+    check(semantics.NamedLabel("first") != semantics.NamedLabel("second"))
 }
 "#;
 
@@ -530,8 +583,16 @@ fn abi_consumer() -> String {
 fn implementation_body(callable: &KotlinCallable) -> &'static str {
     match callable.symbol.as_str() {
         "semantics.increment" => "return value + 1",
+        "semantics.conditional_error" => {
+            "return if (fail) cott_runtime.Err(semantics.NodeError.Invalid) else cott_runtime.Ok(1)"
+        }
         "semantics.echo" | "semantics.echo_shared" => "return node",
-        "semantics.guarded" | "semantics.guarded_async" => "return value",
+        "semantics.guarded_choice" => "return value",
+        "semantics.echo_state" => "return value",
+        "semantics.state_factory" => "return semantics.CombinedState.cottFactory",
+        "semantics.guarded" | "semantics.guarded_async" | "semantics.guarded_node" => {
+            "return value"
+        }
         "semantics.retain"
         | "semantics.CombinedState.inherited"
         | "semantics.CombinedState.child"

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from curriculum.trait_protocol import SimpleTask
 from curriculum.trait_protocol_types import TaskLifecycle_Completed
 

@@ -2264,7 +2264,7 @@ fn contract_runner_awaits_async_functions_and_detects_task_leaks() {
     let request = runner_request(declaration.clone(), vec![strategy.clone()]);
 
     let Some(output) = run_contract_runner(
-        "import asyncio\nfrom cott_runtime import CottContractViolation, _cott_contract_condition\npre_existing = asyncio.create_task(asyncio.Event().wait())\nexpected = iter((-1, 0, 1, 2, 255))\n\nasync def run(value: int) -> int:\n    assert value == next(expected)\n    async def child() -> int:\n        return value\n    result = await asyncio.create_task(child())\n    if not _cott_contract_condition(result == value, 'demo.run', 'ensures:0'):\n        raise CottContractViolation('changed result', symbol='demo.run', phase='ensures')\n    return result\n",
+        "import asyncio\nimport typing\nfrom cott_runtime import CottContractViolation, _cott_contract_condition\npre_existing = asyncio.create_task(asyncio.Event().wait())\nexpected = iter((-1, 0, 1, 2, 255))\n\nasync def run(value: int) -> int:\n    assert value == next(expected)\n    assert typing.get_origin(asyncio.Task[None]) is asyncio.Task\n    assert isinstance(asyncio.current_task(), asyncio.Task)\n    assert issubclass(type(asyncio.current_task()), asyncio.Task)\n    async def child() -> int:\n        return value\n    result = await asyncio.Task[int](child())\n    assert isinstance(awaited := asyncio.create_task(child()), asyncio.Task)\n    assert await awaited == value\n    if not _cott_contract_condition(result == value, 'demo.run', 'ensures:0'):\n        raise CottContractViolation('changed result', symbol='demo.run', phase='ensures')\n    return result\n",
         request,
     ) else {
         return;

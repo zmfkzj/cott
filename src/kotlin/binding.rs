@@ -15,6 +15,8 @@ use super::emit::implementation_signature;
 use super::provenance::{KotlinBindingRecord, KotlinGenerationRecord};
 use super::{KotlinBinding, KotlinCallable, KotlinOwner, KotlinPlan};
 
+const PROCESS_EXIT_RUNTIME_TARGET: &str = "cott_runtime.CottRuntime.exitWithCode";
+
 #[derive(Clone, Debug)]
 struct SourceIndex {
     package: Option<String>,
@@ -35,6 +37,27 @@ struct SelectedBinding {
 struct ExpectedFunction<'a> {
     target_symbol: &'a str,
     signature: String,
+    allows_process_exit: bool,
+}
+
+fn declaration_allows_process_exit(declaration: &serde_json::Value) -> bool {
+    declaration
+        .get("effects")
+        .or_else(|| {
+            declaration
+                .get("contract")
+                .and_then(|contract| contract.get("effects"))
+        })
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|effect| {
+            effect
+                .get("key")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| effect.as_str())
+                == Some("process.exit")
+        })
 }
 
 /// Resolves every canonical Kotlin callable to one source whose syntax, ABI,
@@ -224,6 +247,7 @@ pub fn resolve(
             &source.source,
             &private_targets,
             false,
+            false,
             &no_reserved_identifiers,
             None,
         )
@@ -262,6 +286,9 @@ pub fn resolve(
                         ),
                     )
                 })?,
+                allows_process_exit: declaration_allows_process_exit(
+                    &selected.callable.declaration,
+                ),
             });
         }
         validate_restricted_source(&source.source, &expected, &private_targets)
@@ -327,6 +354,7 @@ pub fn validate_candidate(
                 callable.symbol
             )
         })?,
+        allows_process_exit: declaration_allows_process_exit(&callable.declaration),
     }];
     validate_restricted_source(source, &expected, &private_targets)
 }
@@ -850,7 +878,7 @@ fn index_source(source: &str) -> Result<SourceIndex, String> {
 fn parse_kotlin(source: &str) -> Result<Tree, String> {
     let mut parser = Parser::new();
     parser
-        .set_language(&tree_sitter_kotlin_ng::LANGUAGE.into())
+        .set_language(super::syntax::language()?)
         .map_err(|error| format!("unable to load Kotlin syntax grammar: {error}"))?;
     let tree = parser
         .parse(source.as_bytes(), None)
@@ -1018,6 +1046,7 @@ fn audit_source(
     source: &str,
     private_targets: &BTreeSet<String>,
     implementation_rules: bool,
+    allows_process_exit: bool,
     allowed_reserved_identifiers: &BTreeSet<String>,
     reserved_identifier_owner: Option<&str>,
 ) -> Result<(), String> {
@@ -1035,6 +1064,14 @@ fn audit_source(
             })
         })
         .collect::<Result<BTreeSet<_>, String>>()?;
+    let exit_reaching_local_functions = local_exit_reaching_functions(
+        root,
+        source,
+        package.as_deref(),
+        &imports,
+        private_targets,
+        &local_functions,
+    )?;
     let mut errors = Vec::new();
     audit_node(
         root,
@@ -1043,8 +1080,10 @@ fn audit_source(
         &imports,
         private_targets,
         &local_functions,
+        &exit_reaching_local_functions,
         None,
         implementation_rules,
+        allows_process_exit,
         allowed_reserved_identifiers,
         reserved_identifier_owner,
         &mut errors,
@@ -1084,6 +1123,87 @@ fn import_index(root: Node<'_>, source: &str) -> Result<BTreeMap<String, String>
     Ok(imports)
 }
 
+fn collect_resolved_call_targets(
+    node: Node<'_>,
+    source: &str,
+    package: Option<&str>,
+    imports: &BTreeMap<String, String>,
+    private_targets: &BTreeSet<String>,
+    local_functions: &BTreeSet<String>,
+    targets: &mut BTreeSet<String>,
+) {
+    if node.kind() == "call_expression"
+        && let Some(callee) = direct_named_children(node).first().copied()
+        && let Some(reference) = reference_path(callee, source)
+    {
+        targets.insert(resolve_reference(
+            &reference,
+            package,
+            imports,
+            private_targets,
+            local_functions,
+        ));
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_resolved_call_targets(
+            child,
+            source,
+            package,
+            imports,
+            private_targets,
+            local_functions,
+            targets,
+        );
+    }
+}
+
+fn local_exit_reaching_functions(
+    root: Node<'_>,
+    source: &str,
+    package: Option<&str>,
+    imports: &BTreeMap<String, String>,
+    private_targets: &BTreeSet<String>,
+    local_functions: &BTreeSet<String>,
+) -> Result<BTreeSet<String>, String> {
+    let mut callers = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut exit_reaching = BTreeSet::new();
+    for function in top_level_functions(root) {
+        let name = function_name(function, source)?;
+        let owner = package.map_or(name.clone(), |package| format!("{package}.{name}"));
+        let mut targets = BTreeSet::new();
+        collect_resolved_call_targets(
+            function,
+            source,
+            package,
+            imports,
+            private_targets,
+            local_functions,
+            &mut targets,
+        );
+        for target in targets {
+            if target == PROCESS_EXIT_RUNTIME_TARGET {
+                exit_reaching.insert(owner.clone());
+            } else if local_functions.contains(&target) {
+                callers.entry(target).or_default().insert(owner.clone());
+            }
+        }
+    }
+
+    let mut pending = exit_reaching.iter().cloned().collect::<Vec<_>>();
+    while let Some(callee) = pending.pop() {
+        let Some(dependents) = callers.get(&callee) else {
+            continue;
+        };
+        for caller in dependents {
+            if exit_reaching.insert(caller.clone()) {
+                pending.push(caller.clone());
+            }
+        }
+    }
+    Ok(exit_reaching)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn audit_node(
     node: Node<'_>,
@@ -1092,8 +1212,10 @@ fn audit_node(
     imports: &BTreeMap<String, String>,
     private_targets: &BTreeSet<String>,
     local_functions: &BTreeSet<String>,
+    exit_reaching_local_functions: &BTreeSet<String>,
     current_function: Option<&str>,
     implementation_rules: bool,
+    allows_process_exit: bool,
     allowed_reserved_identifiers: &BTreeSet<String>,
     reserved_identifier_owner: Option<&str>,
     errors: &mut Vec<String>,
@@ -1139,9 +1261,14 @@ fn audit_node(
                 );
             }
         }
-        "import" if node.is_named() => {
-            audit_import(node, source, private_targets, implementation_rules, errors)
-        }
+        "import" if node.is_named() => audit_import(
+            node,
+            source,
+            private_targets,
+            implementation_rules,
+            allows_process_exit,
+            errors,
+        ),
         "callable_reference" => audit_callable_reference(
             node,
             source,
@@ -1149,8 +1276,10 @@ fn audit_node(
             imports,
             private_targets,
             local_functions,
+            exit_reaching_local_functions,
             current,
             implementation_rules,
+            allows_process_exit,
             errors,
         ),
         "navigation_expression" if compact_node(node, source).contains("::") => {
@@ -1161,8 +1290,10 @@ fn audit_node(
                 imports,
                 private_targets,
                 local_functions,
+                exit_reaching_local_functions,
                 current,
                 implementation_rules,
+                allows_process_exit,
                 errors,
             )
         }
@@ -1173,7 +1304,9 @@ fn audit_node(
                     resolve_reference(&path, package, imports, private_targets, local_functions)
                 })
                 .as_deref()
-                .is_some_and(forbidden_kotlin_capability)
+                .is_some_and(|reference| {
+                    forbidden_kotlin_capability(reference, allows_process_exit)
+                })
                 || reference_path(node, source)
                     .as_deref()
                     .is_some_and(|reference| {
@@ -1182,7 +1315,7 @@ fn audit_node(
                             .next()
                             .is_some_and(reserved_cott_runtime_control)
                     })
-                || forbidden_kotlin_capability(&compact)
+                || forbidden_kotlin_capability(&compact, allows_process_exit)
                 || invalid_cott_runtime_object_use(
                     node,
                     source,
@@ -1190,6 +1323,7 @@ fn audit_node(
                     imports,
                     private_targets,
                     local_functions,
+                    allows_process_exit,
                 )
             {
                 push_error(
@@ -1207,8 +1341,10 @@ fn audit_node(
             imports,
             private_targets,
             local_functions,
+            exit_reaching_local_functions,
             current,
             implementation_rules,
+            allows_process_exit,
             errors,
         ),
         "platform_modifier"
@@ -1261,6 +1397,7 @@ fn audit_node(
                 imports,
                 private_targets,
                 local_functions,
+                allows_process_exit,
             ) {
                 push_error(
                     errors,
@@ -1281,8 +1418,10 @@ fn audit_node(
             imports,
             private_targets,
             local_functions,
+            exit_reaching_local_functions,
             current,
             implementation_rules,
+            allows_process_exit,
             allowed_reserved_identifiers,
             reserved_identifier_owner,
             errors,
@@ -1295,6 +1434,7 @@ fn audit_import(
     source: &str,
     private_targets: &BTreeSet<String>,
     implementation_rules: bool,
+    allows_process_exit: bool,
     errors: &mut Vec<String>,
 ) {
     let Ok(import) = import_syntax(node, source) else {
@@ -1314,7 +1454,7 @@ fn audit_import(
         .as_deref()
         .unwrap_or_else(|| target.rsplit('.').next().unwrap_or(target));
     if implementation_rules
-        && safe_cott_runtime_member(local_name)
+        && safe_cott_runtime_member(local_name, allows_process_exit)
         && target.strip_prefix("cott_runtime.CottRuntime.") != Some(local_name)
     {
         push_error(
@@ -1344,7 +1484,7 @@ fn audit_import(
     if implementation_rules && forbidden_import(target) {
         push_error(errors, format!("forbidden Kotlin import `{target}`"));
     }
-    if implementation_rules && forbidden_kotlin_capability(target) {
+    if implementation_rules && forbidden_kotlin_capability(target, allows_process_exit) {
         push_error(
             errors,
             format!("forbidden Kotlin process or verifier-control import `{target}`"),
@@ -1388,6 +1528,7 @@ fn invalid_cott_runtime_object_use(
     imports: &BTreeMap<String, String>,
     private_targets: &BTreeSet<String>,
     local_functions: &BTreeSet<String>,
+    allows_process_exit: bool,
 ) -> bool {
     if node.kind() == "identifier" {
         let mut ancestor = node.parent();
@@ -1448,10 +1589,10 @@ fn invalid_cott_runtime_object_use(
     let Some(member) = selected.strip_prefix("cott_runtime.CottRuntime.") else {
         return true;
     };
-    !safe_cott_runtime_member(member)
+    !safe_cott_runtime_member(member, allows_process_exit)
 }
 
-fn safe_cott_runtime_member(member: &str) -> bool {
+fn safe_cott_runtime_member(member: &str, allows_process_exit: bool) -> bool {
     matches!(
         member,
         "constValue"
@@ -1463,6 +1604,8 @@ fn safe_cott_runtime_member(member: &str) -> bool {
             | "abiSuspend"
             | "returnValue"
             | "returnValueSuspend"
+            | "fixtureClockNs"
+            | "fixtureClockNsSuspend"
             | "int"
             | "checkInt"
             | "mathInt"
@@ -1521,7 +1664,7 @@ fn safe_cott_runtime_member(member: &str) -> bool {
             | "wrapGenerator"
             | "wrapAsyncIterator"
             | "wrapAsyncGenerator"
-    )
+    ) || (allows_process_exit && member == "exitWithCode")
 }
 
 fn reserved_cott_runtime_control(member: &str) -> bool {
@@ -1546,9 +1689,12 @@ fn reserved_cott_runtime_control(member: &str) -> bool {
     )
 }
 
-fn forbidden_kotlin_capability(reference: &str) -> bool {
+fn forbidden_kotlin_capability(reference: &str, allows_process_exit: bool) -> bool {
     let reference = reference.replace('`', "").replace("()", "");
     let reference = reference.trim_start_matches('.');
+    if reference == PROCESS_EXIT_RUNTIME_TARGET {
+        return !allows_process_exit;
+    }
     if reference
         .strip_prefix("cott_runtime.CottRuntime.")
         .is_some_and(reserved_cott_runtime_control)
@@ -1635,6 +1781,18 @@ fn forbidden_kotlin_capability(reference: &str) -> bool {
     false
 }
 
+fn call_is_inside_escaping_callable(node: Node<'_>) -> bool {
+    let mut ancestor = node.parent();
+    while let Some(candidate) = ancestor {
+        match candidate.kind() {
+            "lambda_literal" | "anonymous_function" => return true,
+            "function_declaration" => return is_anonymous_object_member(candidate),
+            _ => ancestor = candidate.parent(),
+        }
+    }
+    false
+}
+
 #[allow(clippy::too_many_arguments)]
 fn audit_call(
     node: Node<'_>,
@@ -1643,8 +1801,10 @@ fn audit_call(
     imports: &BTreeMap<String, String>,
     private_targets: &BTreeSet<String>,
     local_functions: &BTreeSet<String>,
+    exit_reaching_local_functions: &BTreeSet<String>,
     current_function: Option<&str>,
     implementation_rules: bool,
+    allows_process_exit: bool,
     errors: &mut Vec<String>,
 ) {
     let Some(callee) = direct_named_children(node).first().copied() else {
@@ -1681,8 +1841,11 @@ fn audit_call(
         let path = path.as_deref().unwrap_or(&compact);
         let leaf = path.rsplit('.').next().unwrap_or(path);
         let forbidden = forbidden_import(path)
-            || forbidden_kotlin_capability(path)
-            || forbidden_kotlin_capability(&compact)
+            || forbidden_kotlin_capability(path, allows_process_exit)
+            || forbidden_kotlin_capability(&compact, allows_process_exit)
+            || ((path == PROCESS_EXIT_RUNTIME_TARGET
+                || exit_reaching_local_functions.contains(path))
+                && call_is_inside_escaping_callable(node))
             || leaf == "ProcessBuilder"
             || path.ends_with("Class.forName")
             || path.ends_with("System.load")
@@ -1727,8 +1890,10 @@ fn audit_callable_reference(
     imports: &BTreeMap<String, String>,
     private_targets: &BTreeSet<String>,
     local_functions: &BTreeSet<String>,
+    exit_reaching_local_functions: &BTreeSet<String>,
     current_function: Option<&str>,
     implementation_rules: bool,
+    allows_process_exit: bool,
     errors: &mut Vec<String>,
 ) {
     let compact = compact_node(node, source);
@@ -1758,9 +1923,11 @@ fn audit_callable_reference(
     let leaf = target.rsplit('.').next().unwrap_or(&target);
     if implementation_rules
         && (compact.contains("::class")
+            || target == PROCESS_EXIT_RUNTIME_TARGET
+            || exit_reaching_local_functions.contains(&target)
             || forbidden_import(&target)
-            || forbidden_kotlin_capability(&target)
-            || forbidden_kotlin_capability(&reference)
+            || forbidden_kotlin_capability(&target, allows_process_exit)
+            || forbidden_kotlin_capability(&reference, allows_process_exit)
             || reserved_cott_runtime_control(leaf)
             || matches!(
                 leaf,
@@ -1948,6 +2115,7 @@ fn validate_restricted_source(
         source,
         private_targets,
         true,
+        expected[0].allows_process_exit,
         &allowed_reserved_identifiers,
         Some(expected[0].target_symbol),
     )?;

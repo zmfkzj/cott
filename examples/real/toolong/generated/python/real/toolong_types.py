@@ -56,5 +56,9 @@ ToolongError: TypeAlias = Union[ToolongError_InvalidArguments, ToolongError_Read
 """Read UTF-8 log lines in source order and number each source from one."""
 """Keep all entries without a filter; otherwise keep case-insensitive substring matches."""
 """Render path:line and text for each entry, separated by newlines."""
-"""Parse arguments, load logs, apply the optional filter, and render matching entries."""
+"""Call real.toolong.parse_arguments, then real.toolong.load_entries on its
+sources. Pass the entries and parsed contains option to real.toolong.filter_entries
+and return real.toolong.render_entries of those matches.
+Return an error from parsing or loading unchanged; do not load files after
+argument parsing fails."""
 __all__ = ["LogEntry", "ToolongError", "ToolongError_InvalidArguments", "ToolongError_ReadFailed", "ViewerOptions"]

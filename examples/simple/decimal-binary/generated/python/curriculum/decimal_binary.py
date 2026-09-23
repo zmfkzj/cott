@@ -27,7 +27,7 @@ value returns `NegativeDecimal`."""
         _expected_error_span = {"end_byte":706,"end_column":57,"end_line":27,"start_byte":654,"start_column":5,"start_line":27}
         _expected_error_clause = "error:2"
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/decimal_binary/decimal_to_binary.py", "57e8f5283f4cdcbeec8d6ae1b56f209b2f44674ebc78708e41b0ee0aaeaa9eda", "decimal_to_binary", expected_project_name="decimal-binary", expected_cott_symbol="curriculum.decimal_binary.decimal_to_binary")
+        _implementation = _cott_load("_cott_impl/curriculum/decimal_binary/decimal_to_binary.py", "5e54ade431020ff72a43e12cf361a832cb63cc6de31f329b8fdc1d1a9caf028b", "decimal_to_binary", expected_project_name="decimal-binary", expected_cott_symbol="curriculum.decimal_binary.decimal_to_binary")
         _result = _implementation(value)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -74,7 +74,7 @@ returns `Overflow`, so invalid characters take priority over overflow."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/decimal_binary/binary_to_decimal.py", "fda62d17b76e1a9c6724fd4ffbd652eb76d464acf01750f02e58e772cb0cdd65", "binary_to_decimal", expected_project_name="decimal-binary", expected_cott_symbol="curriculum.decimal_binary.binary_to_decimal")
+        _implementation = _cott_load("_cott_impl/curriculum/decimal_binary/binary_to_decimal.py", "be473999a0c33b58b50f9093a05f53fef8bacdb0f37d0f3583fceffc59e23c6d", "binary_to_decimal", expected_project_name="decimal-binary", expected_cott_symbol="curriculum.decimal_binary.binary_to_decimal")
         _result = _implementation(digits)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -114,8 +114,9 @@ returns `Overflow`, so invalid characters take priority over overflow."""
     return _result
 
 def convert_binary_decimal(operation: Conversion) -> Result[ConversionResult, ConversionError]:
-    """Routes a tagged conversion through the matching decimal or binary
-conversion operation and wraps its successful scalar result.
+    """Route DecimalToBinary through curriculum.decimal_binary.decimal_to_binary
+and BinaryToDecimal through curriculum.decimal_binary.binary_to_decimal.
+Wrap the successful scalar in the corresponding ConversionResult variant.
 
 Errors from the selected operation are returned unchanged."""
     operation = _cott_validate_abi(operation, Conversion, path="$.operation")
@@ -123,25 +124,25 @@ Errors from the selected operation are returned unchanged."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/decimal_binary/convert_binary_decimal.py", "44e992a4f2a7ef7125105bc33a0f8be9b6ff91c7a24fec3f9a63e93649afa203", "convert_binary_decimal", expected_project_name="decimal-binary", expected_cott_symbol="curriculum.decimal_binary.convert_binary_decimal")
+        _implementation = _cott_load("_cott_impl/curriculum/decimal_binary/convert_binary_decimal.py", "94689bc3e6b355983902c39fd4659f7d36396260024c9bba2ce7ad8472127238", "convert_binary_decimal", expected_project_name="decimal-binary", expected_cott_symbol="curriculum.decimal_binary.convert_binary_decimal")
         _result = _implementation(operation)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.decimal_binary.convert_binary_decimal"
         if _error.span is None:
-            _error.span = {"end_byte":1855,"end_column":1,"end_line":58,"start_byte":1276,"start_column":1,"start_line":44}
+            _error.span = {"end_byte":1953,"end_column":1,"end_line":59,"start_byte":1276,"start_column":1,"start_line":44}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.decimal_binary.convert_binary_decimal", phase="implementation-call", span={"end_byte":1855,"end_column":1,"end_line":58,"start_byte":1276,"start_column":1,"start_line":44}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.decimal_binary.convert_binary_decimal", phase="implementation-call", span={"end_byte":1953,"end_column":1,"end_line":59,"start_byte":1276,"start_column":1,"start_line":44}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.decimal_binary.convert_binary_decimal", phase="implementation-call", span={"end_byte":1855,"end_column":1,"end_line":58,"start_byte":1276,"start_column":1,"start_line":44}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.decimal_binary.convert_binary_decimal", phase="implementation-call", span={"end_byte":1953,"end_column":1,"end_line":59,"start_byte":1276,"start_column":1,"start_line":44}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[ConversionResult, ConversionError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="curriculum.decimal_binary.convert_binary_decimal", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (ConversionError_NegativeDecimal, ConversionError_InvalidBinary, ConversionError_Overflow,):
-            raise CottContractViolation("returned error is not allowed", symbol="curriculum.decimal_binary.convert_binary_decimal", phase="error", span={"end_byte":1855,"end_column":1,"end_line":58,"start_byte":1276,"start_column":1,"start_line":44}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="curriculum.decimal_binary.convert_binary_decimal", phase="error", span={"end_byte":1953,"end_column":1,"end_line":59,"start_byte":1276,"start_column":1,"start_line":44}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.decimal_binary.convert_binary_decimal", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -160,7 +161,7 @@ Errors from the selected operation are returned unchanged."""
         _cott_contract_condition((False), "curriculum.decimal_binary.convert_binary_decimal", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="curriculum.decimal_binary.convert_binary_decimal", clause="ensures:1", phase="ensures", span={"end_byte":1667,"end_column":73,"end_line":52,"start_byte":1599,"start_column":5,"start_line":52}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.decimal_binary.convert_binary_decimal", clause="ensures:1", phase="ensures", span={"end_byte":1765,"end_column":73,"end_line":53,"start_byte":1697,"start_column":5,"start_line":53}, expected="true", actual="false")
     def _cott_match_ensures_2() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and type(_cott_match_value.value) is ConversionResult_Decimal and True:
@@ -169,7 +170,7 @@ Errors from the selected operation are returned unchanged."""
         _cott_contract_condition((False), "curriculum.decimal_binary.convert_binary_decimal", "ensures:2:applicable")
         return True
     if not (_cott_match_ensures_2()):
-        raise CottContractViolation("ensures clause failed", symbol="curriculum.decimal_binary.convert_binary_decimal", clause="ensures:2", phase="ensures", span={"end_byte":1736,"end_column":69,"end_line":53,"start_byte":1672,"start_column":5,"start_line":53}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.decimal_binary.convert_binary_decimal", clause="ensures:2", phase="ensures", span={"end_byte":1834,"end_column":69,"end_line":54,"start_byte":1770,"start_column":5,"start_line":54}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[ConversionResult, ConversionError], path="$.return", validator=_cott_validate_abi)
     return _result
 

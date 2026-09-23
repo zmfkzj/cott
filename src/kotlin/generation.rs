@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
-use crate::agent::{AgentKind, AgentRunCandidate, adapter, run_agent};
+use crate::agent::{AgentKind, AgentRunCandidate, AgentSelection, adapter, run_agent};
 use crate::hash::sha256_hex;
 use crate::provenance::{AgentRun, AgentStatus, StreamDigest};
 
@@ -40,8 +40,10 @@ pub(crate) fn generate(
     project: Option<PathBuf>,
     symbol: Option<String>,
     agent: Option<AgentKind>,
+    model: Option<String>,
     jobs: usize,
 ) -> i32 {
+    let model = model.as_deref();
     if jobs == 0 {
         eprintln!("error: Kotlin generation jobs must be at least 1");
         return 2;
@@ -187,6 +189,7 @@ pub(crate) fn generate(
             &selected_work,
             jobs,
             kind,
+            model,
             executable,
             &project,
             rules,
@@ -239,6 +242,7 @@ pub(crate) fn generate(
                         &repair,
                         jobs,
                         kind,
+                        model,
                         executable
                             .as_deref()
                             .expect("initial Kotlin agent executable was resolved"),
@@ -277,6 +281,7 @@ fn run_generation_waves(
     items: &[WorkItem],
     jobs: usize,
     kind: AgentKind,
+    model: Option<&str>,
     executable: &Path,
     project: &Project,
     rules: Option<&str>,
@@ -288,7 +293,7 @@ fn run_generation_waves(
     for wave in items.chunks(jobs) {
         let generated = scoped_wave(
             wave,
-            |item| generate_candidate(item, kind, executable, project, rules, feedback),
+            |item| generate_candidate(item, kind, model, executable, project, rules, feedback),
             |item| format!("agent worker for `{}` panicked", item.callable.symbol),
         );
         let mut failed = false;
@@ -317,6 +322,7 @@ fn run_generation_waves(
 fn generate_candidate(
     item: &WorkItem,
     kind: AgentKind,
+    model: Option<&str>,
     executable: &Path,
     project: &Project,
     rules: Option<&str>,
@@ -342,7 +348,7 @@ fn generate_candidate(
         let workspace = AgentWorkspace::create()?;
         let target = workspace.workspace.join("implementation.kt");
         let mut candidate = run_agent(
-            kind,
+            AgentSelection { kind, model },
             executable.to_path_buf(),
             &workspace.workspace,
             &workspace.scratch,
@@ -485,7 +491,6 @@ fn agent_run(symbol: &str, kind: AgentKind, candidate: AgentRunCandidate) -> Age
         sha256: format!("sha256:{}", sha256_hex(bytes)),
         truncated: false,
     };
-    let spec = adapter(kind);
     AgentRun {
         symbol: symbol.to_owned(),
         adapter: match kind {
@@ -495,7 +500,7 @@ fn agent_run(symbol: &str, kind: AgentKind, candidate: AgentRunCandidate) -> Age
         }
         .to_owned(),
         adapter_version: candidate.adapter_version,
-        argv_template: spec.argv_template.iter().map(ToString::to_string).collect(),
+        argv_template: candidate.argv_template,
         executable: candidate.executable.display().to_string(),
         executable_hash: candidate.executable_hash,
         prompt_hash: candidate.prompt_hash,

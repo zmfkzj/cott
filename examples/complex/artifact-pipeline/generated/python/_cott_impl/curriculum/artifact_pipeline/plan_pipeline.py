@@ -4,8 +4,7 @@ from curriculum.artifact_pipeline_types import ArtifactPipelineError, ArtifactPl
 
 
 def plan_pipeline(pipeline: Pipeline) -> Result[ArtifactPlan, ArtifactPipelineError]:
-    match topologically_order_steps(pipeline.steps):
-        case Ok(value=ordered_steps):
-            return Ok(value=ArtifactPlan(ordered_steps=ordered_steps))
-        case Err(error=error):
-            return Err(error=error)
+    ordered_steps = topologically_order_steps(pipeline.steps)
+    if isinstance(ordered_steps, Err):
+        return ordered_steps
+    return Ok(value=ArtifactPlan(ordered_steps=ordered_steps.value))

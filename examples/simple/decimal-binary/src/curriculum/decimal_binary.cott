@@ -43,8 +43,9 @@ fn binary_to_decimal(digits: Str) -> Result[I64, ConversionError]:
 
 fn convert_binary_decimal(operation: Conversion) -> Result[ConversionResult, ConversionError]:
     doc """
-    Routes a tagged conversion through the matching decimal or binary
-    conversion operation and wraps its successful scalar result.
+    Route DecimalToBinary through curriculum.decimal_binary.decimal_to_binary
+    and BinaryToDecimal through curriculum.decimal_binary.binary_to_decimal.
+    Wrap the successful scalar in the corresponding ConversionResult variant.
     
     Errors from the selected operation are returned unchanged.
     """

@@ -25,7 +25,7 @@ def calculate(left: F64, operator: CalculatorOp, right: F64) -> Result[F64, Calc
         _expected_error_span = {"end_byte":707,"end_column":93,"end_line":19,"start_byte":619,"start_column":5,"start_line":19}
         _expected_error_clause = "error:2"
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/calculator/calculate.py", "987fc97088de287ad24161f6cad118c7f1a960e4a2b1d43f8af3fedd949662ce", "calculate", expected_project_name="calculator", expected_cott_symbol="curriculum.calculator.calculate")
+        _implementation = _cott_load("_cott_impl/curriculum/calculator/calculate.py", "f95950c8778d09861fa000ce7e02505d7779e02c1eaeab667cb68f90ddcf59e0", "calculate", expected_project_name="calculator", expected_cott_symbol="curriculum.calculator.calculate")
         _result = _implementation(left, operator, right)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

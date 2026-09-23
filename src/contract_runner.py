@@ -969,10 +969,17 @@ async def invoke_facade(function, args, kwargs, symbol, callable_kind):
     previous_factory = loop.get_task_factory()
     original_task = asyncio.Task
 
-    def tracked_task(coroutine, *args, **kwargs):
-        task = original_task(coroutine, *args, **kwargs)
-        created.append(task)
-        return task
+    class TrackedTaskMeta(type(original_task)):
+        def __instancecheck__(cls, value):
+            return isinstance(value, original_task)
+
+        def __subclasscheck__(cls, value):
+            return issubclass(value, original_task)
+
+    class TrackedTask(original_task, metaclass=TrackedTaskMeta):
+        def __init__(self, coroutine, *args, **kwargs):
+            super().__init__(coroutine, *args, **kwargs)
+            created.append(self)
 
     def task_factory(loop, coroutine, context=None):
         if previous_factory is None:
@@ -988,7 +995,7 @@ async def invoke_facade(function, args, kwargs, symbol, callable_kind):
         created.append(task)
         return task
 
-    asyncio.Task = tracked_task
+    asyncio.Task = TrackedTask
     loop.set_task_factory(task_factory)
     try:
         result = function(*args, **kwargs)

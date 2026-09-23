@@ -1890,7 +1890,7 @@ fn render_struct(
             .expect("validated field");
         writeln!(
             out,
-            "        {} -> {}",
+            "        {} -> this.{}",
             kotlin_string(field_name),
             escape_identifier(field_name)?
         )
@@ -2112,7 +2112,7 @@ fn render_variant_metadata(
             .expect("validated enum field");
         writeln!(
             out,
-            "{prefix}    {} -> {}",
+            "{prefix}    {} -> this.{}",
             kotlin_string(name),
             escape_identifier(name)?
         )
@@ -2824,7 +2824,7 @@ fn descriptor_for_named(
                 rendered.join(", ")
             ))
         }
-        "resource" | "trait" => {
+        "resource" | "trait" | "impl" => {
             let rendered = render_contextual_type(ty, None, declarations)?;
             let erased = erased_kotlin_type(name, declaration, declarations)?;
             Ok(format!(
@@ -3795,7 +3795,7 @@ fn render_error_contracts(
         .filter_map(|clause| clause.get("variant").and_then(Value::as_str))
         .map(kotlin_string)
         .collect::<Vec<_>>();
-    let allowed = format!("setOf({})", unconditional.join(", "));
+    let allowed = format!("setOf<kotlin.String>({})", unconditional.join(", "));
     writeln!(out, "{prefix}val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant").expect("writing to String cannot fail");
     let condition = format!(
         "if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in {allowed}"
@@ -3901,6 +3901,11 @@ fn render_implementation_class(
         out,
         "\npublic class {name}({}){extends} {{",
         constructor_parameters.join(", ")
+    )
+    .expect("writing to String cannot fail");
+    writeln!(
+        out,
+        "    public companion object {{\n        public val cottFactory: cott_runtime.CottFactory<{name}> = cott_runtime.CottFactory.of({name}::class.java)\n    }}"
     )
     .expect("writing to String cannot fail");
     let trait_tokens = trait_specializations(implementation, declarations)?
@@ -4013,7 +4018,7 @@ fn render_implementation_class(
             .expect("validated state field");
         writeln!(
             out,
-            "        {} -> {}",
+            "        {} -> this.{}",
             kotlin_string(field_name),
             escape_identifier(field_name)?
         )
@@ -4045,7 +4050,7 @@ fn render_implementation_class(
             .expect("validated state field");
         writeln!(
             out,
-            "        {} = cott_runtime.CottRuntime.abi({}, {}, cott_runtime.RuntimeValidation.BOUNDARY, {})",
+            "        this.{} = cott_runtime.CottRuntime.abi(this.{}, {}, cott_runtime.RuntimeValidation.BOUNDARY, {})",
             escape_identifier(field_name)?,
             escape_identifier(field_name)?,
             descriptor_for(
@@ -4077,7 +4082,7 @@ fn render_implementation_class(
                 .and_then(Value::as_str)
                 .ok_or_else(|| "state field is missing name".to_owned())?;
             Ok(format!(
-                "cott_runtime.CottStateField({}, {}, {{ {} }}, {{ value -> {} = value as {} }})",
+                "cott_runtime.CottStateField({}, {}, {{ this.{} }}, {{ value -> this.{} = value as {} }})",
                 kotlin_string(field_name),
                 descriptor_for(
                     field
@@ -4256,7 +4261,7 @@ fn render_impl_method(
                 .and_then(Value::as_str)
                 .ok_or_else(|| "state field missing name".to_owned())?;
             Ok(format!(
-                "cott_runtime.CottStateField({}, {}, {{ {} }}, {{ value -> {} = value as {} }})",
+                "cott_runtime.CottStateField({}, {}, {{ this.{} }}, {{ value -> this.{} = value as {} }})",
                 kotlin_string(name),
                 descriptor_for(
                     field
@@ -4350,7 +4355,7 @@ fn render_impl_method(
             .expect("validated state field");
         writeln!(
             out,
-            "        var _cottOld_{}: {} = {}",
+            "        var _cottOld_{}: {} = this.{}",
             safe_internal_name(field_name),
             render_contextual_type(
                 field.get("type").expect("validated state type"),
@@ -4419,7 +4424,7 @@ fn render_impl_method(
             .expect("validated state field");
         writeln!(
             out,
-            "                _cottOld_{} = cott_runtime.CottRuntime.deepSnapshot({}) as {}",
+            "                _cottOld_{} = cott_runtime.CottRuntime.deepSnapshot(this.{}) as {}",
             safe_internal_name(field_name),
             escape_identifier(field_name)?,
             render_contextual_type(

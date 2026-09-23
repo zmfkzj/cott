@@ -233,6 +233,7 @@ struct EvidenceViolation {
 struct PythonAudit {
     references: Vec<ImportReference>,
     evidence: Vec<EvidenceViolation>,
+    from_imports: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// Parses one authored or materialized Python file and records every static or
@@ -251,6 +252,7 @@ fn inspect_python_source(source: &str) -> Result<PythonAudit, String> {
         runtime_derived: BTreeSet::new(),
         references: Vec::new(),
         evidence: Vec::new(),
+        from_imports: BTreeMap::new(),
     };
     for statement in suite {
         visitor.visit_statement(&statement);
@@ -275,6 +277,7 @@ fn inspect_python_source(source: &str) -> Result<PythonAudit, String> {
     Ok(PythonAudit {
         references: visitor.references,
         evidence: visitor.evidence,
+        from_imports: visitor.from_imports,
     })
 }
 
@@ -384,6 +387,7 @@ struct PythonImportVisitor<'a> {
     runtime_derived: BTreeSet<String>,
     references: Vec<ImportReference>,
     evidence: Vec<EvidenceViolation>,
+    from_imports: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl PythonImportVisitor<'_> {
@@ -584,6 +588,10 @@ impl PythonImportVisitor<'_> {
                 let Some(module) = module else {
                     return;
                 };
+                self.from_imports
+                    .entry(module.to_owned())
+                    .or_default()
+                    .extend(node.names.iter().map(|alias| alias.name.to_string()));
                 self.push_literal(node.range, ImportForm::ImportFrom, module);
             }
             ast::Stmt::FunctionDef(node) => {
@@ -1134,18 +1142,19 @@ pub fn resolve_implementations(
     let local_imports = local_import_roots(config, plan);
     let generated_type_modules = generated_type_modules(plan);
     let allowed_facade_imports = allowed_facade_imports(plan);
-    let locked_imports = match locked_import_roots(paths, &config.project.name) {
-        Ok(imports) => imports,
-        Err(message) => {
-            return Err(vec![BindingDiagnostic {
-                path: paths
-                    .lockfile
-                    .clone()
-                    .unwrap_or_else(|| paths.manifest.clone()),
-                message,
-            }]);
-        }
-    };
+    let locked_imports =
+        match locked_import_roots(paths, &config.project.name, &config.python.interpreter) {
+            Ok(imports) => imports,
+            Err(message) => {
+                return Err(vec![BindingDiagnostic {
+                    path: paths
+                        .lockfile
+                        .clone()
+                        .unwrap_or_else(|| paths.manifest.clone()),
+                    message,
+                }]);
+            }
+        };
     let generation_path = paths
         .generated_dir
         .parent()
@@ -1560,7 +1569,7 @@ fn manifest_target(
     target: &str,
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
-    locked_imports: &HashSet<String>,
+    locked_imports: &LockedImports,
 ) -> Result<(PathBuf, String, String), String> {
     let Some((module, function)) = target.split_once(':') else {
         return Err("must use `module:function` syntax".to_owned());
@@ -1597,7 +1606,7 @@ fn manifest_target(
             "module root `{root}` is reserved for the Python standard library"
         ));
     }
-    if locked_imports.contains(root) {
+    if locked_imports.claims_root(root) {
         return Err(format!(
             "module root `{root}` is selected as a locked distribution"
         ));
@@ -1752,7 +1761,7 @@ pub fn validate_candidate(
         &generated_type_modules(plan),
         &allowed_facade_imports(plan),
         &factory_imports,
-        &locked_import_roots(paths, &config.project.name)?,
+        &locked_import_roots(paths, &config.project.name, &config.python.interpreter)?,
     )
 }
 
@@ -1972,12 +1981,237 @@ fn is_exact_generated_facade(module: &str, generated_type_modules: &HashSet<Stri
     generated_type_modules.contains(&format!("{module}_types"))
 }
 
+#[derive(Default)]
+struct LockedImports {
+    conventional_roots: HashSet<String>,
+    selected: BTreeMap<String, BTreeSet<String>>,
+    installed: Vec<(String, String)>,
+    modules: BTreeMap<String, BTreeSet<usize>>,
+}
+
+impl LockedImports {
+    fn selected_owner(&self, owner: usize) -> bool {
+        let (name, version) = &self.installed[owner];
+        self.selected
+            .get(name)
+            .is_some_and(|versions| versions.is_empty() || versions.contains(version))
+    }
+
+    fn module_allowed(&self, module: &str) -> Option<bool> {
+        self.modules.get(module).map(|owners| {
+            owners.len() == 1 && self.selected_owner(*owners.first().expect("one owner"))
+        })
+    }
+
+    fn allows(&self, module: &str, imported: Option<&BTreeSet<String>>) -> bool {
+        let parent = || {
+            self.module_allowed(module).unwrap_or_else(|| {
+                self.conventional_roots
+                    .contains(module.split('.').next().unwrap_or(module))
+            })
+        };
+        let Some(imported) = imported else {
+            return parent();
+        };
+        imported.iter().all(|name| {
+            // `from namespace import package` imports a child module, whereas
+            // `from package import Type` imports an attribute of its owned module.
+            self.module_allowed(&format!("{module}.{name}"))
+                .unwrap_or_else(parent)
+        })
+    }
+
+    fn claims_root(&self, root: &str) -> bool {
+        self.conventional_roots.contains(root)
+            || self.modules.iter().any(|(module, owners)| {
+                (module == root
+                    || module
+                        .strip_prefix(root)
+                        .is_some_and(|suffix| suffix.starts_with('.')))
+                    && owners.iter().any(|owner| self.selected_owner(*owner))
+            })
+    }
+
+    fn read_installed_modules(
+        &mut self,
+        paths: &ProjectPaths,
+        interpreter: &str,
+    ) -> Result<(), String> {
+        let executable = paths.root.join(interpreter);
+        let Some(parent) = executable.parent() else {
+            return Ok(());
+        };
+        // PEP 405 environments are discoverable without executing the target
+        // interpreter. Uninstalled lock-only projects retain the existing static
+        // name check; this inventory is never verification evidence.
+        for environment in parent
+            .ancestors()
+            .take_while(|path| path.starts_with(&paths.root))
+        {
+            let configuration = environment.join("pyvenv.cfg");
+            let metadata = match fs::symlink_metadata(&configuration) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(format!("inspect {}: {error}", configuration.display())),
+            };
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "Python environment configuration is not a regular file: {}",
+                    configuration.display()
+                ));
+            }
+            let text = fs::read_to_string(&configuration)
+                .map_err(|error| format!("read {}: {error}", configuration.display()))?;
+            let version = text
+                .lines()
+                .filter_map(|line| line.split_once('='))
+                .find_map(|(name, value)| {
+                    matches!(name.trim(), "version" | "version_info").then_some(value.trim())
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "Python environment configuration omits its version: {}",
+                        configuration.display()
+                    )
+                })?;
+            let mut components = version.split('.');
+            let major = components.next().unwrap_or_default();
+            let minor = components.next().unwrap_or_default();
+            if major.is_empty()
+                || minor.is_empty()
+                || !major
+                    .bytes()
+                    .chain(minor.bytes())
+                    .all(|byte| byte.is_ascii_digit())
+            {
+                return Err(format!(
+                    "invalid Python environment version in {}",
+                    configuration.display()
+                ));
+            }
+            for site in [
+                environment.join(format!("lib/python{major}.{minor}/site-packages")),
+                environment.join("Lib/site-packages"),
+            ] {
+                let metadata = match fs::symlink_metadata(&site) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(format!("inspect {}: {error}", site.display())),
+                };
+                if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                    return Err(format!(
+                        "Python package directory is not a real directory: {}",
+                        site.display()
+                    ));
+                }
+                let mut entries = fs::read_dir(&site)
+                    .map_err(|error| format!("read {}: {error}", site.display()))?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| format!("read {}: {error}", site.display()))?;
+                entries.sort_by_key(|entry| entry.file_name());
+                for entry in entries {
+                    if !entry.file_name().to_string_lossy().ends_with(".dist-info") {
+                        continue;
+                    }
+                    let metadata = entry
+                        .file_type()
+                        .map_err(|error| format!("inspect {}: {error}", entry.path().display()))?;
+                    if !metadata.is_dir() || metadata.is_symlink() {
+                        return Err(format!(
+                            "Python distribution metadata is not a real directory: {}",
+                            entry.path().display()
+                        ));
+                    }
+                    let metadata_path = entry.path().join("METADATA");
+                    let record_path = entry.path().join("RECORD");
+                    for path in [&metadata_path, &record_path] {
+                        let metadata = fs::symlink_metadata(path)
+                            .map_err(|error| format!("inspect {}: {error}", path.display()))?;
+                        if !metadata.is_file() || metadata.file_type().is_symlink() {
+                            return Err(format!(
+                                "Python distribution inventory is not a regular file: {}",
+                                path.display()
+                            ));
+                        }
+                    }
+                    let metadata = fs::read_to_string(&metadata_path)
+                        .map_err(|error| format!("read {}: {error}", metadata_path.display()))?;
+                    let headers = metadata
+                        .split_once("\n\n")
+                        .map_or(metadata.as_str(), |(headers, _)| headers);
+                    let name = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("Name: "))
+                        .ok_or_else(|| {
+                            format!(
+                                "distribution METADATA omits Name: {}",
+                                metadata_path.display()
+                            )
+                        })?
+                        .trim()
+                        .to_ascii_lowercase()
+                        .replace('_', "-");
+                    let version = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("Version: "))
+                        .ok_or_else(|| {
+                            format!(
+                                "distribution METADATA omits Version: {}",
+                                metadata_path.display()
+                            )
+                        })?
+                        .trim()
+                        .to_owned();
+                    let owner = self.installed.len();
+                    self.installed.push((name, version));
+                    let mut reader = csv::ReaderBuilder::new()
+                        .has_headers(false)
+                        .from_path(&record_path)
+                        .map_err(|error| format!("read {}: {error}", record_path.display()))?;
+                    for record in reader.records() {
+                        let record = record
+                            .map_err(|error| format!("read {}: {error}", record_path.display()))?;
+                        if let Some(module) = record.get(0).and_then(installed_module_name) {
+                            self.modules.entry(module).or_default().insert(owner);
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        Ok(())
+    }
+}
+
+fn installed_module_name(path: &str) -> Option<String> {
+    if path.contains('\\') || path.starts_with('/') {
+        return None;
+    }
+    let (parent, filename) = path.rsplit_once('/').unwrap_or(("", path));
+    let stem = if let Some(stem) = filename.strip_suffix(".py") {
+        stem
+    } else if filename.ends_with(".so") || filename.ends_with(".pyd") {
+        filename.split('.').next()?
+    } else {
+        return None;
+    };
+    let module = if stem == "__init__" {
+        parent.replace('/', ".")
+    } else if parent.is_empty() {
+        stem.to_owned()
+    } else {
+        format!("{}.{}", parent.replace('/', "."), stem)
+    };
+    valid_dotted_name(&module).then_some(module)
+}
+
 fn locked_import_roots(
     paths: &ProjectPaths,
     project_name: &str,
-) -> Result<HashSet<String>, String> {
+    interpreter: &str,
+) -> Result<LockedImports, String> {
     let Some(path) = &paths.lockfile else {
-        return Ok(HashSet::new());
+        return Ok(LockedImports::default());
     };
     let text = fs::read_to_string(path)
         .map_err(|error| format!("unable to read lockfile {}: {error}", path.display()))?;
@@ -1988,7 +2222,7 @@ fn locked_import_roots(
         .and_then(toml::Value::as_array)
         .ok_or_else(|| format!("lockfile {} has no package array", path.display()))?;
     if packages.is_empty() {
-        return Ok(HashSet::new());
+        return Ok(LockedImports::default());
     }
     let normalize = |name: &str| name.to_ascii_lowercase().replace('_', "-");
     let dependencies = |package: &toml::Value| {
@@ -2031,10 +2265,26 @@ fn locked_import_roots(
             pending.extend(dependencies(package));
         }
     }
-    Ok(selected
-        .into_iter()
-        .map(|name| name.replace('-', "_"))
-        .collect())
+    let mut imports = LockedImports {
+        conventional_roots: selected.iter().map(|name| name.replace('-', "_")).collect(),
+        ..LockedImports::default()
+    };
+    for name in selected {
+        let versions = packages
+            .iter()
+            .filter(|package| {
+                package
+                    .get("name")
+                    .and_then(toml::Value::as_str)
+                    .is_some_and(|candidate| normalize(candidate) == name)
+            })
+            .filter_map(|package| package.get("version").and_then(toml::Value::as_str))
+            .map(str::to_owned)
+            .collect();
+        imports.selected.insert(name, versions);
+    }
+    imports.read_installed_modules(paths, interpreter)?;
+    Ok(imports)
 }
 
 fn read_binding(
@@ -2046,7 +2296,7 @@ fn read_binding(
     generated_type_modules: &HashSet<String>,
     allowed_facade_imports: &BTreeMap<String, BTreeSet<String>>,
     factory_imports: &BTreeMap<String, BTreeSet<String>>,
-    locked_imports: &HashSet<String>,
+    locked_imports: &LockedImports,
 ) -> Result<Vec<u8>, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("missing or unreadable binding: {error}"))?;
@@ -2082,13 +2332,25 @@ fn validate_source(
     generated_type_modules: &HashSet<String>,
     allowed_facade_imports: &BTreeMap<String, BTreeSet<String>>,
     factory_imports: &BTreeMap<String, BTreeSet<String>>,
-    locked_imports: &HashSet<String>,
+    locked_imports: &LockedImports,
 ) -> Result<(), String> {
     let masked = mask_python(source);
     let mut errors = Vec::new();
     let mut add_error = |message: String| {
         if !errors.contains(&message) {
             errors.push(message);
+        }
+    };
+    let from_imports = match inspect_python_source(source) {
+        Ok(audit) => {
+            for violation in audit.evidence {
+                add_error(violation.message);
+            }
+            audit.from_imports
+        }
+        Err(message) => {
+            add_error(message);
+            BTreeMap::new()
         }
     };
 
@@ -2146,6 +2408,7 @@ fn validate_source(
     }
     inspect_imports(
         &masked,
+        &from_imports,
         local_imports,
         generated_type_modules,
         allowed_facade_imports,
@@ -4503,12 +4766,13 @@ fn string_literal(value: &str) -> bool {
 
 fn inspect_imports(
     source: &str,
+    from_imports: &BTreeMap<String, BTreeSet<String>>,
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
     allowed_facade_imports: &BTreeMap<String, BTreeSet<String>>,
     factory_imports: &BTreeMap<String, BTreeSet<String>>,
     callable: &PythonCallable,
-    locked_imports: &HashSet<String>,
+    locked_imports: &LockedImports,
     add_error: &mut impl FnMut(String),
 ) {
     let impl_concrete_import = impl_concrete_import_source(callable);
@@ -4532,7 +4796,8 @@ fn inspect_imports(
                 }
                 inspect_import_target(
                     module,
-                    rest,
+                    "",
+                    None,
                     local_imports,
                     generated_type_modules,
                     None,
@@ -4582,6 +4847,7 @@ fn inspect_imports(
                 inspect_import_target(
                     module,
                     imported,
+                    from_imports.get(module),
                     local_imports,
                     generated_type_modules,
                     allowed_facade_imports.get(module),
@@ -4714,12 +4980,13 @@ fn inspect_factory_concrete_import(
 fn inspect_import_target(
     module: &str,
     imported: &str,
+    from_imports: Option<&BTreeSet<String>>,
     local_imports: &HashSet<String>,
     generated_type_modules: &HashSet<String>,
     allowed_facade_functions: Option<&BTreeSet<String>>,
     allowed_factory_concretes: Option<&BTreeSet<String>>,
     allowed_impl_concrete: Option<&str>,
-    locked_imports: &HashSet<String>,
+    locked_imports: &LockedImports,
     add_error: &mut impl FnMut(String),
 ) {
     if module.starts_with('.') {
@@ -4771,7 +5038,7 @@ fn inspect_import_target(
         add_error(format!("project-local import '{module}' is not allowed"));
     } else if root == "cott_runtime" || stdlib_modules().contains(root) {
         return;
-    } else if !locked_imports.contains(root) {
+    } else if !locked_imports.allows(module, from_imports) {
         add_error(format!(
             "external distribution import '{module}' is not selected in uv.lock"
         ));
@@ -4782,6 +5049,7 @@ fn stdlib_modules() -> HashSet<&'static str> {
     HashSet::from([
         "__future__",
         "abc",
+        "argparse",
         "array",
         "ast",
         "asyncio",
@@ -4807,6 +5075,7 @@ fn stdlib_modules() -> HashSet<&'static str> {
         "fractions",
         "functools",
         "getopt",
+        "getpass",
         "glob",
         "gzip",
         "hashlib",

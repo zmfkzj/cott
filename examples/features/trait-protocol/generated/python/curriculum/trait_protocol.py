@@ -136,7 +136,7 @@ class SimpleTask:
             _cott_old_lifecycle = self.lifecycle
             _cott_old_completion_count = self.completion_count
             try:
-                _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/SimpleTask/complete.py", "c2eeca85cc7bc2ee21ef4c92a8cd59a30715ec11af53e613faa70f5d3693f6c5", "_cott_impl_SimpleTask_complete", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.SimpleTask.complete")
+                _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/SimpleTask/complete.py", "272abd3fefd9916a59334699e2764a91c6ad197b8d344cb9d5398bc49cf66db7", "_cott_impl_SimpleTask_complete", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.SimpleTask.complete")
                 _result = await _implementation(self)
             except BaseException as _error:
                 self.title = _cott_validate_abi(self.title, str, path="$.title")
@@ -203,7 +203,7 @@ class SimpleTask:
             _cott_old_lifecycle = self.lifecycle
             _cott_old_completion_count = self.completion_count
             try:
-                _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/SimpleTask/priority_level.py", "c602f09d3f61a255dfd819dc2c15a6dd0bd89e9fb69277717f9ccaa57259f0be", "_cott_impl_SimpleTask_priority_level", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.SimpleTask.priority_level")
+                _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/SimpleTask/priority_level.py", "679518dc6a9ba9ae44573adc77a9e93ba0c4a515102e13edfb8dd79f0b7f4bb3", "_cott_impl_SimpleTask_priority_level", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.SimpleTask.priority_level")
                 _result = await _implementation(self)
             except BaseException as _error:
                 self.title = _cott_validate_abi(self.title, str, path="$.title")
@@ -268,7 +268,7 @@ class SimpleTask:
             _cott_old_lifecycle = self.lifecycle
             _cott_old_completion_count = self.completion_count
             try:
-                _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/SimpleTask/summary.py", "32cd3a679cf07989bd53e30b092110359ce4f02e8f8964b3dfd2198134d32c96", "_cott_impl_SimpleTask_summary", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.SimpleTask.summary")
+                _implementation = _cott_load("_cott_impl/curriculum/trait_protocol/SimpleTask/summary.py", "f5ff8c7b356d93340d74d4c64a6e5a90db77d7809123ade15198496652e01c65", "_cott_impl_SimpleTask_summary", expected_project_name="trait-protocol", expected_cott_symbol="curriculum.trait_protocol.SimpleTask.summary")
                 _result = await _implementation(self)
             except BaseException as _error:
                 self.title = _cott_validate_abi(self.title, str, path="$.title")

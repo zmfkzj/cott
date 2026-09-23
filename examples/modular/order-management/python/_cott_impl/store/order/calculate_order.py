@@ -12,21 +12,15 @@ def calculate_order(catalog: Catalog, order: Order) -> Result[OrderReceipt, Orde
     total_items = 0
     total_cents = 0
     for line in order.lines:
-        match validate_line(line):
-            case Err(error=error):
-                return Err(error=error)
-            case Ok(value=valid_line):
-                match find_item(catalog, valid_line.sku):
-                    case Err(error=cause):
-                        return Err(error=OrderError_ItemUnavailable(cause=cause))
-                    case Ok(value=item):
-                        total_items += valid_line.quantity
-                        total_cents += item.price_cents * valid_line.quantity
+        validated = validate_line(line)
+        if isinstance(validated, Err):
+            return Err(error=validated.error)
 
-    return Ok(
-        value=OrderReceipt(
-            order_id=order.order_id,
-            total_items=total_items,
-            total_cents=total_cents,
-        )
-    )
+        found = find_item(catalog, validated.value.sku)
+        if isinstance(found, Err):
+            return Err(error=OrderError_ItemUnavailable(cause=found.error))
+
+        total_items += validated.value.quantity
+        total_cents += found.value.price_cents * validated.value.quantity
+
+    return Ok(value=OrderReceipt(order_id=order.order_id, total_items=total_items, total_cents=total_cents))

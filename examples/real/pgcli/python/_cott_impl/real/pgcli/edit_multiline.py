@@ -2,9 +2,7 @@ from real.pgcli_types import InputBuffer
 
 
 def edit_multiline(buffer: InputBuffer, input: str) -> InputBuffer:
-    cursor = buffer.cursor
-    text_length = len(buffer.text)
-    if cursor > text_length:
-        cursor = text_length
-    text = buffer.text[:cursor] + input + buffer.text[cursor:]
-    return InputBuffer(text=text, cursor=cursor + len(input), multiline=buffer.multiline)
+    text = buffer.text
+    position = min(buffer.cursor, len(text))
+    new_text = text[:position] + input + text[position:]
+    return InputBuffer(text=new_text, cursor=position + len(input), multiline=buffer.multiline)

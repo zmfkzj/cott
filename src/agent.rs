@@ -22,6 +22,22 @@ pub enum AgentKind {
     Claude,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AgentSelection<'a> {
+    pub kind: AgentKind,
+    pub model: Option<&'a str>,
+}
+
+/// Nonempty, equal to its own trim, free of control characters, and not
+/// starting with `-` (so it can never be mistaken for a flag). Internal
+/// spaces are allowed; the value is passed as a single argv element.
+pub fn valid_model(model: &str) -> bool {
+    !model.is_empty()
+        && model == model.trim()
+        && !model.chars().any(|character| character.is_control())
+        && !model.starts_with('-')
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdapterSpec {
     pub executable_name: &'static str,
@@ -125,6 +141,7 @@ pub struct AgentRunCandidate {
     pub timed_out: bool,
     pub duration_ms: u64,
     pub environment_names: Vec<String>,
+    pub argv_template: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -608,6 +625,7 @@ struct TypeFeatures {
     result: bool,
     option: bool,
     unit: bool,
+    opaque: bool,
     list: bool,
     set: bool,
     map: bool,
@@ -670,7 +688,7 @@ fn append_python_rules(
     prompt: &mut String,
 ) {
     prompt.push_str("CPython 3.14.6, fully annotated Python. Import only names the implementation file actually references. Keep every `def` signature on one physical line and end the file with exactly one newline.\n");
-    prompt.push_str("Preserve every declared annotation exactly. Standard ABI aliases, including integer widths, are annotations and MUST NOT be called. Numeric ABI aliases are plain int/float at runtime: use ordinary arithmetic and comparisons and return the result directly, never call or construct a numeric alias. Never replace contract annotations or returned contract containers with Python primitives or built-in list/set/dict.\n");
+    prompt.push_str("Use the Python ABI projections of the canonical types, not the raw IR type names. Numeric annotations are case-sensitive cott_runtime imports: I8, I16, I32, I64, U8, U16, U32, U64, F32, F64. For example, canonical primitive i32 means `from cott_runtime import I32` and a Python annotation of `I32`; lowercase `i32` is not a runtime export. These aliases are annotations and MUST NOT be called. Numeric ABI aliases are plain int/float at runtime: use ordinary arithmetic and comparisons and return the result directly, never call or construct a numeric alias. Never replace width-specific annotations or returned contract containers with Python primitives or built-in list/set/dict.\n");
     prompt.push_str("Do not use dynamic imports, reflection, dynamic compilation, or suppressions. Imports may use the Python standard library, `cott_runtime`, exact generated facade and `*_types` modules, or lock-selected external distributions.\n");
     prompt.push_str("Exact generated Cott facade modules MAY be imported directly or from their parent package, with an optional module alias, for module-qualified access. Do not alias imported Cott callables. Import public generated symbols through `from <module> import name` and generated value types through `from <module>_types import Type` only for selected identities. Do not import any other project-local module or import concrete facade classes from generated type modules.\n");
     for line in generated_import_lines(declarations, callable) {
@@ -692,13 +710,16 @@ fn append_python_rules(
         prompt.push_str("For an implementation target, a public sibling method of the same concrete may only be called through a parameter annotated with that concrete (normally `self`) or a direct local alias of one, as `<receiver>.<method>(...)`; it is a Cott call.\n");
     }
     if features.result {
-        prompt.push_str("Construct result values only with top-level `cott_runtime.Ok(...)`/`cott_runtime.Err(...)`, never `Result.Ok`/`Result.Err`. Never spell Result as an Ok/Err union. Return `Ok(value=UNIT)` for Result[Unit, E].\n");
+        prompt.push_str("Construct result values only with top-level `cott_runtime.Ok(value=...)`/`cott_runtime.Err(error=...)`, never `Result.Ok`/`Result.Err`. Both constructors are keyword-only: never pass their payload positionally. Never spell Result as an Ok/Err union. Return `Ok(value=UNIT)` for Result[Unit, E].\n");
     }
     if features.unit {
         prompt.push_str("`Unit` is the annotation and `UNIT` is its only value.\n");
     }
     if features.option {
         prompt.push_str("For Option annotations use the top-level `Some(value=...)` and `Nothing()` variants, never `Option.Some` or `Option.Nothing`.\n");
+    }
+    if features.opaque {
+        prompt.push_str("`Opaque[\"tag\"]` maps to `cott_runtime.Opaque[typing.Literal[\"tag\"]]`. Construct it with keyword arguments `Opaque(tag=\"tag\", value=payload)`. Its public `.tag` is a string; `.unwrap()` returns the exact stored payload as `object` (also available as `.value`), without cloning it. Validate and narrow that object using the declared payload contract before use. There is no `.payload` field or reflective accessor. Opaque tags are type labels, not cryptographic ownership seals.\n");
     }
     if features.tuple {
         prompt.push_str("Variadic Cott `Tuple[T, ...]` and fixed Cott Tuple use native `tuple[...]` annotations and `(a, b)` values; never import a nonexistent `List`.\n");
@@ -981,6 +1002,7 @@ fn type_features(value: &serde_json::Value) -> TypeFeatures {
         result: kinds.contains("result"),
         option: kinds.contains("option"),
         unit: kinds.contains("unit"),
+        opaque: kinds.contains("opaque"),
         list: kinds.contains("list"),
         set: kinds.contains("set"),
         map: kinds.contains("map"),
@@ -1178,8 +1200,24 @@ pub(crate) fn selected_implementation_kind(callable: &PythonCallable) -> Option<
     .filter(|kind| matches!(*kind, "default" | "specialization"))
 }
 
-pub fn run_agent(
+fn insert_model_argument(
     kind: AgentKind,
+    mut arguments: Vec<String>,
+    model: Option<&str>,
+) -> Vec<String> {
+    let Some(model) = model else {
+        return arguments;
+    };
+    let index = match kind {
+        AgentKind::Codex => 1,
+        AgentKind::Omp | AgentKind::Claude => 0,
+    };
+    arguments.splice(index..index, [String::from("--model"), model.to_owned()]);
+    arguments
+}
+
+pub fn run_agent(
+    selection: AgentSelection,
     executable: PathBuf,
     workspace: &Path,
     scratch: &Path,
@@ -1187,6 +1225,12 @@ pub fn run_agent(
     prompt: Vec<u8>,
     timeout_seconds: u16,
 ) -> Result<AgentRunCandidate, String> {
+    if let Some(model) = selection.model {
+        if !valid_model(model) {
+            return Err(format!("invalid agent model `{model}`"));
+        }
+    }
+    let kind = selection.kind;
     let scratch = fs::canonicalize(scratch)
         .map_err(|error| format!("resolve agent scratch {}: {error}", scratch.display()))?;
     let spec = adapter(kind);
@@ -1194,9 +1238,9 @@ pub fn run_agent(
         .map_err(|error| format!("resolve {} executable: {error}", spec.executable_name))?;
     let metadata = fs::symlink_metadata(&executable)
         .map_err(|error| format!("stat {} executable: {error}", spec.executable_name))?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.nlink() != 1 {
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(format!(
-            "{} executable must be a regular single-link file",
+            "{} executable must be a regular file",
             spec.executable_name
         ));
     }
@@ -1327,6 +1371,7 @@ pub fn run_agent(
             .map(ToString::to_string)
             .collect(),
     };
+    let arguments = insert_model_argument(kind, arguments, selection.model);
     let stdin = if spec.prompt_on_stdin {
         prompt.clone()
     } else {
@@ -1390,12 +1435,22 @@ pub fn run_agent(
         .read_to_end(&mut implementation)
         .map_err(|error| format!("read agent target: {error}"))?;
     if implementation.is_empty() {
-        return Err(format!("agent did not write target {}", target.display()));
+        return Err(format!(
+            "agent did not write target {}\nprovider stdout:\n{}\nprovider stderr:\n{}",
+            target.display(),
+            String::from_utf8_lossy(&completed.stdout).trim(),
+            String::from_utf8_lossy(&completed.stderr).trim(),
+        ));
     }
     while implementation.last() == Some(&b'\n') {
         implementation.pop();
     }
     implementation.push(b'\n');
+    let argv_template = insert_model_argument(
+        kind,
+        spec.argv_template.iter().map(ToString::to_string).collect(),
+        selection.model,
+    );
     Ok(AgentRunCandidate {
         implementation,
         executable: executable.clone(),
@@ -1408,6 +1463,7 @@ pub fn run_agent(
         timed_out: completed.timed_out,
         duration_ms,
         environment_names: agent_environment_names(kind),
+        argv_template,
     })
 }
 
@@ -1431,8 +1487,8 @@ fn bun_digest(executable: &Path) -> Result<[u8; 32], String> {
 
     let metadata = fs::symlink_metadata(executable)
         .map_err(|error| format!("stat OMP Bun runtime: {error}"))?;
-    if !metadata.is_file() || metadata.nlink() != 1 || metadata.mode() & 0o111 == 0 {
-        return Err("OMP Bun runtime must be a regular single-link executable file".to_owned());
+    if !metadata.is_file() || metadata.mode() & 0o111 == 0 {
+        return Err("OMP Bun runtime must be a regular executable file".to_owned());
     }
     let mut file =
         fs::File::open(executable).map_err(|error| format!("open OMP Bun runtime: {error}"))?;

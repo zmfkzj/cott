@@ -7,9 +7,7 @@ def group_filenames(filenames: CottList[str]) -> Result[CottList[FileMove], File
     moves: list[FileMove] = []
     for filename in filenames:
         result = classify_filename(filename)
-        match result:
-            case Ok(value=move):
-                moves.append(move)
-            case Err():
-                return result
+        if isinstance(result, Err):
+            return result
+        moves.append(result.value)
     return Ok(value=CottList(values=moves))

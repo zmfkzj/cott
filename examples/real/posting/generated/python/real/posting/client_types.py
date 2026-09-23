@@ -129,5 +129,8 @@ PostingError: TypeAlias = Union[PostingError_InvalidArguments, PostingError_Inva
 """Parse METHOD URL [BODY]; use a 30-second timeout and no headers."""
 """Send one HTTP request and retain status, final URL, headers, and response bytes."""
 """Render status and final URL, then headers and a UTF-8 replacement-decoded body."""
-"""Parse arguments, send the request, and render its response."""
+"""Call real.posting.client.parse_arguments, pass its request to
+real.posting.client.send_request, and return the successful response rendered
+by real.posting.client.render_response. Return an error from either earlier
+operation unchanged; do not send a request after argument parsing fails."""
 __all__ = ["Header", "HttpMethod", "HttpMethod_Custom", "HttpMethod_Delete", "HttpMethod_Get", "HttpMethod_Head", "HttpMethod_Options", "HttpMethod_Patch", "HttpMethod_Post", "HttpMethod_Put", "PostingError", "PostingError_InvalidArguments", "PostingError_InvalidRequest", "PostingError_NetworkFailed", "Request", "Response"]

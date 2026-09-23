@@ -32,7 +32,7 @@ Success returns a RideRow containing nominal RouteCode, ServiceDate, and RideCou
         _expected_error_span = {"end_byte":1399,"end_column":55,"end_line":36,"start_byte":1349,"start_column":5,"start_line":36}
         _expected_error_clause = "error:3"
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/cta_row/decode_row.py", "619809dcdb6911972e43edf3b11a457cf3e6076e0b330b7804ac0c0fe16df483", "decode_row", expected_project_name="cta-row", expected_cott_symbol="curriculum.cta_row.decode_row")
+        _implementation = _cott_load("_cott_impl/curriculum/cta_row/decode_row.py", "b4b801780a016d528105647605c672cac6f45d1512ebd6b35b6dd6007a88c119", "decode_row", expected_project_name="cta-row", expected_cott_symbol="curriculum.cta_row.decode_row")
         _result = _implementation(route, date, day_type, rides)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

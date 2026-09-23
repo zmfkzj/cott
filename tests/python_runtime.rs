@@ -51,6 +51,84 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 #[test]
+fn runtime_authenticates_namespace_import_origins_before_execution() {
+    let temp = TempDir::new();
+    write_runtime(&temp.path);
+    let script = r#"
+import copy
+import hashlib
+from pathlib import Path
+import sys
+from cott_runtime import CottContractViolation, _cott_validate_dependencies
+
+root = Path.cwd()
+def install(name, files):
+    metadata = f"Metadata-Version: 2.4\nName: {name}\nVersion: 1.0.0\n\n"
+    info = root / (name.replace("-", "_") + "-1.0.0.dist-info")
+    info.mkdir()
+    (info / "METADATA").write_text(metadata)
+    (info / "top_level.txt").write_text("cott_test_namespace\n")
+    (info / "RECORD").write_text("".join(f"{path},,\n" for path in files))
+    origins = []
+    for relative, content in files.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        origins.append({"path": relative, "content_hash": "sha256:" + hashlib.sha256(content.encode()).hexdigest()})
+    return {"name": name, "version": "1.0.0", "installed": {"version": "1.0.0", "metadata_hash": "sha256:" + hashlib.sha256(metadata.encode()).hexdigest(), "origins": origins, "imports": ["cott_test_namespace"]}}
+
+initializer = "raise RuntimeError('unauthenticated package initializer ran')\n"
+sdk = install("selected-driver", {
+    "cott_test_namespace/sdk/__init__.py": initializer,
+    "cott_test_namespace/sdk/client.py": "value = 42\n",
+})
+other = install("unselected-driver", {"cott_test_namespace/other/__init__.py": "value = 99\n"})
+source = b"from cott_test_namespace import sdk\nfrom cott_test_namespace.sdk.client import value\n"
+_cott_validate_dependencies([sdk], source, {})
+assert "cott_test_namespace.sdk" not in sys.modules
+
+def rejected(dependencies, source):
+    try:
+        _cott_validate_dependencies(dependencies, source, {})
+    except CottContractViolation:
+        return
+    raise AssertionError("unauthenticated external import was accepted")
+
+rejected([sdk], b"from cott_test_namespace import other\n")
+rejected([sdk], b"import cott_test_namespace\n")
+import types
+fake = types.ModuleType("cott_test_namespace.sdk")
+fake.__file__ = str(root / "untrusted.py")
+sys.modules[fake.__name__] = fake
+rejected([sdk], source)
+del sys.modules[fake.__name__]
+missing_parent = copy.deepcopy(sdk)
+missing_parent["installed"]["origins"] = missing_parent["installed"]["origins"][1:]
+rejected([missing_parent], source)
+path = root / "cott_test_namespace/sdk/client.py"
+path.write_text("value = 43\n")
+rejected([sdk], source)
+path.write_text("value = 42\n")
+conflict = install("conflicting-driver", {"cott_test_namespace/sdk/client.py": "value = 42\n"})
+rejected([sdk, conflict], source)
+"#;
+    let output = match Command::new("python3")
+        .args(["-c", script])
+        .current_dir(&temp.path)
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to execute runtime ownership regression: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "runtime dependency ownership failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn snapshot_digests_match_rust_for_all_json_types() {
     let temp = TempDir::new();
     write_runtime(&temp.path);

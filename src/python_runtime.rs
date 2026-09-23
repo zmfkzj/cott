@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+pub(crate) const IMPORT_OWNERSHIP: &str = include_str!("python/import_ownership.py");
 
 const RUNTIME_INIT_TEMPLATE: &str = r#"# Cott's compiler-owned Python runtime.
 # This module intentionally depends only on Python's standard library.
@@ -12,6 +13,7 @@ import contextlib as _contextlib
 import contextvars as _contextvars
 import hashlib as _hashlib
 import importlib.metadata as _metadata
+import importlib.machinery as _machinery
 import json as _json
 import math as _math
 import os as _os
@@ -1460,11 +1462,10 @@ def _cott_validate_python_tools(tools: object) -> None:
         raise _cott_violation("Cott runtime ABI or version mismatch")
 
 
-def _cott_required_distributions(source: bytes, public_python_symbols: object) -> set[str]:
-    try:
-        tree = _ast.parse(source)
-    except SyntaxError as error:
-        raise _cott_violation(f"implementation source is not valid Python: {error}") from error
+__COTT_IMPORT_OWNERSHIP__
+
+
+def _cott_required_distributions(source: bytes, public_python_symbols: object) -> dict[str, set[str]]:
     if type(public_python_symbols) is not dict:
         raise _cott_violation("generation public Python symbols must be an object")
     project_modules = set()
@@ -1472,26 +1473,13 @@ def _cott_required_distributions(source: bytes, public_python_symbols: object) -
         if type(module) is not str or not module or any(not part.isidentifier() for part in module.split(".")):
             raise _cott_violation("generation contains an invalid public Python module")
         project_modules.update((module, f"{module}_types"))
-    imports = set()
-    for node in _ast.walk(tree):
-        if isinstance(node, _ast.Import):
-            imports.update(alias.name for alias in node.names)
-        elif isinstance(node, _ast.ImportFrom) and node.level == 0 and node.module:
-            imports.add(node.module)
-    stdlib = set(_sys.stdlib_module_names) | {"cott_runtime", "_cott_impl"}
-    modules = {
-        module.split(".", 1)[0]
-        for module in imports
-        if module not in project_modules and module.split(".", 1)[0] not in stdlib
-    }
-    owners = _metadata.packages_distributions()
-    required = set()
-    for module in sorted(modules):
-        distributions = owners.get(module, [])
-        if len(distributions) != 1:
-            raise _cott_violation(f"external import {module!r} has ambiguous distribution ownership")
-        required.add(distributions[0].lower().replace("_", "-"))
-    return required
+    try:
+        required: dict[str, set[str]] = {}
+        for _, name, _, origins in _cott_owned_external_imports(source, project_modules):
+            required.setdefault(name, set()).update(relative.as_posix() for relative in origins)
+        return required
+    except (SyntaxError, ValueError, OSError) as error:
+        raise _cott_violation(f"invalid external dependency provenance: {error}") from error
 
 
 def _cott_validate_dependencies(dependencies: object, source: bytes, public_python_symbols: object) -> None:
@@ -1503,7 +1491,7 @@ def _cott_validate_dependencies(dependencies: object, source: bytes, public_pyth
         for dependency in dependencies
         if type(dependency) is dict and type(dependency.get("name")) is str
     }
-    if not required.issubset(recorded_names):
+    if not set(required).issubset(recorded_names):
         raise _cott_violation("implementation external dependencies lack provenance")
     for dependency in dependencies:
         if type(dependency) is not dict:
@@ -1529,22 +1517,28 @@ def _cott_validate_dependencies(dependencies: object, source: bytes, public_pyth
         origins = installed.get("origins")
         if type(origins) is not list or not origins:
             raise _cott_violation(f"dependency {name!r} omitted regular-file provenance")
+        recorded_origins: set[str] = set()
         for origin in origins:
             if type(origin) is not dict or type(origin.get("path")) is not str:
                 raise _cott_violation(f"dependency {name!r} has invalid file provenance")
             origin_path = origin["path"]
+            recorded_origins.add(origin_path)
             if origin_path.startswith("/") or "\\" in origin_path:
                 raise _cott_violation(f"dependency {name!r} has an invalid origin path")
             origin_parts = origin_path.split("/")
             if any(part in ("", ".", "..") for part in origin_parts):
                 raise _cott_violation(f"dependency {name!r} has an invalid origin path")
-            candidate = distribution.locate_file(origin_path)
+            candidate = _Path(distribution.locate_file(origin_path)).absolute()
             if candidate.is_symlink():
                 raise _cott_violation(f"dependency {name!r} origin is a symlink")
             expected = _cott_expected_digest(origin.get("content_hash"), f"dependency {name} file hash")
             actual = _cott_sha256(_cott_dependency_file_bytes(candidate, f"dependency {name} file"))
             if actual != expected:
                 raise _cott_violation(f"dependency {name!r} file hash mismatch")
+        if not required.get(name, set()).issubset(recorded_origins):
+            raise _cott_violation(f"dependency {name!r} omitted a required import origin")
+
+
 def _cott_is_digest(value: object) -> bool:
     return (
         type(value) is str
@@ -2205,6 +2199,7 @@ fn python_string_literal(value: &str) -> String {
 /// Render the compiler-owned, stdlib-only Python runtime files.
 pub fn render_runtime(project_name: &str, project_version: &str) -> BTreeMap<PathBuf, Vec<u8>> {
     let source = RUNTIME_INIT_TEMPLATE
+        .replace("__COTT_IMPORT_OWNERSHIP__", IMPORT_OWNERSHIP)
         .replace(
             "__COTT_PROJECT_NAME_LITERAL__",
             &python_string_literal(project_name),

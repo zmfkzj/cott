@@ -850,6 +850,10 @@ class PagerRequest:
         if not _cott_validated_construction():
             object.__setattr__(self, "terminal_height", _cott_validate_abi(self.terminal_height, U16, path="$.terminal_height"))
 
+"""History persistence is UTF-8 JSON: one array in oldest-to-newest stored order,
+with exact object fields sql (string), executed_at_ms (integer 0..2^64-1, never
+boolean), database (string), success (boolean). This is this Cott client's format,
+not upstream pgcli's query-text-only history. No timestamp is inferred or rewritten."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class HistoryEntry:
@@ -869,6 +873,10 @@ class HistoryEntry:
         if not _cott_validated_construction():
             object.__setattr__(self, "success", _cott_validate_abi(self.success, bool, path="$.success"))
 
+"""Normalize history by preserving stored order, optionally deduplicating exact
+(database, sql) pairs when unique is true. Keep each pair's last occurrence, then
+retain the last max_entries entries in their original relative order. A zero
+capacity produces an empty list. Do not sort by executed_at_ms."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class HistoryPolicy:
@@ -885,6 +893,11 @@ class HistoryPolicy:
         if not _cott_validated_construction():
             object.__setattr__(self, "unique", _cott_validate_abi(self.unique, bool, path="$.unique"))
 
+"""Favorites persistence is UTF-8 JSON: one array in authored order, with exact object
+fields name (string), sql (string), tags (array of strings). No unknown/missing
+fields or coercions. Names are nonempty and unique by exact case-sensitive spelling;
+tags may repeat and retain their order. This is this Cott client's format, not an
+upstream pgcli configuration section."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Favorite:
@@ -1521,5 +1534,120 @@ class InteractiveRequest:
         if not _cott_validated_construction():
             object.__setattr__(self, "execute_once", _cott_validate_abi(self.execute_once, bool, path="$.execute_once"))
 
-"""Run an interactive PostgreSQL session and print client errors before exiting."""
+"""Resolve a password with short-circuit priority: nonempty supplied_password
+returns Supplied; otherwise nonempty environment_password returns Environment.
+Those fields are already resolved input, so do not read process environment.
+Otherwise, if use_keyring is true, require nonempty service and user and call
+the lock-selected keyring.get_password(service, user). A nonempty result
+returns Keyring. A None or empty result means no stored credential and proceeds
+to the prompt policy. A backend/lookup failure returns CredentialUnavailable
+with a fixed nonsecret message; never write/delete a keyring entry.
+If still unresolved and no_prompt is true, return PromptDisabled without
+reading stdin or opening the terminal. Otherwise prompt exactly once using
+getpass.getpass with a fixed "Password: " prompt. Do not permit its echoed-input
+fallback: treat getpass.GetPassWarning as an error. A nonempty response returns
+Prompt; an explicitly submitted empty response returns password="" with
+PasswordSource.None (passwordless authentication). EOF, cancellation, terminal
+or hidden-input failure returns CredentialUnavailable without echoing secrets.
+Never log or include any password, service credential or raw exception in errors."""
+"""Probe an authenticated PostgreSQL session using the lock-selected psycopg
+driver, execute SELECT 1, and close it before returning Unit. This function
+does not install a global session or retain a transaction or SSH daemon.
+A real successful query, not an open TCP socket, establishes success.
+
+Parse plan.dsn with psycopg.conninfo.conninfo_to_dict (empty means no DSN).
+Nonempty settings.host, port, user, password and database override the DSN's
+corresponding host, port, user, password and dbname; empty settings leave
+the DSN value in place. Require a nonempty resolved dbname. Validate a supplied
+port as decimal 1..65535; the default port is 5432. Pass connection parameters
+as psycopg keyword arguments, never SQL or shell text.
+plan.tls.mode overrides sslmode: empty means prefer; otherwise accept exactly
+disable, allow, prefer, require, verify-ca, verify-full. The Path value "."
+means an omitted certificate path. Other root_certificate, certificate and
+private_key paths override sslrootcert, sslcert and sslkey respectively.
+The certificate and private key are supplied together or both omitted.
+Invalid DSN/port/TLS data maps to ConnectionFailed, the only declared error.
+Set connect_timeout=10 regardless of DSN and issue no application writes.
+
+Without SSH connect directly. With Some(ssh), use the installed OpenSSH ssh
+executable with an argument vector, never a shell. Validate nonempty jump
+host/user, positive port, and a single remote database host (no comma-separated
+host list, Unix socket or control characters). Preserve the resolved database
+hostname for TLS verification, but connect to the loopback tunnel using
+hostaddr=127.0.0.1 and the allocated local port. Missing remote host defaults
+to localhost from the jump host's perspective.
+Launch a foreground control master with -M -N, a private mode-0700 temporary
+directory and control socket, BatchMode=yes, StrictHostKeyChecking=yes,
+ExitOnForwardFailure=yes, ConnectTimeout=10, ControlPersist=no and
+GatewayPorts=no. Existing known_hosts is authority: never accept an unknown
+key automatically. Use -p and -l for jump port/user; private_key "." means
+no explicit identity file, otherwise use -i. Reject jump host beginning "-".
+Wait at most ten monotonic seconds for ssh -S socket -O check to succeed.
+Allocate a loopback-only port through a short-lived bound socket, then ask
+the authenticated master with -O forward -L 127.0.0.1:port:dbhost:dbport.
+Quote IPv6 hosts with forwarding-syntax brackets. A bind race is a declared
+failure, never permission to connect through an unconfirmed forwarding.
+Confirm the control request succeeded before contacting PostgreSQL.
+All ssh commands are bounded; stdin is DEVNULL, no password prompt or shell,
+no password in argv, and subprocess output is not copied into diagnostics.
+
+On every path close the psycopg connection, request control-master exit,
+terminate then kill and wait for a still-running owned foreground process,
+and remove the temporary control directory. Never kill an unrelated PID.
+All validation, driver, authentication, TLS, SSH, query, timeout or cleanup
+failures return ConnectionFailed with a fixed nonsecret category message;
+never include a DSN, password, private-key contents or raw exception text."""
+"""Read policy.path as the HistoryEntry JSON format and apply HistoryPolicy
+normalization only after validating every row, including rows later trimmed.
+A missing file is an empty success. Invalid UTF-8/JSON/field types, a non-array
+root, a non-regular or symlink leaf, and other I/O failures return
+HistoryFailed(path=policy.path, message=a fixed nonsecret category).
+Reject files larger than 16 MiB using a bounded read; do not execute file content."""
+"""Apply HistoryPolicy normalization, then write the HistoryEntry JSON format
+with ensure_ascii=False, compact separators and one final newline. Preserve
+field values exactly and reject serialized data larger than 16 MiB.
+Replace policy.path atomically using an exclusive same-directory temporary
+file, mode 0600, flush/fsync then os.replace, followed by parent directory fsync.
+Parent directories are not created. Reject a symlink/non-regular existing leaf.
+On precommit failure preserve the original and remove the temporary file.
+Return HistoryFailed(path=policy.path, message=a fixed nonsecret category) for
+serialization or I/O failure; never leave a partially truncated history file."""
+"""Append entry to entries, then apply the exact HistoryPolicy normalization.
+This is pure list transformation with no clock or filesystem access."""
+"""Read store.path as the Favorite JSON format; a missing file is an empty success.
+Preserve all valid entries in file order; more than store.max_entries is an
+error, not truncation. Validate every row, including tags and duplicate names.
+Reject invalid UTF-8/JSON, files over 16 MiB, non-regular/symlink leaves and
+genuine I/O failures. Return FavoriteFailed(name=str(store.path)) for all file,
+shape, duplicate-name or capacity failures. Do not silently skip invalid rows."""
+"""Validate Favorite names and capacity exactly as the persistence format requires,
+retaining input order. Write UTF-8 JSON with ensure_ascii=False, compact
+separators and one newline; reject serialized data over 16 MiB.
+Use an exclusive same-directory temporary file, mode 0600, flush/fsync,
+os.replace and parent fsync. Do not create parents or follow symlink leaves;
+preserve the old file and remove the temporary file on precommit failure.
+Every validation/serialization/I/O failure is FavoriteFailed(name=str(store.path))."""
+"""Run a real psycopg line-oriented PostgreSQL REPL. arguments excludes argv[0].
+Use argparse with program name pgcli-cott, optional positional DSN, -h/--host,
+-p/--port, -U/--username, -d/--dbname, -c/--command and --help. Reserve -h for
+host, not help. Unknown or malformed arguments print usage to stderr and exit 2;
+--help prints usage and exits 0 without connecting. Nonempty supplied flags
+override the DSN; unspecified connection fields retain libpq defaults and
+PGHOST/PGPORT/PGUSER/PGDATABASE/PGPASSWORD environment behavior. Never accept a
+password argument, echo credentials or disable the DSN's TLS verification.
+Connect once using psycopg.connect with autocommit=True and connect_timeout=10.
+With -c, execute that complete SQL string once. Otherwise read one complete
+SQL command per stdin line (no multiline parser); skip empty lines and leave
+on a line equal to \\q or quit after stripping. EOF is normal termination.
+Print "pgcli> " only when stdin is a terminal. Execute SQL through a real
+cursor; for row results print tab-separated column names followed by rows in
+driver order, rendering SQL NULL as NULL and other cells with str. For
+commands without rows print cursor.statusmessage when nonempty.
+On a query error print only a fixed "query failed" message to stderr; in -c
+mode exit 1, otherwise continue accepting lines but remember failure. Normal
+EOF/quit exits 0 if every query succeeded, otherwise 1. Connection or I/O
+failure exits 1 with a fixed category message. KeyboardInterrupt exits 130.
+Close every cursor and the connection before sys.exit; never log raw exception
+text or leave a background connection. This entrypoint does not create a hidden
+global session or infer a richer argument grammar from the upstream project."""
 __all__ = ["BackslashCommand", "BackslashCommand_Describe", "BackslashCommand_Help", "BackslashCommand_Quit", "BackslashCommand_Tables", "BackslashCommand_Unknown", "Catalog", "CatalogRefreshRequest", "ClientError", "ClientError_CatalogFailed", "ClientError_EditorFailed", "ClientError_ExportFailed", "ClientError_FavoriteFailed", "ClientError_HistoryFailed", "ClientError_ImportFailed", "ClientError_InvalidCommand", "ClientError_InvalidSql", "ClientError_NotificationFailed", "ClientError_PagerFailed", "ClientError_QueryFailed", "ClientError_TerminalFailed", "ClientError_TransactionFailed", "ClientError_UnsupportedFormat", "ColumnCatalog", "CommandInvocation", "CommandResult", "CompletionPolicy", "CompletionRequest", "CompletionResult", "ConnectionError", "ConnectionError_ConnectionFailed", "ConnectionError_CredentialUnavailable", "ConnectionError_InvalidDsn", "ConnectionError_InvalidPort", "ConnectionError_MissingDatabase", "ConnectionError_ProfileMissing", "ConnectionError_PromptDisabled", "ConnectionError_SshInvalid", "ConnectionError_TlsInvalid", "ConnectionInputs", "ConnectionPlan", "ConnectionProfile", "ConnectionRequest", "ConnectionSettings", "CredentialRequest", "CredentialResolution", "DatabaseError", "DatabaseError_ConnectionFailed", "DatabaseError_QueryFailed", "EditorRequest", "EnvironmentInputs", "ExecutedQuery", "ExportRequest", "Favorite", "FavoriteStore", "FormatRequest", "FormattedQuery", "HighlightRequest", "HighlightedSql", "HistoryEntry", "HistoryPolicy", "ImportRequest", "InputBuffer", "InteractiveRequest", "MetaCommand", "MetaCommand_ClearOutput", "MetaCommand_Connect", "MetaCommand_ConnectionInfo", "MetaCommand_Copy", "MetaCommand_DeleteFavorite", "MetaCommand_DeleteNamedQuery", "MetaCommand_Describe", "MetaCommand_Echo", "MetaCommand_EditBuffer", "MetaCommand_ExecuteBuffer", "MetaCommand_ExecuteExpanded", "MetaCommand_Expanded", "MetaCommand_Favorite", "MetaCommand_Help", "MetaCommand_History", "MetaCommand_ListDataTypes", "MetaCommand_ListDatabases", "MetaCommand_ListDefaultPrivileges", "MetaCommand_ListDomains", "MetaCommand_ListExtensions", "MetaCommand_ListFavorites", "MetaCommand_ListForeignTables", "MetaCommand_ListFunctions", "MetaCommand_ListIndexes", "MetaCommand_ListMaterializedViews", "MetaCommand_ListNotifications", "MetaCommand_ListPrivileges", "MetaCommand_ListRoles", "MetaCommand_ListSchemas", "MetaCommand_ListSequences", "MetaCommand_ListTables", "MetaCommand_ListTablespaces", "MetaCommand_ListTextSearchConfigurations", "MetaCommand_ListViews", "MetaCommand_NamedQuery", "MetaCommand_Password", "MetaCommand_PrintBuffer", "MetaCommand_PrintNamedQuery", "MetaCommand_QueryOutputEcho", "MetaCommand_Quit", "MetaCommand_ReadFile", "MetaCommand_ReadRelativeFile", "MetaCommand_RefreshCatalog", "MetaCommand_ResetBuffer", "MetaCommand_SaveNamedQuery", "MetaCommand_SetFormat", "MetaCommand_SetLogFile", "MetaCommand_SetOptions", "MetaCommand_SetOutput", "MetaCommand_SetPager", "MetaCommand_Shell", "MetaCommand_ShowFunction", "MetaCommand_SqlHelp", "MetaCommand_Timing", "MetaCommand_Unknown", "MetaCommand_VerboseErrors", "MetaCommand_Watch", "MetaCommand_WriteBuffer", "Notification", "NotificationRequest", "PagerRequest", "PasswordSource", "PasswordSource_Environment", "PasswordSource_Keyring", "PasswordSource_None", "PasswordSource_Prompt", "PasswordSource_Supplied", "PromptAction", "PromptAction_PromptPassword", "PromptAction_UsePassword", "QueryPlan", "QueryRequest", "QueryResult", "RelationCatalog", "RenderLayout", "RenderLayout_Horizontal", "RenderLayout_Vertical", "RenderRequest", "RenderedQuery", "RoutineCatalog", "SessionOptions", "SshSettings", "TableCatalog", "TableFormat", "TableFormat_Aligned", "TableFormat_Csv", "TableFormat_Html", "TableFormat_Json", "TableFormat_JsonLines", "TableFormat_Latex", "TableFormat_Markdown", "TableFormat_Tsv", "TableFormat_Vertical", "TlsSettings", "TransactionMode", "TransactionMode_AutoCommit", "TransactionMode_Manual", "TransactionMode_ReadOnly", "TransactionState", "TransferResult", "WatchRequest", "WatchResult"]

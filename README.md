@@ -52,6 +52,11 @@ unobserved, never an unsandboxed or external-network fallback. Semantic coverage
 IR clause inventory to runner evidence; manifest coverage rules may gate selected clauses without
 changing artifact certification.
 
+Sandboxed generation and verification additionally require cgroup v2 with the `pids` controller,
+systemd `>=254`, and a reachable systemd user manager. Each invocation gets an independent transient
+scope whose kernel task limit includes processes and threads; parallel jobs do not share a
+compiler-imposed UID-wide quota. Missing task isolation fails closed.
+
 `doc` is non-executable metadata and does not decide conformance. A `doc`-only contract diff is
 `DOCUMENTATION`; that label is not the regeneration signal. Changing `doc`, a relevant rule, a
 referenced type, or an incoming scenario still updates that callable's intent fingerprint and can
@@ -153,7 +158,7 @@ Choose commands by the work needed rather than rerunning the whole sequence afte
 | Check authored contracts | `cott check`, `cott fmt --check` | No artifact publication or agent invocation. |
 | Review one callable's resolved input | `cott prompt <callable> --format json` | No agent or target compiler; includes `generation_required`, `context`, and exact `prompt` bytes. |
 | Refresh emitted artifacts | `cott emit <target>` | No agent; publishes an unverified snapshot. |
-| Implement changed intent | `cott generate [<callable>] --agent <agent> --target <target>` | Invokes the agent only for eligible unresolved work; publishes an unverified snapshot. |
+| Implement changed intent | `cott generate [<callable>] --agent <agent> [--model <selector>] --target <target>` | Invokes the agent only for eligible unresolved work; publishes an unverified snapshot. |
 | Certify current artifacts | `cott verify` | Runs the selected target's real verification and coverage policy, without an agent. |
 | Inspect semantic changes | `cott diff` | Does not generate or certify implementations. |
 | Deliver a certified package | `cott deploy` | Does not generate or re-verify; requires deployable recorded evidence and unchanged bytes. |
@@ -178,6 +183,16 @@ cott fmt --check --project "$project"
 cott emit python --project "$project"
 cott generate --agent claude --target python --project "$project"
 cott verify --project "$project"
+```
+
+`generate --model <selector>` forwards an explicit model to the selected Codex, Claude, or OMP
+agent. Omitting it preserves that agent's default. The requested selector is retained in
+`AgentRun.argv_template`; it does not change the provider's credentials or sandbox permissions.
+The examples script forwards the same optional selector to every sequential `generate -j 3`:
+
+```bash
+COTT_BIN="$PWD/target/debug/cott" ./examples/generate.sh --agent omp --model anthropic/claude-opus-5-5
+# Add --dry-run to inspect commands without generating.
 ```
 
 ### Kotlin/JVM module workflow
@@ -312,8 +327,8 @@ constructors, even for its payloadless variants. `Option` and `Result` remain ge
 The sole member-name escape is an enum member matching its enum type: `Kind.Kind` becomes
 `Kind.Kind$`, still native. Its canonical identity is unchanged; native `.name` reflects the `$`.
 
-Verification requires Linux bubblewrap and Landlock ABI `>=3`. The filesystem policy is applied
-before Dart VM threads start. It denies process-memory access while permitting the VM's own
+Verification requires Linux bubblewrap, the systemd/cgroup task isolation described above, and
+Landlock ABI `>=3`. The filesystem policy is applied before Dart VM threads start. It denies process-memory access while permitting the VM's own
 `/proc/self/maps` and declared scratch I/O. Runner messages use a fresh stdin-only HMAC-SHA256 key;
 candidate stdout cannot certify a snapshot.
 

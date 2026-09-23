@@ -19,6 +19,6 @@ def value_stock_record(record: StockRecord) -> Result[F64, StockRecordError]:
         return Err(error=StockRecordError_NegativeShares())
     if not isfinite(record.price):
         return Err(error=StockRecordError_NonFinitePrice())
-    if record.price < 0.0:
+    if record.price < 0:
         return Err(error=StockRecordError_NegativePrice())
     return value_record(record)

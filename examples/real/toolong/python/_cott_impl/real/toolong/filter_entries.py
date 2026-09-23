@@ -4,7 +4,11 @@ from real.toolong_types import LogEntry
 
 def filter_entries(entries: CottList[LogEntry], contains: Option[str]) -> CottList[LogEntry]:
     if isinstance(contains, Some):
-        needle = contains.value.casefold()
-        return CottList(values=tuple(entry for entry in entries if needle in entry.text.casefold()))
+        needle: str = contains.value.casefold()
+        kept: list[LogEntry] = []
+        for entry in entries:
+            if needle in entry.text.casefold():
+                kept.append(entry)
+        return CottList(values=kept)
     else:
         return entries

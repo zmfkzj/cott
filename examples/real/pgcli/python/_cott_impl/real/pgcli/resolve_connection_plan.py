@@ -1,256 +1,108 @@
-from urllib.parse import unquote
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Final
+
+import psycopg
+from psycopg.conninfo import conninfo_to_dict
 
 from cott_runtime import Err, Nothing, Ok, Option, Result, Some
-from real.pgcli_types import (
-    ConnectionError,
-    ConnectionError_InvalidDsn,
-    ConnectionError_InvalidPort,
-    ConnectionError_MissingDatabase,
-    ConnectionError_SshInvalid,
-    ConnectionError_TlsInvalid,
-    ConnectionInputs,
-    ConnectionPlan,
-    ConnectionProfile,
-    ConnectionRequest,
-    ConnectionSettings,
-    SshSettings,
-    TlsSettings,
-)
+from real.pgcli_types import ConnectionError, ConnectionError_InvalidDsn, ConnectionError_InvalidPort, ConnectionError_MissingDatabase, ConnectionError_SshInvalid, ConnectionError_TlsInvalid, ConnectionPlan, ConnectionProfile, ConnectionRequest, ConnectionSettings, SshSettings, TlsSettings
+
+_TLS_MODES: Final[str] = "disable allow prefer require verify-ca verify-full"
+_MAX_PORT: Final[int] = 65535
 
 
-def _prefer(value: str, fallback: str) -> str:
-    if value != "":
-        return value
-    return fallback
-
-
-def _valid_percent_encoding(value: str) -> bool:
-    index = 0
-    while index < len(value):
-        if value[index] == "%":
-            if index + 2 >= len(value):
-                return False
-            high = value[index + 1]
-            low = value[index + 2]
-            high_valid = "0" <= high <= "9" or "a" <= high.casefold() <= "f"
-            low_valid = "0" <= low <= "9" or "a" <= low.casefold() <= "f"
-            if not high_valid or not low_valid:
-                return False
-            index += 3
-        else:
-            index += 1
-    return True
-
-
-def _parse_dsn_parts(value: str) -> tuple[bool, str, str, str, str, str]:
-    separator = value.find("://")
-    if separator <= 0:
-        return (False, "", "", "", "", "")
-    scheme = value[:separator].casefold()
-    if scheme != "postgres" and scheme != "postgresql":
-        return (False, "", "", "", "", "")
-    remainder = value[separator + 3 :]
-    slash = remainder.find("/")
-    if slash < 0:
-        return (False, "", "", "", "", "")
-    authority = remainder[:slash]
-    path_and_query = remainder[slash + 1 :]
-    if "#" in path_and_query:
-        return (False, "", "", "", "", "")
-    query = path_and_query.find("?")
-    database_encoded = path_and_query if query < 0 else path_and_query[:query]
-    if database_encoded == "" or "/" in database_encoded:
-        return (False, "", "", "", "", "")
-
-    user = ""
-    password = ""
-    host_and_port = authority
-    at = authority.rfind("@")
-    if at >= 0:
-        user_info = authority[:at]
-        host_and_port = authority[at + 1 :]
-        colon = user_info.find(":")
-        if colon < 0:
-            user_encoded = user_info
-            password_encoded = ""
-        else:
-            user_encoded = user_info[:colon]
-            password_encoded = user_info[colon + 1 :]
-        if not _valid_percent_encoding(user_encoded) or not _valid_percent_encoding(password_encoded):
-            return (False, "", "", "", "", "")
-        user = unquote(user_encoded)
-        password = unquote(password_encoded)
-
-    host_encoded = ""
-    port = ""
-    if host_and_port.startswith("["):
-        close = host_and_port.find("]")
-        if close <= 1:
-            return (False, "", "", "", "", "")
-        host_encoded = host_and_port[1:close]
-        suffix = host_and_port[close + 1 :]
-        if suffix != "":
-            if not suffix.startswith(":") or len(suffix) == 1:
-                return (False, "", "", "", "", "")
-            port = suffix[1:]
-    else:
-        if host_and_port.count(":") > 1:
-            return (False, "", "", "", "", "")
-        colon = host_and_port.rfind(":")
-        if colon < 0:
-            host_encoded = host_and_port
-        else:
-            host_encoded = host_and_port[:colon]
-            port = host_and_port[colon + 1 :]
-            if port == "":
-                return (False, "", "", "", "", "")
-    if not _valid_percent_encoding(host_encoded) or not _valid_percent_encoding(database_encoded):
-        return (False, "", "", "", "", "")
-    if port != "" and not _valid_percent_encoding(port):
-        return (False, "", "", "", "", "")
-    host = unquote(host_encoded)
-    database = unquote(database_encoded)
-    if database == "":
-        return (False, "", "", "", "", "")
-    return (True, host, unquote(port), user, password, database)
-
-
-def _valid_port(value: str) -> bool:
-    if value == "":
-        return True
-    port = 0
-    for character in value:
-        if character < "0" or character > "9":
-            return False
-        port = port * 10 + ord(character) - ord("0")
-        if port > 65535:
-            return False
-    return port > 0
-
-
-def _tls_was_supplied(settings: TlsSettings) -> bool:
-    root_certificate = str(settings.root_certificate)
-    certificate = str(settings.certificate)
-    private_key = str(settings.private_key)
-    if settings.mode != "":
-        return True
-    if root_certificate != "" and root_certificate != ".":
-        return True
-    if certificate != "" and certificate != ".":
-        return True
-    return private_key != "" and private_key != "."
-
-
-def _tls_validation_error(settings: TlsSettings) -> str:
-    mode = settings.mode.casefold()
-    if mode not in ("", "disable", "allow", "prefer", "require", "verify-ca", "verify-full"):
-        return "invalid TLS mode: " + settings.mode
-    certificate = str(settings.certificate)
-    private_key = str(settings.private_key)
-    certificate_present = certificate != "" and certificate != "."
-    private_key_present = private_key != "" and private_key != "."
-    if certificate_present and not private_key_present:
-        return "TLS certificate requires a private key"
-    if private_key_present and not certificate_present:
-        return "TLS private key requires a certificate"
+def _first(a: str, b: str, c: str, d: str) -> str:
+    for value in (a, b, c, d):
+        if value != "":
+            return value
     return ""
 
 
-def _ssh_validation_error(settings: SshSettings) -> str:
-    if settings.host == "":
-        return "SSH host is required"
-    if settings.port == 0:
-        return "SSH port must be greater than zero"
-    if settings.user == "":
-        return "SSH user is required"
+def _path_set(p: Path) -> bool:
+    return str(p) not in ("", ".")
+
+
+def _dsn_value(params: Mapping[str, str | int | None], key: str) -> str:
+    value = params.get(key)
+    if value is None:
+        return ""
+    if isinstance(value, int):
+        return str(value)
+    return value
+
+
+def _validate_tls(tls: TlsSettings) -> str:
+    if tls.mode != "" and tls.mode not in _TLS_MODES.split(" "):
+        return "unsupported sslmode"
+    if _path_set(tls.certificate) != _path_set(tls.private_key):
+        return "client certificate and private key must be provided together"
+    if tls.mode == "verify-ca" or tls.mode == "verify-full":
+        if not _path_set(tls.root_certificate):
+            return "verified sslmode requires a root certificate"
     return ""
 
 
-def _select_ssh(request_ssh: Option[SshSettings], profile_ssh: Option[SshSettings]) -> Option[SshSettings]:
-    match request_ssh:
-        case Some(value=request_settings):
-            return Some(value=request_settings)
-        case Nothing():
-            return profile_ssh
-
-
-def _ssh_option_validation_error(ssh: Option[SshSettings]) -> str:
-    match ssh:
-        case Some(value=settings):
-            return _ssh_validation_error(settings)
-        case Nothing():
-            return ""
+def _validate_ssh(ssh: SshSettings) -> str:
+    if ssh.host.strip() == "":
+        return "ssh host is required"
+    if ssh.user.strip() == "":
+        return "ssh user is required"
+    if ssh.port < 1 or ssh.port > _MAX_PORT:
+        return "ssh port out of range"
+    return ""
 
 
 def resolve_connection_plan(request: ConnectionRequest, profile: Option[ConnectionProfile]) -> Result[ConnectionPlan, ConnectionError]:
-    match profile:
-        case Some(value=profile_value):
-            has_profile = True
-            profile_dsn = profile_value.dsn
-            profile_inputs = profile_value.inputs
-            profile_tls = profile_value.tls
-            profile_ssh = profile_value.ssh
-        case Nothing():
-            has_profile = False
-            profile_dsn = ""
-            profile_inputs = ConnectionInputs(host="", port="", user="", password="", database="")
-            profile_tls = request.tls
-            profile_ssh = Nothing()
+    prof: ConnectionProfile | None = None
+    if isinstance(profile, Some):
+        prof = profile.value
 
-    host = ""
-    port = ""
-    user = ""
-    password = ""
-    database = ""
-    selected_dsn = profile_dsn
-    if profile_dsn != "" and request.dsn == "":
-        valid, host, port, user, password, database = _parse_dsn_parts(profile_dsn)
-        if not valid:
-            return Err(error=ConnectionError_InvalidDsn(value=profile_dsn))
-    host = _prefer(profile_inputs.host, host)
-    port = _prefer(profile_inputs.port, port)
-    user = _prefer(profile_inputs.user, user)
-    password = _prefer(profile_inputs.password, password)
-    database = _prefer(profile_inputs.database, database)
+    dsn = request.dsn if request.dsn != "" else (prof.dsn if prof is not None else "")
+    params: Mapping[str, str | int | None] = {}
+    if dsn != "":
+        try:
+            params = conninfo_to_dict(dsn)
+        except psycopg.Error:
+            return Err(error=ConnectionError_InvalidDsn(value="unparseable connection string"))
 
-    if request.dsn != "":
-        selected_dsn = request.dsn
-        valid, dsn_host, dsn_port, dsn_user, dsn_password, dsn_database = _parse_dsn_parts(request.dsn)
-        if not valid:
-            return Err(error=ConnectionError_InvalidDsn(value=request.dsn))
-        host = _prefer(dsn_host, host)
-        port = _prefer(dsn_port, port)
-        user = _prefer(dsn_user, user)
-        password = _prefer(dsn_password, password)
-        database = _prefer(dsn_database, database)
+    req = request.inputs
+    env = request.environment
+    p_host = prof.inputs.host if prof is not None else ""
+    p_port = prof.inputs.port if prof is not None else ""
+    p_user = prof.inputs.user if prof is not None else ""
+    p_password = prof.inputs.password if prof is not None else ""
+    p_database = prof.inputs.database if prof is not None else ""
 
-    host = _prefer(request.inputs.host, host)
-    port = _prefer(request.inputs.port, port)
-    user = _prefer(request.inputs.user, user)
-    password = _prefer(request.inputs.password, password)
-    database = _prefer(request.inputs.database, database)
-    host = _prefer(host, request.environment.host)
-    port = _prefer(port, request.environment.port)
-    user = _prefer(user, request.environment.user)
-    password = _prefer(password, request.environment.password)
-    database = _prefer(database, request.environment.database)
+    host = _first(req.host, _dsn_value(params, "host"), p_host, env.host)
+    port = _first(req.port, _dsn_value(params, "port"), p_port, env.port)
+    user = _first(req.user, _dsn_value(params, "user"), p_user, env.user)
+    password = _first(req.password, _dsn_value(params, "password"), p_password, env.password)
+    database = _first(req.database, _dsn_value(params, "dbname"), p_database, env.database)
+
+    if port != "":
+        if not (port.isascii() and port.isdigit()) or int(port) < 1 or int(port) > _MAX_PORT:
+            return Err(error=ConnectionError_InvalidPort(value=port))
 
     if database == "":
         return Err(error=ConnectionError_MissingDatabase())
-    if not _valid_port(port):
-        return Err(error=ConnectionError_InvalidPort(value=port))
 
     tls = request.tls
-    if has_profile and not _tls_was_supplied(request.tls):
-        tls = profile_tls
-    tls_error = _tls_validation_error(tls)
+    if tls.mode == "" and prof is not None:
+        tls = prof.tls
+    tls_error = _validate_tls(tls)
     if tls_error != "":
         return Err(error=ConnectionError_TlsInvalid(message=tls_error))
 
-    ssh = _select_ssh(request.ssh, profile_ssh)
-    ssh_error = _ssh_option_validation_error(ssh)
-    if ssh_error != "":
-        return Err(error=ConnectionError_SshInvalid(message=ssh_error))
+    ssh: Option[SshSettings] = Nothing()
+    if isinstance(request.ssh, Some):
+        ssh = request.ssh
+    elif prof is not None:
+        ssh = prof.ssh
+    if isinstance(ssh, Some):
+        ssh_error = _validate_ssh(ssh.value)
+        if ssh_error != "":
+            return Err(error=ConnectionError_SshInvalid(message=ssh_error))
 
     settings = ConnectionSettings(host=host, port=port, user=user, password=password, database=database)
-    return Ok(value=ConnectionPlan(settings=settings, dsn=selected_dsn, tls=tls, ssh=ssh))
+    return Ok(value=ConnectionPlan(settings=settings, dsn=dsn, tls=tls, ssh=ssh))

@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::contract_test::{Classification, ContractTestStrategy};
 use crate::manifest::VerificationConfig;
 
+use super::emit;
 use super::expressions;
 use super::types;
 use super::{KotlinCallable, KotlinPlan};
@@ -19,6 +20,8 @@ const RUNNER_PACKAGE: &str = "cott_verification";
 const RUNNER_FILE: &str = "CottContractRunner.kt";
 const MAX_RUNNER_CASES: u64 = 4096;
 const MAX_RUNNER_SOURCE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CANDIDATE_SEARCH_STEPS: usize = 4096;
+const MAX_CANDIDATE_SEARCH_DEPTH: usize = 64;
 pub(crate) const MAIN_CLASS: &str = "cott_verification.CottContractRunnerKt";
 
 #[derive(Clone, Debug)]
@@ -34,11 +37,31 @@ pub(crate) struct RunnerProgram {
 
 #[derive(Clone, Debug)]
 struct CandidateContext<'a> {
+    plan: &'a KotlinPlan,
     declarations: BTreeMap<&'a str, &'a Value>,
     consts: BTreeMap<String, String>,
     type_arguments: BTreeMap<String, Value>,
     node_limit: usize,
     container_limit: usize,
+}
+struct CandidateSearchBudget {
+    remaining: usize,
+}
+
+impl CandidateSearchBudget {
+    fn new() -> Self {
+        Self {
+            remaining: MAX_CANDIDATE_SEARCH_STEPS,
+        }
+    }
+
+    fn enter(&mut self, depth: usize) -> Result<(), ()> {
+        if depth > MAX_CANDIDATE_SEARCH_DEPTH || self.remaining == 0 {
+            return Err(());
+        }
+        self.remaining -= 1;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -93,6 +116,7 @@ pub(crate) fn render(
             continue;
         }
         match render_callable_cases(
+            plan,
             &callable,
             &declarations,
             verification,
@@ -137,6 +161,7 @@ pub(crate) fn render(
             continue;
         }
         match render_initializer_cases(
+            plan,
             owner_symbol,
             owner,
             &declarations,
@@ -372,11 +397,15 @@ private fun cancellationCase(evidence: EvidenceWriter, symbol: kotlin.String, ca
                         task.cancelAndJoin()
                         status = "passed"
                     }} else {{
-                        try {{ task.await() }} catch (_: kotlin.Throwable) {{ status = "failed" }}
+                        try {{ task.await() }} catch (error: CottContractViolation) {{
+                            status = if (error.phase == "requires") "candidate_unavailable" else "failed"
+                        }} catch (_: kotlin.Throwable) {{ status = "failed" }}
                     }}
                 }}
             }}
         }}
+    }} catch (error: CottContractViolation) {{
+        status = if (error.phase == "requires") "candidate_unavailable" else "failed"
     }} catch (_: kotlin.Throwable) {{ status = "failed" }}
     emitEvidence(evidence, "{{\"kind\":\"cancellation\",\"symbol\":${{json(symbol)}},\"case\":$caseId,\"status\":${{json(status)}}}}")
 }}
@@ -435,15 +464,16 @@ fn callable_is_public(callable: &KotlinCallable) -> bool {
     )
 }
 
-fn render_callable_cases(
+fn render_callable_cases<'a>(
+    plan: &'a KotlinPlan,
     callable: &KotlinCallable,
-    declarations: &BTreeMap<&str, &Value>,
+    declarations: &BTreeMap<&'a str, &'a Value>,
     verification: &VerificationConfig,
     source: &mut String,
     main_lines: &mut Vec<String>,
     expected_cancellations: &mut BTreeSet<(String, u32)>,
 ) -> Result<u32, String> {
-    let mut context = candidate_context(callable, declarations)?;
+    let mut context = candidate_context(plan, callable, declarations)?;
     let parameters = callable
         .declaration
         .get("parameters")
@@ -531,15 +561,17 @@ fn render_callable_cases(
     Ok(count)
 }
 
-fn render_initializer_cases(
+fn render_initializer_cases<'a>(
+    plan: &'a KotlinPlan,
     owner_symbol: &str,
     owner: &Value,
-    declarations: &BTreeMap<&str, &Value>,
+    declarations: &BTreeMap<&'a str, &'a Value>,
     verification: &VerificationConfig,
     source: &mut String,
     main_lines: &mut Vec<String>,
 ) -> Result<u32, String> {
     let mut context = CandidateContext {
+        plan,
         declarations: declarations.clone(),
         consts: BTreeMap::new(),
         type_arguments: BTreeMap::new(),
@@ -697,7 +729,7 @@ fn typed_candidate(
     } else {
         format!(
             "val {prefix}_{index}: {} = {value}",
-            types::render_type(&ty)?
+            emit::render_type(context.plan, &ty)?
         )
     })
 }
@@ -813,12 +845,18 @@ fn render_protocol_consumption(
     Ok(())
 }
 
+enum TypeConstraint {
+    Trait(Value),
+    GenericBounds { name: String, bounds: Vec<Value> },
+}
+
 fn candidate_context<'a>(
+    plan: &'a KotlinPlan,
     callable: &KotlinCallable,
     declarations: &BTreeMap<&'a str, &'a Value>,
 ) -> Result<CandidateContext<'a>, String> {
     let mut consts = BTreeMap::new();
-    let mut type_arguments = BTreeMap::new();
+    let mut type_generics = Vec::new();
     for generic in callable
         .declaration
         .get("generics")
@@ -837,13 +875,12 @@ fn candidate_context<'a>(
                 consts.insert(name.to_owned(), "1".to_owned());
             }
             Some("type") => {
-                let argument = generic
+                let bounds = generic
                     .get("bounds")
                     .and_then(Value::as_array)
-                    .and_then(|bounds| bounds.first())
-                    .and_then(|bound| implementation_type_for_bound(bound, declarations))
-                    .unwrap_or_else(|| serde_json::json!({"kind":"primitive","name":"i32"}));
-                type_arguments.insert(name.to_owned(), argument);
+                    .cloned()
+                    .unwrap_or_default();
+                type_generics.push((name.to_owned(), bounds));
             }
             Some(other) => {
                 return Err(format!(
@@ -859,7 +896,63 @@ fn candidate_context<'a>(
             }
         }
     }
+
+    let mut constraints = Vec::new();
+    for parameter in callable
+        .declaration
+        .get("parameters")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(ty) = parameter.get("type") {
+            collect_trait_constraints(ty, declarations, &mut constraints);
+        }
+    }
+    constraints.extend(
+        type_generics
+            .iter()
+            .filter(|(_, bounds)| !bounds.is_empty())
+            .map(|(name, bounds)| TypeConstraint::GenericBounds {
+                name: name.clone(),
+                bounds: bounds.clone(),
+            }),
+    );
+
+    let mut search = CandidateSearchBudget::new();
+    let mut type_arguments = solve_type_constraints(
+        &constraints,
+        0,
+        declarations,
+        BTreeMap::new(),
+        &mut search,
+    )
+    .map_err(|()| {
+        format!(
+            "callable `{}` candidate constraint search exhausted its bounded work or depth budget",
+            callable.symbol
+        )
+    })?
+    .ok_or_else(|| {
+        format!(
+            "callable `{}` has no coherent public concrete implementation for its trait input constraints",
+            callable.symbol
+        )
+    })?;
+    for (name, bounds) in type_generics {
+        if bounds.is_empty() {
+            type_arguments
+                .entry(name)
+                .or_insert_with(|| serde_json::json!({"kind":"primitive","name":"i32"}));
+        } else if !type_arguments.contains_key(&name) {
+            return Err(format!(
+                "generic `{name}` has no public concrete implementation satisfying every required bound"
+            ));
+        }
+    }
+
     Ok(CandidateContext {
+        plan,
         declarations: declarations.clone(),
         consts,
         type_arguments,
@@ -868,31 +961,290 @@ fn candidate_context<'a>(
     })
 }
 
+fn collect_trait_constraints(
+    value: &Value,
+    declarations: &BTreeMap<&str, &Value>,
+    output: &mut Vec<TypeConstraint>,
+) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_trait_constraints(value, declarations, output);
+            }
+        }
+        Value::Object(object) => {
+            let is_trait = object.get("kind").and_then(Value::as_str) == Some("named")
+                && object
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .and_then(|name| declarations.get(name))
+                    .is_some_and(|declaration| {
+                        declaration.get("kind").and_then(Value::as_str) == Some("trait")
+                    });
+            if is_trait {
+                output.push(TypeConstraint::Trait(value.clone()));
+            } else {
+                for value in object.values() {
+                    collect_trait_constraints(value, declarations, output);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn solve_type_constraints(
+    constraints: &[TypeConstraint],
+    index: usize,
+    declarations: &BTreeMap<&str, &Value>,
+    substitutions: BTreeMap<String, Value>,
+    search: &mut CandidateSearchBudget,
+) -> Result<Option<BTreeMap<String, Value>>, ()> {
+    search.enter(index)?;
+    let Some(constraint) = constraints.get(index) else {
+        return Ok(Some(substitutions));
+    };
+    match constraint {
+        TypeConstraint::Trait(bound) => {
+            for (_, matched) in compatible_implementations(
+                std::slice::from_ref(bound),
+                declarations,
+                &substitutions,
+                search,
+            )? {
+                if let Some(result) =
+                    solve_type_constraints(constraints, index + 1, declarations, matched, search)?
+                {
+                    return Ok(Some(result));
+                }
+            }
+            Ok(None)
+        }
+        TypeConstraint::GenericBounds { name, bounds } => {
+            if let Some(argument) = substitutions.get(name) {
+                let Some(declaration) = argument
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .and_then(|name| declarations.get(name))
+                    .copied()
+                else {
+                    return Ok(None);
+                };
+                let Some(matched) = match_implementation_bounds(
+                    declaration,
+                    bounds,
+                    declarations,
+                    &substitutions,
+                    search,
+                )?
+                else {
+                    return Ok(None);
+                };
+                return solve_type_constraints(
+                    constraints,
+                    index + 1,
+                    declarations,
+                    matched,
+                    search,
+                );
+            }
+            for (implementation, mut matched) in
+                compatible_implementations(bounds, declarations, &substitutions, search)?
+            {
+                if let Some(existing) = matched.get(name) {
+                    if existing != &implementation {
+                        continue;
+                    }
+                } else {
+                    matched.insert(name.clone(), implementation);
+                }
+                if let Some(result) =
+                    solve_type_constraints(constraints, index + 1, declarations, matched, search)?
+                {
+                    return Ok(Some(result));
+                }
+            }
+            Ok(None)
+        }
+    }
+}
+
 fn implementation_type_for_bound(
     bound: &Value,
     declarations: &BTreeMap<&str, &Value>,
-) -> Option<Value> {
-    let trait_name = bound.get("name")?.as_str()?;
-    declarations.values().find_map(|declaration| {
-        if declaration.get("kind").and_then(Value::as_str) != Some("impl")
-            || declaration.get("public").and_then(Value::as_bool) != Some(true)
-            || !declaration
-                .get("traits")
-                .and_then(Value::as_array)
-                .is_some_and(|traits| {
-                    traits
-                        .iter()
-                        .any(|value| value.get("name").and_then(Value::as_str) == Some(trait_name))
-                })
+) -> Result<Option<Value>, String> {
+    let mut search = CandidateSearchBudget::new();
+    let compatible = compatible_implementations(
+        std::slice::from_ref(bound),
+        declarations,
+        &BTreeMap::new(),
+        &mut search,
+    )
+    .map_err(|()| {
+        "trait implementation candidate search exhausted its bounded work or depth budget"
+            .to_owned()
+    })?;
+    Ok(compatible
+        .into_iter()
+        .next()
+        .map(|(implementation, _)| implementation))
+}
+
+fn compatible_implementations(
+    bounds: &[Value],
+    declarations: &BTreeMap<&str, &Value>,
+    substitutions: &BTreeMap<String, Value>,
+    search: &mut CandidateSearchBudget,
+) -> Result<Vec<(Value, BTreeMap<String, Value>)>, ()> {
+    let mut compatible = Vec::new();
+    for declaration in declarations.values() {
+        let Some(implementation) = concrete_implementation_type(declaration) else {
+            continue;
+        };
+        if let Some(matched) =
+            match_implementation_bounds(declaration, bounds, declarations, substitutions, search)?
         {
-            return None;
+            compatible.push((implementation, matched));
         }
-        Some(serde_json::json!({
-            "kind": "named",
-            "name": declaration.get("name").and_then(Value::as_str)?,
-            "args": []
-        }))
-    })
+    }
+    Ok(compatible)
+}
+
+fn concrete_implementation_type(declaration: &Value) -> Option<Value> {
+    if declaration.get("kind").and_then(Value::as_str) != Some("impl")
+        || declaration.get("public").and_then(Value::as_bool) != Some(true)
+        || declaration
+            .get("generics")
+            .and_then(Value::as_array)
+            .is_some_and(|generics| !generics.is_empty())
+    {
+        return None;
+    }
+    Some(serde_json::json!({
+        "kind": "named",
+        "name": declaration.get("name").and_then(Value::as_str)?,
+        "args": []
+    }))
+}
+
+fn match_implementation_bounds(
+    implementation: &Value,
+    bounds: &[Value],
+    declarations: &BTreeMap<&str, &Value>,
+    substitutions: &BTreeMap<String, Value>,
+    search: &mut CandidateSearchBudget,
+) -> Result<Option<BTreeMap<String, Value>>, ()> {
+    let implemented = implemented_trait_refs(implementation, declarations);
+    match_bound_at(bounds, 0, &implemented, substitutions.clone(), search)
+}
+
+fn match_bound_at(
+    bounds: &[Value],
+    index: usize,
+    implemented: &[Value],
+    substitutions: BTreeMap<String, Value>,
+    search: &mut CandidateSearchBudget,
+) -> Result<Option<BTreeMap<String, Value>>, ()> {
+    search.enter(index)?;
+    let Some(bound) = bounds.get(index) else {
+        return Ok(Some(substitutions));
+    };
+    for actual in implemented {
+        let mut matched = substitutions.clone();
+        if match_type_pattern(bound, actual, &mut matched, search, 0)?
+            && let Some(result) = match_bound_at(bounds, index + 1, implemented, matched, search)?
+        {
+            return Ok(Some(result));
+        }
+    }
+    Ok(None)
+}
+
+fn implemented_trait_refs(
+    implementation: &Value,
+    declarations: &BTreeMap<&str, &Value>,
+) -> Vec<Value> {
+    let direct = implementation
+        .get("traits")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut implemented = Vec::new();
+    for trait_ref in direct {
+        if !implemented.contains(&trait_ref) {
+            implemented.push(trait_ref.clone());
+        }
+        let Some(trait_name) = trait_ref.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(declaration) = declarations.get(trait_name).copied() else {
+            continue;
+        };
+        let Ok(substitutions) = named_substitutions(declaration, &trait_ref) else {
+            continue;
+        };
+        for inherited in declaration
+            .get("closure")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let inherited = substitute_type(inherited, &substitutions);
+            if !implemented.contains(&inherited) {
+                implemented.push(inherited);
+            }
+        }
+    }
+    implemented
+}
+
+fn match_type_pattern(
+    pattern: &Value,
+    actual: &Value,
+    substitutions: &mut BTreeMap<String, Value>,
+    search: &mut CandidateSearchBudget,
+    depth: usize,
+) -> Result<bool, ()> {
+    search.enter(depth)?;
+    if pattern.get("kind").and_then(Value::as_str) == Some("type_parameter") {
+        let Some(name) = pattern.get("name").and_then(Value::as_str) else {
+            return Ok(false);
+        };
+        if let Some(existing) = substitutions.get(name) {
+            let existing = substitute_type(existing, substitutions);
+            return Ok(&existing == actual);
+        }
+        substitutions.insert(name.to_owned(), actual.clone());
+        return Ok(true);
+    }
+    match (pattern, actual) {
+        (Value::Array(pattern), Value::Array(actual)) => {
+            if pattern.len() != actual.len() {
+                return Ok(false);
+            }
+            for (pattern, actual) in pattern.iter().zip(actual) {
+                if !match_type_pattern(pattern, actual, substitutions, search, depth + 1)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        (Value::Object(pattern), Value::Object(actual)) => {
+            if pattern.len() != actual.len() {
+                return Ok(false);
+            }
+            for (key, pattern) in pattern {
+                let Some(actual) = actual.get(key) else {
+                    return Ok(false);
+                };
+                if !match_type_pattern(pattern, actual, substitutions, search, depth + 1)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        _ => Ok(pattern == actual),
+    }
 }
 
 fn parameter_candidates(
@@ -1032,9 +1384,12 @@ fn candidate_expressions(
                 ty.get("item").ok_or("Option candidate has no item type")?,
                 context,
                 depth + 1,
-            ) && let Some(item) = items.first()
-            {
-                values.push(format!("cott_runtime.Some({item})"));
+            ) {
+                values.extend(
+                    items
+                        .into_iter()
+                        .map(|item| format!("cott_runtime.Some({item})")),
+                );
             }
             values
         }
@@ -1325,7 +1680,7 @@ fn named_candidates(
         }
         Some("trait") => {
             let concrete =
-                implementation_type_for_bound(ty, &nested.declarations).ok_or_else(|| {
+                implementation_type_for_bound(ty, &nested.declarations)?.ok_or_else(|| {
                     format!("trait `{name}` has no public concrete implementation candidate")
                 })?;
             candidate_expressions(&concrete, &mut nested, depth)
@@ -1548,15 +1903,12 @@ fn render_scenario(
         .scenario
         .as_ref()
         .ok_or("scenario strategy is missing")?;
-    if scenario.fixtures.iter().any(|fixture| {
-        matches!(
-            fixture.get("kind").and_then(Value::as_str),
-            Some("clock" | "failure")
-        )
-    }) {
-        return Err(
-            "clock and failure fixtures have no Kotlin runtime interception authority".to_owned(),
-        );
+    if scenario
+        .fixtures
+        .iter()
+        .any(|fixture| fixture.get("kind").and_then(Value::as_str) == Some("failure"))
+    {
+        return Err("failure fixtures have no Kotlin runtime interception authority".to_owned());
     }
     if scenario
         .fixtures
@@ -1602,12 +1954,13 @@ fn render_scenario(
     writeln!(source, "    val _observation = CottObservation()").unwrap();
     writeln!(
         source,
-        "    val _root = Path.of(kotlin.System.getProperty(\"java.io.tmpdir\"), {})",
+        "    val _root = Path.of(java.lang.System.getProperty(\"java.io.tmpdir\"), {})",
         kotlin_string(&format!("scenario-{}", safe_name(&scenario.id)))
     )
     .unwrap();
     source.push_str("    var _assertions = 0\n    try {\n        deleteTree(_root)\n        Files.createDirectory(_root)\n");
     let mut total_fixture_source = 0usize;
+    let mut clock_starts = Vec::new();
     for fixture in &scenario.fixtures {
         let fixture_id = fixture
             .get("id")
@@ -1620,47 +1973,60 @@ fn render_scenario(
             kotlin_string(fixture_id)
         )
         .unwrap();
-        if fixture.get("kind").and_then(Value::as_str) != Some("fs") {
-            return Err("unsupported Kotlin scenario fixture".to_owned());
-        }
-        for file in fixture
-            .get("files")
-            .and_then(Value::as_array)
-            .ok_or("filesystem fixture has no files")?
-        {
-            let path = file
-                .get("path")
-                .and_then(Value::as_str)
-                .ok_or("filesystem fixture file has no path")?;
-            let data = file
-                .get("data")
-                .ok_or("filesystem fixture file has no data")?;
-            let rendered = match data.get("kind").and_then(Value::as_str) {
-                Some("text") => {
-                    let value = data
-                        .get("value")
+        match fixture.get("kind").and_then(Value::as_str) {
+            Some("fs") => {
+                for file in fixture
+                    .get("files")
+                    .and_then(Value::as_array)
+                    .ok_or("filesystem fixture has no files")?
+                {
+                    let path = file
+                        .get("path")
                         .and_then(Value::as_str)
-                        .ok_or("text fixture has no value")?;
-                    total_fixture_source = total_fixture_source.saturating_add(value.len());
-                    format!(
-                        "{}.toByteArray(kotlin.text.Charsets.UTF_8)",
-                        kotlin_string(value)
-                    )
+                        .ok_or("filesystem fixture file has no path")?;
+                    let data = file
+                        .get("data")
+                        .ok_or("filesystem fixture file has no data")?;
+                    let rendered = match data.get("kind").and_then(Value::as_str) {
+                        Some("text") => {
+                            let value = data
+                                .get("value")
+                                .and_then(Value::as_str)
+                                .ok_or("text fixture has no value")?;
+                            total_fixture_source = total_fixture_source.saturating_add(value.len());
+                            format!(
+                                "{}.toByteArray(kotlin.text.Charsets.UTF_8)",
+                                kotlin_string(value)
+                            )
+                        }
+                        Some("bytes") => {
+                            let value = data
+                                .get("value")
+                                .and_then(Value::as_str)
+                                .ok_or("byte fixture has no value")?;
+                            total_fixture_source =
+                                total_fixture_source.saturating_add(value.len() / 2);
+                            format!("hex({})", kotlin_string(value))
+                        }
+                        _ => return Err("unsupported filesystem fixture data".to_owned()),
+                    };
+                    if total_fixture_source > 1_048_576 {
+                        return Err(
+                            "scenario fixture source exceeds the bounded runner limit".to_owned()
+                        );
+                    }
+                    writeln!(source, "        run {{ val _path = _root.resolve({}).resolve({}); Files.createDirectories(_path.parent); Files.write(_path, {rendered}) }}", kotlin_string(fixture_id), kotlin_string(path)).unwrap();
                 }
-                Some("bytes") => {
-                    let value = data
-                        .get("value")
-                        .and_then(Value::as_str)
-                        .ok_or("byte fixture has no value")?;
-                    total_fixture_source = total_fixture_source.saturating_add(value.len() / 2);
-                    format!("hex({})", kotlin_string(value))
-                }
-                _ => return Err("unsupported filesystem fixture data".to_owned()),
-            };
-            if total_fixture_source > 1_048_576 {
-                return Err("scenario fixture source exceeds the bounded runner limit".to_owned());
             }
-            writeln!(source, "        run {{ val _path = _root.resolve({}).resolve({}); Files.createDirectories(_path.parent); Files.write(_path, {rendered}) }}", kotlin_string(fixture_id), kotlin_string(path)).unwrap();
+            Some("clock") => {
+                let start_ms = fixture
+                    .get("start_ms")
+                    .and_then(Value::as_u64)
+                    .ok_or("clock fixture has no unsigned start_ms")?;
+                clock_starts.push((local_name(fixture_id), start_ms));
+            }
+            Some(_) => return Err("unsupported Kotlin scenario fixture".to_owned()),
+            None => return Err("scenario fixture has no kind".to_owned()),
         }
     }
     writeln!(
@@ -1669,7 +2035,20 @@ fn render_scenario(
         scenario.limits.filesystem_files, scenario.limits.filesystem_bytes
     )
     .unwrap();
-    source.push_str("        val _fixtures = CottFixtureContext(_root, emptyMap<CottFixtureKey, kotlin.String>())\n");
+    source.push_str("        val _fixtures = CottFixtureContext(_root, emptyMap<CottFixtureKey, kotlin.String>(), ");
+    if clock_starts.is_empty() {
+        source.push_str("emptyMap<kotlin.String, kotlin.ULong>()");
+    } else {
+        source.push_str("mapOf(");
+        for (index, (name, start_ms)) in clock_starts.iter().enumerate() {
+            if index != 0 {
+                source.push_str(", ");
+            }
+            write!(source, "{} to {start_ms}UL", kotlin_string(name)).unwrap();
+        }
+        source.push(')');
+    }
+    source.push_str(")\n");
     writeln!(source, "        CottRuntime.withTestObservation(_observation) {{ CottRuntime.withFixtureContext(_fixtures) {{ runBlocking {{ withTimeout({}L) {{ CottRuntime.withTestObservationSuspend(_observation) {{ CottRuntime.withFixtureContextSuspend(_fixtures) {{", scenario.limits.scenario_timeout_ms).unwrap();
 
     let mut workers = BTreeSet::new();

@@ -23,7 +23,7 @@ def validate_payload(data: InputPayload) -> Result[InputPayload, BarError]:
         _expected_error_span = {"end_byte":1038,"end_column":58,"end_line":44,"start_byte":985,"start_column":5,"start_line":44}
         _expected_error_clause = "error:4"
     try:
-        _implementation = _cott_load("_cott_impl/foo/bar/validate_payload.py", "d76048f2ee30a1402e9db63e058b78efbb134136c6b5c4b785d42c86ef8361b2", "validate_payload", expected_project_name="process-bar", expected_cott_symbol="foo.bar.validate_payload")
+        _implementation = _cott_load("_cott_impl/foo/bar/validate_payload.py", "3d1c11fb7ee24365f68d8a954981e6fe75b6d6cbe8a27daf74cf94aac1847804", "validate_payload", expected_project_name="process-bar", expected_cott_symbol="foo.bar.validate_payload")
         _result = _implementation(data)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -164,7 +164,7 @@ order, propagating validation and processing errors unchanged."""
         _expected_error_span = {"end_byte":2219,"end_column":58,"end_line":81,"start_byte":2166,"start_column":5,"start_line":81}
         _expected_error_clause = "error:4"
     try:
-        _implementation = _cott_load("_cott_impl/foo/bar/process_bar.py", "200b9909178d7c70b055a0bf18fae4f9db5f71097f7ea39e7aa3f9e03b189420", "process_bar", expected_project_name="process-bar", expected_cott_symbol="foo.bar.process_bar")
+        _implementation = _cott_load("_cott_impl/foo/bar/process_bar.py", "bcfdaf0e77f3305c27798935a3ee1057ba80afd315e1f6d7984db0cc79fb46d6", "process_bar", expected_project_name="process-bar", expected_cott_symbol="foo.bar.process_bar")
         _result = _implementation(data, options)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

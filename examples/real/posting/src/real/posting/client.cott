@@ -76,7 +76,10 @@ fn render_response(response: Response) -> Str:
 
 fn execute(arguments: List[Str]) -> Result[Str, PostingError]:
     doc """
-    Parse arguments, send the request, and render its response.
+    Call real.posting.client.parse_arguments, pass its request to
+    real.posting.client.send_request, and return the successful response rendered
+    by real.posting.client.render_response. Return an error from either earlier
+    operation unchanged; do not send a request after argument parsing fails.
     """
 
     ensures Result.Ok(rendered) => rendered.len > 0

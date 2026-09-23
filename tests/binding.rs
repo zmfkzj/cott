@@ -2130,6 +2130,84 @@ fn accepts_only_import_roots_selected_in_uv_lock() {
 }
 
 #[test]
+fn resolves_locked_namespace_children_and_renamed_distributions() {
+    let mut fixture = fixture("module api.service\n\nfn run() -> Unit\n");
+    let lockfile = fixture.root.join("uv.lock");
+    fs::write(
+        &lockfile,
+        "[[package]]\nname = \"demo\"\ndependencies = [{ name = \"catalog-driver\" }]\n\n[[package]]\nname = \"catalog-driver\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    fixture.paths.lockfile = Some(lockfile);
+    let environment = fixture.root.join(".venv");
+    let site = environment.join("lib/python3.14/site-packages");
+    fs::create_dir_all(environment.join("bin")).unwrap();
+    fs::write(environment.join("pyvenv.cfg"), "version_info = 3.14.6\n").unwrap();
+    let install = |name: &str, modules: &[&str]| {
+        let metadata = site.join(format!("{}-1.0.0.dist-info", name.replace('-', "_")));
+        fs::create_dir_all(&metadata).unwrap();
+        fs::write(
+            metadata.join("METADATA"),
+            format!("Metadata-Version: 2.4\nName: {name}\nVersion: 1.0.0\n\n"),
+        )
+        .unwrap();
+        let mut record = String::new();
+        for module in modules {
+            let path = site.join(module);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "def create():\n    return None\n").unwrap();
+            record.push_str(&format!("{module},,\n"));
+        }
+        fs::write(metadata.join("RECORD"), record).unwrap();
+    };
+    install(
+        "catalog-driver",
+        &["shared/sdk/__init__.py", "renamed_sdk/__init__.py"],
+    );
+    install("unselected-plugin", &["shared/other/__init__.py"]);
+    for source in [
+        "from shared import sdk\n\ndef run() -> object:\n    return sdk.create()\n",
+        "from shared import (\n    sdk,\n)\n\ndef run() -> object:\n    return sdk.create()\n",
+        "import renamed_sdk\n\ndef run() -> object:\n    return renamed_sdk.create()\n",
+    ] {
+        validate_candidate(
+            &fixture.config,
+            &fixture.paths,
+            &fixture.plan,
+            "api.service.run",
+            source.as_bytes(),
+        )
+        .expect("an owned concrete module of a selected distribution is admissible");
+    }
+    for source in [
+        "from shared import other\n\ndef run() -> object:\n    return other.create()\n",
+        "import shared\n\ndef run() -> object:\n    return None\n",
+    ] {
+        assert!(
+            validate_candidate(
+                &fixture.config,
+                &fixture.paths,
+                &fixture.plan,
+                "api.service.run",
+                source.as_bytes()
+            )
+            .is_err()
+        );
+    }
+    install("conflicting-owner", &["shared/sdk/__init__.py"]);
+    assert!(
+        validate_candidate(
+            &fixture.config,
+            &fixture.paths,
+            &fixture.plan,
+            "api.service.run",
+            b"from shared import sdk\n\ndef run() -> object:\n    return sdk.create()\n",
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn rejects_reserved_and_non_authored_manifest_module_roots() {
     let mut fixture = fixture("module api.service\n\nfn run() -> Unit\n");
     let lockfile = fixture.root.join("uv.lock");

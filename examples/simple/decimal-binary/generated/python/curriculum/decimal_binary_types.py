@@ -64,8 +64,9 @@ The input must be nonempty and contain only ASCII `0` and `1`; leading
 zeros are allowed and ignored. Any other input returns `InvalidBinary`.
 After the entire string is validated, more than 63 significant digits
 returns `Overflow`, so invalid characters take priority over overflow."""
-"""Routes a tagged conversion through the matching decimal or binary
-conversion operation and wraps its successful scalar result.
+"""Route DecimalToBinary through curriculum.decimal_binary.decimal_to_binary
+and BinaryToDecimal through curriculum.decimal_binary.binary_to_decimal.
+Wrap the successful scalar in the corresponding ConversionResult variant.
 
 Errors from the selected operation are returned unchanged."""
 __all__ = ["Conversion", "ConversionError", "ConversionError_InvalidBinary", "ConversionError_NegativeDecimal", "ConversionError_Overflow", "ConversionResult", "ConversionResult_Binary", "ConversionResult_Decimal", "Conversion_BinaryToDecimal", "Conversion_DecimalToBinary"]

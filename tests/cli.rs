@@ -1103,6 +1103,26 @@ fn generate_requires_an_agent_only_for_unresolved_callables() {
 }
 
 #[test]
+fn generate_rejects_a_model_without_an_agent() {
+    let project = project();
+    make_unresolved(&project);
+
+    let output = cott(
+        &project.path,
+        &[
+            "generate",
+            "--target",
+            "python",
+            "--model",
+            "anthropic/claude-opus-5-5",
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("`--model` requires `--agent`"));
+}
+
+#[test]
 fn generate_promotes_a_sandboxed_omp_function_candidate_with_artifacts() {
     let project = project();
     make_unresolved(&project);
@@ -1225,7 +1245,7 @@ if [ "$1" = "--version" ]; then
   printf '%s\n' '2.1.89'
   exit 0
 fi
-expected='--bare --print --input-format text --output-format json --permission-mode dontAsk --tools Read,Write --allowedTools Read,Write --disallowedTools Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__* --no-session-persistence'
+expected='--model anthropic/claude-opus-5-5 --bare --print --input-format text --output-format json --permission-mode dontAsk --tools Read,Write --allowedTools Read,Write --disallowedTools Bash,Edit,Glob,Grep,WebFetch,WebSearch,Task,mcp__* --no-session-persistence'
 [ "$*" = "$expected" ] || { printf '%s\n' "unexpected Claude argv: $*" >&2; exit 64; }
 [ "${ANTHROPIC_API_KEY-}" = 'test-api-key' ] || { printf '%s\n' 'missing API key' >&2; exit 64; }
 [ "${ANTHROPIC_AUTH_TOKEN+x}" = x ] && { printf '%s\n' 'forwarded auth token' >&2; exit 64; }
@@ -1262,6 +1282,8 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
             "generate",
             "--agent",
             "claude",
+            "--model",
+            "anthropic/claude-opus-5-5",
             "--target",
             "python",
             "--project",
@@ -1293,6 +1315,8 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
     assert_eq!(
         run["argv_template"],
         serde_json::json!([
+            "--model",
+            "anthropic/claude-opus-5-5",
             "--bare",
             "--print",
             "--input-format",

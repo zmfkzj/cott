@@ -34,6 +34,7 @@ fn parses_global_options_in_any_position() {
             symbol: Some("foo.bar.run".to_owned()),
             target: TargetLanguage::Python,
             agent: Some(AgentKind::Omp),
+            model: None,
             jobs: 1,
             project: None,
             format: OutputFormat::Human
@@ -52,6 +53,7 @@ fn parses_global_options_in_any_position() {
             symbol: Some("foo.bar.Reader.read".to_owned()),
             target: TargetLanguage::Python,
             agent: Some(AgentKind::Codex),
+            model: None,
             jobs: 1,
             project: None,
             format: OutputFormat::Human
@@ -70,6 +72,7 @@ fn parses_global_options_in_any_position() {
             symbol: Some("foo.bar.Writer.write".to_owned()),
             target: TargetLanguage::Python,
             agent: Some(AgentKind::Claude),
+            model: None,
             jobs: 1,
             project: None,
             format: OutputFormat::Human
@@ -88,6 +91,7 @@ fn parses_generate_jobs() {
                 symbol: None,
                 target: TargetLanguage::Python,
                 agent: Some(AgentKind::Omp),
+                model: None,
                 jobs: 5,
                 project: None,
                 format: OutputFormat::Human,
@@ -147,6 +151,7 @@ fn parses_closed_backend_targets() {
             symbol: Some("foo.bar.run".to_owned()),
             target: TargetLanguage::Kotlin,
             agent: Some(AgentKind::Omp),
+            model: None,
             jobs: 1,
             project: None,
             format: OutputFormat::Human,
@@ -191,6 +196,7 @@ fn parses_closed_backend_targets() {
             symbol: Some("foo.bar.run".to_owned()),
             target: TargetLanguage::Dart,
             agent: Some(AgentKind::Omp),
+            model: None,
             jobs: 1,
             project: None,
             format: OutputFormat::Human,
@@ -209,6 +215,7 @@ fn help_advertises_the_complete_closed_target_grammar() {
     let help = String::from_utf8_lossy(&output.stdout);
     assert!(help.contains("--target python|kotlin|dart"));
     assert!(help.contains("emit ir|python|kotlin|dart"));
+    assert!(help.contains("--model <model>"));
 }
 
 #[test]
@@ -371,6 +378,84 @@ fn rejects_duplicate_or_invalid_options() {
     assert_eq!(
         parse_command(&["generate", "--agent", "unknown"].map(OsString::from)),
         Err("`--agent` requires `codex`, `claude`, or `omp`")
+    );
+}
+
+#[test]
+fn parses_generate_model_alongside_agent() {
+    assert_eq!(
+        parse(&[
+            "generate",
+            "--target",
+            "python",
+            "--agent",
+            "omp",
+            "--model",
+            "anthropic/claude-opus-5-5",
+        ]),
+        Command::Generate {
+            symbol: None,
+            target: TargetLanguage::Python,
+            agent: Some(AgentKind::Omp),
+            model: Some("anthropic/claude-opus-5-5".to_owned()),
+            jobs: 1,
+            project: None,
+            format: OutputFormat::Human,
+        },
+    );
+}
+
+#[test]
+fn rejects_invalid_or_misplaced_generate_model() {
+    for arguments in [
+        &[
+            "generate", "--target", "python", "--agent", "omp", "--model",
+        ][..],
+        &[
+            "generate", "--target", "python", "--agent", "omp", "--model", "",
+        ][..],
+        &[
+            "generate", "--target", "python", "--agent", "omp", "--model", "-flag",
+        ][..],
+        &[
+            "generate",
+            "--target",
+            "python",
+            "--agent",
+            "omp",
+            "--model",
+            "trailing ",
+        ][..],
+        &[
+            "generate", "--target", "python", "--agent", "omp", "--model", "a", "--model", "b",
+        ][..],
+        &[
+            "generate",
+            "--target",
+            "python",
+            "--model",
+            "anthropic/claude-opus-5-5",
+        ][..],
+        &["verify", "--model", "anthropic/claude-opus-5-5"][..],
+        &["check", "--model", "anthropic/claude-opus-5-5"][..],
+    ] {
+        assert!(
+            parse_command(&arguments.iter().map(OsString::from).collect::<Vec<_>>()).is_err(),
+            "{arguments:?}"
+        );
+    }
+    assert_eq!(
+        parse_command(
+            &[
+                "generate",
+                "--target",
+                "python",
+                "--model",
+                "anthropic/claude-opus-5-5"
+            ]
+            .map(OsString::from)
+        ),
+        Err("`--model` requires `--agent`")
     );
 }
 

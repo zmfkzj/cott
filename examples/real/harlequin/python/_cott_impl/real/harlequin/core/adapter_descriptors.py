@@ -1,110 +1,31 @@
 from cott_runtime import CottList
-from real.harlequin.core_types import (
-    AdapterDescriptor,
-    AdapterKind_Adbc,
-    AdapterKind_BigQuery,
-    AdapterKind_Cassandra,
-    AdapterKind_Databricks,
-    AdapterKind_DuckDb,
-    AdapterKind_MySql,
-    AdapterKind_NebulaGraph,
-    AdapterKind_Odbc,
-    AdapterKind_PostgreSql,
-    AdapterKind_Sqlite,
-    AdapterKind_Trino,
-)
+from real.harlequin.core_types import AdapterDescriptor, AdapterKind, AdapterKind_Adbc, AdapterKind_BigQuery, AdapterKind_Cassandra, AdapterKind_Databricks, AdapterKind_DuckDb, AdapterKind_MySql, AdapterKind_NebulaGraph, AdapterKind_Odbc, AdapterKind_PostgreSql, AdapterKind_Sqlite, AdapterKind_Trino
+
+
+def _descriptor(kind: AdapterKind, display_name: str, schemes: CottList[str], transactions: bool, catalog: bool, files: bool) -> AdapterDescriptor:
+    return AdapterDescriptor(
+        kind=kind,
+        display_name=display_name,
+        uri_schemes=schemes,
+        supports_transactions=transactions,
+        supports_catalog=catalog,
+        supports_files=files,
+    )
 
 
 def adapter_descriptors() -> CottList[AdapterDescriptor]:
     return CottList(
         values=[
-            AdapterDescriptor(
-                kind=AdapterKind_DuckDb(),
-                display_name="DuckDB",
-                uri_schemes=CottList(values=["duckdb"]),
-                supports_transactions=True,
-                supports_catalog=True,
-                supports_files=True,
-            ),
-            AdapterDescriptor(
-                kind=AdapterKind_Sqlite(),
-                display_name="SQLite",
-                uri_schemes=CottList(values=["sqlite"]),
-                supports_transactions=True,
-                supports_catalog=True,
-                supports_files=True,
-            ),
-            AdapterDescriptor(
-                kind=AdapterKind_PostgreSql(),
-                display_name="PostgreSQL",
-                uri_schemes=CottList(values=["postgres", "postgresql"]),
-                supports_transactions=True,
-                supports_catalog=True,
-                supports_files=False,
-            ),
-            AdapterDescriptor(
-                kind=AdapterKind_MySql(),
-                display_name="MySQL",
-                uri_schemes=CottList(values=["mysql"]),
-                supports_transactions=True,
-                supports_catalog=True,
-                supports_files=False,
-            ),
-            AdapterDescriptor(
-                kind=AdapterKind_Odbc(),
-                display_name="ODBC",
-                uri_schemes=CottList(values=["odbc"]),
-                supports_transactions=True,
-                supports_catalog=True,
-                supports_files=False,
-            ),
-            AdapterDescriptor(
-                kind=AdapterKind_BigQuery(),
-                display_name="BigQuery",
-                uri_schemes=CottList(values=["bigquery"]),
-                supports_transactions=False,
-                supports_catalog=True,
-                supports_files=False,
-            ),
-            AdapterDescriptor(
-                kind=AdapterKind_Trino(),
-                display_name="Trino",
-                uri_schemes=CottList(values=["trino"]),
-                supports_transactions=False,
-                supports_catalog=True,
-                supports_files=False,
-            ),
-            AdapterDescriptor(
-                kind=AdapterKind_Databricks(),
-                display_name="Databricks",
-                uri_schemes=CottList(values=["databricks"]),
-                supports_transactions=False,
-                supports_catalog=True,
-                supports_files=True,
-            ),
-            AdapterDescriptor(
-                kind=AdapterKind_Adbc(),
-                display_name="ADBC",
-                uri_schemes=CottList(values=["adbc"]),
-                supports_transactions=True,
-                supports_catalog=True,
-                supports_files=False,
-            ),
-            AdapterDescriptor(
-                kind=AdapterKind_Cassandra(),
-                display_name="Cassandra",
-                uri_schemes=CottList(values=["cassandra"]),
-                supports_transactions=False,
-                supports_catalog=True,
-                supports_files=False,
-            ),
-            AdapterDescriptor(
-                kind=AdapterKind_NebulaGraph(),
-                display_name="NebulaGraph",
-                uri_schemes=CottList(values=["nebula"]),
-                supports_transactions=False,
-                supports_catalog=True,
-                supports_files=False,
-            ),
+            _descriptor(AdapterKind_DuckDb(), "DuckDB", CottList(values=["duckdb"]), True, True, True),
+            _descriptor(AdapterKind_Sqlite(), "SQLite", CottList(values=["sqlite"]), True, True, True),
+            _descriptor(AdapterKind_PostgreSql(), "PostgreSQL", CottList(values=["postgres", "postgresql"]), True, True, False),
+            _descriptor(AdapterKind_MySql(), "MySQL", CottList(values=["mysql"]), True, True, False),
+            _descriptor(AdapterKind_Odbc(), "ODBC", CottList(values=["odbc"]), True, True, False),
+            _descriptor(AdapterKind_BigQuery(), "BigQuery", CottList(values=["bigquery"]), False, True, False),
+            _descriptor(AdapterKind_Trino(), "Trino", CottList(values=["trino"]), False, True, False),
+            _descriptor(AdapterKind_Databricks(), "Databricks", CottList(values=["databricks"]), False, True, True),
+            _descriptor(AdapterKind_Adbc(), "ADBC", CottList(values=["adbc"]), True, True, False),
+            _descriptor(AdapterKind_Cassandra(), "Cassandra", CottList(values=["cassandra"]), False, True, False),
+            _descriptor(AdapterKind_NebulaGraph(), "NebulaGraph", CottList(values=["nebula"]), False, True, False),
         ]
     )

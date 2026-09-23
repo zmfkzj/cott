@@ -8,5 +8,5 @@ def edit_query_tab(tab: QueryTab, source: str, cursor: U64) -> QueryTab:
         title=tab.title,
         source=source,
         cursor=min(cursor, len(source)),
-        dirty=True,
+        dirty=tab.dirty or source != tab.source,
     )

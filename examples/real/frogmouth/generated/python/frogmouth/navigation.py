@@ -21,7 +21,7 @@ def resolve_location(value: str, working_directory: Path) -> Result[Location, Na
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/frogmouth/navigation/resolve_location.py", "95a090fa1ec6ef714e0104e911d9255968eab4067ee5184e7e60406a643e2014", "resolve_location", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.navigation.resolve_location")
+        _implementation = _cott_load("_cott_impl/frogmouth/navigation/resolve_location.py", "4e48912b09f66450135cf55887f72eab42a255857676aa865d6ba7d15a92977f", "resolve_location", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.navigation.resolve_location")
         _result = _implementation(value, working_directory)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -63,7 +63,7 @@ def resolve_location(value: str, working_directory: Path) -> Result[Location, Na
 def display_location(location: Location) -> str:
     location = _cott_validate_abi(location, Location, path="$.location")
     try:
-        _implementation = _cott_load("_cott_impl/frogmouth/navigation/display_location.py", "08bafd3a41930c309efddab2f5399adabf02ccc88e730a4b057c3607337eac1a", "display_location", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.navigation.display_location")
+        _implementation = _cott_load("_cott_impl/frogmouth/navigation/display_location.py", "1f83dddef24cb9e9de99b18c73cfc4c351939ca75fe7806bbe2117d1286ac9cb", "display_location", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.navigation.display_location")
         _result = _implementation(location)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

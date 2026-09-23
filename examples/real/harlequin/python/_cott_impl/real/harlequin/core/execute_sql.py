@@ -1,333 +1,175 @@
 import sqlite3
+from pathlib import Path
+from typing import Final, cast
 
 from cott_runtime import CottList, Err, Ok, Result
-from real.harlequin.core_types import (
-    Cell,
-    Cell_Blob,
-    Cell_Integer,
-    Cell_Null,
-    Cell_Real,
-    Cell_Text,
-    DatabaseTarget,
-    DatabaseTarget_File,
-    DatabaseTarget_Memory,
-    QueryResult,
-    SqlClientError,
-    SqlClientError_EmptySql,
-    SqlClientError_ReadOnlyViolation,
-    SqlClientError_UnsupportedValue,
-    SqlClientError_UnterminatedSql,
-    TypedRow,
-)
+from real.harlequin.core_types import Cell, Cell_Blob, Cell_Integer, Cell_Null, Cell_Real, Cell_Text, DatabaseTarget, DatabaseTarget_File, QueryResult, SqlClientError, SqlClientError_EmptySql, SqlClientError_ReadOnlyViolation, SqlClientError_SqliteFailure, SqlClientError_UnsupportedValue, SqlClientError_UnterminatedSql, TypedRow
+
+_READ_KEYWORDS: Final[str] = "SELECT WITH VALUES EXPLAIN"
+_SAFE_PRAGMAS: Final[str] = "table_info table_xinfo table_list index_list index_info index_xinfo foreign_key_list foreign_key_check database_list collation_list compile_options function_list module_list pragma_list user_version application_id schema_version data_version page_count page_size freelist_count encoding integrity_check quick_check"
 
 
 def _split_sql(sql: str) -> tuple[list[str], str | None]:
     statements: list[str] = []
-    buffer: list[str] = []
-    state = "normal"
-    has_code = False
-    index = 0
-    while index < len(sql):
-        character = sql[index]
-        following = sql[index + 1] if index + 1 < len(sql) else ""
-        if state == "normal":
-            if character == "-" and following == "-":
-                buffer.append(character)
-                buffer.append(following)
-                state = "line-comment"
-                index += 2
-                continue
-            if character == "/" and following == "*":
-                buffer.append(character)
-                buffer.append(following)
-                state = "block-comment"
-                index += 2
-                continue
-            if character == "'":
-                buffer.append(character)
-                state = "single-quote"
-                has_code = True
-                index += 1
-                continue
-            if character == '"':
-                buffer.append(character)
-                state = "double-quote"
-                has_code = True
-                index += 1
-                continue
-            if character == "`":
-                buffer.append(character)
-                state = "backtick"
-                has_code = True
-                index += 1
-                continue
-            if character == "[":
-                buffer.append(character)
-                state = "bracket"
-                has_code = True
-                index += 1
-                continue
-            if character == ";":
-                if has_code:
-                    candidate = "".join(buffer)
-                    if not sqlite3.complete_statement(candidate + character):
-                        buffer.append(character)
-                        index += 1
-                        continue
+    start = 0
+    meaningful = False
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch == "-" and sql.startswith("--", i):
+            end = sql.find("\n", i)
+            i = n if end < 0 else end + 1
+            continue
+        if ch == "/" and sql.startswith("/*", i):
+            end = sql.find("*/", i + 2)
+            if end < 0:
+                return statements, "*/"
+            i = end + 2
+            continue
+        if ch in "'\"`[":
+            close = "]" if ch == "[" else ch
+            j = i + 1
+            while True:
+                k = sql.find(close, j)
+                if k < 0:
+                    return statements, close
+                if close != "]" and sql.startswith(close * 2, k):
+                    j = k + 2
+                    continue
+                i = k + 1
+                break
+            meaningful = True
+            continue
+        if ch == ";":
+            candidate = sql[start : i + 1]
+            if sqlite3.complete_statement(candidate):
+                if meaningful:
                     statements.append(candidate.strip())
-                buffer = []
-                has_code = False
-                index += 1
-                continue
-            buffer.append(character)
-            if not character.isspace():
-                has_code = True
-            index += 1
+                start = i + 1
+                meaningful = False
+            i += 1
             continue
-        if state == "line-comment":
-            buffer.append(character)
-            if character == "\n":
-                state = "normal"
-            index += 1
-            continue
-        if state == "block-comment":
-            buffer.append(character)
-            if character == "*" and following == "/":
-                buffer.append(following)
-                state = "normal"
-                index += 2
-            else:
-                index += 1
-            continue
-        buffer.append(character)
-        if state == "single-quote" and character == "'":
-            if following == "'":
-                buffer.append(following)
-                index += 2
-            else:
-                state = "normal"
-                index += 1
-            continue
-        if state == "double-quote" and character == '"':
-            if following == '"':
-                buffer.append(following)
-                index += 2
-            else:
-                state = "normal"
-                index += 1
-            continue
-        if state == "backtick" and character == "`":
-            if following == "`":
-                buffer.append(following)
-                index += 2
-            else:
-                state = "normal"
-                index += 1
-            continue
-        if state == "bracket" and character == "]":
-            if following == "]":
-                buffer.append(following)
-                index += 2
-            else:
-                state = "normal"
-                index += 1
-            continue
-        index += 1
-
-    if state == "single-quote":
-        return statements, "'"
-    if state == "double-quote":
-        return statements, '"'
-    if state == "backtick":
-        return statements, "`"
-    if state == "bracket":
-        return statements, "["
-    if state == "block-comment":
-        return statements, "/*"
-    if has_code:
-        statements.append("".join(buffer).strip())
+        if not ch.isspace():
+            meaningful = True
+        i += 1
+    if meaningful:
+        statements.append(sql[start:].strip())
     return statements, None
 
 
-def _statement_is_read_only(statement: str) -> bool:
-    keywords: list[str] = []
-    state = "normal"
-    depth = 0
-    has_top_level_assignment = False
-    index = 0
-    while index < len(statement):
-        character = statement[index]
-        following = statement[index + 1] if index + 1 < len(statement) else ""
-        if state == "normal":
-            if character == "-" and following == "-":
-                state = "line-comment"
-                index += 2
-                continue
-            if character == "/" and following == "*":
-                state = "block-comment"
-                index += 2
-                continue
-            if character == "'":
-                state = "single-quote"
-                index += 1
-                continue
-            if character == '"':
-                state = "double-quote"
-                index += 1
-                continue
-            if character == "`":
-                state = "backtick"
-                index += 1
-                continue
-            if character == "[":
-                state = "bracket"
-                index += 1
-                continue
-            if character == "(":
-                depth += 1
-                index += 1
-                continue
-            if character == ")":
-                if depth > 0:
-                    depth -= 1
-                index += 1
-                continue
-            if depth == 0 and character == "=":
-                has_top_level_assignment = True
-                index += 1
-                continue
-            if depth == 0 and (character.isalpha() or character == "_"):
-                end = index + 1
-                while end < len(statement) and (statement[end].isalnum() or statement[end] == "_"):
-                    end += 1
-                keywords.append(statement[index:end].upper())
-                index = end
-                continue
-            index += 1
-            continue
-        if state == "line-comment":
-            if character == "\n":
-                state = "normal"
-            index += 1
-            continue
-        if state == "block-comment":
-            if character == "*" and following == "/":
-                state = "normal"
-                index += 2
-            else:
-                index += 1
-            continue
-        if state == "single-quote" and character == "'":
-            if following == "'":
-                index += 2
-            else:
-                state = "normal"
-                index += 1
-            continue
-        if state == "double-quote" and character == '"':
-            if following == '"':
-                index += 2
-            else:
-                state = "normal"
-                index += 1
-            continue
-        if state == "backtick" and character == "`":
-            if following == "`":
-                index += 2
-            else:
-                state = "normal"
-                index += 1
-            continue
-        if state == "bracket" and character == "]":
-            if following == "]":
-                index += 2
-            else:
-                state = "normal"
-                index += 1
-            continue
-        index += 1
+def _leading_keyword(statement: str) -> str:
+    i = 0
+    n = len(statement)
+    while i < n:
+        if statement[i].isspace():
+            i += 1
+        elif statement.startswith("--", i):
+            end = statement.find("\n", i)
+            i = n if end < 0 else end + 1
+        elif statement.startswith("/*", i):
+            end = statement.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+        else:
+            break
+    j = i
+    while j < n and (statement[j].isalpha() or statement[j] == "_"):
+        j += 1
+    return statement[i:j].upper()
 
-    if len(keywords) == 0:
-        return False
-    first = keywords[0]
-    if first == "SELECT" or first == "VALUES" or first == "EXPLAIN":
+
+def _is_read_statement(statement: str) -> bool:
+    keyword = _leading_keyword(statement)
+    if keyword in _READ_KEYWORDS.split():
         return True
-    if first == "PRAGMA":
-        return not has_top_level_assignment
-    if first != "WITH":
-        return False
-    for keyword in keywords[1:]:
-        if keyword == "SELECT" or keyword == "VALUES":
-            return True
-        if keyword == "INSERT" or keyword == "UPDATE" or keyword == "DELETE" or keyword == "REPLACE":
-            return False
-    return False
+    return keyword == "PRAGMA" and "=" not in statement
 
 
 def _to_cell(value: object) -> Cell | None:
-    match value:
-        case None:
-            return Cell_Null()
-        case bool() as integer_value:
-            return Cell_Integer(value=integer_value)
-        case int() as integer_value:
-            return Cell_Integer(value=integer_value)
-        case float() as real_value:
-            return Cell_Real(value=real_value)
-        case str() as text_value:
-            return Cell_Text(value=text_value)
-        case bytes() as blob_value:
-            return Cell_Blob(value=blob_value)
-        case _:
-            return None
+    if value is None:
+        return Cell_Null()
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return Cell_Integer(value=value)
+    if isinstance(value, float):
+        return Cell_Real(value=value)
+    if isinstance(value, str):
+        return Cell_Text(value=value)
+    if isinstance(value, memoryview):
+        view = cast(memoryview[int], value)
+        return Cell_Blob(value=view.tobytes())
+    if isinstance(value, (bytes, bytearray)):
+        return Cell_Blob(value=bytes(value))
+    return None
+
+
+def _unsupported_type_name(value: object) -> str:
+    if isinstance(value, bool):
+        return "bool"
+    return "object"
+
+
+def _authorize_read(denied: list[bool], action: int, arg1: str | None, arg2: str | None) -> int:
+    if action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE):
+        return sqlite3.SQLITE_OK
+    if action == sqlite3.SQLITE_PRAGMA and arg2 is None and arg1 is not None and arg1.lower() in _SAFE_PRAGMAS.split():
+        return sqlite3.SQLITE_OK
+    denied[0] = True
+    return sqlite3.SQLITE_DENY
+
+
+def _connect(database: DatabaseTarget, read_only: bool) -> sqlite3.Connection:
+    if isinstance(database, DatabaseTarget_File):
+        path = Path(database.path)
+        if read_only:
+            return sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, autocommit=True)
+        return sqlite3.connect(path, autocommit=True)
+    return sqlite3.connect(":memory:", autocommit=True)
 
 
 def execute_sql(database: DatabaseTarget, sql: str, read_only: bool) -> Result[CottList[QueryResult], SqlClientError]:
-    statements, unterminated_delimiter = _split_sql(sql)
-    if unterminated_delimiter is not None:
-        return Err(error=SqlClientError_UnterminatedSql(delimiter=unterminated_delimiter))
-    if len(statements) == 0:
+    statements, unterminated = _split_sql(sql)
+    if unterminated is not None:
+        return Err(error=SqlClientError_UnterminatedSql(delimiter=unterminated))
+    if not statements:
         return Err(error=SqlClientError_EmptySql())
     if read_only:
         for statement in statements:
-            if not _statement_is_read_only(statement):
+            if not _is_read_statement(statement):
                 return Err(error=SqlClientError_ReadOnlyViolation(statement=statement))
-
-    match database:
-        case DatabaseTarget_Memory():
-            connection = sqlite3.connect(":memory:")
-        case DatabaseTarget_File(path=path):
-            connection = sqlite3.connect(path)
-    if read_only:
-        connection.execute("PRAGMA query_only = ON")
-
+    try:
+        connection = _connect(database, read_only)
+    except sqlite3.Error as exc:
+        return Err(error=SqlClientError_SqliteFailure(message=str(exc)))
     results: list[QueryResult] = []
-    for statement in statements:
-        cursor = connection.execute(statement)
-        columns: list[str] = []
-        rows: list[TypedRow] = []
-        if cursor.description is not None:
-            columns = [description[0] for description in cursor.description]
-            for raw_row in cursor.fetchall():
-                values: list[Cell] = []
-                for raw_value in raw_row:
-                    cell = _to_cell(raw_value)
+    denied: list[bool] = [False]
+    try:
+        if read_only:
+            connection.set_authorizer(lambda action, arg1, arg2, _db, _trigger: _authorize_read(denied, action, arg1, arg2))
+        for statement in statements:
+            denied[0] = False
+            try:
+                cursor = connection.execute(statement)
+            except sqlite3.DatabaseError as exc:
+                if denied[0]:
+                    return Err(error=SqlClientError_ReadOnlyViolation(statement=statement))
+                raise exc
+            columns = [str(column[0]) for column in cursor.description] if cursor.description is not None else []
+            rows: list[TypedRow] = []
+            for raw in cursor.fetchall():
+                cells: list[Cell] = []
+                for value in raw:
+                    cell = _to_cell(value)
                     if cell is None:
-                        connection.close()
-                        return Err(error=SqlClientError_UnsupportedValue(type_name="unsupported SQLite value"))
-                    values.append(cell)
-                rows.append(TypedRow(values=CottList(values=values)))
-        affected_rows = cursor.rowcount
-        if affected_rows < 0:
-            affected_rows = 0
-        results.append(
-            QueryResult(
-                columns=CottList(values=columns),
-                rows=CottList(values=rows),
-                affected_rows=affected_rows,
-            )
-        )
-
-    connection.commit()
-    connection.close()
+                        return Err(error=SqlClientError_UnsupportedValue(type_name=_unsupported_type_name(value)))
+                    cells.append(cell)
+                rows.append(TypedRow(values=CottList(values=cells)))
+            affected = cursor.rowcount if cursor.rowcount > 0 else 0
+            cursor.close()
+            results.append(QueryResult(columns=CottList(values=columns), rows=CottList(values=rows), affected_rows=affected))
+    except sqlite3.Error as exc:
+        return Err(error=SqlClientError_SqliteFailure(message=str(exc)))
+    finally:
+        connection.close()
     return Ok(value=CottList(values=results))

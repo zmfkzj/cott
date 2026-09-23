@@ -100,6 +100,32 @@ fn callable<'a>(plan: &'a KotlinPlan, symbol: &str) -> KotlinCallable {
         .expect("fixture callable")
 }
 
+#[test]
+fn jvm_soft_keyword_identifiers_preserve_source_auditing() {
+    let fixture = fixture("module api.service\nfn echo(current: I32) -> I32\n");
+    let callable = callable(&fixture.plan, "api.service.echo");
+    let source = candidate_source(
+        &fixture.plan,
+        &callable,
+        "val dynamic = current\nreturn dynamic",
+    );
+    validate_candidate(&fixture.config, &fixture.plan, &callable, source.as_bytes())
+        .expect("JVM soft keyword is a valid local identifier");
+
+    let source = candidate_source(&fixture.plan, &callable, "dynamic.exit(0)\nreturn current")
+        .replacen('\n', "\nimport java.lang.System as dynamic\n", 1);
+    assert!(
+        validate_candidate(&fixture.config, &fixture.plan, &callable, source.as_bytes()).is_err(),
+        "keyword-named aliases must not bypass process capability auditing"
+    );
+
+    let source = candidate_source(&fixture.plan, &callable, "val dynamic = )\nreturn current");
+    assert!(
+        validate_candidate(&fixture.config, &fixture.plan, &callable, source.as_bytes()).is_err(),
+        "keyword handling must not accept malformed declarations"
+    );
+}
+
 fn candidate_source(plan: &KotlinPlan, callable: &KotlinCallable, body: &str) -> String {
     let mut package = format!("cott_impl.{}", callable.module);
     if let Some(owner) = &callable.owner {
@@ -712,6 +738,224 @@ fn audit_rejects_process_exit_stdout_replacement_and_verifier_control_spellings(
 }
 
 #[test]
+fn audit_gates_exit_with_code_on_the_canonical_process_exit_effect() {
+    let declared = fixture(
+        "module api.service\n\nfn exit_with_code(code: U8) -> Never:\n    effects [process.exit]\n",
+    );
+    let declared_callable = callable(&declared.plan, "api.service.exit_with_code");
+    let declared_source = candidate_source(
+        &declared.plan,
+        &declared_callable,
+        "return cott_runtime.CottRuntime.exitWithCode(code)",
+    );
+    validate_candidate(
+        &declared.config,
+        &declared.plan,
+        &declared_callable,
+        declared_source.as_bytes(),
+    )
+    .expect("the canonical process.exit effect grants the runtime exit capability");
+
+    let undeclared = fixture("module api.service\n\nfn exit_with_code(code: U8) -> Never\n");
+    let undeclared_callable = callable(&undeclared.plan, "api.service.exit_with_code");
+    let undeclared_source = candidate_source(
+        &undeclared.plan,
+        &undeclared_callable,
+        "return cott_runtime.CottRuntime.exitWithCode(code)",
+    );
+    validate_candidate(
+        &undeclared.config,
+        &undeclared.plan,
+        &undeclared_callable,
+        undeclared_source.as_bytes(),
+    )
+    .expect_err(
+        "a similarly named callable without process.exit cannot use the runtime capability",
+    );
+}
+
+#[test]
+fn audit_effect_gates_exit_aliases_private_helpers_and_callable_references() {
+    let declared =
+        fixture("module api.service\n\nfn stop(code: U8) -> Never:\n    effects [process.exit]\n");
+    let declared_callable = callable(&declared.plan, "api.service.stop");
+    let candidate = |imports: &str, prelude: &str, body: &str| {
+        candidate_source(&declared.plan, &declared_callable, body).replacen(
+            "\n\n",
+            &format!("\n\n{imports}\n\n{prelude}"),
+            1,
+        )
+    };
+    let allowed = [
+        candidate(
+            "import cott_runtime.CottRuntime as RuntimeApi",
+            "",
+            "return RuntimeApi.exitWithCode(code)",
+        ),
+        candidate(
+            "import cott_runtime.CottRuntime.exitWithCode as terminate",
+            "",
+            "return terminate(code)",
+        ),
+        candidate(
+            "",
+            "private fun _stop(code: kotlin.UByte): kotlin.Nothing = cott_runtime.CottRuntime.exitWithCode(code)\n\n",
+            "return _stop(code)",
+        ),
+    ];
+    for source in allowed {
+        validate_candidate(
+            &declared.config,
+            &declared.plan,
+            &declared_callable,
+            source.as_bytes(),
+        )
+        .expect("aliases and private helpers retain the canonical callable's process.exit grant");
+    }
+
+    let undeclared = fixture("module api.service\n\nfn stop(code: U8) -> Never\n");
+    let undeclared_callable = callable(&undeclared.plan, "api.service.stop");
+    let candidate = |imports: &str, prelude: &str, body: &str| {
+        candidate_source(&undeclared.plan, &undeclared_callable, body).replacen(
+            "\n\n",
+            &format!("\n\n{imports}\n\n{prelude}"),
+            1,
+        )
+    };
+    let rejected = [
+        candidate(
+            "import cott_runtime.CottRuntime as RuntimeApi",
+            "",
+            "return RuntimeApi.exitWithCode(code)",
+        ),
+        candidate(
+            "import cott_runtime.CottRuntime.exitWithCode as terminate",
+            "",
+            "return terminate(code)",
+        ),
+        candidate(
+            "",
+            "private fun terminate(code: kotlin.UByte): kotlin.Nothing = cott_runtime.CottRuntime.exitWithCode(code)\n\n",
+            "return terminate(code)",
+        ),
+        candidate(
+            "",
+            "",
+            "val terminate = cott_runtime.CottRuntime::exitWithCode\n    return terminate(code)",
+        ),
+        candidate(
+            "import cott_runtime.CottRuntime.exitWithCode as terminate",
+            "",
+            "val terminateReference = ::terminate\n    return terminateReference(code)",
+        ),
+    ];
+    for source in rejected {
+        validate_candidate(
+            &undeclared.config,
+            &undeclared.plan,
+            &undeclared_callable,
+            source.as_bytes(),
+        )
+        .expect_err("indirection cannot grant an undeclared process.exit capability");
+    }
+}
+
+#[test]
+fn process_exit_effect_does_not_allow_raw_jvm_exit_or_capability_escape() {
+    let fixture =
+        fixture("module api.service\n\nfn stop(code: U8) -> Never:\n    effects [process.exit]\n");
+    let callable = callable(&fixture.plan, "api.service.stop");
+    let candidate = |body| candidate_source(&fixture.plan, &callable, body);
+    let with_imports =
+        |imports: &str, body| candidate(body).replacen("\n\n", &format!("\n\n{imports}\n\n"), 1);
+    let private_exit_helper = "private fun _stop(code: kotlin.UByte): kotlin.Nothing = cott_runtime.CottRuntime.exitWithCode(code)";
+    let with_prelude =
+        |prelude: &str, body| candidate(body).replacen("\n\n", &format!("\n\n{prelude}\n\n"), 1);
+    for source in [
+        candidate("java.lang.System.exit(code.toInt())\n    throw IllegalStateException()"),
+        candidate("kotlin.system.exitProcess(code.toInt())\n    throw IllegalStateException()"),
+        candidate(
+            "java.lang.Runtime.getRuntime().halt(code.toInt())\n    throw IllegalStateException()",
+        ),
+        candidate(
+            "val terminate = cott_runtime.CottRuntime::exitWithCode\n    return terminate(code)",
+        ),
+        candidate(
+            "val leaked: kotlin.Any = cott_runtime.CottRuntime::exitWithCode\n    throw IllegalStateException(leaked.toString())",
+        ),
+        with_imports(
+            "import cott_runtime.CottRuntime.exitWithCode as finish",
+            "val terminate = ::finish\n    return terminate(code)",
+        ),
+        candidate(
+            "val terminate: (kotlin.UByte) -> kotlin.Nothing = { status -> cott_runtime.CottRuntime.exitWithCode(status) }\n    return terminate(code)",
+        ),
+        with_prelude(
+            private_exit_helper,
+            "val leaked: kotlin.Any = ::_stop\n    throw IllegalStateException(leaked.toString())",
+        ),
+        with_prelude(
+            private_exit_helper,
+            "val deferred: () -> kotlin.Nothing = { _stop(code) }\n    return deferred()",
+        ),
+        with_prelude(
+            private_exit_helper,
+            "val deferred = object {\n        fun stop(): kotlin.Nothing = _stop(code)\n    }\n    return deferred.stop()",
+        ),
+    ] {
+        validate_candidate(&fixture.config, &fixture.plan, &callable, source.as_bytes())
+            .expect_err("process.exit grants only direct access to the approved runtime operation");
+    }
+}
+
+#[test]
+fn binding_resolution_enforces_the_canonical_process_exit_effect() {
+    let mut declared =
+        fixture("module api.service\n\nfn stop(code: U8) -> Never:\n    effects [process.exit]\n");
+    declared.config.kotlin.implementations.insert(
+        "api.service.stop".to_owned(),
+        "bindings.service.stop".to_owned(),
+    );
+    let declared_callable = callable(&declared.plan, "api.service.stop");
+    let declared_source = format!(
+        "package bindings.service\n\n{} {{\n    return cott_runtime.CottRuntime.exitWithCode(code)\n}}\n",
+        implementation_signature(&declared.plan, &declared_callable).expect("signature"),
+    );
+    write_source(
+        &declared.paths.kotlin_source_dir.join("bindings/service.kt"),
+        &declared_source,
+    );
+    let bindings = resolve(&declared.config, &declared.paths, &declared.plan, None)
+        .expect("declared process.exit binding resolves");
+    assert_eq!(bindings.len(), 1);
+
+    let mut undeclared = fixture("module api.service\n\nfn stop(code: U8) -> Never\n");
+    undeclared.config.kotlin.implementations.insert(
+        "api.service.stop".to_owned(),
+        "bindings.service.stop".to_owned(),
+    );
+    let undeclared_callable = callable(&undeclared.plan, "api.service.stop");
+    let undeclared_source = format!(
+        "package bindings.service\n\n{} {{\n    return cott_runtime.CottRuntime.exitWithCode(code)\n}}\n",
+        implementation_signature(&undeclared.plan, &undeclared_callable).expect("signature"),
+    );
+    write_source(
+        &undeclared
+            .paths
+            .kotlin_source_dir
+            .join("bindings/service.kt"),
+        &undeclared_source,
+    );
+    resolve(
+        &undeclared.config,
+        &undeclared.paths,
+        &undeclared.plan,
+        None,
+    )
+    .expect_err("binding resolution cannot grant process.exit to an undeclared callable");
+}
+
+#[test]
 fn audit_rejects_cott_runtime_object_aliases_and_unapproved_receiver_extensions() {
     let fixture = fixture("module api.service\n\nfn run(value: I32) -> I32\n");
     let callable = callable(&fixture.plan, "api.service.run");
@@ -829,6 +1073,67 @@ fn audit_preserves_logging_and_runtime_value_and_mathematical_apis() {
     for source in [direct, imported, member_imported] {
         validate_candidate(&fixture.config, &fixture.plan, &callable, source.as_bytes())
             .expect("normal logging and direct approved Kotlin runtime APIs remain legal");
+    }
+}
+
+#[test]
+fn audit_allows_only_direct_fixture_clock_reads() {
+    let synchronous = fixture("module api.service\n\nfn run(value: I32) -> I32\n");
+    let synchronous_callable = callable(&synchronous.plan, "api.service.run");
+    let synchronous_source = candidate_source(
+        &synchronous.plan,
+        &synchronous_callable,
+        "return cott_runtime.CottRuntime.fixtureClockNs(\"clock\").toInt()",
+    );
+    validate_candidate(
+        &synchronous.config,
+        &synchronous.plan,
+        &synchronous_callable,
+        synchronous_source.as_bytes(),
+    )
+    .expect("direct synchronous fixture clock read");
+
+    let asynchronous = fixture("module api.service\n\nasync fn run(value: I32) -> I32\n");
+    let asynchronous_callable = callable(&asynchronous.plan, "api.service.run");
+    let asynchronous_source = candidate_source(
+        &asynchronous.plan,
+        &asynchronous_callable,
+        "return cott_runtime.CottRuntime.fixtureClockNsSuspend(\"clock\").toInt()",
+    );
+    validate_candidate(
+        &asynchronous.config,
+        &asynchronous.plan,
+        &asynchronous_callable,
+        asynchronous_source.as_bytes(),
+    )
+    .expect("direct suspending fixture clock read");
+
+    let candidate = |body| candidate_source(&synchronous.plan, &synchronous_callable, body);
+    for source in [
+        candidate(
+            "val context = cott_runtime.CottFixtureContext(java.nio.file.Path.of(\".\"), emptyMap(), mapOf(\"clock\" to 17uL))\n    return value",
+        ),
+        candidate(
+            "cott_runtime.CottRuntime.withFixtureContext(cott_runtime.CottFixtureContext(java.nio.file.Path.of(\".\"), emptyMap())) { return value }\n    return value",
+        ),
+        candidate(
+            "val path = cott_runtime.CottRuntime.fixturePath(\"clock\", \"value\")\n    return value",
+        ),
+        candidate(
+            "val url = cott_runtime.CottRuntime.fixtureUrl(\"clock\", \"value\")\n    return value",
+        ),
+        candidate(
+            "val clock = cott_runtime.CottRuntime::fixtureClockNs\n    return clock(\"clock\").toInt()",
+        ),
+        candidate("val members = cott_runtime.CottRuntime::class.members\n    return value"),
+    ] {
+        validate_candidate(
+            &synchronous.config,
+            &synchronous.plan,
+            &synchronous_callable,
+            source.as_bytes(),
+        )
+        .expect_err("fixture authority or runtime reflection must remain forbidden");
     }
 }
 

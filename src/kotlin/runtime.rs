@@ -154,9 +154,16 @@ public data class CottFixtureKey(
 public class CottFixtureContext public constructor(
     root: Path,
     urls: Map<CottFixtureKey, String>,
+    clocks: Map<String, ULong>,
 ) {
+    public constructor(
+        root: Path,
+        urls: Map<CottFixtureKey, String>,
+    ) : this(root, urls, emptyMap())
+
     internal val root: Path = root.toAbsolutePath().normalize()
     internal val urls: FrozenMap<CottFixtureKey, String> = FrozenMap(urls)
+    internal val clocks: FrozenMap<String, ULong> = FrozenMap(clocks)
 }
 
 private class FixtureElement(
@@ -1713,6 +1720,9 @@ public object CottRuntime {
     public val RUNTIME_ABI: Int = 1
     public val RUNTIME_VERSION: String = __COTT_RUNTIME_VERSION_LITERAL__
 
+    public fun exitWithCode(code: UByte): kotlin.Nothing =
+        kotlin.system.exitProcess(code.toInt())
+
     public fun requireIdentity(
         expectedProjectName: String,
         expectedProjectVersion: String,
@@ -1815,6 +1825,35 @@ public object CottRuntime {
 
     private suspend fun fixturesSuspend(): CottFixtureContext =
         coroutineContext[FixtureElement]?.fixtures ?: fixtures()
+
+    public fun fixtureClockNs(name: String): ULong =
+        resolveFixtureClockNs(fixtures(), name)
+
+    public suspend fun fixtureClockNsSuspend(name: String): ULong =
+        resolveFixtureClockNs(fixturesSuspend(), name)
+
+    private fun resolveFixtureClockNs(
+        context: CottFixtureContext,
+        name: String,
+    ): ULong {
+        validateUnicode(name, "$.name")
+        if (name.isEmpty()) violation(
+            "fixture clock name must be non-empty",
+            phase = "fixture",
+        )
+        val milliseconds = context.clocks[name] ?: violation(
+            "fixture clock is not configured",
+            phase = "fixture",
+            expected = name,
+        )
+        if (milliseconds > ULong.MAX_VALUE / 1_000_000uL) violation(
+            "fixture clock milliseconds overflow nanoseconds",
+            phase = "fixture",
+            expected = "0..${ULong.MAX_VALUE / 1_000_000uL}",
+            actual = milliseconds.toString(),
+        )
+        return milliseconds * 1_000_000uL
+    }
 
     public fun fixturePath(fixture: String, path: String): Path =
         resolveFixturePath(fixtures(), fixture, path)
@@ -3323,6 +3362,37 @@ fn substitute_runtime_markers(replacements: &[(&str, String)]) -> String {
         rendered.push_str(replacement);
         remaining = &remaining[offset + marker.len()..];
     }
+}
+
+fn runtime_api_fragment(start_marker: &str, end_marker: &str) -> &'static str {
+    let start = RUNTIME_TEMPLATE
+        .find(start_marker)
+        .expect("runtime contains API start marker");
+    let end = RUNTIME_TEMPLATE[start..]
+        .find(end_marker)
+        .expect("runtime contains API end marker")
+        + start;
+    &RUNTIME_TEMPLATE[start..end]
+}
+
+pub(crate) fn lazy_protocol_api() -> (&'static str, &'static str) {
+    (
+        runtime_api_fragment(
+            "public sealed interface CottStep<",
+            "private enum class ProtocolState",
+        ),
+        runtime_api_fragment(
+            "    public fun <T> wrapIterator(",
+            "    public fun rethrowImplementation(",
+        ),
+    )
+}
+
+pub(crate) fn json_value_api() -> &'static str {
+    runtime_api_fragment(
+        "public sealed interface JsonValue",
+        "private class VisitKey",
+    )
 }
 
 /// Render the compiler-owned Kotlin/JVM 17 runtime ABI.

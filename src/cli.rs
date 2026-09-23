@@ -16,8 +16,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub use crate::agent::AgentKind;
 use crate::agent::{
-    AgentRunCandidate, ShadowFacet, adapter, parse_domain_rules, render_prompt, run_agent,
-    scan_doc_candidates, selected_implementation_kind,
+    AgentRunCandidate, AgentSelection, ShadowFacet, adapter, parse_domain_rules, render_prompt,
+    run_agent, scan_doc_candidates, selected_implementation_kind, valid_model,
 };
 use crate::binding::{
     PythonFileRole, ResolvedBinding, audit_facade_file, recorded_intent_baseline,
@@ -49,7 +49,7 @@ use crate::python_verify::verify_python;
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession, TransactionError};
 use crate::version::{is_at_least, parse_version};
 
-const USAGE: &str = "Cott compiles contracts into verifiable Python, Kotlin, and Dart.\n\nUsage:\n  cott init <path> [--target python|kotlin|dart] [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python|kotlin|dart [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--replace] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
+const USAGE: &str = "Cott compiles contracts into verifiable Python, Kotlin, and Dart.\n\nUsage:\n  cott init <path> [--target python|kotlin|dart] [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python|kotlin|dart [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp [--model <model>] --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--replace] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
 
 const WORKFLOW: &str = "\nChoose the smallest step for the change:\n  check / fmt --check   Inspect authored contracts without publishing artifacts.\n  prompt <callable>     Inspect the exact initial agent input without running an agent.\n  emit <target>         Publish target artifacts without an agent; leaves them unverified.\n  generate [callable]   Generate eligible unresolved implementations, not every callable.\n  verify               Run target checks and coverage policy; never invokes an agent.\n  diff                 Inspect semantic changes against the recorded baseline.\n  deploy               Publish a verified snapshot; never generates or re-verifies.\n\nOnly explicit verify certifies a snapshot. Coverage is bounded, not a proof of\nrequirement completeness; inspect unknown/unobserved clauses and policy allowances.\nUse --version and --help from the same compiler executable used for the project.\n";
 
@@ -193,10 +193,11 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
             symbol,
             target,
             agent,
+            model,
             jobs,
             project,
             ..
-        }) => generate_for_target(project, target, symbol, agent, jobs),
+        }) => generate_for_target(project, target, symbol, agent, model, jobs),
         Ok(Command::Prompt {
             symbol,
             project,
@@ -484,6 +485,7 @@ pub enum Command {
         symbol: Option<String>,
         target: TargetLanguage,
         agent: Option<AgentKind>,
+        model: Option<String>,
         jobs: usize,
         project: Option<PathBuf>,
         format: OutputFormat,
@@ -725,6 +727,7 @@ fn parse_emit(values: &[OsString]) -> Result<Command, &'static str> {
 fn parse_generate(values: &[OsString]) -> Result<Command, &'static str> {
     let mut symbol = None;
     let mut agent = None;
+    let mut model = None;
     let mut target = None;
     let mut jobs = None;
     let mut options = ExistingOptions::default();
@@ -739,6 +742,17 @@ fn parse_generate(values: &[OsString]) -> Result<Command, &'static str> {
                     Some("omp") => Some(AgentKind::Omp),
                     _ => return Err("`--agent` requires `codex`, `claude`, or `omp`"),
                 };
+            }
+            Some("--model") if model.is_none() => {
+                index += 1;
+                model = Some(
+                    values
+                        .get(index)
+                        .and_then(|value| value.to_str())
+                        .filter(|value| valid_model(value))
+                        .ok_or("`--model` requires a valid model identifier")?
+                        .to_owned(),
+                );
             }
             Some("--target") if target.is_none() => {
                 index += 1;
@@ -783,10 +797,14 @@ fn parse_generate(values: &[OsString]) -> Result<Command, &'static str> {
     let Some(target) = target else {
         return Err("`generate` requires `--target python|kotlin|dart`");
     };
+    if model.is_some() && agent.is_none() {
+        return Err("`--model` requires `--agent`");
+    }
     Ok(Command::Generate {
         target,
         symbol,
         agent,
+        model,
         jobs: jobs.unwrap_or(1),
         project: options.project,
         format: options.format,
@@ -2425,7 +2443,6 @@ fn add_agent_runs(
         .agent_runs
         .retain(|run| !replaced.contains(run.symbol.as_str()));
     for (symbol, kind, candidate) in runs {
-        let spec = adapter(kind);
         let stream = |bytes: &[u8]| StreamDigest {
             bytes: bytes.len() as u64,
             sha256: format!("sha256:{}", sha256_hex(bytes)),
@@ -2440,7 +2457,7 @@ fn add_agent_runs(
             }
             .to_owned(),
             adapter_version: candidate.adapter_version,
-            argv_template: spec.argv_template.iter().map(ToString::to_string).collect(),
+            argv_template: candidate.argv_template,
             executable: candidate.executable.display().to_string(),
             executable_hash: candidate.executable_hash,
             prompt_hash: candidate.prompt_hash,
@@ -2903,8 +2920,10 @@ fn generate_project(
     project_argument: Option<PathBuf>,
     symbol: Option<String>,
     agent: Option<AgentKind>,
+    model: Option<String>,
     jobs: usize,
 ) -> i32 {
+    let model = model.as_deref();
     let Ok(root) = project_root(project_argument) else {
         return 2;
     };
@@ -3115,7 +3134,7 @@ fn generate_project(
                         None,
                     )?;
                     let mut candidate = run_agent(
-                        agent,
+                        AgentSelection { kind: agent, model },
                         executable.clone(),
                         &temporary.workspace,
                         &temporary.scratch,
@@ -3167,7 +3186,7 @@ fn generate_project(
                                     )
                                 })?;
                                 candidate = run_agent(
-                                    agent,
+                                    AgentSelection { kind: agent, model },
                                     executable.clone(),
                                     &temporary.workspace,
                                     &temporary.scratch,
@@ -4457,6 +4476,7 @@ fn generate_for_target(
     requested: TargetLanguage,
     symbol: Option<String>,
     agent: Option<AgentKind>,
+    model: Option<String>,
     jobs: usize,
 ) -> i32 {
     let actual = match selected_project_target(&project) {
@@ -4467,9 +4487,13 @@ fn generate_for_target(
         return target_mismatch(requested, actual);
     }
     match requested {
-        TargetLanguage::Python => generate_project(project, symbol, agent, jobs),
-        TargetLanguage::Kotlin => crate::kotlin::generation::generate(project, symbol, agent, jobs),
-        TargetLanguage::Dart => crate::dart::generation::generate(project, symbol, agent, jobs),
+        TargetLanguage::Python => generate_project(project, symbol, agent, model, jobs),
+        TargetLanguage::Kotlin => {
+            crate::kotlin::generation::generate(project, symbol, agent, model, jobs)
+        }
+        TargetLanguage::Dart => {
+            crate::dart::generation::generate(project, symbol, agent, model, jobs)
+        }
     }
 }
 

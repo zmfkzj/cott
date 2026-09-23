@@ -218,6 +218,13 @@ class SimulationMode_PrintOnly:
 
 SimulationMode: TypeAlias = Union[SimulationMode_Download, SimulationMode_Simulate, SimulationMode_SkipDownload, SimulationMode_PrintOnly]
 
+"""UpdatePolicy controls whether and from which official yt-dlp release channel the
+portable `yt-dlp` asset is checked or installed. Never performs no I/O. Check
+authenticates and verifies the selected channel's current release metadata and
+compares it with target without writing. Apply checks and, when different,
+installs the channel selected by UpdateRequest.channel. Nightly and Master are
+installing policies which force those respective channels and ignore
+UpdateRequest.channel."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UpdatePolicy_Never:
@@ -267,6 +274,9 @@ class LogLevel_Debug:
 
 LogLevel: TypeAlias = Union[LogLevel_Quiet, LogLevel_Warning, LogLevel_Info, LogLevel_Debug]
 
+"""Search emits yt-dlp's bounded YouTube search prefix, SearchAll emits its
+unbounded prefix, and Url validates then passes through an already formed URL.
+Search limits results; the limit is irrelevant to SearchAll and Url."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ShortcutKind_Search:
@@ -760,6 +770,15 @@ class VideoFilterRequest:
         if not _cott_validated_construction():
             object.__setattr__(self, "include_ads", _cott_validate_abi(self.include_ads, bool, path="$.include_ads"))
 
+"""For Search and SearchAll, query must be non-empty and is preserved byte-for-byte,
+including leading, trailing, or all-whitespace text; it is not stripped or URL
+encoded. Search requires a nonzero limit. For Url, limit is ignored, outer
+whitespace is stripped, and the stripped URL is returned without normalization.
+Valid URL schemes use yt-dlp's url_or_none family: http, https, ftp, ftps,
+rtmp, rtmpe, rtmps, rtmpt, rtmpte, rtmpts, rtmfp, ws, wss, or a
+scheme-relative `//` URL; the
+authority must be non-empty and the URL must contain no whitespace or control
+characters."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ShortcutRequest:
@@ -1121,6 +1140,11 @@ class PostProcessRequest:
         if not _cott_validated_construction():
             object.__setattr__(self, "external_tool", _cott_validate_abi(self.external_tool, Option[ExternalToolRequest], path="$.external_tool"))
 
+"""channel is a case-sensitive official channel name after stripping outer
+whitespace: stable, nightly, or master; an empty channel means stable. It is
+consulted only by Check and Apply. Nightly and Master override it, and Never
+ignores both channel and target. target is the explicit filesystem leaf checked
+or atomically replaced; it is never inferred from the running program."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UpdateRequest:
@@ -1223,8 +1247,230 @@ class ExecutionReport:
         if not _cott_validated_construction():
             object.__setattr__(self, "simulated", _cott_validate_abi(self.simulated, bool, path="$.simulated"))
 
+"""Search returns `ytsearch{limit}:{query}` using the positive base-10 limit.
+SearchAll returns `ytsearchall:{query}` and ignores limit, including zero.
+Url ignores limit, strips only outer whitespace, validates the schemes and
+authority documented by ShortcutRequest, and returns that stripped URL
+unchanged. Do not percent-encode, case-fold, or otherwise normalize output.
+Return InvalidShortcut(value=request.query) for an empty search query, a
+zero Search limit, or an invalid Url."""
+"""Read declarative UTF-8-sig text manifests, never Python modules or executable
+plugins. Each input Path names one regular non-symlink file, not a directory.
+Process input paths in order without recursion or deduplication. The descriptor
+name is path.stem, and its path is the original input Path.
+Strip each line; ignore blank lines and lines beginning "#". Remaining lines
+use TYPE:NAME, splitting at the first colon and stripping NAME. TYPE is exactly
+extractor, postprocessor or post_processor; NAME is nonempty. Append names in
+declaration order to the corresponding list, preserving duplicates.
+At least one extractor or postprocessor declaration and a nonempty stem are
+required. Do not import, inspect, execute or discover code from these names.
+Reject more than 100000 input paths before I/O using paths[100000] as the error
+path. Each file has a bounded 1 MiB read limit and at most 100000 declarations;
+oversized input is rejected, not truncated. Empty input returns an empty list.
+Any missing/nonregular/symlink file, I/O/decoding/format/size/declaration error
+fails the entire call as PluginRejected(path=the offending path, message=a
+fixed descriptive category), with no partial result and no content in errors."""
 """Handle every auth kind; HEAD via Request and urlopen; derive one item from final URL."""
-"""Handle each playlist mode once; apply ranges, bounds, then requested ordering."""
+"""Empty ranges returns items unchanged. Otherwise validate every range: first
+and last are positive inclusive MediaItem.playlist_index values, not list
+positions; first greater than last is InvalidRange. Iterate ranges in request
+order and items in input order, appending matching items for each range.
+Overlapping ranges deliberately repeat occurrences. An out-of-bounds range
+contributes no matches. Preserve every MediaItem field, including playlist_index."""
+"""Reject positive start/end with start greater than end as InvalidRange before
+any selection. Zero start/end means the corresponding bound is absent.
+Call real.yt_dlp.expand_playlist_ranges and propagate InvalidRange.
+Scan the expanded result in its order, keeping no more occurrences of an exact
+MediaItem value (all five fields) than appeared in the original input. Consume
+that occurrence allowance before testing inclusive start/end playlist_index
+bounds; this prevents overlap expansion from exceeding the input length.
+An empty request.items string adds no filter. Otherwise split it on commas,
+strip each token, require a nonempty str.isdecimal() token with integer value
+1..2^64-1, and form a set of requested playlist_index values. Invalid selectors
+return InvalidInput with a fixed descriptive message; ranges, negative indices
+and step syntax in this string are not supported. Filter the selected list by
+membership without changing its current order or renumbering indices.
+Then Single keeps only the first selected item; Playlist and Flat keep all
+descriptor values (Flat does not perform an additional metadata fetch).
+Reverse requests a reversal, Random requests a shuffle. Apply one reversal
+when either mode Reverse or flag reverse is set, then one random.shuffle when
+either mode Random or flag random is set. Both can be requested together in
+that order. Single truncation happens before flags. Preserve duplicates up to
+their original multiplicity and keep item fields unchanged."""
+"""This stage validates a snapshot of already-discovered live-media candidates;
+it is not a downloader, live-status probe or polling loop. MediaItem contains
+no start-time or live-state field, so do not infer such state from its text.
+concurrent_fragments zero returns InvalidInput. Otherwise Default and
+FromStart retain every supplied item unchanged and in order: retrieval from
+the beginning is a downstream transfer choice, not a change to these descriptors.
+Wait additionally requires wait_for_video_ms greater than zero; zero is
+InvalidInput. With a positive wait budget, a nonempty snapshot succeeds
+unchanged; an empty snapshot returns RetryExhausted(attempts=1), referring to
+this one completed discovery snapshot. This function does not sleep, repeat
+discovery or claim a network observation; clock/network are permitted effects,
+not a requirement to invent a request endpoint."""
 """None returns typed List[Str]; otherwise preserve requested language order."""
-"""No kinds returns typed List[ExternalToolRequest]; otherwise preserve kind order."""
+"""Return symbolic output names, not URLs or CLI options. When write is true and
+formats is empty, append item.id + ".thumbnail". When write is true and formats
+is nonempty, append item.id + "." + format for each nonempty format in order.
+Independently, a nonempty convert_format appends item.id + "." + convert_format,
+even when write is false. Finally embed appends "embed:" + item.id.
+Preserve duplicates. No other MediaItem field affects these names."""
+"""Return symbolic output names in this flag order: write_info_json appends
+item.id + ".info.json"; write_description appends item.id + ".description";
+write_comments appends item.id + ".comments.json"; write_playlist_metadata
+appends item.id + ".playlist.json"; embed appends "embed:" + item.id.
+False flags add nothing. No other MediaItem field changes this pure plan."""
+"""Call real.yt_dlp.render_output_path(item, request.template,
+request.missing_placeholder) and propagate its InvalidTemplate unchanged.
+The resulting string is a path, not a URL. Split it on "/" and sanitize each
+ordinary component, leaving empty, "." and ".." components unchanged.
+restrict_filenames replaces every character except ASCII letters/digits and
+".", "_" and "-" with "_". windows_filenames also replaces ASCII controls
+and < > : double-quote backslash | ? * with "_", replaces trailing spaces/dots
+with "_", and prefixes "_" when the case-insensitive stem before the first
+dot is CON, PRN, AUX, NUL, COM1..COM9 or LPT1..LPT9.
+Reject an empty/NUL-containing path or a path without a filename as PathFailure.
+trim_filename_bytes zero means no limit; otherwise trim only the final name
+to that many UTF-8 bytes without splitting a code point. Preserve the last
+extension when it fits while leaving a nonempty stem; otherwise trim the entire
+filename. An empty trimmed filename is PathFailure.
+An absolute rendered path stays absolute. A relative path is joined beneath
+request.output unless it is Path("."), otherwise beneath request.home.
+Parent components are not a confinement check; this pure function does no
+filesystem lookup, symlink resolution or directory creation. Reject a final
+path equal to request.temp. PathFailure carries the offending computed path
+and a fixed descriptive message, not raw exception text."""
+"""This client's archive contains plain media ids, one UTF-8 line per entry,
+not upstream yt-dlp's extractor-key-plus-id format. Read request.path with
+UTF-8-sig decoding, split lines, strip surrounding whitespace and ignore empty
+lines. Preserve nonempty line order and duplicates. Reject more than 100000
+entries and files exceeding 16 MiB rather than truncating.
+Missing/nonregular/symlink files, decoding and actual I/O errors return
+ArchiveFailure(path=request.path, message=a fixed descriptive category).
+break_on_existing and force_write_archive affect the caller's execution policy,
+not this reader. No extractor key is invented and no content is executed."""
+"""Atomically replace the complete archive with plain MediaItem.id values, not
+upstream extractor-key/id pairs. Preserve input order and duplicates; do not
+read or merge a prior archive. Reject more than 100000 items and ids that are
+empty, have surrounding whitespace, or contain CR/LF. No other item field
+contributes to the archive. Encode UTF-8 without BOM with one LF after each
+id; empty input writes an empty file. Reject output exceeding 16 MiB.
+Validate before publication. Refuse symlink path components and nonregular
+existing leaves using descriptor-relative no-follow traversal; do not create
+parent directories. Write an exclusive same-directory temporary file with
+mode 0600, flush/fsync it, atomically replace the target and fsync the parent.
+Clean up temporary files and preserve the prior target on precommit failure.
+Map validation, path, encoding, unsupported safety primitives and genuine I/O
+failures to ArchiveFailure(path=path, message=a fixed descriptive category).
+Never emit a partial archive or infer an extractor from the URL."""
+"""Serialize each MediaItem as a JSON object whose keys occur in exactly this
+order: url, id, title, ext, playlist_index, with their stored values unchanged.
+Use ensure_ascii=False and compact separators (",", ":"). Lines joins the
+objects with a single newline and no trailing newline; empty input is "".
+Single returns one compact JSON array in item order; empty input is "[]".
+Do not invent a playlist envelope, rename keys, or sort/deduplicate items."""
+"""Empty kinds returns an empty success without inspecting external_tool.
+Otherwise external_tool is required: Nothing returns ExternalToolMissing("ffmpeg").
+An empty executable returns ExternalToolMissing(name=the empty executable).
+input or output equal to Path(".") and timeout_ms zero are InvalidInput.
+This is a pure plan for an explicitly supplied command-protocol adapter, not
+raw ffmpeg argv: no executable lookup, subprocess or filesystem work occurs.
+Preserve kind order and duplicates. Produce exactly one request per kind,
+retaining the supplied tool's executable, input, output and timeout_ms, and
+appending these protocol arguments to a copy of its arguments:
+ExtractAudio: ["extract-audio", audio_format], requiring nonempty audio_format.
+RemuxVideo: ["remux-video", video_format], requiring nonempty video_format.
+RecodeVideo: ["recode-video", video_format], requiring nonempty video_format.
+EmbedSubtitle: ["embed-subtitle"]. EmbedThumbnail: ["embed-thumbnail"].
+EmbedMetadata: ["embed-metadata"]. SplitChapters: ["split-chapters"].
+ConvertThumbnails: ["convert-thumbnails", video_format], requiring nonempty video_format.
+SponsorBlock: ["sponsorblock", comma-joined sponsorblock_categories], requiring
+a nonempty list with no empty category. Fixup: ["fixup"].
+Missing required format/categories returns InvalidInput with a descriptive
+fixed message and no partial plan. item does not affect this protocol plan:
+the explicit external tool request already supplies the input and output."""
+"""Return the empty string for Never without inspecting channel. Nightly returns
+`yt-dlp/yt-dlp-nightly-builds` and Master returns
+`yt-dlp/yt-dlp-master-builds`, ignoring channel. For Check and Apply, strip
+outer whitespace from channel: empty or `stable` maps to `yt-dlp/yt-dlp`,
+`nightly` maps to `yt-dlp/yt-dlp-nightly-builds`, and `master` maps to
+`yt-dlp/yt-dlp-master-builds`. Matching is case-sensitive. Reject every other
+value as UpdateUnavailable; never interpret channel as a repository or URL."""
+"""Never returns Ok immediately without validating channel or target and without
+network or filesystem access: success means updates are disabled, not that an
+update was installed. Otherwise call
+real.yt_dlp.resolve_update_repository(request.policy, request.channel).
+
+Use only the selected official repository's latest release assets at fixed
+HTTPS GitHub release URLs: `SHA2-256SUMS` and the platform-independent
+`yt-dlp` zipimport executable documented by upstream. Stable is
+yt-dlp/yt-dlp, nightly is yt-dlp/yt-dlp-nightly-builds, and master is
+yt-dlp/yt-dlp-master-builds. Do not accept a repository, asset name, tag, or
+URL from input. Use certificate- and hostname-verifying TLS, a finite timeout,
+at most five redirects, and permit redirects only to github.com or
+release-assets.githubusercontent.com over HTTPS. Send no credentials.
+
+Read each response incrementally. Cap SHA2-256SUMS at 1 MiB and the yt-dlp
+asset at 64 MiB, rejecting an excessive Content-Length or a cap-plus-one
+byte. Reject HTML masquerading as an asset. Parse exactly one GNU-style
+SHA-256 entry for filename `yt-dlp`; require exactly 64 hexadecimal digits.
+The authenticated HTTPS checksum manifest is mandatory: missing, malformed,
+duplicate, or absent checksums are not optional. Never trust or install bytes
+until their streaming SHA-256 digest matches that entry.
+
+The target is an explicit leaf. Refuse an empty/root/dot leaf, every symlink
+in its path, and an existing non-regular target. Use no-follow, directory-fd
+filesystem operations so validation and use are not separated by a symlink
+race; if the platform cannot provide those guarantees, fail closed. A missing
+target represents an available update. For an existing target, hash it
+incrementally without following links; a digest equal to the release checksum
+means it is current.
+
+Check performs the authenticated manifest fetch and target comparison above,
+then returns Ok whether the target is current or an update is available. It
+never downloads the executable, creates a temporary file, changes metadata,
+or replaces target; Unit intentionally reports only successful completion of
+the read-only check.
+
+Apply, Nightly, and Master return Ok without writing when target already
+matches. Otherwise create an unpredictable exclusive no-follow temporary
+regular file in target's directory, stream the bounded asset into it while
+hashing, verify the digest, flush and fsync it, set its mode, then atomically
+replace target within that same directory and fsync the directory. Preserve
+an existing target's ordinary rwx permission bits while dropping special
+bits; use 0755 for a new target. Recheck the target identity before commit,
+clean up the temporary leaf on every pre-commit failure, and never move or
+truncate the old target before verified replacement. Do not leave a partial
+target or follow a target swapped to a symlink.
+
+Map unknown channels, missing releases/assets or checksum entries, malformed
+metadata, forbidden redirects, oversized/HTML payloads, and integrity
+failures to UpdateUnavailable. Map DNS, timeout, TLS, connection, and
+non-404 HTTP transport failures to NetworkFailure. Map target/path/type,
+permission, local read/write, flush, chmod, fsync, race, cleanup, and atomic
+replacement failures to OutputFailure. Error messages may identify the
+operation, selected channel, HTTP status, and target path, but must never
+include response bodies, redirect query strings, authorization material, or
+raw exception text that may contain secrets."""
+"""arguments excludes argv[0]. Call real.yt_dlp.parse_arguments, then
+real.yt_dlp.execute with an ExecutionRequest whose inputs are the parsed values.
+Every list starts empty, string "", integer 0, boolean false, optional value
+Nothing, and Path "." unless an override below states otherwise.
+Enum choices are: network proxy Direct and geo Default; authentication
+Anonymous; playlist Playlist; live Default; shortcut Url; subtitles None;
+simulation Download; json_mode Lines; update Never; presentation Info;
+workarounds certificate Verify. There are no other inferred CLI defaults.
+Override network.socket_timeout_ms=30000; live.concurrent_fragments=1;
+video_filter.include_ads=true; shortcut.limit=1;
+formats.max_file_size=104857600; output.template="%(title)s.%(ext)s";
+output.temp=Path(".tmp"); output.missing_placeholder="NA";
+fragments.concurrent_fragments=1, buffer_size=65536, chunk_size=104857600,
+retries=3, fragment_retries=3, file_access_retries=3, continue_download=true,
+part_files=true; presentation.progress=true and presentation.color=true.
+On a parsing or execution Err, write a fixed nonsecret "media operation failed"
+message to stderr and exit 1 without subsequent stages. On success, write the
+report's rendered string plus one newline only when it is nonempty, then exit 0.
+Do not run updater or download code outside the declared execute pipeline, and
+do not expand the argument grammar beyond the parse_arguments contract."""
 __all__ = ["ArchiveRequest", "Authentication", "AuthenticationKind", "AuthenticationKind_Anonymous", "AuthenticationKind_BrowserCookies", "AuthenticationKind_Cookies", "AuthenticationKind_Credentials", "AuthenticationKind_Netrc", "CertificatePolicy", "CertificatePolicy_Insecure", "CertificatePolicy_Verify", "CliInput", "DownloadPlan", "ExecutionReport", "ExecutionRequest", "ExternalToolRequest", "ExtractorDescriptor", "ExtractorWorkaround", "ExtractorWorkaround_ForceGeneric", "ExtractorWorkaround_LegacyServerConnect", "ExtractorWorkaround_NoCheckCertificates", "ExtractorWorkaround_NoPlaylist", "FormatContainer", "FormatContainer_Any", "FormatContainer_Audio", "FormatContainer_Best", "FormatContainer_Video", "FormatContainer_Worst", "FormatDescriptor", "FormatRequest", "FragmentPolicy", "GeoBypassMode", "GeoBypassMode_Country", "GeoBypassMode_Default", "GeoBypassMode_Disabled", "GeoBypassMode_IpBlock", "InputKind", "InputKind_Argument", "InputKind_BatchFile", "InputKind_ConfigFile", "JsonMode", "JsonMode_Lines", "JsonMode_Single", "LiveMode", "LiveMode_Default", "LiveMode_FromStart", "LiveMode_Wait", "LiveRequest", "LogLevel", "LogLevel_Debug", "LogLevel_Info", "LogLevel_Quiet", "LogLevel_Warning", "MediaError", "MediaError_ArchiveFailure", "MediaError_AuthenticationFailed", "MediaError_BatchReadFailed", "MediaError_CertificateFailure", "MediaError_CookieFailure", "MediaError_ExternalToolMissing", "MediaError_ExtractorMissing", "MediaError_FormatUnavailable", "MediaError_GeoRestricted", "MediaError_HttpStatus", "MediaError_InvalidConfig", "MediaError_InvalidInput", "MediaError_InvalidRange", "MediaError_InvalidShortcut", "MediaError_InvalidTemplate", "MediaError_LogFailure", "MediaError_NetworkFailure", "MediaError_OutputFailure", "MediaError_PathFailure", "MediaError_PluginRejected", "MediaError_PostProcessFailed", "MediaError_RetryExhausted", "MediaError_SizeLimit", "MediaError_SubtitleUnavailable", "MediaError_UnsupportedUrl", "MediaError_UpdateUnavailable", "MediaError_WorkaroundRejected", "MediaItem", "MetadataRequest", "NetworkPolicy", "OutputRequest", "PlaylistMode", "PlaylistMode_Flat", "PlaylistMode_Playlist", "PlaylistMode_Random", "PlaylistMode_Reverse", "PlaylistMode_Single", "PlaylistRange", "PlaylistRequest", "PluginDescriptor", "PostProcessRequest", "PostProcessorKind", "PostProcessorKind_ConvertThumbnails", "PostProcessorKind_EmbedMetadata", "PostProcessorKind_EmbedSubtitle", "PostProcessorKind_EmbedThumbnail", "PostProcessorKind_ExtractAudio", "PostProcessorKind_Fixup", "PostProcessorKind_RecodeVideo", "PostProcessorKind_RemuxVideo", "PostProcessorKind_SplitChapters", "PostProcessorKind_SponsorBlock", "PresentationRequest", "ProxyMode", "ProxyMode_Direct", "ProxyMode_Http", "ProxyMode_Socks", "ShortcutKind", "ShortcutKind_Search", "ShortcutKind_SearchAll", "ShortcutKind_Url", "ShortcutRequest", "SimulationMode", "SimulationMode_Download", "SimulationMode_PrintOnly", "SimulationMode_Simulate", "SimulationMode_SkipDownload", "SubtitleMode", "SubtitleMode_All", "SubtitleMode_Automatic", "SubtitleMode_Manual", "SubtitleMode_None", "SubtitleRequest", "ThumbnailRequest", "TransferReceipt", "TransferRequest", "UpdatePolicy", "UpdatePolicy_Apply", "UpdatePolicy_Check", "UpdatePolicy_Master", "UpdatePolicy_Never", "UpdatePolicy_Nightly", "UpdateRequest", "VideoFilterRequest", "WorkaroundPolicy"]

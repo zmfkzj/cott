@@ -23,7 +23,7 @@ def validate_access_code(code: str) -> Result[str, AccessCodeError]:
         _expected_error_span = {"end_byte":425,"end_column":56,"end_line":19,"start_byte":374,"start_column":5,"start_line":19}
         _expected_error_clause = "error:0"
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/assignment_rule/validate_access_code.py", "8b8a450163f78215f0ea405c487bc9f05ef2a5fe9d0762bbb70c39fe71283623", "validate_access_code", expected_project_name="assignment-rule", expected_cott_symbol="curriculum.assignment_rule.validate_access_code")
+        _implementation = _cott_load("_cott_impl/curriculum/assignment_rule/validate_access_code.py", "b3082865112621b0c943c6379ee1f8e2eba88465527af38493f843783edcd12d", "validate_access_code", expected_project_name="assignment-rule", expected_cott_symbol="curriculum.assignment_rule.validate_access_code")
         _result = _implementation(code)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

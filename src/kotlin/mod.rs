@@ -16,6 +16,7 @@ pub(crate) mod prompt;
 pub mod provenance;
 pub(crate) mod runner;
 pub mod runtime;
+mod syntax;
 pub(crate) mod types;
 pub(crate) mod verify;
 
