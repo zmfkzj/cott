@@ -1896,7 +1896,7 @@ fn const_numeric(value: &Value, declarations: &BTreeMap<&str, &Value>) -> Result
 fn render_scenario(
     strategy: &ContractTestStrategy,
     declarations: &BTreeMap<&str, &Value>,
-    source: &mut String,
+    output: &mut String,
     main_lines: &mut Vec<String>,
 ) -> Result<bool, String> {
     let scenario = strategy
@@ -1945,6 +1945,9 @@ fn render_scenario(
         }
     }
 
+    // An unsupported fixture, step, or value becomes this scenario's unavailability
+    // reason; a partially written function would break the whole runner instead.
+    let mut source = String::new();
     let function = format!("scenario_{}", safe_name(&scenario.id));
     writeln!(
         source,
@@ -2136,6 +2139,22 @@ fn render_scenario(
                 )?;
                 writeln!(source, "            check({expression}) {{ \"scenario assertion step:{step_id} failed\" }}; _assertions += 1").unwrap();
             }
+            Some("data") => {
+                let binding = step
+                    .get("binding")
+                    .and_then(Value::as_str)
+                    .ok_or("scenario data has no binding")?;
+                let expression = expressions::render_expression(
+                    step.get("expression")
+                        .ok_or("scenario data has no expression")?,
+                )?;
+                writeln!(
+                    source,
+                    "            val {} = {expression}",
+                    quoted(local_name(binding))
+                )
+                .unwrap();
+            }
             Some(other) => return Err(format!("unsupported scenario step `{other}`")),
             None => return Err("scenario step has no kind".to_owned()),
         }
@@ -2169,6 +2188,7 @@ fn render_scenario(
     )
     .unwrap();
     source.push_str("    } finally { deleteTree(_root) }\n}\n");
+    output.push_str(&source);
     main_lines.push(format!("{function}(evidence)"));
     Ok(false)
 }

@@ -34,7 +34,7 @@ meet the request's minimum length."""
         _expected_error_span = {"end_byte":1322,"end_column":124,"end_line":45,"start_byte":1203,"start_column":5,"start_line":45}
         _expected_error_clause = "error:5"
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/contracts_evidence/assess_label.py", "eab0ac0f772807cdec415280c7c1f38d6995f6d55274e0140ba7f2e014ce8cd3", "assess_label", expected_project_name="contracts-evidence", expected_cott_symbol="curriculum.contracts_evidence.assess_label")
+        _implementation = _cott_load("_cott_impl/curriculum/contracts_evidence/assess_label.py", "d6bb6a1c4af2738f192bc18f77a388d0b11d8f754647977f59c1a9b02b3dc372", "assess_label", expected_project_name="contracts-evidence", expected_cott_symbol="curriculum.contracts_evidence.assess_label")
         _result = _implementation(request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

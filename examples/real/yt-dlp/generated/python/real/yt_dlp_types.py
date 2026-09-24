@@ -1254,6 +1254,9 @@ authority documented by ShortcutRequest, and returns that stripped URL
 unchanged. Do not percent-encode, case-fold, or otherwise normalize output.
 Return InvalidShortcut(value=request.query) for an empty search query, a
 zero Search limit, or an invalid Url."""
+"""Return one enabled generic HTTP extractor named "generic", accepting the
+prefixes "http://" and "https://", with requires_login false. This is a
+direct-media client, not a registry of upstream site-specific extractors."""
 """Read declarative UTF-8-sig text manifests, never Python modules or executable
 plugins. Each input Path names one regular non-symlink file, not a directory.
 Process input paths in order without recursion or deduplication. The descriptor
@@ -1453,6 +1456,56 @@ replacement failures to OutputFailure. Error messages may identify the
 operation, selected channel, HTTP status, and target path, but must never
 include response bodies, redirect query strings, authorization material, or
 raw exception text that may contain secrets."""
+"""Execute the direct-media pipeline and return its actual selected items,
+download plan and rendered output, never an invented empty success.
+Propagate each failing stage's declared MediaError unchanged and stop before
+later stages. Do not perform effects outside these stages.
+
+First call real.yt_dlp.apply_update(request.update), then validate_network,
+select_geo_route, resolve_authentication and validate_workarounds on their
+corresponding request values. Use the returned network and authentication
+for extraction. Path(".") in presentation.log_file disables logging;
+otherwise call configure_presentation.
+
+Expand input entries in order. Argument contributes its value. ConfigFile
+calls load_config(Path(value)); its returned Argument entries contribute
+values and BatchFile entries call load_batch_urls with comment prefixes
+List("#"). Reject a nested ConfigFile as InvalidInput rather than recursing.
+BatchFile calls load_batch_urls directly. Pass the resulting Argument
+entries to resolve_inputs with an empty config list. If shortcut.query is
+nonempty, append build_shortcut_url(request.shortcut)'s successful value.
+Require at least one resulting URL, otherwise return InvalidInput.
+Discover descriptors through discover_extractors. For each URL in order
+call choose_extractor and extract_media; concatenate their actual items.
+Apply select_playlist, then resolve_live_media, then filter_video to these
+items using their respective request settings.
+
+Path(".") in archive.path disables archive reading and writing and supplies
+an empty archive. Otherwise call read_download_archive; do not turn its
+failure into an empty success. Call plan_downloads with the selected items,
+archive entries and break_on_existing. Preserve the returned plan unchanged.
+
+Only SimulationMode.Download transfers media. For each planned item in
+order, resolve_output_path with request.output, construct TransferRequest
+with the item's URL, that path, simulate false and formats.max_file_size,
+then call plan_fragments and transfer_fragments using request.fragments.
+On successful transfer call plan_post_processing then run_post_processing
+when kinds is nonempty. Do not use these symbolic plans as raw ffmpeg argv.
+Only after all planned transfers and requested post-processing succeed,
+write_download_archive when the archive is enabled and either downloads
+occurred or force_write_archive is true. Supply the successfully planned
+items; this writer replaces rather than merges an earlier archive.
+Simulate, SkipDownload and PrintOnly perform discovery, selection and
+planning but no media transfer, post-processing or archive write.
+
+Render the selected items through render_items with request.json_mode,
+including when the archive removed every item from the download plan.
+Return ExecutionReport(selected=the selected items, downloads=the actual
+plan, rendered=that string, simulated=simulation is not Download).
+This pipeline uses the existing direct-media descriptor model: it does not
+invent format/subtitle/thumbnail discovery or metadata that MediaItem does
+not contain. Those independently declared planning APIs are not silently
+represented as completed work by this report."""
 """arguments excludes argv[0]. Call real.yt_dlp.parse_arguments, then
 real.yt_dlp.execute with an ExecutionRequest whose inputs are the parsed values.
 Every list starts empty, string "", integer 0, boolean false, optional value

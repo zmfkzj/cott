@@ -742,7 +742,7 @@ fn validate_declaration(
     let Some(kind) = object.get("kind").and_then(Value::as_str) else {
         return;
     };
-    if !matches!(kind, "external_type" | "scenario") {
+    if !matches!(kind, "external_type" | "scenario" | "requirement") {
         validate_generic_parameters(object, module, diagnostics);
     }
     match kind {
@@ -1163,7 +1163,8 @@ fn validate_declaration(
                 validate_value(value, module, diagnostics);
             }
         }
-        "rule" | "scenario" => {}
+        // Requirements are normative report metadata with no Python ABI symbol.
+        "rule" | "scenario" | "requirement" => {}
         "function" => {
             match required_string(object, "callable_kind", module, diagnostics).as_deref() {
                 Some("sync" | "async") => {}
@@ -2007,6 +2008,23 @@ fn render_types(
         "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport dataclasses as _dataclasses\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import Annotated, Any, Final, ForwardRef, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, final, runtime_checkable\n\nfrom cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_descending_by, _cott_ends_with, _cott_euclidean_mod, _cott_normalize_f32, _cott_starts_with, _cott_unique_by, _cott_validate_abi, _cott_validated_construction\n",
     );
     out.push_str("from cott_runtime import _cott_contract_condition\n");
+    // The four legacy invariant helpers are always imported above; later
+    // closed intrinsics are imported only where a struct/newtype uses them.
+    render_intrinsic_helper_imports(
+        &mut out,
+        module.declarations.iter().filter(|declaration| {
+            matches!(
+                declaration.get("kind").and_then(Value::as_str),
+                Some("struct" | "newtype")
+            )
+        }),
+        &[
+            "_cott_descending_by",
+            "_cott_ends_with",
+            "_cott_starts_with",
+            "_cott_unique_by",
+        ],
+    );
     for (source, name, alias) in external_imports(module, external_types) {
         writeln!(out, "from {source} import {name} as {alias}").unwrap();
     }
@@ -2063,7 +2081,7 @@ fn render_types(
         };
         if matches!(
             object.get("kind").and_then(Value::as_str),
-            Some("trait" | "function" | "scenario")
+            Some("trait" | "function" | "scenario" | "requirement")
         ) {
             continue;
         }
@@ -2084,7 +2102,7 @@ fn render_types(
     for declaration in &module.declarations {
         if matches!(
             declaration.get("kind").and_then(Value::as_str),
-            Some("trait" | "scenario")
+            Some("trait" | "scenario" | "requirement")
         ) {
             continue;
         }
@@ -3707,6 +3725,16 @@ fn render_facade(
         "from __future__ import annotations\n\nfrom collections.abc import Generator, Iterator\nimport asyncio as _asyncio\nimport dataclasses as _dataclasses\nimport threading as _threading\nfrom pathlib import Path\nfrom typing import Any, Literal, Never, Protocol, TypeVar, final\n\nfrom cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol\n",
     );
     out.push_str("from cott_runtime import _cott_contract_condition\n");
+    render_intrinsic_helper_imports(
+        &mut out,
+        module.declarations.iter().filter(|declaration| {
+            matches!(
+                declaration.get("kind").and_then(Value::as_str),
+                Some("function" | "impl")
+            )
+        }),
+        &[],
+    );
     let names = exported_names(module);
     let mut local_imports = type_exported_names(module);
     local_imports.extend(function_bound_protocol_names(module));
@@ -4978,9 +5006,12 @@ fn render_preconditions(
         )
         .unwrap();
     }
-    if clauses
-        .iter()
-        .any(|clause| clause.get("kind").and_then(Value::as_str) == Some("error"))
+    // Complete errors keep the check even with zero conditional clauses: then
+    // no requires-valid input may return `Err`.
+    if crate::ir::complete_errors(function) == Ok(true)
+        || clauses
+            .iter()
+            .any(|clause| clause.get("kind").and_then(Value::as_str) == Some("error"))
     {
         out.push_str("    _expected_error = None\n    _expected_error_span = None\n    _expected_error_clause = None\n");
         for clause in clauses {
@@ -5065,7 +5096,7 @@ fn render_postconditions(
         .iter()
         .filter(|clause| clause.get("kind").and_then(Value::as_str) == Some("error"))
         .collect::<Vec<_>>();
-    if !errors.is_empty() {
+    if !errors.is_empty() || crate::ir::complete_errors(function) == Ok(true) {
         let unconditional = errors
             .iter()
             .filter(|clause| clause.get("guard").is_none_or(Value::is_null))
@@ -5137,6 +5168,73 @@ fn render_postconditions(
             "    if not ({condition}):\n        raise CottContractViolation(\"ensures clause failed\", symbol={}, clause={}, phase=\"ensures\", span={span}, expected=\"true\", actual=\"false\")",
             json_string(symbol),
             json_string(&label),
+        )
+        .unwrap();
+    }
+}
+
+/// The `cott_runtime` helper implementing a closed contract intrinsic.
+/// `contains` renders as native membership and has none.
+fn python_intrinsic_helper(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "starts_with" => "_cott_starts_with",
+        "ends_with" => "_cott_ends_with",
+        "unique_by" => "_cott_unique_by",
+        "descending_by" => "_cott_descending_by",
+        "any_blank_by" => "_cott_any_blank_by",
+        "unknown_dependency_by" => "_cott_unknown_dependency_by",
+        "self_dependency_by" => "_cott_self_dependency_by",
+        "cyclic_by" => "_cott_cyclic_by",
+        "permutation_by" => "_cott_permutation_by",
+        "dependency_ordered_by" => "_cott_dependency_ordered_by",
+        _ => return None,
+    })
+}
+
+/// Import exactly the intrinsic helpers the rendered contracts reference, so
+/// modules without such contracts keep byte-identical imports.
+fn render_intrinsic_helper_imports<'a>(
+    out: &mut String,
+    declarations: impl IntoIterator<Item = &'a Value>,
+    already_imported: &[&str],
+) {
+    fn collect(value: &Value, helpers: &mut BTreeSet<&'static str>) {
+        match value {
+            Value::Array(values) => {
+                for value in values {
+                    collect(value, helpers);
+                }
+            }
+            Value::Object(object) => match object.get("kind").and_then(Value::as_str) {
+                // Json literal payloads are user data, never contract syntax.
+                Some("json") => {}
+                kind => {
+                    if kind == Some("intrinsic")
+                        && let Some(helper) = object
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .and_then(python_intrinsic_helper)
+                    {
+                        helpers.insert(helper);
+                    }
+                    for value in object.values() {
+                        collect(value, helpers);
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
+    let mut helpers = BTreeSet::new();
+    for declaration in declarations {
+        collect(declaration, &mut helpers);
+    }
+    helpers.retain(|helper| !already_imported.contains(helper));
+    if !helpers.is_empty() {
+        writeln!(
+            out,
+            "from cott_runtime import {}",
+            helpers.into_iter().collect::<Vec<_>>().join(", ")
         )
         .unwrap();
     }
@@ -5265,31 +5363,41 @@ fn render_contract_expression(expression: &Value) -> String {
                 .unwrap_or_default();
             let first = arguments.first().cloned().unwrap_or_default();
             let second = arguments.get(1).cloned().unwrap_or_default();
-            match expression.get("name").and_then(Value::as_str) {
-                Some("starts_with") => format!("_cott_starts_with({first}, {second})"),
-                Some("ends_with") => format!("_cott_ends_with({first}, {second})"),
-                Some("contains") => format!("({second} in {first})"),
-                Some("unique_by") => format!(
-                    "_cott_unique_by({first}, {})",
-                    json_string(local_name(
-                        expression
-                            .get("selector")
-                            .and_then(Value::as_object)
-                            .and_then(|selector| selector.get("field"))
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                    ))
+            let field = |key: &str| {
+                json_string(local_name(
+                    expression
+                        .get(key)
+                        .and_then(Value::as_object)
+                        .and_then(|selector| selector.get("field"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                ))
+            };
+            let name = expression.get("name").and_then(Value::as_str);
+            let helper = name.and_then(python_intrinsic_helper);
+            match (name, helper) {
+                (Some("contains"), _) => format!("({second} in {first})"),
+                (Some("starts_with" | "ends_with"), Some(helper)) => {
+                    format!("{helper}({first}, {second})")
+                }
+                (Some("unique_by" | "descending_by" | "any_blank_by"), Some(helper)) => {
+                    format!("{helper}({first}, {})", field("selector"))
+                }
+                (
+                    Some("unknown_dependency_by" | "self_dependency_by" | "cyclic_by"),
+                    Some(helper),
+                ) => format!(
+                    "{helper}({first}, {}, {})",
+                    field("selector"),
+                    field("dependencies")
                 ),
-                Some("descending_by") => format!(
-                    "_cott_descending_by({first}, {})",
-                    json_string(local_name(
-                        expression
-                            .get("selector")
-                            .and_then(Value::as_object)
-                            .and_then(|selector| selector.get("field"))
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                    ))
+                (Some("permutation_by"), Some(helper)) => {
+                    format!("{helper}({first}, {second}, {})", field("selector"))
+                }
+                (Some("dependency_ordered_by"), Some(helper)) => format!(
+                    "{helper}({first}, {second}, {}, {})",
+                    field("selector"),
+                    field("dependencies")
                 ),
                 _ => "False".to_owned(),
             }

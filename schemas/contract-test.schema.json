@@ -122,7 +122,7 @@
       "required": ["kind", "step_id", "span"],
       "additionalProperties": false,
       "properties": {
-        "kind": {"enum": ["call", "spawn", "await", "cancel", "tick", "assert"]},
+        "kind": {"enum": ["call", "spawn", "await", "cancel", "tick", "assert", "data"]},
         "step_id": {"type": "integer", "minimum": 0, "maximum": 63},
         "span": {"$ref": "#/$defs/span"},
         "arguments": {"type": "array", "items": {"$ref": "#/$defs/expression"}},
@@ -141,7 +141,8 @@
         {"if": {"properties": {"kind": {"const": "spawn"}}, "required": ["kind"]}, "then": {"required": ["arguments", "parameters", "return_type", "target", "worker"]}},
         {"if": {"properties": {"kind": {"const": "await"}}, "required": ["kind"]}, "then": {"required": ["cancelled", "result", "return_type", "worker"]}},
         {"if": {"properties": {"kind": {"const": "cancel"}}, "required": ["kind"]}, "then": {"required": ["worker"]}},
-        {"if": {"properties": {"kind": {"const": "assert"}}, "required": ["kind"]}, "then": {"required": ["expression"]}}
+        {"if": {"properties": {"kind": {"const": "assert"}}, "required": ["kind"]}, "then": {"required": ["expression"]}},
+        {"if": {"properties": {"kind": {"const": "data"}}, "required": ["kind"]}, "then": {"required": ["binding", "expression"]}}
       ]
     },
     "limits": {

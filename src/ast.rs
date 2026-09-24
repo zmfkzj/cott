@@ -36,6 +36,8 @@ pub enum Declaration {
     Resource(ResourceDecl),
     Rule(RuleDecl),
     Scenario(Scenario),
+    TestData(TestDataDecl),
+    Requirement(RequirementDecl),
 }
 
 impl Declaration {
@@ -54,6 +56,8 @@ impl Declaration {
             Self::Resource(value) => &value.span,
             Self::Rule(value) => &value.span,
             Self::Scenario(value) => &value.span,
+            Self::TestData(value) => &value.span,
+            Self::Requirement(value) => &value.span,
         }
     }
 }
@@ -275,6 +279,50 @@ pub struct Scenario {
     pub steps: Vec<ScenarioStep>,
 }
 
+/// Module-local reusable scenario test data. It is compile-time only: every
+/// scenario use inlines the typed value, so it is never a public or IR declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TestDataDecl {
+    pub span: Span,
+    pub name: String,
+    pub name_span: Span,
+    pub ty: Type,
+    pub value: Expr,
+}
+
+/// A normative requirement: a stable identity and text tied to one free function.
+/// `checked_by` links are declared evidence references only, never evidence themselves.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RequirementDecl {
+    pub span: Span,
+    pub annotations: Vec<Annotation>,
+    pub doc: Option<DocBlock>,
+    pub name: String,
+    pub name_span: Span,
+    pub callable: QualifiedName,
+    pub statement: RequirementText,
+    pub checked_by: Vec<RequirementCheck>,
+    pub assumptions: Vec<RequirementText>,
+    pub waivers: Vec<RequirementText>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RequirementText {
+    pub span: Span,
+    pub text: String,
+    /// Preserves triple-quoted spelling for the formatter.
+    pub triple: bool,
+}
+
+/// `checked_by <scenario>` or `checked_by <scenario> assert <N>`, where `N` is the 1-based
+/// ordinal of an `assert` step in that scenario.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RequirementCheck {
+    pub span: Span,
+    pub scenario: QualifiedName,
+    pub assertion: Option<ScenarioInteger>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScenarioFixture {
     pub span: Span,
@@ -422,6 +470,13 @@ pub enum ScenarioStep {
     Assert {
         span: Span,
         expression: Expr,
+    },
+    /// Compile-time-only scenario-local test data; inlined at each use.
+    Data {
+        span: Span,
+        binding: ScenarioBinding,
+        ty: Type,
+        value: Expr,
     },
 }
 
@@ -659,6 +714,9 @@ pub enum ClauseKind {
         source: Expr,
         except: Vec<PreservedFieldExclusion>,
     },
+    /// `errors complete`: every error clause is conditional and, on
+    /// requires-valid input where none applies, the function returns `Ok`.
+    ErrorsComplete,
     Error {
         error: QualifiedName,
         guard: Option<MatchGuard>,
@@ -762,6 +820,28 @@ pub enum ExprKind {
     OldStateField {
         field: ModifiedField,
     },
+    /// Scenario-only closed value constructor: struct, newtype, enum payload
+    /// variant, `Option`/`Result` payload variant, or standard container.
+    Construct {
+        path: QualifiedName,
+        arguments: Vec<ConstructArgument>,
+    },
+    /// Scenario-only guarded assertion: the pattern must match and, when
+    /// present, the condition must hold with clause-local bindings.
+    Match {
+        scrutinee: Box<Expr>,
+        pattern: Pattern,
+        condition: Option<Box<Expr>>,
+    },
+}
+
+/// One constructor argument. `label` is a field name for nominal constructors
+/// and a key expression for `Map(...)` entries; positional arguments have none.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConstructArgument {
+    pub span: Span,
+    pub label: Option<Box<Expr>>,
+    pub value: Expr,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -771,6 +851,31 @@ pub enum Intrinsic {
     Contains,
     UniqueBy,
     DescendingBy,
+    AnyBlankBy,
+    UnknownDependencyBy,
+    SelfDependencyBy,
+    CyclicBy,
+    PermutationBy,
+    DependencyOrderedBy,
+}
+
+impl Intrinsic {
+    /// Exact source argument count; `Type.field` selectors are arguments.
+    pub const fn arity(self) -> usize {
+        match self {
+            Self::StartsWith
+            | Self::EndsWith
+            | Self::Contains
+            | Self::UniqueBy
+            | Self::DescendingBy
+            | Self::AnyBlankBy => 2,
+            Self::UnknownDependencyBy
+            | Self::SelfDependencyBy
+            | Self::CyclicBy
+            | Self::PermutationBy => 3,
+            Self::DependencyOrderedBy => 4,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

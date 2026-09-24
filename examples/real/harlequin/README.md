@@ -11,9 +11,7 @@ and S3 references. They also cover bounded SQL execution, catalog refresh,
 autocomplete and search, themes, keymaps, table and vertical views, and CSV,
 TSV, JSON, Markdown, and SQL exports.
 
-Implementations are generated from the contracts; the sole manifest-owned binding
-is the interactive host boundary. The generated facade remains the only public
-import path; `harlequin_cli.py` adapts process arguments to `real.harlequin.core.run`.
+All implementations, including the interactive `core.run` host boundary, are generated from the contracts; the manifest selects no bindings. The generated facade remains the only public import path; `harlequin_cli.py` adapts process arguments to `real.harlequin.core.run`.
 
 `core.connect` returns a live `Connection.session` handle, not a connection-id
 registry entry. `execute_statements` borrows that retained SDK session.

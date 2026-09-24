@@ -998,10 +998,10 @@ with _runtime._cott_fixture_activate(
     failures={{"clock.read": {{"occurrence": 2, "error": "clock stopped"}}}},
     transcript_limit=16,
 ):
-    _runtime._cott_fixture_write("nested/value", b"old")
+    _runtime._cott_fixture_write(Path("nested/value"), b"old")
     assert _runtime._cott_fixture_read("nested/value") == b"old"
-    _runtime._cott_fixture_replace("nested/value", b"new")
-    assert _runtime._cott_fixture_read("nested/value") == b"new"
+    _runtime._cott_fixture_replace(Path("nested/value"), b"new")
+    assert _runtime._cott_fixture_read(Path("nested/value")) == b"new"
     assert _runtime._cott_fixture_now() == 17
     try:
         _runtime._cott_fixture_now()
@@ -1012,6 +1012,13 @@ with _runtime._cott_fixture_activate(
     _events = _runtime._cott_fixture_transcript()
     assert [event["kind"] for event in _events] == ["filesystem.write", "filesystem.read", "filesystem.replace", "filesystem.read", "clock.read", "failure"]
     assert all(str(_fixture_root) not in repr(event) for event in _events)
+    for unsafe_path in (Path("../escape"), Path("/etc/passwd")):
+        try:
+            _runtime._cott_fixture_read(unsafe_path)
+        except CottContractViolation as error:
+            assert error.phase == "fixture"
+        else:
+            raise AssertionError("Path ABI bypassed fixture confinement")
 with _runtime._cott_fixture_activate(
     _runtime._cott_fixture_runner_token(),
     root=_fixture_root,

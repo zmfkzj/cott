@@ -9,9 +9,13 @@ Validate build-stage dependencies and turn them into an executable artifact-pipe
 - Empty and duplicate stage names are rejected before unknown dependencies, self-dependencies, and cycles. Ready stages are selected lexicographically.
 
 ## Independent acceptance
-`check_semantics.py` is an executable corpus with its own permutation oracle. The Cott DSL cannot state graph-valued scenario inputs or universal graph conditions, so this script is the acceptance check. It is not `cott verify`, not compiler proof, and not `semantic_coverage`.
+The Cott contract now opts into `errors complete`: normal inputs must succeed, and conditional errors retain their declared priority. Closed predicates check name multiplicities, dependency ordering, and graph errors. Nested-value scenarios exercise a valid chain, a cycle, and overlapping error conditions without public builders. `check_semantics.py` remains an independent permutation oracle for the stronger documented lexicographic tie-break; it is not `cott verify`, not compiler proof, and not `semantic_coverage`.
 
 Scope is finite: every labeled graph on at most 3 nodes, plus explicit larger DAG and error-precedence cases. Ready-node ties are the lexicographically smallest valid topological order.
+
+Blank names use the fixed 25-character Unicode `White_Space` set, not the target's default `strip`/`trim`. In particular U+FEFF and U+001C are valid nonblank names. The independent corpus includes these cross-target boundary cases.
+
+`cott requirements --project . --format json` separates declared `checked_by` links, actual bounded observations and unverified requirements. A passing linked scenario is evidence, not a universal proof of the requirement.
 
 ```bash
 .venv/bin/python check_semantics.py --project .

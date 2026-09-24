@@ -897,9 +897,25 @@ fn run_contract_runner(source: &str, request: Value) -> Option<std::process::Out
 }
 
 fn run_contract_runner_files(
-    mut files: std::collections::BTreeMap<PathBuf, Vec<u8>>,
+    files: std::collections::BTreeMap<PathBuf, Vec<u8>>,
     python_dir: &Path,
     request: Value,
+) -> Option<std::process::Output> {
+    run_python_fixture(
+        files,
+        python_dir,
+        include_str!("../src/contract_runner.py"),
+        request.to_string(),
+    )
+}
+
+/// Run `program` against emitted fixture files with the executing interpreter
+/// recorded in the generation record, so runtime provenance checks stay active.
+fn run_python_fixture(
+    mut files: std::collections::BTreeMap<PathBuf, Vec<u8>>,
+    python_dir: &Path,
+    program: &str,
+    stdin: String,
 ) -> Option<std::process::Output> {
     if !Command::new("python3")
         .arg("--version")
@@ -956,7 +972,7 @@ print(json.dumps({"cache_tag":sys.implementation.cache_tag,"content_hash":"sha25
         fs::write(path, bytes).expect("runtime file");
     }
     let mut child = Command::new("python3")
-        .args(["-c", include_str!("../src/contract_runner.py")])
+        .args(["-c", program])
         .current_dir(root.join(python_dir))
         .env("PYTHONPATH", root.join(python_dir))
         .env("PYTHONDONTWRITEBYTECODE", "1")
@@ -970,7 +986,7 @@ print(json.dumps({"cache_tag":sys.implementation.cache_tag,"content_hash":"sha25
         .stdin
         .take()
         .expect("contract runner stdin")
-        .write_all(request.to_string().as_bytes())
+        .write_all(stdin.as_bytes())
         .expect("contract runner request");
     let output = child
         .wait_with_output()
@@ -987,6 +1003,32 @@ fn run_emitted_contract_runner(
     implementations: &[(&str, &str)],
     symbols: &[&str],
 ) -> Option<std::process::Output> {
+    let (files, ir) = emit_python_fixture(source, implementations);
+    let strategies = derive_strategies(&ir, &VerificationConfig::default())
+        .expect("fixture strategies")
+        .into_iter()
+        .filter(|strategy| symbols.contains(&strategy.symbol.as_str()))
+        .collect::<Vec<_>>();
+    let modules = ir
+        .modules
+        .iter()
+        .map(|module| serde_json::from_slice::<Value>(&module.bytes).unwrap())
+        .collect::<Vec<_>>();
+    run_contract_runner_files(
+        files,
+        Path::new("python"),
+        json!({"modules": modules, "runtime_validation": "boundary", "strategies": strategies}),
+    )
+}
+
+/// Emit boundary-mode Python facades with manifest-bound fixture implementations.
+fn emit_python_fixture(
+    source: &str,
+    implementations: &[(&str, &str)],
+) -> (
+    std::collections::BTreeMap<PathBuf, Vec<u8>>,
+    cott::ir::CanonicalIr,
+) {
     use cott::binding::{BindingOwner, ResolvedBinding};
     use cott::compiler::{SourceFile, parse_project};
     use cott::python::artifact_plan::{PythonArtifactPlan, PythonCallableKind};
@@ -1063,21 +1105,7 @@ fn run_emitted_contract_runner(
         .collect::<Vec<_>>();
     let emission =
         cott::python_emit::emit(&config, &plan, &ir, &bindings).expect("fixture emission");
-    let strategies = derive_strategies(&ir, &VerificationConfig::default())
-        .expect("fixture strategies")
-        .into_iter()
-        .filter(|strategy| symbols.contains(&strategy.symbol.as_str()))
-        .collect::<Vec<_>>();
-    let modules = ir
-        .modules
-        .iter()
-        .map(|module| serde_json::from_slice::<Value>(&module.bytes).unwrap())
-        .collect::<Vec<_>>();
-    run_contract_runner_files(
-        emission.files,
-        Path::new("python"),
-        json!({"modules": modules, "runtime_validation": "boundary", "strategies": strategies}),
-    )
+    (emission.files, ir)
 }
 
 fn runner_strategy(symbol: &str, clause_ids: Vec<String>) -> Value {
@@ -2408,4 +2436,396 @@ fn contract_runner_awaits_async_functions_and_detects_task_leaks() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+const TOPOLOGICAL_CONTRACT: &str = r#"module demo
+
+struct BuildStep:
+    name: Str
+    needs: Set[Str]
+
+enum PipelineError:
+    BlankStepName
+    DuplicateStep
+    UnknownDependency
+    SelfDependency
+    Cycle
+
+fn order_steps(steps: List[BuildStep]) -> Result[List[Str], PipelineError]:
+    ensures Result.Ok(order) => permutation_by(order, steps, BuildStep.name)
+    ensures Result.Ok(order) => dependency_ordered_by(order, steps, BuildStep.name, BuildStep.needs)
+
+    errors complete
+    error PipelineError.BlankStepName when any_blank_by(steps, BuildStep.name)
+    error PipelineError.DuplicateStep when not unique_by(steps, BuildStep.name)
+    error PipelineError.UnknownDependency when unknown_dependency_by(steps, BuildStep.name, BuildStep.needs)
+    error PipelineError.SelfDependency when self_dependency_by(steps, BuildStep.name, BuildStep.needs)
+    error PipelineError.Cycle when cyclic_by(steps, BuildStep.name, BuildStep.needs)
+"#;
+
+/// A typed, deterministic Kahn implementation. `order` and `check_first`
+/// let deliberately wrong fixtures keep the exact valid signature.
+fn topological_implementation(check_first: &str, finish: &str) -> String {
+    format!(
+        r#"from cott_runtime import CottList, Err, Ok, Result
+from demo_types import BuildStep, PipelineError, PipelineError_BlankStepName, PipelineError_Cycle, PipelineError_DuplicateStep, PipelineError_SelfDependency, PipelineError_UnknownDependency
+
+_WHITE_SPACE = frozenset("\t\n\x0b\x0c\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000")
+
+
+def order_steps(steps: CottList[BuildStep]) -> Result[CottList[str], PipelineError]:
+    names = [step.name for step in steps]
+    known = set(names)
+    unknown = any(need not in known for step in steps for need in step.needs)
+{check_first}    if any(all(character in _WHITE_SPACE for character in name) for name in names):
+        return Err(error=PipelineError_BlankStepName())
+    if len(known) != len(names):
+        return Err(error=PipelineError_DuplicateStep())
+    if unknown:
+        return Err(error=PipelineError_UnknownDependency())
+    if any(step.name in step.needs for step in steps):
+        return Err(error=PipelineError_SelfDependency())
+    remaining = {{step.name: set(step.needs) for step in steps}}
+    order: list[str] = []
+    while remaining:
+        ready = sorted(name for name, needs in remaining.items() if not needs)
+        if not ready:
+            return Err(error=PipelineError_Cycle())
+        order.append(ready[0])
+        del remaining[ready[0]]
+        for needs in remaining.values():
+            needs.discard(ready[0])
+{finish}    return Ok(value=CottList(values=order))
+"#
+    )
+}
+
+const TOPOLOGICAL_DRIVER: &str = r#"import json
+import sys
+
+from cott_runtime import CottContractViolation, CottList, CottSet, Ok
+import demo
+from demo_types import BuildStep
+
+
+def run(case):
+    steps = CottList(values=[BuildStep(name=name, needs=CottSet(values=needs)) for name, needs in case])
+    try:
+        result = demo.order_steps(steps)
+    except CottContractViolation as error:
+        return {"violation": [error.phase, error.clause]}
+    if type(result) is Ok:
+        return {"ok": list(result.value)}
+    return {"err": type(result.error).__name__}
+
+
+print(json.dumps([run(case) for case in json.loads(sys.stdin.read())]))
+"#;
+
+fn topological_cases() -> Value {
+    json!([
+        [],
+        [["b", ["a"]], ["a", []]],
+        [["c", []], ["a", ["c"]], ["b", ["c"]]],
+        [[" \u{3000}", []]],
+        [["\u{feff}", []]],
+        [["a", []], ["a", ["zz"]]],
+        [["a", ["zz"]], ["b", ["b"]]],
+        [["a", ["a"]], ["b", ["c"]], ["c", ["b"]]],
+        [["a", ["b"]], ["b", ["a"]]]
+    ])
+}
+
+fn run_topological_driver(implementation: &str) -> Option<Value> {
+    let (files, _) = emit_python_fixture(
+        TOPOLOGICAL_CONTRACT,
+        &[("demo.order_steps", implementation)],
+    );
+    let output = run_python_fixture(
+        files,
+        Path::new("python"),
+        TOPOLOGICAL_DRIVER,
+        topological_cases().to_string(),
+    )?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Some(serde_json::from_slice(&output.stdout).expect("driver JSON"))
+}
+
+#[test]
+fn complete_errors_topological_contract_accepts_ordering_precedence_and_unicode_blanks() {
+    let Some(outcomes) = run_topological_driver(&topological_implementation("", "")) else {
+        return;
+    };
+    assert_eq!(
+        outcomes,
+        json!([
+            {"ok": []},
+            {"ok": ["a", "b"]},
+            {"ok": ["c", "a", "b"]},
+            {"err": "PipelineError_BlankStepName"},
+            // U+FEFF is not Unicode White_Space in any target.
+            {"ok": ["\u{feff}"]},
+            {"err": "PipelineError_DuplicateStep"},
+            {"err": "PipelineError_UnknownDependency"},
+            {"err": "PipelineError_SelfDependency"},
+            {"err": "PipelineError_Cycle"}
+        ])
+    );
+}
+
+#[test]
+fn complete_errors_topological_contract_rejects_wrong_typed_implementations_at_runtime() {
+    let cases = [
+        // Always an error, even for valid normal input.
+        (
+            topological_implementation("    return Err(error=PipelineError_Cycle())\n", ""),
+            1,
+            json!({"violation": ["error", null]}),
+        ),
+        // Valid shape, wrong multiplicity.
+        (
+            topological_implementation("", "    order = order[:1] + order\n"),
+            1,
+            json!({"violation": ["ensures", "ensures:0"]}),
+        ),
+        // Valid shape and multiset, dependencies after dependents.
+        (
+            topological_implementation("", "    order.reverse()\n"),
+            2,
+            json!({"violation": ["ensures", "ensures:1"]}),
+        ),
+        // Dependency errors checked before duplicate names.
+        (
+            topological_implementation(
+                "    if unknown:\n        return Err(error=PipelineError_UnknownDependency())\n",
+                "",
+            ),
+            5,
+            json!({"violation": ["error", "error:4"]}),
+        ),
+    ];
+    for (implementation, case, expected) in cases {
+        let Some(outcomes) = run_topological_driver(&implementation) else {
+            return;
+        };
+        assert_eq!(outcomes[case], expected, "{implementation}");
+    }
+}
+
+#[test]
+fn complete_errors_is_opt_in_and_rejects_err_without_conditional_clauses() {
+    let implementation = "from cott_runtime import Err, Result\nfrom demo_types import Failure_Bad\n\ndef echo(value: str) -> Result[str, Failure_Bad]:\n    return Err(error=Failure_Bad())\n";
+    let default = "module demo\n\nenum Failure:\n    Bad\n\nfn echo(value: Str) -> Result[Str, Failure]:\n    ensures Result.Ok(output) => output == value\n";
+    let Some(output) =
+        run_emitted_contract_runner(default, &[("demo.echo", implementation)], &["demo.echo"])
+    else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "the default keeps Err unchecked without error clauses: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    assert_eq!(report["contracts"][0]["evidence"][0]["grade"], "unobserved");
+
+    let complete = default.replace("value\n", "value\n\n    errors complete\n");
+    let Some(output) =
+        run_emitted_contract_runner(&complete, &[("demo.echo", implementation)], &["demo.echo"])
+    else {
+        return;
+    };
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("CottContractViolation") && error.contains("returned error is not allowed"),
+        "{error}"
+    );
+}
+
+#[test]
+fn complete_errors_runner_reports_success_only_from_exercised_normal_cases() {
+    let Some(output) = run_emitted_contract_runner(
+        TOPOLOGICAL_CONTRACT,
+        &[("demo.order_steps", &topological_implementation("", ""))],
+        &["demo.order_steps"],
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("contract report JSON");
+    for success in &report["contracts"].as_array().expect("contracts")[..2] {
+        let evidence = &success["evidence"][0];
+        assert_eq!(evidence["grade"], "test observation");
+        // Only generated normal inputs (no conditional applies) reach `Ok`.
+        assert!(
+            evidence["applicable_cases"]
+                .as_u64()
+                .is_some_and(|cases| cases >= 1)
+        );
+        assert_eq!(evidence["applicable_cases"], evidence["satisfied_cases"]);
+        assert!(evidence["applicable_cases"].as_u64() < evidence["eligible_cases"].as_u64());
+    }
+
+    let always_error =
+        topological_implementation("    return Err(error=PipelineError_Cycle())\n", "");
+    let Some(output) = run_emitted_contract_runner(
+        TOPOLOGICAL_CONTRACT,
+        &[("demo.order_steps", &always_error)],
+        &["demo.order_steps"],
+    ) else {
+        return;
+    };
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("CottContractViolation"));
+}
+
+const SCENARIO_VALUES: &str = r#"module demo
+
+enum Mode:
+    Fast
+    Careful(retries: U8)
+
+struct Limits:
+    timeout_ms: U32
+    tags: List[Str]
+
+    invariant self.timeout_ms > 0
+
+struct Request:
+    name: Str
+    mode: Mode
+    limits: Limits
+    labels: Map[Str, U32]
+    note: Option[Str]
+
+enum Failure:
+    Rejected(reason: Str)
+
+struct Report:
+    name: Str
+    retries: U8
+
+fn run(request: Request) -> Result[Report, Failure]:
+    ensures Result.Ok(report) => report.retries >= 0
+
+    error Failure.Rejected
+
+data base_limits: Limits = Limits(timeout_ms: 30, tags: List("a", "b"))
+
+scenario nested_request:
+    data request: Request = Request(
+        name: "job",
+        mode: Mode.Careful(retries: 2),
+        limits: base_limits,
+        labels: Map("x": 1),
+        note: Option.Some(value: "n"),
+    )
+    call outcome = run(request)
+    assert outcome matches Result.Ok(report) => report.retries == 2
+    assert outcome == Result.Ok(value: Report(name: "job", retries: 2))
+
+scenario invalid_limits:
+    data limits: Limits = Limits(timeout_ms: 0, tags: List())
+    call outcome = run(Request(name: "x", mode: Mode.Fast, limits: limits, labels: Map(), note: Option.Nothing))
+    assert outcome matches Result.Ok(_)
+"#;
+
+fn scenario_value_implementation(retries: &str) -> String {
+    format!(
+        "from cott_runtime import Ok, Result\nfrom demo_types import Failure_Rejected, Mode_Careful, Report, Request\n\ndef run(request: Request) -> Result[Report, Failure_Rejected]:\n    retries = {retries}\n    return Ok(value=Report(name=request.name, retries=retries))\n"
+    )
+}
+
+#[test]
+fn scenario_values_construct_nested_inputs_and_check_payloads() {
+    let correct = scenario_value_implementation(
+        "request.mode.retries if isinstance(request.mode, Mode_Careful) else 0",
+    );
+    let Some(output) = run_emitted_contract_runner(
+        SCENARIO_VALUES,
+        &[("demo.run", &correct)],
+        &["demo.scenario.nested_request"],
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("runner JSON");
+    assert_eq!(report["scenarios"][0]["grade"], "test observation");
+    assert_eq!(
+        report["scenarios"][0]["assertions"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
+
+    // An `Ok` shell with the wrong payload must fail the guarded assertion.
+    let wrong_payload = scenario_value_implementation("0");
+    let Some(output) = run_emitted_contract_runner(
+        SCENARIO_VALUES,
+        &[("demo.run", &wrong_payload)],
+        &["demo.scenario.nested_request"],
+    ) else {
+        return;
+    };
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("assertion step:2 failed"));
+}
+
+#[test]
+fn scenario_values_run_canonical_struct_invariants() {
+    let implementation = scenario_value_implementation("0");
+    let Some(output) = run_emitted_contract_runner(
+        SCENARIO_VALUES,
+        &[("demo.run", &implementation)],
+        &["demo.scenario.invalid_limits"],
+    ) else {
+        return;
+    };
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("CottContractViolation") && stderr.contains("invariant"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn scenario_values_construct_and_compare_error_payloads() {
+    let source = format!(
+        "{SCENARIO_VALUES}\nscenario error_payload:\n    data outcome: Result[Report, Failure] = Result.Err(error: Failure.Rejected(reason: \"denied\"))\n    assert outcome matches Result.Err(Failure.Rejected(reason)) => reason == \"denied\"\n    assert outcome == Result.Err(error: Failure.Rejected(reason: \"denied\"))\n"
+    );
+    let implementation = scenario_value_implementation("0");
+    let Some(output) = run_emitted_contract_runner(
+        &source,
+        &[("demo.run", &implementation)],
+        &["demo.scenario.error_payload"],
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("runner JSON");
+    assert_eq!(report["scenarios"][0]["grade"], "test observation");
+    assert_eq!(
+        report["scenarios"][0]["assertions"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
 }

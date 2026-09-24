@@ -102,6 +102,9 @@ pub(crate) fn render_generation_prompt(
 
     let mut current_intent = String::new();
     collect_intent_docs(declarations, &mut current_intent);
+    current_intent.push_str(&crate::requirements::render_prompt_requirements(
+        declarations,
+    ));
     if current_intent.is_empty() {
         current_intent.push_str("(no documentation selected)\n");
     }

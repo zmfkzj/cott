@@ -19,7 +19,7 @@ def read_text(source: Path) -> Result[str, EffectError]:
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/read_text.py", "d49dc5c730538993711988053e8f517f4dbe4cbd6d85846f2171015a361b3f78", "read_text", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.read_text")
+        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/read_text.py", "a782361cd747653bc34dad3d8930d57ce01f5e116eb927fb507731c58943a1ff", "read_text", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.read_text")
         _result = _implementation(source)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -59,32 +59,35 @@ def read_text(source: Path) -> Result[str, EffectError]:
     return _result
 
 def copy_text(source: Path, destination: Path) -> Result[U64, EffectError]:
-    """Read source through its public facade and atomically replace destination."""
+    """Read source through curriculum.effects_selection.read_text, encode the
+successful text as UTF-8 bytes and atomically replace destination with those
+bytes. Return the encoded byte count, not the character count. If replacement
+fails, return OperationFailed and preserve the previous destination bytes."""
     source = _cott_validate_abi(source, Path, path="$.source")
     destination = _cott_validate_abi(destination, Path, path="$.destination")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/copy_text.py", "c5ff18231a42b71f8b9196d6d7ec6989aaed91088846195d02bafaf18ce70445", "copy_text", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.copy_text")
+        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/copy_text.py", "98fadbb1f4d70ce9f1be04b92522fc68ac0598c2e8405604c56b3d5c737a3ed0", "copy_text", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.copy_text")
         _result = _implementation(source, destination)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.effects_selection.copy_text"
         if _error.span is None:
-            _error.span = {"end_byte":736,"end_column":1,"end_line":31,"start_byte":403,"start_column":1,"start_line":19}
+            _error.span = {"end_byte":975,"end_column":1,"end_line":34,"start_byte":403,"start_column":1,"start_line":19}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.copy_text", phase="implementation-call", span={"end_byte":736,"end_column":1,"end_line":31,"start_byte":403,"start_column":1,"start_line":19}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.copy_text", phase="implementation-call", span={"end_byte":975,"end_column":1,"end_line":34,"start_byte":403,"start_column":1,"start_line":19}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.copy_text", phase="implementation-call", span={"end_byte":736,"end_column":1,"end_line":31,"start_byte":403,"start_column":1,"start_line":19}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.copy_text", phase="implementation-call", span={"end_byte":975,"end_column":1,"end_line":34,"start_byte":403,"start_column":1,"start_line":19}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[U64, EffectError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="curriculum.effects_selection.copy_text", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (EffectError_InputMissing, EffectError_OperationFailed,):
-            raise CottContractViolation("returned error is not allowed", symbol="curriculum.effects_selection.copy_text", phase="error", span={"end_byte":736,"end_column":1,"end_line":31,"start_byte":403,"start_column":1,"start_line":19}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="curriculum.effects_selection.copy_text", phase="error", span={"end_byte":975,"end_column":1,"end_line":34,"start_byte":403,"start_column":1,"start_line":19}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.effects_selection.copy_text", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -101,7 +104,7 @@ def copy_text(source: Path, destination: Path) -> Result[U64, EffectError]:
         _cott_contract_condition((False), "curriculum.effects_selection.copy_text", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="curriculum.effects_selection.copy_text", clause="ensures:1", phase="ensures", span={"end_byte":623,"end_column":47,"end_line":24,"start_byte":581,"start_column":5,"start_line":24}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.effects_selection.copy_text", clause="ensures:1", phase="ensures", span={"end_byte":862,"end_column":47,"end_line":27,"start_byte":820,"start_column":5,"start_line":27}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[U64, EffectError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -113,28 +116,28 @@ def fetch_local(url: str) -> Result[str, EffectError]:
     _expected_error_clause = None
     if _expected_error is None and (_cott_contract_condition(((url == "")), "curriculum.effects_selection.fetch_local", "error:2:condition")):
         _expected_error = EffectError_OperationFailed
-        _expected_error_span = {"end_byte":972,"end_column":53,"end_line":38,"start_byte":924,"start_column":5,"start_line":38}
+        _expected_error_span = {"end_byte":1211,"end_column":53,"end_line":41,"start_byte":1163,"start_column":5,"start_line":41}
         _expected_error_clause = "error:2"
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/fetch_local.py", "6ed42cac122da72ab14a893e6403988a5bb6f30d24544da3fc7ed4aef0fe17db", "fetch_local", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.fetch_local")
+        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/fetch_local.py", "0da710ed899c4af3ec769e3fed78c07d5f9ebfe80e28bbb21b533eb125ef17c5", "fetch_local", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.fetch_local")
         _result = _implementation(url)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.effects_selection.fetch_local"
         if _error.span is None:
-            _error.span = {"end_byte":1035,"end_column":1,"end_line":43,"start_byte":736,"start_column":1,"start_line":31}
+            _error.span = {"end_byte":1274,"end_column":1,"end_line":46,"start_byte":975,"start_column":1,"start_line":34}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.fetch_local", phase="implementation-call", span={"end_byte":1035,"end_column":1,"end_line":43,"start_byte":736,"start_column":1,"start_line":31}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.fetch_local", phase="implementation-call", span={"end_byte":1274,"end_column":1,"end_line":46,"start_byte":975,"start_column":1,"start_line":34}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.fetch_local", phase="implementation-call", span={"end_byte":1035,"end_column":1,"end_line":43,"start_byte":736,"start_column":1,"start_line":31}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.fetch_local", phase="implementation-call", span={"end_byte":1274,"end_column":1,"end_line":46,"start_byte":975,"start_column":1,"start_line":34}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[str, EffectError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="curriculum.effects_selection.fetch_local", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (EffectError_OperationFailed,):
-            raise CottContractViolation("returned error is not allowed", symbol="curriculum.effects_selection.fetch_local", phase="error", span={"end_byte":1035,"end_column":1,"end_line":43,"start_byte":736,"start_column":1,"start_line":31}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="curriculum.effects_selection.fetch_local", phase="error", span={"end_byte":1274,"end_column":1,"end_line":46,"start_byte":975,"start_column":1,"start_line":34}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.effects_selection.fetch_local", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -149,7 +152,7 @@ def fetch_local(url: str) -> Result[str, EffectError]:
         _cott_contract_condition((False), "curriculum.effects_selection.fetch_local", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="curriculum.effects_selection.fetch_local", clause="ensures:1", phase="ensures", span={"end_byte":918,"end_column":45,"end_line":36,"start_byte":878,"start_column":5,"start_line":36}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.effects_selection.fetch_local", clause="ensures:1", phase="ensures", span={"end_byte":1157,"end_column":45,"end_line":39,"start_byte":1117,"start_column":5,"start_line":39}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[str, EffectError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -157,18 +160,18 @@ def text_result_is_ok(result: Result[str, EffectError]) -> bool:
     """Return whether a text effect result is successful."""
     result = _cott_validate_abi(result, Result[str, EffectError], path="$.result")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/text_result_is_ok.py", "1f4b39025cd54974cdbdd1ef62d1d183485fab7d332b641847495a3c26aa5e6f", "text_result_is_ok", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.text_result_is_ok")
+        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/text_result_is_ok.py", "df68a692f8ea44a87e2dfd99a28d8ba92a0d9880105f8b5d404ae67734951788", "text_result_is_ok", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.text_result_is_ok")
         _result = _implementation(result)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.effects_selection.text_result_is_ok"
         if _error.span is None:
-            _error.span = {"end_byte":1175,"end_column":1,"end_line":48,"start_byte":1035,"start_column":1,"start_line":43}
+            _error.span = {"end_byte":1414,"end_column":1,"end_line":51,"start_byte":1274,"start_column":1,"start_line":46}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.text_result_is_ok", phase="implementation-call", span={"end_byte":1175,"end_column":1,"end_line":48,"start_byte":1035,"start_column":1,"start_line":43}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.text_result_is_ok", phase="implementation-call", span={"end_byte":1414,"end_column":1,"end_line":51,"start_byte":1274,"start_column":1,"start_line":46}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.text_result_is_ok", phase="implementation-call", span={"end_byte":1175,"end_column":1,"end_line":48,"start_byte":1035,"start_column":1,"start_line":43}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.text_result_is_ok", phase="implementation-call", span={"end_byte":1414,"end_column":1,"end_line":51,"start_byte":1274,"start_column":1,"start_line":46}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, bool, path="$.return")
     _result = _cott_wrap_async_protocol(_result, bool, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -177,18 +180,18 @@ def text_result_text(result: Result[str, EffectError]) -> str:
     """Return successful text, or an empty string for an error result."""
     result = _cott_validate_abi(result, Result[str, EffectError], path="$.result")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/text_result_text.py", "a636df09801c8c63e565b1b061ed124f0113d02300357893720a08e43d075d18", "text_result_text", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.text_result_text")
+        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/text_result_text.py", "9c3337cf3f05f6b9adec3d4c9ce96cfa7c5e23dd4dec2474484d8c556519fa04", "text_result_text", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.text_result_text")
         _result = _implementation(result)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.effects_selection.text_result_text"
         if _error.span is None:
-            _error.span = {"end_byte":1326,"end_column":1,"end_line":53,"start_byte":1175,"start_column":1,"start_line":48}
+            _error.span = {"end_byte":1565,"end_column":1,"end_line":56,"start_byte":1414,"start_column":1,"start_line":51}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.text_result_text", phase="implementation-call", span={"end_byte":1326,"end_column":1,"end_line":53,"start_byte":1175,"start_column":1,"start_line":48}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.text_result_text", phase="implementation-call", span={"end_byte":1565,"end_column":1,"end_line":56,"start_byte":1414,"start_column":1,"start_line":51}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.text_result_text", phase="implementation-call", span={"end_byte":1326,"end_column":1,"end_line":53,"start_byte":1175,"start_column":1,"start_line":48}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.text_result_text", phase="implementation-call", span={"end_byte":1565,"end_column":1,"end_line":56,"start_byte":1414,"start_column":1,"start_line":51}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -197,18 +200,18 @@ def copy_result_is_ok(result: Result[U64, EffectError]) -> bool:
     """Return whether a copy effect result is successful."""
     result = _cott_validate_abi(result, Result[U64, EffectError], path="$.result")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/copy_result_is_ok.py", "a775989f6cea2667a0edf703995500ead9519a51f8137a0a2832b4654f96943f", "copy_result_is_ok", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.copy_result_is_ok")
+        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/copy_result_is_ok.py", "84a202a295e9fd72068dc6aee1890313f1ff566cb560d43c8ac0f4c898185609", "copy_result_is_ok", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.copy_result_is_ok")
         _result = _implementation(result)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.effects_selection.copy_result_is_ok"
         if _error.span is None:
-            _error.span = {"end_byte":1466,"end_column":1,"end_line":58,"start_byte":1326,"start_column":1,"start_line":53}
+            _error.span = {"end_byte":1705,"end_column":1,"end_line":61,"start_byte":1565,"start_column":1,"start_line":56}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.copy_result_is_ok", phase="implementation-call", span={"end_byte":1466,"end_column":1,"end_line":58,"start_byte":1326,"start_column":1,"start_line":53}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.copy_result_is_ok", phase="implementation-call", span={"end_byte":1705,"end_column":1,"end_line":61,"start_byte":1565,"start_column":1,"start_line":56}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.copy_result_is_ok", phase="implementation-call", span={"end_byte":1466,"end_column":1,"end_line":58,"start_byte":1326,"start_column":1,"start_line":53}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.copy_result_is_ok", phase="implementation-call", span={"end_byte":1705,"end_column":1,"end_line":61,"start_byte":1565,"start_column":1,"start_line":56}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, bool, path="$.return")
     _result = _cott_wrap_async_protocol(_result, bool, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -222,25 +225,25 @@ def store_and_load(database: Path, key: str, value: str) -> Result[str, EffectEr
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/store_and_load.py", "68635efce80fe98ea77b9dc2face364d9ca568a9e5246da55cb4df3d90fb3061", "store_and_load", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.store_and_load")
+        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/store_and_load.py", "fe5f5d4315103481e5ad8c325742d795425d75e3de4d18650808b0eac762a17d", "store_and_load", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.store_and_load")
         _result = _implementation(database, key, value)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.effects_selection.store_and_load"
         if _error.span is None:
-            _error.span = {"end_byte":1781,"end_column":1,"end_line":69,"start_byte":1466,"start_column":1,"start_line":58}
+            _error.span = {"end_byte":2020,"end_column":1,"end_line":72,"start_byte":1705,"start_column":1,"start_line":61}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.store_and_load", phase="implementation-call", span={"end_byte":1781,"end_column":1,"end_line":69,"start_byte":1466,"start_column":1,"start_line":58}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.store_and_load", phase="implementation-call", span={"end_byte":2020,"end_column":1,"end_line":72,"start_byte":1705,"start_column":1,"start_line":61}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.store_and_load", phase="implementation-call", span={"end_byte":1781,"end_column":1,"end_line":69,"start_byte":1466,"start_column":1,"start_line":58}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.store_and_load", phase="implementation-call", span={"end_byte":2020,"end_column":1,"end_line":72,"start_byte":1705,"start_column":1,"start_line":61}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[str, EffectError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="curriculum.effects_selection.store_and_load", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (EffectError_OperationFailed,):
-            raise CottContractViolation("returned error is not allowed", symbol="curriculum.effects_selection.store_and_load", phase="error", span={"end_byte":1781,"end_column":1,"end_line":69,"start_byte":1466,"start_column":1,"start_line":58}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="curriculum.effects_selection.store_and_load", phase="error", span={"end_byte":2020,"end_column":1,"end_line":72,"start_byte":1705,"start_column":1,"start_line":61}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.effects_selection.store_and_load", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -255,25 +258,26 @@ def store_and_load(database: Path, key: str, value: str) -> Result[str, EffectEr
         _cott_contract_condition((False), "curriculum.effects_selection.store_and_load", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="curriculum.effects_selection.store_and_load", clause="ensures:1", phase="ensures", span={"end_byte":1695,"end_column":49,"end_line":63,"start_byte":1651,"start_column":5,"start_line":63}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.effects_selection.store_and_load", clause="ensures:1", phase="ensures", span={"end_byte":1934,"end_column":49,"end_line":66,"start_byte":1890,"start_column":5,"start_line":66}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[str, EffectError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def clock_ns() -> U64:
-    """Return a compiler-owned deterministic fixture clock in nanoseconds."""
+    """Return the compiler-owned fixture clock in nanoseconds: the configured
+start_ms multiplied by 1000000. Reading the clock does not advance it."""
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/clock_ns.py", "a8337c833e573162234dee1fe2d657a6a315f98f8bf4f4cf381df29fd10c494d", "clock_ns", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.clock_ns")
+        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/clock_ns.py", "ae301a0ace40c222b6d5685189d1ec45dbbd3cc05d08776245eeee67b4eec0e8", "clock_ns", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.clock_ns")
         _result = _implementation()
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.effects_selection.clock_ns"
         if _error.span is None:
-            _error.span = {"end_byte":1917,"end_column":1,"end_line":76,"start_byte":1781,"start_column":1,"start_line":69}
+            _error.span = {"end_byte":2234,"end_column":1,"end_line":80,"start_byte":2020,"start_column":1,"start_line":72}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.clock_ns", phase="implementation-call", span={"end_byte":1917,"end_column":1,"end_line":76,"start_byte":1781,"start_column":1,"start_line":69}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.clock_ns", phase="implementation-call", span={"end_byte":2234,"end_column":1,"end_line":80,"start_byte":2020,"start_column":1,"start_line":72}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.clock_ns", phase="implementation-call", span={"end_byte":1917,"end_column":1,"end_line":76,"start_byte":1781,"start_column":1,"start_line":69}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.clock_ns", phase="implementation-call", span={"end_byte":2234,"end_column":1,"end_line":80,"start_byte":2020,"start_column":1,"start_line":72}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, U64, path="$.return")
     _result = _cott_wrap_async_protocol(_result, U64, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -283,23 +287,23 @@ def sample_index(limit: U8, seed: U64) -> U8:
     limit = _cott_validate_abi(limit, U8, path="$.limit")
     seed = _cott_validate_abi(seed, U64, path="$.seed")
     if not (_cott_contract_condition(((limit > 0)), "curriculum.effects_selection.sample_index", "requires:1")):
-        raise CottContractViolation("requires clause failed", symbol="curriculum.effects_selection.sample_index", clause="requires:1", phase="requires", span={"end_byte":2081,"end_column":23,"end_line":81,"start_byte":2063,"start_column":5,"start_line":81}, expected="true", actual="false")
+        raise CottContractViolation("requires clause failed", symbol="curriculum.effects_selection.sample_index", clause="requires:1", phase="requires", span={"end_byte":2398,"end_column":23,"end_line":85,"start_byte":2380,"start_column":5,"start_line":85}, expected="true", actual="false")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/sample_index.py", "79454884c5715cdff59e8d82a15c581d2dd6b7c36bb4ba532ec97c8ec5b9c9ff", "sample_index", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.sample_index")
+        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/sample_index.py", "27a5c05ebe0976edc0cadb3b2ac113abaa93863759de968285c15543b348c425", "sample_index", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.sample_index")
         _result = _implementation(limit, seed)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.effects_selection.sample_index"
         if _error.span is None:
-            _error.span = {"end_byte":2133,"end_column":1,"end_line":87,"start_byte":1917,"start_column":1,"start_line":76}
+            _error.span = {"end_byte":2450,"end_column":1,"end_line":91,"start_byte":2234,"start_column":1,"start_line":80}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.sample_index", phase="implementation-call", span={"end_byte":2133,"end_column":1,"end_line":87,"start_byte":1917,"start_column":1,"start_line":76}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.effects_selection.sample_index", phase="implementation-call", span={"end_byte":2450,"end_column":1,"end_line":91,"start_byte":2234,"start_column":1,"start_line":80}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.sample_index", phase="implementation-call", span={"end_byte":2133,"end_column":1,"end_line":87,"start_byte":1917,"start_column":1,"start_line":76}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.sample_index", phase="implementation-call", span={"end_byte":2450,"end_column":1,"end_line":91,"start_byte":2234,"start_column":1,"start_line":80}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, U8, path="$.return")
     if not (_cott_contract_condition(((_result < limit)), "curriculum.effects_selection.sample_index", "ensures:2")):
-        raise CottContractViolation("ensures clause failed", symbol="curriculum.effects_selection.sample_index", clause="ensures:2", phase="ensures", span={"end_byte":2109,"end_column":27,"end_line":83,"start_byte":2087,"start_column":5,"start_line":83}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.effects_selection.sample_index", clause="ensures:2", phase="ensures", span={"end_byte":2426,"end_column":27,"end_line":87,"start_byte":2404,"start_column":5,"start_line":87}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, U8, path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -307,18 +311,18 @@ def exit_with_code(code: U8) -> Never:
     """End the current process with code."""
     code = _cott_validate_abi(code, U8, path="$.code")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/exit_with_code.py", "c8a31111517f4e2ae52470c5f96e6677920dd19fe80aa3c551a662272b795d30", "exit_with_code", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.exit_with_code")
+        _implementation = _cott_load("_cott_impl/curriculum/effects_selection/exit_with_code.py", "ec0fb4eab97d890fe4c135064a1569a28c90487760a24a14ec6c75bd8fdfbb1d", "exit_with_code", expected_project_name="effects-selection", expected_cott_symbol="curriculum.effects_selection.exit_with_code")
         _result = _implementation(code)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.effects_selection.exit_with_code"
         if _error.span is None:
-            _error.span = {"end_byte":2259,"end_column":1,"end_line":94,"start_byte":2133,"start_column":1,"start_line":87}
+            _error.span = {"end_byte":2576,"end_column":1,"end_line":98,"start_byte":2450,"start_column":1,"start_line":91}
         raise
     except SystemExit:
         raise
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.exit_with_code", phase="implementation-call", span={"end_byte":2259,"end_column":1,"end_line":94,"start_byte":2133,"start_column":1,"start_line":87}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
-    raise CottContractViolation("Never function returned", symbol="curriculum.effects_selection.exit_with_code", phase="return", span={"end_byte":2259,"end_column":1,"end_line":94,"start_byte":2133,"start_column":1,"start_line":87}, expected="Never", actual=repr(_result))
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.effects_selection.exit_with_code", phase="implementation-call", span={"end_byte":2576,"end_column":1,"end_line":98,"start_byte":2450,"start_column":1,"start_line":91}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+    raise CottContractViolation("Never function returned", symbol="curriculum.effects_selection.exit_with_code", phase="return", span={"end_byte":2576,"end_column":1,"end_line":98,"start_byte":2450,"start_column":1,"start_line":91}, expected="Never", actual=repr(_result))
 
 __all__ = ["EffectError", "EffectError_InputMissing", "EffectError_OperationFailed", "clock_ns", "copy_result_is_ok", "copy_text", "exit_with_code", "fetch_local", "read_text", "sample_index", "store_and_load", "text_result_is_ok", "text_result_text"]

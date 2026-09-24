@@ -1,9 +1,9 @@
 use crate::ast::{
     Annotation, BinaryOp, CallableKind, Clause, ClauseKind, CompareOp, ConstExpr, Declaration,
     DocBlock, Expr, ExprKind, File, FunctionBody, GenericArgKind, GenericParam, Intrinsic,
-    LiteralKind, MatchGuard, Pattern, PatternKind, QualifiedName, RuleClause, RuleClauseAction,
-    ScenarioAwaitOutcome, ScenarioData, ScenarioDataKind, ScenarioFixture, ScenarioFixtureConfig,
-    ScenarioHttpOutcome, ScenarioStep, Type, UnaryOp, Variance,
+    LiteralKind, MatchGuard, Pattern, PatternKind, QualifiedName, RequirementText, RuleClause,
+    RuleClauseAction, ScenarioAwaitOutcome, ScenarioData, ScenarioDataKind, ScenarioFixture,
+    ScenarioFixtureConfig, ScenarioHttpOutcome, ScenarioStep, Type, UnaryOp, Variance,
 };
 use crate::diagnostics::{Diagnostic, Span};
 use crate::syntax::{Cst, TokenKind};
@@ -523,6 +523,44 @@ impl<'a> Printer<'a> {
                     self.scenario_step(step);
                 }
             }
+            Declaration::TestData(value) => {
+                self.value_lines(
+                    0,
+                    &format!("data {}: {} = ", value.name, self.ty(&value.ty)),
+                    &value.value,
+                    "",
+                );
+                self.inline_for(&value.span);
+            }
+            Declaration::Requirement(value) => {
+                self.annotations(&value.annotations);
+                self.doc(value.doc.as_ref(), 0);
+                self.push(
+                    0,
+                    format!("requirement {} for {}:", value.name, qname(&value.callable)),
+                );
+                self.inline_line(self.keyword_line(&value.span, "requirement "));
+                self.requirement_text("text", &value.statement);
+                for check in &value.checked_by {
+                    self.leading(check.span.start, 1);
+                    let assertion = check
+                        .assertion
+                        .as_ref()
+                        .map(|assertion| format!(" assert {}", assertion.value))
+                        .unwrap_or_default();
+                    self.push(
+                        1,
+                        format!("checked_by {}{assertion}", qname(&check.scenario)),
+                    );
+                    self.inline_for(&check.span);
+                }
+                for assumption in &value.assumptions {
+                    self.requirement_text("assumption", assumption);
+                }
+                for waiver in &value.waivers {
+                    self.requirement_text("waiver", waiver);
+                }
+            }
 
             Declaration::Function(value) => {
                 self.annotations(&value.annotations);
@@ -628,36 +666,18 @@ impl<'a> Printer<'a> {
                 target,
                 arguments,
                 ..
-            } => self.push(
-                1,
-                format!(
-                    "call {} = {}({})",
-                    binding.name,
-                    qname(target),
-                    arguments
-                        .iter()
-                        .map(|argument| self.expr(argument, 0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
+            } => self.invocation_lines(
+                &format!("call {} = {}(", binding.name, qname(target)),
+                arguments,
             ),
             ScenarioStep::Spawn {
                 worker,
                 target,
                 arguments,
                 ..
-            } => self.push(
-                1,
-                format!(
-                    "spawn {} = {}({})",
-                    worker.name,
-                    qname(target),
-                    arguments
-                        .iter()
-                        .map(|argument| self.expr(argument, 0))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
+            } => self.invocation_lines(
+                &format!("spawn {} = {}(", worker.name, qname(target)),
+                arguments,
             ),
             ScenarioStep::Await {
                 worker, outcome, ..
@@ -674,8 +694,83 @@ impl<'a> Printer<'a> {
             }
             ScenarioStep::Tick { .. } => self.push(1, "tick".to_owned()),
             ScenarioStep::Assert { expression, .. } => {
-                self.expression_line(1, "assert ", expression);
+                if contains_construct(expression) {
+                    self.value_lines(1, "assert ", expression, "");
+                } else {
+                    self.expression_line(1, "assert ", expression);
+                }
             }
+            ScenarioStep::Data {
+                binding, ty, value, ..
+            } => self.value_lines(
+                1,
+                &format!("data {}: {} = ", binding.name, self.ty(ty)),
+                value,
+                "",
+            ),
+        }
+    }
+
+    /// Existing scalar call lines stay on one line; only invocations carrying
+    /// constructed values break into one indented argument per line.
+    fn invocation_lines(&mut self, prefix: &str, arguments: &[Expr]) {
+        let inline = format!(
+            "{prefix}{})",
+            arguments
+                .iter()
+                .map(|argument| self.expr(argument, 0))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        if 4 + inline.chars().count() <= 100 || !arguments.iter().any(contains_construct) {
+            self.push(1, inline);
+            return;
+        }
+        self.push(1, prefix.to_owned());
+        for argument in arguments {
+            self.leading(argument.span.start, 2);
+            self.value_lines(2, "", argument, ",");
+            self.inline_for(&argument.span);
+        }
+        self.push(1, ")".to_owned());
+    }
+
+    /// Lays out a scenario value inline when it fits, otherwise one constructor
+    /// argument per line with trailing commas, recursively.
+    fn value_lines(&mut self, indent: usize, prefix: &str, value: &Expr, suffix: &str) {
+        let inline = self.expr(value, 0);
+        if indent * 4 + prefix.chars().count() + inline.chars().count() + suffix.chars().count()
+            <= 100
+        {
+            self.push(indent, format!("{prefix}{inline}{suffix}"));
+            return;
+        }
+        match &value.kind {
+            ExprKind::Construct { path, arguments } if !arguments.is_empty() => {
+                self.push(indent, format!("{prefix}{}(", qname(path)));
+                for argument in arguments {
+                    self.leading(argument.span.start, indent + 1);
+                    let label = argument
+                        .label
+                        .as_ref()
+                        .map(|label| format!("{}: ", self.expr(label, 0)))
+                        .unwrap_or_default();
+                    self.value_lines(indent + 1, &label, &argument.value, ",");
+                    self.inline_for(&argument.span);
+                }
+                self.push(indent, format!("){suffix}"));
+            }
+            ExprKind::Comparison { first, rest }
+                if rest.len() == 1 && contains_construct(&rest[0].1) =>
+            {
+                let prefix = format!(
+                    "{prefix}{} {} ",
+                    self.expr(first, expression_precedence(value)),
+                    compare_operator(rest[0].0)
+                );
+                self.value_lines(indent, &prefix, &rest[0].1, suffix);
+            }
+            _ => self.push(indent, format!("{prefix}{inline}{suffix}")),
         }
     }
 
@@ -773,6 +868,7 @@ impl<'a> Printer<'a> {
             ClauseKind::EnsuresTable { .. } | ClauseKind::EnsuresPreserves { .. } => {
                 self.ensures_sugar(indent, "ensures ", &clause.kind);
             }
+            ClauseKind::ErrorsComplete => self.push(indent, "errors complete".to_owned()),
             ClauseKind::Error { error, guard, when } => {
                 let mut prefix = format!("error {}", qname(error));
                 if let Some(guard) = guard {
@@ -853,6 +949,7 @@ impl<'a> Printer<'a> {
             ClauseKind::EnsuresTable { .. } | ClauseKind::EnsuresPreserves { .. } => {
                 self.ensures_sugar(1, &format!("{prefix}ensures "), &rule_clause.kind);
             }
+            ClauseKind::ErrorsComplete => self.push(1, format!("{prefix}errors complete")),
             ClauseKind::Error { error, guard, when } => {
                 let mut rendered = format!("{prefix}error {}", qname(error));
                 if let Some(guard) = guard {
@@ -898,6 +995,23 @@ impl<'a> Printer<'a> {
         }
         self.push(indent, "\"\"\"".to_owned());
         self.inline_for(&doc.span);
+    }
+
+    fn requirement_text(&mut self, keyword: &str, text: &RequirementText) {
+        self.leading(text.span.start, 1);
+        if text.triple {
+            self.push(1, format!("{keyword} \"\"\""));
+            for line in text.text.split('\n') {
+                self.push(1, line.to_owned());
+            }
+            self.push(1, "\"\"\"".to_owned());
+        } else {
+            self.push(
+                1,
+                format!("{keyword} {}", serde_json::to_string(&text.text).unwrap()),
+            );
+        }
+        self.inline_for(&text.span);
     }
 
     fn generics(&self, generics: &[GenericParam]) -> String {
@@ -1076,6 +1190,36 @@ impl<'a> Printer<'a> {
                 format!("{fixture}.url({})", serde_json::to_string(path).unwrap())
             }
             ExprKind::OldStateField { field } => format!("old(self.{})", field.name),
+            ExprKind::Construct { path, arguments } => format!(
+                "{}({})",
+                qname(path),
+                arguments
+                    .iter()
+                    .map(|argument| match &argument.label {
+                        Some(label) => {
+                            format!("{}: {}", self.expr(label, 0), self.expr(&argument.value, 0))
+                        }
+                        None => self.expr(&argument.value, 0),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            ExprKind::Match {
+                scrutinee,
+                pattern,
+                condition,
+            } => {
+                let mut rendered = format!(
+                    "{} matches {}",
+                    self.expr(scrutinee, 1),
+                    self.pattern(pattern)
+                );
+                if let Some(condition) = condition {
+                    rendered.push_str(" => ");
+                    rendered.push_str(&self.expr(condition, 0));
+                }
+                rendered
+            }
         };
         if precedence < parent_precedence {
             format!("({rendered})")
@@ -1299,6 +1443,12 @@ const fn intrinsic_name(intrinsic: Intrinsic) -> &'static str {
         Intrinsic::Contains => "contains",
         Intrinsic::UniqueBy => "unique_by",
         Intrinsic::DescendingBy => "descending_by",
+        Intrinsic::AnyBlankBy => "any_blank_by",
+        Intrinsic::UnknownDependencyBy => "unknown_dependency_by",
+        Intrinsic::SelfDependencyBy => "self_dependency_by",
+        Intrinsic::CyclicBy => "cyclic_by",
+        Intrinsic::PermutationBy => "permutation_by",
+        Intrinsic::DependencyOrderedBy => "dependency_ordered_by",
     }
 }
 
@@ -1335,7 +1485,7 @@ fn clause_group(clause: &Clause) -> u8 {
         ClauseKind::Ensures { .. }
         | ClauseKind::EnsuresTable { .. }
         | ClauseKind::EnsuresPreserves { .. } => 5,
-        ClauseKind::Error { .. } => 6,
+        ClauseKind::ErrorsComplete | ClauseKind::Error { .. } => 6,
         ClauseKind::Effects { .. } => 7,
     }
 }
@@ -1356,7 +1506,7 @@ fn rule_clause_group(clause: &RuleClause) -> u8 {
             ClauseKind::Ensures { .. }
             | ClauseKind::EnsuresTable { .. }
             | ClauseKind::EnsuresPreserves { .. } => 5,
-            ClauseKind::Error { .. } => 6,
+            ClauseKind::ErrorsComplete | ClauseKind::Error { .. } => 6,
             ClauseKind::Effects { .. } => 7,
         }
 }
@@ -1370,10 +1520,38 @@ fn expression_precedence(expression: &Expr) -> u8 {
             BinaryOp::Add | BinaryOp::Subtract => 4,
             BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Remainder => 5,
         },
+        ExprKind::Match { .. } => 0,
         ExprKind::Comparison { .. } => 3,
         ExprKind::Unary { .. } => 6,
         ExprKind::Field { .. } => 7,
         _ => 8,
+    }
+}
+
+fn contains_construct(expression: &Expr) -> bool {
+    match &expression.kind {
+        ExprKind::Construct { .. } => true,
+        ExprKind::Parenthesized(value)
+        | ExprKind::Unary { operand: value, .. }
+        | ExprKind::Field { base: value, .. } => contains_construct(value),
+        ExprKind::Binary { left, right, .. } => {
+            contains_construct(left) || contains_construct(right)
+        }
+        ExprKind::Comparison { first, rest } => {
+            contains_construct(first) || rest.iter().any(|(_, value)| contains_construct(value))
+        }
+        ExprKind::Intrinsic { arguments, .. } => arguments.iter().any(contains_construct),
+        ExprKind::Match {
+            scrutinee,
+            condition,
+            ..
+        } => contains_construct(scrutinee) || condition.as_deref().is_some_and(contains_construct),
+        ExprKind::Literal(_)
+        | ExprKind::Name(_)
+        | ExprKind::Unit
+        | ExprKind::FixturePath { .. }
+        | ExprKind::FixtureUrl { .. }
+        | ExprKind::OldStateField { .. } => false,
     }
 }
 

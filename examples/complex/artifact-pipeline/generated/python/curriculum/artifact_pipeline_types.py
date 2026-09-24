@@ -70,7 +70,9 @@ ArtifactPipelineError: TypeAlias = Union[ArtifactPipelineError_BlankStepName, Ar
 
 """Validate build-step names and dependencies, then return their deterministic
 topological order. Blank and duplicate names are rejected before dependency
-errors. Ready steps are ordered lexicographically."""
+errors. Ready steps are ordered lexicographically. A blank name is empty or
+consists only of the 25 Unicode White_Space characters used by any_blank_by;
+U+FEFF, U+180E, U+200B and U+001C are not whitespace for this contract."""
 """Order and validate the pipeline's build steps with topologically_order_steps
 and construct an artifact plan, propagating any ordering error unchanged."""
 __all__ = ["ArtifactPipelineError", "ArtifactPipelineError_BlankStepName", "ArtifactPipelineError_Cycle", "ArtifactPipelineError_DuplicateStep", "ArtifactPipelineError_SelfDependency", "ArtifactPipelineError_UnknownDependency", "ArtifactPlan", "BuildStep", "Pipeline"]

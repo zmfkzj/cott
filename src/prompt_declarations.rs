@@ -14,13 +14,31 @@ pub fn scoped_declarations(selected: &Value) -> Result<Value, String> {
     let modules = selected
         .as_object()
         .ok_or_else(|| "intent context declarations must be an object".to_owned())?;
+    let mut requirements = false;
     for (module, value) in modules {
-        value
+        requirements |= value
             .get("declarations")
             .and_then(Value::as_array)
-            .ok_or_else(|| format!("module `{module}` declarations must be an array"))?;
+            .ok_or_else(|| format!("module `{module}` declarations must be an array"))?
+            .iter()
+            .any(requirement);
     }
-    compact(selected)
+    if !requirements {
+        return compact(selected);
+    }
+    // Requirement statements are normative prose rendered in CURRENT INTENT, never formal
+    // source constraints; keep them out of the authoritative formal view.
+    let mut formal = selected.clone();
+    for value in formal.as_object_mut().into_iter().flat_map(Map::values_mut) {
+        if let Some(Value::Array(declarations)) = value.get_mut("declarations") {
+            declarations.retain(|declaration| !requirement(declaration));
+        }
+    }
+    compact(&formal)
+}
+
+fn requirement(declaration: &Value) -> bool {
+    declaration.get("kind").and_then(Value::as_str) == Some("requirement")
 }
 
 /// Render the presentation projection as minified JSON for prompt embedding.
@@ -101,6 +119,8 @@ enum Form {
     Generic,
     Reference,
     Selector,
+    /// A selector key present only on some nodes of a kind.
+    OptionalSelector,
     Member,
     Expressions,
     Types,
@@ -109,6 +129,12 @@ enum Form {
     Generics,
     Members,
     Entries,
+    /// Scenario `construct` field `{name, value: expression}`.
+    ExpressionMember,
+    ExpressionMembers,
+    /// Scenario `map` entry `{key: expression, value: expression}`.
+    ExpressionEntry,
+    ExpressionEntries,
     Raw,
 }
 
@@ -132,6 +158,8 @@ fn render(value: &Value, form: Form, output: &mut String) -> Result<(), String> 
         Generics => Some(Generic),
         Members => Some(Member),
         Entries => Some(Values),
+        ExpressionMembers => Some(ExpressionMember),
+        ExpressionEntries => Some(ExpressionEntry),
         _ => None,
     };
     if let Some(element) = element {
@@ -152,16 +180,17 @@ fn render(value: &Value, form: Form, output: &mut String) -> Result<(), String> 
         .as_object()
         .ok_or_else(|| "semantic prompt node must be an object".to_owned())?;
     let kind = match form {
-        Selector => "selector",
-        Member => "member",
+        Selector | OptionalSelector => "selector",
+        Member | ExpressionMember => "member",
+        ExpressionEntry => "entry",
         _ => object
             .get("kind")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| "semantic prompt node must have a kind".to_owned())?,
     };
     let fields = fields(form, kind)?;
-    for (key, _) in fields {
-        if !object.contains_key(*key) {
+    for (key, form) in fields {
+        if !object.contains_key(*key) && !matches!(form, OptionalSelector) {
             return Err(format!("semantic prompt {kind} is missing `{key}`"));
         }
     }
@@ -221,8 +250,19 @@ fn fields(form: Form, kind: &str) -> Result<&'static [(&'static str, Form)], Str
                 ("arguments", Expressions),
                 ("name", Raw),
                 ("selector", Selector),
+                ("dependencies", OptionalSelector),
             ],
             "fixture_path" | "fixture_url" => &[("fixture", Raw), ("path", Raw)],
+            "construct" => &[("fields", ExpressionMembers), ("symbol", Raw)],
+            "variant" => &[("fields", Expressions), ("symbol", Raw)],
+            "option_some" | "result_ok" | "result_err" => &[("payload", Expression)],
+            "list" | "set" | "tuple" | "array" => &[("items", Expressions)],
+            "map" => &[("entries", ExpressionEntries)],
+            "match" => &[
+                ("condition", Expression),
+                ("pattern", Pattern),
+                ("scrutinee", Expression),
+            ],
             _ => {
                 return Err(format!(
                     "unsupported canonical prompt expression kind `{kind}`"
@@ -301,8 +341,10 @@ fn fields(form: Form, kind: &str) -> Result<&'static [(&'static str, Form)], Str
                 ));
             }
         },
-        Selector => &[("field", Raw), ("owner", Raw)],
+        Selector | OptionalSelector => &[("field", Raw), ("owner", Raw)],
         Member => &[("name", Raw), ("value", Value)],
+        ExpressionMember => &[("name", Raw), ("value", Expression)],
+        ExpressionEntry => &[("key", Expression), ("value", Expression)],
         _ => unreachable!("arrays and raw JSON are handled before node fields"),
     };
     Ok(fields)

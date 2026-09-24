@@ -10,7 +10,10 @@ from curriculum.effects_selection_types import EffectError as EffectError, Effec
 """Read UTF-8 text from a compiler-owned filesystem fixture."""
 def read_text(source: Path) -> Result[str, EffectError]: ...
 
-"""Read source through its public facade and atomically replace destination."""
+"""Read source through curriculum.effects_selection.read_text, encode the
+successful text as UTF-8 bytes and atomically replace destination with those
+bytes. Return the encoded byte count, not the character count. If replacement
+fails, return OperationFailed and preserve the previous destination bytes."""
 def copy_text(source: Path, destination: Path) -> Result[U64, EffectError]: ...
 
 """Fetch UTF-8 text from a compiler-owned local HTTP fixture."""
@@ -28,7 +31,8 @@ def copy_result_is_ok(result: Result[U64, EffectError]) -> bool: ...
 """Store value under key in a SQLite database, then read that value back."""
 def store_and_load(database: Path, key: str, value: str) -> Result[str, EffectError]: ...
 
-"""Return a compiler-owned deterministic fixture clock in nanoseconds."""
+"""Return the compiler-owned fixture clock in nanoseconds: the configured
+start_ms multiplied by 1000000. Reading the clock does not advance it."""
 def clock_ns() -> U64: ...
 
 """Choose one index below limit from a deterministic seeded random stream."""

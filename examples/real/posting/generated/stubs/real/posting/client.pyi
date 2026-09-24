@@ -13,7 +13,10 @@ def parse_method(source: str) -> Result[HttpMethod, PostingError]: ...
 """Parse METHOD URL [BODY]; use a 30-second timeout and no headers."""
 def parse_arguments(arguments: CottList[str]) -> Result[Request, PostingError]: ...
 
-"""Send one HTTP request and retain status, final URL, headers, and response bytes."""
+"""Send one HTTP request and retain status, final URL, headers, and the response
+body decoded as UTF-8 with replacement characters for undecodable bytes. An HTTP
+error status is still a received Response; InvalidRequest covers a non-HTTP(S)
+URL, and NetworkFailed covers connection, timeout, and URL errors."""
 def send_request(request: Request) -> Result[Response, PostingError]: ...
 
 """Render status and final URL, then headers and a UTF-8 replacement-decoded body."""

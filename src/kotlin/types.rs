@@ -708,7 +708,7 @@ pub(crate) fn render_named_arguments(ty: Option<&Value>) -> Result<Vec<String>, 
         .collect()
 }
 
-fn const_witness_values(expected_type: Option<&Value>) -> Result<Vec<String>, String> {
+pub(crate) fn const_witness_values(expected_type: Option<&Value>) -> Result<Vec<String>, String> {
     expected_type
         .and_then(|ty| ty.get("args"))
         .and_then(Value::as_array)

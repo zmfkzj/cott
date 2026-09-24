@@ -19,7 +19,7 @@ def package_label(label: NonEmptyLabel, values: CottArray[U8, Literal[4]], raw: 
     if not (_cott_contract_condition(((len(values) == LABEL_BYTES)), "declarations.presentation.package_label", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="declarations.presentation.package_label", clause="requires:1", phase="requires", span={"end_byte":421,"end_column":39,"end_line":14,"start_byte":387,"start_column":5,"start_line":14}, expected="true", actual="false")
     try:
-        _implementation = _cott_load("_cott_impl/declarations/presentation/package_label.py", "54bfa42801042ad46f3e96d0ce2c209dcf7de4797bbee0c0a3ac00045f28ee92", "package_label", expected_project_name="declarations-generics", expected_cott_symbol="declarations.presentation.package_label")
+        _implementation = _cott_load("_cott_impl/declarations/presentation/package_label.py", "f0b20121eeec3c0bb246f30402ebe76bf958a17bade71524281958df4e533bba", "package_label", expected_project_name="declarations-generics", expected_cott_symbol="declarations.presentation.package_label")
         _result = _implementation(label, values, raw)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

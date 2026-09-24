@@ -470,6 +470,12 @@ fn select_geo_route(policy: NetworkPolicy) -> Result[NetworkPolicy, MediaError]:
     effects [network]
 
 fn discover_extractors() -> List[ExtractorDescriptor]:
+    doc """
+    Return one enabled generic HTTP extractor named "generic", accepting the
+    prefixes "http://" and "https://", with requires_login false. This is a
+    direct-media client, not a registry of upstream site-specific extractors.
+    """
+
     effects []
 
 fn load_plugins(paths: List[Path]) -> Result[List[PluginDescriptor], MediaError]:
@@ -941,6 +947,59 @@ fn apply_update(request: UpdateRequest) -> Result[Unit, MediaError]:
     effects [network, file.read, file.write]
 
 fn execute(request: ExecutionRequest) -> Result[ExecutionReport, MediaError]:
+    doc """
+    Execute the direct-media pipeline and return its actual selected items,
+    download plan and rendered output, never an invented empty success.
+    Propagate each failing stage's declared MediaError unchanged and stop before
+    later stages. Do not perform effects outside these stages.
+    
+    First call real.yt_dlp.apply_update(request.update), then validate_network,
+    select_geo_route, resolve_authentication and validate_workarounds on their
+    corresponding request values. Use the returned network and authentication
+    for extraction. Path(".") in presentation.log_file disables logging;
+    otherwise call configure_presentation.
+    
+    Expand input entries in order. Argument contributes its value. ConfigFile
+    calls load_config(Path(value)); its returned Argument entries contribute
+    values and BatchFile entries call load_batch_urls with comment prefixes
+    List("#"). Reject a nested ConfigFile as InvalidInput rather than recursing.
+    BatchFile calls load_batch_urls directly. Pass the resulting Argument
+    entries to resolve_inputs with an empty config list. If shortcut.query is
+    nonempty, append build_shortcut_url(request.shortcut)'s successful value.
+    Require at least one resulting URL, otherwise return InvalidInput.
+    Discover descriptors through discover_extractors. For each URL in order
+    call choose_extractor and extract_media; concatenate their actual items.
+    Apply select_playlist, then resolve_live_media, then filter_video to these
+    items using their respective request settings.
+    
+    Path(".") in archive.path disables archive reading and writing and supplies
+    an empty archive. Otherwise call read_download_archive; do not turn its
+    failure into an empty success. Call plan_downloads with the selected items,
+    archive entries and break_on_existing. Preserve the returned plan unchanged.
+    
+    Only SimulationMode.Download transfers media. For each planned item in
+    order, resolve_output_path with request.output, construct TransferRequest
+    with the item's URL, that path, simulate false and formats.max_file_size,
+    then call plan_fragments and transfer_fragments using request.fragments.
+    On successful transfer call plan_post_processing then run_post_processing
+    when kinds is nonempty. Do not use these symbolic plans as raw ffmpeg argv.
+    Only after all planned transfers and requested post-processing succeed,
+    write_download_archive when the archive is enabled and either downloads
+    occurred or force_write_archive is true. Supply the successfully planned
+    items; this writer replaces rather than merges an earlier archive.
+    Simulate, SkipDownload and PrintOnly perform discovery, selection and
+    planning but no media transfer, post-processing or archive write.
+    
+    Render the selected items through render_items with request.json_mode,
+    including when the archive removed every item from the download plan.
+    Return ExecutionReport(selected=the selected items, downloads=the actual
+    plan, rendered=that string, simulated=simulation is not Download).
+    This pipeline uses the existing direct-media descriptor model: it does not
+    invent format/subtitle/thumbnail discovery or metadata that MediaItem does
+    not contain. Those independently declared planning APIs are not silently
+    represented as completed work by this report.
+    """
+
     ensures Result.Ok(report) => report.simulated == (request.simulation != SimulationMode.Download)
 
     error MediaError.InvalidConfig
@@ -998,3 +1057,159 @@ fn run(arguments: List[Str]) -> Never:
     """
 
     effects [file.read, file.write, network, clock, random, process.exit]
+
+requirement EXECUTE_REPORTS_ACTUAL_MEDIA for execute:
+    text "The report contains the actual discovered and selected media, and Download transfers the selected plan before returning success."
+
+requirement EXECUTE_STOPS_ON_FAILURE for execute:
+    text "A failed stage returns its declared error without executing subsequent transfer or archive publication stages."
+
+requirement RUN_EXECUTES_REQUEST for run:
+    text "The CLI executes the parsed request, prints the actual rendered report on success, and exits nonzero on a declared operation failure."
+
+# Reusable test data, not a public request-builder API.
+data direct_media_request: ExecutionRequest = ExecutionRequest(
+    inputs: List(CliInput(kind: InputKind.Argument, value: "https://example.invalid/clip.mp4")),
+    network: NetworkPolicy(
+        proxy_mode: ProxyMode.Direct,
+        proxy: "",
+        socket_timeout_ms: 30000,
+        source_address: "",
+        force_ipv4: false,
+        force_ipv6: false,
+        geo_mode: GeoBypassMode.Default,
+        geo_country: "",
+        geo_ip_block: "",
+    ),
+    authentication: Authentication(
+        kind: AuthenticationKind.Anonymous,
+        username: "",
+        password: "",
+        netrc_location: files.path("netrc"),
+        cookie_file: files.path("cookies"),
+        browser: "",
+        profile: "",
+    ),
+    playlist: PlaylistRequest(
+        mode: PlaylistMode.Playlist,
+        ranges: List(),
+        start: 0,
+        end: 0,
+        items: "",
+        reverse: false,
+        random: false,
+    ),
+    live: LiveRequest(mode: LiveMode.Default, wait_for_video_ms: 0, concurrent_fragments: 1),
+    video_filter: VideoFilterRequest(
+        date_after: "",
+        date_before: "",
+        min_views: 0,
+        max_views: 0,
+        age_limit: 0,
+        match_filter: "",
+        reject_live: false,
+        include_ads: true,
+    ),
+    shortcut: ShortcutRequest(kind: ShortcutKind.Url, query: "", limit: 1),
+    formats: FormatRequest(
+        selector: "",
+        containers: List(),
+        sort_fields: List(),
+        merge_output_format: "",
+        min_file_size: 0,
+        max_file_size: 104857600,
+        prefer_free_formats: false,
+    ),
+    subtitles: SubtitleRequest(
+        mode: SubtitleMode.None,
+        languages: List(),
+        formats: List(),
+        convert_format: "",
+        embed: false,
+    ),
+    thumbnails: ThumbnailRequest(write: false, formats: List(), convert_format: "", embed: false),
+    metadata: MetadataRequest(
+        write_info_json: false,
+        write_description: false,
+        write_comments: false,
+        write_playlist_metadata: false,
+        embed: false,
+    ),
+    output: OutputRequest(
+        template: "%(id)s.%(ext)s",
+        home: files.path("home"),
+        temp: files.path("temp"),
+        output: files.path("output"),
+        missing_placeholder: "NA",
+        restrict_filenames: false,
+        windows_filenames: false,
+        trim_filename_bytes: 0,
+    ),
+    archive: ArchiveRequest(
+        path: files.path("archive.txt"),
+        break_on_existing: false,
+        force_write_archive: false,
+    ),
+    fragments: FragmentPolicy(
+        concurrent_fragments: 1,
+        buffer_size: 65536,
+        chunk_size: 104857600,
+        rate_limit_bytes_per_second: 0,
+        retries: 0,
+        fragment_retries: 0,
+        file_access_retries: 0,
+        continue_download: false,
+        part_files: true,
+    ),
+    post_processing: PostProcessRequest(
+        kinds: List(),
+        audio_format: "",
+        video_format: "",
+        sponsorblock_categories: List(),
+        external_tool: Option.Nothing,
+    ),
+    simulation: SimulationMode.Simulate,
+    json_mode: JsonMode.Single,
+    update: UpdateRequest(policy: UpdatePolicy.Never, channel: "", target: files.path("updater")),
+    presentation: PresentationRequest(
+        level: LogLevel.Info,
+        progress: false,
+        newline_progress: false,
+        color: false,
+        dump_pages: false,
+        write_pages: false,
+        log_file: files.path("log"),
+    ),
+    workarounds: WorkaroundPolicy(
+        certificate: CertificatePolicy.Verify,
+        force_generic_extractor: false,
+        legacy_server_connect: false,
+        extractor_args: List(),
+    ),
+)
+
+scenario nested_request_values:
+    fixtures:
+        fs files:
+            file "archive.txt" text("")
+    data request: ExecutionRequest = direct_media_request
+    call network = validate_network(request.network)
+    assert network matches Result.Ok(value) => value == request.network
+    call urls = resolve_inputs(request.inputs, List())
+    assert urls matches Result.Ok(values) => values == List("https://example.invalid/clip.mp4")
+    call rendered = render_items(
+        List(
+            MediaItem(
+                url: "https://example.invalid/clip.mp4",
+                id: "clip",
+                title: "clip.mp4",
+                ext: "mp4",
+                playlist_index: 1,
+            ),
+        ),
+        request.json_mode,
+    )
+    assert (
+        rendered
+        == "[{\"url\":\"https://example.invalid/clip.mp4\",\"id\":\"clip\",\"title\":\"clip.mp4\",\"ext\":\"mp4\",\"playlist_index\":1}]"
+    )

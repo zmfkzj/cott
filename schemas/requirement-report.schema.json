@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cott.dev/schema/requirement-report/v1",
+  "title": "cott requirement evidence report",
+  "type": "object",
+  "required": ["schema_version", "kind", "meaning", "evidence", "requirements", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "cott.requirements"},
+    "meaning": {"const": "observed means every checked_by link executed and held in the bound snapshot within its reported scope; it never proves the requirement, and assumptions or waivers never change a status"},
+    "evidence": {
+      "type": "object",
+      "required": ["state", "target", "snapshot", "generation_id", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "state": {"enum": ["current", "failed", "stale", "absent"]},
+        "target": {"enum": ["python", "kotlin", "dart"]},
+        "snapshot": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "generation_id": {"type": ["string", "null"]},
+        "reason": {"type": ["string", "null"]}
+      },
+      "if": {"properties": {"state": {"const": "current"}}},
+      "then": {"properties": {"snapshot": {"$ref": "#/$defs/digest"}, "reason": {"type": "null"}}},
+      "else": {"properties": {"generation_id": {"type": "null"}, "reason": {"type": "string", "minLength": 1}}}
+    },
+    "requirements": {"type": "array", "items": {"$ref": "#/$defs/requirement"}},
+    "summary": {
+      "type": "object",
+      "required": ["total", "observed", "unverified", "unknown", "failed", "waived"],
+      "additionalProperties": false,
+      "properties": {
+        "total": {"type": "integer", "minimum": 0},
+        "observed": {"type": "integer", "minimum": 0},
+        "unverified": {"type": "integer", "minimum": 0},
+        "unknown": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0},
+        "waived": {"type": "integer", "minimum": 0}
+      }
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "span": {
+      "type": "object",
+      "required": ["start_byte", "end_byte", "start_line", "start_column", "end_line", "end_column"],
+      "additionalProperties": false,
+      "properties": {
+        "start_byte": {"type": "integer", "minimum": 0},
+        "end_byte": {"type": "integer", "minimum": 0},
+        "start_line": {"type": "integer", "minimum": 0},
+        "start_column": {"type": "integer", "minimum": 0},
+        "end_line": {"type": "integer", "minimum": 0},
+        "end_column": {"type": "integer", "minimum": 0}
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "required": ["id", "callable", "statement", "source", "span", "status", "reason", "checks", "assumptions", "waivers"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "callable": {"type": "string", "minLength": 1},
+        "statement": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1},
+        "span": {"$ref": "#/$defs/span"},
+        "status": {"enum": ["observed", "unverified", "unknown", "failed"]},
+        "reason": {"type": ["string", "null"]},
+        "checks": {"type": "array", "items": {"$ref": "#/$defs/check"}},
+        "assumptions": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "waivers": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      },
+      "if": {"properties": {"status": {"const": "observed"}}},
+      "then": {"properties": {"reason": {"type": "null"}, "checks": {"minItems": 1}}},
+      "else": {"properties": {"reason": {"type": "string", "minLength": 1}}}
+    },
+    "check": {
+      "type": "object",
+      "required": ["scenario", "assertion", "scope", "status", "executed", "assertions_declared", "assertions_observed", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "scenario": {"type": "string", "minLength": 1},
+        "assertion": {"oneOf": [{"type": "null"}, {"type": "string", "pattern": "^assert:(0|[1-9][0-9]*)$"}]},
+        "scope": {"enum": ["scenario", "assertion"]},
+        "status": {"enum": ["observed", "unobserved", "missing", "unverified", "unknown", "failed"]},
+        "executed": {"type": "boolean"},
+        "assertions_declared": {"type": "integer", "minimum": 0},
+        "assertions_observed": {"type": "integer", "minimum": 0},
+        "reason": {"type": ["string", "null"]}
+      },
+      "if": {"properties": {"status": {"const": "observed"}}},
+      "then": {"properties": {"executed": {"const": true}, "reason": {"type": "null"}}},
+      "else": {"properties": {"reason": {"type": "string", "minLength": 1}}}
+    }
+  }
+}

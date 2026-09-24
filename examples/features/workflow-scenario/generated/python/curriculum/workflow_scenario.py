@@ -19,7 +19,7 @@ def begin_search(request_id: U64, query: str) -> SearchSnapshot:
     if not (_cott_contract_condition(((request_id > 0)), "curriculum.workflow_scenario.begin_search", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="curriculum.workflow_scenario.begin_search", clause="requires:1", phase="requires", span={"end_byte":851,"end_column":28,"end_line":47,"start_byte":828,"start_column":5,"start_line":47}, expected="true", actual="false")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/begin_search.py", "328931bf67335ceb8b69220b57a529fb392572827f7f463e399546129d175ae4", "begin_search", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.begin_search")
+        _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/begin_search.py", "7c84ec979dd3142ffa0797fd05ace26135d870c8bdb5a9acd1c9598dd38fab66", "begin_search", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.begin_search")
         _result = _implementation(request_id, query)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -42,7 +42,7 @@ async def resolve_search(request_id: U64, query: str) -> SearchResult:
     if not (_cott_contract_condition(((request_id > 0)), "curriculum.workflow_scenario.resolve_search", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="curriculum.workflow_scenario.resolve_search", clause="requires:1", phase="requires", span={"end_byte":1057,"end_column":28,"end_line":56,"start_byte":1034,"start_column":5,"start_line":56}, expected="true", actual="false")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/resolve_search.py", "ecfdd7535cd9fe98d93b101d7f9792695bb3efa5e08e86c0180226b03caac8cb", "resolve_search", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.resolve_search")
+        _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/resolve_search.py", "b0a372753b6b9ed39beaa837c3a27f80dae61e52d34f7dffc1b2e55235b0a80f", "resolve_search", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.resolve_search")
         _result = await _implementation(request_id, query)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -63,7 +63,7 @@ def apply_search(snapshot: SearchSnapshot, candidate: SearchResult) -> SearchSna
     snapshot = _cott_validate_abi(snapshot, SearchSnapshot, path="$.snapshot")
     candidate = _cott_validate_abi(candidate, SearchResult, path="$.candidate")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/apply_search.py", "c3cabc87c92a02674b764f2591b6c4fe021f9c27862353cc3a22f512cbf72fe6", "apply_search", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.apply_search")
+        _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/apply_search.py", "5f176b09ac2f84d72d5bca317d5eeeaf82319bb959eba5d8f7c0ed22e62d3433", "apply_search", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.apply_search")
         _result = _implementation(snapshot, candidate)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -86,7 +86,7 @@ def begin_save(revision: U64, text: str) -> SaveSnapshot:
     if not (_cott_contract_condition(((revision > 0)), "curriculum.workflow_scenario.begin_save", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="curriculum.workflow_scenario.begin_save", clause="requires:1", phase="requires", span={"end_byte":1425,"end_column":26,"end_line":72,"start_byte":1404,"start_column":5,"start_line":72}, expected="true", actual="false")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/begin_save.py", "089f1535c79302a840fd788f51d0816abdef0446939f9bfb4bab097702414a0d", "begin_save", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.begin_save")
+        _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/begin_save.py", "4bb7277ae2cb0e35efea5d3775276578b457499ea6da554d86d3a5dbf7666897", "begin_save", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.begin_save")
         _result = _implementation(revision, text)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -110,7 +110,7 @@ def request_save(snapshot: SaveSnapshot, revision: U64, text: str) -> SaveSnapsh
     if not (_cott_contract_condition(((revision > 0)), "curriculum.workflow_scenario.request_save", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="curriculum.workflow_scenario.request_save", clause="requires:1", phase="requires", span={"end_byte":1639,"end_column":26,"end_line":81,"start_byte":1618,"start_column":5,"start_line":81}, expected="true", actual="false")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/request_save.py", "641a3825e3e133289ee7e5b2fc335b8eaf87767fb3c11ae9aca8ffe7f1c8e2c1", "request_save", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.request_save")
+        _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/request_save.py", "dee7998910630f24e0be39e037e79190358c878388c748a62938e58f7ea620a7", "request_save", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.request_save")
         _result = _implementation(snapshot, revision, text)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -130,7 +130,7 @@ def flush_save(snapshot: SaveSnapshot) -> SaveReceipt:
     """Return the public receipt for the currently coalesced save request."""
     snapshot = _cott_validate_abi(snapshot, SaveSnapshot, path="$.snapshot")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/flush_save.py", "978ce8a8fbe9de03ab6f73c6491e4f24804a408ab2648232f177dd86ae6dca70", "flush_save", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.flush_save")
+        _implementation = _cott_load("_cott_impl/curriculum/workflow_scenario/flush_save.py", "e537c5449d2141a886417c08f9c44a9b9f492acdd8bf4fbd7ee2da92fe8ef30c", "flush_save", expected_project_name="workflow-scenario", expected_cott_symbol="curriculum.workflow_scenario.flush_save")
         _result = _implementation(snapshot)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

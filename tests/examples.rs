@@ -297,24 +297,6 @@ fn implementation_mappings(manifest: &str) -> Vec<&str> {
     mappings
 }
 
-fn binding_source_file(mapping: &str) -> PathBuf {
-    let (_, target) = mapping
-        .split_once('=')
-        .expect("implementation mapping should have a target");
-    let (module, _) = target
-        .trim()
-        .trim_matches('"')
-        .split_once(':')
-        .expect("implementation target should name a callable");
-    PathBuf::from("python/cott_bindings").join(format!(
-        "{}.py",
-        module
-            .strip_prefix("cott_bindings.")
-            .expect("implementation target should be a cott_bindings module")
-            .replace('.', "/")
-    ))
-}
-
 fn cott(root: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_cott"))
         .args(arguments)
@@ -663,35 +645,16 @@ fn real_inventory_has_canonical_origins_and_verified_generated_shape() {
             "{} must retain project API version 0.1.0",
             example.path
         );
-        let mappings = implementation_mappings(&manifest);
-        let binding_root = project.join("python/cott_bindings");
-        let expected_mappings = match example.path {
-            "real/yt-dlp" => vec![
-                "\"real.yt_dlp.transfer_media\" = \"cott_bindings.real.yt_dlp.transfer_media:transfer_media\"",
-            ],
-            "real/harlequin" => {
-                vec!["\"real.harlequin.core.run\" = \"cott_bindings.real.harlequin.core.run:run\""]
-            }
-            "real/posting" => vec![
-                "\"real.posting.client.send_request\" = \"cott_bindings.real.posting.client.send_request:send_request\"",
-            ],
-            "real/frogmouth" => vec![
-                "\"frogmouth.document.load_document\" = \"cott_bindings.frogmouth.document.load_document:load_document\"",
-            ],
-            _ => Vec::new(),
-        };
-        assert_eq!(
-            mappings, expected_mappings,
-            "{} must retain only its essential bindings",
+        assert!(
+            implementation_mappings(&manifest).is_empty(),
+            "{} must not select manifest bindings",
             example.path
         );
-        if mappings.is_empty() {
-            assert!(
-                !binding_root.exists(),
-                "{} must not have a cott_bindings source tree",
-                example.path
-            );
-        }
+        assert!(
+            !project.join("python/cott_bindings").exists(),
+            "{} must not have a cott_bindings source tree",
+            example.path
+        );
 
         let source_files = authored_files_below(&project.join("src"))
             .iter()
@@ -716,10 +679,7 @@ fn real_inventory_has_canonical_origins_and_verified_generated_shape() {
         let adapter_files = authored_files_below(&project.join("python"))
             .into_iter()
             .filter(|path| path.extension().is_some_and(|extension| extension == "py"))
-            .filter(|path| {
-                !path.starts_with(project.join("python/cott_bindings"))
-                    && !path.starts_with(project.join("python/_cott_impl"))
-            })
+            .filter(|path| !path.starts_with(project.join("python/_cott_impl")))
             .map(|path| {
                 path.strip_prefix(&project)
                     .expect("adapter should remain within its project")
@@ -744,35 +704,6 @@ fn real_inventory_has_canonical_origins_and_verified_generated_shape() {
                 "{} adapter must import only public generated facades",
                 example.path
             );
-        }
-
-        if !mappings.is_empty() {
-            let mapped_binding_sources = mappings
-                .iter()
-                .map(|mapping| binding_source_file(mapping))
-                .collect::<BTreeSet<_>>();
-            let binding_sources = authored_files_below(&binding_root)
-                .into_iter()
-                .filter(|path| path.file_name().is_some_and(|name| name != "__init__.py"))
-                .map(|path| {
-                    path.strip_prefix(&project)
-                        .expect("binding source should remain within its project")
-                        .to_path_buf()
-                })
-                .collect::<BTreeSet<_>>();
-            assert_eq!(
-                binding_sources, mapped_binding_sources,
-                "{} binding sources must match its manifest mappings",
-                example.path
-            );
-            for source in mapped_binding_sources {
-                assert!(
-                    project.join(&source).is_file(),
-                    "{} mapped binding source must exist: {}",
-                    example.path,
-                    source.display()
-                );
-            }
         }
 
         let generation_path = project.join("generated/generation.json");
@@ -1208,20 +1139,38 @@ fn feature_examples_are_formatted_checked_emitted_verified_and_run() {
                     "curriculum.effects_selection.scenario.deterministic_clock",
                 ]
             );
-            assert!(
-                scenarios
-                    .iter()
-                    .all(|scenario| scenario["grade"] == "unobserved")
-            );
-            assert_eq!(
-                generation["current"]["semantic_coverage"]["summary"],
-                serde_json::json!({
-                    "observed": 0,
-                    "unobserved": 0,
-                    "trust_declaration": 11,
-                    "unknown": 2,
-                })
-            );
+            for scenario in scenarios {
+                let assertions = scenario["assertions"]
+                    .as_array()
+                    .expect("scenario assertion evidence");
+                let trace = scenario["trace"].as_array().expect("scenario trace");
+                match scenario["grade"].as_str() {
+                    Some("test observation") => {
+                        assert!(trace.iter().any(|event| event["kind"] == "assert"));
+                        assert!(
+                            assertions
+                                .iter()
+                                .all(|assertion| { assertion["grade"] == "test observation" })
+                        );
+                    }
+                    Some("unobserved") => {
+                        assert_eq!(
+                            scenario["reason"],
+                            "isolated loopback capability unavailable"
+                        );
+                        assert!(
+                            trace.is_empty(),
+                            "unavailable checks must not invent execution"
+                        );
+                        assert!(
+                            assertions
+                                .iter()
+                                .all(|assertion| { assertion["grade"] == "unobserved" })
+                        );
+                    }
+                    status => panic!("invalid effect-scenario evidence status: {status:?}"),
+                }
+            }
         }
     }
 }

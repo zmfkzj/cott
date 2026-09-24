@@ -247,6 +247,81 @@ def _cott_descending_by(values: object, field: str) -> bool:
     return True
 
 
+# Unicode White_Space code points, pinned identically in every Cott target;
+# never a host `isspace`/`strip` definition.
+_COTT_WHITE_SPACE = frozenset("\t\n\x0b\x0c\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000")
+
+
+def _cott_any_blank_by(values: object, field: str) -> bool:
+    for value in values:
+        if all(character in _COTT_WHITE_SPACE for character in getattr(value, field)):
+            return True
+    return False
+
+
+def _cott_unknown_dependency_by(values: object, key: str, dependencies: str) -> bool:
+    elements = list(values)
+    keys = {getattr(value, key) for value in elements}
+    return any(dependency not in keys for value in elements for dependency in getattr(value, dependencies))
+
+
+def _cott_self_dependency_by(values: object, key: str, dependencies: str) -> bool:
+    return any(getattr(value, key) in getattr(value, dependencies) for value in values)
+
+
+def _cott_cyclic_by(values: object, key: str, dependencies: str) -> bool:
+    elements = list(values)
+    dependents: dict[object, set[object]] = {getattr(value, key): set() for value in elements}
+    for value in elements:
+        dependent = getattr(value, key)
+        for dependency in getattr(value, dependencies):
+            if dependency in dependents:
+                dependents[dependency].add(dependent)
+    incoming = dict.fromkeys(dependents, 0)
+    for targets in dependents.values():
+        for target in targets:
+            incoming[target] += 1
+    ready = [node for node, count in incoming.items() if count == 0]
+    ordered = 0
+    while ready:
+        node = ready.pop()
+        ordered += 1
+        for target in dependents[node]:
+            incoming[target] -= 1
+            if incoming[target] == 0:
+                ready.append(target)
+    return ordered != len(dependents)
+
+
+def _cott_permutation_by(order: object, values: object, key: str) -> bool:
+    remaining: dict[object, int] = {}
+    for value in values:
+        selected = getattr(value, key)
+        remaining[selected] = remaining.get(selected, 0) + 1
+    for item in order:
+        count = remaining.get(item, 0)
+        if count == 0:
+            return False
+        remaining[item] = count - 1
+    return not any(remaining.values())
+
+
+def _cott_dependency_ordered_by(order: object, values: object, key: str, dependencies: str) -> bool:
+    first: dict[object, int] = {}
+    last: dict[object, int] = {}
+    for position, item in enumerate(order):
+        first.setdefault(item, position)
+        last[item] = position
+    for value in values:
+        dependent = getattr(value, key)
+        if dependent not in first:
+            continue
+        for dependency in getattr(value, dependencies):
+            if dependency in last and not last[dependency] < first[dependent]:
+                return False
+    return True
+
+
 def _cott_normalize_scalar(value: object, annotation: object) -> object:
     metadata = next((item for item in _get_args(annotation)[1:] if isinstance(item, (CottInt, CottFloat))), None)
     if isinstance(metadata, CottInt):
@@ -1034,6 +1109,8 @@ def _cott_fixture_activate(
 
 
 def _cott_fixture_path(state: _CottFixtureState, path: object) -> tuple[str, _Path]:
+    if isinstance(path, _Path):
+        path = path.as_posix()
     if type(path) is not str or not path or path.startswith("/") or "\\" in path:
         raise CottContractViolation("fixture path must be a non-empty relative POSIX path", phase="fixture")
     parts = path.split("/")
@@ -1057,7 +1134,7 @@ def _cott_fixture_read(path: object) -> bytes:
     return value
 
 
-def _cott_fixture_write(path: object, data: object) -> None:
+def _cott_fixture_write(path: object, data: bytes) -> None:
     state = _cott_fixture_state()
     relative, target = _cott_fixture_path(state, path)
     if type(data) is not bytes:
@@ -1073,7 +1150,7 @@ def _cott_fixture_write(path: object, data: object) -> None:
     _cott_fixture_record(state, "filesystem.write", path=relative, bytes=len(data))
 
 
-def _cott_fixture_replace(path: object, data: object) -> None:
+def _cott_fixture_replace(path: object, data: bytes) -> None:
     state = _cott_fixture_state()
     relative, target = _cott_fixture_path(state, path)
     if type(data) is not bytes:

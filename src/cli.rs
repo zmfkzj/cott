@@ -46,12 +46,13 @@ use crate::provenance::{
 use crate::python::artifact_plan::{PythonArtifactPlan, PythonCallable, PythonCallableKind};
 use crate::python_emit::{Emission, EmitDiagnostic, emit};
 use crate::python_verify::verify_python;
+use crate::requirements::{Evidence, RequirementModel, RequirementReport};
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession, TransactionError};
 use crate::version::{is_at_least, parse_version};
 
-const USAGE: &str = "Cott compiles contracts into verifiable Python, Kotlin, and Dart.\n\nUsage:\n  cott init <path> [--target python|kotlin|dart] [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python|kotlin|dart [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp [--model <model>] --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--replace] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
+const USAGE: &str = "Cott compiles contracts into verifiable Python, Kotlin, and Dart.\n\nUsage:\n  cott init <path> [--target python|kotlin|dart] [--name <name>] [--no-sync] [--format json]\n  cott check [<source.cott>] [--project <dir>] [--format json]\n  cott fmt [--check] [--project <dir>] [--format json]\n  cott emit ir|python|kotlin|dart [--project <dir>] [--format json]\n  cott generate [<fully.qualified.callable>] --agent codex|claude|omp [--model <model>] --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]\n  cott prompt <fully.qualified.callable> [--project <dir>] [--format json]\n  cott verify [--project <dir>] [--format json]\n  cott requirements [--project <dir>] [--format json]\n  cott deploy [--output <dir>] [--replace] [--project <dir>] [--format json]\n  cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]\n  cott lsp\n  cott --version | -V\n";
 
-const WORKFLOW: &str = "\nChoose the smallest step for the change:\n  check / fmt --check   Inspect authored contracts without publishing artifacts.\n  prompt <callable>     Inspect the exact initial agent input without running an agent.\n  emit <target>         Publish target artifacts without an agent; leaves them unverified.\n  generate [callable]   Generate eligible unresolved implementations, not every callable.\n  verify               Run target checks and coverage policy; never invokes an agent.\n  diff                 Inspect semantic changes against the recorded baseline.\n  deploy               Publish a verified snapshot; never generates or re-verifies.\n\nOnly explicit verify certifies a snapshot. Coverage is bounded, not a proof of\nrequirement completeness; inspect unknown/unobserved clauses and policy allowances.\nUse --version and --help from the same compiler executable used for the project.\n";
+const WORKFLOW: &str = "\nChoose the smallest step for the change:\n  check / fmt --check   Inspect authored contracts without publishing artifacts.\n  prompt <callable>     Inspect the exact initial agent input without running an agent.\n  emit <target>         Publish target artifacts without an agent; leaves them unverified.\n  generate [callable]   Generate eligible unresolved implementations, not every callable.\n  verify               Run target checks and coverage policy; never invokes an agent.\n  requirements         Report requirement evidence from the fresh verified snapshot only.\n  diff                 Inspect semantic changes against the recorded baseline.\n  deploy               Publish a verified snapshot; never generates or re-verifies.\n\nOnly explicit verify certifies a snapshot. Coverage is bounded, not a proof of\nrequirement completeness; inspect unknown/unobserved clauses and policy allowances.\nAn observed requirement only means its checked_by scenarios ran and held.\nUse --version and --help from the same compiler executable used for the project.\n";
 
 #[cfg(test)]
 thread_local! {
@@ -128,6 +129,22 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
         }) = parse_command(&arguments)
     {
         return prompt_for_target(project, symbol, OutputFormat::Json);
+    }
+    if !version_requested
+        && arguments
+            .first()
+            .is_some_and(|command| command == "requirements")
+        && arguments
+            .windows(2)
+            .filter(|pair| pair[0] == "--format" && pair[1] == "json")
+            .count()
+            == 1
+        && let Ok(Command::Requirements {
+            project,
+            format: OutputFormat::Json,
+        }) = parse_command(&arguments)
+    {
+        return requirements_for_target(project, OutputFormat::Json);
     }
     let json_formats = arguments
         .windows(2)
@@ -216,6 +233,7 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> i32 {
             format,
         }) => diff_for_target(project, baseline, exit_code, format),
         Ok(Command::Verify { project, .. }) => verify_for_target(project),
+        Ok(Command::Requirements { project, format }) => requirements_for_target(project, format),
         Err(message) => {
             eprintln!("error: {message}");
             eprint!("{USAGE}");
@@ -382,6 +400,7 @@ fn command_project_argument(command: &Command) -> Option<&Option<PathBuf>> {
         | Command::Generate { project, .. }
         | Command::Prompt { project, .. }
         | Command::Verify { project, .. }
+        | Command::Requirements { project, .. }
         | Command::Deploy { project, .. }
         | Command::Diff { project, .. } => Some(project),
         Command::Init { .. } | Command::Lsp | Command::Help | Command::Version => None,
@@ -499,6 +518,11 @@ pub enum Command {
         project: Option<PathBuf>,
         format: OutputFormat,
     },
+    /// Read-only requirement evidence report bound to the fresh verified snapshot.
+    Requirements {
+        project: Option<PathBuf>,
+        format: OutputFormat,
+    },
     Deploy {
         output: Option<PathBuf>,
         replace: bool,
@@ -539,6 +563,13 @@ pub fn parse_command(arguments: &[OsString]) -> Result<Command, &'static str> {
         "verify" => {
             let options = ExistingOptions::parse(values)?;
             Ok(Command::Verify {
+                project: options.project,
+                format: options.format,
+            })
+        }
+        "requirements" => {
+            let options = ExistingOptions::parse(values)?;
+            Ok(Command::Requirements {
                 project: options.project,
                 format: options.format,
             })
@@ -1509,6 +1540,7 @@ fn shadow_warnings(
 ) -> Result<Vec<String>, String> {
     let mut facets = BTreeMap::new();
     let mut warnings = Vec::new();
+    let mut requirement_candidates = Vec::new();
     for module in &ir.modules {
         let value = crate::ir::load(&module.bytes)?;
         for declaration in value
@@ -1552,6 +1584,29 @@ fn shadow_warnings(
                 }
             }
             facets.insert(symbol, supported);
+        }
+        requirement_candidates.extend(
+            crate::requirements::shadow_candidates(&value)
+                .into_iter()
+                .map(|candidate| (display_path(&paths.root, &module.source), candidate)),
+        );
+    }
+    // Requirement text is normative prose like doc: it can shadow a formal duty, but it stays a
+    // warning and linked scenarios are never treated as formal evidence here.
+    for (path, candidate) in requirement_candidates {
+        if !facets
+            .get(&candidate.callable)
+            .is_some_and(|supported| supported.contains(&candidate.facet))
+        {
+            warnings.push(format!(
+                "{path}:{}-{}: {}: possible shadow specification: {} duty is stated in requirement `{}` for `{}` but has no formal evidence",
+                candidate.start_byte,
+                candidate.end_byte,
+                code::SHADOW_SPECIFICATION,
+                candidate.facet.as_str(),
+                candidate.requirement,
+                candidate.callable,
+            ));
         }
     }
     if let Some(rule_path) = &config.generator.rules {
@@ -2198,7 +2253,8 @@ fn enrich_generation_record(
         .map_err(|error| format!("invalid planned generation record: {error}"))?;
     record.current.project_version = config.project.version.clone();
     record.current.compatibility = crate::provenance::GenerationCompatibility::current();
-    let mut dependencies = dependency_records(paths)?;
+    let mut dependencies =
+        crate::python_verify::planned_dependency_records(&config.project.name, paths)?;
     let existing_path = artifact_root_for_paths(paths)?.join("generation.json");
     if existing_path.exists() {
         let existing = fs::read(&existing_path).map_err(|error| {
@@ -2301,64 +2357,6 @@ fn current_compiler_tool() -> Result<serde_json::Value, String> {
         "executable": executable,
         "version": env!("CARGO_PKG_VERSION"),
     }))
-}
-
-fn dependency_records(paths: &ProjectPaths) -> Result<serde_json::Value, String> {
-    let Some(path) = &paths.lockfile else {
-        return Ok(serde_json::Value::Array(Vec::new()));
-    };
-    let bytes = fs::read(path)
-        .map_err(|error| format!("failed to read lockfile {}: {error}", path.display()))?;
-    let lock: toml::Value = toml::from_str(
-        std::str::from_utf8(&bytes)
-            .map_err(|_| format!("lockfile {} is not UTF-8", path.display()))?,
-    )
-    .map_err(|error| format!("invalid uv lockfile {}: {error}", path.display()))?;
-    let lock_hash = format!("sha256:{}", sha256_hex(&bytes));
-    let mut packages = lock
-        .get("package")
-        .and_then(toml::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|package| {
-            let name = package.get("name")?.as_str()?;
-            let version = package.get("version")?.as_str()?;
-            let mut artifacts = package
-                .get("wheels")
-                .and_then(toml::Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|wheel| wheel.get("hash").and_then(toml::Value::as_str))
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
-            if let Some(hash) = package
-                .get("sdist")
-                .and_then(|sdist| sdist.get("hash"))
-                .and_then(toml::Value::as_str)
-            {
-                artifacts.push(hash.to_owned());
-            }
-            artifacts.sort();
-            artifacts.dedup();
-            Some(serde_json::json!({
-                "artifacts": artifacts,
-                "lock_hash": lock_hash,
-                "name": name.to_ascii_lowercase().replace('_', "-"),
-                "version": version,
-            }))
-        })
-        .collect::<Vec<_>>();
-    packages.sort_by(|left, right| {
-        (
-            left.get("name").and_then(serde_json::Value::as_str),
-            left.get("version").and_then(serde_json::Value::as_str),
-        )
-            .cmp(&(
-                right.get("name").and_then(serde_json::Value::as_str),
-                right.get("version").and_then(serde_json::Value::as_str),
-            ))
-    });
-    Ok(serde_json::Value::Array(packages))
 }
 
 fn verified_baseline_guard(
@@ -4343,9 +4341,12 @@ fn finish_kotlin_path(result: Result<PathBuf, crate::kotlin::pipeline::Failure>)
 }
 
 fn finish_kotlin_verification(
-    result: Result<(PathBuf, SemanticCoverage), crate::kotlin::pipeline::Failure>,
+    (result, requirements): (
+        Result<(PathBuf, SemanticCoverage), crate::kotlin::pipeline::Failure>,
+        Option<RequirementReport>,
+    ),
 ) -> i32 {
-    match result {
+    let code = match result {
         Ok((path, coverage)) => {
             println!("verified {}", path.display());
             println!("{}", display_semantic_coverage(&coverage));
@@ -4355,7 +4356,9 @@ fn finish_kotlin_verification(
             eprintln!("error: {}", failure.message);
             failure.code
         }
-    }
+    };
+    print_requirement_report(requirements.as_ref());
+    code
 }
 
 fn finish_dart_unit(result: Result<(), crate::dart::pipeline::Failure>) -> i32 {
@@ -4386,9 +4389,12 @@ fn finish_dart_path(result: Result<PathBuf, crate::dart::pipeline::Failure>) -> 
 }
 
 fn finish_dart_verification(
-    result: Result<(PathBuf, SemanticCoverage), crate::dart::pipeline::Failure>,
+    (result, requirements): (
+        Result<(PathBuf, SemanticCoverage), crate::dart::pipeline::Failure>,
+        Option<RequirementReport>,
+    ),
 ) -> i32 {
-    match result {
+    let code = match result {
         Ok((path, coverage)) => {
             println!("verified {}", path.display());
             println!("{}", display_semantic_coverage(&coverage));
@@ -4398,7 +4404,9 @@ fn finish_dart_verification(
             eprintln!("error: {}", failure.message);
             failure.code
         }
-    }
+    };
+    print_requirement_report(requirements.as_ref());
+    code
 }
 
 fn check_for_target(project: Option<PathBuf>, source: Option<PathBuf>) -> i32 {
@@ -4507,26 +4515,201 @@ fn prompt_for_target(project: Option<PathBuf>, symbol: String, format: OutputFor
 }
 
 fn verify_python_project(project: Option<PathBuf>) -> i32 {
-    match plan(project) {
-        Ok(plan) => match verify(&plan) {
-            Ok(coverage) => {
-                println!("verified {}", generated_path(&plan.paths));
-                println!("{}", display_semantic_coverage(&coverage));
-                0
+    let plan = match plan(project) {
+        Ok(plan) => plan,
+        Err(code) => return code,
+    };
+    let model = match RequirementModel::from_ir(&plan.ir) {
+        Ok(model) => model,
+        Err(error) => {
+            eprintln!("error: requirement model: {error}");
+            return 1;
+        }
+    };
+    let result = verify(&plan);
+    let code = match &result {
+        Ok(coverage) => {
+            println!("verified {}", generated_path(&plan.paths));
+            println!("{}", display_semantic_coverage(coverage));
+            0
+        }
+        Err(messages) => {
+            let contract_failure = messages.iter().any(|message| {
+                crate::proof::is_disproved_error(message)
+                    || message.starts_with(COVERAGE_POLICY_PREFIX)
+            });
+            for message in messages {
+                eprintln!("error: {message}");
             }
-            Err(messages) => {
-                let contract_failure = messages.iter().any(|message| {
-                    crate::proof::is_disproved_error(message)
-                        || message.starts_with(COVERAGE_POLICY_PREFIX)
-                });
-                for message in messages {
-                    eprintln!("error: {message}");
-                }
-                if contract_failure { 3 } else { 4 }
+            if contract_failure { 3 } else { 4 }
+        }
+    };
+    // `verify` publishes the certified record before it reports coverage-policy violations;
+    // every other error happens before certification and must never fall back to a record.
+    let failure = match &result {
+        Err(messages)
+            if !messages
+                .iter()
+                .all(|message| message.starts_with(COVERAGE_POLICY_PREFIX)) =>
+        {
+            Some(messages.join("\n"))
+        }
+        _ => None,
+    };
+    let generation = artifact_root_for_paths(&plan.paths).map(|root| root.join("generation.json"));
+    let outcome = match (&failure, &generation) {
+        (Some(message), _) | (None, Err(message)) => VerifyOutcome::Failed(message),
+        (None, Ok(path)) => VerifyOutcome::Published(path),
+    };
+    print_requirement_report(
+        verification_requirements(TargetLanguage::Python, &model, outcome).as_ref(),
+    );
+    code
+}
+
+/// How one `verify` run of the current inputs ended, as far as requirement evidence goes.
+pub(crate) enum VerifyOutcome<'a> {
+    /// This run published its certified record at the path. A failed coverage policy still
+    /// publishes raw evidence; policy never changes a requirement status.
+    Published(&'a Path),
+    /// This run failed before certification. Older records are never consulted.
+    Failed(&'a str),
+}
+
+const VERIFY_FAILED_REASON: &str = "verify failed before certifying the current inputs";
+
+/// The requirement report a `verify` run prints, or `None` when the project declares no
+/// requirement so existing verify output is unchanged.
+pub(crate) fn verification_requirements(
+    target: TargetLanguage,
+    model: &RequirementModel,
+    outcome: VerifyOutcome<'_>,
+) -> Option<RequirementReport> {
+    if model.is_empty() {
+        return None;
+    }
+    Some(match outcome {
+        VerifyOutcome::Published(path) => match fs::read(path) {
+            Ok(bytes) => recorded_requirements(target, model, &bytes),
+            Err(error) => model.report(
+                target,
+                Evidence::Absent(&format!("read published generation record: {error}")),
+            ),
+        },
+        VerifyOutcome::Failed(message) => {
+            let failures = model.scenario_failures(target, message);
+            model.report(
+                target,
+                Evidence::Failed {
+                    reason: VERIFY_FAILED_REASON,
+                    failures: &failures,
+                },
+            )
+        }
+    })
+}
+
+/// Join requirements against record bytes. Callers pass only bytes that already passed the
+/// target's freshness gate (or that this process just published); the report itself still
+/// requires a certified current snapshot whose Canonical IR identity matches the sources.
+pub(crate) fn recorded_requirements(
+    target: TargetLanguage,
+    model: &RequirementModel,
+    bytes: &[u8],
+) -> RequirementReport {
+    match serde_json::from_slice::<serde_json::Value>(bytes) {
+        Ok(record) => model.report(target, Evidence::Recorded(&record)),
+        Err(error) => model.report(
+            target,
+            Evidence::Stale(&format!("generation record is not JSON: {error}")),
+        ),
+    }
+}
+
+fn print_requirement_report(report: Option<&RequirementReport>) {
+    if let Some(report) = report {
+        println!("{report}");
+    }
+}
+
+pub(crate) const NO_RECORD_REASON: &str =
+    "no generation record; run `cott emit <target>` and `cott verify`";
+
+/// Python `requirements`: bind the published record only after the same managed-byte and
+/// comparable-snapshot gate `verify` runs before it trusts a record.
+fn python_requirement_report(project: Option<PathBuf>) -> Result<RequirementReport, i32> {
+    let root = project_root(project)?;
+    let session = ProjectSession::acquire_for_inspection(&root).map_err(|error| {
+        eprintln!("error: {error}");
+        6
+    })?;
+    let plan = plan_with_session(session)?;
+    let model = RequirementModel::from_ir(&plan.ir).map_err(|error| {
+        eprintln!("error: requirement model: {error}");
+        1
+    })?;
+    let artifact_root = artifact_root_for_paths(&plan.paths).map_err(|error| {
+        eprintln!("error: {error}");
+        2
+    })?;
+    match fs::symlink_metadata(artifact_root.join("generation.json")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(model.report(TargetLanguage::Python, Evidence::Absent(NO_RECORD_REASON)));
+        }
+        _ => {}
+    }
+    Ok(match current_python_publication(&plan) {
+        Ok(publication) => {
+            recorded_requirements(TargetLanguage::Python, &model, &publication.record_bytes)
+        }
+        Err(mismatches) => model.report(
+            TargetLanguage::Python,
+            Evidence::Stale(&mismatches.join("; ")),
+        ),
+    })
+}
+
+fn requirements_for_target(project: Option<PathBuf>, format: OutputFormat) -> i32 {
+    let report = match selected_project_target(&project) {
+        Ok(TargetLanguage::Python) => python_requirement_report(project),
+        Ok(TargetLanguage::Kotlin) => {
+            crate::kotlin::pipeline::requirements(project).map_err(|failure| {
+                eprintln!("error: {}", failure.message);
+                failure.code
+            })
+        }
+        Ok(TargetLanguage::Dart) => {
+            crate::dart::pipeline::requirements(project).map_err(|failure| {
+                eprintln!("error: {}", failure.message);
+                failure.code
+            })
+        }
+        // Failures keep stdout empty in both formats; stdout carries only the report document.
+        Err(message) => return target_selection_failure(OutputFormat::Human, message),
+    };
+    let report = match report {
+        Ok(report) => report,
+        Err(code) => return code,
+    };
+    match format {
+        OutputFormat::Human => {
+            println!("{report}");
+            // Zero selected requirements is not evidence that any check ran.
+            if report.summary.total == 0 {
+                println!(
+                    "note: no requirement is declared; nothing was selected, so no check is reported as executed"
+                );
+            }
+        }
+        OutputFormat::Json => match report.to_json() {
+            Ok(value) => println!("{value}"),
+            Err(error) => {
+                eprintln!("error: {error}");
+                return 1;
             }
         },
-        Err(code) => code,
     }
+    0
 }
 
 fn verify_for_target(project: Option<PathBuf>) -> i32 {
@@ -5768,10 +5951,20 @@ fn safe_relative_path(path: &Path) -> bool {
             .components()
             .all(|component| matches!(component, Component::Normal(_)))
 }
-fn verify(plan: &PlannedProject) -> Result<SemanticCoverage, Vec<String>> {
+/// The published Python snapshot after the freshness gate `verify` and `requirements` share.
+struct PythonPublication {
+    artifact_root: PathBuf,
+    expected: GenerationRecord,
+    actual: GenerationRecord,
+    /// Exact bytes of the published `generation.json` that passed the gate.
+    record_bytes: Vec<u8>,
+}
+
+/// Every managed byte must equal the current plan's emission, and the published generation
+/// record's comparable snapshot must describe the current compiler inputs.
+fn current_python_publication(plan: &PlannedProject) -> Result<PythonPublication, Vec<String>> {
     let artifact_root = artifact_root_for_paths(&plan.paths).map_err(|message| vec![message])?;
-    let session = &plan.session;
-    let actual = collect_tree(&artifact_root).map_err(|message| vec![message])?;
+    let mut actual = collect_tree(&artifact_root).map_err(|message| vec![message])?;
     let mut mismatches = Vec::new();
     for (path, expected) in &plan.emission.files {
         if path == Path::new("generation.json") {
@@ -5804,10 +5997,20 @@ fn verify(plan: &PlannedProject) -> Result<SemanticCoverage, Vec<String>> {
             GenerationRecord::parse(bytes)
                 .map_err(|error| vec![format!("invalid managed generation record: {error}")])
         })?;
-    if comparable_snapshot(&actual_record.current) != comparable_snapshot(&expected_record.current)
-    {
-        mismatches
-            .push("generation record does not describe the current compiler inputs".to_owned());
+    let actual_snapshot = comparable_snapshot(&actual_record.current);
+    let expected_snapshot = comparable_snapshot(&expected_record.current);
+    if actual_snapshot != expected_snapshot {
+        let fields = expected_snapshot
+            .as_object()
+            .expect("comparable snapshot is an object")
+            .keys()
+            .filter(|key| actual_snapshot.get(*key) != expected_snapshot.get(*key))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        mismatches.push(format!(
+            "generation record does not describe the current compiler inputs: {fields}"
+        ));
     }
     if !expected_record.current.unresolved.is_empty() {
         mismatches.push(format!(
@@ -5824,6 +6027,25 @@ fn verify(plan: &PlannedProject) -> Result<SemanticCoverage, Vec<String>> {
     if !mismatches.is_empty() {
         return Err(mismatches);
     }
+    let record_bytes = actual
+        .remove(Path::new("generation.json"))
+        .expect("parsed generation record is present");
+    Ok(PythonPublication {
+        artifact_root,
+        expected: expected_record,
+        actual: actual_record,
+        record_bytes,
+    })
+}
+
+fn verify(plan: &PlannedProject) -> Result<SemanticCoverage, Vec<String>> {
+    let PythonPublication {
+        artifact_root,
+        expected: expected_record,
+        actual: actual_record,
+        ..
+    } = current_python_publication(plan)?;
+    let session = &plan.session;
     let implementation_comparison = compare_implementation_identities(
         actual_record.last_verified.as_ref(),
         &expected_record.current,

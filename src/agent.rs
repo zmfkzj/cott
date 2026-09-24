@@ -540,6 +540,9 @@ pub fn render_prompt(
         write_path.display()
     ));
     append_intent_docs(declarations, symbol, &mut prompt);
+    prompt.push_str(&crate::requirements::render_prompt_requirements(
+        declarations,
+    ));
     prompt.push_str("\nFORMAL DECLARATIONS\n");
     prompt.push_str(prompt_declarations::FORMAT);
     prompt.push_str(&prompt_declarations::render_scoped_declarations(
@@ -768,6 +771,7 @@ fn append_python_rules(
     }
     if features.scenario {
         prompt.push_str("Scenario fixtures and steps are runner-owned. Scenario calls are facade-only: invoke the exact generated public facade, never a private `_cott_impl` implementation or `cott_bindings` module. The only private runtime effect adapters are `cott_runtime._cott_fixture_read`, `cott_runtime._cott_fixture_write`, `cott_runtime._cott_fixture_replace`, `cott_runtime._cott_fixture_http`, and `cott_runtime._cott_fixture_now`. They MAY be used only when the contract is targeted by a compatible declared scenario with an active fixture. Otherwise, an effectful callable MUST NOT invent an adapter name or authority. Do not emulate an effect with stdlib I/O, inspect adapter internals, dynamically import an adapter, or retain an adapter value.\n");
+        prompt.push_str("Fixture filesystem adapters accept a relative pathlib.Path or str inside the fixture root. `_cott_fixture_read(path)` and `_cott_fixture_http(url)` return bytes; `_cott_fixture_write(path, data)` and `_cott_fixture_replace(path, data)` require bytes, so encode/decode text explicitly using the contract's encoding. `_cott_fixture_now()` returns the configured clock fixture's start_ms value in milliseconds; convert explicitly if the callable contract returns another unit, such as nanoseconds. No fixture adapter supplies authority outside an active compiler-owned fixture.\n");
     }
     prompt.push_str("Implement only the target Python file. Do not modify .cott contracts, manifests, rules, bindings, generated files, or other implementations. Do not reimplement bound symbols. If the contract must change, report that and leave the target unresolved.\n");
 }
@@ -891,6 +895,7 @@ fn declaration_kind(kind: &str) -> bool {
             | "rule"
             | "resource"
             | "scenario"
+            | "requirement"
             | "external_type"
             | "specialization"
     )

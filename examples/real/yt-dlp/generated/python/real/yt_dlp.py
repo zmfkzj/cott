@@ -506,19 +506,22 @@ def select_geo_route(policy: NetworkPolicy) -> Result[NetworkPolicy, MediaError]
     return _result
 
 def discover_extractors() -> CottList[ExtractorDescriptor]:
+    """Return one enabled generic HTTP extractor named "generic", accepting the
+prefixes "http://" and "https://", with requires_login false. This is a
+direct-media client, not a registry of upstream site-specific extractors."""
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/discover_extractors.py", "7ffd0f5d47903d3b2d38083debf49ec04c27e285a55ee7f7ed45f78754e92460", "discover_extractors", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.discover_extractors")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/discover_extractors.py", "1a728279216552f89f9753c29437016f1d0da22c3bcad47234dc165deccc1d32", "discover_extractors", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.discover_extractors")
         _result = _implementation()
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.discover_extractors"
         if _error.span is None:
-            _error.span = {"end_byte":11328,"end_column":1,"end_line":475,"start_byte":11257,"start_column":1,"start_line":472}
+            _error.span = {"end_byte":11580,"end_column":1,"end_line":481,"start_byte":11257,"start_column":1,"start_line":472}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.discover_extractors", phase="implementation-call", span={"end_byte":11328,"end_column":1,"end_line":475,"start_byte":11257,"start_column":1,"start_line":472}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.discover_extractors", phase="implementation-call", span={"end_byte":11580,"end_column":1,"end_line":481,"start_byte":11257,"start_column":1,"start_line":472}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.discover_extractors", phase="implementation-call", span={"end_byte":11328,"end_column":1,"end_line":475,"start_byte":11257,"start_column":1,"start_line":472}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.discover_extractors", phase="implementation-call", span={"end_byte":11580,"end_column":1,"end_line":481,"start_byte":11257,"start_column":1,"start_line":472}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, CottList[ExtractorDescriptor], path="$.return")
     _result = _cott_wrap_async_protocol(_result, CottList[ExtractorDescriptor], path="$.return", validator=_cott_validate_abi)
     return _result
@@ -545,25 +548,25 @@ fixed descriptive category), with no partial result and no content in errors."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/load_plugins.py", "0ed5ded5e28b8ae701746724db20d0db7175364d4f2b5db08c5be4816c40822b", "load_plugins", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.load_plugins")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/load_plugins.py", "da32e2462049af99bb467abbd76b718619b7fe2e2c84d49f4daadffc4fc31e2d", "load_plugins", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.load_plugins")
         _result = _implementation(paths)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.load_plugins"
         if _error.span is None:
-            _error.span = {"end_byte":12838,"end_column":1,"end_line":501,"start_byte":11328,"start_column":1,"start_line":475}
+            _error.span = {"end_byte":13090,"end_column":1,"end_line":507,"start_byte":11580,"start_column":1,"start_line":481}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.load_plugins", phase="implementation-call", span={"end_byte":12838,"end_column":1,"end_line":501,"start_byte":11328,"start_column":1,"start_line":475}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.load_plugins", phase="implementation-call", span={"end_byte":13090,"end_column":1,"end_line":507,"start_byte":11580,"start_column":1,"start_line":481}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.load_plugins", phase="implementation-call", span={"end_byte":12838,"end_column":1,"end_line":501,"start_byte":11328,"start_column":1,"start_line":475}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.load_plugins", phase="implementation-call", span={"end_byte":13090,"end_column":1,"end_line":507,"start_byte":11580,"start_column":1,"start_line":481}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[PluginDescriptor], MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.load_plugins", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_PluginRejected,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.load_plugins", phase="error", span={"end_byte":12838,"end_column":1,"end_line":501,"start_byte":11328,"start_column":1,"start_line":475}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.load_plugins", phase="error", span={"end_byte":13090,"end_column":1,"end_line":507,"start_byte":11580,"start_column":1,"start_line":481}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.load_plugins", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -578,7 +581,7 @@ fixed descriptive category), with no partial result and no content in errors."""
         _cott_contract_condition((False), "real.yt_dlp.load_plugins", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.load_plugins", clause="ensures:1", phase="ensures", span={"end_byte":12774,"end_column":56,"end_line":495,"start_byte":12723,"start_column":5,"start_line":495}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.load_plugins", clause="ensures:1", phase="ensures", span={"end_byte":13026,"end_column":56,"end_line":501,"start_byte":12975,"start_column":5,"start_line":501}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[PluginDescriptor], MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -595,19 +598,19 @@ def choose_extractor(url: str, extractors: CottList[ExtractorDescriptor]) -> Res
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.choose_extractor"
         if _error.span is None:
-            _error.span = {"end_byte":13108,"end_column":1,"end_line":512,"start_byte":12838,"start_column":1,"start_line":501}
+            _error.span = {"end_byte":13360,"end_column":1,"end_line":518,"start_byte":13090,"start_column":1,"start_line":507}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.choose_extractor", phase="implementation-call", span={"end_byte":13108,"end_column":1,"end_line":512,"start_byte":12838,"start_column":1,"start_line":501}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.choose_extractor", phase="implementation-call", span={"end_byte":13360,"end_column":1,"end_line":518,"start_byte":13090,"start_column":1,"start_line":507}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.choose_extractor", phase="implementation-call", span={"end_byte":13108,"end_column":1,"end_line":512,"start_byte":12838,"start_column":1,"start_line":501}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.choose_extractor", phase="implementation-call", span={"end_byte":13360,"end_column":1,"end_line":518,"start_byte":13090,"start_column":1,"start_line":507}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[ExtractorDescriptor, MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.choose_extractor", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_UnsupportedUrl, MediaError_ExtractorMissing,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.choose_extractor", phase="error", span={"end_byte":13108,"end_column":1,"end_line":512,"start_byte":12838,"start_column":1,"start_line":501}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.choose_extractor", phase="error", span={"end_byte":13360,"end_column":1,"end_line":518,"start_byte":13090,"start_column":1,"start_line":507}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.choose_extractor", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -624,7 +627,7 @@ def choose_extractor(url: str, extractors: CottList[ExtractorDescriptor]) -> Res
         _cott_contract_condition((False), "real.yt_dlp.choose_extractor", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.choose_extractor", clause="ensures:0", phase="ensures", span={"end_byte":13015,"end_column":54,"end_line":505,"start_byte":12966,"start_column":5,"start_line":505}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.choose_extractor", clause="ensures:0", phase="ensures", span={"end_byte":13267,"end_column":54,"end_line":511,"start_byte":13218,"start_column":5,"start_line":511}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[ExtractorDescriptor, MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -644,19 +647,19 @@ def extract_media(url: str, extractor: ExtractorDescriptor, authentication: Auth
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.extract_media"
         if _error.span is None:
-            _error.span = {"end_byte":13651,"end_column":1,"end_line":532,"start_byte":13108,"start_column":1,"start_line":512}
+            _error.span = {"end_byte":13903,"end_column":1,"end_line":538,"start_byte":13360,"start_column":1,"start_line":518}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.extract_media", phase="implementation-call", span={"end_byte":13651,"end_column":1,"end_line":532,"start_byte":13108,"start_column":1,"start_line":512}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.extract_media", phase="implementation-call", span={"end_byte":13903,"end_column":1,"end_line":538,"start_byte":13360,"start_column":1,"start_line":518}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.extract_media", phase="implementation-call", span={"end_byte":13651,"end_column":1,"end_line":532,"start_byte":13108,"start_column":1,"start_line":512}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.extract_media", phase="implementation-call", span={"end_byte":13903,"end_column":1,"end_line":538,"start_byte":13360,"start_column":1,"start_line":518}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[MediaItem], MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.extract_media", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_AuthenticationFailed, MediaError_GeoRestricted, MediaError_HttpStatus, MediaError_NetworkFailure, MediaError_UnsupportedUrl,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.extract_media", phase="error", span={"end_byte":13651,"end_column":1,"end_line":532,"start_byte":13108,"start_column":1,"start_line":512}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.extract_media", phase="error", span={"end_byte":13903,"end_column":1,"end_line":538,"start_byte":13360,"start_column":1,"start_line":518}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.extract_media", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -679,7 +682,7 @@ def extract_media(url: str, extractor: ExtractorDescriptor, authentication: Auth
         _cott_contract_condition((False), "real.yt_dlp.extract_media", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.extract_media", clause="ensures:1", phase="ensures", span={"end_byte":13444,"end_column":52,"end_line":522,"start_byte":13397,"start_column":5,"start_line":522}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.extract_media", clause="ensures:1", phase="ensures", span={"end_byte":13696,"end_column":52,"end_line":528,"start_byte":13649,"start_column":5,"start_line":528}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[MediaItem], MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -702,19 +705,19 @@ contributes no matches. Preserve every MediaItem field, including playlist_index
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.expand_playlist_ranges"
         if _error.span is None:
-            _error.span = {"end_byte":14484,"end_column":1,"end_line":551,"start_byte":13651,"start_column":1,"start_line":532}
+            _error.span = {"end_byte":14736,"end_column":1,"end_line":557,"start_byte":13903,"start_column":1,"start_line":538}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.expand_playlist_ranges", phase="implementation-call", span={"end_byte":14484,"end_column":1,"end_line":551,"start_byte":13651,"start_column":1,"start_line":532}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.expand_playlist_ranges", phase="implementation-call", span={"end_byte":14736,"end_column":1,"end_line":557,"start_byte":13903,"start_column":1,"start_line":538}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.expand_playlist_ranges", phase="implementation-call", span={"end_byte":14484,"end_column":1,"end_line":551,"start_byte":13651,"start_column":1,"start_line":532}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.expand_playlist_ranges", phase="implementation-call", span={"end_byte":14736,"end_column":1,"end_line":557,"start_byte":13903,"start_column":1,"start_line":538}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[MediaItem], MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.expand_playlist_ranges", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_InvalidRange,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.expand_playlist_ranges", phase="error", span={"end_byte":14484,"end_column":1,"end_line":551,"start_byte":13651,"start_column":1,"start_line":532}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.expand_playlist_ranges", phase="error", span={"end_byte":14736,"end_column":1,"end_line":557,"start_byte":13903,"start_column":1,"start_line":538}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.expand_playlist_ranges", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -729,7 +732,7 @@ contributes no matches. Preserve every MediaItem field, including playlist_index
         _cott_contract_condition((False), "real.yt_dlp.expand_playlist_ranges", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.expand_playlist_ranges", clause="ensures:1", phase="ensures", span={"end_byte":14431,"end_column":148,"end_line":545,"start_byte":14288,"start_column":5,"start_line":545}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.expand_playlist_ranges", clause="ensures:1", phase="ensures", span={"end_byte":14683,"end_column":148,"end_line":551,"start_byte":14540,"start_column":5,"start_line":551}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[MediaItem], MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -766,19 +769,19 @@ their original multiplicity and keep item fields unchanged."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.select_playlist"
         if _error.span is None:
-            _error.span = {"end_byte":16356,"end_column":1,"end_line":585,"start_byte":14484,"start_column":1,"start_line":551}
+            _error.span = {"end_byte":16608,"end_column":1,"end_line":591,"start_byte":14736,"start_column":1,"start_line":557}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.select_playlist", phase="implementation-call", span={"end_byte":16356,"end_column":1,"end_line":585,"start_byte":14484,"start_column":1,"start_line":551}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.select_playlist", phase="implementation-call", span={"end_byte":16608,"end_column":1,"end_line":591,"start_byte":14736,"start_column":1,"start_line":557}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.select_playlist", phase="implementation-call", span={"end_byte":16356,"end_column":1,"end_line":585,"start_byte":14484,"start_column":1,"start_line":551}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.select_playlist", phase="implementation-call", span={"end_byte":16608,"end_column":1,"end_line":591,"start_byte":14736,"start_column":1,"start_line":557}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[MediaItem], MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.select_playlist", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_InvalidRange, MediaError_InvalidInput,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.select_playlist", phase="error", span={"end_byte":16356,"end_column":1,"end_line":585,"start_byte":14484,"start_column":1,"start_line":551}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.select_playlist", phase="error", span={"end_byte":16608,"end_column":1,"end_line":591,"start_byte":14736,"start_column":1,"start_line":557}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.select_playlist", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -795,7 +798,7 @@ their original multiplicity and keep item fields unchanged."""
         _cott_contract_condition((False), "real.yt_dlp.select_playlist", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.select_playlist", clause="ensures:1", phase="ensures", span={"end_byte":16263,"end_column":61,"end_line":578,"start_byte":16207,"start_column":5,"start_line":578}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.select_playlist", clause="ensures:1", phase="ensures", span={"end_byte":16515,"end_column":61,"end_line":584,"start_byte":16459,"start_column":5,"start_line":584}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[MediaItem], MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -824,19 +827,19 @@ not a requirement to invent a request endpoint."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.resolve_live_media"
         if _error.span is None:
-            _error.span = {"end_byte":17592,"end_column":1,"end_line":611,"start_byte":16356,"start_column":1,"start_line":585}
+            _error.span = {"end_byte":17844,"end_column":1,"end_line":617,"start_byte":16608,"start_column":1,"start_line":591}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.resolve_live_media", phase="implementation-call", span={"end_byte":17592,"end_column":1,"end_line":611,"start_byte":16356,"start_column":1,"start_line":585}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.resolve_live_media", phase="implementation-call", span={"end_byte":17844,"end_column":1,"end_line":617,"start_byte":16608,"start_column":1,"start_line":591}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.resolve_live_media", phase="implementation-call", span={"end_byte":17592,"end_column":1,"end_line":611,"start_byte":16356,"start_column":1,"start_line":585}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.resolve_live_media", phase="implementation-call", span={"end_byte":17844,"end_column":1,"end_line":617,"start_byte":16608,"start_column":1,"start_line":591}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[MediaItem], MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.resolve_live_media", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_InvalidInput, MediaError_RetryExhausted,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.resolve_live_media", phase="error", span={"end_byte":17592,"end_column":1,"end_line":611,"start_byte":16356,"start_column":1,"start_line":585}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.resolve_live_media", phase="error", span={"end_byte":17844,"end_column":1,"end_line":617,"start_byte":16608,"start_column":1,"start_line":591}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.resolve_live_media", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -853,7 +856,7 @@ not a requirement to invent a request endpoint."""
         _cott_contract_condition((False), "real.yt_dlp.resolve_live_media", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.resolve_live_media", clause="ensures:1", phase="ensures", span={"end_byte":17489,"end_column":61,"end_line":604,"start_byte":17433,"start_column":5,"start_line":604}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.resolve_live_media", clause="ensures:1", phase="ensures", span={"end_byte":17741,"end_column":61,"end_line":610,"start_byte":17685,"start_column":5,"start_line":610}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[MediaItem], MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -870,19 +873,19 @@ def filter_video(items: CottList[MediaItem], request: VideoFilterRequest) -> Res
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.filter_video"
         if _error.span is None:
-            _error.span = {"end_byte":17825,"end_column":1,"end_line":621,"start_byte":17592,"start_column":1,"start_line":611}
+            _error.span = {"end_byte":18077,"end_column":1,"end_line":627,"start_byte":17844,"start_column":1,"start_line":617}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.filter_video", phase="implementation-call", span={"end_byte":17825,"end_column":1,"end_line":621,"start_byte":17592,"start_column":1,"start_line":611}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.filter_video", phase="implementation-call", span={"end_byte":18077,"end_column":1,"end_line":627,"start_byte":17844,"start_column":1,"start_line":617}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.filter_video", phase="implementation-call", span={"end_byte":17825,"end_column":1,"end_line":621,"start_byte":17592,"start_column":1,"start_line":611}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.filter_video", phase="implementation-call", span={"end_byte":18077,"end_column":1,"end_line":627,"start_byte":17844,"start_column":1,"start_line":617}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[MediaItem], MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.filter_video", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_InvalidInput,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.filter_video", phase="error", span={"end_byte":17825,"end_column":1,"end_line":621,"start_byte":17592,"start_column":1,"start_line":611}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.filter_video", phase="error", span={"end_byte":18077,"end_column":1,"end_line":627,"start_byte":17844,"start_column":1,"start_line":617}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.filter_video", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -897,7 +900,7 @@ def filter_video(items: CottList[MediaItem], request: VideoFilterRequest) -> Res
         _cott_contract_condition((False), "real.yt_dlp.filter_video", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.filter_video", clause="ensures:0", phase="ensures", span={"end_byte":17772,"end_column":61,"end_line":615,"start_byte":17716,"start_column":5,"start_line":615}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.filter_video", clause="ensures:0", phase="ensures", span={"end_byte":18024,"end_column":61,"end_line":621,"start_byte":17968,"start_column":5,"start_line":621}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[MediaItem], MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -914,19 +917,19 @@ def filter_formats(formats: CottList[FormatDescriptor], request: FormatRequest) 
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.filter_formats"
         if _error.span is None:
-            _error.span = {"end_byte":18112,"end_column":1,"end_line":632,"start_byte":17825,"start_column":1,"start_line":621}
+            _error.span = {"end_byte":18364,"end_column":1,"end_line":638,"start_byte":18077,"start_column":1,"start_line":627}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.filter_formats", phase="implementation-call", span={"end_byte":18112,"end_column":1,"end_line":632,"start_byte":17825,"start_column":1,"start_line":621}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.filter_formats", phase="implementation-call", span={"end_byte":18364,"end_column":1,"end_line":638,"start_byte":18077,"start_column":1,"start_line":627}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.filter_formats", phase="implementation-call", span={"end_byte":18112,"end_column":1,"end_line":632,"start_byte":17825,"start_column":1,"start_line":621}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.filter_formats", phase="implementation-call", span={"end_byte":18364,"end_column":1,"end_line":638,"start_byte":18077,"start_column":1,"start_line":627}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[FormatDescriptor], MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.filter_formats", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_FormatUnavailable, MediaError_InvalidInput,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.filter_formats", phase="error", span={"end_byte":18112,"end_column":1,"end_line":632,"start_byte":17825,"start_column":1,"start_line":621}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.filter_formats", phase="error", span={"end_byte":18364,"end_column":1,"end_line":638,"start_byte":18077,"start_column":1,"start_line":627}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.filter_formats", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -943,7 +946,7 @@ def filter_formats(formats: CottList[FormatDescriptor], request: FormatRequest) 
         _cott_contract_condition((False), "real.yt_dlp.filter_formats", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.filter_formats", clause="ensures:0", phase="ensures", span={"end_byte":18020,"end_column":63,"end_line":625,"start_byte":17962,"start_column":5,"start_line":625}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.filter_formats", clause="ensures:0", phase="ensures", span={"end_byte":18272,"end_column":63,"end_line":631,"start_byte":18214,"start_column":5,"start_line":631}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[FormatDescriptor], MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -957,15 +960,15 @@ def sort_formats(formats: CottList[FormatDescriptor], fields: CottList[str]) -> 
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.sort_formats"
         if _error.span is None:
-            _error.span = {"end_byte":18262,"end_column":1,"end_line":637,"start_byte":18112,"start_column":1,"start_line":632}
+            _error.span = {"end_byte":18514,"end_column":1,"end_line":643,"start_byte":18364,"start_column":1,"start_line":638}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.sort_formats", phase="implementation-call", span={"end_byte":18262,"end_column":1,"end_line":637,"start_byte":18112,"start_column":1,"start_line":632}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.sort_formats", phase="implementation-call", span={"end_byte":18514,"end_column":1,"end_line":643,"start_byte":18364,"start_column":1,"start_line":638}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.sort_formats", phase="implementation-call", span={"end_byte":18262,"end_column":1,"end_line":637,"start_byte":18112,"start_column":1,"start_line":632}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.sort_formats", phase="implementation-call", span={"end_byte":18514,"end_column":1,"end_line":643,"start_byte":18364,"start_column":1,"start_line":638}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, CottList[FormatDescriptor], path="$.return")
     if not (_cott_contract_condition(((len(_result) == len(formats))), "real.yt_dlp.sort_formats", "ensures:0")):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.sort_formats", clause="ensures:0", phase="ensures", span={"end_byte":18244,"end_column":38,"end_line":633,"start_byte":18211,"start_column":5,"start_line":633}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.sort_formats", clause="ensures:0", phase="ensures", span={"end_byte":18496,"end_column":38,"end_line":639,"start_byte":18463,"start_column":5,"start_line":639}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, CottList[FormatDescriptor], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -983,19 +986,19 @@ def select_subtitles(item: MediaItem, request: SubtitleRequest) -> Result[CottLi
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.select_subtitles"
         if _error.span is None:
-            _error.span = {"end_byte":18585,"end_column":1,"end_line":648,"start_byte":18262,"start_column":1,"start_line":637}
+            _error.span = {"end_byte":18837,"end_column":1,"end_line":654,"start_byte":18514,"start_column":1,"start_line":643}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.select_subtitles", phase="implementation-call", span={"end_byte":18585,"end_column":1,"end_line":648,"start_byte":18262,"start_column":1,"start_line":637}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.select_subtitles", phase="implementation-call", span={"end_byte":18837,"end_column":1,"end_line":654,"start_byte":18514,"start_column":1,"start_line":643}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.select_subtitles", phase="implementation-call", span={"end_byte":18585,"end_column":1,"end_line":648,"start_byte":18262,"start_column":1,"start_line":637}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.select_subtitles", phase="implementation-call", span={"end_byte":18837,"end_column":1,"end_line":654,"start_byte":18514,"start_column":1,"start_line":643}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[str], MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.select_subtitles", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_SubtitleUnavailable,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.select_subtitles", phase="error", span={"end_byte":18585,"end_column":1,"end_line":648,"start_byte":18262,"start_column":1,"start_line":637}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.select_subtitles", phase="error", span={"end_byte":18837,"end_column":1,"end_line":654,"start_byte":18514,"start_column":1,"start_line":643}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.select_subtitles", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -1010,7 +1013,7 @@ def select_subtitles(item: MediaItem, request: SubtitleRequest) -> Result[CottLi
         _cott_contract_condition((False), "real.yt_dlp.select_subtitles", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.select_subtitles", clause="ensures:1", phase="ensures", span={"end_byte":18518,"end_column":60,"end_line":642,"start_byte":18463,"start_column":5,"start_line":642}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.select_subtitles", clause="ensures:1", phase="ensures", span={"end_byte":18770,"end_column":60,"end_line":648,"start_byte":18715,"start_column":5,"start_line":648}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[str], MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -1030,12 +1033,12 @@ Preserve duplicates. No other MediaItem field affects these names."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.plan_thumbnails"
         if _error.span is None:
-            _error.span = {"end_byte":19175,"end_column":1,"end_line":660,"start_byte":18585,"start_column":1,"start_line":648}
+            _error.span = {"end_byte":19427,"end_column":1,"end_line":666,"start_byte":18837,"start_column":1,"start_line":654}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.plan_thumbnails", phase="implementation-call", span={"end_byte":19175,"end_column":1,"end_line":660,"start_byte":18585,"start_column":1,"start_line":648}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.plan_thumbnails", phase="implementation-call", span={"end_byte":19427,"end_column":1,"end_line":666,"start_byte":18837,"start_column":1,"start_line":654}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.plan_thumbnails", phase="implementation-call", span={"end_byte":19175,"end_column":1,"end_line":660,"start_byte":18585,"start_column":1,"start_line":648}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.plan_thumbnails", phase="implementation-call", span={"end_byte":19427,"end_column":1,"end_line":666,"start_byte":18837,"start_column":1,"start_line":654}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, CottList[str], path="$.return")
     _result = _cott_wrap_async_protocol(_result, CottList[str], path="$.return", validator=_cott_validate_abi)
     return _result
@@ -1055,12 +1058,12 @@ False flags add nothing. No other MediaItem field changes this pure plan."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.plan_metadata"
         if _error.span is None:
-            _error.span = {"end_byte":19674,"end_column":1,"end_line":671,"start_byte":19175,"start_column":1,"start_line":660}
+            _error.span = {"end_byte":19926,"end_column":1,"end_line":677,"start_byte":19427,"start_column":1,"start_line":666}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.plan_metadata", phase="implementation-call", span={"end_byte":19674,"end_column":1,"end_line":671,"start_byte":19175,"start_column":1,"start_line":660}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.plan_metadata", phase="implementation-call", span={"end_byte":19926,"end_column":1,"end_line":677,"start_byte":19427,"start_column":1,"start_line":666}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.plan_metadata", phase="implementation-call", span={"end_byte":19674,"end_column":1,"end_line":671,"start_byte":19175,"start_column":1,"start_line":660}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.plan_metadata", phase="implementation-call", span={"end_byte":19926,"end_column":1,"end_line":677,"start_byte":19427,"start_column":1,"start_line":666}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, CottList[str], path="$.return")
     _result = _cott_wrap_async_protocol(_result, CottList[str], path="$.return", validator=_cott_validate_abi)
     return _result
@@ -1079,19 +1082,19 @@ def render_output_path(item: MediaItem, template: str, missing_placeholder: str)
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.render_output_path"
         if _error.span is None:
-            _error.span = {"end_byte":19989,"end_column":1,"end_line":682,"start_byte":19674,"start_column":1,"start_line":671}
+            _error.span = {"end_byte":20241,"end_column":1,"end_line":688,"start_byte":19926,"start_column":1,"start_line":677}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.render_output_path", phase="implementation-call", span={"end_byte":19989,"end_column":1,"end_line":682,"start_byte":19674,"start_column":1,"start_line":671}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.render_output_path", phase="implementation-call", span={"end_byte":20241,"end_column":1,"end_line":688,"start_byte":19926,"start_column":1,"start_line":677}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.render_output_path", phase="implementation-call", span={"end_byte":19989,"end_column":1,"end_line":682,"start_byte":19674,"start_column":1,"start_line":671}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.render_output_path", phase="implementation-call", span={"end_byte":20241,"end_column":1,"end_line":688,"start_byte":19926,"start_column":1,"start_line":677}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[str, MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.render_output_path", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_InvalidTemplate,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.render_output_path", phase="error", span={"end_byte":19989,"end_column":1,"end_line":682,"start_byte":19674,"start_column":1,"start_line":671}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.render_output_path", phase="error", span={"end_byte":20241,"end_column":1,"end_line":688,"start_byte":19926,"start_column":1,"start_line":677}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.render_output_path", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -1106,7 +1109,7 @@ def render_output_path(item: MediaItem, template: str, missing_placeholder: str)
         _cott_contract_condition((False), "real.yt_dlp.render_output_path", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.render_output_path", clause="ensures:0", phase="ensures", span={"end_byte":19933,"end_column":137,"end_line":676,"start_byte":19801,"start_column":5,"start_line":676}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.render_output_path", clause="ensures:0", phase="ensures", span={"end_byte":20185,"end_column":137,"end_line":682,"start_byte":20053,"start_column":5,"start_line":682}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[str, MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -1143,19 +1146,19 @@ and a fixed descriptive message, not raw exception text."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.resolve_output_path"
         if _error.span is None:
-            _error.span = {"end_byte":21755,"end_column":1,"end_line":713,"start_byte":19989,"start_column":1,"start_line":682}
+            _error.span = {"end_byte":22007,"end_column":1,"end_line":719,"start_byte":20241,"start_column":1,"start_line":688}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.resolve_output_path", phase="implementation-call", span={"end_byte":21755,"end_column":1,"end_line":713,"start_byte":19989,"start_column":1,"start_line":682}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.resolve_output_path", phase="implementation-call", span={"end_byte":22007,"end_column":1,"end_line":719,"start_byte":20241,"start_column":1,"start_line":688}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.resolve_output_path", phase="implementation-call", span={"end_byte":21755,"end_column":1,"end_line":713,"start_byte":19989,"start_column":1,"start_line":682}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.resolve_output_path", phase="implementation-call", span={"end_byte":22007,"end_column":1,"end_line":719,"start_byte":20241,"start_column":1,"start_line":688}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[Path, MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.resolve_output_path", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_InvalidTemplate, MediaError_PathFailure,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.resolve_output_path", phase="error", span={"end_byte":21755,"end_column":1,"end_line":713,"start_byte":19989,"start_column":1,"start_line":682}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.resolve_output_path", phase="error", span={"end_byte":22007,"end_column":1,"end_line":719,"start_byte":20241,"start_column":1,"start_line":688}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.resolve_output_path", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -1172,7 +1175,7 @@ and a fixed descriptive message, not raw exception text."""
         _cott_contract_condition((False), "real.yt_dlp.resolve_output_path", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.resolve_output_path", clause="ensures:1", phase="ensures", span={"end_byte":21666,"end_column":52,"end_line":706,"start_byte":21619,"start_column":5,"start_line":706}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.resolve_output_path", clause="ensures:1", phase="ensures", span={"end_byte":21918,"end_column":52,"end_line":712,"start_byte":21871,"start_column":5,"start_line":712}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[Path, MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -1197,19 +1200,19 @@ not this reader. No extractor key is invented and no content is executed."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.read_download_archive"
         if _error.span is None:
-            _error.span = {"end_byte":22677,"end_column":1,"end_line":732,"start_byte":21755,"start_column":1,"start_line":713}
+            _error.span = {"end_byte":22929,"end_column":1,"end_line":738,"start_byte":22007,"start_column":1,"start_line":719}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.read_download_archive", phase="implementation-call", span={"end_byte":22677,"end_column":1,"end_line":732,"start_byte":21755,"start_column":1,"start_line":713}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.read_download_archive", phase="implementation-call", span={"end_byte":22929,"end_column":1,"end_line":738,"start_byte":22007,"start_column":1,"start_line":719}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.read_download_archive", phase="implementation-call", span={"end_byte":22677,"end_column":1,"end_line":732,"start_byte":21755,"start_column":1,"start_line":713}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.read_download_archive", phase="implementation-call", span={"end_byte":22929,"end_column":1,"end_line":738,"start_byte":22007,"start_column":1,"start_line":719}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[str], MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.read_download_archive", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_ArchiveFailure,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.read_download_archive", phase="error", span={"end_byte":22677,"end_column":1,"end_line":732,"start_byte":21755,"start_column":1,"start_line":713}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.read_download_archive", phase="error", span={"end_byte":22929,"end_column":1,"end_line":738,"start_byte":22007,"start_column":1,"start_line":719}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.read_download_archive", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -1224,7 +1227,7 @@ not this reader. No extractor key is invented and no content is executed."""
         _cott_contract_condition((False), "real.yt_dlp.read_download_archive", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.read_download_archive", clause="ensures:1", phase="ensures", span={"end_byte":22613,"end_column":56,"end_line":726,"start_byte":22562,"start_column":5,"start_line":726}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.read_download_archive", clause="ensures:1", phase="ensures", span={"end_byte":22865,"end_column":56,"end_line":732,"start_byte":22814,"start_column":5,"start_line":732}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[str], MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -1239,12 +1242,12 @@ def plan_downloads(items: CottList[MediaItem], archive: CottList[str], break_on_
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.plan_downloads"
         if _error.span is None:
-            _error.span = {"end_byte":22812,"end_column":1,"end_line":739,"start_byte":22677,"start_column":1,"start_line":732}
+            _error.span = {"end_byte":23064,"end_column":1,"end_line":745,"start_byte":22929,"start_column":1,"start_line":738}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.plan_downloads", phase="implementation-call", span={"end_byte":22812,"end_column":1,"end_line":739,"start_byte":22677,"start_column":1,"start_line":732}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.plan_downloads", phase="implementation-call", span={"end_byte":23064,"end_column":1,"end_line":745,"start_byte":22929,"start_column":1,"start_line":738}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.plan_downloads", phase="implementation-call", span={"end_byte":22812,"end_column":1,"end_line":739,"start_byte":22677,"start_column":1,"start_line":732}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.plan_downloads", phase="implementation-call", span={"end_byte":23064,"end_column":1,"end_line":745,"start_byte":22929,"start_column":1,"start_line":738}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, DownloadPlan, path="$.return")
     _result = _cott_wrap_async_protocol(_result, DownloadPlan, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -1276,19 +1279,19 @@ Never emit a partial archive or infer an extractor from the URL."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.write_download_archive"
         if _error.span is None:
-            _error.span = {"end_byte":24141,"end_column":1,"end_line":763,"start_byte":22812,"start_column":1,"start_line":739}
+            _error.span = {"end_byte":24393,"end_column":1,"end_line":769,"start_byte":23064,"start_column":1,"start_line":745}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.write_download_archive", phase="implementation-call", span={"end_byte":24141,"end_column":1,"end_line":763,"start_byte":22812,"start_column":1,"start_line":739}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.write_download_archive", phase="implementation-call", span={"end_byte":24393,"end_column":1,"end_line":769,"start_byte":23064,"start_column":1,"start_line":745}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.write_download_archive", phase="implementation-call", span={"end_byte":24141,"end_column":1,"end_line":763,"start_byte":22812,"start_column":1,"start_line":739}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.write_download_archive", phase="implementation-call", span={"end_byte":24393,"end_column":1,"end_line":769,"start_byte":23064,"start_column":1,"start_line":745}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[Unit, MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.write_download_archive", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_ArchiveFailure,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.write_download_archive", phase="error", span={"end_byte":24141,"end_column":1,"end_line":763,"start_byte":22812,"start_column":1,"start_line":739}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.write_download_archive", phase="error", span={"end_byte":24393,"end_column":1,"end_line":769,"start_byte":23064,"start_column":1,"start_line":745}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.write_download_archive", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -1303,7 +1306,7 @@ Never emit a partial archive or infer an extractor from the URL."""
         _cott_contract_condition((False), "real.yt_dlp.write_download_archive", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.write_download_archive", clause="ensures:1", phase="ensures", span={"end_byte":24076,"end_column":44,"end_line":757,"start_byte":24037,"start_column":5,"start_line":757}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.write_download_archive", clause="ensures:1", phase="ensures", span={"end_byte":24328,"end_column":44,"end_line":763,"start_byte":24289,"start_column":5,"start_line":763}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[Unit, MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -1320,19 +1323,19 @@ def plan_fragments(request: TransferRequest, policy: FragmentPolicy) -> Result[C
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.plan_fragments"
         if _error.span is None:
-            _error.span = {"end_byte":24409,"end_column":1,"end_line":774,"start_byte":24141,"start_column":1,"start_line":763}
+            _error.span = {"end_byte":24661,"end_column":1,"end_line":780,"start_byte":24393,"start_column":1,"start_line":769}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.plan_fragments", phase="implementation-call", span={"end_byte":24409,"end_column":1,"end_line":774,"start_byte":24141,"start_column":1,"start_line":763}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.plan_fragments", phase="implementation-call", span={"end_byte":24661,"end_column":1,"end_line":780,"start_byte":24393,"start_column":1,"start_line":769}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.plan_fragments", phase="implementation-call", span={"end_byte":24409,"end_column":1,"end_line":774,"start_byte":24141,"start_column":1,"start_line":763}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.plan_fragments", phase="implementation-call", span={"end_byte":24661,"end_column":1,"end_line":780,"start_byte":24393,"start_column":1,"start_line":769}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[TransferRequest], MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.plan_fragments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_InvalidInput, MediaError_SizeLimit,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.plan_fragments", phase="error", span={"end_byte":24409,"end_column":1,"end_line":774,"start_byte":24141,"start_column":1,"start_line":763}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.plan_fragments", phase="error", span={"end_byte":24661,"end_column":1,"end_line":780,"start_byte":24393,"start_column":1,"start_line":769}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.plan_fragments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -1349,7 +1352,7 @@ def plan_fragments(request: TransferRequest, policy: FragmentPolicy) -> Result[C
         _cott_contract_condition((False), "real.yt_dlp.plan_fragments", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.plan_fragments", clause="ensures:0", phase="ensures", span={"end_byte":24325,"end_column":60,"end_line":767,"start_byte":24270,"start_column":5,"start_line":767}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.plan_fragments", clause="ensures:0", phase="ensures", span={"end_byte":24577,"end_column":60,"end_line":773,"start_byte":24522,"start_column":5,"start_line":773}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[TransferRequest], MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -1360,28 +1363,28 @@ def transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaErr
     _expected_error_clause = None
     if _expected_error is None and (_cott_contract_condition((((request).max_bytes == 0)), "real.yt_dlp.transfer_media", "error:4:condition")):
         _expected_error = MediaError_InvalidInput
-        _expected_error_span = {"end_byte":24842,"end_column":62,"end_line":780,"start_byte":24785,"start_column":5,"start_line":780}
+        _expected_error_span = {"end_byte":25094,"end_column":62,"end_line":786,"start_byte":25037,"start_column":5,"start_line":786}
         _expected_error_clause = "error:4"
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/transfer_media.py", "9eb2fc6d8608073da7e4c1f6eeaba4dd30fae1dfff89be3d5470c4b93b8e2c20", "transfer_media", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.transfer_media")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/transfer_media.py", "9308b8abd06b07860f5d1528b35647528ab2f40a059e750aad317cde5974b642", "transfer_media", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.transfer_media")
         _result = _implementation(request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.transfer_media"
         if _error.span is None:
-            _error.span = {"end_byte":25049,"end_column":1,"end_line":789,"start_byte":24409,"start_column":1,"start_line":774}
+            _error.span = {"end_byte":25301,"end_column":1,"end_line":795,"start_byte":24661,"start_column":1,"start_line":780}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.transfer_media", phase="implementation-call", span={"end_byte":25049,"end_column":1,"end_line":789,"start_byte":24409,"start_column":1,"start_line":774}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.transfer_media", phase="implementation-call", span={"end_byte":25301,"end_column":1,"end_line":795,"start_byte":24661,"start_column":1,"start_line":780}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.transfer_media", phase="implementation-call", span={"end_byte":25049,"end_column":1,"end_line":789,"start_byte":24409,"start_column":1,"start_line":774}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.transfer_media", phase="implementation-call", span={"end_byte":25301,"end_column":1,"end_line":795,"start_byte":24661,"start_column":1,"start_line":780}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[TransferReceipt, MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.transfer_media", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_UnsupportedUrl, MediaError_HttpStatus, MediaError_NetworkFailure, MediaError_OutputFailure, MediaError_SizeLimit,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.transfer_media", phase="error", span={"end_byte":25049,"end_column":1,"end_line":789,"start_byte":24409,"start_column":1,"start_line":774}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.transfer_media", phase="error", span={"end_byte":25301,"end_column":1,"end_line":795,"start_byte":24661,"start_column":1,"start_line":780}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.transfer_media", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -1404,7 +1407,7 @@ def transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaErr
         _cott_contract_condition((False), "real.yt_dlp.transfer_media", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.transfer_media", clause="ensures:0", phase="ensures", span={"end_byte":24553,"end_column":61,"end_line":775,"start_byte":24497,"start_column":5,"start_line":775}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.transfer_media", clause="ensures:0", phase="ensures", span={"end_byte":24805,"end_column":61,"end_line":781,"start_byte":24749,"start_column":5,"start_line":781}, expected="true", actual="false")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
@@ -1413,7 +1416,7 @@ def transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaErr
         _cott_contract_condition((False), "real.yt_dlp.transfer_media", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.transfer_media", clause="ensures:1", phase="ensures", span={"end_byte":24630,"end_column":77,"end_line":776,"start_byte":24558,"start_column":5,"start_line":776}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.transfer_media", clause="ensures:1", phase="ensures", span={"end_byte":24882,"end_column":77,"end_line":782,"start_byte":24810,"start_column":5,"start_line":782}, expected="true", actual="false")
     def _cott_match_ensures_2() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
@@ -1422,7 +1425,7 @@ def transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaErr
         _cott_contract_condition((False), "real.yt_dlp.transfer_media", "ensures:2:applicable")
         return True
     if not (_cott_match_ensures_2()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.transfer_media", clause="ensures:2", phase="ensures", span={"end_byte":24707,"end_column":77,"end_line":777,"start_byte":24635,"start_column":5,"start_line":777}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.transfer_media", clause="ensures:2", phase="ensures", span={"end_byte":24959,"end_column":77,"end_line":783,"start_byte":24887,"start_column":5,"start_line":783}, expected="true", actual="false")
     def _cott_match_ensures_3() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
@@ -1431,7 +1434,7 @@ def transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaErr
         _cott_contract_condition((False), "real.yt_dlp.transfer_media", "ensures:3:applicable")
         return True
     if not (_cott_match_ensures_3()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.transfer_media", clause="ensures:3", phase="ensures", span={"end_byte":24779,"end_column":72,"end_line":778,"start_byte":24712,"start_column":5,"start_line":778}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.transfer_media", clause="ensures:3", phase="ensures", span={"end_byte":25031,"end_column":72,"end_line":784,"start_byte":24964,"start_column":5,"start_line":784}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[TransferReceipt, MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -1448,19 +1451,19 @@ def transfer_fragments(fragments: CottList[TransferRequest], policy: FragmentPol
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.transfer_fragments"
         if _error.span is None:
-            _error.span = {"end_byte":25499,"end_column":1,"end_line":804,"start_byte":25049,"start_column":1,"start_line":789}
+            _error.span = {"end_byte":25751,"end_column":1,"end_line":810,"start_byte":25301,"start_column":1,"start_line":795}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.transfer_fragments", phase="implementation-call", span={"end_byte":25499,"end_column":1,"end_line":804,"start_byte":25049,"start_column":1,"start_line":789}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.transfer_fragments", phase="implementation-call", span={"end_byte":25751,"end_column":1,"end_line":810,"start_byte":25301,"start_column":1,"start_line":795}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.transfer_fragments", phase="implementation-call", span={"end_byte":25499,"end_column":1,"end_line":804,"start_byte":25049,"start_column":1,"start_line":789}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.transfer_fragments", phase="implementation-call", span={"end_byte":25751,"end_column":1,"end_line":810,"start_byte":25301,"start_column":1,"start_line":795}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[TransferReceipt], MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.transfer_fragments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_InvalidInput, MediaError_HttpStatus, MediaError_NetworkFailure, MediaError_OutputFailure, MediaError_RetryExhausted, MediaError_SizeLimit,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.transfer_fragments", phase="error", span={"end_byte":25499,"end_column":1,"end_line":804,"start_byte":25049,"start_column":1,"start_line":789}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.transfer_fragments", phase="error", span={"end_byte":25751,"end_column":1,"end_line":810,"start_byte":25301,"start_column":1,"start_line":795}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.transfer_fragments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -1485,7 +1488,7 @@ def transfer_fragments(fragments: CottList[TransferRequest], policy: FragmentPol
         _cott_contract_condition((False), "real.yt_dlp.transfer_fragments", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.transfer_fragments", clause="ensures:0", phase="ensures", span={"end_byte":25250,"end_column":65,"end_line":793,"start_byte":25190,"start_column":5,"start_line":793}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.transfer_fragments", clause="ensures:0", phase="ensures", span={"end_byte":25502,"end_column":65,"end_line":799,"start_byte":25442,"start_column":5,"start_line":799}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[TransferReceipt], MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -1499,18 +1502,18 @@ Do not invent a playlist envelope, rename keys, or sort/deduplicate items."""
     items = _cott_validate_abi(items, CottList[MediaItem], path="$.items")
     mode = _cott_validate_abi(mode, JsonMode, path="$.mode")
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/render_items.py", "1f788d92d60ad3cea529e983b7695c852bda037f606ee5f67bf66a40bb6c2053", "render_items", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.render_items")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/render_items.py", "f71f05ff14275de9176a13b2aa82cd18fee1cecbaefcacfd65d0d0573e68a082", "render_items", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.render_items")
         _result = _implementation(items, mode)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.render_items"
         if _error.span is None:
-            _error.span = {"end_byte":26076,"end_column":1,"end_line":816,"start_byte":25499,"start_column":1,"start_line":804}
+            _error.span = {"end_byte":26328,"end_column":1,"end_line":822,"start_byte":25751,"start_column":1,"start_line":810}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.render_items", phase="implementation-call", span={"end_byte":26076,"end_column":1,"end_line":816,"start_byte":25499,"start_column":1,"start_line":804}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.render_items", phase="implementation-call", span={"end_byte":26328,"end_column":1,"end_line":822,"start_byte":25751,"start_column":1,"start_line":810}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.render_items", phase="implementation-call", span={"end_byte":26076,"end_column":1,"end_line":816,"start_byte":25499,"start_column":1,"start_line":804}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.render_items", phase="implementation-call", span={"end_byte":26328,"end_column":1,"end_line":822,"start_byte":25751,"start_column":1,"start_line":810}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -1548,19 +1551,19 @@ the explicit external tool request already supplies the input and output."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.plan_post_processing"
         if _error.span is None:
-            _error.span = {"end_byte":27968,"end_column":1,"end_line":850,"start_byte":26076,"start_column":1,"start_line":816}
+            _error.span = {"end_byte":28220,"end_column":1,"end_line":856,"start_byte":26328,"start_column":1,"start_line":822}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.plan_post_processing", phase="implementation-call", span={"end_byte":27968,"end_column":1,"end_line":850,"start_byte":26076,"start_column":1,"start_line":816}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.plan_post_processing", phase="implementation-call", span={"end_byte":28220,"end_column":1,"end_line":856,"start_byte":26328,"start_column":1,"start_line":822}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.plan_post_processing", phase="implementation-call", span={"end_byte":27968,"end_column":1,"end_line":850,"start_byte":26076,"start_column":1,"start_line":816}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.plan_post_processing", phase="implementation-call", span={"end_byte":28220,"end_column":1,"end_line":856,"start_byte":26328,"start_column":1,"start_line":822}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[ExternalToolRequest], MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.plan_post_processing", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_ExternalToolMissing, MediaError_InvalidInput,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.plan_post_processing", phase="error", span={"end_byte":27968,"end_column":1,"end_line":850,"start_byte":26076,"start_column":1,"start_line":816}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.plan_post_processing", phase="error", span={"end_byte":28220,"end_column":1,"end_line":856,"start_byte":26328,"start_column":1,"start_line":822}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.plan_post_processing", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -1577,7 +1580,7 @@ the explicit external tool request already supplies the input and output."""
         _cott_contract_condition((False), "real.yt_dlp.plan_post_processing", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.plan_post_processing", clause="ensures:1", phase="ensures", span={"end_byte":27874,"end_column":67,"end_line":843,"start_byte":27812,"start_column":5,"start_line":843}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.plan_post_processing", clause="ensures:1", phase="ensures", span={"end_byte":28126,"end_column":67,"end_line":849,"start_byte":28064,"start_column":5,"start_line":849}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[ExternalToolRequest], MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -1593,19 +1596,19 @@ def run_post_processing(requests: CottList[ExternalToolRequest]) -> Result[Unit,
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.run_post_processing"
         if _error.span is None:
-            _error.span = {"end_byte":28228,"end_column":1,"end_line":858,"start_byte":27968,"start_column":1,"start_line":850}
+            _error.span = {"end_byte":28480,"end_column":1,"end_line":864,"start_byte":28220,"start_column":1,"start_line":856}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.run_post_processing", phase="implementation-call", span={"end_byte":28228,"end_column":1,"end_line":858,"start_byte":27968,"start_column":1,"start_line":850}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.run_post_processing", phase="implementation-call", span={"end_byte":28480,"end_column":1,"end_line":864,"start_byte":28220,"start_column":1,"start_line":856}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.run_post_processing", phase="implementation-call", span={"end_byte":28228,"end_column":1,"end_line":858,"start_byte":27968,"start_column":1,"start_line":850}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.run_post_processing", phase="implementation-call", span={"end_byte":28480,"end_column":1,"end_line":864,"start_byte":28220,"start_column":1,"start_line":856}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[Unit, MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.run_post_processing", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_ExternalToolMissing, MediaError_PostProcessFailed,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.run_post_processing", phase="error", span={"end_byte":28228,"end_column":1,"end_line":858,"start_byte":27968,"start_column":1,"start_line":850}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.run_post_processing", phase="error", span={"end_byte":28480,"end_column":1,"end_line":864,"start_byte":28220,"start_column":1,"start_line":856}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.run_post_processing", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -1622,7 +1625,7 @@ def run_post_processing(requests: CottList[ExternalToolRequest]) -> Result[Unit,
         _cott_contract_condition((False), "real.yt_dlp.run_post_processing", "ensures:0:applicable")
         return True
     if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.run_post_processing", clause="ensures:0", phase="ensures", span={"end_byte":28108,"end_column":52,"end_line":851,"start_byte":28061,"start_column":5,"start_line":851}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.run_post_processing", clause="ensures:0", phase="ensures", span={"end_byte":28360,"end_column":52,"end_line":857,"start_byte":28313,"start_column":5,"start_line":857}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[Unit, MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -1646,19 +1649,19 @@ value as UpdateUnavailable; never interpret channel as a repository or URL."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.resolve_update_repository"
         if _error.span is None:
-            _error.span = {"end_byte":29114,"end_column":1,"end_line":875,"start_byte":28228,"start_column":1,"start_line":858}
+            _error.span = {"end_byte":29366,"end_column":1,"end_line":881,"start_byte":28480,"start_column":1,"start_line":864}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.resolve_update_repository", phase="implementation-call", span={"end_byte":29114,"end_column":1,"end_line":875,"start_byte":28228,"start_column":1,"start_line":858}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.resolve_update_repository", phase="implementation-call", span={"end_byte":29366,"end_column":1,"end_line":881,"start_byte":28480,"start_column":1,"start_line":864}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.resolve_update_repository", phase="implementation-call", span={"end_byte":29114,"end_column":1,"end_line":875,"start_byte":28228,"start_column":1,"start_line":858}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.resolve_update_repository", phase="implementation-call", span={"end_byte":29366,"end_column":1,"end_line":881,"start_byte":28480,"start_column":1,"start_line":864}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[str, MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.resolve_update_repository", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_UpdateUnavailable,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.resolve_update_repository", phase="error", span={"end_byte":29114,"end_column":1,"end_line":875,"start_byte":28228,"start_column":1,"start_line":858}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.resolve_update_repository", phase="error", span={"end_byte":29366,"end_column":1,"end_line":881,"start_byte":28480,"start_column":1,"start_line":864}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.resolve_update_repository", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -1673,7 +1676,7 @@ value as UpdateUnavailable; never interpret channel as a repository or URL."""
         _cott_contract_condition((False), "real.yt_dlp.resolve_update_repository", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.resolve_update_repository", clause="ensures:1", phase="ensures", span={"end_byte":29056,"end_column":184,"end_line":869,"start_byte":28877,"start_column":5,"start_line":869}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.resolve_update_repository", clause="ensures:1", phase="ensures", span={"end_byte":29308,"end_column":184,"end_line":875,"start_byte":29129,"start_column":5,"start_line":875}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[str, MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -1745,19 +1748,19 @@ raw exception text that may contain secrets."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.apply_update"
         if _error.span is None:
-            _error.span = {"end_byte":33145,"end_column":1,"end_line":943,"start_byte":29114,"start_column":1,"start_line":875}
+            _error.span = {"end_byte":33397,"end_column":1,"end_line":949,"start_byte":29366,"start_column":1,"start_line":881}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.apply_update", phase="implementation-call", span={"end_byte":33145,"end_column":1,"end_line":943,"start_byte":29114,"start_column":1,"start_line":875}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.apply_update", phase="implementation-call", span={"end_byte":33397,"end_column":1,"end_line":949,"start_byte":29366,"start_column":1,"start_line":881}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.apply_update", phase="implementation-call", span={"end_byte":33145,"end_column":1,"end_line":943,"start_byte":29114,"start_column":1,"start_line":875}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.apply_update", phase="implementation-call", span={"end_byte":33397,"end_column":1,"end_line":949,"start_byte":29366,"start_column":1,"start_line":881}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[Unit, MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.apply_update", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_UpdateUnavailable, MediaError_NetworkFailure, MediaError_OutputFailure,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.apply_update", phase="error", span={"end_byte":33145,"end_column":1,"end_line":943,"start_byte":29114,"start_column":1,"start_line":875}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.apply_update", phase="error", span={"end_byte":33397,"end_column":1,"end_line":949,"start_byte":29366,"start_column":1,"start_line":881}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.apply_update", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -1776,102 +1779,152 @@ raw exception text that may contain secrets."""
         _cott_contract_condition((False), "real.yt_dlp.apply_update", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.apply_update", clause="ensures:1", phase="ensures", span={"end_byte":32986,"end_column":48,"end_line":935,"start_byte":32943,"start_column":5,"start_line":935}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.apply_update", clause="ensures:1", phase="ensures", span={"end_byte":33238,"end_column":48,"end_line":941,"start_byte":33195,"start_column":5,"start_line":941}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[Unit, MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def execute(request: ExecutionRequest) -> Result[ExecutionReport, MediaError]:
+    """Execute the direct-media pipeline and return its actual selected items,
+download plan and rendered output, never an invented empty success.
+Propagate each failing stage's declared MediaError unchanged and stop before
+later stages. Do not perform effects outside these stages.
+
+First call real.yt_dlp.apply_update(request.update), then validate_network,
+select_geo_route, resolve_authentication and validate_workarounds on their
+corresponding request values. Use the returned network and authentication
+for extraction. Path(".") in presentation.log_file disables logging;
+otherwise call configure_presentation.
+
+Expand input entries in order. Argument contributes its value. ConfigFile
+calls load_config(Path(value)); its returned Argument entries contribute
+values and BatchFile entries call load_batch_urls with comment prefixes
+List("#"). Reject a nested ConfigFile as InvalidInput rather than recursing.
+BatchFile calls load_batch_urls directly. Pass the resulting Argument
+entries to resolve_inputs with an empty config list. If shortcut.query is
+nonempty, append build_shortcut_url(request.shortcut)'s successful value.
+Require at least one resulting URL, otherwise return InvalidInput.
+Discover descriptors through discover_extractors. For each URL in order
+call choose_extractor and extract_media; concatenate their actual items.
+Apply select_playlist, then resolve_live_media, then filter_video to these
+items using their respective request settings.
+
+Path(".") in archive.path disables archive reading and writing and supplies
+an empty archive. Otherwise call read_download_archive; do not turn its
+failure into an empty success. Call plan_downloads with the selected items,
+archive entries and break_on_existing. Preserve the returned plan unchanged.
+
+Only SimulationMode.Download transfers media. For each planned item in
+order, resolve_output_path with request.output, construct TransferRequest
+with the item's URL, that path, simulate false and formats.max_file_size,
+then call plan_fragments and transfer_fragments using request.fragments.
+On successful transfer call plan_post_processing then run_post_processing
+when kinds is nonempty. Do not use these symbolic plans as raw ffmpeg argv.
+Only after all planned transfers and requested post-processing succeed,
+write_download_archive when the archive is enabled and either downloads
+occurred or force_write_archive is true. Supply the successfully planned
+items; this writer replaces rather than merges an earlier archive.
+Simulate, SkipDownload and PrintOnly perform discovery, selection and
+planning but no media transfer, post-processing or archive write.
+
+Render the selected items through render_items with request.json_mode,
+including when the archive removed every item from the download plan.
+Return ExecutionReport(selected=the selected items, downloads=the actual
+plan, rendered=that string, simulated=simulation is not Download).
+This pipeline uses the existing direct-media descriptor model: it does not
+invent format/subtitle/thumbnail discovery or metadata that MediaItem does
+not contain. Those independently declared planning APIs are not silently
+represented as completed work by this report."""
     request = _cott_validate_abi(request, ExecutionRequest, path="$.request")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/execute.py", "788a0b13491ef916d47d7507f780b47c8fecacc2a8aaa42f265b90afd71a64d5", "execute", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.execute")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/execute.py", "84c0af01c2a001947db17d9584bec0fa94cfb7bd0165b27858be433629f3b931", "execute", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.execute")
         _result = _implementation(request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.execute"
         if _error.span is None:
-            _error.span = {"end_byte":34373,"end_column":1,"end_line":976,"start_byte":33145,"start_column":1,"start_line":943}
+            _error.span = {"end_byte":38021,"end_column":1,"end_line":1035,"start_byte":33397,"start_column":1,"start_line":949}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.execute", phase="implementation-call", span={"end_byte":34373,"end_column":1,"end_line":976,"start_byte":33145,"start_column":1,"start_line":943}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.yt_dlp.execute", phase="implementation-call", span={"end_byte":38021,"end_column":1,"end_line":1035,"start_byte":33397,"start_column":1,"start_line":949}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.execute", phase="implementation-call", span={"end_byte":34373,"end_column":1,"end_line":976,"start_byte":33145,"start_column":1,"start_line":943}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.execute", phase="implementation-call", span={"end_byte":38021,"end_column":1,"end_line":1035,"start_byte":33397,"start_column":1,"start_line":949}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[ExecutionReport, MediaError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.yt_dlp.execute", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (MediaError_InvalidConfig, MediaError_InvalidInput, MediaError_AuthenticationFailed, MediaError_BatchReadFailed, MediaError_InvalidShortcut, MediaError_CertificateFailure, MediaError_WorkaroundRejected, MediaError_LogFailure, MediaError_InvalidRange, MediaError_CookieFailure, MediaError_GeoRestricted, MediaError_ExtractorMissing, MediaError_PluginRejected, MediaError_UnsupportedUrl, MediaError_FormatUnavailable, MediaError_SubtitleUnavailable, MediaError_InvalidTemplate, MediaError_ArchiveFailure, MediaError_PathFailure, MediaError_HttpStatus, MediaError_NetworkFailure, MediaError_OutputFailure, MediaError_SizeLimit, MediaError_RetryExhausted, MediaError_ExternalToolMissing, MediaError_PostProcessFailed, MediaError_UpdateUnavailable,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.execute", phase="error", span={"end_byte":34373,"end_column":1,"end_line":976,"start_byte":33145,"start_column":1,"start_line":943}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.yt_dlp.execute", phase="error", span={"end_byte":38021,"end_column":1,"end_line":1035,"start_byte":33397,"start_column":1,"start_line":949}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.yt_dlp.execute", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
         _cott_contract_condition(True, "real.yt_dlp.execute", _expected_error_clause)
     if type(_result) is Err and type(_result.error) is MediaError_InvalidConfig:
-        _cott_contract_condition(True, "real.yt_dlp.execute", "error:1")
-    if type(_result) is Err and type(_result.error) is MediaError_InvalidInput:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:2")
-    if type(_result) is Err and type(_result.error) is MediaError_AuthenticationFailed:
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidInput:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:3")
-    if type(_result) is Err and type(_result.error) is MediaError_BatchReadFailed:
+    if type(_result) is Err and type(_result.error) is MediaError_AuthenticationFailed:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:4")
-    if type(_result) is Err and type(_result.error) is MediaError_InvalidShortcut:
+    if type(_result) is Err and type(_result.error) is MediaError_BatchReadFailed:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:5")
-    if type(_result) is Err and type(_result.error) is MediaError_CertificateFailure:
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidShortcut:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:6")
-    if type(_result) is Err and type(_result.error) is MediaError_WorkaroundRejected:
+    if type(_result) is Err and type(_result.error) is MediaError_CertificateFailure:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:7")
-    if type(_result) is Err and type(_result.error) is MediaError_LogFailure:
+    if type(_result) is Err and type(_result.error) is MediaError_WorkaroundRejected:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:8")
-    if type(_result) is Err and type(_result.error) is MediaError_InvalidRange:
+    if type(_result) is Err and type(_result.error) is MediaError_LogFailure:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:9")
-    if type(_result) is Err and type(_result.error) is MediaError_CookieFailure:
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidRange:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:10")
-    if type(_result) is Err and type(_result.error) is MediaError_GeoRestricted:
+    if type(_result) is Err and type(_result.error) is MediaError_CookieFailure:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:11")
-    if type(_result) is Err and type(_result.error) is MediaError_ExtractorMissing:
+    if type(_result) is Err and type(_result.error) is MediaError_GeoRestricted:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:12")
-    if type(_result) is Err and type(_result.error) is MediaError_PluginRejected:
+    if type(_result) is Err and type(_result.error) is MediaError_ExtractorMissing:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:13")
-    if type(_result) is Err and type(_result.error) is MediaError_UnsupportedUrl:
+    if type(_result) is Err and type(_result.error) is MediaError_PluginRejected:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:14")
-    if type(_result) is Err and type(_result.error) is MediaError_FormatUnavailable:
+    if type(_result) is Err and type(_result.error) is MediaError_UnsupportedUrl:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:15")
-    if type(_result) is Err and type(_result.error) is MediaError_SubtitleUnavailable:
+    if type(_result) is Err and type(_result.error) is MediaError_FormatUnavailable:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:16")
-    if type(_result) is Err and type(_result.error) is MediaError_InvalidTemplate:
+    if type(_result) is Err and type(_result.error) is MediaError_SubtitleUnavailable:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:17")
-    if type(_result) is Err and type(_result.error) is MediaError_ArchiveFailure:
+    if type(_result) is Err and type(_result.error) is MediaError_InvalidTemplate:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:18")
-    if type(_result) is Err and type(_result.error) is MediaError_PathFailure:
+    if type(_result) is Err and type(_result.error) is MediaError_ArchiveFailure:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:19")
-    if type(_result) is Err and type(_result.error) is MediaError_HttpStatus:
+    if type(_result) is Err and type(_result.error) is MediaError_PathFailure:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:20")
-    if type(_result) is Err and type(_result.error) is MediaError_NetworkFailure:
+    if type(_result) is Err and type(_result.error) is MediaError_HttpStatus:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:21")
-    if type(_result) is Err and type(_result.error) is MediaError_OutputFailure:
+    if type(_result) is Err and type(_result.error) is MediaError_NetworkFailure:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:22")
-    if type(_result) is Err and type(_result.error) is MediaError_SizeLimit:
+    if type(_result) is Err and type(_result.error) is MediaError_OutputFailure:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:23")
-    if type(_result) is Err and type(_result.error) is MediaError_RetryExhausted:
+    if type(_result) is Err and type(_result.error) is MediaError_SizeLimit:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:24")
-    if type(_result) is Err and type(_result.error) is MediaError_ExternalToolMissing:
+    if type(_result) is Err and type(_result.error) is MediaError_RetryExhausted:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:25")
-    if type(_result) is Err and type(_result.error) is MediaError_PostProcessFailed:
+    if type(_result) is Err and type(_result.error) is MediaError_ExternalToolMissing:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:26")
-    if type(_result) is Err and type(_result.error) is MediaError_UpdateUnavailable:
+    if type(_result) is Err and type(_result.error) is MediaError_PostProcessFailed:
         _cott_contract_condition(True, "real.yt_dlp.execute", "error:27")
-    def _cott_match_ensures_0() -> bool:
+    if type(_result) is Err and type(_result.error) is MediaError_UpdateUnavailable:
+        _cott_contract_condition(True, "real.yt_dlp.execute", "error:28")
+    def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             report = _cott_match_value.value
-            return (_cott_contract_condition((((report).simulated == ((request).simulation != SimulationMode_Download()))), "real.yt_dlp.execute", "ensures:0"))
-        _cott_contract_condition((False), "real.yt_dlp.execute", "ensures:0:applicable")
+            return (_cott_contract_condition((((report).simulated == ((request).simulation != SimulationMode_Download()))), "real.yt_dlp.execute", "ensures:1"))
+        _cott_contract_condition((False), "real.yt_dlp.execute", "ensures:1:applicable")
         return True
-    if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.execute", clause="ensures:0", phase="ensures", span={"end_byte":33323,"end_column":101,"end_line":944,"start_byte":33227,"start_column":5,"start_line":944}, expected="true", actual="false")
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="real.yt_dlp.execute", clause="ensures:1", phase="ensures", span={"end_byte":36971,"end_column":101,"end_line":1003,"start_byte":36875,"start_column":5,"start_line":1003}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[ExecutionReport, MediaError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -1904,12 +1957,12 @@ do not expand the argument grammar beyond the parse_arguments contract."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.yt_dlp.run"
         if _error.span is None:
-            _error.span = {"end_byte":36032,"end_column":1,"end_line":1001,"start_byte":34373,"start_column":1,"start_line":976}
+            _error.span = {"end_byte":39681,"end_column":1,"end_line":1061,"start_byte":38021,"start_column":1,"start_line":1035}
         raise
     except SystemExit:
         raise
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.run", phase="implementation-call", span={"end_byte":36032,"end_column":1,"end_line":1001,"start_byte":34373,"start_column":1,"start_line":976}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
-    raise CottContractViolation("Never function returned", symbol="real.yt_dlp.run", phase="return", span={"end_byte":36032,"end_column":1,"end_line":1001,"start_byte":34373,"start_column":1,"start_line":976}, expected="Never", actual=repr(_result))
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.yt_dlp.run", phase="implementation-call", span={"end_byte":39681,"end_column":1,"end_line":1061,"start_byte":38021,"start_column":1,"start_line":1035}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+    raise CottContractViolation("Never function returned", symbol="real.yt_dlp.run", phase="return", span={"end_byte":39681,"end_column":1,"end_line":1061,"start_byte":38021,"start_column":1,"start_line":1035}, expected="Never", actual=repr(_result))
 
 __all__ = ["ArchiveRequest", "Authentication", "AuthenticationKind", "AuthenticationKind_Anonymous", "AuthenticationKind_BrowserCookies", "AuthenticationKind_Cookies", "AuthenticationKind_Credentials", "AuthenticationKind_Netrc", "CertificatePolicy", "CertificatePolicy_Insecure", "CertificatePolicy_Verify", "CliInput", "DownloadPlan", "ExecutionReport", "ExecutionRequest", "ExternalToolRequest", "ExtractorDescriptor", "ExtractorWorkaround", "ExtractorWorkaround_ForceGeneric", "ExtractorWorkaround_LegacyServerConnect", "ExtractorWorkaround_NoCheckCertificates", "ExtractorWorkaround_NoPlaylist", "FormatContainer", "FormatContainer_Any", "FormatContainer_Audio", "FormatContainer_Best", "FormatContainer_Video", "FormatContainer_Worst", "FormatDescriptor", "FormatRequest", "FragmentPolicy", "GeoBypassMode", "GeoBypassMode_Country", "GeoBypassMode_Default", "GeoBypassMode_Disabled", "GeoBypassMode_IpBlock", "InputKind", "InputKind_Argument", "InputKind_BatchFile", "InputKind_ConfigFile", "JsonMode", "JsonMode_Lines", "JsonMode_Single", "LiveMode", "LiveMode_Default", "LiveMode_FromStart", "LiveMode_Wait", "LiveRequest", "LogLevel", "LogLevel_Debug", "LogLevel_Info", "LogLevel_Quiet", "LogLevel_Warning", "MediaError", "MediaError_ArchiveFailure", "MediaError_AuthenticationFailed", "MediaError_BatchReadFailed", "MediaError_CertificateFailure", "MediaError_CookieFailure", "MediaError_ExternalToolMissing", "MediaError_ExtractorMissing", "MediaError_FormatUnavailable", "MediaError_GeoRestricted", "MediaError_HttpStatus", "MediaError_InvalidConfig", "MediaError_InvalidInput", "MediaError_InvalidRange", "MediaError_InvalidShortcut", "MediaError_InvalidTemplate", "MediaError_LogFailure", "MediaError_NetworkFailure", "MediaError_OutputFailure", "MediaError_PathFailure", "MediaError_PluginRejected", "MediaError_PostProcessFailed", "MediaError_RetryExhausted", "MediaError_SizeLimit", "MediaError_SubtitleUnavailable", "MediaError_UnsupportedUrl", "MediaError_UpdateUnavailable", "MediaError_WorkaroundRejected", "MediaItem", "MetadataRequest", "NetworkPolicy", "OutputRequest", "PlaylistMode", "PlaylistMode_Flat", "PlaylistMode_Playlist", "PlaylistMode_Random", "PlaylistMode_Reverse", "PlaylistMode_Single", "PlaylistRange", "PlaylistRequest", "PluginDescriptor", "PostProcessRequest", "PostProcessorKind", "PostProcessorKind_ConvertThumbnails", "PostProcessorKind_EmbedMetadata", "PostProcessorKind_EmbedSubtitle", "PostProcessorKind_EmbedThumbnail", "PostProcessorKind_ExtractAudio", "PostProcessorKind_Fixup", "PostProcessorKind_RecodeVideo", "PostProcessorKind_RemuxVideo", "PostProcessorKind_SplitChapters", "PostProcessorKind_SponsorBlock", "PresentationRequest", "ProxyMode", "ProxyMode_Direct", "ProxyMode_Http", "ProxyMode_Socks", "ShortcutKind", "ShortcutKind_Search", "ShortcutKind_SearchAll", "ShortcutKind_Url", "ShortcutRequest", "SimulationMode", "SimulationMode_Download", "SimulationMode_PrintOnly", "SimulationMode_Simulate", "SimulationMode_SkipDownload", "SubtitleMode", "SubtitleMode_All", "SubtitleMode_Automatic", "SubtitleMode_Manual", "SubtitleMode_None", "SubtitleRequest", "ThumbnailRequest", "TransferReceipt", "TransferRequest", "UpdatePolicy", "UpdatePolicy_Apply", "UpdatePolicy_Check", "UpdatePolicy_Master", "UpdatePolicy_Never", "UpdatePolicy_Nightly", "UpdateRequest", "VideoFilterRequest", "WorkaroundPolicy", "apply_update", "build_shortcut_url", "choose_extractor", "configure_presentation", "discover_extractors", "execute", "expand_playlist_ranges", "extract_media", "filter_formats", "filter_video", "load_batch_urls", "load_config", "load_plugins", "parse_arguments", "parse_batch_urls", "plan_downloads", "plan_fragments", "plan_metadata", "plan_post_processing", "plan_thumbnails", "read_download_archive", "render_items", "render_output_path", "resolve_authentication", "resolve_inputs", "resolve_live_media", "resolve_output_path", "resolve_update_repository", "run", "run_post_processing", "select_geo_route", "select_playlist", "select_subtitles", "sort_formats", "transfer_fragments", "transfer_media", "validate_network", "validate_workarounds", "write_download_archive"]

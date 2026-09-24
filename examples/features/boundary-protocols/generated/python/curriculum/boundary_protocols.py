@@ -23,7 +23,7 @@ def wrap_handle(raw_id: U64) -> Result[HandleBundle, HandleError]:
         _expected_error_span = {"end_byte":463,"end_column":53,"end_line":19,"start_byte":415,"start_column":5,"start_line":19}
         _expected_error_clause = "error:2"
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/boundary_protocols/wrap_handle.py", "b0256a4b130d02c23b0b20f708831ec4822bc0da1b87afbbf742a2e6f4510b05", "wrap_handle", expected_project_name="boundary-protocols", expected_cott_symbol="curriculum.boundary_protocols.wrap_handle")
+        _implementation = _cott_load("_cott_impl/curriculum/boundary_protocols/wrap_handle.py", "b2e20037b9eac6ad02803bfc760482df4c9e41b86064c2b99a01fd1da4286dd9", "wrap_handle", expected_project_name="boundary-protocols", expected_cott_symbol="curriculum.boundary_protocols.wrap_handle")
         _result = _implementation(raw_id)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -62,7 +62,7 @@ def extract_handle_id(bundle: HandleBundle) -> U64:
     """Explicitly adapt a client-session opaque handle to its Python ID."""
     bundle = _cott_validate_abi(bundle, HandleBundle, path="$.bundle")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/boundary_protocols/extract_handle_id.py", "15ee436d80ae7b210c709d632b0b32c5149535f4bf6b712ca9007e077b1ac294", "extract_handle_id", expected_project_name="boundary-protocols", expected_cott_symbol="curriculum.boundary_protocols.extract_handle_id")
+        _implementation = _cott_load("_cott_impl/curriculum/boundary_protocols/extract_handle_id.py", "87b167df10d73fffa5279541354f2fe01dbeb3f36713d173f0ec19d3c263bc7c", "extract_handle_id", expected_project_name="boundary-protocols", expected_cott_symbol="curriculum.boundary_protocols.extract_handle_id")
         _result = _implementation(bundle)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -84,7 +84,7 @@ def adapt_unknown(value: Any) -> object:
     """Deliberately adapt an unconstrained value to an explicitly narrowed boundary value."""
     value = _cott_validate_abi(value, Any, path="$.value")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/boundary_protocols/adapt_unknown.py", "f66f20ebacad682b1a537e45facf398893520c8c3dfde2a260d7ccb5b27daf49", "adapt_unknown", expected_project_name="boundary-protocols", expected_cott_symbol="curriculum.boundary_protocols.adapt_unknown")
+        _implementation = _cott_load("_cott_impl/curriculum/boundary_protocols/adapt_unknown.py", "f8cd3a661e133fb532fd2ad3acdb0ceb651cd558bdf927a9ebbf00053b4b4178", "adapt_unknown", expected_project_name="boundary-protocols", expected_cott_symbol="curriculum.boundary_protocols.adapt_unknown")
         _result = _implementation(value)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -104,7 +104,7 @@ def iter_lines(buffer: TextBuffer) -> Iterator[str]:
     """Lazily yield buffer lines without trailing line endings."""
     buffer = _cott_validate_abi(buffer, TextBuffer, path="$.buffer")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/boundary_protocols/iter_lines.py", "28df24e128403596de810439057c10a166dcf04df22adc8605f1948911105cc6", "iter_lines", expected_project_name="boundary-protocols", expected_cott_symbol="curriculum.boundary_protocols.iter_lines")
+        _implementation = _cott_load("_cott_impl/curriculum/boundary_protocols/iter_lines.py", "185f2ff6951ec19b4565616c5368025fb79c99ea3924450b30ce2f52efaaa586", "iter_lines", expected_project_name="boundary-protocols", expected_cott_symbol="curriculum.boundary_protocols.iter_lines")
         _result = _implementation(buffer)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -124,7 +124,7 @@ def echo_values(values: Iterator[Any]) -> Generator[Any, object, U64]:
     """Yield each value, discard sent unknown values, and return the yield count."""
     values = _cott_validate_abi(values, Iterator[Any], path="$.values")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/boundary_protocols/echo_values.py", "292acbb71eca91b9f16e9cb9de89797f171bccf6a7367b97984a64b83945df98", "echo_values", expected_project_name="boundary-protocols", expected_cott_symbol="curriculum.boundary_protocols.echo_values")
+        _implementation = _cott_load("_cott_impl/curriculum/boundary_protocols/echo_values.py", "fd44eae6f28832e3bce49f3d941ebf8d3734a3de36b65ba311d91fe9120b5b0e", "echo_values", expected_project_name="boundary-protocols", expected_cott_symbol="curriculum.boundary_protocols.echo_values")
         _result = _implementation(values)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -144,7 +144,7 @@ async def async_lines(values: AsyncIterator[str]) -> AsyncIterator[str]:
     """Return the supplied async iterator."""
     values = _cott_validate_abi(values, AsyncIterator[str], path="$.values")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/boundary_protocols/async_lines.py", "4362cf9bd2b06dc09a460e23b558ae4ee23eb4654a56e59466fab58e05b67e68", "async_lines", expected_project_name="boundary-protocols", expected_cott_symbol="curriculum.boundary_protocols.async_lines")
+        _implementation = _cott_load("_cott_impl/curriculum/boundary_protocols/async_lines.py", "6938b95bbc831cd3fd0c007505b384472624af99d3143e191750d3e1cbf80bcf", "async_lines", expected_project_name="boundary-protocols", expected_cott_symbol="curriculum.boundary_protocols.async_lines")
         _result = await _implementation(values)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -164,7 +164,7 @@ async def echo_async(values: AsyncGenerator[Any, object]) -> AsyncGenerator[Any,
     """Return the supplied async generator."""
     values = _cott_validate_abi(values, AsyncGenerator[Any, object], path="$.values")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/boundary_protocols/echo_async.py", "dfda4da00567053b60962e3490fe43836695fa831392cb792105e043b848819e", "echo_async", expected_project_name="boundary-protocols", expected_cott_symbol="curriculum.boundary_protocols.echo_async")
+        _implementation = _cott_load("_cott_impl/curriculum/boundary_protocols/echo_async.py", "6f7283139a8889bb77f745c3d294f1da65559046438372f5a5ff871650b12f32", "echo_async", expected_project_name="boundary-protocols", expected_cott_symbol="curriculum.boundary_protocols.echo_async")
         _result = await _implementation(values)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

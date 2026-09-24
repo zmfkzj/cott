@@ -127,7 +127,10 @@ PostingError: TypeAlias = Union[PostingError_InvalidArguments, PostingError_Inva
 
 """Accept standard HTTP methods case-insensitively; preserve other non-empty methods."""
 """Parse METHOD URL [BODY]; use a 30-second timeout and no headers."""
-"""Send one HTTP request and retain status, final URL, headers, and response bytes."""
+"""Send one HTTP request and retain status, final URL, headers, and the response
+body decoded as UTF-8 with replacement characters for undecodable bytes. An HTTP
+error status is still a received Response; InvalidRequest covers a non-HTTP(S)
+URL, and NetworkFailed covers connection, timeout, and URL errors."""
 """Render status and final URL, then headers and a UTF-8 replacement-decoded body."""
 """Call real.posting.client.parse_arguments, pass its request to
 real.posting.client.send_request, and return the successful response rendered

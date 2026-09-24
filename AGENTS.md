@@ -85,11 +85,9 @@ cott check / fmt / emit / generate / prompt / verify / diff / deploy
 | `examples/integrations/flutter-counter/` | Dart Cott package plus standard Flutter Android/web consumer |
 | `examples/real/` | Six independent Python real-world generation-first projects |
 | `examples/**/src/**/*.cott` | Authoritative example contracts |
-| `examples/**/python/cott_bindings/**/*.py` | Selected Python binding sources |
+| `examples/grammar/checked-add/python/cott_bindings/**/*.py` | The sole selected Python binding source (binding-syntax lesson) |
 | `examples/**/python/_cott_impl/**/*.py` | Durable accepted Python agent implementation sources |
-| `examples/**/kotlin/cott_bindings/**/*.kt` | Selected Kotlin binding sources |
 | `examples/**/kotlin/cott_impl/**/*.kt` | Durable accepted Kotlin agent implementation sources |
-| `examples/**/dart/cott_bindings/**/*.dart` | Selected private Dart binding sources |
 | `examples/**/dart/cott_impl/**/*.dart` | Durable accepted Dart agent implementation sources |
 | `architecture.md` | Normative implemented v1.0 contract |
 
@@ -123,6 +121,7 @@ cott emit ir|python|kotlin|dart [--project <dir>] [--format json]
 cott generate [<fully.qualified.callable>] --agent codex|claude|omp [--model <model>] --target python|kotlin|dart [-j <jobs>] [--project <dir>] [--format json]
 cott prompt <fully.qualified.callable> [--project <dir>] [--format json]
 cott verify [--project <dir>] [--format json]
+cott requirements [--project <dir>] [--format json]
 cott deploy [--output <dir>] [--replace] [--project <dir>] [--format json]
 cott diff [--baseline <generation.json>] [--exit-code] [--project <dir>] [--format json]
 cott lsp
@@ -222,6 +221,10 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
 - Functions support parameters, generics/bounds, `requires`, `ensures`, conditional `error`, and
   closed `effects`. Contract expressions are typed in HIR and generated wrappers apply the configured
   validation mode without weakening provenance or implementation-state checks.
+- Free functions may opt into `errors complete` after ensures and before errors. This mode
+  rejects bare error allowances and requires `Ok` when no conditional error applies; functions
+  without it retain their existing meaning. It is an obligation, not a termination proof.
+  The graph predicates and fixed Unicode White_Space semantics are defined in architecture §10.4.1.
 - An input-scrutinee guard such as `ensures key matches Kind.X => result == ...` retains the
   return-value `result` in its condition, alongside clause-local pattern bindings. In contrast,
   `ensures result matches Pattern => condition` and its shorthand `ensures Pattern => condition`
@@ -240,6 +243,16 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
 - Scenario fixtures are closed and facade-only. Effectful HTTP observation is available only through
   compiler-owned Linux isolated loopback; unavailable isolation is `unobserved`, never an
   unsandboxed or host-network substitute.
+- Scenario arguments, `data` and assertions accept closed nested canonical struct/enum/container
+  values. Module-local `data name: Type = VALUE` is reusable test data; scenario-local data
+  evaluates exactly once. `assert value matches Pattern => condition` must match and keeps
+  bindings local to that assertion. No arbitrary calls or public builder helpers are introduced.
+- `requirement NAME for callable:` needs only normative `text`. Optional `checked_by` links name
+  local scenarios or assertion ordinals; `assumption` and `waiver` remain separate and never
+  convert failed or missing evidence into success. Requirements enter CURRENT INTENT without
+  demoting existing doc. `cott requirements` is a read-only, version-1 report tied to the current
+  target snapshot after normal freshness checks. Observed linked checks do not prove the prose.
+  K101 remains advisory. External program regression results are not Cott scenario evidence.
 - Semantic coverage is the closed join of Canonical IR clause inventory and runner evidence. Only
   manifest-selected clauses are policy-gated; certification is not a second runtime truth boundary.
 - Evidence comes from actual emitted predicate observations in the exact callable/invocation/method
@@ -255,6 +268,9 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
 - A manifest binding names a compatible implementation with `module:function`. A durable accepted
   agent implementation uses `python/_cott_impl/<module path>/<function>.py`; impl methods use the
   corresponding concrete-type path. Do not assume every example uses the same selection mechanism.
+  Only `grammar/checked-add` selects a manifest binding. Never introduce `[target.*.implementations]`
+  mappings or `cott_bindings/` sources to work around a generation, run, or verification failure;
+  fix the contract, generator rules, or toolchain instead.
 - Imports may use the standard library, `cott_runtime`, exact generated `*_types` modules,
   scoped generated callable facades, or a uniquely owned distribution selected by `uv.lock`.
   Facade calls must name declarations in the selected context and be covered by the caller's
@@ -269,8 +285,9 @@ probe must finish without a timeout at status `0`; stdout must be exactly one st
 
 - Each `examples/real/` project is generation-first with project API `0.1.0`: adapters use public
   facades only, and its README H1 is the canonical upstream URL. After the generation phase,
-  commit its verified generated artifacts. Manifest bindings are limited to the essential host
-  boundaries: yt-dlp transfer, Harlequin REPL, Posting HTTP, and Frogmouth document loading.
+  commit its verified generated artifacts. Real projects select no manifest bindings: host
+  boundaries such as yt-dlp transfer, Harlequin REPL, Posting HTTP, and Frogmouth document loading
+  are agent-generated like every other callable.
 
 ### Kotlin Implementations and Android Boundary
 

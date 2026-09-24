@@ -12,9 +12,6 @@ type_checker = ".venv/bin/basedpyright"
 lockfile = "python/uv.lock"
 runtime_validation = "boundary"
 
-[target.python.implementations]
-"frogmouth.document.load_document" = "cott_bindings.frogmouth.document.load_document:load_document"
-
 [generator]
 rules = "generator.rules"
 timeout_seconds = 1800

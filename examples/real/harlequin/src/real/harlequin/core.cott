@@ -569,7 +569,10 @@ fn save_query_file(reference: FileReference, source: Str) -> Result[SavedFile, F
 
 fn run(arguments: List[Str]) -> Never:
     doc """
-    Parse/connect; read SQL at sql> until .quit/EOF; execute and print tab-separated results.
+    Parse arguments with real.harlequin.core.parse_cli, then connect with the parsed
+    adapter (DuckDb when absent), connection endpoint (":memory:" when absent) and
+    read_only flag; read SQL at sql> until .quit/EOF; execute and print tab-separated
+    results.
     """
 
     effects [

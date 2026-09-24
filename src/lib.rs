@@ -27,6 +27,7 @@ pub mod python;
 pub mod python_emit;
 pub mod python_runtime;
 pub mod python_verify;
+pub mod requirements;
 pub mod sandbox;
 pub mod snapshot_record;
 pub mod transaction;

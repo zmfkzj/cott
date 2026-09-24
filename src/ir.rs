@@ -7,14 +7,14 @@ use serde_json::Value;
 use crate::diagnostics::Span;
 use crate::hir::{
     HirAnnotation, HirAssociatedType, HirAssociatedTypeAssignment, HirBinaryOp, HirCallableKind,
-    HirClause, HirClauseKind, HirCompareOp, HirConstArgument, HirContract, HirDeclaration, HirDoc,
-    HirEffect, HirExpr, HirExprKind, HirField, HirGenericArg, HirGenericParam, HirImplInitializer,
-    HirImplMethod, HirMatchGuard, HirMethod, HirModule, HirParameter, HirParameterKind, HirPattern,
-    HirPatternKind, HirProject, HirReference, HirResource, HirResourceTerminal,
-    HirResourceTransition, HirScenario, HirScenarioData, HirScenarioFailureError,
-    HirScenarioFailurePoint, HirScenarioFixtureKind, HirScenarioHttpOutcome, HirScenarioStep,
-    HirSelectedImplementation, HirType, HirUnaryOp, HirValue, HirVariance, HirVariant,
-    PrimitiveType,
+    HirClause, HirClauseKind, HirCollectionKind, HirCompareOp, HirConstArgument, HirContract,
+    HirDeclaration, HirDoc, HirEffect, HirExpr, HirExprKind, HirField, HirGenericArg,
+    HirGenericParam, HirImplInitializer, HirImplMethod, HirMatchGuard, HirMethod, HirModule,
+    HirParameter, HirParameterKind, HirPattern, HirPatternKind, HirProject, HirReference,
+    HirRequirement, HirResource, HirResourceTerminal, HirResourceTransition, HirScenario,
+    HirScenarioData, HirScenarioFailureError, HirScenarioFailurePoint, HirScenarioFixtureKind,
+    HirScenarioHttpOutcome, HirScenarioStep, HirSelectedImplementation, HirType, HirUnaryOp,
+    HirValue, HirVariance, HirVariant, PrimitiveType,
 };
 use crate::provenance::CANONICAL_IR_SCHEMA_VERSION;
 
@@ -67,14 +67,73 @@ fn validate(bytes: &[u8]) -> Result<(), String> {
         .iter_errors(&value)
         .map(|error| error.to_string())
         .collect::<Vec<_>>();
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
+    if !errors.is_empty() {
+        return Err(format!(
             "canonical IR schema violation: {}",
             errors.join("; ")
-        ))
+        ));
     }
+    for declaration in value
+        .get("declarations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+    {
+        complete_errors(declaration)
+            .map_err(|error| format!("canonical IR schema violation: {error}"))?;
+    }
+    Ok(())
+}
+
+/// Read the compiler-owned `cott.complete_errors` marker of one canonical
+/// declaration. Fails closed unless it is exactly one argument-less marker on
+/// a `Result` free function whose error clauses are all conditional.
+pub fn complete_errors(declaration: &serde_json::Map<String, Value>) -> Result<bool, String> {
+    let mut markers = declaration
+        .get("annotations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|annotation| {
+            annotation.get("name").and_then(Value::as_str)
+                == Some(crate::hir::COMPLETE_ERRORS_ANNOTATION)
+        });
+    let Some(marker) = markers.next() else {
+        return Ok(false);
+    };
+    if markers.next().is_some() {
+        return Err("duplicate cott.complete_errors annotation".to_owned());
+    }
+    if !marker.get("argument").is_some_and(Value::is_null) {
+        return Err("cott.complete_errors annotation takes no argument".to_owned());
+    }
+    if declaration.get("kind").and_then(Value::as_str) != Some("function") {
+        return Err("cott.complete_errors annotates only free functions".to_owned());
+    }
+    if declaration
+        .get("return_type")
+        .and_then(|ty| ty.get("kind"))
+        .and_then(Value::as_str)
+        != Some("result")
+    {
+        return Err("cott.complete_errors requires a Result return type".to_owned());
+    }
+    let unconditional = declaration
+        .get("contract")
+        .and_then(|contract| contract.get("clauses"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|clause| {
+            clause.get("kind").and_then(Value::as_str) == Some("error")
+                && clause.get("guard").is_none_or(Value::is_null)
+                && clause.get("when").is_none_or(Value::is_null)
+        });
+    if unconditional {
+        return Err("cott.complete_errors forbids unconditional error clauses".to_owned());
+    }
+    Ok(true)
 }
 
 fn render_module(module: &HirModule) -> CanonicalModule {
@@ -533,7 +592,79 @@ fn render_declaration(json: &mut Json, declaration: &HirDeclaration) {
             json.object_end();
         }
         HirDeclaration::Scenario(value) => render_scenario(json, value),
+        HirDeclaration::Requirement(value) => render_requirement(json, value),
     }
+}
+
+/// Keys are emitted in canonical (sorted) order. `checked_by[].assertion` is the resolved
+/// scenario step identity, so reordering assertions changes IR identity and stales evidence.
+fn render_requirement(json: &mut Json, value: &HirRequirement) {
+    fn texts(json: &mut Json, texts: &[HirDoc]) {
+        json.array_start();
+        for (index, text) in texts.iter().enumerate() {
+            if index != 0 {
+                json.comma();
+            }
+            render_doc(json, Some(text));
+        }
+        json.array_end();
+    }
+    json.object_start();
+    json.key("annotations");
+    render_annotations(json, &value.annotations);
+    json.comma();
+    json.key("assumptions");
+    texts(json, &value.assumptions);
+    json.comma();
+    json.key("callable");
+    json.string(&value.callable.as_string());
+    json.comma();
+    json.key("checked_by");
+    json.array_start();
+    for (index, check) in value.checked_by.iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
+        json.object_start();
+        json.key("assertion");
+        match check.assertion {
+            Some(step_id) => json.string(&format!("assert:{step_id}")),
+            None => json.null(),
+        }
+        json.comma();
+        json.key("scenario");
+        json.string(&check.scenario.as_string());
+        json.comma();
+        json.key("span");
+        render_span(json, &check.span);
+        json.object_end();
+    }
+    json.array_end();
+    json.comma();
+    json.key("doc");
+    render_doc(json, value.doc.as_ref());
+    json.comma();
+    json.key("kind");
+    json.string("requirement");
+    json.comma();
+    json.key("name");
+    json.string(&value.id.as_string());
+    json.comma();
+    json.key("public");
+    json.boolean(false);
+    json.comma();
+    json.key("source_order");
+    json.number_usize(value.source_order);
+    json.comma();
+    json.key("span");
+    render_span(json, &value.span);
+    json.comma();
+    json.key("statement");
+    render_doc(json, Some(&value.statement));
+    json.comma();
+    json.key("waivers");
+    texts(json, &value.waivers);
+    json.object_end();
 }
 
 fn render_scenario(json: &mut Json, value: &HirScenario) {
@@ -891,6 +1022,27 @@ fn render_scenario_step(json: &mut Json, step: &HirScenarioStep) {
             json.comma();
             json.key("kind");
             json.string("assert");
+            json.comma();
+            json.key("step_id");
+            json.number_u32(*step_id);
+            json.comma();
+            json.key("span");
+            render_span(json, span);
+        }
+        HirScenarioStep::Data {
+            step_id,
+            span,
+            binding,
+            expression,
+        } => {
+            json.key("binding");
+            json.string(&binding.as_string());
+            json.comma();
+            json.key("expression");
+            render_expr(json, expression);
+            json.comma();
+            json.key("kind");
+            json.string("data");
             json.comma();
             json.key("step_id");
             json.number_u32(*step_id);
@@ -2044,6 +2196,7 @@ fn render_expr(json: &mut Json, expression: &HirExpr) {
             intrinsic,
             arguments,
             selector,
+            dependencies,
         } => {
             json.string("intrinsic");
             json.comma();
@@ -2054,6 +2207,12 @@ fn render_expr(json: &mut Json, expression: &HirExpr) {
                 crate::hir::HirIntrinsic::Contains => "contains",
                 crate::hir::HirIntrinsic::UniqueBy => "unique_by",
                 crate::hir::HirIntrinsic::DescendingBy => "descending_by",
+                crate::hir::HirIntrinsic::AnyBlankBy => "any_blank_by",
+                crate::hir::HirIntrinsic::UnknownDependencyBy => "unknown_dependency_by",
+                crate::hir::HirIntrinsic::SelfDependencyBy => "self_dependency_by",
+                crate::hir::HirIntrinsic::CyclicBy => "cyclic_by",
+                crate::hir::HirIntrinsic::PermutationBy => "permutation_by",
+                crate::hir::HirIntrinsic::DependencyOrderedBy => "dependency_ordered_by",
             });
             json.comma();
             json.key("arguments");
@@ -2078,6 +2237,18 @@ fn render_expr(json: &mut Json, expression: &HirExpr) {
                     json.object_end();
                 }
                 None => json.null(),
+            }
+            // Only graph intrinsics carry this key, so existing bytes are unchanged.
+            if let Some(dependencies) = dependencies {
+                json.comma();
+                json.key("dependencies");
+                json.object_start();
+                json.key("owner");
+                json.string(&dependencies.owner.as_string());
+                json.comma();
+                json.key("field");
+                json.string(&dependencies.field.as_string());
+                json.object_end();
             }
         }
         HirExprKind::FixturePath { fixture, path } | HirExprKind::FixtureUrl { fixture, path } => {
@@ -2142,6 +2313,98 @@ fn render_expr(json: &mut Json, expression: &HirExpr) {
             }
             json.array_end();
         }
+        HirExprKind::Construct { symbol, fields } => {
+            json.string("construct");
+            json.comma();
+            json.key("fields");
+            json.array_start();
+            for (index, (name, value)) in fields.iter().enumerate() {
+                if index != 0 {
+                    json.comma();
+                }
+                json.object_start();
+                json.key("name");
+                json.string(name);
+                json.comma();
+                json.key("value");
+                render_expr(json, value);
+                json.object_end();
+            }
+            json.array_end();
+            json.comma();
+            json.key("symbol");
+            json.string(&symbol.as_string());
+        }
+        HirExprKind::Variant { symbol, fields } => {
+            json.string("variant");
+            json.comma();
+            json.key("fields");
+            render_exprs(json, fields);
+            json.comma();
+            json.key("symbol");
+            json.string(&symbol.as_string());
+        }
+        HirExprKind::OptionSome(value) => {
+            json.string("option_some");
+            json.comma();
+            json.key("payload");
+            render_expr(json, value);
+        }
+        HirExprKind::ResultValue { ok, value } => {
+            json.string(if *ok { "result_ok" } else { "result_err" });
+            json.comma();
+            json.key("payload");
+            render_expr(json, value);
+        }
+        HirExprKind::Collection { kind, items } => {
+            json.string(match kind {
+                HirCollectionKind::List => "list",
+                HirCollectionKind::Set => "set",
+                HirCollectionKind::Tuple => "tuple",
+                HirCollectionKind::Array => "array",
+            });
+            json.comma();
+            json.key("items");
+            render_exprs(json, items);
+        }
+        HirExprKind::MapLiteral { entries } => {
+            json.string("map");
+            json.comma();
+            json.key("entries");
+            json.array_start();
+            for (index, (key, value)) in entries.iter().enumerate() {
+                if index != 0 {
+                    json.comma();
+                }
+                json.object_start();
+                json.key("key");
+                render_expr(json, key);
+                json.comma();
+                json.key("value");
+                render_expr(json, value);
+                json.object_end();
+            }
+            json.array_end();
+        }
+        HirExprKind::Match {
+            scrutinee,
+            pattern,
+            condition,
+        } => {
+            json.string("match");
+            json.comma();
+            json.key("condition");
+            match condition {
+                Some(condition) => render_expr(json, condition),
+                None => json.null(),
+            }
+            json.comma();
+            json.key("pattern");
+            render_pattern(json, pattern);
+            json.comma();
+            json.key("scrutinee");
+            render_expr(json, scrutinee);
+        }
     }
     json.comma();
     json.key("reference");
@@ -2156,6 +2419,16 @@ fn render_expr(json: &mut Json, expression: &HirExpr) {
     json.key("type");
     render_type(json, &expression.ty);
     json.object_end();
+}
+fn render_exprs(json: &mut Json, expressions: &[HirExpr]) {
+    json.array_start();
+    for (index, expression) in expressions.iter().enumerate() {
+        if index != 0 {
+            json.comma();
+        }
+        render_expr(json, expression);
+    }
+    json.array_end();
 }
 fn render_reference(json: &mut Json, reference: &HirReference) {
     json.object_start();

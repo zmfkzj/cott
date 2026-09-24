@@ -50,6 +50,10 @@ _cott_curriculum_trait_protocol_Summarizable_curriculum_trait_protocol_Summariza
 _cott_curriculum_trait_protocol_TaskView_curriculum_trait_protocol_Summarizable_Summary = TypeVar("_cott_curriculum_trait_protocol_TaskView_curriculum_trait_protocol_Summarizable_Summary")
 _cott_curriculum_trait_protocol_Summarizable_Summary_91a0038fc149a52d660ec2d4c914e0f201ef340095a79ffc2c9cd89ad6d2311f = TypeVar("_cott_curriculum_trait_protocol_Summarizable_Summary_91a0038fc149a52d660ec2d4c914e0f201ef340095a79ffc2c9cd89ad6d2311f")
 
+"""Return the fixed default category "default" for any task view."""
+"""Return the text "specialized: " immediately followed by receiver.title."""
+"""Return the SimpleTask constructor itself as the factory."""
+"""Return the awaited summary of the dynamically dispatched task view item."""
 @final
 class TaskLifecycle_Pending:
     __slots__ = ()

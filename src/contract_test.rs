@@ -514,6 +514,9 @@ fn derive_strategy_entries(
                     strategy.bytes()?;
                     strategies.push((strategy, None));
                 }
+                // Requirements never add strategies or evidence; the requirement report joins
+                // the scenario evidence recorded for these strategies.
+                "requirement" => {}
                 _ => {}
             }
         }

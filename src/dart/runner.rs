@@ -491,6 +491,25 @@ void _emitCancellation(
   });
 }
 
+final class _ScenarioAssertionFailure {
+  const _ScenarioAssertionFailure();
+}
+
+final class _ScenarioCancellationMissing {
+  const _ScenarioCancellationMissing();
+}
+
+/// The closed failure kind of a failed scenario; host exception text is never evidence.
+String? _scenarioFailure(String status, Object? failure) {
+  if (status == 'passed') return null;
+  if (failure is _ScenarioAssertionFailure) return 'assertion';
+  if (failure is _ScenarioCancellationMissing) return 'cancellation';
+  if (failure is cott_runtime.CottContractViolation) return 'contract';
+  if (failure is TimeoutException) return 'timeout';
+  if (failure != null) return 'exception';
+  return 'lifecycle';
+}
+
 void _emitScenario(
   EvidenceWriter evidence,
   String id,
@@ -500,7 +519,11 @@ void _emitScenario(
   int assertions,
   int cancellations,
   bool cleaned,
+  int step,
+  Object? failure,
 ) {
+  final kind = _scenarioFailure(status, failure);
+  final violation = failure is cott_runtime.CottContractViolation ? failure : null;
   evidence.emit(<String, Object?>{
     'kind': 'scenario',
     'scenario_id': id,
@@ -510,6 +533,16 @@ void _emitScenario(
     'cancellations': cancellations,
     'cleaned': cleaned,
     'observations': _observations(observation),
+    // Passed evidence keeps its recorded shape; only a failure explains itself.
+    if (kind != null) ...<String, Object?>{
+      'failure': kind,
+      'failed_step': kind == 'lifecycle' || step < 0 ? null : step,
+      'phase': violation?.phase,
+      'clause': violation?.clause,
+      'error_symbol': violation?.symbol,
+      // Only the Dart type name, never host exception text.
+      'exception_type': kind == 'exception' ? failure.runtimeType.toString() : null,
+    },
   });
 }
 
@@ -2682,7 +2715,7 @@ fn render_scenario(
     )
     .unwrap();
     rendered.push_str(
-        "  final _observation = cott_runtime.CottObservation();\n  var _assertions = 0;\n  var _cancellations = 0;\n  var _status = 'passed';\n  var _cleaned = false;\n  Directory? _root;\n",
+        "  final _observation = cott_runtime.CottObservation();\n  var _assertions = 0;\n  var _cancellations = 0;\n  var _status = 'passed';\n  var _cleaned = false;\n  var _step = -1;\n  Object? _failure;\n  Directory? _root;\n",
     );
     for (worker, ty) in &workers {
         writeln!(
@@ -2845,6 +2878,7 @@ fn render_scenario(
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok())
             .ok_or("Dart scenario step has invalid step_id")?;
+        writeln!(rendered, "      _step = {step_id};").unwrap();
         match step.get("kind").and_then(Value::as_str) {
             Some("call") => {
                 let binding = step
@@ -2914,7 +2948,7 @@ fn render_scenario(
                         .ok_or("Dart scenario await has no worker")?,
                 ))?;
                 if step.get("cancelled").and_then(Value::as_bool) == Some(true) {
-                    writeln!(rendered, "      try {{ await {worker}.result; throw StateError('scenario step {step_id} expected cooperative cancellation'); }} on cott_runtime.CottCancellationException {{ if (!{worker}.cancellationObserved) rethrow; _cancellations += 1; _emitCancellation(evidence, {}, {step_id}, true); }}", dart_string(&scenario.id)).unwrap();
+                    writeln!(rendered, "      try {{ await {worker}.result; throw const _ScenarioCancellationMissing(); }} on cott_runtime.CottCancellationException {{ if (!{worker}.cancellationObserved) rethrow; _cancellations += 1; _emitCancellation(evidence, {}, {step_id}, true); }}", dart_string(&scenario.id)).unwrap();
                     cancellations = cancellations.saturating_add(1);
                     local_cancellations.insert((scenario.id.clone(), step_id));
                 } else if let Some(result) = step.get("result").and_then(Value::as_str) {
@@ -2929,6 +2963,24 @@ fn render_scenario(
                 }
                 writeln!(rendered, "      _awaited_{worker} = true;").unwrap();
             }
+            Some("data") => {
+                let binding = step
+                    .get("binding")
+                    .and_then(Value::as_str)
+                    .ok_or("Dart scenario data has no binding")?;
+                let expression = emit::render_consumer_expression(
+                    step.get("expression")
+                        .ok_or("Dart scenario data has no expression")?,
+                    aliases,
+                    plan.enum_projection(),
+                )?;
+                writeln!(
+                    rendered,
+                    "      final {} = {expression};",
+                    escape_identifier(local_name(binding))?
+                )
+                .unwrap();
+            }
             Some("assert") => {
                 let expression = emit::render_consumer_expression(
                     step.get("expression")
@@ -2938,7 +2990,7 @@ fn render_scenario(
                 )?;
                 writeln!(
                     rendered,
-                    "      if (!({expression})) throw StateError('scenario assertion step:{step_id} failed');\n      _assertions += 1;"
+                    "      if (!({expression})) throw const _ScenarioAssertionFailure();\n      _assertions += 1;"
                 )
                 .unwrap();
                 assertions = assertions.saturating_add(1);
@@ -2957,11 +3009,13 @@ fn render_scenario(
     .unwrap();
     writeln!(
         rendered,
-        "    _auditFixtureRoot(_root!, {}, {});",
+        "    _step = -1;\n    _auditFixtureRoot(_root!, {}, {});",
         scenario.limits.filesystem_files, scenario.limits.filesystem_bytes
     )
     .unwrap();
-    rendered.push_str("  } catch (_) {\n    _status = 'failed';\n  } finally {\n");
+    rendered.push_str(
+        "  } catch (error) {\n    _status = 'failed';\n    _failure = error;\n  } finally {\n",
+    );
     for (worker, _) in &workers {
         writeln!(
             rendered,
@@ -2983,7 +3037,7 @@ fn render_scenario(
     );
     writeln!(
         rendered,
-        "  _emitScenario(evidence, {}, {}, _status, _observation, _assertions, _cancellations, _cleaned);\n}}",
+        "  _emitScenario(evidence, {}, {}, _status, _observation, _assertions, _cancellations, _cleaned, _step, _failure);\n}}",
         dart_string(&scenario.id),
         dart_string(&strategy.symbol)
     )

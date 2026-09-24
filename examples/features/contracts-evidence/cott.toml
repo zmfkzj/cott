@@ -23,6 +23,3 @@ clauses = ["ensures:2", "error:5"]
 allow_unobserved = false
 allow_trust_declaration = false
 allow_unknown = false
-
-[target.python.implementations]
-"curriculum.contracts_evidence.assess_label" = "cott_bindings.curriculum.contracts_evidence.assess_label:assess_label"

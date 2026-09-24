@@ -786,3 +786,96 @@ Future<void> main() async {{
 "#
     ));
 }
+
+#[test]
+#[ignore = "requires COTT_DART=/tmp/cott-dart-toolchain/dart-sdk/bin/dart"]
+fn dart_runtime_graph_predicates_follow_the_fixed_cross_target_semantics() {
+    run_dart(&format!(
+        r#"{PRELUDE}
+final class Step implements CottFieldValue {{
+  Step(this.key, [List<Object?> deps = const []]) : deps = CottSet<Object?>(deps);
+  final Object? key;
+  final CottSet<Object?> deps;
+  @override
+  String get cottTypeIdentity => 'demo.Step';
+  @override
+  CottList<String> get cottFieldNames => CottList(const ['key', 'deps']);
+  @override
+  Object? cottField(String field) => switch (field) {{
+    'key' => key,
+    'deps' => deps,
+    _ => CottRuntime.violation('unknown field', phase: 'field'),
+  }};
+}}
+
+bool blank(List<Object?> keys) =>
+    CottRuntime.anyBlankBy([for (final key in keys) Step(key)], 'demo.Step', 'key');
+bool unknown(List<Step> steps) =>
+    CottRuntime.unknownDependencyBy(steps, 'demo.Step', 'key', 'deps');
+bool selfEdge(List<Step> steps) =>
+    CottRuntime.selfDependencyBy(steps, 'demo.Step', 'key', 'deps');
+bool cyclic(List<Step> steps) => CottRuntime.cyclicBy(steps, 'demo.Step', 'key', 'deps');
+bool permutation(List<String> order, List<Step> steps) =>
+    CottRuntime.permutationBy(CottList(order), steps, 'demo.Step', 'key');
+bool ordered(List<String> order, List<Step> steps) =>
+    CottRuntime.dependencyOrderedBy(CottList(order), steps, 'demo.Step', 'key', 'deps');
+
+void main() {{
+  // Exactly the 25 Unicode White_Space scalars, never Dart's trim set.
+  expect(!blank(const []), 'an empty list has no blank key');
+  expect(blank(const ['']), 'the empty key is blank');
+  expect(blank(const [' \t\n\u000B\u000C\r']), 'ASCII White_Space is blank');
+  expect(blank(const ['\u0085\u00A0\u1680\u2000\u200A\u2028\u2029\u202F\u205F\u3000']),
+      'non-ASCII White_Space is blank');
+  for (final key in const ['\uFEFF', '\u200B', '\u180E', '\u001C', '\u001F', ' a ', '😀']) {{
+    expect(!blank([key]), 'non-White_Space key ${{key.codeUnits}} was blank');
+  }}
+  expect(blank(const ['a', ' ']), 'one blank key among others was missed');
+
+  expect(!unknown([]), 'an empty list has no unknown dependency');
+  expect(unknown([Step('a', ['zz'])]), 'a missing dependency was not unknown');
+  expect(!unknown([Step('b', ['a']), Step('a')]), 'a later-declared dependency was unknown');
+  expect(!unknown([Step('a'), Step('a', ['a'])]), 'a duplicate key was not a known node');
+
+  expect(selfEdge([Step('a', ['a'])]), 'a self dependency was missed');
+  expect(selfEdge([Step('a'), Step('a', ['a'])]), 'a duplicate element self dependency was missed');
+  expect(!selfEdge([Step('a', ['b']), Step('b', ['a'])]), 'a two-cycle is not a self edge');
+
+  expect(!cyclic([]), 'an empty graph is acyclic');
+  expect(cyclic([Step('a', ['a'])]), 'a self edge is a length-one cycle');
+  expect(cyclic([Step('a', ['b']), Step('b', ['a'])]), 'a two-cycle was missed');
+  expect(cyclic([Step('a'), Step('a', ['a'])]), 'duplicate keys did not merge into one node');
+  expect(!cyclic([Step('a', ['zz'])]), 'an unknown dependency created an edge');
+  expect(!cyclic([Step('a'), Step('a')]), 'duplicate keys alone created a cycle');
+  expect(!cyclic([Step('c'), Step('a', ['c']), Step('b', ['c', 'a'])]), 'a DAG was cyclic');
+
+  expect(permutation(const [], []), 'empty order and elements are a permutation');
+  expect(permutation(const ['a', 'b'], [Step('b'), Step('a')]), 'reordering lost the permutation');
+  expect(!permutation(const ['a'], [Step('a'), Step('a')]), 'a missing duplicate was accepted');
+  expect(permutation(const ['a', 'a'], [Step('a'), Step('a')]), 'duplicate multiplicity was rejected');
+  expect(!permutation(const ['a', 'a'], [Step('a')]), 'an extra occurrence was accepted');
+  expect(!permutation(const ['c'], [Step('a')]), 'a foreign key was accepted');
+
+  final chain = [Step('b', ['a']), Step('a')];
+  expect(ordered(const ['a', 'b'], chain), 'a dependency-first order was rejected');
+  expect(!ordered(const ['b', 'a'], chain), 'a dependent-first order was accepted');
+  expect(!ordered(const ['a', 'b', 'a'], chain),
+      'every dependency position must precede every dependent position');
+  expect(ordered(const ['b'], chain), 'an absent dependency constrained the order');
+  expect(ordered(const ['a'], chain), 'an absent dependent constrained the order');
+  expect(ordered(const [], []), 'an empty order of no elements is ordered');
+
+  expectViolation(
+    () => CottRuntime.anyBlankBy([Step('a')], 'demo.Other', 'key'),
+    'a selector owned by another type was accepted',
+  );
+  expectViolation(() => blank([1]), 'a non-Str key was accepted');
+  expectViolation(() => unknown([Step('a', [1])]), 'a non-Str dependency was accepted');
+  expectViolation(
+    () => CottRuntime.permutationBy(CottList(const [1]), [Step('a')], 'demo.Step', 'key'),
+    'a non-Str order item was accepted',
+  );
+}}
+"#
+    ));
+}

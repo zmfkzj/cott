@@ -18,7 +18,10 @@ fn read_text(source: Path) -> Result[Str, EffectError]:
 
 fn copy_text(source: Path, destination: Path) -> Result[U64, EffectError]:
     doc """
-    Read source through its public facade and atomically replace destination.
+    Read source through curriculum.effects_selection.read_text, encode the
+    successful text as UTF-8 bytes and atomically replace destination with those
+    bytes. Return the encoded byte count, not the character count. If replacement
+    fails, return OperationFailed and preserve the previous destination bytes.
     """
 
     ensures Result.Ok(written) => written >= 0
@@ -68,7 +71,8 @@ fn store_and_load(database: Path, key: Str, value: Str) -> Result[Str, EffectErr
 
 fn clock_ns() -> U64:
     doc """
-    Return a compiler-owned deterministic fixture clock in nanoseconds.
+    Return the compiler-owned fixture clock in nanoseconds: the configured
+    start_ms multiplied by 1000000. Reading the clock does not advance it.
     """
 
     effects [clock]

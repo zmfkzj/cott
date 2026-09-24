@@ -19,7 +19,7 @@ async def wrap_scalar_json(key: str, value: str) -> JsonValue:
     if not (_cott_contract_condition(((len(key) > 0)), "curriculum.json_transform.wrap_scalar_json", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="curriculum.json_transform.wrap_scalar_json", clause="requires:1", phase="requires", span={"end_byte":357,"end_column":25,"end_line":16,"start_byte":337,"start_column":5,"start_line":16}, expected="true", actual="false")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/json_transform/wrap_scalar_json.py", "cc780ae75bdfa330553729f1da036b1c28229fea17b8737941699234719b9d6d", "wrap_scalar_json", expected_project_name="json-transform", expected_cott_symbol="curriculum.json_transform.wrap_scalar_json")
+        _implementation = _cott_load("_cott_impl/curriculum/json_transform/wrap_scalar_json.py", "2531f8ef560180f03cb833a4a57e21ffbe0fc6921eac188559d1bf2298125331", "wrap_scalar_json", expected_project_name="json-transform", expected_cott_symbol="curriculum.json_transform.wrap_scalar_json")
         _result = await _implementation(key, value)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -40,7 +40,7 @@ def extract_string_field(payload: JsonValue, field: str) -> Result[str, JsonTran
     payload = _cott_validate_abi(payload, JsonValue, path="$.payload")
     field = _cott_validate_abi(field, str, path="$.field")
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/json_transform/extract_string_field.py", "5166254c4d3ba44dd546175722f33cf10cc8544a187c335245eaf5cdf852d95d", "extract_string_field", expected_project_name="json-transform", expected_cott_symbol="curriculum.json_transform.extract_string_field")
+        _implementation = _cott_load("_cott_impl/curriculum/json_transform/extract_string_field.py", "4c1afecf4a1b96b89b95e44da4558fa0d9c17afc23a949408ad47ed75623d4ef", "extract_string_field", expected_project_name="json-transform", expected_cott_symbol="curriculum.json_transform.extract_string_field")
         _result = _implementation(payload, field)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

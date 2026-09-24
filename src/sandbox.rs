@@ -23,7 +23,19 @@ impl NetworkAccess {
     pub const fn bwrap_arguments(self) -> &'static [&'static str] {
         match self {
             Self::Disabled => &["--unshare-net"],
-            Self::IsolatedLoopback => &["--unshare-net", "--cap-add", "CAP_NET_ADMIN"],
+            // UID 0 is mapped only inside the new user namespace to the invoking
+            // host user. Otherwise exec drops CAP_NET_ADMIN before `ip` can raise lo.
+            Self::IsolatedLoopback => &[
+                "--uid",
+                "0",
+                "--gid",
+                "0",
+                "--unshare-net",
+                "--cap-add",
+                "CAP_NET_ADMIN",
+                "--cap-add",
+                "CAP_SETPCAP",
+            ],
             Self::Enabled => &[],
         }
     }
@@ -298,7 +310,7 @@ pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
         command.args([
             "/bin/sh",
             "-c",
-            "if ! /usr/sbin/ip link set lo up; then printf '%s\\n' 'cott-sandbox: isolated loopback unavailable' >&2; exit 125; fi; exec \"$@\"",
+            "if ! /usr/sbin/ip link set lo up; then printf '%s\\n' 'cott-sandbox: isolated loopback unavailable' >&2; exit 125; fi; exec /usr/bin/setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs -- \"$@\"",
             "cott-loopback",
         ]);
     }
@@ -856,9 +868,20 @@ fn verify_scope_tasks_max(cgroup: &Path, expected: u64) -> Result<(), String> {
 }
 
 fn cgroup_populated(cgroup: &Path) -> io::Result<bool> {
-    let events = match std::fs::read_to_string(cgroup.join("cgroup.events")) {
+    cgroup_events_populated(std::fs::read_to_string(cgroup.join("cgroup.events")))
+}
+
+fn cgroup_events_populated(events: io::Result<String>) -> io::Result<bool> {
+    let events = match events {
         Ok(events) => events,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        // kernfs returns ENODEV when a cgroup disappears after open but before read.
+        // Removal is possible only after the scope has become empty.
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound
+                || error.raw_os_error() == Some(libc::ENODEV) =>
+        {
+            return Ok(false);
+        }
         Err(error) => return Err(error),
     };
     match events
@@ -874,7 +897,10 @@ fn cgroup_populated(cgroup: &Path) -> io::Result<bool> {
 }
 
 fn require_loopback_setup() -> Result<(), SandboxError> {
-    if Path::new("/bin/sh").is_file() && Path::new("/usr/sbin/ip").is_file() {
+    if Path::new("/bin/sh").is_file()
+        && Path::new("/usr/sbin/ip").is_file()
+        && Path::new("/usr/bin/setpriv").is_file()
+    {
         Ok(())
     } else {
         Err(SandboxError::UnsupportedLoopback)
@@ -979,6 +1005,32 @@ mod tests {
         assert!(supports_bubblewrap_version("0.9.0"));
         assert!(supports_bubblewrap_version("1.0.0"));
         assert!(!supports_bubblewrap_version("0.8.9"));
+    }
+
+    #[test]
+    fn retired_cgroup_is_empty_but_other_observation_failures_are_not() {
+        assert!(
+            !cgroup_events_populated(Err(io::Error::from_raw_os_error(libc::ENODEV)))
+                .expect("removed open cgroup")
+        );
+        assert!(
+            !cgroup_events_populated(Err(io::Error::from(io::ErrorKind::NotFound)))
+                .expect("removed cgroup path")
+        );
+        assert!(
+            cgroup_events_populated(Ok("populated 1\nfrozen 0\n".to_owned())).expect("live cgroup")
+        );
+        assert!(
+            !cgroup_events_populated(Ok("populated 0\nfrozen 0\n".to_owned()))
+                .expect("empty cgroup")
+        );
+        assert_eq!(
+            cgroup_events_populated(Err(io::Error::from(io::ErrorKind::PermissionDenied)))
+                .expect_err("lack of authority must fail closed")
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(cgroup_events_populated(Ok("frozen 0\n".to_owned())).is_err());
     }
 }
 

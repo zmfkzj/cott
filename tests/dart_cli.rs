@@ -543,6 +543,49 @@ fn manifest_binding_keeps_original_identity_separate_from_managed_private_part()
 }
 
 #[test]
+fn removing_a_manifest_binding_leaves_the_callable_unresolved() {
+    let project = dart_project("module demo.main\n\nfn main(value: I32) -> I32\n");
+    let manifest_path = project.path.join("cott.toml");
+    let unbound = fs::read_to_string(&manifest_path).expect("manifest");
+    fs::write(
+        &manifest_path,
+        format!(
+            "{unbound}\n[target.dart.implementations]\n\"demo.main.main\" = \"bindings/main.dart:_main\"\n"
+        ),
+    )
+    .expect("manifest implementation");
+    fs::create_dir_all(project.path.join("dart/bindings")).expect("binding directory");
+    fs::write(
+        project.path.join("dart/bindings/main.dart"),
+        b"int _main(int value) {\n  return value;\n}\n",
+    )
+    .expect("binding");
+    let bound = run(&project.path, &["emit", "dart"]);
+    assert_eq!(
+        bound.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&bound.stderr)
+    );
+
+    fs::write(&manifest_path, unbound).expect("remove manifest binding");
+    fs::remove_dir_all(project.path.join("dart/bindings")).expect("remove binding source");
+    let emitted = run(&project.path, &["emit", "dart"]);
+    assert_eq!(
+        emitted.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let record = DartGenerationRecord::parse(
+        &fs::read(project.path.join("generated/generation.json")).expect("generation record"),
+    )
+    .expect("valid Dart generation record");
+    assert!(record.current.implementations.is_empty());
+    assert_eq!(record.current.unresolved, ["demo.main.main"]);
+}
+
+#[test]
 fn deploy_publishes_only_the_verified_portable_dart_package_without_overwrite() {
     let project = dart_project("module demo.main\n\nfn main(value: I32) -> I32\n");
     let manifest_path = project.path.join("cott.toml");

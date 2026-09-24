@@ -10,17 +10,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::cli::OutputFormat;
+use crate::cli::{
+    NO_RECORD_REASON, OutputFormat, VerifyOutcome, recorded_requirements, verification_requirements,
+};
 use crate::compiler::{ProjectDiagnostic, SourceFile, parse_project};
 use crate::diagnostics::{Diagnostic, DiagnosticReport, SourceMap, Span, code};
 use crate::hash::sha256_hex;
 use crate::hir::lower_with_effects;
 use crate::ir::render;
+use crate::manifest::TargetLanguage;
 use crate::manifest::{ApiVersion, DartProjectConfig, parse_api_version};
 use crate::project::{
     DartPaths, discover_dart_contract_sources, discover_dart_sources, load_dart_config_with_paths,
 };
 use crate::provenance::{AgentRun, SemanticCoverage};
+use crate::requirements::{Evidence, RequirementModel, RequirementReport};
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession};
 
 use super::binding::{agent_source_origin, requires_binding, resolve};
@@ -730,9 +734,42 @@ pub(crate) fn emit(project: Option<PathBuf>, ir_only: bool) -> Result<PathBuf, F
     })
 }
 
-pub(crate) fn verify(project: Option<PathBuf>) -> Result<(PathBuf, SemanticCoverage), Failure> {
-    let loaded = load(project, false)?;
-    let emission = project_emission(&loaded, &loaded.bindings)?;
+/// Verify the current inputs. The requirement report is `None` when loading failed before a
+/// Canonical IR existed or when the project declares no requirement.
+pub(crate) fn verify(
+    project: Option<PathBuf>,
+) -> (
+    Result<(PathBuf, SemanticCoverage), Failure>,
+    Option<RequirementReport>,
+) {
+    let loaded = match load(project, false) {
+        Ok(loaded) => loaded,
+        Err(failure) => return (Err(failure), None),
+    };
+    let model = match RequirementModel::from_ir(&loaded.plan.ir) {
+        Ok(model) => model,
+        Err(error) => {
+            return (
+                Err(Failure::new(1, format!("requirement model: {error}"))),
+                None,
+            );
+        }
+    };
+    let result = verify_loaded(&loaded);
+    let generation = loaded.paths.artifact_root.join("generation.json");
+    let outcome = match &result {
+        // Exit 8 comes only from publish's coverage-policy gate, after the certified record
+        // was published; policy never changes raw requirement evidence.
+        Ok(_) => VerifyOutcome::Published(&generation),
+        Err(failure) if failure.code == 8 => VerifyOutcome::Published(&generation),
+        Err(failure) => VerifyOutcome::Failed(&failure.message),
+    };
+    let requirements = verification_requirements(TargetLanguage::Dart, &model, outcome);
+    (result, requirements)
+}
+
+fn verify_loaded(loaded: &Project) -> Result<(PathBuf, SemanticCoverage), Failure> {
+    let emission = project_emission(loaded, &loaded.bindings)?;
     if !emission.unresolved.is_empty() {
         return Err(Failure::new(
             4,
@@ -742,7 +779,7 @@ pub(crate) fn verify(project: Option<PathBuf>) -> Result<(PathBuf, SemanticCover
             ),
         ));
     }
-    validate_current_publication(&loaded, &emission)?;
+    validate_current_publication(loaded, &emission)?;
     let verification = dart_verify::verify(
         &loaded.config,
         &loaded.paths,
@@ -752,7 +789,7 @@ pub(crate) fn verify(project: Option<PathBuf>) -> Result<(PathBuf, SemanticCover
     )
     .map_err(|message| Failure::new(4, message))?;
     publish(
-        &loaded,
+        loaded,
         &loaded.bindings,
         &[],
         &BTreeSet::new(),
@@ -766,6 +803,28 @@ pub(crate) fn verify(project: Option<PathBuf>) -> Result<(PathBuf, SemanticCover
             .join("dart/verification/cott-module.dill"),
         verification.coverage,
     ))
+}
+
+/// Requirement evidence for the current inputs. The published record binds only after the
+/// same publication gate `verify` and `deploy` run; otherwise evidence is stale or absent.
+pub(crate) fn requirements(project: Option<PathBuf>) -> Result<RequirementReport, Failure> {
+    let loaded = load(project, true)?;
+    let model = RequirementModel::from_ir(&loaded.plan.ir)
+        .map_err(|error| Failure::new(1, format!("requirement model: {error}")))?;
+    let (Some(record), Some(bytes)) = (&loaded.baseline, &loaded.generation_bytes) else {
+        return Ok(model.report(TargetLanguage::Dart, Evidence::Absent(NO_RECORD_REASON)));
+    };
+    let emission = project_emission(&loaded, &loaded.bindings)?;
+    if let Err(stale) = validate_current_publication(&loaded, &emission) {
+        return Ok(model.report(TargetLanguage::Dart, Evidence::Stale(&stale.message)));
+    }
+    if !record.current.verified || record.last_verified.as_ref() != Some(&record.current) {
+        return Ok(model.report(
+            TargetLanguage::Dart,
+            Evidence::Stale("current Dart snapshot is not verified; run `cott verify`"),
+        ));
+    }
+    Ok(recorded_requirements(TargetLanguage::Dart, &model, bytes))
 }
 fn coverage_failure(coverage: &SemanticCoverage) -> Failure {
     let violations = coverage
@@ -1430,10 +1489,9 @@ fn build_record(
                 continue;
             };
             if existing.owner != DartOwner::Agent {
-                return Err(Failure::new(
-                    4,
-                    format!("pending Dart source `{symbol}` has invalid recorded ownership"),
-                ));
+                // A removed manifest selection leaves the callable unresolved; its
+                // manifest-owned record is never pending agent evidence.
+                continue;
             }
             match inputs.get(&existing.source_origin) {
                 None => continue,

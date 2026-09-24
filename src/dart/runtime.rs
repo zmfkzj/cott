@@ -3011,6 +3011,138 @@ final class CottRuntime {
     return true;
   }
 
+  // Unicode White_Space, pinned identically in every Cott target (never
+  // Dart's trim set, which adds U+FEFF). Every member is a BMP scalar, so a
+  // UTF-16 surrogate code unit is never whitespace.
+  static const Set<core.int> _whiteSpace = <core.int>{
+    0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680,
+    0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A,
+    0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
+  };
+
+  static String _stringField(Object? value, String owner, String name) {
+    final selected = field(value, owner, name);
+    if (selected is String) return selected;
+    return violation(
+      'selected field is not a Str',
+      phase: 'contract-expression',
+      expected: 'Str',
+      actual: selected?.runtimeType.toString() ?? 'null',
+    );
+  }
+
+  static List<String> _stringDependencies(Object? value, String owner, String name) {
+    final selected = field(value, owner, name);
+    if (selected is! Iterable) {
+      return violation(
+        'selected dependency field is not a Str collection',
+        phase: 'contract-expression',
+        expected: 'Set[Str] or List[Str]',
+        actual: selected?.runtimeType.toString() ?? 'null',
+      );
+    }
+    return <String>[for (final dependency in selected) _string(dependency, 'dependency')];
+  }
+
+  static String _string(Object? value, String role) {
+    if (value is String) return value;
+    return violation(
+      '$role is not a Str',
+      phase: 'contract-expression',
+      expected: 'Str',
+      actual: value?.runtimeType.toString() ?? 'null',
+    );
+  }
+
+  static bool anyBlankBy(Iterable<Object?> values, String owner, String name) => values.any(
+      (value) => _stringField(value, owner, name).codeUnits.every(_whiteSpace.contains));
+
+  static bool unknownDependencyBy(
+      Iterable<Object?> values, String owner, String key, String dependencies) {
+    final elements = values.toList();
+    final keys = <String>{for (final value in elements) _stringField(value, owner, key)};
+    return elements.any((value) => _stringDependencies(value, owner, dependencies)
+        .any((dependency) => !keys.contains(dependency)));
+  }
+
+  static bool selfDependencyBy(
+          Iterable<Object?> values, String owner, String key, String dependencies) =>
+      values.any((value) => _stringDependencies(value, owner, dependencies)
+          .contains(_stringField(value, owner, key)));
+
+  static bool cyclicBy(Iterable<Object?> values, String owner, String key, String dependencies) {
+    final elements = values.toList();
+    final dependents = <String, Set<String>>{};
+    for (final value in elements) {
+      dependents.putIfAbsent(_stringField(value, owner, key), () => <String>{});
+    }
+    for (final value in elements) {
+      final dependent = _stringField(value, owner, key);
+      for (final dependency in _stringDependencies(value, owner, dependencies)) {
+        dependents[dependency]?.add(dependent);
+      }
+    }
+    final incoming = <String, core.int>{for (final node in dependents.keys) node: 0};
+    for (final targets in dependents.values) {
+      for (final target in targets) {
+        incoming[target] = incoming[target]! + 1;
+      }
+    }
+    final ready = <String>[
+      for (final entry in incoming.entries)
+        if (entry.value == 0) entry.key
+    ];
+    var ordered = 0;
+    while (ready.isNotEmpty) {
+      final node = ready.removeLast();
+      ordered += 1;
+      for (final target in dependents[node]!) {
+        final remaining = incoming[target]! - 1;
+        incoming[target] = remaining;
+        if (remaining == 0) ready.add(target);
+      }
+    }
+    return ordered != dependents.length;
+  }
+
+  static bool permutationBy(
+      Iterable<Object?> order, Iterable<Object?> values, String owner, String key) {
+    final remaining = <String, core.int>{};
+    for (final value in values) {
+      final selected = _stringField(value, owner, key);
+      remaining[selected] = (remaining[selected] ?? 0) + 1;
+    }
+    for (final item in order) {
+      final selected = _string(item, 'order item');
+      final count = remaining[selected] ?? 0;
+      if (count == 0) return false;
+      remaining[selected] = count - 1;
+    }
+    return remaining.values.every((count) => count == 0);
+  }
+
+  static bool dependencyOrderedBy(Iterable<Object?> order, Iterable<Object?> values, String owner,
+      String key, String dependencies) {
+    final first = <String, core.int>{};
+    final last = <String, core.int>{};
+    var position = 0;
+    for (final item in order) {
+      final selected = _string(item, 'order item');
+      first.putIfAbsent(selected, () => position);
+      last[selected] = position;
+      position += 1;
+    }
+    for (final value in values) {
+      final dependentPosition = first[_stringField(value, owner, key)];
+      if (dependentPosition == null) continue;
+      for (final dependency in _stringDependencies(value, owner, dependencies)) {
+        final dependencyPosition = last[dependency];
+        if (dependencyPosition != null && dependencyPosition >= dependentPosition) return false;
+      }
+    }
+    return true;
+  }
+
   static Object? field(Object? value, String ownerOrName, [String? name]) {
     if (value is! CottFieldValue) {
       return violation(

@@ -1,0 +1,1 @@
+cott-domain curriculum.boundary_protocols.extract_handle_id return: the opaque client_session handle value is the U64 connection ID supplied to wrap_handle; return cast(U64, bundle.handle.unwrap()) using typing.cast, never the Python object identity id(...).

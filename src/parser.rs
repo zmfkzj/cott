@@ -15,6 +15,9 @@ struct Parser {
     pos: usize,
     errors: Vec<Diagnostic>,
     allow_old: bool,
+    /// Closed value constructors, nested fixture references and guarded
+    /// assertions exist only inside scenario arguments, data and assertions.
+    allow_scenario_values: bool,
 }
 
 impl Parser {
@@ -24,6 +27,7 @@ impl Parser {
             pos: 0,
             errors: Vec::new(),
             allow_old: false,
+            allow_scenario_values: false,
         }
     }
     fn current(&self) -> &Token {
@@ -397,6 +401,21 @@ impl Parser {
             TokenKind::Keyword(Keyword::Scenario) => Some(Declaration::Scenario(
                 self.parse_scenario(annotations, doc)?,
             )),
+            TokenKind::Name(value) if value == "requirement" && self.name_at(1) => Some(
+                Declaration::Requirement(self.parse_requirement(annotations, doc)?),
+            ),
+            TokenKind::Name(value) if value == "data" && self.name_at(1) => {
+                if let Some(annotation) = annotations.first() {
+                    self.error(
+                        "scenario test data does not accept annotations",
+                        annotation.span.clone(),
+                    );
+                }
+                if let Some(doc) = doc {
+                    self.error("scenario test data does not accept documentation", doc.span);
+                }
+                Some(Declaration::TestData(self.parse_test_data()?))
+            }
             TokenKind::Keyword(Keyword::Async) => {
                 if doc.is_some() {
                     self.error(
@@ -628,6 +647,133 @@ impl Parser {
             fixtures,
             steps,
         })
+    }
+
+    fn parse_requirement(
+        &mut self,
+        annotations: Vec<Annotation>,
+        doc: Option<DocBlock>,
+    ) -> Option<RequirementDecl> {
+        let st = self.bump().span;
+        let (name, name_span) = self.name("requirement name")?;
+        self.expect(
+            TokenKind::Keyword(Keyword::For),
+            "expected `for` and the requirement's callable",
+        )?;
+        let callable = self.parse_qname()?;
+        self.expect(TokenKind::Colon, "expected `:` after requirement callable")?;
+        self.newline();
+        self.expect(TokenKind::Indent, "expected indented requirement body")?;
+        self.skip_newlines();
+        let mut statement = None;
+        let mut checked_by = Vec::new();
+        let mut assumptions = Vec::new();
+        let mut waivers = Vec::new();
+        let mut stage = 0;
+        let mut end = callable.span.clone();
+        while !self.at(&TokenKind::Dedent) && !self.eof() {
+            let Some(item) = self.parse_requirement_item() else {
+                self.recover_line();
+                self.skip_newlines();
+                continue;
+            };
+            let (item_stage, span) = match &item {
+                RequirementItem::Text(text) => (0, text.span.clone()),
+                RequirementItem::Check(check) => (1, check.span.clone()),
+                RequirementItem::Assumption(text) => (2, text.span.clone()),
+                RequirementItem::Waiver(text) => (3, text.span.clone()),
+            };
+            if item_stage < stage || (item_stage == 0 && statement.is_some()) {
+                self.error(
+                    "requirement body is one `text` line followed by `checked_by`, then `assumption`, then `waiver` lines",
+                    span.clone(),
+                );
+            }
+            stage = stage.max(item_stage);
+            end = span;
+            match item {
+                RequirementItem::Text(text) => {
+                    statement.get_or_insert(text);
+                }
+                RequirementItem::Check(check) => checked_by.push(check),
+                RequirementItem::Assumption(text) => assumptions.push(text),
+                RequirementItem::Waiver(text) => waivers.push(text),
+            }
+            self.newline();
+            self.skip_newlines();
+        }
+        self.expect(TokenKind::Dedent, "expected end of requirement body")?;
+        let Some(statement) = statement else {
+            self.error("requirement requires one `text` line", name_span);
+            return None;
+        };
+        Some(RequirementDecl {
+            span: Self::join(st, end),
+            annotations,
+            doc,
+            name,
+            name_span,
+            callable,
+            statement,
+            checked_by,
+            assumptions,
+            waivers,
+        })
+    }
+
+    fn parse_requirement_item(&mut self) -> Option<RequirementItem> {
+        let item = match self.current().kind.clone() {
+            TokenKind::Name(item) => item,
+            _ => String::new(),
+        };
+        match item.as_str() {
+            "text" | "assumption" | "waiver" => {
+                self.bump();
+                let (text, triple) = match self.current().kind.clone() {
+                    TokenKind::String(text) => (text, false),
+                    TokenKind::TripleString(text) => (normalize_doc(&text), true),
+                    _ => {
+                        self.error(format!("expected {item} string"), self.span_here());
+                        return None;
+                    }
+                };
+                let text = RequirementText {
+                    span: self.bump().span,
+                    text,
+                    triple,
+                };
+                Some(match item.as_str() {
+                    "text" => RequirementItem::Text(text),
+                    "assumption" => RequirementItem::Assumption(text),
+                    _ => RequirementItem::Waiver(text),
+                })
+            }
+            "checked_by" => {
+                let st = self.bump().span;
+                let scenario = self.parse_qname()?;
+                let assertion = if self.at(&TokenKind::Keyword(Keyword::Assert)) {
+                    self.bump();
+                    Some(self.integer("1-based assert ordinal after `assert`")?)
+                } else {
+                    None
+                };
+                let end = assertion
+                    .as_ref()
+                    .map_or_else(|| scenario.span.clone(), |assertion| assertion.span.clone());
+                Some(RequirementItem::Check(RequirementCheck {
+                    span: Self::join(st, end),
+                    scenario,
+                    assertion,
+                }))
+            }
+            _ => {
+                self.error(
+                    "expected `text`, `checked_by`, `assumption`, or `waiver` in requirement",
+                    self.span_here(),
+                );
+                None
+            }
+        }
     }
 
     fn parse_scenario_fixtures(&mut self) -> Option<Vec<ScenarioFixture>> {
@@ -942,12 +1088,28 @@ impl Parser {
             }
             TokenKind::Keyword(Keyword::Assert) => {
                 let st = self.bump().span;
-                let expression = self.parse_expr()?;
+                let expression = self.with_scenario_values(Self::parse_scenario_assertion)?;
                 let end = expression.span.clone();
                 self.newline();
                 Some(ScenarioStep::Assert {
                     span: Self::join(st, end),
                     expression,
+                })
+            }
+            TokenKind::Name(value) if value == "data" && self.name_at(1) => {
+                let st = self.bump().span;
+                let (name, span) = self.name("scenario data binding")?;
+                self.expect(TokenKind::Colon, "expected `:` after scenario data binding")?;
+                let ty = self.parse_type()?;
+                self.expect(TokenKind::Equal, "expected `=` in scenario data")?;
+                let value = self.with_scenario_values(Self::parse_expr)?;
+                let end = value.span.clone();
+                self.newline();
+                Some(ScenarioStep::Data {
+                    span: Self::join(st, end),
+                    binding: ScenarioBinding { span, name },
+                    ty,
+                    value,
                 })
             }
             _ => {
@@ -969,6 +1131,9 @@ impl Parser {
                 arguments.push(self.parse_scenario_value()?);
                 if self.at(&TokenKind::Comma) {
                     self.bump();
+                    if self.at(&TokenKind::RParen) {
+                        break;
+                    }
                 } else {
                     break;
                 }
@@ -984,47 +1149,156 @@ impl Parser {
     }
 
     fn parse_scenario_value(&mut self) -> Option<Expr> {
-        let save = self.pos;
-        if let TokenKind::Name(fixture) = self.current().kind.clone() {
-            let fixture_span = self.bump().span;
-            if self.at(&TokenKind::Dot) {
+        self.with_scenario_values(Self::parse_expr)
+    }
+
+    fn with_scenario_values(&mut self, parse: fn(&mut Parser) -> Option<Expr>) -> Option<Expr> {
+        let previous = std::mem::replace(&mut self.allow_scenario_values, true);
+        let parsed = parse(self);
+        self.allow_scenario_values = previous;
+        parsed
+    }
+
+    /// `assert SCRUTINEE matches PATTERN [=> CONDITION]` requires a match; the
+    /// pattern bindings are visible only in CONDITION.
+    fn parse_scenario_assertion(&mut self) -> Option<Expr> {
+        let scrutinee = self.parse_expr()?;
+        if !self.at(&TokenKind::Keyword(Keyword::Matches)) {
+            return Some(scrutinee);
+        }
+        self.bump();
+        let pattern = self.parse_pattern()?;
+        let condition = if self.at(&TokenKind::FatArrow) {
+            self.bump();
+            Some(Box::new(self.parse_expr()?))
+        } else {
+            None
+        };
+        let end = condition
+            .as_ref()
+            .map(|condition| condition.span.clone())
+            .unwrap_or_else(|| pattern.span.clone());
+        Some(Expr {
+            span: Self::join(scrutinee.span.clone(), end),
+            kind: ExprKind::Match {
+                scrutinee: Box::new(scrutinee),
+                pattern,
+                condition,
+            },
+        })
+    }
+
+    fn parse_test_data(&mut self) -> Option<TestDataDecl> {
+        let st = self.bump().span;
+        let (name, name_span) = self.name("scenario data name")?;
+        self.expect(TokenKind::Colon, "expected `:` after scenario data name")?;
+        let ty = self.parse_type()?;
+        self.expect(TokenKind::Equal, "expected `=` in scenario data")?;
+        let value = self.with_scenario_values(Self::parse_expr)?;
+        let end = value.span.clone();
+        self.newline();
+        Some(TestDataDecl {
+            span: Self::join(st, end),
+            name,
+            name_span,
+            ty,
+            value,
+        })
+    }
+
+    fn name_at(&self, offset: usize) -> bool {
+        matches!(
+            self.tokens.get(self.pos + offset).map(|token| &token.kind),
+            Some(TokenKind::Name(_))
+        )
+    }
+
+    fn parse_fixture_reference(&mut self, name: &QualifiedName) -> Option<Expr> {
+        let fixture = name.segments[0].clone();
+        let path_accessor = name.segments[1] == "path";
+        self.expect(TokenKind::LParen, "expected `(` after fixture accessor")?;
+        let (path, path_span) = self.string("fixture path")?;
+        let end = self
+            .expect(TokenKind::RParen, "expected `)` after fixture reference")?
+            .span;
+        let span = Self::join(name.span.clone(), end);
+        if path_accessor {
+            if !normalized_relative_path(&path) {
+                self.error(
+                    "fixture path must be normalized relative UTF-8 without symlinks",
+                    path_span,
+                );
+            }
+            return Some(Expr {
+                span,
+                kind: ExprKind::FixturePath { fixture, path },
+            });
+        }
+        if !normalized_route_path(&path) {
+            self.error(
+                "fixture url must be relative to compiler-owned endpoint",
+                path_span,
+            );
+        }
+        Some(Expr {
+            span,
+            kind: ExprKind::FixtureUrl { fixture, path },
+        })
+    }
+
+    /// Closed scenario value constructor arguments: `field: value`, `key: value`
+    /// (for `Map`), or positional values.
+    fn parse_construct(&mut self, path: QualifiedName) -> Option<Expr> {
+        self.expect(TokenKind::LParen, "expected `(` after value constructor")?;
+        let mut arguments = Vec::new();
+        while !self.at(&TokenKind::RParen) {
+            let start = self.span_here();
+            let label = if (self.name_at(0) || self.at(&TokenKind::Keyword(Keyword::Error)))
+                && matches!(
+                    self.tokens.get(self.pos + 1).map(|token| &token.kind),
+                    Some(TokenKind::Colon)
+                ) {
+                let (name, span) = if self.at(&TokenKind::Keyword(Keyword::Error)) {
+                    ("error".to_owned(), self.bump().span)
+                } else {
+                    self.name("constructor field")?
+                };
                 self.bump();
-                if let Some((accessor, _)) = self.name("fixture accessor") {
-                    if (accessor == "path" || accessor == "url") && self.at(&TokenKind::LParen) {
-                        self.bump();
-                        let (path, path_span) = self.string("fixture path")?;
-                        let end = self
-                            .expect(TokenKind::RParen, "expected `)` after fixture reference")?
-                            .span;
-                        let span = Self::join(fixture_span, end);
-                        if accessor == "path" {
-                            if !normalized_relative_path(&path) {
-                                self.error(
-                                    "fixture path must be normalized relative UTF-8 without symlinks",
-                                    path_span,
-                                );
-                            }
-                            return Some(Expr {
-                                span,
-                                kind: ExprKind::FixturePath { fixture, path },
-                            });
-                        }
-                        if !normalized_route_path(&path) {
-                            self.error(
-                                "fixture url must be relative to compiler-owned endpoint",
-                                path_span,
-                            );
-                        }
-                        return Some(Expr {
-                            span,
-                            kind: ExprKind::FixtureUrl { fixture, path },
-                        });
-                    }
+                Some(Box::new(Expr {
+                    span: span.clone(),
+                    kind: ExprKind::Name(QualifiedName::single(span, &name)),
+                }))
+            } else {
+                None
+            };
+            let mut value = self.parse_expr()?;
+            let label = match label {
+                Some(label) => Some(label),
+                None if self.at(&TokenKind::Colon) => {
+                    self.bump();
+                    let key = std::mem::replace(&mut value, self.parse_expr()?);
+                    Some(Box::new(key))
                 }
+                None => None,
+            };
+            arguments.push(ConstructArgument {
+                span: Self::join(start, value.span.clone()),
+                label,
+                value,
+            });
+            if self.at(&TokenKind::Comma) {
+                self.bump();
+            } else {
+                break;
             }
         }
-        self.pos = save;
-        self.parse_expr()
+        let end = self
+            .expect(TokenKind::RParen, "expected `)` after value constructor")?
+            .span;
+        Some(Expr {
+            span: Self::join(path.span.clone(), end),
+            kind: ExprKind::Construct { path, arguments },
+        })
     }
 
     fn parse_scenario_data(&mut self) -> Option<ScenarioData> {
@@ -1618,8 +1892,9 @@ impl Parser {
                     ClauseKind::Ensures { .. }
                     | ClauseKind::EnsuresTable { .. }
                     | ClauseKind::EnsuresPreserves { .. } => 3,
-                    ClauseKind::Error { .. } => 4,
-                    ClauseKind::Effects { .. } => 5,
+                    ClauseKind::ErrorsComplete => 4,
+                    ClauseKind::Error { .. } => 5,
+                    ClauseKind::Effects { .. } => 6,
                 };
                 if rank == 0 {
                     if seen_doc || phase > 0 {
@@ -1633,7 +1908,13 @@ impl Parser {
                     if rank < phase {
                         self.error("function clauses are out of order", c.span.clone());
                     }
-                    if rank == 5 && phase == 5 {
+                    if rank == 4 && phase == 4 {
+                        self.error(
+                            "function may have only one `errors complete` clause",
+                            c.span.clone(),
+                        );
+                    }
+                    if rank == 6 && phase == 6 {
                         self.error("function may have only one effects clause", c.span.clone());
                     }
                     phase = phase.max(rank);
@@ -1922,7 +2203,7 @@ impl Parser {
                 | ClauseKind::EnsuresPreserves { .. } => 4,
                 ClauseKind::Error { .. } => 5,
                 ClauseKind::Effects { .. } => 6,
-                ClauseKind::Rule { .. } => unreachable!(),
+                ClauseKind::Rule { .. } | ClauseKind::ErrorsComplete => unreachable!(),
             };
             if !method && rank > 4 {
                 self.error(
@@ -2058,6 +2339,13 @@ impl Parser {
             || self.at(&TokenKind::Keyword(Keyword::Effects))
         {
             return self.parse_clause();
+        }
+        if self.contextual_name(0, "errors") && self.contextual_name(1, "complete") {
+            self.error(
+                "`errors complete` is supported only on free functions",
+                self.span_here(),
+            );
+            return None;
         }
         self.error("expected method clause", self.span_here());
         None
@@ -2254,6 +2542,15 @@ impl Parser {
         }
         if self.at(&TokenKind::Keyword(Keyword::Ensures)) {
             return self.parse_ensures_clause(false);
+        }
+        if self.contextual_name(0, "errors") && self.contextual_name(1, "complete") {
+            let st = self.bump().span;
+            let end = self.bump().span;
+            self.newline();
+            return Some(Clause {
+                span: Self::join(st, end),
+                kind: ClauseKind::ErrorsComplete,
+            });
         }
         if self.at(&TokenKind::Keyword(Keyword::Error)) {
             let st = self.bump().span;
@@ -3036,6 +3333,20 @@ impl Parser {
             TokenKind::Name(n) => {
                 let t = self.bump();
                 let q = self.parse_qname_after(n, t.span.clone());
+                if self.allow_scenario_values && self.at(&TokenKind::LParen) {
+                    let fixture = q.segments.len() == 2
+                        && matches!(q.segments[1].as_str(), "path" | "url")
+                        && matches!(
+                            self.tokens.get(self.pos + 1).map(|token| &token.kind),
+                            Some(TokenKind::String(_))
+                        );
+                    if fixture {
+                        return self.parse_fixture_reference(&q);
+                    }
+                    if intrinsic(&q).is_none() {
+                        return self.parse_construct(q);
+                    }
+                }
                 if self.at(&TokenKind::LParen) {
                     let Some(kind) = intrinsic(&q) else {
                         self.error(
@@ -3059,9 +3370,13 @@ impl Parser {
                     let end = self
                         .expect(TokenKind::RParen, "expected `)` after intrinsic arguments")?
                         .span;
-                    if arguments.len() != 2 {
+                    if arguments.len() != kind.arity() {
                         self.error(
-                            "closed invariant intrinsics require exactly two arguments",
+                            format!(
+                                "closed intrinsic `{}` requires exactly {} arguments",
+                                q.segments.join("."),
+                                kind.arity()
+                            ),
                             q.span.clone(),
                         );
                     }
@@ -3121,6 +3436,13 @@ impl Parser {
     }
 }
 
+enum RequirementItem {
+    Text(RequirementText),
+    Check(RequirementCheck),
+    Assumption(RequirementText),
+    Waiver(RequirementText),
+}
+
 fn normalize_doc(raw: &str) -> String {
     let mut lines: Vec<&str> = raw.split('\n').collect();
     if lines.first().map(|s| s.trim().is_empty()).unwrap_or(false) {
@@ -3177,6 +3499,12 @@ fn intrinsic(name: &QualifiedName) -> Option<Intrinsic> {
             "contains" => Intrinsic::Contains,
             "unique_by" => Intrinsic::UniqueBy,
             "descending_by" => Intrinsic::DescendingBy,
+            "any_blank_by" => Intrinsic::AnyBlankBy,
+            "unknown_dependency_by" => Intrinsic::UnknownDependencyBy,
+            "self_dependency_by" => Intrinsic::SelfDependencyBy,
+            "cyclic_by" => Intrinsic::CyclicBy,
+            "permutation_by" => Intrinsic::PermutationBy,
+            "dependency_ordered_by" => Intrinsic::DependencyOrderedBy,
             _ => return None,
         }),
         _ => None,

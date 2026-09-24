@@ -887,6 +887,7 @@ fn declaration_index<'a>(
                     | "const"
                     | "function"
                     | "scenario"
+                    | "requirement"
             ) {
                 return Err(format!(
                     "unsupported canonical declaration kind `{kind}` for `{name}`"
@@ -1194,7 +1195,11 @@ fn render_types_file(
             .as_object()
             .ok_or_else(|| format!("declaration in `{}` must be an object", module.name))?;
         let kind = required_string(object, "kind", &module.name)?;
-        if matches!(kind, "function" | "impl" | "specialization" | "scenario") {
+        // Scenarios and requirements have no Kotlin ABI symbol; requirements are report metadata.
+        if matches!(
+            kind,
+            "function" | "impl" | "specialization" | "scenario" | "requirement"
+        ) {
             continue;
         }
         render_doc(&mut out, object.get("doc"), 0);
@@ -2353,7 +2358,7 @@ fn public_target_names(module: &KotlinModule) -> Result<Vec<String>, String> {
         .filter(|declaration| {
             !matches!(
                 declaration.get("kind").and_then(Value::as_str),
-                Some("specialization" | "scenario")
+                Some("specialization" | "scenario" | "requirement")
             )
         })
         .map(|declaration| {
@@ -3586,7 +3591,7 @@ fn render_contract_clauses(
         (pre && kind == Some("requires"))
             || (!pre && matches!(kind, Some("ensures" | "error")))
             || (kind.is_none() && !clauses.is_empty())
-    });
+    }) || (!pre && crate::ir::complete_errors(declaration) == Ok(true));
     if !has_checks {
         return Ok(());
     }
@@ -3682,7 +3687,9 @@ fn render_expected_errors(
         .iter()
         .filter(|clause| clause.get("kind").and_then(Value::as_str) == Some("error"))
         .collect::<Vec<_>>();
-    if errors.is_empty() {
+    // Complete errors keep the check with zero conditional clauses: then no
+    // requires-valid input may return `Err`.
+    if errors.is_empty() && crate::ir::complete_errors(declaration) != Ok(true) {
         return Ok(());
     }
     let prefix = " ".repeat(indent);
@@ -3777,7 +3784,7 @@ fn render_error_contracts(
         .iter()
         .filter(|clause| clause.get("kind").and_then(Value::as_str) == Some("error"))
         .collect::<Vec<_>>();
-    if errors.is_empty() {
+    if errors.is_empty() && crate::ir::complete_errors(declaration) != Ok(true) {
         return Ok(());
     }
     let prefix = " ".repeat(indent);

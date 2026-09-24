@@ -8,7 +8,7 @@ This executable boundary-mode witness keeps a client-session identity opaque, pr
 - `TextBuffer` is a semantic external Cott type, projected only by `"curriculum.boundary_protocols.TextBuffer" = "io:StringIO"` in `[target.python.external_types]`.
 - `adapt_unknown(Any) -> Unknown` deliberately crosses the dynamic boundary. The app narrows the returned `Unknown` with `isinstance` before reading its dictionary value.
 - `iter_lines` and `echo_values` retain the synchronous `Iterator` and `Generator[Any, Unknown, U64]` protocols. The generator returns its yielded count after completion.
-- `async_lines` accepts and returns `AsyncIterator[Str]`; `echo_async` accepts and returns `AsyncGenerator[Any, Unknown]`. Their bindings are identity `async def` wrappers over caller-supplied protocol objects.
+- `async_lines` accepts and returns `AsyncIterator[Str]`; `echo_async` accepts and returns `AsyncGenerator[Any, Unknown]`. Their generated implementations are exact `async def` functions over caller-supplied protocol objects.
 
 All functions declare `effects []`; `HandleError.InvalidHandle` is the only declared error.
 

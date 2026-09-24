@@ -89,6 +89,9 @@ pub(crate) fn render_generation_prompt(
         .map_err(|_| "existing Kotlin implementation is not UTF-8".to_owned())?;
     let mut current_intent = String::new();
     collect_intent_docs(declarations, &mut current_intent);
+    current_intent.push_str(&crate::requirements::render_prompt_requirements(
+        declarations,
+    ));
     if current_intent.is_empty() {
         current_intent.push_str("(no documentation selected)\n");
     }

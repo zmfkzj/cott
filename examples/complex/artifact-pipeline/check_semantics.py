@@ -26,7 +26,10 @@ _MAX_PERM = 8  # ponytail: n! oracle; explicit expected above this
 def expected_order(steps):
     """Bounded permutation oracle. Not Kahn's algorithm."""
     for step in steps:
-        if step["name"].strip() == "":
+        if all(
+            character in "\t\n\v\f\r \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+            for character in step["name"]
+        ):
             return {"error": "BlankStepName"}
     names = []
     seen = set()
@@ -96,6 +99,9 @@ def _enumerated():
 def _explicit():
     return [
         _case("empty", []),
+        _case("unicode-white-space", [{"name": "\u0085\u2007\u202f", "needs": []}]),
+        _case("bom-is-not-white-space", [{"name": "\ufeff", "needs": []}]),
+        _case("separator-is-not-white-space", [{"name": "\u001c", "needs": []}]),
         _case(
             "shuffled-chain",
             [

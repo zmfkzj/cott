@@ -20,7 +20,7 @@ def load_document(location: Location) -> Result[Document, LoadError]:
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/frogmouth/document/load_document.py", "2c7607ae8e78b7596d613188b579fdb5229d093d551131ed2f8c5130e9fc8052", "load_document", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.document.load_document")
+        _implementation = _cott_load("_cott_impl/frogmouth/document/load_document.py", "23d5d841a33b40abb956673abc328303f7e46a6be45dac2e34fb3d1293387d8d", "load_document", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.document.load_document")
         _result = _implementation(location)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

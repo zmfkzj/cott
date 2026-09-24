@@ -804,6 +804,33 @@ fn verify_rejects_a_missing_configured_kotlin_compiler_without_a_fake_jar() {
 }
 
 #[test]
+fn removing_a_manifest_binding_leaves_the_callable_unresolved() {
+    let fixture = Fixture::new(Path::new("kotlinc-never-run"), Path::new("java"));
+    assert_success("bound Kotlin emission", fixture.cott(&["emit", "kotlin"]));
+    assert_eq!(
+        generation_view(&fixture)["current"]["implementations"][0]["owner"],
+        "manifest"
+    );
+
+    let manifest_path = fixture.root.join("cott.toml");
+    let manifest = fs::read_to_string(&manifest_path).expect("read Kotlin fixture manifest");
+    let (unbound, _) = manifest
+        .split_once("\n[target.kotlin.implementations]\n")
+        .expect("fixture manifest selects a binding");
+    fs::write(&manifest_path, format!("{unbound}\n")).expect("remove manifest binding");
+    fs::remove_dir_all(fixture.root.join("kotlin/cott_bindings")).expect("remove binding source");
+
+    assert_success("unbound Kotlin emission", fixture.cott(&["emit", "kotlin"]));
+    let current = &generation_view(&fixture)["current"];
+    assert_eq!(current["implementations"], serde_json::json!([]));
+    assert_eq!(
+        current["unresolved"],
+        serde_json::json!(["example.counter.increment"])
+    );
+    assert_eq!(current["verified"], false);
+}
+
+#[test]
 #[ignore = "requires the pinned Kotlin 2.2.10/JDK 17 toolchain and bubblewrap"]
 fn option_payload_candidates_reach_nonempty_guarded_obligations() {
     let (kotlin_home, java_home) = pinned_toolchain();

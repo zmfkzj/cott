@@ -838,7 +838,7 @@ target-private helper와 public Dart signature로 emit한다. Module 내 functio
 
 refinement, `requires`, `ensures`, `error`, struct/impl invariant와 rule clause는 하나의 정규화된 순수 표현식 언어와 통일된 match guard를 사용한다.
 
-허용 대상은 숫자·문자열·boolean·`Unit` literal, 현재 declaration parameter·constant, §10.3의 scope 규칙을 따르는 `ensures`의 `result`, struct/refinement/impl의 `self`, cott field와 `.len`, method `ensures`의 `old(self.field)`, 산술·연쇄 비교·동등성·`and`·`or`·`not`이다. struct invariant에서만 `starts_with(Str, Str)`, `ends_with(Str, Str)`, `contains(Str, Str)`, `unique_by(List[T], T.field)`, `descending_by(List[T], T.field)`의 다섯 total intrinsic을 추가로 허용한다. 후자의 selector는 resolve된 nominal element field여야 하며 runtime callable·문자열 selector가 아니다. `unique_by`는 canonical Cott equality를, `descending_by`는 orderable scalar의 non-increasing order를 검사한다. 빈/singleton list는 둘 다 참이다. guard의 scrutinee는 그 clause의 base scope에서 평가되고 pattern binding은 guard condition에만 보인다. `requires`와 invariant guard는 matched 경우에만 obligation을 만든다; `ensures` guard는 normal return 뒤 match한 경우에만 검사한다. legacy `ensures Pattern => condition`은 result scrutinee shorthand다.
+허용 대상은 숫자·문자열·boolean·`Unit` literal, 현재 declaration parameter·constant, §10.3의 scope 규칙을 따르는 `ensures`의 `result`, struct/refinement/impl의 `self`, cott field와 `.len`, method `ensures`의 `old(self.field)`, 산술·연쇄 비교·동등성·`and`·`or`·`not`이다. contract expression(struct invariant, refinement, `requires`, `ensures`, `error ... when`)은 closed total intrinsic `starts_with(Str, Str)`, `ends_with(Str, Str)`, `contains(Str, Str)`, `unique_by(List[T], T.field)`, `descending_by(List[T], T.field)`와 §10.4.1의 `any_blank_by`, `unknown_dependency_by`, `self_dependency_by`, `cyclic_by`, `permutation_by`, `dependency_ordered_by`를 추가로 허용한다. 임의 function call, callee reference, quantifier는 없다. 후자의 selector는 resolve된 nominal element field여야 하며 runtime callable·문자열 selector가 아니다. `unique_by`는 canonical Cott equality를, `descending_by`는 orderable scalar의 non-increasing order를 검사한다. 빈/singleton list는 둘 다 참이다. guard의 scrutinee는 그 clause의 base scope에서 평가되고 pattern binding은 guard condition에만 보인다. `requires`와 invariant guard는 matched 경우에만 obligation을 만든다; `ensures` guard는 normal return 뒤 match한 경우에만 검사한다. legacy `ensures Pattern => condition`은 result scrutinee shorthand다.
 
 선언되지 않은 ambient 이름, file/network/database/clock/random 접근, object method와 임의 Python function call, state change와 nondeterministic expression은 금지한다. 표현식의 모든 이름과 type은 HIR에서 해석한다. 숫자 literal은 문맥 type을 따르고 연쇄 비교는 short-circuit `and`로 정규화한다. equality operand는 같은 resolved non-trait cott value type이어야 하며 type parameter, trait 또는 `Opaque`를 transitive하게 포함할 수 없다. 모든 refinement, guard condition, `requires`, `ensures`, invariant와 `when`의 최종 type은 `Bool`이어야 한다.
 
@@ -934,6 +934,38 @@ fn load_payload(
 * API 문서 생성
 * 오류 분기 누락 검사
 
+#### 10.4.1 완전 조건부 오류와 graph predicate
+
+```cott
+fn topologically_order_steps(steps: List[BuildStep]) -> Result[List[Str], ArtifactPipelineError]:
+    ensures Result.Ok(order) => permutation_by(order, steps, BuildStep.name)
+    ensures Result.Ok(order) => dependency_ordered_by(order, steps, BuildStep.name, BuildStep.needs)
+
+    errors complete
+    error ArtifactPipelineError.BlankStepName when any_blank_by(steps, BuildStep.name)
+    error ArtifactPipelineError.DuplicateStep when not unique_by(steps, BuildStep.name)
+    error ArtifactPipelineError.UnknownDependency when unknown_dependency_by(steps, BuildStep.name, BuildStep.needs)
+    error ArtifactPipelineError.SelfDependency when self_dependency_by(steps, BuildStep.name, BuildStep.needs)
+    error ArtifactPipelineError.Cycle when cyclic_by(steps, BuildStep.name, BuildStep.needs)
+```
+
+`errors complete`는 free function 하나에 거는 명시적 opt-in이다. `errors`와 `complete`는 contextual name이고 clause는 `ensures` 뒤, 첫 `error` 앞에 한 번만 온다. 반환 type은 `Result`여야 하며 rule 적용 뒤의 모든 `error` 절은 `when` 또는 `with ... matches`를 가진 conditional이어야 한다. 조건 없는 `error Variant` allowance는 이 mode에서만 거부한다. conditional error가 0개인 `errors complete`도 유효하며 그때는 모든 requires-valid input이 `Ok`를 반환해야 한다. rule 선언과 trait/impl method에서는 거부한다.
+
+의미는 다음과 같다. 모든 requires-valid input에서 기존 priority 그대로 source-order 첫 applicable conditional error가 반환 variant를 정하고, 어느 conditional도 참이 아니면 `Ok`가 필수다. HIR은 새 IR field 없이 compiler annotation `{name: "cott.complete_errors", argument: null, span}`을 function `annotations`에 붙인다. dotted name이라 source annotation으로 위조할 수 없고 intent fingerprint·prompt 선언에 그대로 포함된다. Canonical IR validator는 이 annotation이 `Result` free function에 정확히 하나, `argument: null`, bare error 없이 붙었는지 검사한다. Python·Kotlin·Dart facade는 conditional clause가 없어도 error-return 검사를 유지하며 allowed-unconditional set은 비어 있다. `errors complete`가 없는 함수의 의미는 그대로다: 적용된 conditional이 없을 때 `Err`는 선언된 bare variant만 허용되고, `error` 절이 없는 `Result` 함수는 `Err`를 검사하지 않는다.
+
+completeness는 runtime obligation이지 증명이 아니다. `Ok` 쪽 `ensures` evidence는 runner candidate나 scenario가 실제로 실행한 normal case(어떤 conditional도 참이 아닌 requires-valid input)에서만 나오며, bounded candidate가 normal case에 도달하지 못하면 그 clause는 `unobserved`로 남는다. completeness와 아래 predicate는 구현의 종료나 전체 correctness를 주장하지 않는다. 끝나지 않는 구현은 기존 runner timeout으로만 실패한다.
+
+graph·whitespace intrinsic의 selector는 모두 첫 list argument의 nominal element type `T` field다. key selector는 정확히 `Str` field, dependency selector는 `Set[Str]` 또는 `List[Str]` field, order argument는 `List[Str]`이다(alias는 풀지만 newtype carrier는 받지 않는다). 모두 total이며 중복·미지·self edge가 있는 invalid 입력에서도 결정적인 bool을 반환한다. invalid 입력 사이의 우선순위는 predicate가 아니라 `error` 절 source order가 정한다. 아래에서 `K`는 element key 집합이며 중복 key는 하나의 node로 합친다. edge `d → key(e)`는 `d ∈ deps(e)`이고 `d ∈ K`일 때만 생긴다.
+
+* `any_blank_by(xs, T.key)`: 어떤 key가 빈 문자열이거나 모든 code point가 Unicode `White_Space`(U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000의 25개)이면 참. 모든 target이 이 고정 table만 쓰고 host `isspace`·`trim`·`isWhitespace`(예: U+001C–U+001F, U+FEFF, U+180E, U+200B 차이)는 쓰지 않는다. normalization·case folding은 없다.
+* `unknown_dependency_by(xs, T.key, T.deps)`: 어떤 `d ∈ deps(e)`가 `K`에 없으면 참.
+* `self_dependency_by(xs, T.key, T.deps)`: 어떤 element의 `deps`가 그 element 자신의 key를 포함하면 참.
+* `cyclic_by(xs, T.key, T.deps)`: `(K, edges)`에 directed cycle이 있으면 참. self edge는 길이 1 cycle이고, 미지 dependency는 edge를 만들지 않으며, 빈 list는 거짓이다.
+* `permutation_by(order, xs, T.key)`: `order`의 multiset이 element key multiset과 같으면(중복 횟수 포함) 참.
+* `dependency_ordered_by(order, xs, T.key, T.deps)`: 모든 element `e`와 `d ∈ deps(e)`에 대해 `order` 안 `d`의 모든 위치가 `key(e)`의 모든 위치보다 앞서면 참. `order`에 없는 key·dependency는 조건을 만들지 않으며 완전성은 `permutation_by`가 맡는다. target 구현은 index sentinel 없이 위치 map의 부재로 처리한다.
+
+이 predicate들은 dependency order만 규정하고 동률 tie-break(예: lexicographic ready order)가 정하는 유일한 출력은 규정하지 않는다. 그런 결정성은 `doc` 의도이며 formal oracle이 아니다.
+
 ### 10.5 부작용
 
 함수의 외부 부작용은 `effects`에 명시한다.
@@ -979,7 +1011,7 @@ manifest effect key는 qname 문법이고 value는 literal `true`여야 한다. 
 
 `struct` body는 `field* invariant*`다. invariant 뒤 field는 syntax error이고 duplicate invariant는 source order 그대로 허용한다. invariant는 기존 `SCRUTINEE matches PATTERN => BOOL` guard를 그대로 쓴다. fields와 generic을 먼저 lower한 뒤 `self`를 `Named[Struct, declared generic args]`로 type-check하며 `result`, `old`, ambient name은 허용하지 않는다. intrinsic arity/type/selector 오류는 expression span에, Bool 이외 condition은 `struct invariant condition must be boolean`으로 보고한다.
 
-IR의 모든 struct는 source-order `invariants`를 반드시 가진다(없는 경우 `[]`). 각 node는 `clause_id`, `guard`, typed `expression`, `span`이며, intrinsic은 closed name·typed arguments·resolved `{owner, field}` selector를 canonical JSON에 저장한다. AST/HIR/source spelling을 재해석하지 않고 이 IR만 emitter와 runner가 소비한다.
+IR의 모든 struct는 source-order `invariants`를 반드시 가진다(없는 경우 `[]`). 각 node는 `clause_id`, `guard`, typed `expression`, `span`이며, intrinsic은 closed name·typed arguments·resolved `{owner, field}` selector를 canonical JSON에 저장하고, dependency selector를 받는 `unknown_dependency_by`·`self_dependency_by`·`cyclic_by`·`dependency_ordered_by`만 같은 shape의 `dependencies` key를 추가로 가진다. 다른 expression에는 이 key가 없으므로 기존 IR bytes는 변하지 않는다. AST/HIR/source spelling을 재해석하지 않고 이 IR만 emitter와 runner가 소비한다.
 
 생성된 frozen keyword-only dataclass가 유일한 canonical smart constructor다. Python argument/default factory 평가 뒤 `__post_init__`가 declaration order로 field ABI를 validate·normalize하고 `object.__setattr__`한 다음 invariant guard/condition을 clause order로 평가한다. 첫 false는 `CottContractViolation`에 `symbol`, `clause="invariant:N"`, `phase="invariant"`, canonical span과 expected/actual을 담아 실패한다. guard non-match는 satisfied다. direct construction도 이 순서를 우회하지 않는다. active facade ABI boundary는 exact nominal type·concrete generic substitution·depth 64/node 1024/cycle 검사를 공유 traversal state에서 끝낸 뒤 같은 constructor로 재구성하므로 `object.__new__`, deserialization, mutation으로 만든 invalid value도 거부한다. `off`가 facade traversal을 생략해도 constructor invariant는 끄지 않는다. default가 명백히 false면 compile error이고, 그 외에는 repair·sort·deduplicate 없이 construction failure다.
 
@@ -988,9 +1020,25 @@ IR의 모든 struct는 source-order `invariants`를 반드시 가진다(없는 �
 scenario는 public facade만 호출하는 비공개 declaration이며 public target API symbol을 만들지
 않는다. `call value = facade(args)`는 sync call 또는 async facade의 completion을 저장하고,
 `spawn worker = async_facade(args)`는 async public facade만 허용한다. `await worker as value`,
-`await worker cancelled`, `cancel worker`, `tick`, `assert Bool`만 있다. loop, branch, sleep,
-callback, arbitrary code, private implementation/binding import와 widget/tree syntax는 없다. prior
-value와 typed field만 다음 argument/assertion에 쓸 수 있고 worker reference는 ABI value가 아니다.
+`await worker cancelled`, `cancel worker`, `tick`, typed `data`와 `assert`가 있다. loop, branch,
+sleep, callback, arbitrary code, private implementation/binding import와 widget/tree syntax는 없다.
+prior value와 typed field 및 아래의 닫힌 값 생성식을 다음 argument/assertion에 쓸 수 있고 worker reference는 ABI value가 아니다.
+
+scenario 값은 closed canonical constructor만 쓴다. call/spawn argument, `data`, assert operand에서만
+`Struct(field: v, ...)`(선언 순서와 무관, default field 생략 가능), `Newtype(v)`,
+`Enum.Variant(field: v, ...)`, `Option.Some(value: v)`, `Option.Nothing`, `Result.Ok(value: v)`,
+`Result.Err(error: e)`, `List(..)`, `Set(..)`, `Map(k: v, ..)`, `Tuple(..)`, `Array(..)`,
+`Buffer("hex")`와 중첩 `f.path("..")`/`f.url("..")`가 허용되며 기대 type(facade parameter, data 선언,
+comparison의 다른 operand)으로 type-check한다. unknown·duplicate·missing field, 범위 밖 numeric literal,
+정적으로 알 수 있는 newtype refinement 위반은 compile error이고 struct invariant와 ABI 검사는 target의
+generated canonical constructor가 runtime에 다시 수행한다. 일반 call language는 없다. top-level
+`data name: Type = VALUE`는 snake_case 이름을 가진 module-local closed template로 사용 여부와 무관하게 선언 시 type-check되고
+각 scenario 사용처에 inline되며 fixture reference는 그 scenario의 fixture 선언으로 다시 bind된다.
+scenario step `data name: Type = VALUE`는 IR step `data`로 정확히 한 번 평가되어 이후 step이 같은
+immutable 값을 binding으로 재사용한다. `assert X matches PATTERN [=> COND]`는 pattern이 match하지 않으면
+실패하고(contract guard의 vacuous 성공과 다름) binding은 COND 안에서만 보이며 scenario 이름을 shadow할 수
+없다. IR은 schema 8을 유지하며 expression kind `construct`, `variant`, `option_some`, `result_ok`,
+`result_err`, `list`, `set`, `tuple`, `array`, `map`, `match`를 추가한다.
 
 scenario는 최대 64 step이고 적어도 한 step을 가져야 한다. `verification.lifecycle_limit`
 (1..64)은 동시 live worker와 총 tick의 상한이다. worker는
@@ -1004,6 +1052,32 @@ limit은 containment이지 ordering evidence가 아니다.
 `fixtures:` 안의 closed kind는 `fs`, `http`, `clock`, `failure`뿐이다. filesystem은 normalized relative POSIX path와 inline `text`/`bytes` file만, HTTP는 normalized `/path`와 `response(status, body, encoding)`·relative `redirect(status, location)`·`delay(ms)`·`disconnect()`만, clock은 unsigned `start_ms`/`tick_ms`만 가진다. failure는 `file.open|read|write|flush|replace`, `http.connect|read`, `clock.read`의 정확히 한 occurrence와 `permission_denied|not_found|disk_full|timeout|connection_reset`만 가진다. source/manifest/IR에는 host path, socket address, remote URL, script, plugin 또는 monkeypatch name이 없다. HIR은 target/argument/result/fixture reference를 resolve하고 required effect union과 fixture authority의 exact match를 강제한다. custom/database/random/process effect는 fixture backend가 없으므로 observed scenario가 될 수 없다.
 
 scenario strategy는 source order, stable IDs/spans, resolved facade/callable identity, typed steps, required effects, closed fixtures, effective limits를 v5 JSON으로 serialize한다. scratch root, port, PID, host time은 strategy/evidence에 serialize하지 않는다. trace는 source order `{step_id, operation, facade?, worker?, outcome, value_binding?}`와 ABI type/assertion boolean만 기록하며 arbitrary/opaque value와 host exception text는 기록하지 않는다. successful scenario evidence는 bounds, cleanup outcome, referenced fixture event IDs를 가진 `test observation`; unavailable execution capability는 `unobserved`다. facade를 호출했다는 사실만으로 unrelated clause evidence를 credit하지 않는다.
+
+requirement는 안정 ID와 규범 문장을 local free function 하나에 묶는 비공개 top-level declaration이며
+public target API symbol을 만들지 않는다. `requirement`, `text`, `checked_by`, `assumption`, `waiver`는
+이 declaration 안에서만 해석하는 contextual word이고 새 예약어가 아니다. 문법은
+`requirement NAME for <free function>:` 뒤 indented body의 고정 순서다: `text "..."` 또는
+`text """..."""` 정확히 한 번, 0개 이상의 `checked_by <local scenario>` 또는
+`checked_by <local scenario> assert N`, 0개 이상의 `assumption "..."`, 0개 이상의 `waiver "..."`.
+`doc` block과 annotation은 앞에 올 수 있다. 안정 ID는 FQN `<module>.requirement.<NAME>`이다.
+impl/trait method target, unknown target·scenario, qualified scenario name, 없는 `assert N`,
+duplicate link·requirement, 빈 text·assumption·waiver는 compile error다. `assert N`은 그 scenario의
+assert step 중 1-based 순서이며 IR에는 resolved `assert:<step_id>`로 기록된다. 따라서 assertion
+순서가 바뀌면 Canonical IR hash가 바뀌고 이전 evidence는 stale이 된다. IR v8은 schema version bump
+없이 closed declaration kind `requirement`(`statement`, `callable`, `checked_by[{scenario, assertion}]`,
+`assumptions`, `waivers`)를 가진다. statement와 assumption은 selected callable의 intent fingerprint와
+prompt의 CURRENT INTENT에 들어가고 `checked_by`와 waiver는 들어가지 않는다.
+
+`checked_by`, `assert N`, assumption, waiver는 모두 선택 사항이다. link는 evidence가 아니라 선택된
+target runner가 certified snapshot에 이미 기록한 scenario evidence와의 join이다. link가 없는
+requirement는 `unverified`다. whole-scenario link의 scope는 선언된 모든 assertion이고 `assert N`
+link의 scope는 그 assertion 하나다. link는 scope 안의 모든 assertion이 실행되어 성립했을 때만
+`observed`이며 이것도 requirement의 증명이 아니다. 실행되지 않았거나 capability가 없어 관찰하지
+못한 link는 `unverified`, evidence가 없거나 중복·모순인 link는 `unknown`, 실행되어 실패한 link는
+`failed`이고 requirement status는 link 중 가장 나쁜 상태(`failed` > `unknown` > `unverified` >
+`observed`)다. assumption은 외부 전제로 report에 따로 표시되고, waiver는 임시 예외 기록으로
+report에만 따로 표시된다. 둘 다 status를 바꾸지 않으며 coverage policy allowance도 참조하지 않으므로
+waiver나 policy 완화로 failed·unverified requirement가 observed가 되지 않는다. report 호출은 §18.7이다.
 
 ## 11. 상태를 타입으로 표현하기
 
@@ -1442,6 +1516,14 @@ generated/
 
 `cott_runtime` ABI **7**는 numeric alias `I8`…`U64`·`F32`·`F64`, `Option`·`Result`, `Ok`·`Err`·`Some`·`Nothing`, `Unit`·`UNIT`, `Opaque`, `Dyn`, `CottList`·`CottSet`·`FrozenMap`·`CottArray`·`CottBuffer`, numeric metadata, `JsonValue` union·variant와 `CottContractViolation`의 유일한 runtime identity 원본이다. ABI 7은 canonical struct construction/invariant와 fixture adapter activation을 유지하며 새 loader는 closed v8 generation reference envelope를 검증한다. `Any`는 `typing.Any`, `Unknown`은 `object`, iterator protocol은 기존 direct Python typing projection을 쓴다. runtime ABI value가 expected ABI 7와 다르면 facade load는 실패한다.
 
+Python의 compiler-private fixture 파일 adapter `_cott_fixture_read`, `_cott_fixture_write`,
+`_cott_fixture_replace`는 활성 fixture root 안의 상대 `pathlib.Path` 또는 `str`을 받는다.
+`read`와 `_cott_fixture_http`의 반환은 bytes이고 write/replace의 data도 bytes다. 텍스트 인코딩은
+callable의 계약에 따라 구현이 명시적으로 수행한다. Path ABI 값을 받더라도 절대 경로와 root
+탈출은 거부한다. `_cott_fixture_now()`는 설정된 `start_ms`의 밀리초 값을 돌려주므로 nanosecond
+계약은 명시적으로 변환한다. 이 ABI 정보는 scenario가 포함된 Python OUTPUT RULES에도 제공하며,
+adapter는 compiler-owned fixture가 활성화되지 않은 상태에서 권한을 부여하지 않는다.
+
 Python environment 하나에는 generated cott project 하나만 설치한다. `cott_runtime`과 각 facade는 normalized `[project].name`, `[project].version`, runtime ABI 7를 embed하고 서로 다르면 import를 거부한다. `generated/python`은 public cott module, runtime과 verified local implementation copy를 함께 담는 단일 runtime/package root이며 `<module>_types.py`는 user type·constant만 정의한다.
 
 `facade_exports(IR, resolved)`는 모든 public non-callable, resolved public free function, every selected slot이 explicit implementation, specialization 또는 verified trait default facade로 resolved된 impl class의 합집합이다. unresolved explicit sync/async impl method만 generation record의 `.snapshots[.current].unresolved`에 기록한다. default/specialization-selected method에는 durable agent implementation source·record가 없다.
@@ -1870,11 +1952,11 @@ standard Flutter consumer다. `process-bar`는 curriculum count에 넣지 않는
 
 유지되는 curriculum module의 source order는 type 선언, 작은 domain leaf function, 더 큰 composition function, domain-named final operation 순서다. 의미 있는 경계만 stage로 공개한다. grammar lesson은 의도적으로 leaf 하나일 수 있고 simple·complex lesson도 domain responsibility가 독립적인 경우에만 stage를 추가한다. `artifact-pipeline`은 순수 topological artifact-plan composition이고, `process-bar`는 `foo.bar` 전체의 unresolved-to-agent-generation 전환을 집중적으로 보이는 fixture다.
 
-real project는 각자 독립 generation-first example이며 project API version은 `0.1.0`이다. adapter는 exact generated public facade만 사용하고 implementation·binding을 직접 import하거나 public re-export하지 않는다. 각 real project README의 H1은 canonical upstream URL이고, 다음 generation phase 뒤 verified generated artifact를 commit한다. binding은 essential host boundary인 `real.yt_dlp.transfer_media`, `real.harlequin.core.run`, `real.posting.client.send_request`, `frogmouth.document.load_document`에 각각 1개만 허용하며 나머지 real project의 binding은 0개다.
+real project는 각자 독립 generation-first example이며 project API version은 `0.1.0`이다. adapter는 exact generated public facade만 사용하고 implementation·binding을 직접 import하거나 public re-export하지 않는다. 각 real project README의 H1은 canonical upstream URL이고, 다음 generation phase 뒤 verified generated artifact를 commit한다. real project의 manifest binding은 0개다. `real.yt_dlp.transfer_media`, `real.harlequin.core.run`, `real.posting.client.send_request`, `frogmouth.document.load_document` 같은 host boundary도 agent implementation이다.
 
 `.cott` declaration은 항상 bodyless다. free-function composition edge는 `from <exact cott module> import <declared public function>` 형태의 alias-free import로 exact generated public facade를 통과해야 하며 implementation file끼리 직접 호출하지 않는다. same-file private helper call은 implementation detail이고 impl canonical function의 only cross-contract method composition edge는 `self.<declared_method>(...)` public wrapper다. effect verifier는 caller와 same-file helper가 도달하는 Cott facade callee의 declared effects를 transitive하게 검사한다; external/stdlib operation은 declaration의 trust boundary로 남는다. helper가 Cott로 승격되어 public function이 되면 모든 ABI-valid input에 선언된 결과를 반환하거나 caller가 호출 전에 확립할 수 있는 Cott `requires`를 선언해야 한다.
 
-`checked-add`는 manifest binding syntax를 집중적으로 가르치는 lesson이다. 구현 선택은 항상 각 project의 `[target.python.implementations]`과 generation record가 정한다. Binding은 compatible project-local implementation을 선택할 뿐 Cott contract를 정의하지 않으며, example마다 binding 또는 agent implementation을 임의로 일반화해서는 안 된다. checkout에 commit된 `generated/`는 compiler-owned result이고, agent-owned free-function `python/_cott_impl/<cott module>/<function>.py` 및 impl-method `python/_cott_impl/<cott module>/<Concrete>/<method>.py`는 matching `agent_runs` provenance가 있는 실제 `cott generate --agent <agent> --target python` 성공 결과다. `.venv/`, `.cott/`, `__pycache__/`는 transient이며 managed artifact나 evidence가 아니다.
+`checked-add`는 manifest binding syntax를 집중적으로 가르치는 lesson이다. 구현 선택은 항상 각 project의 `[target.python.implementations]`과 generation record가 정한다. `checked-add` 외의 example은 binding을 갖지 않으며, generation/run/verification 실패를 binding이나 implementation mapping으로 우회하지 않는다. Binding은 compatible project-local implementation을 선택할 뿐 Cott contract를 정의하지 않으며, example마다 binding 또는 agent implementation을 임의로 일반화해서는 안 된다. checkout에 commit된 `generated/`는 compiler-owned result이고, agent-owned free-function `python/_cott_impl/<cott module>/<function>.py` 및 impl-method `python/_cott_impl/<cott module>/<Concrete>/<method>.py`는 matching `agent_runs` provenance가 있는 실제 `cott generate --agent <agent> --target python` 성공 결과다. `.venv/`, `.cott/`, `__pycache__/`는 transient이며 managed artifact나 evidence가 아니다.
 
 `cott emit python|kotlin|dart`는 선택 target의 compiler-owned output과 unresolved metadata만
 materialize하며 agent나 target compiler를 호출하지 않는다. `cott generate`는 선택
@@ -2092,7 +2174,7 @@ scaffold하지 않는다. `--no-sync`가 없으면 installed Kotlin/JDK toolchai
 Python/uv 작업을 하지 않는다.
 
 `examples/integrations/android-counter`는 standard Gradle consumer와 Cott module을 명시적으로
-분리한다. Cott source/binding lifecycle은 다음과 같다.
+분리한다. Cott source/implementation lifecycle은 다음과 같다.
 
 ```bash
 project=examples/integrations/android-counter
@@ -2699,6 +2781,37 @@ cott verify
 검증에서 얻은 coverage를 사용한다. `--format json`에서는 기존 diagnostics schema 1의 `note`로
 전달하며 certification, coverage policy, exit code와 record schema는 바꾸지 않는다.
 
+project가 requirement(§10.7)를 선언하면 `verify`는 coverage 요약 뒤 같은 실행의 requirement
+report를 출력한다. 성공한 verify와 certified record를 publish한 뒤의 coverage-policy gate 실패는
+방금 publish한 record에 bind한다. 그 전의 실패는 현재 실행의 실패만 사용한다. compiler-owned runner
+실패 메시지가 이름을 댄 linked scenario·assertion은 `failed`이고 나머지 link는 `unverified`다. 이전
+verified record로 되돌아가 observed를 credit하지 않는다. requirement가 없는 project의 verify 출력은
+바뀌지 않는다. `--format json`에서는 report 줄도 기존 diagnostics schema 1의 `note`이며
+`verified`, certification, policy, exit code는 바뀌지 않는다.
+
+```bash
+cott requirements [--project <dir>] [--format json]
+```
+
+`cott requirements`는 agent나 runner를 실행하지 않고 source·artifact·record를 쓰지 않는 inspection
+command다(project lock만 inspection mode로 잡는다). 현재
+source에서 IR과 requirement를 다시 계산하고, published `generation.json`은 target의 기존 freshness
+gate를 통과한 뒤에만 bind한다. Python gate는 `verify`와 같은 managed-byte 및 comparable-snapshot
+비교이고, Kotlin·Dart gate는 `verify`·`deploy`의 current-publication 검증과 verified
+`current == last_verified` 확인이다. 그 뒤 report는 certified current snapshot과 정확한 Canonical IR
+identity 일치를 다시 요구한다. record가 없으면 evidence는 `absent`, gate·certification·IR identity가
+맞지 않으면 `stale`이다. 두 경우 모든 link는 `unverified`이고 이전 snapshot의 evidence를 credit하지
+않는다. human 출력 첫 줄은
+`requirements: total= observed= unverified= unknown= failed= waived=; evidence=current|failed|stale|absent target=<target>`
+이다. 이어서 requirement마다 status와 reason, check마다 `scope`, `status`, `executed`,
+`assertions=<observed>/<declared>`, external assumption과 temporary waiver를 나열한다.
+`executed=false`나 `assertions=0/N`은 선택된 link가 실행되지 않았다는 뜻이고, requirement가 0개인
+report(`total=0`)는 실행 증거가 아니다. `--format json`은 closed diagnostics 대신 별도 versioned
+document(`schemas/requirement-report.schema.json`, `schema_version = 1`,
+`kind = "cott.requirements"`, 고정 `meaning`)를 stdout에 쓴다. 실패하면 stdout은 비어 있고 오류는
+stderr와 기존 exit code로 보고한다. report status는 raw behavioral evidence이며 coverage policy,
+deploy readiness, `verified`와 별개다. report를 만들면 status와 무관하게 exit `0`이다.
+
 검증 범위:
 
 * 공개 free-function 및 impl class/init/method signature와 `public_python_symbols(IR)` projection
@@ -3201,6 +3314,10 @@ byte offset은 0-based end-exclusive, line·Unicode-scalar column은 1-based end
 
 `COTT-K101`은 warning `possible shadow specification`이다. 실행 가능한 증거나 proof가 아니며 command exit status를 바꾸지 않는다. scanner는 declaration doc의 exact sentence와 reserved generator directive만 본다. doc candidate는 `.`, `!`, `?`, newline에서 split한 원 source byte span이며 closed ASCII case-insensitive modal `must`, `shall`, `required to`, `must not`와 facet anchor를 모두 가져야 한다. facet은 source-order `return`, `limit`, `error`, `atomicity`, `cleanup`뿐이다. ordinary 설명, implementation instruction, modal-only prose와 arbitrary generator guidance는 인식하지 않는다.
 
+requirement `text` statement도 같은 sentence scanner와 formal-evidence suppression 규칙으로 검사한다.
+target callable의 formal declaration이 facet을 뒷받침하지 않으면 statement literal 전체 span에 같은
+warning을 낸다. 이 검사는 기존 K101 범위와 같이 Python target에서만 실행하며 evidence가 아니다.
+
 generator rules의 reserved single-line syntax는 `cott-domain <fully.qualified.callable> <return|limit|error|atomicity|cleanup>: <nonempty UTF-8 text>`다. LF만 허용하며 malformed reserved line, unknown facet, bad canonical symbol, duplicate `(symbol, facet)`는 hard diagnostic이다. 원 bytes는 prompt에 그대로 남고 scanner가 rewrite하지 않는다. formal evidence가 effective resolved `ensures`이면 return, refinement/requires/ensures이면 limit, `error`이면 error, scenario fixture/atomic assertion이면 atomicity, scenario cleanup evidence이면 cleanup candidate를 suppress한다. scenario가 없는 경우 expressible clause/effect evidence만 suppress하며 나머지는 경고로 남긴다. diagnostic은 exact sentence/directive payload span, source order와 facet order로 안정 정렬하고 generator-file finding에는 callable declaration을 related evidence로 붙인다.
 
 ---
@@ -3431,6 +3548,16 @@ success/conditional branch observation, scenario trace, fixture transcript와 se
 ### 결정 29
 
 effect scenario는 compiler-owned fs/local HTTP/clock/failure adapter와 Linux isolated-loopback sandbox에서만 observed다. capability가 없으면 fail-closed unobserved이며 unsandboxed execution은 지원하지 않는다.
+
+isolated-loopback 실행은 별도 user/network namespace 안에서만 UID/GID 0을 사용한다.
+이 namespace-local identity는 호출한 host 사용자로 매핑되며 host root 권한을 얻지 않는다.
+설정 단계에만 `CAP_NET_ADMIN`과 capability bounding set 제거용 `CAP_SETPCAP`을 부여한다.
+`ip link set lo up` 뒤 `/usr/bin/setpriv`가 bounding/inheritable/ambient capability를 모두
+지우고 `no_new_privs`를 설정한 다음 payload를 exec한다. Payload의 effective/permitted를
+포함한 모든 capability 집합은 0이어야 한다. 필요한 도구가 없거나 권한 제거가 실패하면
+실행을 거부하며 host network fallback은 없다. network-disabled/provider 모드의 identity는
+바꾸지 않는다. regression은 loopback 통신 성공, payload의 network 변경 거부, capability
+집합 0, 외부 기본 경로 부재와 생성 파일의 host 소유권을 검사한다.
 
 ### 결정 30
 

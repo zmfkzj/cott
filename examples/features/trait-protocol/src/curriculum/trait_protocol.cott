@@ -15,15 +15,33 @@ trait Completable:
     async fn complete(self) -> Bool
 
 async fn default_category[T](receiver: TaskView[T]) -> Str:
+    doc """
+    Return the fixed default category "default" for any task view.
+    """
+
+    ensures result == "default"
+
     effects []
 
 async fn specialized_display(receiver: SimpleTask) -> Str:
+    doc """
+    Return the text "specialized: " immediately followed by receiver.title.
+    """
+
     effects []
 
 fn task_factory() -> Factory[SimpleTask]:
+    doc """
+    Return the SimpleTask constructor itself as the factory.
+    """
+
     effects []
 
 async fn inspect_dyn(item: Dyn[TaskView[Str]]) -> Str:
+    doc """
+    Return the awaited summary of the dynamically dispatched task view item.
+    """
+
     effects []
 
 resource TaskLifecycle:

@@ -1,2 +1,3 @@
 For `_cott_impl_SimpleTask_complete` only, follow the generated prompt's async helper shape and its exact annotations and imports.
 Assign `self.lifecycle = TaskLifecycle_Completed()` using `TaskLifecycle_Completed` imported from `curriculum.trait_protocol_types`, increment `self.completion_count` exactly once, then return `True`.
+cott-domain curriculum.trait_protocol.inspect_dyn return: import Dyn from cott_runtime and TaskView from the public facade module curriculum.trait_protocol (not curriculum.trait_protocol_types), annotate the parameter exactly as item: Dyn[TaskView[str]], and return await item.value.summary().

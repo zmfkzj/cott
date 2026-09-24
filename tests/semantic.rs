@@ -2549,3 +2549,80 @@ impl Counter for Reader:
     assert_eq!(imported[0].diagnostic.span.start, start);
     assert_eq!(imported[0].diagnostic.span.end, start + "limt".len());
 }
+
+#[test]
+fn complete_errors_and_graph_intrinsics_reject_ambiguous_or_mistyped_contracts() {
+    let prelude = "module acceptance\nenum Failure:\n    Bad\nnewtype Name(Str)\nstruct Step:\n    name: Str\n    label: Name\n    needs: Set[Str]\n    counts: List[I32]\n";
+    for (body, message, token, occurrence) in [
+        (
+            "fn run(value: Str) -> Result[Str, Failure]:\n    ensures Result.Ok(output) => output == value\n    errors complete\n    error Failure.Bad\n",
+            "`errors complete` rejects unconditional error clauses",
+            "error Failure.Bad",
+            0,
+        ),
+        (
+            "fn run(value: Str) -> Str:\n    ensures result == value\n    errors complete\n",
+            "`errors complete` requires a Result return type",
+            "errors complete",
+            0,
+        ),
+        (
+            "rule Strict:\n    errors complete\nfn run(value: Str) -> Result[Str, Failure]:\n    rule Strict\n    ensures Result.Ok(output) => output == value\n",
+            "`errors complete` is supported only on free functions",
+            "errors complete",
+            0,
+        ),
+        (
+            "fn run(steps: List[Step]) -> Bool:\n    requires not any_blank_by(steps, Step.label)\n",
+            "key selector field must have exact type Str",
+            "Step.label",
+            0,
+        ),
+        (
+            "fn run(steps: List[Step]) -> Bool:\n    requires not cyclic_by(steps, Step.name, Step.counts)\n",
+            "dependency selector must name a Set[Str] or List[Str] field of the exact list element type",
+            "cyclic_by",
+            0,
+        ),
+        (
+            "fn run(order: List[I32], steps: List[Step]) -> Bool:\n    requires permutation_by(order, steps, Step.name)\n",
+            "intrinsic arguments are incompatible with its closed signature",
+            "permutation_by",
+            0,
+        ),
+    ] {
+        assert_semantic_error_at(&format!("{prelude}{body}"), message, token, occurrence);
+    }
+}
+
+#[test]
+fn complete_errors_lower_to_the_compiler_annotation_only_when_opted_in() {
+    let source_text = "module acceptance\nenum Failure:\n    Bad\nstruct Step:\n    name: Str\n    needs: Set[Str]\nfn plain(steps: List[Step]) -> Result[List[Str], Failure]:\n    ensures Result.Ok(order) => permutation_by(order, steps, Step.name)\n    error Failure.Bad when cyclic_by(steps, Step.name, Step.needs)\nfn complete(steps: List[Step]) -> Result[List[Str], Failure]:\n    ensures Result.Ok(order) => dependency_ordered_by(order, steps, Step.name, Step.needs)\n    errors complete\n    error Failure.Bad when cyclic_by(steps, Step.name, Step.needs)\n";
+    let project = lower_project([source("src/acceptance.cott", source_text)]);
+    let complete = |index: usize| {
+        let HirDeclaration::Function(function) = &project.modules[0].declarations[index] else {
+            panic!("expected function");
+        };
+        function
+            .annotations
+            .iter()
+            .filter(|annotation| annotation.name == cott::hir::COMPLETE_ERRORS_ANNOTATION)
+            .count()
+    };
+    assert_eq!(complete(2), 0);
+    assert_eq!(complete(3), 1);
+    let ir = cott::ir::render(&project).expect("canonical IR");
+    let module: serde_json::Value = serde_json::from_slice(&ir.modules[0].bytes).unwrap();
+    let error = &module["declarations"][3]["contract"]["clauses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|clause| clause["kind"] == "error")
+        .unwrap()["when"];
+    assert_eq!(error["name"], "cyclic_by");
+    assert_eq!(error["dependencies"]["field"], "acceptance.Step.needs");
+    let mut forged = module["declarations"][2].as_object().unwrap().clone();
+    forged["annotations"] = serde_json::json!([{"argument": null, "name": "cott.complete_errors", "span": forged["span"]}]);
+    forged["contract"]["clauses"][1]["when"] = serde_json::Value::Null;
+    assert!(cott::ir::complete_errors(&forged).is_err());
+}

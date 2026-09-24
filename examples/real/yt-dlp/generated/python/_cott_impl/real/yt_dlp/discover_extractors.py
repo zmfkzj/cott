@@ -3,5 +3,6 @@ from real.yt_dlp_types import ExtractorDescriptor
 
 
 def discover_extractors() -> CottList[ExtractorDescriptor]:
-    empty: CottList[ExtractorDescriptor] = CottList(values=[])
-    return empty
+    urls: CottList[str] = CottList(values=["http://", "https://"])
+    generic: ExtractorDescriptor = ExtractorDescriptor(name="generic", urls=urls, enabled=True, requires_login=False)
+    return CottList(values=[generic])

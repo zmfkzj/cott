@@ -1218,6 +1218,7 @@ fn declaration_index<'a>(plan: &'a DartPlan) -> Result<DeclarationIndex<'a>, Str
                     | "const"
                     | "function"
                     | "scenario"
+                    | "requirement"
             ) {
                 return Err(format!(
                     "unsupported canonical declaration kind `{kind}` for `{name}`"
@@ -1598,7 +1599,7 @@ fn public_target_names(module: &DartModule) -> Result<Vec<String>, String> {
         .filter(|declaration| {
             !matches!(
                 declaration.get("kind").and_then(Value::as_str),
-                Some("specialization" | "scenario")
+                Some("specialization" | "scenario" | "requirement")
             )
         })
         .map(|declaration| {
@@ -1964,7 +1965,11 @@ fn render_types_file(
             .as_object()
             .ok_or_else(|| format!("declaration in `{}` must be an object", module.name))?;
         let kind = required_string(object, "kind", &module.name)?;
-        if matches!(kind, "function" | "impl" | "specialization" | "scenario") {
+        // Scenarios and requirements have no Dart ABI symbol; requirements are report metadata.
+        if matches!(
+            kind,
+            "function" | "impl" | "specialization" | "scenario" | "requirement"
+        ) {
             continue;
         }
         render_doc(&mut out, object.get("doc"), 0);
@@ -2897,7 +2902,7 @@ fn render_field_metadata(
     .expect("writing to String cannot fail");
     writeln!(
         out,
-        "{prefix}@override\n{prefix}Object? cottField(String name) => switch (name) {{"
+        "{prefix}@override\n{prefix}Object? cottField(String _cott_field) => switch (_cott_field) {{"
     )
     .expect("writing to String cannot fail");
     for name in names {
@@ -2911,7 +2916,7 @@ fn render_field_metadata(
     }
     writeln!(
         out,
-        "{prefix}  _ => cott_runtime.CottRuntime.violation('unknown canonical field', symbol: cottTypeIdentity, phase: 'field', actual: name),\n{prefix}}};"
+        "{prefix}  _ => cott_runtime.CottRuntime.violation('unknown canonical field', symbol: cottTypeIdentity, phase: 'field', actual: _cott_field),\n{prefix}}};"
     )
     .expect("writing to String cannot fail");
     Ok(())
@@ -3378,7 +3383,7 @@ fn render_variant_metadata(
     .expect("writing to String cannot fail");
     writeln!(
         out,
-        "{prefix}@override\n{prefix}Object? cottField(String name) => switch (name) {{"
+        "{prefix}@override\n{prefix}Object? cottField(String _cott_field) => switch (_cott_field) {{"
     )
     .expect("writing to String cannot fail");
     for (canonical, property) in canonical_names.iter().zip(properties) {
@@ -3387,7 +3392,7 @@ fn render_variant_metadata(
     }
     writeln!(
         out,
-        "{prefix}  _ => cott_runtime.CottRuntime.violation('unknown canonical field', symbol: cottVariant, phase: 'field', actual: name),\n{prefix}}};"
+        "{prefix}  _ => cott_runtime.CottRuntime.violation('unknown canonical field', symbol: cottVariant, phase: 'field', actual: _cott_field),\n{prefix}}};"
     )
     .expect("writing to String cannot fail");
     Ok(())
@@ -5344,13 +5349,17 @@ fn render_expected_errors(
     let errors = contract_clauses(declaration)
         .filter(|clause| clause.get("kind").and_then(Value::as_str) == Some("error"))
         .collect::<Vec<_>>();
-    if errors.is_empty() {
+    if !checks_error_return(declaration) {
         return Ok(());
     }
     let prefix = " ".repeat(indent);
     if declare {
-        writeln!(out, "{prefix}String? _cott_expected_error = null;\n{prefix}String? _cott_expected_error_clause = null;")
+        writeln!(out, "{prefix}String? _cott_expected_error = null;")
             .expect("writing to String cannot fail");
+        if errors.iter().copied().any(conditional_error) {
+            writeln!(out, "{prefix}String? _cott_expected_error_clause = null;")
+                .expect("writing to String cannot fail");
+        }
     }
     writeln!(
         out,
@@ -5414,16 +5423,14 @@ fn render_error_contracts(
     let errors = contract_clauses(declaration)
         .filter(|clause| clause.get("kind").and_then(Value::as_str) == Some("error"))
         .collect::<Vec<_>>();
-    if errors.is_empty() {
+    if !checks_error_return(declaration) {
         return Ok(());
     }
     let prefix = " ".repeat(indent);
     let unconditional = errors
         .iter()
-        .filter(|clause| {
-            clause.get("guard").is_none_or(Value::is_null)
-                && clause.get("when").is_none_or(Value::is_null)
-        })
+        .copied()
+        .filter(|clause| !conditional_error(clause))
         .filter_map(|clause| clause.get("variant").and_then(Value::as_str))
         .map(dart_string)
         .collect::<Vec<_>>();
@@ -5442,9 +5449,7 @@ fn render_error_contracts(
             "variant",
             symbol,
         )?;
-        let applicable = if clause.get("guard").is_none_or(Value::is_null)
-            && clause.get("when").is_none_or(Value::is_null)
-        {
+        let applicable = if !conditional_error(clause) {
             format!("_cott_actual_error_variant == {}", dart_string(variant))
         } else {
             format!("_cott_expected_error_clause == {}", dart_string(&label))
@@ -5461,6 +5466,22 @@ fn render_error_contracts(
     }
     writeln!(out, "{prefix}}}").expect("writing to String cannot fail");
     Ok(())
+}
+
+/// A guarded or `when` error clause selects the expected variant before the call; only such
+/// clauses assign and read `_cott_expected_error_clause`, so the local exists only with them.
+fn conditional_error(clause: &Value) -> bool {
+    clause.get("guard").is_some_and(|guard| !guard.is_null())
+        || clause.get("when").is_some_and(|when| !when.is_null())
+}
+
+/// `true` when the facade checks a returned `Err` as the `error-return` observation: with any
+/// `error` clause, and with `errors complete` even without one, when every requires-valid
+/// input must return `Ok`.
+pub(crate) fn checks_error_return(declaration: &Map<String, Value>) -> bool {
+    contract_clauses(declaration)
+        .any(|clause| clause.get("kind").and_then(Value::as_str) == Some("error"))
+        || crate::ir::complete_errors(declaration) == Ok(true)
 }
 
 fn render_facade_file(
@@ -5936,7 +5957,7 @@ fn render_implementation_metadata(
         .collect::<Vec<_>>();
     writeln!(
         out,
-        "  @override\n  cott_runtime.CottList<String> get cottFieldNames => cott_runtime.CottList([{}]);\n  @override\n  Object? cottField(String name) => switch (name) {{",
+        "  @override\n  cott_runtime.CottList<String> get cottFieldNames => cott_runtime.CottList([{}]);\n  @override\n  Object? cottField(String _cott_field) => switch (_cott_field) {{",
         names.iter().map(|name| dart_string(name)).collect::<Vec<_>>().join(", ")
     )
     .expect("writing to String cannot fail");
@@ -5949,7 +5970,7 @@ fn render_implementation_metadata(
         )
         .expect("writing to String cannot fail");
     }
-    out.push_str("    _ => cott_runtime.CottRuntime.violation('unknown canonical field', symbol: cottTypeIdentity, phase: 'field', actual: name),\n  };\n");
+    out.push_str("    _ => cott_runtime.CottRuntime.violation('unknown canonical field', symbol: cottTypeIdentity, phase: 'field', actual: _cott_field),\n  };\n");
     Ok(())
 }
 
@@ -6107,9 +6128,13 @@ fn render_impl_method(
     let locals =
         render_parameter_validation(out, config, method, declarations, &rendering.context, 4)?;
     let errors = contract_clauses(method)
-        .any(|clause| clause.get("kind").and_then(Value::as_str) == Some("error"));
-    if errors {
-        out.push_str("    String? _cott_expected_error = null;\n    String? _cott_expected_error_clause = null;\n");
+        .filter(|clause| clause.get("kind").and_then(Value::as_str) == Some("error"))
+        .collect::<Vec<_>>();
+    if !errors.is_empty() {
+        out.push_str("    String? _cott_expected_error = null;\n");
+        if errors.iter().copied().any(conditional_error) {
+            out.push_str("    String? _cott_expected_error_clause = null;\n");
+        }
     }
     let state = required_array(implementation, "state", &callable.symbol)?;
     let old_state_fields = old_state_field_references(method)?;

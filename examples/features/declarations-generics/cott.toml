@@ -11,5 +11,5 @@ interpreter = ".venv/bin/python"
 type_checker = ".venv/bin/basedpyright"
 runtime_validation = "boundary"
 
-[target.python.implementations]
-"declarations.presentation.package_label" = "cott_bindings.declarations.presentation.package_label:package_label"
+[generator]
+rules = "generator.rules"

@@ -55,7 +55,7 @@ def _read_bounded(path: Path) -> Result[bytes, str]:
 
 
 def _parse(path: Path, data: bytes) -> Result[PluginDescriptor, str]:
-    name = path.stem
+    name = Path(path).stem
     if name == "":
         return Err(error="plugin manifest name is empty")
     try:

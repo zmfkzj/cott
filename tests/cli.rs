@@ -4093,7 +4093,12 @@ printf 'from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n' > i
         "{}",
         String::from_utf8_lossy(&generated.stderr)
     );
-    assert!(cott(&project.path, &["verify"]).status.success());
+    let verified = cott(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
     fs::write(
         project.path.join("src/app.cott"),
         "module app\n\nfn primary() -> I32:\n    doc \"\"\"\n    Return two for the right-to-left primary path.\n    \"\"\"\n\n    effects []\n\nfn sibling() -> I32:\n    doc \"\"\"\n    Return seven for the unchanged sibling path.\n    \"\"\"\n\n    effects []\n",

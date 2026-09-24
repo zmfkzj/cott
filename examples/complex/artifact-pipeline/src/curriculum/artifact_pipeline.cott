@@ -21,16 +21,20 @@ fn topologically_order_steps(steps: List[BuildStep]) -> Result[List[Str], Artifa
     doc """
     Validate build-step names and dependencies, then return their deterministic
     topological order. Blank and duplicate names are rejected before dependency
-    errors. Ready steps are ordered lexicographically.
+    errors. Ready steps are ordered lexicographically. A blank name is empty or
+    consists only of the 25 Unicode White_Space characters used by any_blank_by;
+    U+FEFF, U+180E, U+200B and U+001C are not whitespace for this contract.
     """
 
-    ensures Result.Ok(ordered_steps) => ordered_steps.len == steps.len
+    ensures Result.Ok(ordered_steps) => permutation_by(ordered_steps, steps, BuildStep.name)
+    ensures Result.Ok(ordered_steps) => dependency_ordered_by(ordered_steps, steps, BuildStep.name, BuildStep.needs)
 
-    error ArtifactPipelineError.BlankStepName
-    error ArtifactPipelineError.DuplicateStep
-    error ArtifactPipelineError.UnknownDependency
-    error ArtifactPipelineError.SelfDependency
-    error ArtifactPipelineError.Cycle
+    errors complete
+    error ArtifactPipelineError.BlankStepName when any_blank_by(steps, BuildStep.name)
+    error ArtifactPipelineError.DuplicateStep when not unique_by(steps, BuildStep.name)
+    error ArtifactPipelineError.UnknownDependency when unknown_dependency_by(steps, BuildStep.name, BuildStep.needs)
+    error ArtifactPipelineError.SelfDependency when self_dependency_by(steps, BuildStep.name, BuildStep.needs)
+    error ArtifactPipelineError.Cycle when cyclic_by(steps, BuildStep.name, BuildStep.needs)
 
     effects []
 
@@ -40,12 +44,56 @@ fn plan_pipeline(pipeline: Pipeline) -> Result[ArtifactPlan, ArtifactPipelineErr
     and construct an artifact plan, propagating any ordering error unchanged.
     """
 
-    ensures Result.Ok(plan) => plan.ordered_steps.len == pipeline.steps.len
+    ensures Result.Ok(plan) => permutation_by(plan.ordered_steps, pipeline.steps, BuildStep.name)
+    ensures Result.Ok(plan) => dependency_ordered_by(plan.ordered_steps, pipeline.steps, BuildStep.name, BuildStep.needs)
 
-    error ArtifactPipelineError.BlankStepName
-    error ArtifactPipelineError.DuplicateStep
-    error ArtifactPipelineError.UnknownDependency
-    error ArtifactPipelineError.SelfDependency
-    error ArtifactPipelineError.Cycle
+    errors complete
+    error ArtifactPipelineError.BlankStepName when any_blank_by(pipeline.steps, BuildStep.name)
+    error ArtifactPipelineError.DuplicateStep when not unique_by(pipeline.steps, BuildStep.name)
+    error ArtifactPipelineError.UnknownDependency when unknown_dependency_by(pipeline.steps, BuildStep.name, BuildStep.needs)
+    error ArtifactPipelineError.SelfDependency when self_dependency_by(pipeline.steps, BuildStep.name, BuildStep.needs)
+    error ArtifactPipelineError.Cycle when cyclic_by(pipeline.steps, BuildStep.name, BuildStep.needs)
 
     effects []
+
+data dependency_chain: Pipeline = Pipeline(
+    steps: List(
+        BuildStep(name: "package", needs: Set("compile")),
+        BuildStep(name: "compile", needs: Set("parse")),
+        BuildStep(name: "parse", needs: Set()),
+    ),
+)
+
+scenario pipeline_success:
+    call plan = plan_pipeline(dependency_chain)
+    assert plan matches Result.Ok(value) => value.ordered_steps == List("parse", "compile", "package")
+
+scenario pipeline_cycle:
+    call plan = plan_pipeline(
+        Pipeline(
+            steps: List(
+                BuildStep(name: "a", needs: Set("b")),
+                BuildStep(name: "b", needs: Set("a")),
+            ),
+        ),
+    )
+    assert plan matches Result.Err(ArtifactPipelineError.Cycle)
+
+scenario pipeline_error_priority:
+    call plan = plan_pipeline(
+        Pipeline(
+            steps: List(
+                BuildStep(name: "", needs: Set("missing")),
+                BuildStep(name: "", needs: Set("")),
+            ),
+        ),
+    )
+    assert plan matches Result.Err(ArtifactPipelineError.BlankStepName)
+
+requirement DEPENDENCIES_PRECEDE_STEPS for plan_pipeline:
+    text "A valid acyclic pipeline succeeds with each dependency before its dependent and with exactly the supplied step names."
+    checked_by pipeline_success assert 1
+
+requirement CYCLE_IS_REJECTED for plan_pipeline:
+    text "A cyclic pipeline is rejected rather than returned as a partial successful plan."
+    checked_by pipeline_cycle assert 1

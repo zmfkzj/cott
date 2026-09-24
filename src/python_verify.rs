@@ -983,45 +983,22 @@ fn valid_type_projection_path(path: &Path) -> bool {
             })
 }
 
-fn dependency_evidence(
+/// Planned and verified snapshots must select the same production lock closure.
+pub(crate) fn planned_dependency_records(
     project_name: &str,
     paths: &ProjectPaths,
-    interpreter: &Path,
-    generated_root: &Path,
-    artifact_root: &Path,
-    scratch: &Path,
-    project_modules: &BTreeSet<String>,
-    type_projection_paths: &[PathBuf],
-    site_packages: &[PathBuf],
 ) -> Result<Value, String> {
+    if paths.lockfile.is_none() {
+        return Ok(Value::Array(Vec::new()));
+    }
+    dependency_metadata(project_name, paths).map(|(dependencies, _)| Value::Array(dependencies))
+}
+
+fn dependency_metadata(
+    project_name: &str,
+    paths: &ProjectPaths,
+) -> Result<(Vec<Value>, BTreeMap<String, String>), String> {
     let metadata_path = paths.python_source_dir.join("pyproject.toml");
-    if type_projection_paths
-        .windows(2)
-        .any(|paths| paths[0] >= paths[1])
-    {
-        return Err(
-            "type projection paths are not deterministically ordered and unique".to_owned(),
-        );
-    }
-    for relative in type_projection_paths {
-        if !valid_type_projection_path(relative) {
-            return Err(format!(
-                "invalid compiler-owned type projection path {}",
-                relative.display()
-            ));
-        }
-        let path = generated_root.join(relative);
-        if !fs::symlink_metadata(&path)
-            .map_err(|error| format!("read type projection {}: {error}", path.display()))?
-            .file_type()
-            .is_file()
-        {
-            return Err(format!(
-                "compiler-owned type projection {} is not a regular file",
-                path.display()
-            ));
-        }
-    }
     let metadata: toml::Value =
         toml::from_str(&fs::read_to_string(&metadata_path).map_err(|error| {
             format!("read target metadata {}: {error}", metadata_path.display())
@@ -1052,7 +1029,7 @@ fn dependency_evidence(
                 })
         })
         .collect::<Result<BTreeSet<_>, _>>()?;
-    let (mut dependencies, lock_index) = if let Some(path) = &paths.lockfile {
+    let (dependencies, lock_index) = if let Some(path) = &paths.lockfile {
         let bytes =
             fs::read(path).map_err(|error| format!("read lockfile {}: {error}", path.display()))?;
         let lock: toml::Value = toml::from_str(
@@ -1199,6 +1176,48 @@ fn dependency_evidence(
     } else {
         (Vec::new(), BTreeMap::new())
     };
+    Ok((dependencies, lock_index))
+}
+
+fn dependency_evidence(
+    project_name: &str,
+    paths: &ProjectPaths,
+    interpreter: &Path,
+    generated_root: &Path,
+    artifact_root: &Path,
+    scratch: &Path,
+    project_modules: &BTreeSet<String>,
+    type_projection_paths: &[PathBuf],
+    site_packages: &[PathBuf],
+) -> Result<Value, String> {
+    let (mut dependencies, lock_index) = dependency_metadata(project_name, paths)?;
+    if type_projection_paths
+        .windows(2)
+        .any(|paths| paths[0] >= paths[1])
+    {
+        return Err(
+            "type projection paths are not deterministically ordered and unique".to_owned(),
+        );
+    }
+    for relative in type_projection_paths {
+        if !valid_type_projection_path(relative) {
+            return Err(format!(
+                "invalid compiler-owned type projection path {}",
+                relative.display()
+            ));
+        }
+        let path = generated_root.join(relative);
+        if !fs::symlink_metadata(&path)
+            .map_err(|error| format!("read type projection {}: {error}", path.display()))?
+            .file_type()
+            .is_file()
+        {
+            return Err(format!(
+                "compiler-owned type projection {} is not a regular file",
+                path.display()
+            ));
+        }
+    }
     let mut dependency_mounts = vec![artifact_root.to_path_buf()];
     dependency_mounts.extend(site_packages.iter().cloned());
     let probe = process(

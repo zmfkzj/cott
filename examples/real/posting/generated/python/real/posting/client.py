@@ -103,31 +103,34 @@ def parse_arguments(arguments: CottList[str]) -> Result[Request, PostingError]:
     return _result
 
 def send_request(request: Request) -> Result[Response, PostingError]:
-    """Send one HTTP request and retain status, final URL, headers, and response bytes."""
+    """Send one HTTP request and retain status, final URL, headers, and the response
+body decoded as UTF-8 with replacement characters for undecodable bytes. An HTTP
+error status is still a received Response; InvalidRequest covers a non-HTTP(S)
+URL, and NetworkFailed covers connection, timeout, and URL errors."""
     request = _cott_validate_abi(request, Request, path="$.request")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/posting/client/send_request.py", "e48b354421e312b8b3c8c927f8ee79829f61e10aaf95e6bc87eebdb440eab288", "send_request", expected_project_name="real-posting", expected_cott_symbol="real.posting.client.send_request")
+        _implementation = _cott_load("_cott_impl/real/posting/client/send_request.py", "b4dfbec9d0a3f154c30b4de3aa92d0b8f99f6eb084cdaa34a76045beaed61e12", "send_request", expected_project_name="real-posting", expected_cott_symbol="real.posting.client.send_request")
         _result = _implementation(request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.posting.client.send_request"
         if _error.span is None:
-            _error.span = {"end_byte":1422,"end_column":1,"end_line":70,"start_byte":1092,"start_column":1,"start_line":58}
+            _error.span = {"end_byte":1658,"end_column":1,"end_line":73,"start_byte":1092,"start_column":1,"start_line":58}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.posting.client.send_request", phase="implementation-call", span={"end_byte":1422,"end_column":1,"end_line":70,"start_byte":1092,"start_column":1,"start_line":58}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.posting.client.send_request", phase="implementation-call", span={"end_byte":1658,"end_column":1,"end_line":73,"start_byte":1092,"start_column":1,"start_line":58}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.posting.client.send_request", phase="implementation-call", span={"end_byte":1422,"end_column":1,"end_line":70,"start_byte":1092,"start_column":1,"start_line":58}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.posting.client.send_request", phase="implementation-call", span={"end_byte":1658,"end_column":1,"end_line":73,"start_byte":1092,"start_column":1,"start_line":58}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[Response, PostingError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.posting.client.send_request", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (PostingError_InvalidRequest, PostingError_NetworkFailed,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.posting.client.send_request", phase="error", span={"end_byte":1422,"end_column":1,"end_line":70,"start_byte":1092,"start_column":1,"start_line":58}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.posting.client.send_request", phase="error", span={"end_byte":1658,"end_column":1,"end_line":73,"start_byte":1092,"start_column":1,"start_line":58}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.posting.client.send_request", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -144,7 +147,7 @@ def send_request(request: Request) -> Result[Response, PostingError]:
         _cott_contract_condition((False), "real.posting.client.send_request", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.posting.client.send_request", clause="ensures:1", phase="ensures", span={"end_byte":1321,"end_column":55,"end_line":63,"start_byte":1271,"start_column":5,"start_line":63}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.posting.client.send_request", clause="ensures:1", phase="ensures", span={"end_byte":1557,"end_column":55,"end_line":66,"start_byte":1507,"start_column":5,"start_line":66}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[Response, PostingError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -158,12 +161,12 @@ def render_response(response: Response) -> str:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.posting.client.render_response"
         if _error.span is None:
-            _error.span = {"end_byte":1590,"end_column":1,"end_line":77,"start_byte":1422,"start_column":1,"start_line":70}
+            _error.span = {"end_byte":1826,"end_column":1,"end_line":80,"start_byte":1658,"start_column":1,"start_line":73}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.posting.client.render_response", phase="implementation-call", span={"end_byte":1590,"end_column":1,"end_line":77,"start_byte":1422,"start_column":1,"start_line":70}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.posting.client.render_response", phase="implementation-call", span={"end_byte":1826,"end_column":1,"end_line":80,"start_byte":1658,"start_column":1,"start_line":73}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.posting.client.render_response", phase="implementation-call", span={"end_byte":1590,"end_column":1,"end_line":77,"start_byte":1422,"start_column":1,"start_line":70}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.posting.client.render_response", phase="implementation-call", span={"end_byte":1826,"end_column":1,"end_line":80,"start_byte":1658,"start_column":1,"start_line":73}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -184,19 +187,19 @@ operation unchanged; do not send a request after argument parsing fails."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.posting.client.execute"
         if _error.span is None:
-            _error.span = {"end_byte":2170,"end_column":1,"end_line":92,"start_byte":1590,"start_column":1,"start_line":77}
+            _error.span = {"end_byte":2406,"end_column":1,"end_line":95,"start_byte":1826,"start_column":1,"start_line":80}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.posting.client.execute", phase="implementation-call", span={"end_byte":2170,"end_column":1,"end_line":92,"start_byte":1590,"start_column":1,"start_line":77}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.posting.client.execute", phase="implementation-call", span={"end_byte":2406,"end_column":1,"end_line":95,"start_byte":1826,"start_column":1,"start_line":80}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.posting.client.execute", phase="implementation-call", span={"end_byte":2170,"end_column":1,"end_line":92,"start_byte":1590,"start_column":1,"start_line":77}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.posting.client.execute", phase="implementation-call", span={"end_byte":2406,"end_column":1,"end_line":95,"start_byte":1826,"start_column":1,"start_line":80}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[str, PostingError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.posting.client.execute", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (PostingError_InvalidArguments, PostingError_InvalidRequest, PostingError_NetworkFailed,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.posting.client.execute", phase="error", span={"end_byte":2170,"end_column":1,"end_line":92,"start_byte":1590,"start_column":1,"start_line":77}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.posting.client.execute", phase="error", span={"end_byte":2406,"end_column":1,"end_line":95,"start_byte":1826,"start_column":1,"start_line":80}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.posting.client.execute", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -215,7 +218,7 @@ operation unchanged; do not send a request after argument parsing fails."""
         _cott_contract_condition((False), "real.posting.client.execute", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.posting.client.execute", clause="ensures:1", phase="ensures", span={"end_byte":2030,"end_column":52,"end_line":85,"start_byte":1983,"start_column":5,"start_line":85}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.posting.client.execute", clause="ensures:1", phase="ensures", span={"end_byte":2266,"end_column":52,"end_line":88,"start_byte":2219,"start_column":5,"start_line":88}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[str, PostingError], path="$.return", validator=_cott_validate_abi)
     return _result
 

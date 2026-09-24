@@ -57,7 +57,10 @@ fn parse_arguments(arguments: List[Str]) -> Result[Request, PostingError]:
 
 fn send_request(request: Request) -> Result[Response, PostingError]:
     doc """
-    Send one HTTP request and retain status, final URL, headers, and response bytes.
+    Send one HTTP request and retain status, final URL, headers, and the response
+    body decoded as UTF-8 with replacement characters for undecodable bytes. An HTTP
+    error status is still a received Response; InvalidRequest covers a non-HTTP(S)
+    URL, and NetworkFailed covers connection, timeout, and URL errors.
     """
 
     ensures Result.Ok(response) => response.status > 0

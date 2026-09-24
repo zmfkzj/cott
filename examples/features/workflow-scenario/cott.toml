@@ -13,11 +13,3 @@ runtime_validation = "boundary"
 
 [verification]
 lifecycle_limit = 4
-
-[target.python.implementations]
-"curriculum.workflow_scenario.begin_search" = "cott_bindings.curriculum.workflow_scenario.search:begin_search"
-"curriculum.workflow_scenario.resolve_search" = "cott_bindings.curriculum.workflow_scenario.resolve_search:resolve_search"
-"curriculum.workflow_scenario.apply_search" = "cott_bindings.curriculum.workflow_scenario.apply_search:apply_search"
-"curriculum.workflow_scenario.begin_save" = "cott_bindings.curriculum.workflow_scenario.save:begin_save"
-"curriculum.workflow_scenario.request_save" = "cott_bindings.curriculum.workflow_scenario.request_save:request_save"
-"curriculum.workflow_scenario.flush_save" = "cott_bindings.curriculum.workflow_scenario.flush_save:flush_save"

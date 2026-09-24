@@ -1,2 +1,3 @@
 Implement declared contracts directly, deterministically, and fail closed.
 Iterate CottList directly; handle final union variants without a redundant match.
+cott-domain real.posting.client.send_request return: Read the final URL from the response .url attribute (never the deprecated geturl()) and treat response .headers as a non-optional Message without None checks; HTTPError is itself the received response object for error statuses.

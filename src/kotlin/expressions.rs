@@ -1,8 +1,8 @@
 use serde_json::Value;
 
 use super::types::{
-    escape_identifier, kotlin_string, local_name, render_const_witness, render_named_arguments,
-    render_qualified, render_type, render_value,
+    const_witness_values, escape_identifier, kotlin_string, local_name, render_const_witness,
+    render_named_arguments, render_qualified, render_type, render_value,
 };
 
 pub(crate) fn render_expression(expression: &Value) -> Result<String, String> {
@@ -104,9 +104,119 @@ pub(crate) fn render_expression(expression: &Value) -> Result<String, String> {
         "unary" => render_unary(expression, object),
         "binary" => render_binary(expression, object),
         "comparison_chain" => render_comparison_chain(object),
+        "construct" | "variant" | "option_some" | "result_ok" | "result_err" | "list" | "set"
+        | "tuple" | "array" | "map" => render_scenario_value(kind, object),
+        "match" => {
+            let always = serde_json::json!({"kind": "kotlin_synthetic", "code": "true"});
+            let condition = object.get("condition").filter(|value| !value.is_null());
+            render_guard(expression, condition.unwrap_or(&always), false)
+        }
         other => Err(format!(
             "unsupported canonical contract expression kind `{other}`"
         )),
+    }
+}
+
+/// Scenario values run the generated canonical constructors, so every
+/// ABI check and struct invariant applies exactly as for facade callers.
+fn render_scenario_value(
+    kind: &str,
+    object: &serde_json::Map<String, Value>,
+) -> Result<String, String> {
+    let ty = object.get("type");
+    let items = |field: &str| -> Result<Vec<String>, String> {
+        required_array(object.get(field), field)?
+            .iter()
+            .map(|item| {
+                render_expression(
+                    item.get("value")
+                        .filter(|_| field == "fields" && kind == "construct")
+                        .unwrap_or(item),
+                )
+            })
+            .collect()
+    };
+    let element = |name: &str| -> Result<String, String> {
+        render_type(required(
+            ty.and_then(|ty| ty.get(name)),
+            "scenario container element type",
+        )?)
+    };
+    match kind {
+        // Explicit type arguments keep a data binding at its declared type:
+        // Kotlin would otherwise infer `Box<Nothing>` from `Box(Nothing)`.
+        "construct" | "variant" => {
+            let type_arguments = render_named_arguments(ty)?;
+            let mut fields = items("fields")?;
+            fields.extend(const_witness_values(ty)?);
+            let constructor = render_qualified(required_string(
+                object.get("symbol"),
+                "scenario value.symbol",
+            )?)?;
+            Ok(if type_arguments.is_empty() {
+                format!("{constructor}({})", fields.join(", "))
+            } else {
+                format!(
+                    "{constructor}<{}>({})",
+                    type_arguments.join(", "),
+                    fields.join(", ")
+                )
+            })
+        }
+        "option_some" | "result_ok" | "result_err" => Ok(format!(
+            "cott_runtime.{}({})",
+            match kind {
+                "option_some" => "Some",
+                "result_ok" => "Ok",
+                _ => "Err",
+            },
+            render_expression(required(object.get("payload"), "payload")?)?
+        )),
+        "list" | "set" => Ok(format!(
+            "cott_runtime.CottRuntime.{}(listOf<{}>({}))",
+            if kind == "list" {
+                "snapshotList"
+            } else {
+                "snapshotSet"
+            },
+            element("item")?,
+            items("items")?.join(", ")
+        )),
+        "array" => Ok(format!(
+            "cott_runtime.CottRuntime.snapshotArray(listOf<{}>({}), {})",
+            element("item")?,
+            items("items")?.join(", "),
+            render_const_witness(required(
+                ty.and_then(|ty| ty.get("length")),
+                "array length"
+            )?)?
+        )),
+        "tuple" => {
+            let values = items("items")?;
+            Ok(format!(
+                "cott_runtime.CottTuple{}({})",
+                values.len(),
+                values.join(", ")
+            ))
+        }
+        _ => {
+            let entries = required_array(object.get("entries"), "map.entries")?
+                .iter()
+                .map(|entry| {
+                    Ok(format!(
+                        "{} to {}",
+                        render_expression(required(entry.get("key"), "map entry.key")?)?,
+                        render_expression(required(entry.get("value"), "map entry.value")?)?
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(format!(
+                "cott_runtime.CottRuntime.snapshotMap(linkedMapOf<{}, {}>({}))",
+                element("key")?,
+                element("value")?,
+                entries.join(", ")
+            ))
+        }
     }
 }
 
@@ -203,17 +313,12 @@ fn render_intrinsic(object: &serde_json::Map<String, Value>) -> Result<String, S
                 "cott_runtime.CottRuntime.{method}({first}, {second})"
             ))
         }
-        "unique_by" | "descending_by" => {
-            let selector = object
-                .get("selector")
-                .and_then(Value::as_object)
-                .ok_or_else(|| format!("contract intrinsic `{name}` requires selector"))?;
-            let owner = required_string(selector.get("owner"), "intrinsic selector.owner")?;
-            let field = required_string(selector.get("field"), "intrinsic selector.field")?;
-            let method = if name == "unique_by" {
-                "uniqueBy"
-            } else {
-                "descendingBy"
+        "unique_by" | "descending_by" | "any_blank_by" => {
+            let (owner, field) = intrinsic_selector(object, name, "selector")?;
+            let method = match name {
+                "unique_by" => "uniqueBy",
+                "descending_by" => "descendingBy",
+                _ => "anyBlankBy",
             };
             Ok(format!(
                 "cott_runtime.CottRuntime.{method}({first}, {}, {})",
@@ -221,10 +326,64 @@ fn render_intrinsic(object: &serde_json::Map<String, Value>) -> Result<String, S
                 kotlin_string(field)
             ))
         }
+        "unknown_dependency_by" | "self_dependency_by" | "cyclic_by" => {
+            let (owner, key) = intrinsic_selector(object, name, "selector")?;
+            let (_, dependencies) = intrinsic_selector(object, name, "dependencies")?;
+            let method = match name {
+                "unknown_dependency_by" => "unknownDependencyBy",
+                "self_dependency_by" => "selfDependencyBy",
+                _ => "cyclicBy",
+            };
+            Ok(format!(
+                "cott_runtime.CottRuntime.{method}({first}, {}, {}, {})",
+                kotlin_string(owner),
+                kotlin_string(key),
+                kotlin_string(dependencies)
+            ))
+        }
+        "permutation_by" | "dependency_ordered_by" => {
+            let second =
+                second.ok_or_else(|| format!("contract intrinsic `{name}` needs two arguments"))?;
+            let (owner, key) = intrinsic_selector(object, name, "selector")?;
+            if name == "permutation_by" {
+                return Ok(format!(
+                    "cott_runtime.CottRuntime.permutationBy({first}, {second}, {}, {})",
+                    kotlin_string(owner),
+                    kotlin_string(key)
+                ));
+            }
+            let (_, dependencies) = intrinsic_selector(object, name, "dependencies")?;
+            Ok(format!(
+                "cott_runtime.CottRuntime.dependencyOrderedBy({first}, {second}, {}, {}, {})",
+                kotlin_string(owner),
+                kotlin_string(key),
+                kotlin_string(dependencies)
+            ))
+        }
         other => Err(format!(
             "unsupported canonical contract intrinsic `{other}`"
         )),
     }
+}
+
+/// One canonical `{owner, field}` selector of a list intrinsic. The canonical
+/// field is the qualified symbol `owner.field`; `cottField` takes the bare name.
+fn intrinsic_selector<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    name: &str,
+    key: &str,
+) -> Result<(&'a str, &'a str), String> {
+    let selector = object
+        .get(key)
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("contract intrinsic `{name}` requires {key}"))?;
+    Ok((
+        required_string(selector.get("owner"), "intrinsic selector.owner")?,
+        local_name(required_string(
+            selector.get("field"),
+            "intrinsic selector.field",
+        )?),
+    ))
 }
 
 fn render_unary(

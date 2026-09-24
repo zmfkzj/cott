@@ -31,6 +31,21 @@ def variant(symbol):
     enumeration, name = symbol.rsplit(".", 2)[-2:]
     return f"{enumeration}_{name}"
 
+def named_type(symbol, module=None, nested=False):
+    """Resolve a canonical nominal type or `<Enum>_<Variant>` class from its owner module."""
+    name = variant(symbol) if nested else local(symbol)
+    if module is not None and hasattr(module, name):
+        return getattr(module, name)
+    owner = symbol.rsplit(".", 2 if nested else 1)[0]
+    for candidate in (owner, f"{owner}_types"):
+        try:
+            imported = importlib.import_module(candidate)
+        except ImportError:
+            continue
+        if hasattr(imported, name):
+            return getattr(imported, name)
+    raise AssertionError(f"canonical type {symbol} is not importable")
+
 
 def unique(values):
     result = []
@@ -504,12 +519,12 @@ def decode_value(value, module):
         decoded = decode_value(value["value"], module)
         return cott_runtime.Ok(value=decoded) if value["ok"] else cott_runtime.Err(error=decoded)
     if kind == "named":
-        target = getattr(module, local(value["symbol"]))
+        target = named_type(value["symbol"], module)
         return target(**{
             field["name"]: decode_value(field["value"], module) for field in value["fields"]
         })
     if kind == "enum":
-        variant_type = getattr(module, variant(value["variant"]))
+        variant_type = named_type(value["variant"], module, nested=True)
         decoded = [decode_value(item, module) for item in value["fields"]]
         return variant_type(**{
             field.name: item for field, item in zip(dataclasses.fields(variant_type), decoded)
@@ -550,7 +565,7 @@ def evaluate(expression, environment, module, receiver=None, result=None, old=No
     if kind == "fixture_url":
         return _SCENARIO_FIXTURES[expression["fixture"]]["url"](expression["path"])
     if kind == "enum_singleton_ref":
-        return getattr(module, variant(expression["symbol"]))()
+        return named_type(expression["symbol"], module, nested=True)()
     if kind == "self_ref":
         return receiver
     if kind == "result_ref":
@@ -605,7 +620,93 @@ def evaluate(expression, environment, module, receiver=None, result=None, old=No
                 return False
             left = right
         return True
+    if kind == "construct":
+        target = named_type(expression["symbol"], module)
+        return target(**{
+            field["name"]: evaluate(field["value"], environment, module, receiver, result, old)
+            for field in expression["fields"]
+        })
+    if kind == "variant":
+        variant_type = named_type(expression["symbol"], module, nested=True)
+        values = [
+            evaluate(field, environment, module, receiver, result, old)
+            for field in expression["fields"]
+        ]
+        return variant_type(**{
+            field.name: item for field, item in zip(dataclasses.fields(variant_type), values)
+        })
+    if kind in ("option_some", "result_ok", "result_err"):
+        payload = evaluate(expression["payload"], environment, module, receiver, result, old)
+        if kind == "option_some":
+            return cott_runtime.Some(value=payload)
+        if kind == "result_ok":
+            return cott_runtime.Ok(value=payload)
+        return cott_runtime.Err(error=payload)
+    if kind in ("list", "set", "tuple", "array"):
+        items = [
+            evaluate(item, environment, module, receiver, result, old)
+            for item in expression["items"]
+        ]
+        if kind == "list":
+            return cott_runtime.CottList(values=items)
+        if kind == "set":
+            return cott_runtime.CottSet(values=items)
+        if kind == "array":
+            return cott_runtime.CottArray(values=items)
+        return tuple(items)
+    if kind == "map":
+        return cott_runtime.FrozenMap(values={
+            evaluate(entry["key"], environment, module, receiver, result, old):
+                evaluate(entry["value"], environment, module, receiver, result, old)
+            for entry in expression["entries"]
+        })
+    if kind == "match":
+        scrutinee = evaluate(expression["scrutinee"], environment, module, receiver, result, old)
+        bindings = {}
+        if not match_pattern(expression["pattern"], scrutinee, module, bindings):
+            return False
+        condition = expression["condition"]
+        if condition is None:
+            return True
+        return bool(evaluate(condition, {**environment, **bindings}, module, receiver, result, old))
     raise ValueError(f"unsupported canonical expression {kind}")
+
+
+def match_pattern(pattern, value, module, bindings):
+    """Match one canonical pattern; a non-matching scrutinee fails a scenario assertion."""
+    kind = pattern["kind"]
+    if kind == "wildcard":
+        return True
+    if kind == "binding":
+        bindings[pattern["name"]] = value
+        return True
+    arguments = pattern["arguments"]
+    if kind == "option_none":
+        return isinstance(value, cott_runtime.Nothing) and not arguments
+    if kind in ("result_ok", "result_err", "option_some"):
+        carrier, field = {
+            "result_ok": (cott_runtime.Ok, "value"),
+            "result_err": (cott_runtime.Err, "error"),
+            "option_some": (cott_runtime.Some, "value"),
+        }[kind]
+        payloads = [getattr(value, field)] if isinstance(value, carrier) else None
+    elif kind == "enum":
+        variant_type = named_type(pattern["symbol"], module, nested=True)
+        payloads = (
+            [getattr(value, field.name) for field in dataclasses.fields(variant_type)]
+            if isinstance(value, variant_type)
+            else None
+        )
+    else:
+        raise ValueError(f"unsupported canonical pattern {kind}")
+    return (
+        payloads is not None
+        and len(payloads) == len(arguments)
+        and all(
+            match_pattern(argument, payload, module, bindings)
+            for argument, payload in zip(arguments, payloads)
+        )
+    )
 
 
 def callable_hints(function):
@@ -1451,6 +1552,12 @@ async def run_scenario(module_value, strategy, request):
                             raise AssertionError(f"{scenario['id']}: expected cancelled worker")
                         values[local(step["result"])] = result
                     trace.append({"event_id": f"step:{step_id}", "kind": "await"})
+                elif kind == "data":
+                    # Canonical constructors run exactly once; later steps reuse the value.
+                    values[local(step["binding"])] = evaluate(
+                        step["expression"], values, assertion_module
+                    )
+                    trace.append({"event_id": f"step:{step_id}", "kind": "data"})
                 elif kind == "assert":
                     if not evaluate(step["expression"], values, assertion_module):
                         raise AssertionError(f"{scenario['id']}: assertion step:{step_id} failed")

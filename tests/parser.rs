@@ -1289,7 +1289,7 @@ fn rejects_closed_struct_and_scenario_escape_hatches_with_stable_spans() {
         "module bad\nstruct Item:\n    value: Str\n    invariant starts_with(self.value)\n";
     assert_syntax_error_at(
         bad_arity,
-        "closed invariant intrinsics require exactly two arguments",
+        "closed intrinsic `starts_with` requires exactly 2 arguments",
         "starts_with",
     );
 

@@ -444,16 +444,6 @@ fn exhausted_task_budget_does_not_affect_a_sibling_sandbox() {
 }
 
 #[test]
-fn network_modes_build_closed_bubblewrap_commands() {
-    assert_eq!(NetworkAccess::Disabled.bwrap_arguments(), ["--unshare-net"]);
-    assert_eq!(
-        NetworkAccess::IsolatedLoopback.bwrap_arguments(),
-        ["--unshare-net", "--cap-add", "CAP_NET_ADMIN"]
-    );
-    assert!(NetworkAccess::Enabled.bwrap_arguments().is_empty());
-}
-
-#[test]
 fn unavailable_loopback_has_a_stable_outcome() {
     assert_eq!(
         SandboxError::UnsupportedLoopback.outcome(),
@@ -520,21 +510,52 @@ fn timeout_kills_the_complete_process_group() {
 fn isolated_loopback_is_available_or_reports_unsupported() {
     let cwd = scratch();
     let result = run(&sandbox(
-        "/bin/sh",
+        PYTHON3,
         &[
             "-c",
-            "test -z \"$(/usr/sbin/ip route show default)\" && case \"$(/usr/sbin/ip link show lo)\" in *UP*) exit 0;; *) exit 1;; esac",
+            r#"import pathlib, socket, subprocess
+status = dict(line.split(":", 1) for line in pathlib.Path("/proc/self/status").read_text().splitlines())
+for capability in ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"):
+    assert int(status[capability].strip(), 16) == 0, (capability, status[capability])
+assert status["NoNewPrivs"].strip() == "1"
+assert not subprocess.check_output(["/usr/sbin/ip", "route", "show", "default"]).strip()
+denied = subprocess.run(["/usr/sbin/ip", "link", "set", "lo", "down"], capture_output=True)
+assert denied.returncode != 0, "payload retained network administration authority"
+with socket.socket() as listener:
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    with socket.create_connection(listener.getsockname(), timeout=1) as client:
+        peer, _ = listener.accept()
+        with peer:
+            client.sendall(b"safe")
+            assert peer.recv(4) == b"safe"
+pathlib.Path("owned").write_bytes(b"isolated")
+"#,
         ],
         cwd.clone(),
         NetworkAccess::IsolatedLoopback,
-        limits(Duration::from_secs(2), 1024),
+        limits(Duration::from_secs(5), 2048),
     ));
-    fs::remove_dir_all(&cwd).expect("remove scratch");
     match result {
         Err(SandboxError::Unavailable(_) | SandboxError::UnsupportedLoopback) => {}
-        Ok(completed) => assert_eq!(completed.status, Some(0), "{completed:?}"),
+        Ok(completed) => {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(completed.status, Some(0), "{completed:?}");
+            assert_eq!(
+                fs::read(cwd.join("owned")).expect("sandbox output"),
+                b"isolated"
+            );
+            assert_eq!(
+                fs::metadata(cwd.join("owned"))
+                    .expect("output metadata")
+                    .uid(),
+                fs::metadata(&cwd).expect("scratch metadata").uid(),
+                "namespace-local root must remain the invoking host user"
+            );
+        }
         other => panic!("isolated loopback must not fall back to host networking: {other:?}"),
     }
+    fs::remove_dir_all(&cwd).expect("remove scratch");
 }
 
 #[test]

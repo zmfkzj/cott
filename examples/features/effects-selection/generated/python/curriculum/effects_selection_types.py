@@ -23,13 +23,17 @@ class EffectError_OperationFailed:
 EffectError: TypeAlias = Union[EffectError_InputMissing, EffectError_OperationFailed]
 
 """Read UTF-8 text from a compiler-owned filesystem fixture."""
-"""Read source through its public facade and atomically replace destination."""
+"""Read source through curriculum.effects_selection.read_text, encode the
+successful text as UTF-8 bytes and atomically replace destination with those
+bytes. Return the encoded byte count, not the character count. If replacement
+fails, return OperationFailed and preserve the previous destination bytes."""
 """Fetch UTF-8 text from a compiler-owned local HTTP fixture."""
 """Return whether a text effect result is successful."""
 """Return successful text, or an empty string for an error result."""
 """Return whether a copy effect result is successful."""
 """Store value under key in a SQLite database, then read that value back."""
-"""Return a compiler-owned deterministic fixture clock in nanoseconds."""
+"""Return the compiler-owned fixture clock in nanoseconds: the configured
+start_ms multiplied by 1000000. Reading the clock does not advance it."""
 """Choose one index below limit from a deterministic seeded random stream."""
 """End the current process with code."""
 __all__ = ["EffectError", "EffectError_InputMissing", "EffectError_OperationFailed"]

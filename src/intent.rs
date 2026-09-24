@@ -209,12 +209,23 @@ impl SurfaceIndex {
                     .and_then(Value::as_str)
                     .ok_or_else(|| format!("declaration in `{module}` is missing name"))?
                     .to_owned();
-                local_decls
-                    .entry(module.clone())
-                    .or_default()
-                    .entry(local_name(&name).to_owned())
-                    .or_default()
-                    .push(name.clone());
+                if kind == "requirement" {
+                    // Linkage and waivers are verification/report metadata, not intent: adding
+                    // evidence links or temporary waivers never invalidates an implementation.
+                    // Requirements are selected through their callable, so their local names
+                    // never make an unrelated doc token ambiguous.
+                    if let Some(object) = declaration.as_object_mut() {
+                        object.remove("checked_by");
+                        object.remove("waivers");
+                    }
+                } else {
+                    local_decls
+                        .entry(module.clone())
+                        .or_default()
+                        .entry(local_name(&name).to_owned())
+                        .or_default()
+                        .push(name.clone());
+                }
                 let index = stripped.len();
                 if kind == "function" {
                     record_callable(
@@ -324,13 +335,20 @@ impl SurfaceIndex {
                 }
             }
             for (name, declaration) in self.declarations() {
-                if declaration.get("kind").and_then(Value::as_str) != Some("scenario") {
-                    continue;
-                }
-                if scenario_targets(declaration)
-                    .iter()
-                    .any(|target| selected_callables.contains(target) || target == symbol)
-                {
+                let selected = match declaration.get("kind").and_then(Value::as_str) {
+                    Some("scenario") => scenario_targets(declaration)
+                        .iter()
+                        .any(|target| selected_callables.contains(target) || target == symbol),
+                    // Normative requirement text is intent of the callable it is tied to.
+                    Some("requirement") => declaration
+                        .get("callable")
+                        .and_then(Value::as_str)
+                        .is_some_and(|callable| {
+                            callable == symbol || selected_callables.contains(callable)
+                        }),
+                    _ => false,
+                };
+                if selected {
                     self.select_decl(
                         name,
                         &mut selected_decls,
@@ -663,6 +681,20 @@ fn collect_doc_texts(value: &Value, texts: &mut Vec<String>) {
             }
         }
         Value::Object(object) => {
+            if object.get("kind").and_then(Value::as_str) == Some("requirement") {
+                if let Some(text) = value.pointer("/statement/text").and_then(Value::as_str) {
+                    texts.push(text.to_owned());
+                }
+                for assumption in object
+                    .get("assumptions")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|assumption| assumption.get("text").and_then(Value::as_str))
+                {
+                    texts.push(assumption.to_owned());
+                }
+            }
             match object.get("doc") {
                 Some(Value::String(text)) => texts.push(text.clone()),
                 Some(Value::Object(doc)) => {

@@ -1014,21 +1014,24 @@ def save_query_file(reference: FileReference, source: str) -> Result[SavedFile, 
     return _result
 
 def run(arguments: CottList[str]) -> Never:
-    """Parse/connect; read SQL at sql> until .quit/EOF; execute and print tab-separated results."""
+    """Parse arguments with real.harlequin.core.parse_cli, then connect with the parsed
+adapter (DuckDb when absent), connection endpoint (":memory:" when absent) and
+read_only flag; read SQL at sql> until .quit/EOF; execute and print tab-separated
+results."""
     arguments = _cott_validate_abi(arguments, CottList[str], path="$.arguments")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/core/run.py", "ceabcebb7eca441b6c0103aa32beb9bf9a7e7f00ec530ba1bec88287d208ca8b", "run", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.core.run")
+        _implementation = _cott_load("_cott_impl/real/harlequin/core/run.py", "142b61fd1c0e014b1c92dc2006a79bd596b7fc5b8e2ab39753f6bb34da102bbf", "run", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.core.run")
         _result = _implementation(arguments)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.core.run"
         if _error.span is None:
-            _error.span = {"end_byte":23352,"end_column":1,"end_line":585,"start_byte":23022,"start_column":1,"start_line":570}
+            _error.span = {"end_byte":23525,"end_column":1,"end_line":588,"start_byte":23022,"start_column":1,"start_line":570}
         raise
     except SystemExit:
         raise
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.core.run", phase="implementation-call", span={"end_byte":23352,"end_column":1,"end_line":585,"start_byte":23022,"start_column":1,"start_line":570}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
-    raise CottContractViolation("Never function returned", symbol="real.harlequin.core.run", phase="return", span={"end_byte":23352,"end_column":1,"end_line":585,"start_byte":23022,"start_column":1,"start_line":570}, expected="Never", actual=repr(_result))
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.core.run", phase="implementation-call", span={"end_byte":23525,"end_column":1,"end_line":588,"start_byte":23022,"start_column":1,"start_line":570}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+    raise CottContractViolation("Never function returned", symbol="real.harlequin.core.run", phase="return", span={"end_byte":23525,"end_column":1,"end_line":588,"start_byte":23022,"start_column":1,"start_line":570}, expected="Never", actual=repr(_result))
 
 __all__ = ["AdapterDescriptor", "AdapterKind", "AdapterKind_Adbc", "AdapterKind_BigQuery", "AdapterKind_Cassandra", "AdapterKind_Databricks", "AdapterKind_DuckDb", "AdapterKind_MySql", "AdapterKind_NebulaGraph", "AdapterKind_Odbc", "AdapterKind_PostgreSql", "AdapterKind_Sqlite", "AdapterKind_Trino", "Cell", "Cell_Blob", "Cell_Integer", "Cell_Null", "Cell_Real", "Cell_Text", "CliError", "CliError_ConflictingConnectionInputs", "CliError_InvalidAdapter", "CliError_MissingOptionValue", "CliError_UnknownOption", "CliOptions", "Configuration", "ConfigurationError", "ConfigurationError_Invalid", "ConfigurationError_Missing", "ConfigurationError_ProfileDuplicate", "ConfigurationError_ProfileMissing", "Connection", "ConnectionError", "ConnectionError_AdapterUnavailable", "ConnectionError_AuthenticationFailed", "ConnectionError_Failed", "ConnectionError_InvalidEndpoint", "ConnectionProfile", "ConnectionRequest", "DatabaseTarget", "DatabaseTarget_File", "DatabaseTarget_Memory", "FileError", "FileError_InvalidEncoding", "FileError_NotFound", "FileError_PermissionDenied", "FileError_TransferFailed", "FileLocation", "FileLocation_Local", "FileLocation_S3", "FileReference", "IdeSession", "LoadedFile", "QueryBatch", "QueryHistory", "QueryHistoryEntry", "QueryResult", "QueryTab", "SavedFile", "SessionError", "SessionError_HistoryCapacityInvalid", "SessionError_TabMissing", "SessionHandle", "Setting", "SqlClientError", "SqlClientError_Cancelled", "SqlClientError_EmptySql", "SqlClientError_ExecutionFailed", "SqlClientError_ReadOnlyViolation", "SqlClientError_ResultLimitExceeded", "SqlClientError_SqliteFailure", "SqlClientError_UnsupportedValue", "SqlClientError_UnterminatedSql", "Transaction", "TransactionLease", "TypedRow", "activate_query_tab", "adapter_descriptors", "add_query_tab", "append_query_history", "begin_transaction", "close_query_tab", "commit_transaction", "connect", "disconnect", "edit_query_tab", "execute_sql", "execute_statements", "load_configuration", "load_query_file", "open_query_tab", "parse_cli", "resolve_profile", "rollback_transaction", "run", "save_query_file", "split_statements", "start_session"]

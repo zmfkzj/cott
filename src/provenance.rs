@@ -172,16 +172,34 @@ impl std::fmt::Display for SemanticCoverageDisplay<'_> {
             coverage.policy.selected,
             coverage.policy.passed,
         )?;
+        if coverage.policy.selected == 0 {
+            formatter.write_str(
+                "\nsemantic coverage selection: none; no clause is policy-gated; recorded observations remain independent of selection",
+            )?;
+        } else {
+            write!(
+                formatter,
+                "\nsemantic coverage selection: {} clauses policy-gated; selection does not establish execution",
+                coverage.policy.selected,
+            )?;
+        }
+        formatter.write_str(
+            "\nbehavioral evidence: observed counts clause observations, not test cases or exhaustive correctness; trust_declaration, unknown and unobserved are not successful observations\
+             \nrelease readiness: not established by verification alone; deployment additionally checks current inputs, artifacts, resolution and project policy",
+        )?;
         for clause in coverage.clauses.iter().filter(|clause| {
             matches!(
                 clause.status,
-                CoverageStatus::Unknown | CoverageStatus::Unobserved
+                CoverageStatus::Unknown
+                    | CoverageStatus::Unobserved
+                    | CoverageStatus::TrustDeclaration
             )
         }) {
             let status = match clause.status {
                 CoverageStatus::Unknown => "unknown",
                 CoverageStatus::Unobserved => "unobserved",
-                CoverageStatus::Observed | CoverageStatus::TrustDeclaration => {
+                CoverageStatus::TrustDeclaration => "trust_declaration",
+                CoverageStatus::Observed => {
                     unreachable!("filtered semantic coverage status")
                 }
             };

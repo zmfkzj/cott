@@ -934,6 +934,18 @@ fn validate_events(
             expected_clauses.insert((symbol.to_owned(), "refinement".to_owned()));
         }
     }
+    // The facade's `error-return` check is observed like a clause but is no coverage clause.
+    for callable in plan.callables() {
+        if callable
+            .declaration
+            .as_object()
+            .is_some_and(super::emit::checks_error_return)
+        {
+            for alias in observation_aliases(&callable.symbol) {
+                expected_clauses.insert((alias, "error-return".to_owned()));
+            }
+        }
+    }
     let mut seen_cases = BTreeSet::new();
     let mut seen_cancellations = BTreeSet::new();
     let mut seen_scenarios = BTreeSet::new();
@@ -1019,8 +1031,16 @@ fn validate_events(
                         }
                     }
                     "failed" | "timeout" | "unexpected_cancellation" | "unexpected_exception" => {
+                        let detail = match (
+                            event.get("phase").and_then(Value::as_str),
+                            event.get("clause").and_then(Value::as_str),
+                        ) {
+                            (Some(phase), Some(clause)) => format!(": {phase} {clause}"),
+                            (Some(phase), None) => format!(": {phase}"),
+                            _ => String::new(),
+                        };
                         return Err(format!(
-                            "Dart contract execution failed for `{symbol}` case {case} ({status})"
+                            "Dart contract execution failed for `{symbol}` case {case} ({status}{detail})"
                         ));
                     }
                     other => {
@@ -1063,20 +1083,39 @@ fn validate_events(
                 }
             }
             Some("scenario") => {
-                exact_event_fields(
-                    event,
-                    &[
-                        "kind",
-                        "scenario_id",
-                        "symbol",
-                        "status",
-                        "assertions",
-                        "cancellations",
-                        "cleaned",
-                        "observations",
-                    ],
-                    "scenario",
-                )?;
+                const SCENARIO_FIELDS: [&str; 8] = [
+                    "kind",
+                    "scenario_id",
+                    "symbol",
+                    "status",
+                    "assertions",
+                    "cancellations",
+                    "cleaned",
+                    "observations",
+                ];
+                let passed = match required_event_string(event, "status")? {
+                    "passed" => true,
+                    "failed" => false,
+                    other => {
+                        return Err(format!(
+                            "Dart runner emitted unknown scenario status `{other}`"
+                        ));
+                    }
+                };
+                if passed {
+                    exact_event_fields(event, &SCENARIO_FIELDS, "scenario")?;
+                } else {
+                    let mut fields = SCENARIO_FIELDS.to_vec();
+                    fields.extend([
+                        "failure",
+                        "failed_step",
+                        "phase",
+                        "clause",
+                        "error_symbol",
+                        "exception_type",
+                    ]);
+                    exact_event_fields(event, &fields, "scenario")?;
+                }
                 let id = required_event_string(event, "scenario_id")?;
                 let expectation = program
                     .expected_scenarios
@@ -1084,6 +1123,9 @@ fn validate_events(
                     .ok_or_else(|| format!("Dart runner emitted unknown scenario `{id}`"))?;
                 if !seen_scenarios.insert(id.to_owned()) {
                     return Err(format!("Dart runner emitted duplicate scenario `{id}`"));
+                }
+                if !passed {
+                    return Err(scenario_failure(id, event)?);
                 }
                 if required_event_string(event, "symbol")? != expectation.symbol.as_str()
                     || required_event_u32(event, "assertions")? != expectation.assertions
@@ -1096,12 +1138,12 @@ fn validate_events(
                 }
                 let observations =
                     validate_observations(event, &expected_clauses, "Dart scenario")?;
-                if required_event_string(event, "status")? != "passed"
-                    || observations.iter().any(|observation| {
-                        observation.get("passed").and_then(Value::as_bool) == Some(false)
-                    })
-                {
-                    return Err(format!("Dart scenario `{id}` failed"));
+                if observations.iter().any(|observation| {
+                    observation.get("passed").and_then(Value::as_bool) == Some(false)
+                }) {
+                    return Err(format!(
+                        "Dart scenario `{id}` failed: a runtime clause observation failed"
+                    ));
                 }
             }
             Some(other) => return Err(format!("Dart runner emitted unknown event `{other}`")),
@@ -1145,6 +1187,55 @@ fn exact_event_fields(event: &Value, expected: &[&str], kind: &str) -> Result<()
         return Err(format!("Dart {kind} event has unexpected fields"));
     }
     Ok(())
+}
+
+/// The failure message of one failed scenario event. It always starts with
+/// ``Dart scenario `<id>` failed`` so requirement reports can bind the failure.
+fn scenario_failure(id: &str, event: &Value) -> Result<String, String> {
+    validate_optional_event_strings(
+        event,
+        &["phase", "clause", "error_symbol", "exception_type"],
+        "Dart scenario",
+    )?;
+    let step = match event.get("failed_step") {
+        Some(Value::Null) => None,
+        Some(_) => Some(required_event_u32(event, "failed_step")?),
+        None => return Err("Dart scenario failure has no failed_step".to_owned()),
+    };
+    let at = step
+        .map(|step| format!(" at step:{step}"))
+        .unwrap_or_default();
+    let text = |field: &str| event.get(field).and_then(Value::as_str);
+    Ok(match required_event_string(event, "failure")? {
+        "assertion" => format!(
+            "Dart scenario `{id}` failed: assertion step:{} failed",
+            step.ok_or("Dart scenario assertion failure has no step")?
+        ),
+        "contract" => format!(
+            "Dart scenario `{id}` failed{at}: contract violation for `{}` ({}{})",
+            text("error_symbol").unwrap_or("unknown symbol"),
+            text("phase").unwrap_or("unknown phase"),
+            text("clause")
+                .map(|clause| format!(" {clause}"))
+                .unwrap_or_default()
+        ),
+        "timeout" => format!("Dart scenario `{id}` failed{at}: the scenario timeout elapsed"),
+        "cancellation" => format!(
+            "Dart scenario `{id}` failed{at}: the worker finished without observing its cancellation"
+        ),
+        "exception" => format!(
+            "Dart scenario `{id}` failed{at}: unexpected {}",
+            text("exception_type").unwrap_or("exception")
+        ),
+        "lifecycle" => format!(
+            "Dart scenario `{id}` failed: a worker, fixture server or scratch cleanup did not finish"
+        ),
+        other => {
+            return Err(format!(
+                "Dart runner emitted unknown scenario failure `{other}`"
+            ));
+        }
+    })
 }
 
 fn require_null_event_fields(event: &Value, fields: &[&str], context: &str) -> Result<(), String> {

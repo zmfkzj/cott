@@ -978,3 +978,107 @@ fun main(): Unit = runBlocking {
 "#,
     );
 }
+
+#[test]
+#[ignore = "requires COTT_KOTLIN_HOME with Kotlin 2.2.10 and JAVA_HOME with JDK 17"]
+fn kotlin_graph_predicates_follow_the_fixed_canonical_semantics() {
+    compile_and_run(
+        r#"package cott_native_regression
+
+import cott_runtime.CottContractViolation
+import cott_runtime.CottFieldValue
+import cott_runtime.CottList
+import cott_runtime.CottRuntime
+import cott_runtime.CottSet
+
+private const val OWNER = "demo.BuildStep"
+
+private class Step(
+    private val key: String,
+    private val needs: List<String>,
+    override val cottTypeIdentity: String = OWNER,
+) : CottFieldValue {
+    override val cottFieldNames: CottList<String> = CottList(listOf("name", "needs"))
+    override fun cottField(name: String): Any? = when (name) {
+        "name" -> key
+        "needs" -> CottSet(needs)
+        else -> error("unknown field $name")
+    }
+}
+
+private fun step(key: String, vararg needs: String): Step = Step(key, needs.toList())
+private fun steps(vararg values: Step): CottList<Step> = CottList(values.toList())
+private fun order(vararg keys: String): CottList<String> = CottList(keys.toList())
+
+private fun blank(values: CottList<Step>): Boolean = CottRuntime.anyBlankBy(values, OWNER, "name")
+private fun unknown(values: CottList<Step>): Boolean =
+    CottRuntime.unknownDependencyBy(values, OWNER, "name", "needs")
+private fun selfDependent(values: CottList<Step>): Boolean =
+    CottRuntime.selfDependencyBy(values, OWNER, "name", "needs")
+private fun cyclic(values: CottList<Step>): Boolean = CottRuntime.cyclicBy(values, OWNER, "name", "needs")
+private fun permutation(order: CottList<String>, values: CottList<Step>): Boolean =
+    CottRuntime.permutationBy(order, values, OWNER, "name")
+private fun ordered(order: CottList<String>, values: CottList<Step>): Boolean =
+    CottRuntime.dependencyOrderedBy(order, values, OWNER, "name", "needs")
+
+private fun expectViolation(label: String, operation: () -> Unit): Unit {
+    try {
+        operation()
+    } catch (_: CottContractViolation) {
+        return
+    }
+    error("$label did not raise CottContractViolation")
+}
+
+fun main() {
+    // Exactly the 25 pinned Unicode White_Space scalars; empty keys are blank.
+    for (key in listOf("", " ", "\t\n\u000B\u000C\r", "\u0085", "\u00A0", "\u1680", "\u2000\u2005\u200A", "\u2028\u2029", "\u202F\u205F\u3000")) {
+        check(blank(steps(step("a"), step(key)))) { "blank key ${key.map { it.code }}" }
+    }
+    // Host whitespace outliers and mixed text stay non-blank.
+    for (key in listOf("a", " a ", "\uFEFF", "\u001C", "\u001F", "\u180E", "\u200B", " \u200B")) {
+        check(!blank(steps(step(key)))) { "non-blank key ${key.map { it.code }}" }
+    }
+    check(!blank(steps()))
+
+    val empty = steps()
+    check(!unknown(empty) && !selfDependent(empty) && !cyclic(empty))
+    val chain = steps(step("b", "a"), step("a"))
+    check(!unknown(chain) && !selfDependent(chain) && !cyclic(chain))
+    // Unknown dependencies create no edge.
+    val missing = steps(step("a", "zz"))
+    check(unknown(missing) && !selfDependent(missing) && !cyclic(missing))
+    // A self edge is a length-one cycle.
+    val selfLoop = steps(step("a", "a"))
+    check(!unknown(selfLoop) && selfDependent(selfLoop) && cyclic(selfLoop))
+    check(cyclic(steps(step("a", "b"), step("b", "a"))))
+    check(!cyclic(steps(step("d", "b", "c"), step("b", "a"), step("c", "a"), step("a"))))
+    // Duplicate keys are one graph node.
+    check(!cyclic(steps(step("a"), step("a", "b"), step("b"))))
+    check(cyclic(steps(step("a"), step("b", "a"), step("a", "b"))))
+
+    // Multisets, with duplicate counts.
+    check(permutation(order(), empty))
+    check(permutation(order("a", "b"), chain) && permutation(order("b", "a"), chain))
+    check(!permutation(order("a"), chain))
+    check(!permutation(order("a", "b", "c"), chain))
+    check(!permutation(order("a", "a", "b"), chain))
+    val twice = steps(step("a"), step("a"))
+    check(permutation(order("a", "a"), twice) && !permutation(order("a"), twice))
+
+    // Every dependency position precedes every dependent position.
+    check(ordered(order("a", "b"), chain) && !ordered(order("b", "a"), chain))
+    check(!ordered(order("a", "b", "a"), chain) && !ordered(order("b", "a", "b"), chain))
+    // Absent keys and unknown dependencies constrain nothing; self edges never order.
+    check(ordered(order(), chain) && ordered(order("b"), chain) && ordered(order("a"), missing))
+    check(!ordered(order("a"), selfLoop))
+
+    // Wrong owners and wrongly typed selected fields fail closed.
+    expectViolation("owner mismatch") { blank(steps(Step("a", emptyList(), "demo.Other"))) }
+    expectViolation("non-string key") { CottRuntime.cyclicBy(chain, OWNER, "needs", "needs") }
+    expectViolation("non-collection dependencies") { CottRuntime.selfDependencyBy(chain, OWNER, "name", "name") }
+    expectViolation("non-string order") { CottRuntime.permutationBy(CottList(listOf(1)), chain, OWNER, "name") }
+}
+"#,
+    );
+}

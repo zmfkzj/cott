@@ -9,12 +9,16 @@ from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, C
 from curriculum.trait_protocol_types import Completable as Completable, Prioritizable as Prioritizable, Summarizable as Summarizable, TaskLifecycle as TaskLifecycle, TaskLifecycle_Completed as TaskLifecycle_Completed, TaskLifecycle_Pending as TaskLifecycle_Pending, TaskView as TaskView, _cott_curriculum_trait_protocol_Summarizable_Summary_91a0038fc149a52d660ec2d4c914e0f201ef340095a79ffc2c9cd89ad6d2311f as _cott_curriculum_trait_protocol_Summarizable_Summary_91a0038fc149a52d660ec2d4c914e0f201ef340095a79ffc2c9cd89ad6d2311f, _cott_curriculum_trait_protocol_Summarizable_curriculum_trait_protocol_Summarizable_Summary as _cott_curriculum_trait_protocol_Summarizable_curriculum_trait_protocol_Summarizable_Summary, _cott_curriculum_trait_protocol_TaskView_curriculum_trait_protocol_Summarizable_Summary as _cott_curriculum_trait_protocol_TaskView_curriculum_trait_protocol_Summarizable_Summary
 
 T = TypeVar("T")
+"""Return the fixed default category "default" for any task view."""
 async def default_category(receiver: TaskView[T]) -> str: ...
 
+"""Return the text "specialized: " immediately followed by receiver.title."""
 async def specialized_display(receiver: SimpleTask) -> str: ...
 
+"""Return the SimpleTask constructor itself as the factory."""
 def task_factory() -> type[SimpleTask]: ...
 
+"""Return the awaited summary of the dynamically dispatched task view item."""
 async def inspect_dyn(item: Dyn[TaskView[str]]) -> str: ...
 
 
