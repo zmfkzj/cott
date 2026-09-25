@@ -13,20 +13,7 @@ internal fun store_and_load(database: java.nio.file.Path, key: kotlin.String, `v
                     statement.setString(2, value)
                     statement.executeUpdate()
                 }
-                val loaded = connection.prepareStatement("SELECT value FROM cott_key_value WHERE key = ?").use { statement ->
-                    statement.setString(1, key)
-                    statement.executeQuery().use { rows ->
-                        if (!rows.next()) {
-                            throw java.sql.SQLException("Stored key was not found")
-                        }
-                        rows.getString(1) ?: throw java.sql.SQLException("Stored value was null")
-                    }
-                }
-                if (loaded != value) {
-                    throw java.sql.SQLException("Stored value did not match the supplied value")
-                }
                 connection.commit()
-                loaded
             } catch (failure: kotlin.Exception) {
                 try {
                     connection.rollback()
@@ -34,6 +21,16 @@ internal fun store_and_load(database: java.nio.file.Path, key: kotlin.String, `v
                     failure.addSuppressed(rollbackFailure)
                 }
                 throw failure
+            }
+            connection.autoCommit = true
+            connection.prepareStatement("SELECT value FROM cott_key_value WHERE key = ?").use { statement ->
+                statement.setString(1, key)
+                statement.executeQuery().use { rows ->
+                    if (!rows.next()) {
+                        throw java.sql.SQLException("Stored key was not found")
+                    }
+                    rows.getString(1) ?: throw java.sql.SQLException("Stored value was null")
+                }
             }
         }
         cott_runtime.Ok(stored)

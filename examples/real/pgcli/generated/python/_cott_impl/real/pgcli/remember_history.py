@@ -1,5 +1,4 @@
 from cott_runtime import CottList
-
 from real.pgcli_types import HistoryEntry, HistoryPolicy
 
 

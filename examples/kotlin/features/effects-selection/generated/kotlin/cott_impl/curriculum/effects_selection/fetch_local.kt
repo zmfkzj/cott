@@ -1,6 +1,6 @@
 package cott_impl.curriculum.effects_selection
 
-internal fun fetch_local(url: kotlin.String): cott_runtime.CottResult<kotlin.String, curriculum.effects_selection.EffectError> {
+internal fun fetch_local(url: kotlin.String): cott_runtime.CottResult<curriculum.effects_selection.PageText, curriculum.effects_selection.EffectError> {
     if (url.isEmpty()) {
         return cott_runtime.Err(curriculum.effects_selection.EffectError.OperationFailed("URL must not be empty"))
     }
@@ -22,7 +22,7 @@ internal fun fetch_local(url: kotlin.String): cott_runtime.CottResult<kotlin.Str
                 .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
                 .decode(java.nio.ByteBuffer.wrap(response.body()))
                 .toString()
-            cott_runtime.Ok(text)
+            cott_runtime.Ok(curriculum.effects_selection.PageText(url, text))
         }
     } catch (error: java.lang.InterruptedException) {
         java.lang.Thread.currentThread().interrupt()

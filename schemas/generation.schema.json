@@ -62,9 +62,9 @@
       "additionalProperties": false,
       "properties": {
         "generation_schema": {"const": 8},
-        "canonical_ir_schema": {"const": 8},
+        "canonical_ir_schema": {"const": 9},
         "runtime_abi": {"const": 7},
-        "contract_strategy_schema": {"const": 5}
+        "contract_strategy_schema": {"const": 6}
       }
     },
     "implementation": {
@@ -217,6 +217,7 @@
             "owner": {"$ref": "#/$defs/implementation_field_change"},
             "python_symbol": {"$ref": "#/$defs/implementation_field_change"},
             "runtime_origin": {"$ref": "#/$defs/implementation_field_change"},
+            "selection": {"$ref": "#/$defs/implementation_selection_change"},
             "source_origin": {"$ref": "#/$defs/implementation_field_change"}
           },
           "additionalProperties": false
@@ -237,6 +238,15 @@
       "properties": {
         "before": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "after": {"anyOf": [{"type": "string"}, {"type": "null"}]}
+      }
+    },
+    "implementation_selection_change": {
+      "type": "object",
+      "required": ["before", "after"],
+      "additionalProperties": false,
+      "properties": {
+        "before": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/dispatch_selection"}]},
+        "after": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/dispatch_selection"}]}
       }
     },
     "semantic_coverage": {

@@ -47,6 +47,85 @@ def named_type(symbol, module=None, nested=False):
     raise AssertionError(f"canonical type {symbol} is not importable")
 
 
+def canonical_const(value, module):
+    kind = value["kind"]
+    if kind == "value":
+        return int(value["value"])
+    if kind == "reference":
+        symbol = value["symbol"]
+        owner = importlib.import_module(symbol.rsplit(".", 1)[0])
+        return getattr(owner, local(symbol))
+    if kind == "binary":
+        left = canonical_const(value["left"], module)
+        right = canonical_const(value["right"], module)
+        if value["op"] == "add":
+            return left + right
+        if value["op"] == "subtract":
+            return left - right
+        if value["op"] == "multiply":
+            return left * right
+        if value["op"] == "divide":
+            return left // right
+        if value["op"] == "remainder":
+            return left % right
+    raise AssertionError(f"unsupported concrete generic constant {kind}")
+
+
+def canonical_type(value, module):
+    """Resolve a rendered canonical type using only public target types."""
+    kind = value["kind"]
+    if kind == "primitive":
+        name = value["name"]
+        primitives = {
+            "bool": bool, "str": str, "bytes": bytes, "path": pathlib.Path,
+            "any": typing.Any, "unknown": object, "never": typing.Never,
+        }
+        if name in primitives:
+            return primitives[name]
+        runtime_name = {
+            "unit": "Unit", "json": "JsonValue",
+            **{f"{sign}{bits}": f"{sign.upper()}{bits}"
+               for sign in ("i", "u", "f")
+               for bits in ((32, 64) if sign == "f" else (8, 16, 32, 64))},
+        }.get(name)
+        if runtime_name is not None:
+            return getattr(cott_runtime, runtime_name)
+    if kind == "named":
+        target = named_type(value["name"], module)
+        args = [
+            canonical_type(arg["type"], module) if arg["kind"] == "type"
+            else typing.Literal[canonical_const(arg["value"], module)]
+            for arg in value["args"]
+        ]
+        return target[tuple(args)] if args else target
+    constructors = {
+        "list": (cott_runtime.CottList, ("item",)),
+        "set": (cott_runtime.CottSet, ("item",)),
+        "map": (cott_runtime.FrozenMap, ("key", "value")),
+        "option": (cott_runtime.Option, ("item",)),
+        "result": (cott_runtime.Result, ("ok", "error")),
+        "dyn": (cott_runtime.Dyn, ("trait",)),
+        "iterator": (collections.abc.Iterator, ("item",)),
+        "async_iterator": (collections.abc.AsyncIterator, ("item",)),
+        "generator": (collections.abc.Generator, ("yield", "send", "return")),
+        "async_generator": (collections.abc.AsyncGenerator, ("yield", "send")),
+        "factory": (type, ("instance",)),
+    }
+    if kind in constructors:
+        target, fields = constructors[kind]
+        args = tuple(canonical_type(value[field], module) for field in fields)
+        return target[args[0] if len(args) == 1 else args]
+    if kind == "tuple":
+        return tuple[tuple(canonical_type(item, module) for item in value["items"])]
+    if kind in ("array", "buffer"):
+        target = cott_runtime.CottArray if kind == "array" else cott_runtime.CottBuffer
+        length = typing.Literal[canonical_const(value["length"], module)]
+        return target[(canonical_type(value["item"], module), length)] if kind == "array" else target[length]
+    if kind == "opaque":
+        return cott_runtime.Opaque[typing.Literal[value["tag"]]]
+    raise AssertionError(f"unsupported concrete trait type {kind}")
+
+
 def unique(values):
     result = []
     seen = set()
@@ -669,6 +748,37 @@ def evaluate(expression, environment, module, receiver=None, result=None, old=No
         if condition is None:
             return True
         return bool(evaluate(condition, {**environment, **bindings}, module, receiver, result, old))
+    if kind == "dyn":
+        trait = canonical_type(expression["trait_ref"], module)
+        value = evaluate(expression["value"], environment, module, receiver, result, old)
+        return cott_runtime.Dyn(value=value, trait=trait)
+    if kind == "intrinsic":
+        # Same closed helpers and local field selectors as the generated facade contracts.
+        arguments = [
+            evaluate(argument, environment, module, receiver, result, old)
+            for argument in expression["arguments"]
+        ]
+        name = expression["name"]
+
+        def field(key):
+            return expression[key]["field"].rsplit(".", 1)[-1]
+
+        if name == "contains":
+            return type(arguments[0]) is str and type(arguments[1]) is str and arguments[1] in arguments[0]
+        helper = getattr(cott_runtime, f"_cott_{name}", None)
+        if not callable(helper):
+            raise ValueError(f"unsupported contract intrinsic {name}")
+        if name in ("starts_with", "ends_with"):
+            return helper(arguments[0], arguments[1])
+        if name in ("unique_by", "descending_by", "any_blank_by"):
+            return helper(arguments[0], field("selector"))
+        if name in ("unknown_dependency_by", "self_dependency_by", "cyclic_by"):
+            return helper(arguments[0], field("selector"), field("dependencies"))
+        if name == "permutation_by":
+            return helper(arguments[0], arguments[1], field("selector"))
+        if name == "dependency_ordered_by":
+            return helper(arguments[0], arguments[1], field("selector"), field("dependencies"))
+        raise ValueError(f"unsupported contract intrinsic {name}")
     raise ValueError(f"unsupported canonical expression {kind}")
 
 
@@ -1514,6 +1624,24 @@ async def run_scenario(module_value, strategy, request):
                         function, args, {}, strategy["symbol"], step["callable_kind"]
                     )
                     trace.append({"event_id": f"step:{step_id}", "kind": "call"})
+                elif kind == "init":
+                    facade, module = scenario_facade(step["target"])
+                    args = [evaluate(argument, values, module) for argument in step["arguments"]]
+                    values[local(step["binding"])] = await invoke_facade(
+                        facade, args, {}, strategy["symbol"], "sync"
+                    )
+                    trace.append({"event_id": f"step:{step_id}", "kind": "init"})
+                elif kind == "method_call":
+                    receiver = evaluate(step["receiver"], values, assertion_module)
+                    method = getattr(receiver, local(step["target"]))
+                    args = [
+                        evaluate(argument, values, assertion_module)
+                        for argument in step["arguments"]
+                    ]
+                    values[local(step["binding"])] = await invoke_facade(
+                        method, args, {}, strategy["symbol"], step["callable_kind"]
+                    )
+                    trace.append({"event_id": f"step:{step_id}", "kind": "method_call"})
                 elif kind == "spawn":
                     if len(workers) >= scenario["lifecycle_limit"]:
                         raise AssertionError(f"{scenario['id']}: worker limit exceeded")

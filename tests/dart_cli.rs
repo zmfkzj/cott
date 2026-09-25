@@ -114,6 +114,218 @@ runtime_validation = "boundary"
     temp
 }
 
+/// Re-create the previous IR8/strategy5 publication of the verified Flutter counter module.
+/// Only the compiler-owned IR bytes, the schema markers and the generation identity that
+/// covers them change; source, implementation, AgentRun and verification evidence stay
+/// the authentic example bytes.
+fn flutter_legacy_project() -> TempDir {
+    let temp = TempDir::new();
+    let original =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/integrations/flutter-counter");
+    let generation = fs::read(original.join("generated/generation.json"))
+        .expect("verified example Dart generation record");
+    DartGenerationRecord::parse(&generation).expect("current verified example record");
+    let mut wire = snapshot_wire::read(&generation);
+    assert_eq!(wire["current"]["verified"], true);
+    assert_eq!(wire["current"], wire["last_verified"]);
+    let current = &wire["current"];
+    let inputs = current["inputs"].as_object().expect("source inputs");
+    let managed = current["managed_files"].as_object().expect("managed files");
+    for name in inputs.keys().chain(managed.keys()) {
+        let target = temp.path.join(name);
+        fs::create_dir_all(target.parent().expect("relative fixture path"))
+            .expect("create fixture directory");
+        fs::copy(original.join(name), target).expect("copy authenticated fixture bytes");
+    }
+
+    let current = &mut wire["current"];
+    let modules = current["ir"]
+        .as_object()
+        .expect("IR hashes")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    for module in modules {
+        let path = format!("generated/ir/{}.json", module.replace('.', "/"));
+        let mut ir: serde_json::Value =
+            serde_json::from_slice(&fs::read(temp.path.join(&path)).expect("current IR"))
+                .expect("IR JSON");
+        assert_eq!(ir["schema_version"], 9);
+        ir["schema_version"] = serde_json::json!(8);
+        let mut bytes = serde_json::to_vec(&ir).expect("legacy IR JSON");
+        bytes.push(b'\n');
+        fs::write(temp.path.join(&path), &bytes).expect("legacy IR bytes");
+        current["ir"][&module] = serde_json::json!(digest(&bytes));
+        current["managed_files"][&path] = serde_json::json!(digest(&bytes));
+    }
+    current["canonical_ir_schema"] = serde_json::json!(8);
+    for strategy in current["verification"]["contract_tests"]["strategies"]
+        .as_array_mut()
+        .expect("verified contract strategies")
+    {
+        assert_eq!(strategy["schema_version"], 6);
+        strategy["schema_version"] = serde_json::json!(5);
+    }
+    let mut identity = current.clone();
+    for field in [
+        "generation_id",
+        "verified",
+        "verification",
+        "semantic_coverage",
+        "agent_runs",
+    ] {
+        identity
+            .as_object_mut()
+            .expect("snapshot object")
+            .remove(field);
+    }
+    current["generation_id"] = serde_json::json!(
+        cott::snapshot_record::digest(&serde_json::json!({
+            "domain": "cott.dart.generation.v2",
+            "schema_version": 2,
+            "current": identity,
+        }))
+        .expect("seal legacy Dart generation identity")
+    );
+    wire["last_verified"] = wire["current"].clone();
+    fs::write(
+        temp.path.join("generated/generation.json"),
+        snapshot_wire::bytes(&wire),
+    )
+    .expect("legacy provenance");
+    temp
+}
+
+#[test]
+fn legacy_flutter_emit_preserves_authenticated_agent_sources_and_decertifies() {
+    let project = flutter_legacy_project();
+    let generation = project.path.join("generated/generation.json");
+    let old_bytes = fs::read(&generation).expect("legacy record");
+    let old = snapshot_wire::read(&old_bytes);
+
+    for command in [
+        &["check"][..],
+        &["verify"][..],
+        &["diff"][..],
+        &["requirements"][..],
+        &["deploy"][..],
+        &["prompt", "example.counter.increment"][..],
+    ] {
+        let rejected = run(&project.path, command);
+        assert_ne!(
+            rejected.status.code(),
+            Some(0),
+            "old Dart record unexpectedly accepted by {command:?}"
+        );
+        assert_eq!(fs::read(&generation).unwrap(), old_bytes);
+    }
+
+    let emitted = run(&project.path, &["emit", "dart"]);
+    assert_eq!(
+        emitted.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let converted = DartGenerationRecord::parse(&fs::read(&generation).unwrap())
+        .expect("emit must publish a fully authenticated current record");
+    assert_eq!(
+        converted.current.canonical_ir_schema,
+        cott::provenance::CANONICAL_IR_SCHEMA_VERSION
+    );
+    assert!(!converted.current.verified);
+    assert!(converted.last_verified.is_none());
+    let original_runs: Vec<AgentRun> =
+        serde_json::from_value(old["current"]["agent_runs"].clone()).unwrap();
+    let original_implementations: Vec<DartBindingRecord> =
+        serde_json::from_value(old["current"]["implementations"].clone()).unwrap();
+    assert_eq!(converted.current.agent_runs, original_runs);
+    assert_eq!(converted.current.implementations, original_implementations);
+    for (name, expected) in old["current"]["inputs"].as_object().unwrap() {
+        assert_eq!(
+            digest(&fs::read(project.path.join(name)).unwrap()),
+            expected.as_str().unwrap()
+        );
+    }
+}
+
+#[test]
+fn legacy_flutter_emit_rejects_broken_snapshot_and_changed_source() {
+    let project = flutter_legacy_project();
+    let generation = project.path.join("generated/generation.json");
+    let original = fs::read(&generation).unwrap();
+    let mut tampered: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    let current = tampered["current"].as_str().unwrap().to_owned();
+    tampered["snapshots"][&current]["agent_runs"][0]["duration_ms"] = serde_json::json!(12);
+    let tampered = serde_json::to_vec(&tampered).unwrap();
+    fs::write(&generation, &tampered).unwrap();
+    assert_eq!(run(&project.path, &["emit", "dart"]).status.code(), Some(4));
+    assert_eq!(fs::read(&generation).unwrap(), tampered);
+    let mut resealed = snapshot_wire::read(&original);
+    resealed["current"]["project_name"] = serde_json::json!("forged");
+    resealed["last_verified"]["project_name"] = serde_json::json!("forged");
+    let resealed = snapshot_wire::bytes(&resealed);
+    fs::write(&generation, &resealed).unwrap();
+    assert_eq!(run(&project.path, &["emit", "dart"]).status.code(), Some(4));
+    assert_eq!(fs::read(&generation).unwrap(), resealed);
+    let mut wrong_strategy = snapshot_wire::read(&original);
+    for snapshot in ["current", "last_verified"] {
+        wrong_strategy[snapshot]["verification"]["contract_tests"]["strategies"][0]["schema_version"] =
+            serde_json::json!(6);
+    }
+    let wrong_strategy = snapshot_wire::bytes(&wrong_strategy);
+    fs::write(&generation, &wrong_strategy).unwrap();
+    assert_eq!(run(&project.path, &["emit", "dart"]).status.code(), Some(4));
+    assert_eq!(fs::read(&generation).unwrap(), wrong_strategy);
+
+    fs::write(&generation, &original).unwrap();
+    let source = project
+        .path
+        .join("dart/cott_impl/example/counter/increment.dart");
+    let mut changed_source = fs::read(&source).unwrap();
+    changed_source.extend_from_slice(b"\n// drift\n");
+    fs::write(&source, changed_source).unwrap();
+    assert_eq!(run(&project.path, &["emit", "dart"]).status.code(), Some(4));
+    assert_eq!(fs::read(&generation).unwrap(), original);
+}
+
+#[test]
+#[ignore = "requires COTT_DART, bubblewrap, and the provisioned Dart SDK"]
+fn legacy_flutter_emit_then_real_verify_certifies_new_schema() {
+    let project = flutter_legacy_project();
+    let emitted = run(&project.path, &["emit", "dart"]);
+    assert_eq!(
+        emitted.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let dart =
+        PathBuf::from(std::env::var_os("COTT_DART").expect("provisioned Dart SDK executable"));
+    let mut path = vec![dart.parent().expect("Dart SDK bin directory").to_path_buf()];
+    path.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let verified = Command::new(env!("CARGO_BIN_EXE_cott"))
+        .args(["verify", "--project"])
+        .arg(&project.path)
+        .env("PATH", std::env::join_paths(path).unwrap())
+        .output()
+        .expect("native Dart verify should run");
+    assert_eq!(
+        verified.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let record = DartGenerationRecord::parse(
+        &fs::read(project.path.join("generated/generation.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(record.current.verified);
+    assert_eq!(record.last_verified, Some(record.current));
+}
+
 #[test]
 fn dart_init_is_module_only_and_atomic_without_tooling() {
     let parent = TempDir::new();

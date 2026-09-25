@@ -33,6 +33,8 @@ class Catalog:
     def __post_init__(self) -> None:
         if not _cott_validated_construction():
             object.__setattr__(self, "items", _cott_validate_abi(self.items, CottList[Item], path="$.items"))
+        if not (_cott_contract_condition((_cott_unique_by((self).items, "sku")), "store.catalog.Catalog", "invariant:0")):
+            raise CottContractViolation("invariant failed", symbol="store.catalog.Catalog", clause="invariant:0", phase="invariant", span={"end_byte":168,"end_column":46,"end_line":11,"start_byte":127,"start_column":5,"start_line":11}, expected="true", actual="false")
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -42,5 +44,6 @@ class CatalogError_ItemNotFound:
 
 CatalogError: TypeAlias = Union[CatalogError_ItemNotFound]
 
-"""Look up an item in the catalog by its SKU."""
+"""Look up the catalog item whose SKU is `sku`. SKUs are unique within a catalog, so at most
+one item matches."""
 __all__ = ["Catalog", "CatalogError", "CatalogError_ItemNotFound", "Item"]

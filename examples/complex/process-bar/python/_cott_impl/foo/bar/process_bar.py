@@ -7,7 +7,8 @@ def process_bar(data: InputPayload, options: BarOptions) -> Result[OutputPayload
     validated = validate_payload(data)
     if isinstance(validated, Err):
         return validated
-    processed = process_payload_bytes(validated.value.data, options)
+    payload = validated.value
+    processed = process_payload_bytes(payload.data, options)
     if isinstance(processed, Err):
         return processed
-    return Ok(value=build_output(processed.value, data.declared_size, data.format))
+    return Ok(value=build_output(processed.value, payload.declared_size, payload.format))

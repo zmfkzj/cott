@@ -25,8 +25,6 @@ struct OutputPayload:
 
 enum BarError:
     InvalidPayload(reason: Str)
-    ServiceUnavailable
-    ProcessingFailed(message: Str)
 
 struct BarOptions:
     threshold: Probability = Probability(0.5)
@@ -34,7 +32,8 @@ struct BarOptions:
 
 fn validate_payload(data: InputPayload) -> Result[InputPayload, BarError]:
     doc """
-    Reject empty payload bytes before pure processing.
+    Reject a payload without bytes. declared_size is caller-supplied metadata
+    carried to the output; it is not compared with the byte count.
     """
 
     ensures Result.Ok(validated) => validated.data == data.data
@@ -47,13 +46,13 @@ fn validate_payload(data: InputPayload) -> Result[InputPayload, BarError]:
 
 fn process_payload_bytes(data: Bytes, options: BarOptions) -> Result[Bytes, BarError]:
     doc """
-    Perform the pure byte-processing step without changing payload bytes.
+    The byte-processing stage of this fixture is the identity: it always
+    succeeds with the input bytes, whatever the options.
     """
 
     ensures Result.Ok(processed) => processed == data
 
-    error BarError.ServiceUnavailable
-    error BarError.ProcessingFailed
+    errors complete
 
     effects []
 
@@ -70,16 +69,38 @@ fn build_output(data: Bytes, source_size: PayloadSize, format: PayloadFormat) ->
 
 fn process_bar(data: InputPayload, options: BarOptions) -> Result[OutputPayload, BarError]:
     doc """
-    Compose validate_payload, process_payload_bytes, and build_output in that
-    order, propagating validation and processing errors unchanged.
+    Domain-named operation of the fixture: validate the payload, process its
+    bytes, then build the output from the processed bytes and the validated
+    metadata.
     """
 
     ensures Result.Ok(output) => output.data == data.data
     ensures Result.Ok(output) => output.source_size == data.declared_size
     ensures Result.Ok(output) => output.format == data.format
 
+    errors complete
     error BarError.InvalidPayload when data.data.len == 0
-    error BarError.ServiceUnavailable
-    error BarError.ProcessingFailed
 
     effects []
+
+scenario process_bar_composes_stages:
+    call out = process_bar(
+        InputPayload(data: Bytes("6869"), declared_size: PayloadSize(2), format: PayloadFormat.Raw),
+        BarOptions(),
+    )
+    assert out == Result.Ok(
+        value: OutputPayload(
+            data: Bytes("6869"),
+            source_size: PayloadSize(2),
+            format: PayloadFormat.Raw,
+        ),
+    )
+    call empty = process_bar(
+        InputPayload(data: Bytes(""), declared_size: PayloadSize(1), format: PayloadFormat.Text),
+        BarOptions(),
+    )
+    assert empty matches Result.Err(BarError.InvalidPayload(_))
+
+requirement STAGES_COMPOSE_THROUGH_FACADES for process_bar:
+    text "process_bar calls the public validate_payload facade with data, then process_payload_bytes with the validated bytes and options, then build_output with the processed bytes and the validated declared_size and format; the first Err is returned unchanged and later stages are not called."
+    checked_by process_bar_composes_stages

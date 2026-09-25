@@ -4,7 +4,7 @@ from curriculum.alphabetical_file_groups_types import FileGroupError, FileGroupE
 
 
 def classify_filename(filename: str) -> Result[FileMove, FileGroupError]:
-    if not filename:
+    if len(filename) == 0:
         return Err(error=FileGroupError_EmptyFilename())
     first = filename[0]
     folder = first.casefold() if first.isalpha() else "misc"

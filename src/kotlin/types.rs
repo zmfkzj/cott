@@ -685,7 +685,17 @@ pub(crate) fn render_value(value: &Value, expected_type: Option<&Value>) -> Resu
 }
 
 pub(crate) fn render_named_arguments(ty: Option<&Value>) -> Result<Vec<String>, String> {
-    ty.and_then(|ty| ty.get("args"))
+    render_named_arguments_contextual(ty, None)
+}
+
+/// The Kotlin type arguments of a canonical named type exactly as `render_type_contextual`
+/// spells them: its own arguments, then any associated-type slots the context appends.
+pub(crate) fn render_named_arguments_contextual(
+    ty: Option<&Value>,
+    context: Option<&dyn KotlinTypeContext>,
+) -> Result<Vec<String>, String> {
+    let mut arguments = ty
+        .and_then(|ty| ty.get("args"))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -694,10 +704,11 @@ pub(crate) fn render_named_arguments(ty: Option<&Value>) -> Result<Vec<String>, 
                 .as_object()
                 .ok_or_else(|| "named generic argument must be an object".to_owned())?;
             match string(argument.get("kind"), "generic argument.kind")? {
-                "type" => render_type(required(
-                    argument.get("type"),
-                    "generic type argument.type",
-                )?),
+                "type" => render_type_contextual(
+                    required(argument.get("type"), "generic type argument.type")?,
+                    None,
+                    context,
+                ),
                 "const" => render_const_marker(required(
                     argument.get("value"),
                     "generic const argument.value",
@@ -705,7 +716,15 @@ pub(crate) fn render_named_arguments(ty: Option<&Value>) -> Result<Vec<String>, 
                 other => Err(format!("unsupported generic argument kind `{other}`")),
             }
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    if let (Some(context), Some(ty)) = (context, ty)
+        && ty.get("kind").and_then(Value::as_str) == Some("named")
+    {
+        arguments.extend(
+            context.named_associated_arguments(ty, string(ty.get("name"), "named type.name")?)?,
+        );
+    }
+    Ok(arguments)
 }
 
 pub(crate) fn const_witness_values(expected_type: Option<&Value>) -> Result<Vec<String>, String> {

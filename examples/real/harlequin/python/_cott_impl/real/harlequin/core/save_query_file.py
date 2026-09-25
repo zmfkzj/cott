@@ -1,52 +1,42 @@
-import datetime
-import hashlib
-import hmac
 import os
-import urllib.error
-import urllib.parse
-import urllib.request
-from typing import Final
+import tempfile
+from typing import Any, Final, cast
 
-from cott_runtime import Err, Ok, Result
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
+
+from cott_runtime import CottContractViolation, Err, Ok, Result, _cott_fixture_replace
 from real.harlequin.core_types import FileError, FileError_PermissionDenied, FileError_TransferFailed, FileLocation_Local, FileReference, SavedFile
 
-_DEFAULT_REGION: Final[str] = "us-east-1"
+_INACTIVE: Final[str] = "fixture adapters are inactive"
+_LOCAL_FAILED: Final[str] = "local file write failed"
+_S3_FAILED: Final[str] = "S3 upload failed"
 
 
-def _hmac_sha256(key: bytes, message: str) -> bytes:
-    return hmac.new(key, message.encode("utf-8"), hashlib.sha256).digest()
+def _is_denied_code(code: str) -> bool:
+    return code in ("AccessDenied", "403", "Forbidden", "AllAccessDisabled", "InvalidAccessKeyId", "SignatureDoesNotMatch")
 
 
-def _s3_request(bucket: str, key: str, data: bytes) -> urllib.request.Request:
-    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or _DEFAULT_REGION
-    host = bucket + ".s3." + region + ".amazonaws.com"
-    canonical_uri = "/" + urllib.parse.quote(key, safe="/~")
-    url = "https://" + host + canonical_uri
-    payload_hash = hashlib.sha256(data).hexdigest()
-    headers: dict[str, str] = {"Content-Type": "text/plain; charset=utf-8", "x-amz-content-sha256": payload_hash}
-    access_key = os.environ.get("AWS_ACCESS_KEY_ID")
-    secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
-    if access_key and secret_key:
-        now = datetime.datetime.now(datetime.UTC)
-        amz_date = now.strftime("%Y%m%dT%H%M%SZ")
-        date_stamp = now.strftime("%Y%m%d")
-        signed: dict[str, str] = {"host": host, "x-amz-content-sha256": payload_hash, "x-amz-date": amz_date}
-        token = os.environ.get("AWS_SESSION_TOKEN")
-        if token:
-            signed["x-amz-security-token"] = token
-        names = sorted(signed)
-        canonical_headers = "".join(name + ":" + signed[name].strip() + "\n" for name in names)
-        signed_headers = ";".join(names)
-        canonical_request = "\n".join(["PUT", canonical_uri, "", canonical_headers, signed_headers, payload_hash])
-        scope = date_stamp + "/" + region + "/s3/aws4_request"
-        string_to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()])
-        signing_key = _hmac_sha256(_hmac_sha256(_hmac_sha256(_hmac_sha256(("AWS4" + secret_key).encode("utf-8"), date_stamp), region), "s3"), "aws4_request")
-        signature = hmac.new(signing_key, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
-        headers["x-amz-date"] = amz_date
-        if token:
-            headers["x-amz-security-token"] = token
-        headers["Authorization"] = "AWS4-HMAC-SHA256 Credential=" + access_key + "/" + scope + ", SignedHeaders=" + signed_headers + ", Signature=" + signature
-    return urllib.request.Request(url, data=data, method="PUT", headers=headers)
+def _discard(temp_path: str) -> bool:
+    try:
+        os.unlink(temp_path)
+    except OSError:
+        return False
+    return True
+
+
+def _host_replace(path: str, data: bytes) -> None:
+    folder = os.path.split(os.path.abspath(path))[0]
+    fd, temp_path = tempfile.mkstemp("", ".cott-save-", folder)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except BaseException:
+        _discard(temp_path)
+        raise
 
 
 def save_query_file(reference: FileReference, source: str) -> Result[SavedFile, FileError]:
@@ -55,23 +45,39 @@ def save_query_file(reference: FileReference, source: str) -> Result[SavedFile, 
     data = source.encode("utf-8")
     location = reference.location
     if isinstance(location, FileLocation_Local):
+        path = os.fspath(location.path)
         try:
-            with open(location.path, "wb") as handle:
-                handle.write(data)
+            _cott_fixture_replace(path, data)
+        except CottContractViolation as exc:
+            if exc.message != _INACTIVE:
+                if isinstance(exc.__cause__, PermissionError):
+                    return Err(error=FileError_PermissionDenied(reference=reference))
+                return Err(error=FileError_TransferFailed(reference=reference, message=_LOCAL_FAILED))
+            try:
+                _host_replace(path, data)
+            except PermissionError:
+                return Err(error=FileError_PermissionDenied(reference=reference))
+            except OSError:
+                return Err(error=FileError_TransferFailed(reference=reference, message=_LOCAL_FAILED))
         except PermissionError:
             return Err(error=FileError_PermissionDenied(reference=reference))
-        except OSError:
-            return Err(error=FileError_TransferFailed(reference=reference, message="local file write failed"))
+        except Exception:
+            return Err(error=FileError_TransferFailed(reference=reference, message=_LOCAL_FAILED))
         return Ok(value=SavedFile(reference=reference, bytes_written=len(data)))
     try:
-        with urllib.request.urlopen(_s3_request(location.bucket, location.key, data), timeout=30) as response:
-            response.read()
-    except urllib.error.HTTPError as exc:
-        if exc.code in (401, 403):
+        sdk: Any = boto3
+        client: Any = sdk.client("s3")
+        client.put_object(Bucket=location.bucket, Key=location.key, Body=data)
+    except ClientError as exc:
+        error_info = cast(object, cast(Any, exc).response.get("Error", {}))
+        code = ""
+        if isinstance(error_info, dict):
+            raw_code = cast(dict[str, object], error_info).get("Code")
+            if isinstance(raw_code, str):
+                code = raw_code
+        if _is_denied_code(code):
             return Err(error=FileError_PermissionDenied(reference=reference))
-        return Err(error=FileError_TransferFailed(reference=reference, message="S3 upload failed with HTTP " + str(exc.code)))
-    except urllib.error.URLError:
-        return Err(error=FileError_TransferFailed(reference=reference, message="S3 upload failed: connection error"))
-    except OSError:
-        return Err(error=FileError_TransferFailed(reference=reference, message="S3 upload failed: I/O error"))
+        return Err(error=FileError_TransferFailed(reference=reference, message=_S3_FAILED))
+    except (BotoCoreError, OSError):
+        return Err(error=FileError_TransferFailed(reference=reference, message=_S3_FAILED))
     return Ok(value=SavedFile(reference=reference, bytes_written=len(data)))

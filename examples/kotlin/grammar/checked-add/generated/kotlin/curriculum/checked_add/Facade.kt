@@ -25,7 +25,7 @@ public fun  checked_add(left: kotlin.Int, right: kotlin.Int): kotlin.Long {
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.I64, cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottResult, cott_runtime.CottRuntime.intNegate(cott_runtime.CottRuntime.mathInt(java.math.BigInteger("4294967296").toLong()))) >= 0), "curriculum.checked_add.checked_add", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 506, endByte = 535, startLine = 10, startColumn = 5, endLine = 10, endColumn = 34), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottResult, cott_runtime.CottRuntime.intNegate(cott_runtime.CottRuntime.int("4294967296"))) >= 0), "curriculum.checked_add.checked_add", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 506, endByte = 535, startLine = 10, startColumn = 5, endLine = 10, endColumn = 34), expected = "true", actual = "false")
         cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottResult, java.math.BigInteger("4294967294").toLong()) <= 0), "curriculum.checked_add.checked_add", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 540, endByte = 568, startLine = 11, startColumn = 5, endLine = 11, endColumn = 33), expected = "true", actual = "false")
     }
     return _cottResult

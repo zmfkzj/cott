@@ -58,7 +58,8 @@ def _payload(connection: Connection) -> dict[str, object] | None:
     if not isinstance(raw, dict):
         return None
     payload = cast(dict[str, object], raw)
-    if set(payload.keys()) != set(_KEYS.split(",")):
+    keys: set[str] = set(_KEYS.split(","))
+    if set(payload.keys()) != keys:
         return None
     if not isinstance(payload["id"], str) or not isinstance(payload["endpoint"], str) or not isinstance(payload["read_only"], bool):
         return None

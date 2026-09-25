@@ -1,10 +1,17 @@
+from typing import Final
+
 from cott_runtime import Err, Ok, Result
 from real.posting.client_types import HttpMethod, HttpMethod_Custom, HttpMethod_Delete, HttpMethod_Get, HttpMethod_Head, HttpMethod_Options, HttpMethod_Patch, HttpMethod_Post, HttpMethod_Put, PostingError, PostingError_InvalidRequest
+
+_TOKEN_CHARS: Final[str] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&'*+-.^_`|~"
 
 
 def parse_method(source: str) -> Result[HttpMethod, PostingError]:
     if len(source) == 0:
         return Err(error=PostingError_InvalidRequest(message="HTTP method must not be empty"))
+    for ch in source:
+        if ch not in _TOKEN_CHARS:
+            return Err(error=PostingError_InvalidRequest(message="HTTP method must be an HTTP token"))
     match source.upper():
         case "GET":
             return Ok(value=HttpMethod_Get())

@@ -10,11 +10,10 @@ import pymysql.connections
 import pyodbc
 from cott_runtime import Err, Ok, Result
 
-from real.harlequin.core_types import AdapterKind, AdapterKind_Adbc, AdapterKind_DuckDb, AdapterKind_MySql, AdapterKind_Odbc, AdapterKind_PostgreSql, AdapterKind_Sqlite, Connection, ConnectionError, ConnectionError_Failed, Transaction
+from real.harlequin.core_types import AdapterKind, AdapterKind_Adbc, AdapterKind_DuckDb, AdapterKind_MySql, AdapterKind_Odbc, AdapterKind_PostgreSql, AdapterKind_Sqlite, Connection, ConnectionError, ConnectionError_Failed, ConnectionError_LeaseRejected, Transaction, TransactionStatus_Active, TransactionStatus_Committed
 
 _SESSION_TAG: Final[str] = "harlequin.session"
 _LEASE_TAG: Final[str] = "harlequin.transaction"
-_INVALID_MESSAGE: Final[str] = "transaction is not active on an open session"
 _COMMIT_FAILED_MESSAGE: Final[str] = "transaction commit failed; session closed"
 
 
@@ -78,23 +77,23 @@ def _session_state(connection: Connection) -> dict[str, object] | None:
 
 
 def commit_transaction(transaction: Transaction) -> Result[Transaction, ConnectionError]:
-    if not transaction.active or transaction.lease.tag != _LEASE_TAG:
-        return Err(error=ConnectionError_Failed(message=_INVALID_MESSAGE))
+    if not isinstance(transaction.status, TransactionStatus_Active) or transaction.lease.tag != _LEASE_TAG:
+        return Err(error=ConnectionError_LeaseRejected())
     lease = transaction.lease.unwrap()
     connection = transaction.connection
     state = _session_state(connection)
     if state is None:
-        return Err(error=ConnectionError_Failed(message=_INVALID_MESSAGE))
+        return Err(error=ConnectionError_LeaseRejected())
     lock = state["lock"]
     raw_cleanup = state["cleanup"]
     if not isinstance(lock, threading.Lock) or not isinstance(raw_cleanup, contextlib.ExitStack):
-        return Err(error=ConnectionError_Failed(message=_INVALID_MESSAGE))
+        return Err(error=ConnectionError_LeaseRejected())
     cleanup = cast(contextlib.ExitStack[bool | None], raw_cleanup)
     with lock:
         driver = state["driver"]
         current = state["transaction"]
         if state["closed"] is not False or current is None or current is not lease or not _driver_supported(connection.adapter, driver):
-            return Err(error=ConnectionError_Failed(message=_INVALID_MESSAGE))
+            return Err(error=ConnectionError_LeaseRejected())
         try:
             _driver_finish(driver, True)
         except Exception:
@@ -104,4 +103,4 @@ def commit_transaction(transaction: Transaction) -> Result[Transaction, Connecti
             _attempt_cleanup(cleanup)
             return Err(error=ConnectionError_Failed(message=_COMMIT_FAILED_MESSAGE))
         state["transaction"] = None
-    return Ok(value=Transaction(connection=connection, lease=transaction.lease, active=False))
+    return Ok(value=Transaction(connection=connection, lease=transaction.lease, status=TransactionStatus_Committed()))

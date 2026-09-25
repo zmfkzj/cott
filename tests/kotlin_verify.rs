@@ -1317,3 +1317,188 @@ fn external_host_exit_with_forged_legacy_rows_cannot_authorize_verification() {
         "forged evidence rejection must not publish a compiled artifact"
     );
 }
+
+/// Negative integer literals and integer arithmetic in scenario call arguments, data and
+/// constructor fields are exact ABI values (`Int`, `Long`, `Byte`), including the minimum
+/// value whose negated operand is outside its own type.
+fn negative_integer_scenario(compiler: &Path, java: &Path) -> Fixture {
+    let root = fixture_root();
+    fs::create_dir_all(root.join("src/example")).expect("create contract source directory");
+    fs::create_dir_all(root.join("kotlin/cott_bindings/neg"))
+        .expect("create Kotlin binding directory");
+    fs::write(
+        root.join("cott.toml"),
+        format!(
+            r#"[project]
+name = "verify-negative"
+version = "0.1.0"
+source = "src"
+
+[target.kotlin]
+source = "kotlin"
+generated = "generated/kotlin"
+compiler = {}
+java = {}
+jvm_target = 17
+runtime_validation = "boundary"
+
+[target.kotlin.implementations]
+"example.neg.widen" = "cott_bindings.neg.widen"
+"example.neg.shares" = "cott_bindings.neg.shares"
+"#,
+            toml_string(compiler),
+            toml_string(java),
+        ),
+    )
+    .expect("write negative-integer manifest");
+    fs::write(
+        root.join("src/example/neg.cott"),
+        r#"module example.neg
+
+struct Holding:
+    shares: I64
+    small: I8
+
+fn widen(left: I32, right: I32) -> I64:
+    requires left <= right + 0
+
+fn shares(holding: Holding) -> I64:
+    ensures result == holding.shares
+
+data low_i32: I32 = -2147483648
+
+scenario negative_arguments:
+    call low = widen(-2147483648, -1)
+    assert low == -2147483649
+    call again = widen(low_i32, -(1 + 2))
+    assert again == -2147483651
+    data owned: Holding = Holding(shares: -5, small: -128)
+    call count = shares(owned)
+    assert count == -5
+    assert owned.small == -128
+    call nested = shares(Holding(shares: -7, small: -1))
+    assert nested == -7
+"#,
+    )
+    .expect("write negative-integer contract");
+    fs::write(
+        root.join("kotlin/cott_bindings/neg/widen.kt"),
+        "package cott_bindings.neg\n\ninternal fun widen(left: kotlin.Int, right: kotlin.Int): kotlin.Long =\n    left.toLong() + right.toLong()\n",
+    )
+    .expect("write widen implementation");
+    fs::write(
+        root.join("kotlin/cott_bindings/neg/shares.kt"),
+        "package cott_bindings.neg\n\ninternal fun shares(holding: example.neg.Holding): kotlin.Long =\n    holding.shares\n",
+    )
+    .expect("write shares implementation");
+    Fixture { root }
+}
+
+#[test]
+#[ignore = "requires the pinned Kotlin 2.2.10/JDK 17 toolchain and bubblewrap"]
+fn negative_integer_scenario_values_use_exact_kotlin_abi_types() {
+    let (kotlin_home, java_home) = pinned_toolchain();
+    let fixture = negative_integer_scenario(
+        &kotlin_home.join("bin/kotlinc"),
+        &java_home.join("bin/java"),
+    );
+    assert_success(
+        "negative-integer Kotlin emission",
+        fixture.cott(&["emit", "kotlin"]),
+    );
+    assert_success(
+        "negative-integer Kotlin verification",
+        fixture.cott(&["verify"]),
+    );
+    let generation = generation_view(&fixture);
+    let current = &generation["current"];
+    assert_eq!(current["verified"], true);
+    let scenario = current["verification"]["contract_tests"]["scenarios"]
+        .as_array()
+        .expect("negative-integer scenario evidence")
+        .iter()
+        .find(|scenario| scenario["scenario_id"] == "example.neg.scenario.negative_arguments")
+        .expect("negative-integer scenario evidence");
+    assert_eq!(scenario["status"], "passed", "{scenario}");
+    assert_eq!(scenario["assertions"], 5, "{scenario}");
+}
+
+#[test]
+#[ignore = "requires the pinned Kotlin 2.2.10/JDK 17 toolchain and bubblewrap"]
+fn native_impl_scenario_executes_initializer_receiver_method_and_nested_dyn_argument() {
+    let (kotlin_home, java_home) = pinned_toolchain();
+    let fixture = Fixture::generic_trait(
+        &kotlin_home.join("bin/kotlinc"),
+        &java_home.join("bin/java"),
+    );
+    // `TaskView` inherits the associated `Summary` slot, so its Kotlin interface takes a
+    // star-projected second type argument that every scenario-rendered `Dyn` must spell,
+    // including inside a container argument.
+    let contract = fixture.root.join("src/example/traits.cott");
+    fs::write(
+        &contract,
+        format!(
+            "{}\nfn inspect(view: Dyn[TaskView[Str]]) -> Str:\n    effects []\n\nfn first_summary(views: List[Dyn[TaskView[Str]]]) -> Str:\n    requires views.len > 0\n    effects []\n\nscenario view:\n    call task = SimpleTask(title: \"Launch\")\n    call summary = task.summary()\n    assert summary == \"Launch\"\n    data wrapped: Dyn[TaskView[Str]] = Dyn(value: task)\n    call observed = inspect(wrapped)\n    assert observed == \"Launch\"\n    call nested = inspect(Dyn(value: task))\n    assert nested == \"Launch\"\n    call listed = first_summary(List(Dyn(value: task)))\n    assert listed == \"Launch\"\n",
+            fs::read_to_string(&contract).expect("trait source")
+        ),
+    )
+    .expect("append native scenario");
+    let manifest = fixture.root.join("cott.toml");
+    fs::write(
+        &manifest,
+        format!(
+            "{}\"example.traits.inspect\" = \"cott_bindings.traits.inspect\"\n\"example.traits.first_summary\" = \"cott_bindings.traits.first_summary\"\n",
+            fs::read_to_string(&manifest).expect("trait manifest")
+        ),
+    )
+    .expect("add inspect bindings");
+    fs::write(
+        fixture.root.join("kotlin/cott_bindings/traits/first_summary.kt"),
+        "package cott_bindings.traits\n\ninternal fun first_summary(views: cott_runtime.CottList<cott_runtime.Dyn<example.traits.TaskView<kotlin.String, *>>>): kotlin.String =\n    views[0].value.summary().toString()\n",
+    )
+    .expect("write first_summary implementation");
+    let inspect_file = fixture.root.join("kotlin/cott_bindings/traits/inspect.kt");
+    let inspect = |body: &str| {
+        fs::write(
+            &inspect_file,
+            format!(
+                "package cott_bindings.traits\n\ninternal fun inspect(view: cott_runtime.Dyn<example.traits.TaskView<kotlin.String, *>>): kotlin.String =\n    {body}\n"
+            ),
+        )
+        .expect("write inspect implementation");
+    };
+    inspect("view.value.summary().toString()");
+    assert_success(
+        "impl scenario Kotlin emission",
+        fixture.cott(&["emit", "kotlin"]),
+    );
+    assert_success(
+        "impl scenario Kotlin verification",
+        fixture.cott(&["verify"]),
+    );
+    let generation = generation_view(&fixture);
+    let scenario = generation["current"]["verification"]["contract_tests"]["scenarios"]
+        .as_array()
+        .expect("native scenarios")
+        .iter()
+        .find(|scenario| scenario["scenario_id"] == "example.traits.scenario.view")
+        .expect("native impl scenario");
+    assert_eq!(scenario["status"], "passed", "{scenario}");
+    assert_eq!(scenario["assertions"], 4, "{scenario}");
+    inspect("\"wrong\"");
+    assert_success(
+        "wrong inspect Kotlin emission",
+        fixture.cott(&["emit", "kotlin"]),
+    );
+    let rejected = fixture.cott(&["verify"]);
+    assert!(
+        !rejected.status.success(),
+        "wrong Dyn result passed verification"
+    );
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr)
+            .contains("Kotlin scenario `example.traits.scenario.view` failed"),
+        "{}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+}

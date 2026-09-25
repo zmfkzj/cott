@@ -34,10 +34,27 @@ _COMMIT_FAILED: Final[str] = "commit failed"
 _TX_CONTROL: Final[str] = "transaction control statements must use the transaction lease API"
 _NEBULA_FAILED: Final[str] = "NebulaGraph statement failed"
 _I64_MAX: Final[int] = 9223372036854775807
+_TX_KEYWORDS: Final[str] = "BEGIN,START,COMMIT,ROLLBACK,SAVEPOINT,RELEASE,END,ABORT"
+_READ_KEYWORDS: Final[str] = "SELECT,WITH,VALUES,SHOW,DESCRIBE,DESC,EXPLAIN,MATCH,GO,FETCH,LOOKUP"
 
 
 def _in_i64(value: int) -> bool:
     return -_I64_MAX - 1 <= value <= _I64_MAX
+
+
+def _affected(value: object) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= _I64_MAX:
+        return value
+    return -1
+
+
+def _type_name(value: object) -> str:
+    text = str(type(value))
+    start = text.find("'")
+    end = text.rfind("'")
+    if 0 <= start < end:
+        text = text[start + 1:end]
+    return text.rsplit(".", 1)[-1]
 
 
 def _driver_matches(adapter: AdapterKind, driver: object) -> bool:
@@ -65,80 +82,52 @@ def _driver_matches(adapter: AdapterKind, driver: object) -> bool:
 
 
 def _payload(connection: Connection) -> dict[str, object] | None:
-    session = connection.session
-    if session.tag != _SESSION_TAG:
+    try:
+        session = connection.session
+        if session.tag != _SESSION_TAG:
+            return None
+        raw = session.unwrap()
+    except AttributeError:
         return None
-    raw = session.unwrap()
     if not isinstance(raw, dict):
         return None
     value = cast(dict[str, object], raw)
-    if set(value.keys()) != {"id", "adapter", "endpoint", "read_only", "driver", "cleanup", "lock", "closed", "transaction"}:
+    keys: set[str] = set(value.keys())
+    expected: set[str] = {"id", "adapter", "endpoint", "read_only", "driver", "cleanup", "lock", "closed", "transaction"}
+    if keys != expected:
+        return None
+    if not isinstance(value["id"], str) or not isinstance(value["endpoint"], str) or not isinstance(value["read_only"], bool):
         return None
     if value["id"] != connection.id or value["adapter"] != connection.adapter or value["endpoint"] != connection.endpoint or value["read_only"] is not connection.read_only:
         return None
-    if not isinstance(value["cleanup"], contextlib.ExitStack) or not isinstance(value["lock"], threading.Lock) or not isinstance(value["closed"], bool):
+    if not isinstance(value["cleanup"], contextlib.ExitStack) or not isinstance(value["lock"], type(threading.Lock())) or not isinstance(value["closed"], bool):
         return None
     if not _driver_matches(connection.adapter, value["driver"]):
         return None
     return value
 
 
-def _words(statement: str) -> list[str]:
-    words: list[str] = []
+def _first_keyword(statement: str) -> str:
     i = 0
     n = len(statement)
     while i < n:
         ch = statement[i]
-        if ch == "-" and statement.startswith("--", i):
+        if statement.startswith("--", i):
             end = statement.find("\n", i)
             i = n if end < 0 else end + 1
-        elif ch == "/" and statement.startswith("/*", i):
+        elif statement.startswith("/*", i):
             end = statement.find("*/", i + 2)
             i = n if end < 0 else end + 2
-        elif ch in "'\"`":
-            j = i + 1
-            while j < n:
-                if statement[j] == ch:
-                    if j + 1 < n and statement[j + 1] == ch:
-                        j += 2
-                        continue
-                    break
-                j += 1
-            i = j + 1
-        elif ch.isalpha() or ch == "_":
-            j = i
-            while j < n and (statement[j].isalnum() or statement[j] == "_"):
-                j += 1
-            words.append(statement[i:j].upper())
-            i = j
-        else:
+        elif ch in " \t\n\v\f\r":
             i += 1
-    return words
-
-
-def _is_transaction_control(words: list[str]) -> bool:
-    return len(words) > 0 and words[0] in ("BEGIN", "START", "COMMIT", "ROLLBACK", "SAVEPOINT", "RELEASE", "END", "ABORT")
-
-
-def _is_write_intent(words: list[str]) -> bool:
-    if len(words) == 0:
-        return True
-    if words[0] not in ("SELECT", "WITH", "VALUES", "TABLE", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "MATCH", "GO", "FETCH", "LOOKUP", "FIND", "GET", "YIELD"):
-        return True
-    for word in words:
-        if word in ("INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "REPLACE", "CREATE", "DROP", "ALTER", "TRUNCATE", "GRANT", "REVOKE", "COPY", "CALL", "INTO", "ANALYZE", "VACUUM", "SET", "LOCK", "ATTACH", "DETACH", "PRAGMA"):
-            return True
-    return False
-
-
-def _unsupported_name(value: object) -> str:
-    if isinstance(value, (list, tuple)):
-        return "list"
-    if isinstance(value, dict):
-        return "map"
-    if isinstance(value, (set, frozenset)):
-        return "set"
-    return "opaque"
+        elif ch.isascii() and (ch.isalpha() or ch == "_"):
+            j = i
+            while j < n and statement[j].isascii() and (statement[j].isalnum() or statement[j] == "_"):
+                j += 1
+            return statement[i:j].upper()
+        else:
+            return ""
+    return ""
 
 
 def _cell(value: object) -> Cell | SqlClientError:
@@ -149,11 +138,11 @@ def _cell(value: object) -> Cell | SqlClientError:
     if isinstance(value, int):
         if _in_i64(value):
             return Cell_Integer(value=value)
-        return SqlClientError_UnsupportedValue(type_name="int")
+        return SqlClientError_UnsupportedValue(type_name=_type_name(value))
     if isinstance(value, float):
         if math.isfinite(value):
             return Cell_Real(value=value)
-        return SqlClientError_UnsupportedValue(type_name="float")
+        return SqlClientError_UnsupportedValue(type_name=_type_name(value))
     if isinstance(value, str):
         return Cell_Text(value=value)
     if isinstance(value, (bytes, bytearray)):
@@ -162,7 +151,7 @@ def _cell(value: object) -> Cell | SqlClientError:
         return Cell_Blob(value=bytes(cast(memoryview[int], value)))
     if isinstance(value, (decimal.Decimal, datetime.date, datetime.time, datetime.timedelta, uuid.UUID)):
         return Cell_Text(value=str(value))
-    return SqlClientError_UnsupportedValue(type_name=_unsupported_name(value))
+    return SqlClientError_UnsupportedValue(type_name=_type_name(value))
 
 
 def _query_result(columns: list[str], rows: list[tuple[object, ...]], affected: int, maximum_rows: int) -> QueryResult | SqlClientError:
@@ -177,7 +166,7 @@ def _query_result(columns: list[str], rows: list[tuple[object, ...]], affected: 
                 return cell
             cells.append(cell)
         typed.append(TypedRow(values=CottList(values=cells)))
-    return QueryResult(columns=CottList(values=columns), rows=CottList(values=typed), affected_rows=affected if _in_i64(affected) else -1)
+    return QueryResult(columns=CottList(values=columns), rows=CottList(values=typed), affected_rows=affected)
 
 
 def _normalize(statement: str, description: object, fetched: object, rowcount: object, maximum_rows: int) -> QueryResult | SqlClientError:
@@ -200,8 +189,7 @@ def _normalize(statement: str, description: object, fetched: object, rowcount: o
                 rows.append(tuple(cast(Iterable[object], row)))
             else:
                 return SqlClientError_ExecutionFailed(statement=statement, message=_EXEC_FAILED)
-    affected = rowcount if isinstance(rowcount, int) and not isinstance(rowcount, bool) else -1
-    return _query_result(columns, rows, affected, maximum_rows)
+    return _query_result(columns, rows, _affected(rowcount), maximum_rows)
 
 
 def _run_sqlite(driver: sqlite3.Connection, statement: str, maximum_rows: int) -> QueryResult | SqlClientError:
@@ -216,12 +204,10 @@ def _run_sqlite(driver: sqlite3.Connection, statement: str, maximum_rows: int) -
 
 
 def _run_duckdb(driver: duckdb.DuckDBPyConnection, statement: str, maximum_rows: int) -> QueryResult | SqlClientError:
-    # Execute on the retained connection itself: DuckDBPyConnection.cursor() is a
-    # duplicate connection with independent transaction state.
     driver.execute(statement)
     description = cast(object, driver.description)
     fetched = cast(object, driver.fetchmany(maximum_rows + 1)) if description is not None else None
-    return _normalize(statement, description, fetched, -1, maximum_rows)
+    return _normalize(statement, description, fetched, cast(object, driver.rowcount), maximum_rows)
 
 
 def _run_postgres(driver: psycopg.Connection[tuple[object, ...]], statement: str, maximum_rows: int) -> QueryResult | SqlClientError:
@@ -301,8 +287,7 @@ def _run_bigquery(client: bigquery.Client, statement: str, maximum_rows: int) ->
         rows.append(tuple(cast(Iterable[object], row.values())))
         if len(rows) > maximum_rows:
             break
-    affected = cast(object, job.num_dml_affected_rows)
-    return _query_result(columns, rows, affected if isinstance(affected, int) and not isinstance(affected, bool) else -1, maximum_rows)
+    return _query_result(columns, rows, _affected(cast(object, job.num_dml_affected_rows)), maximum_rows)
 
 
 def _run_cassandra(session: CassandraSession, statement: str, maximum_rows: int) -> QueryResult | SqlClientError:
@@ -448,17 +433,17 @@ def execute_statements(connection: Connection, sql: str, maximum_rows: U32) -> R
     payload = _payload(connection)
     if payload is None:
         return Err(error=SqlClientError_ExecutionFailed(statement=first, message=_INVALID_SESSION))
-    lock = payload["lock"]
-    if not isinstance(lock, threading.Lock):
-        return Err(error=SqlClientError_ExecutionFailed(statement=first, message=_INVALID_SESSION))
+    lock = cast(threading.Lock, payload["lock"])
+    tx_keywords = _TX_KEYWORDS.split(",")
+    read_keywords = _READ_KEYWORDS.split(",")
     with lock:
         if payload["closed"] is not False:
             return Err(error=SqlClientError_ExecutionFailed(statement=first, message=_INVALID_SESSION))
         for statement in statements:
-            words = _words(statement)
-            if _is_transaction_control(words):
+            keyword = _first_keyword(statement)
+            if keyword in tx_keywords:
                 return Err(error=SqlClientError_ExecutionFailed(statement=statement, message=_TX_CONTROL))
-            if connection.read_only and _is_write_intent(words):
+            if connection.read_only and keyword not in read_keywords:
                 return Err(error=SqlClientError_ReadOnlyViolation(statement=statement))
         driver = payload["driver"]
         autocommit = _is_transactional(driver) and payload["transaction"] is None

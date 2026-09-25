@@ -1,9 +1,9 @@
 # assignment-rule
 
 ## Purpose
-Compose, override, and delete rule clauses for an access-code validator.
+Composes a base rule, strengthens an obligation by override, and deletes a legacy error allowance in an access-code validator.
 
 ## Key points
-- `BaseAccessCodeRule` declares the legacy-format and empty-code errors.
-- `StrictAccessCodeRule` overrides the empty-code clause with a false condition, deletes the legacy-format clause, and adds `TooShort`.
-- `validate_access_code` applies the composed rule and trims codes before rejecting values shorter than four characters.
+- `BaseAccessCodeRule` requires a nonempty successful value and permits `LegacyFormat`; `StrictAccessCodeRule` overrides the minimum success length from one to four and deletes that error allowance.
+- `validate_access_code` returns the original code unchanged when its length is at least four. It does not trim whitespace. Conditional errors and `errors complete` require `EmptyCode` for empty input, `TooShort` for the other shorter inputs, and success otherwise.
+- Scenarios observe empty, short, and legacy-prefixed codes. They do not establish any separate whitespace-trimming behavior.

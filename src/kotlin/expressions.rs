@@ -1,11 +1,35 @@
 use serde_json::Value;
 
 use super::types::{
-    const_witness_values, escape_identifier, kotlin_string, local_name, render_const_witness,
-    render_named_arguments, render_qualified, render_type, render_value,
+    KotlinTypeContext, const_witness_values, escape_identifier, kotlin_string, local_name,
+    render_const_witness, render_named_arguments_contextual, render_qualified,
+    render_type_contextual, render_value, trait_marker,
 };
 
+/// Kotlin type spelling for one expression tree. Contract clauses render without a context;
+/// scenario steps carry the plan's emission context so every trait type in a scenario value
+/// (a `Dyn` trait, a container item, a generic argument or a pattern binding) spells the
+/// generated declaration, including its star-projected associated-type slots.
+type Types<'a> = Option<&'a dyn KotlinTypeContext>;
+
 pub(crate) fn render_expression(expression: &Value) -> Result<String, String> {
+    render(expression, None)
+}
+
+/// Render a scenario step expression (call/initializer argument, method receiver, `data`
+/// value or assertion) against the plan's emission type context.
+pub(crate) fn render_scenario_expression(
+    expression: &Value,
+    types: &dyn KotlinTypeContext,
+) -> Result<String, String> {
+    render(expression, Some(types))
+}
+
+fn render_type(ty: &Value, types: Types) -> Result<String, String> {
+    render_type_contextual(ty, None, types)
+}
+
+fn render(expression: &Value, types: Types) -> Result<String, String> {
     let object = expression
         .as_object()
         .ok_or_else(|| "canonical contract expression must be an object".to_owned())?;
@@ -31,7 +55,7 @@ pub(crate) fn render_expression(expression: &Value) -> Result<String, String> {
                 object.get("symbol"),
                 "enum singleton reference.symbol",
             )?)?;
-            let type_arguments = render_named_arguments(object.get("type"))?;
+            let type_arguments = render_named_arguments_contextual(object.get("type"), types)?;
             let constructor = if type_arguments.is_empty() {
                 variant
             } else {
@@ -72,7 +96,10 @@ pub(crate) fn render_expression(expression: &Value) -> Result<String, String> {
         )),
         "field" => Ok(format!(
             "({}).{}",
-            render_expression(required(object.get("base"), "field expression.base")?)?,
+            render(
+                required(object.get("base"), "field expression.base")?,
+                types
+            )?,
             escape_identifier(required_string(
                 object.get("name"),
                 "field expression.name"
@@ -80,9 +107,12 @@ pub(crate) fn render_expression(expression: &Value) -> Result<String, String> {
         )),
         "len" => Ok(format!(
             "cott_runtime.CottRuntime.length({})",
-            render_expression(required(object.get("value"), "len expression.value")?)?
+            render(
+                required(object.get("value"), "len expression.value")?,
+                types
+            )?
         )),
-        "intrinsic" => render_intrinsic(object),
+        "intrinsic" => render_intrinsic(object, types),
         "fixture_path" | "fixture_url" => {
             let fixture = escape_identifier(local_name(required_string(
                 object.get("fixture"),
@@ -101,15 +131,41 @@ pub(crate) fn render_expression(expression: &Value) -> Result<String, String> {
                 }
             ))
         }
-        "unary" => render_unary(expression, object),
-        "binary" => render_binary(expression, object),
-        "comparison_chain" => render_comparison_chain(object),
+        "unary" | "binary" if integer_type(object.get("type")) => {
+            render_exact_integer(expression, object.get("type"), types)
+        }
+        "unary" => render_unary(expression, object, types),
+        "binary" => render_binary(expression, object, types),
+        "comparison_chain" => render_comparison_chain(object, types),
+        "dyn" => {
+            // `Dyn(value: ...)` exists only in scenario values, whose trait spelling needs the
+            // generated associated-type slots; a context-free spelling would name the wrong
+            // Kotlin type arity.
+            let types = types
+                .ok_or("Dyn value construction requires the scenario emission type context")?;
+            let trait_ref = required(object.get("trait_ref"), "dyn expression.trait_ref")?;
+            let dyn_type = required(object.get("type"), "dyn expression.type")?;
+            if dyn_type.get("kind").and_then(Value::as_str) != Some("dyn")
+                || dyn_type.get("trait") != Some(trait_ref)
+            {
+                return Err("dyn expression trait_ref does not match its type".to_owned());
+            }
+            let trait_type = render_type(trait_ref, Some(types))?;
+            let value = render(
+                required(object.get("value"), "dyn expression.value")?,
+                Some(types),
+            )?;
+            Ok(format!(
+                "cott_runtime.Dyn.of<{trait_type}>({value}, cott_runtime.{} as cott_runtime.CottTrait<{trait_type}>)",
+                trait_marker(trait_ref)?
+            ))
+        }
         "construct" | "variant" | "option_some" | "result_ok" | "result_err" | "list" | "set"
-        | "tuple" | "array" | "map" => render_scenario_value(kind, object),
+        | "tuple" | "array" | "map" => render_scenario_value(kind, object, types),
         "match" => {
             let always = serde_json::json!({"kind": "kotlin_synthetic", "code": "true"});
             let condition = object.get("condition").filter(|value| !value.is_null());
-            render_guard(expression, condition.unwrap_or(&always), false)
+            render_guard_in(expression, condition.unwrap_or(&always), false, types)
         }
         other => Err(format!(
             "unsupported canonical contract expression kind `{other}`"
@@ -122,31 +178,36 @@ pub(crate) fn render_expression(expression: &Value) -> Result<String, String> {
 fn render_scenario_value(
     kind: &str,
     object: &serde_json::Map<String, Value>,
+    types: Types,
 ) -> Result<String, String> {
     let ty = object.get("type");
     let items = |field: &str| -> Result<Vec<String>, String> {
         required_array(object.get(field), field)?
             .iter()
             .map(|item| {
-                render_expression(
+                render(
                     item.get("value")
                         .filter(|_| field == "fields" && kind == "construct")
                         .unwrap_or(item),
+                    types,
                 )
             })
             .collect()
     };
     let element = |name: &str| -> Result<String, String> {
-        render_type(required(
-            ty.and_then(|ty| ty.get(name)),
-            "scenario container element type",
-        )?)
+        render_type(
+            required(
+                ty.and_then(|ty| ty.get(name)),
+                "scenario container element type",
+            )?,
+            types,
+        )
     };
     match kind {
         // Explicit type arguments keep a data binding at its declared type:
         // Kotlin would otherwise infer `Box<Nothing>` from `Box(Nothing)`.
         "construct" | "variant" => {
-            let type_arguments = render_named_arguments(ty)?;
+            let type_arguments = render_named_arguments_contextual(ty, types)?;
             let mut fields = items("fields")?;
             fields.extend(const_witness_values(ty)?);
             let constructor = render_qualified(required_string(
@@ -170,7 +231,7 @@ fn render_scenario_value(
                 "result_ok" => "Ok",
                 _ => "Err",
             },
-            render_expression(required(object.get("payload"), "payload")?)?
+            render(required(object.get("payload"), "payload")?, types)?
         )),
         "list" | "set" => Ok(format!(
             "cott_runtime.CottRuntime.{}(listOf<{}>({}))",
@@ -205,8 +266,8 @@ fn render_scenario_value(
                 .map(|entry| {
                     Ok(format!(
                         "{} to {}",
-                        render_expression(required(entry.get("key"), "map entry.key")?)?,
-                        render_expression(required(entry.get("value"), "map entry.value")?)?
+                        render(required(entry.get("key"), "map entry.key")?, types)?,
+                        render(required(entry.get("value"), "map entry.value")?, types)?
                     ))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
@@ -225,15 +286,25 @@ pub(crate) fn render_guard(
     predicate: &Value,
     non_match: bool,
 ) -> Result<String, String> {
+    render_guard_in(guard, predicate, non_match, None)
+}
+
+fn render_guard_in(
+    guard: &Value,
+    predicate: &Value,
+    non_match: bool,
+    types: Types,
+) -> Result<String, String> {
     let guard = guard
         .as_object()
         .ok_or_else(|| "canonical match guard must be an object".to_owned())?;
-    let scrutinee = render_expression(required(guard.get("scrutinee"), "guard.scrutinee")?)?;
+    let scrutinee = render(required(guard.get("scrutinee"), "guard.scrutinee")?, types)?;
     let (condition, bindings) = render_pattern(
         required(guard.get("pattern"), "guard.pattern")?,
         "_cottMatchValue",
+        types,
     )?;
-    let predicate = render_expression(predicate)?;
+    let predicate = render(predicate, types)?;
     let fallback = if non_match { "true" } else { "false" };
     let binding_lines = if bindings.is_empty() {
         String::new()
@@ -290,10 +361,13 @@ pub(crate) fn clause_label(clause: &Value) -> Result<String, String> {
     ))
 }
 
-fn render_intrinsic(object: &serde_json::Map<String, Value>) -> Result<String, String> {
+fn render_intrinsic(
+    object: &serde_json::Map<String, Value>,
+    types: Types,
+) -> Result<String, String> {
     let arguments = required_array(object.get("arguments"), "intrinsic expression.arguments")?
         .iter()
-        .map(render_expression)
+        .map(|argument| render_operand(argument, types))
         .collect::<Result<Vec<_>, _>>()?;
     let first = arguments
         .first()
@@ -386,21 +460,124 @@ fn intrinsic_selector<'a>(
     ))
 }
 
+/// An integer-typed arithmetic result in a value position (scenario call
+/// argument, data, constructor field, container item, payload) takes the
+/// exact Kotlin ABI type of its canonical integer type. The mathematical
+/// result is range-checked instead of wrapped, so an out-of-range value is a
+/// contract violation rather than a silently different argument.
+fn render_exact_integer(
+    expression: &Value,
+    ty: Option<&Value>,
+    types: Types,
+) -> Result<String, String> {
+    let ty = required(ty, "integer expression.type")?;
+    let kind = match primitive_type(Some(ty)) {
+        Some("i8") => "I8",
+        Some("i16") => "I16",
+        Some("i32") => "I32",
+        Some("i64") => "I64",
+        Some("u8") => "U8",
+        Some("u16") => "U16",
+        Some("u32") => "U32",
+        Some("u64") => "U64",
+        _ => return Err("exact integer expression requires an integer primitive type".to_owned()),
+    };
+    Ok(format!(
+        "(cott_runtime.CottRuntime.intValue({}, cott_runtime.CottIntKind.{kind}) as {})",
+        render_math_integer(expression, types)?,
+        render_type(ty, types)?
+    ))
+}
+
+/// Operands whose value is only observed by the runtime's canonical
+/// comparison, intrinsic and pattern helpers keep integer arithmetic as
+/// unbounded mathematical integers.
+fn render_operand(expression: &Value, types: Types) -> Result<String, String> {
+    if is_integer_arithmetic(expression) {
+        render_math_integer(expression, types)
+    } else {
+        render(expression, types)
+    }
+}
+
+fn is_integer_arithmetic(expression: &Value) -> bool {
+    matches!(
+        expression.get("kind").and_then(Value::as_str),
+        Some("unary" | "binary")
+    ) && integer_type(expression.get("type"))
+}
+
+/// Contract integer arithmetic is exact: every operand is a `BigInteger`.
+/// An integer literal operand is its exact decimal, never the width-typed
+/// literal, because a negated minimum such as `-2147483648` has an operand
+/// outside its own type's range.
+fn render_math_integer(expression: &Value, types: Types) -> Result<String, String> {
+    let object = expression
+        .as_object()
+        .ok_or_else(|| "canonical contract expression must be an object".to_owned())?;
+    match object.get("kind").and_then(Value::as_str) {
+        Some("literal")
+            if object
+                .get("value")
+                .and_then(|value| value.get("kind"))
+                .and_then(Value::as_str)
+                == Some("integer") =>
+        {
+            let value = required(object.get("value"), "literal expression.value")?;
+            Ok(format!(
+                "cott_runtime.CottRuntime.int({})",
+                kotlin_string(required_string(value.get("value"), "integer value.value")?)
+            ))
+        }
+        Some("unary") if is_integer_arithmetic(expression) => {
+            let operand = render_math_integer(
+                required(object.get("operand"), "unary expression.operand")?,
+                types,
+            )?;
+            match required_string(object.get("op"), "unary expression.op")? {
+                "plus" => Ok(operand),
+                "minus" => Ok(format!("cott_runtime.CottRuntime.intNegate({operand})")),
+                other => Err(format!("unsupported integer unary operator `{other}`")),
+            }
+        }
+        Some("binary") if is_integer_arithmetic(expression) => {
+            let method = match required_string(object.get("op"), "binary expression.op")? {
+                "add" => "intAdd",
+                "subtract" => "intSubtract",
+                "multiply" => "intMultiply",
+                "divide" => "euclideanDivide",
+                "remainder" => "euclideanRemainder",
+                other => return Err(format!("unsupported integer binary operator `{other}`")),
+            };
+            Ok(format!(
+                "cott_runtime.CottRuntime.{method}({}, {})",
+                render_math_integer(
+                    required(object.get("left"), "binary expression.left")?,
+                    types
+                )?,
+                render_math_integer(
+                    required(object.get("right"), "binary expression.right")?,
+                    types
+                )?
+            ))
+        }
+        _ => Ok(format!(
+            "cott_runtime.CottRuntime.mathInt({})",
+            render(expression, types)?
+        )),
+    }
+}
+
 fn render_unary(
     expression: &Value,
     object: &serde_json::Map<String, Value>,
+    types: Types,
 ) -> Result<String, String> {
-    let operand = render_expression(required(object.get("operand"), "unary expression.operand")?)?;
+    let operand = render(
+        required(object.get("operand"), "unary expression.operand")?,
+        types,
+    )?;
     let op = required_string(object.get("op"), "unary expression.op")?;
-    if integer_type(expression.get("type")) {
-        return match op {
-            "plus" => Ok(format!("cott_runtime.CottRuntime.mathInt({operand})")),
-            "minus" => Ok(format!(
-                "cott_runtime.CottRuntime.intNegate(cott_runtime.CottRuntime.mathInt({operand}))"
-            )),
-            other => Err(format!("unsupported integer unary operator `{other}`")),
-        };
-    }
     match op {
         "not" => Ok(format!("!({operand})")),
         "plus" => Ok(operand),
@@ -418,32 +595,24 @@ fn render_unary(
 fn render_binary(
     expression: &Value,
     object: &serde_json::Map<String, Value>,
+    types: Types,
 ) -> Result<String, String> {
-    let left = render_expression(required(object.get("left"), "binary expression.left")?)?;
-    let right = render_expression(required(object.get("right"), "binary expression.right")?)?;
+    let left = required(object.get("left"), "binary expression.left")?;
+    let right = required(object.get("right"), "binary expression.right")?;
     let op = required_string(object.get("op"), "binary expression.op")?;
+    if op == "remainder" {
+        return Ok(format!(
+            "cott_runtime.CottRuntime.euclideanRemainder({}, {})",
+            render_math_integer(left, types)?,
+            render_math_integer(right, types)?
+        ));
+    }
+    let left = render(left, types)?;
+    let right = render(right, types)?;
     if matches!(op, "or" | "and") {
         return Ok(format!(
             "(({left}) {} ({right}))",
             if op == "or" { "||" } else { "&&" }
-        ));
-    }
-    if integer_type(expression.get("type")) {
-        let method = match op {
-            "add" => "intAdd",
-            "subtract" => "intSubtract",
-            "multiply" => "intMultiply",
-            "divide" => "euclideanDivide",
-            "remainder" => "euclideanRemainder",
-            other => return Err(format!("unsupported integer binary operator `{other}`")),
-        };
-        return Ok(format!(
-            "cott_runtime.CottRuntime.{method}(cott_runtime.CottRuntime.mathInt({left}), cott_runtime.CottRuntime.mathInt({right}))"
-        ));
-    }
-    if op == "remainder" {
-        return Ok(format!(
-            "cott_runtime.CottRuntime.euclideanRemainder(cott_runtime.CottRuntime.mathInt({left}), cott_runtime.CottRuntime.mathInt({right}))"
         ));
     }
     if let Some(prefix) = match primitive_type(expression.get("type")) {
@@ -472,10 +641,13 @@ fn render_binary(
     Ok(format!("(({left}) {token} ({right}))"))
 }
 
-fn render_comparison_chain(object: &serde_json::Map<String, Value>) -> Result<String, String> {
+fn render_comparison_chain(
+    object: &serde_json::Map<String, Value>,
+    types: Types,
+) -> Result<String, String> {
     let operands = required_array(object.get("operands"), "comparison expression.operands")?
         .iter()
-        .map(render_expression)
+        .map(|operand| render_operand(operand, types))
         .collect::<Result<Vec<_>, _>>()?;
     let operators = required_array(object.get("operators"), "comparison expression.operators")?;
     if operands.len() != operators.len() + 1 {
@@ -514,7 +686,11 @@ fn render_comparison_chain(object: &serde_json::Map<String, Value>) -> Result<St
     })
 }
 
-fn render_pattern(pattern: &Value, value: &str) -> Result<(String, Vec<String>), String> {
+fn render_pattern(
+    pattern: &Value,
+    value: &str,
+    types: Types,
+) -> Result<(String, Vec<String>), String> {
     let object = pattern
         .as_object()
         .ok_or_else(|| "canonical contract pattern must be an object".to_owned())?;
@@ -532,7 +708,7 @@ fn render_pattern(pattern: &Value, value: &str) -> Result<(String, Vec<String>),
                         .or_else(|| object.get("symbol").and_then(Value::as_str).map(local_name))
                         .ok_or_else(|| "binding pattern is missing name".to_owned())?
                 )?,
-                render_type(required(object.get("type"), "binding pattern.type")?)?
+                render_type(required(object.get("type"), "binding pattern.type")?, types)?
             )],
         )),
         "result_ok" | "result_err" | "option_some" | "option_none" | "enum" | "variant" => {
@@ -591,7 +767,7 @@ fn render_pattern(pattern: &Value, value: &str) -> Result<(String, Vec<String>),
                 } else {
                     format!("{payload}[{index}]")
                 };
-                let (condition, nested) = render_pattern(argument, &field)?;
+                let (condition, nested) = render_pattern(argument, &field, types)?;
                 conditions.push(condition);
                 bindings.extend(nested);
             }

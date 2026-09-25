@@ -1,23 +1,41 @@
 module real.pgcli
 
+doc """
+Connection-layer failures. Every message payload is a fixed, nonsecret
+category text: it never contains a password, connection-string text,
+private-key contents or raw exception text.
+"""
 enum ConnectionError:
     MissingDatabase
     InvalidPort(value: Str)
     InvalidDsn(value: Str)
     ProfileMissing(name: Str)
-    TlsInvalid(message: Str)
     SshInvalid(message: Str)
     CredentialUnavailable(message: Str)
     PromptDisabled
     ConnectionFailed(message: Str)
 
+doc """
+Failures of the minimal settings-only query API. Messages never contain connection
+parameters; QueryFailed carries the SQLSTATE and the server's primary message.
+"""
 enum DatabaseError:
     ConnectionFailed(message: Str)
     QueryFailed(message: Str)
 
+doc """
+Client failures. Message payloads are fixed, nonsecret category texts, except
+that QueryFailed may carry the SQLSTATE and the server's primary message. No
+payload contains a password, connection-string text or raw exception text.
+TunnelUnsupported means a database operation received a plan with an SSH hop,
+which only the connection probe supports.
+"""
 enum ClientError:
+    InvalidArguments(message: Str)
     InvalidCommand(source: Str)
     InvalidSql(message: Str)
+    ConnectionFailed(message: Str)
+    TunnelUnsupported
     CatalogFailed(message: Str)
     QueryFailed(message: Str)
     TransactionFailed(message: Str)
@@ -31,6 +49,10 @@ enum ClientError:
     TerminalFailed(message: Str)
     UnsupportedFormat(value: Str)
 
+doc """
+Connection fields as the user gave them. "" means not specified. port is
+decimal text.
+"""
 struct ConnectionInputs:
     host: Str
     port: Str
@@ -38,6 +60,9 @@ struct ConnectionInputs:
     password: Str
     database: Str
 
+doc """
+The values of PGHOST, PGPORT, PGUSER, PGPASSWORD and PGDATABASE, "" when unset.
+"""
 struct EnvironmentInputs:
     host: Str
     port: Str
@@ -52,17 +77,42 @@ struct ConnectionSettings:
     password: Str
     database: Str
 
-struct TlsSettings:
-    mode: Str
-    root_certificate: Path
+doc """
+libpq sslmode request. Default sets no sslmode, leaving the connection string's
+value or libpq's default (prefer). The others set sslmode to disable, allow,
+prefer, require, verify-ca or verify-full.
+"""
+enum TlsMode:
+    Default
+    Disable
+    Allow
+    Prefer
+    Require
+    VerifyCa
+    VerifyFull
+
+struct ClientCertificate:
     certificate: Path
     private_key: Path
 
+doc """
+root_certificate sets sslrootcert; client sets sslcert and sslkey together.
+Nothing leaves the parameter unset.
+"""
+struct TlsSettings:
+    mode: TlsMode
+    root_certificate: Option[Path]
+    client: Option[ClientCertificate]
+
+doc """
+An OpenSSH jump host. private_key Some(path) selects that identity file;
+Nothing uses the ssh client's configured identities.
+"""
 struct SshSettings:
     host: Str
     port: U16
     user: Str
-    private_key: Path
+    private_key: Option[Path]
 
 struct ConnectionProfile:
     name: Str
@@ -79,11 +129,30 @@ struct ConnectionRequest:
     tls: TlsSettings
     ssh: Option[SshSettings]
 
+doc """
+A plan denotes one set of libpq connection parameters: start from dsn parsed as
+a libpq connection string ("" gives none); nonempty settings host, port, user,
+password and database replace host, port, user, password and dbname; apply
+TlsSettings; always set connect_timeout=10. Parameters are connection data and
+are never interpolated into SQL or shell text. TLS verification requested by the
+plan or its connection string is never weakened. ssh Some(hop) means PostgreSQL is
+reached through that jump host; only the connection probe supports such plans,
+and every other database operation rejects them with TunnelUnsupported.
+"""
 struct ConnectionPlan:
     settings: ConnectionSettings
     dsn: Str
     tls: TlsSettings
     ssh: Option[SshSettings]
+
+doc """
+What the server confirmed for a successful probe: current_database(),
+current_user and the server_version setting.
+"""
+struct ConnectionReceipt:
+    database: Str
+    user: Str
+    server_version: Str
 
 enum PasswordSource:
     Supplied
@@ -128,6 +197,16 @@ struct RoutineCatalog:
     arguments: Str
     result_type: Str
 
+doc """
+A snapshot of server metadata. A relation kind is one of "table",
+"partitioned table", "view", "materialized view", "sequence" or
+"foreign table"; its columns are the live attributes in attribute order.
+A routine's arguments is its identity argument list text and result_type its
+result type text. Schema-scoped lists are ordered by schema then name, the other
+lists by name, and each list holds the first limit entries of that order.
+refreshed_at_ms is wall-clock Unix milliseconds when the snapshot completed and
+limit is the requested limit.
+"""
 struct Catalog:
     databases: List[Str]
     schemas: List[Str]
@@ -140,15 +219,26 @@ struct Catalog:
     refreshed_at_ms: U64
     limit: U64
 
+doc """
+include_system false omits objects in pg_catalog, information_schema and schemas
+whose names start with pg_toast or pg_temp, and template databases.
+"""
 struct CatalogRefreshRequest:
     connection: ConnectionPlan
     include_system: Bool
     limit: U64
 
+const SQL_KEYWORDS: Str = "SELECT FROM WHERE JOIN LEFT RIGHT INNER OUTER FULL CROSS ON USING GROUP BY ORDER HAVING LIMIT OFFSET INSERT INTO VALUES UPDATE SET DELETE RETURNING AND OR NOT NULL IS IN LIKE ILIKE BETWEEN AS DISTINCT CASE WHEN THEN ELSE END CREATE ALTER DROP TABLE VIEW INDEX BEGIN COMMIT ROLLBACK WITH UNION ALL EXISTS ASC DESC TRUE FALSE"
+
+doc """
+cursor counts Unicode code points of source.
+"""
 struct CompletionRequest:
     source: Str
     cursor: U64
     catalog: List[TableCatalog]
+
+    invariant self.cursor <= self.source.len
 
 struct CompletionPolicy:
     max_candidates: U64
@@ -170,6 +260,10 @@ enum RenderLayout:
     Horizontal
     Vertical
 
+doc """
+Output formats. Their \T names are aligned, csv, tsv, json, jsonl, html, latex,
+markdown and vertical.
+"""
 enum TableFormat:
     Aligned
     Csv
@@ -181,11 +275,20 @@ enum TableFormat:
     Markdown
     Vertical
 
+doc """
+Tabular text. A cell is the text of one value: SQL NULL is "<null>", bytea is
+"\x" followed by lowercase hexadecimal, and any other value is the text of the
+driver-decoded value (str in Python).
+"""
+struct QueryResult:
+    columns: List[Str]
+    rows: List[List[Str]]
+
 struct RenderRequest:
     columns: List[Str]
     rows: List[List[Str]]
     terminal_width: U16
-    vertical: Bool
+    layout: RenderLayout
 
 struct FormatRequest:
     query: QueryResult
@@ -194,6 +297,9 @@ struct FormatRequest:
     max_column_width: U16
     max_rows: U64
 
+doc """
+width is the length in code points of the longest line of text, at most 65535.
+"""
 struct RenderedQuery:
     text: Str
     layout: RenderLayout
@@ -203,9 +309,27 @@ struct FormattedQuery:
     rendered: RenderedQuery
     truncated_rows: U64
 
-struct QueryResult:
-    columns: List[Str]
-    rows: List[List[Str]]
+doc """
+AutoCommit commits each statement; Manual runs one submission in one transaction;
+ReadOnly runs one submission in a READ ONLY transaction that is rolled back.
+"""
+enum TransactionMode:
+    AutoCommit
+    Manual
+    ReadOnly
+
+doc """
+The client's view of one explicit transaction: none open, open, or failed after
+an error so that only rollback is possible.
+"""
+enum TransactionStatus:
+    Idle
+    Active
+    Failed
+
+struct TransactionState:
+    mode: TransactionMode
+    status: TransactionStatus
 
 struct ExecutedQuery:
     result: QueryResult
@@ -226,10 +350,15 @@ struct QueryPlan:
     statement_count: U64
     requires_terminator: Bool
 
+doc """
+Pending input. cursor counts Unicode code points of text.
+"""
 struct InputBuffer:
     text: Str
     cursor: U64
     multiline: Bool
+
+    invariant self.cursor <= self.text.len
 
 struct EditorRequest:
     buffer: InputBuffer
@@ -255,10 +384,10 @@ struct HistoryEntry:
     success: Bool
 
 doc """
-Normalize history by preserving stored order, optionally deduplicating exact
-(database, sql) pairs when unique is true. Keep each pair's last occurrence, then
-retain the last max_entries entries in their original relative order. A zero
-capacity produces an empty list. Do not sort by executed_at_ms.
+HistoryPolicy normalization preserves stored order, removes all but the last
+occurrence of each exact (database, sql) pair when unique is true, then keeps the
+last max_entries entries in their relative order. A zero capacity produces an
+empty list. It never sorts by executed_at_ms.
 """
 struct HistoryPolicy:
     path: Path
@@ -268,9 +397,10 @@ struct HistoryPolicy:
 doc """
 Favorites persistence is UTF-8 JSON: one array in authored order, with exact object
 fields name (string), sql (string), tags (array of strings). No unknown/missing
-fields or coercions. Names are nonempty and unique by exact case-sensitive spelling;
-tags may repeat and retain their order. This is this Cott client's format, not an
-upstream pgcli configuration section.
+fields or coercions. Names are unique by exact case-sensitive spelling and not
+blank (blank as any_blank_by defines: empty or only the 25 Unicode White_Space
+code points); tags may repeat and keep their order. This is this Cott client's
+format, not an upstream pgcli configuration section.
 """
 struct Favorite:
     name: Str
@@ -321,16 +451,6 @@ struct WatchResult:
     executions: U64
     last_result: ExecutedQuery
 
-enum TransactionMode:
-    AutoCommit
-    Manual
-    ReadOnly
-
-struct TransactionState:
-    mode: TransactionMode
-    active: Bool
-    failed: Bool
-
 enum BackslashCommand:
     Quit
     Help
@@ -340,7 +460,6 @@ enum BackslashCommand:
 
 enum MetaCommand:
     Quit
-    Shell(command: Str)
     RefreshCatalog
     Help
     SqlHelp(topic: Str)
@@ -372,18 +491,12 @@ enum MetaCommand:
     ReadFile(path: Path)
     ReadRelativeFile(path: Path)
     NamedQuery(name: Str, arguments: List[Str])
-    SetLogFile(path: Path)
     DeleteNamedQuery(name: Str)
     PrintNamedQuery(name: Str)
     SaveNamedQuery(name: Str, sql: Str)
-    SetOutput(path: Path)
-    ClearOutput
     SetPager(enabled: Bool)
-    SetOptions(key: Str, value: Str)
     QueryOutputEcho(text: Str)
     Timing
-    VerboseErrors(enabled: Bool)
-    Watch(interval_ms: U32)
     Expanded
     ExecuteBuffer
     ExecuteExpanded
@@ -394,20 +507,23 @@ enum MetaCommand:
     Favorite(name: Str)
     ListFavorites(pattern: Str)
     DeleteFavorite(name: Str)
-    Password
-    ListNotifications
     Unknown(source: Str)
 
 struct CommandInvocation:
     command: MetaCommand
     buffer: InputBuffer
 
+doc """
+Session settings. history Nothing disables history persistence and favorites
+Nothing disables favorites. max_rows bounds the rows fetched and shown per
+statement; catalog_limit bounds each catalog list.
+"""
 struct SessionOptions:
     connection: ConnectionPlan
     catalog_limit: U64
-    completion_limit: U64
-    history: HistoryPolicy
-    favorites: FavoriteStore
+    max_rows: U64
+    history: Option[HistoryPolicy]
+    favorites: Option[FavoriteStore]
     format: TableFormat
     timing: Bool
     pager: Bool
@@ -416,15 +532,44 @@ struct SessionOptions:
 
 struct CommandResult:
     buffer: InputBuffer
+    options: SessionOptions
+    catalog: Catalog
     output: Str
     quit: Bool
+
+enum SessionMode:
+    Interactive
+    ExecuteOnce
 
 struct InteractiveRequest:
     options: SessionOptions
     initial_sql: Str
-    execute_once: Bool
+    mode: SessionMode
+
+doc """
+submissions counts every submitted SQL text or backslash command; failures counts
+those that ended in a ClientError.
+"""
+struct SessionReport:
+    submissions: U64
+    failures: U64
+
+    invariant self.failures <= self.submissions
+
+enum CliCommand:
+    Help
+    Session(connection: ConnectionRequest, mode: SessionMode, initial_sql: Str)
 
 fn parse_dsn(value: Str) -> Result[ConnectionInputs, ConnectionError]:
+    doc """
+    Parse value as one libpq connection string: a postgresql:// or postgres://
+    URI (percent-decoded) or whitespace-separated key=value pairs. Return its
+    host, port, user, password and dbname parameters verbatim; an absent
+    parameter is "". A string libpq cannot parse, and one that names no
+    database, is InvalidDsn whose value is a fixed category message that never
+    contains any part of the input, which may include a password.
+    """
+
     ensures Result.Ok(inputs) => inputs.database != ""
 
     error ConnectionError.InvalidDsn
@@ -435,6 +580,11 @@ fn resolve_profile(
     name: Str,
     profiles: List[ConnectionProfile],
 ) -> Result[ConnectionProfile, ConnectionError]:
+    doc """
+    Return the first profile in list order whose name equals name exactly
+    (case-sensitive, no trimming); when none does, return ProfileMissing(name: name).
+    """
+
     ensures Result.Ok(profile) => profile.name == name
 
     error ConnectionError.ProfileMissing
@@ -445,13 +595,20 @@ fn resolve_connection(
     inputs: ConnectionInputs,
     environment: EnvironmentInputs,
 ) -> Result[ConnectionSettings, ConnectionError]:
+    doc """
+    Merge explicit inputs over environment values field by field. The merged
+    database must be nonempty. A nonempty merged port must consist of ASCII
+    digits denoting 1..65535, otherwise return InvalidPort(value: the merged
+    port); an empty port stays empty and means libpq's default.
+    """
+
     ensures Result.Ok(settings) => ((inputs.host != "" and settings.host == inputs.host) or (inputs.host == "" and settings.host == environment.host))
     ensures Result.Ok(settings) => ((inputs.port != "" and settings.port == inputs.port) or (inputs.port == "" and settings.port == environment.port))
     ensures Result.Ok(settings) => ((inputs.user != "" and settings.user == inputs.user) or (inputs.user == "" and settings.user == environment.user))
     ensures Result.Ok(settings) => ((inputs.password != "" and settings.password == inputs.password) or (inputs.password == "" and settings.password == environment.password))
     ensures Result.Ok(settings) => ((inputs.database != "" and settings.database == inputs.database) or (inputs.database == "" and settings.database == environment.database))
 
-    error ConnectionError.MissingDatabase
+    error ConnectionError.MissingDatabase when inputs.database == "" and environment.database == ""
     error ConnectionError.InvalidPort
 
     effects []
@@ -460,195 +617,418 @@ fn resolve_connection_plan(
     request: ConnectionRequest,
     profile: Option[ConnectionProfile],
 ) -> Result[ConnectionPlan, ConnectionError]:
-    ensures Result.Ok(plan) => plan.settings.database != ""
+    doc """
+    Build a session plan from four layers, highest first: request.inputs, the
+    effective connection string, the profile's inputs when profile is Some, then
+    request.environment. The effective connection string is request.dsn when
+    nonempty, otherwise the profile's dsn, otherwise ""; it contributes its host,
+    port, user, password and dbname parameters as parsed by libpq. For host,
+    port, user, password and database take the first nonempty layer value.
+    request.profile is the name the caller resolved with resolve_profile; only
+    the profile argument is used here.
+    
+    plan.dsn is the effective connection string. plan.tls is request.tls when its
+    mode is not Default, otherwise the profile's tls when profile is Some,
+    otherwise request.tls. plan.ssh is request.ssh when Some, otherwise the
+    profile's ssh when profile is Some, otherwise Nothing.
+    
+    Validate in this order: the selected SSH hop needs a nonempty host that does
+    not start with "-", a nonempty user and a nonzero port (SshInvalid); the
+    effective connection string must parse (InvalidDsn); the merged port follows
+    resolve_connection's port rule (InvalidPort); the merged database must be
+    nonempty (MissingDatabase).
+    """
 
-    error ConnectionError.MissingDatabase
-    error ConnectionError.InvalidPort
-    error ConnectionError.InvalidDsn
-    error ConnectionError.TlsInvalid
+    ensures Result.Ok(plan) => plan.settings.database != ""
+    ensures Result.Ok(plan) => (request.inputs.host == "" or plan.settings.host == request.inputs.host)
+    ensures Result.Ok(plan) => (request.inputs.port == "" or plan.settings.port == request.inputs.port)
+    ensures Result.Ok(plan) => (request.inputs.user == "" or plan.settings.user == request.inputs.user)
+    ensures Result.Ok(plan) => (request.inputs.password == "" or plan.settings.password == request.inputs.password)
+    ensures Result.Ok(plan) => (request.inputs.database == "" or plan.settings.database == request.inputs.database)
+    ensures Result.Ok(plan) => (request.dsn == "" or plan.dsn == request.dsn)
+
+    error ConnectionError.SshInvalid with request.ssh matches Option.Some(hop) when (hop.host == "" or starts_with(hop.host, "-") or hop.user == "" or hop.port == 0)
     error ConnectionError.SshInvalid
+    error ConnectionError.InvalidDsn
+    error ConnectionError.InvalidPort
+    error ConnectionError.MissingDatabase
+
+    effects []
+
+fn parse_arguments(
+    arguments: List[Str],
+    environment: EnvironmentInputs,
+) -> Result[CliCommand, ClientError]:
+    doc """
+    Parse the pgcli-cott command line; arguments excludes the program name.
+    --help anywhere selects Help. The options -h/--host, -p/--port,
+    -U/--username, -d/--dbname and -c/--command take the next argument as their
+    value, or use the --long=value form; a repeated option keeps its last value.
+    The first other argument that does not start with "-" is the positional
+    connection string. An option without a value, a second positional argument
+    and any other argument starting with "-" are InvalidArguments whose message
+    names the offending option or says that a positional argument is extra and
+    never contains an argument value.
+    
+    Session carries ConnectionRequest(dsn: the positional value or "", profile: "",
+    inputs: host, port, user and database from the options ("" when absent) with
+    password "", environment: environment, tls: TlsSettings(Default, Nothing,
+    Nothing), ssh: Nothing). The CLI never accepts a password argument. -c selects
+    ExecuteOnce with initial_sql = its value; otherwise the mode is Interactive
+    with initial_sql "".
+    """
+
+    ensures Result.Ok(CliCommand.Session(connection, _, _)) => connection.environment == environment
+    ensures Result.Ok(CliCommand.Session(connection, _, _)) => connection.inputs.password == ""
+    ensures Result.Ok(CliCommand.Session(_, mode, sql)) => (mode == SessionMode.ExecuteOnce or sql == "")
+
+    error ClientError.InvalidArguments
 
     effects []
 
 fn prompt_policy(no_prompt: Bool, password: Str) -> Result[PromptAction, ConnectionError]:
+    doc """
+    Decide how to obtain a password: a nonempty password is used as is; an empty
+    one is prompted for unless prompting is disabled.
+    """
+
     ensures Result.Ok(action) => ((password != "" and action == PromptAction.UsePassword) or (password == "" and action == PromptAction.PromptPassword))
 
+    errors complete
     error ConnectionError.PromptDisabled when no_prompt and password == ""
 
     effects []
 
 fn resolve_credential(request: CredentialRequest) -> Result[CredentialResolution, ConnectionError]:
     doc """
-    Resolve a password with short-circuit priority: nonempty supplied_password
-    returns Supplied; otherwise nonempty environment_password returns Environment.
-    Those fields are already resolved input, so do not read process environment.
-    Otherwise, if use_keyring is true, require nonempty service and user and call
-    the lock-selected keyring.get_password(service, user). A nonempty result
-    returns Keyring. A None or empty result means no stored credential and proceeds
-    to the prompt policy. A backend/lookup failure returns CredentialUnavailable
-    with a fixed nonsecret message; never write/delete a keyring entry.
-    If still unresolved and no_prompt is true, return PromptDisabled without
-    reading stdin or opening the terminal. Otherwise prompt exactly once using
-    getpass.getpass with a fixed "Password: " prompt. Do not permit its echoed-input
-    fallback: treat getpass.GetPassWarning as an error. A nonempty response returns
-    Prompt; an explicitly submitted empty response returns password="" with
-    PasswordSource.None (passwordless authentication). EOF, cancellation, terminal
-    or hidden-input failure returns CredentialUnavailable without echoing secrets.
-    Never log or include any password, service credential or raw exception in errors.
+    Resolve a password with short-circuit priority. A nonempty supplied_password
+    returns it with Supplied; otherwise a nonempty environment_password returns
+    it with Environment. These fields are already-resolved inputs: do not read
+    the process environment. Otherwise, when use_keyring is true, service and
+    user must be nonempty (else CredentialUnavailable) and the lock-selected
+    keyring is asked for the password stored for (service, user): a nonempty
+    answer returns it with Keyring; no entry or an empty entry continues; a
+    backend or lookup failure is CredentialUnavailable. Keyring entries are only
+    read, never written or deleted.
+    Still unresolved, call prompt_policy(no_prompt, "") and return its
+    PromptDisabled unchanged without touching the terminal. For PromptPassword,
+    prompt exactly once on the controlling terminal with the fixed prompt
+    "Password: " and hidden input; when hidden input is unavailable fail with
+    CredentialUnavailable instead of reading echoed input. A nonempty answer
+    returns it with Prompt; a submitted empty answer returns password "" with
+    source None (passwordless authentication). End of input, cancellation or
+    terminal failure is CredentialUnavailable.
     """
 
     ensures Result.Ok(resolution) => (resolution.password != "" or resolution.source == PasswordSource.None)
+    ensures Result.Ok(resolution) => (request.supplied_password == "" or (resolution.source == PasswordSource.Supplied and resolution.password == request.supplied_password))
+    ensures Result.Ok(resolution) => (request.supplied_password != "" or request.environment_password == "" or (resolution.source == PasswordSource.Environment and resolution.password == request.environment_password))
 
+    error ConnectionError.CredentialUnavailable when (request.supplied_password == "" and request.environment_password == "" and request.use_keyring and (request.service == "" or request.user == ""))
+    error ConnectionError.PromptDisabled when (request.supplied_password == "" and request.environment_password == "" and not request.use_keyring and request.no_prompt)
     error ConnectionError.CredentialUnavailable
     error ConnectionError.PromptDisabled
 
     effects [file.read, file.write, network]
 
-fn connect(plan: ConnectionPlan) -> Result[Unit, ConnectionError]:
+fn connect(plan: ConnectionPlan) -> Result[ConnectionReceipt, ConnectionError]:
     doc """
-    Probe an authenticated PostgreSQL session using the lock-selected psycopg
-    driver, execute SELECT 1, and close it before returning Unit. This function
-    does not install a global session or retain a transaction or SSH daemon.
-    A real successful query, not an open TCP socket, establishes success.
+    Probe the server described by plan with the lock-selected psycopg driver:
+    open one authenticated connection with the ConnectionPlan parameters, execute
+    SELECT current_database(), current_user, current_setting('server_version'),
+    close the connection and return those values as the receipt. Success means an
+    authenticated query completed, not that a socket opened. The probe writes no
+    data and leaves no session, transaction, tunnel or process behind.
     
-    Parse plan.dsn with psycopg.conninfo.conninfo_to_dict (empty means no DSN).
-    Nonempty settings.host, port, user, password and database override the DSN's
-    corresponding host, port, user, password and dbname; empty settings leave
-    the DSN value in place. Require a nonempty resolved dbname. Validate a supplied
-    port as decimal 1..65535; the default port is 5432. Pass connection parameters
-    as psycopg keyword arguments, never SQL or shell text.
-    plan.tls.mode overrides sslmode: empty means prefer; otherwise accept exactly
-    disable, allow, prefer, require, verify-ca, verify-full. The Path value "."
-    means an omitted certificate path. Other root_certificate, certificate and
-    private_key paths override sslrootcert, sslcert and sslkey respectively.
-    The certificate and private key are supplied together or both omitted.
-    Invalid DSN/port/TLS data maps to ConnectionFailed, the only declared error.
-    Set connect_timeout=10 regardless of DSN and issue no application writes.
-    
-    Without SSH connect directly. With Some(ssh), use the installed OpenSSH ssh
-    executable with an argument vector, never a shell. Validate nonempty jump
-    host/user, positive port, and a single remote database host (no comma-separated
-    host list, Unix socket or control characters). Preserve the resolved database
-    hostname for TLS verification, but connect to the loopback tunnel using
-    hostaddr=127.0.0.1 and the allocated local port. Missing remote host defaults
-    to localhost from the jump host's perspective.
+    Without ssh connect directly. With Some(hop) use the installed OpenSSH ssh
+    executable with an argument vector, never a shell. The database host must be
+    a single host name or address (no comma-separated list, Unix socket path or
+    control characters); a missing host means localhost as seen from the jump
+    host. Keep that host name for TLS verification but connect with
+    hostaddr=127.0.0.1 and the forwarded local port.
     Launch a foreground control master with -M -N, a private mode-0700 temporary
-    directory and control socket, BatchMode=yes, StrictHostKeyChecking=yes,
+    directory holding the control socket, BatchMode=yes, StrictHostKeyChecking=yes,
     ExitOnForwardFailure=yes, ConnectTimeout=10, ControlPersist=no and
-    GatewayPorts=no. Existing known_hosts is authority: never accept an unknown
-    key automatically. Use -p and -l for jump port/user; private_key "." means
-    no explicit identity file, otherwise use -i. Reject jump host beginning "-".
-    Wait at most ten monotonic seconds for ssh -S socket -O check to succeed.
-    Allocate a loopback-only port through a short-lived bound socket, then ask
-    the authenticated master with -O forward -L 127.0.0.1:port:dbhost:dbport.
-    Quote IPv6 hosts with forwarding-syntax brackets. A bind race is a declared
-    failure, never permission to connect through an unconfirmed forwarding.
-    Confirm the control request succeeded before contacting PostgreSQL.
-    All ssh commands are bounded; stdin is DEVNULL, no password prompt or shell,
-    no password in argv, and subprocess output is not copied into diagnostics.
+    GatewayPorts=no, -p for the jump port, -l for the jump user and -i for
+    private_key when Some. The existing known_hosts is the authority: never
+    accept an unknown host key. Wait at most ten monotonic seconds for
+    ssh -S socket -O check to succeed. Pick a free loopback port through a
+    short-lived bound socket, then ask the master for
+    -O forward -L 127.0.0.1:port:dbhost:dbport, bracketing IPv6 hosts. Confirm the
+    forward succeeded before contacting PostgreSQL; a bind race is a failure,
+    never a reason to connect elsewhere. Every ssh command is bounded, has stdin
+    connected to the null device, never prompts, never carries a password in its
+    arguments, and its output is not copied into diagnostics.
+    On every path close the psycopg connection, ask the control master to exit,
+    terminate then kill and wait for the owned master process if it still runs,
+    and remove the temporary directory. Never signal an unrelated process.
     
-    On every path close the psycopg connection, request control-master exit,
-    terminate then kill and wait for a still-running owned foreground process,
-    and remove the temporary control directory. Never kill an unrelated PID.
-    All validation, driver, authentication, TLS, SSH, query, timeout or cleanup
-    failures return ConnectionFailed with a fixed nonsecret category message;
-    never include a DSN, password, private-key contents or raw exception text.
+    Any validation, driver, authentication, TLS, SSH, query, timeout or cleanup
+    failure is ConnectionFailed with a fixed category message.
     """
 
-    ensures Result.Ok(connected) => connected == ()
+    ensures Result.Ok(receipt) => (plan.settings.database == "" or receipt.database == plan.settings.database)
+    ensures Result.Ok(receipt) => (plan.settings.user == "" or receipt.user == plan.settings.user)
 
+    error ConnectionError.ConnectionFailed with plan.ssh matches Option.Some(hop) when (hop.host == "" or starts_with(hop.host, "-") or hop.user == "" or hop.port == 0)
     error ConnectionError.ConnectionFailed
 
-    effects [network, database.read, database.write, file.read, file.write, clock]
+    effects [network, database.read, file.read, file.write, clock]
 
-fn refresh_catalog(request: CatalogRefreshRequest) -> Result[Catalog, ClientError]:
-    ensures Result.Ok(catalog) => catalog.limit == request.limit
-    ensures Result.Ok(catalog) => catalog.relations.len <= request.limit
+fn begin_transaction(mode: TransactionMode) -> TransactionState:
+    doc """
+    Open an explicit transaction in the client's transaction model.
+    """
 
-    error ClientError.CatalogFailed
+    ensures result.mode == mode
+    ensures result.status == TransactionStatus.Active
 
-    effects [database.read, clock]
+    effects []
 
-fn complete_sql(request: CompletionRequest) -> CompletionResult:
+fn commit_transaction(transaction: TransactionState) -> Result[TransactionState, ClientError]:
+    doc """
+    Commit the open transaction. Committing when no transaction is open, or after
+    it failed (PostgreSQL rolls a failed transaction back instead), is
+    TransactionFailed.
+    """
+
+    ensures Result.Ok(committed) => (committed.mode == transaction.mode and committed.status == TransactionStatus.Idle)
+
+    errors complete
+    error ClientError.TransactionFailed when transaction.status != TransactionStatus.Active
+
+    effects []
+
+fn rollback_transaction(transaction: TransactionState) -> Result[TransactionState, ClientError]:
+    doc """
+    Roll back an open or failed transaction. Rolling back when no transaction is
+    open is TransactionFailed.
+    """
+
+    ensures Result.Ok(rolled_back) => (rolled_back.mode == transaction.mode and rolled_back.status == TransactionStatus.Idle)
+
+    errors complete
+    error ClientError.TransactionFailed when transaction.status == TransactionStatus.Idle
+
     effects []
 
 fn complete_catalog_sql(request: CompletionRequest, policy: CompletionPolicy) -> CompletionResult:
+    doc """
+    Complete the word that ends at request.cursor. The word starts right after
+    the last character before the cursor that is not a Unicode letter or digit,
+    "_" or "."; replace_start is that position and the prefix is the text from
+    replace_start to the cursor. A candidate matches when it starts with the
+    prefix ignoring ASCII case.
+    Candidates, in this order: for each catalog table, its name, then
+    schema + "." + name, then each column name unless in relation context; then,
+    when policy.include_keywords is true and not in relation context, each word
+    of SQL_KEYWORDS. Relation context means the nearest whitespace-separated word
+    before replace_start equals FROM, JOIN, INTO, UPDATE or TABLE ignoring ASCII
+    case. Keep matching candidates, drop exact duplicates, sort by the
+    ASCII-lowercased text and then by the text itself, and return the first
+    policy.max_candidates.
+    """
+
     ensures result.candidates.len <= policy.max_candidates
+    ensures result.replace_start <= request.cursor
+
+    effects []
+
+fn complete_sql(request: CompletionRequest) -> CompletionResult:
+    doc """
+    Complete with the default interactive policy: the result is exactly
+    complete_catalog_sql(request, CompletionPolicy(max_candidates: 50,
+    include_keywords: true)).
+    """
+
+    ensures result.candidates.len <= 50
+    ensures result.replace_start <= request.cursor
 
     effects []
 
 fn highlight_sql(request: HighlightRequest) -> HighlightedSql:
+    doc """
+    Mark SQL for a terminal. contains_error is true exactly when the source ends
+    inside a single-quoted string, a double-quoted identifier, a dollar-quoted
+    string ($$ or $tag$) or a /* block comment; quotes are escaped by doubling
+    and a -- comment ends at a line feed.
+    When color is false text is source. When color is true text is source with
+    each keyword wrapped between ESC "[1m" and ESC "[0m" and each complete
+    single-quoted string literal, quotes included, wrapped between ESC "[32m" and
+    ESC "[0m", where ESC is U+001B. A keyword is a maximal sequence of ASCII letters
+    and "_" outside quotes and comments that equals a word of SQL_KEYWORDS
+    ignoring ASCII case. All other characters are copied unchanged.
+    """
+
+    ensures (request.color or result.text == request.source)
+
     effects []
 
 fn plan_query(buffer: InputBuffer) -> Result[QueryPlan, ClientError]:
-    ensures Result.Ok(plan) => plan.sql == buffer.text
+    doc """
+    Plan the buffer's SQL text for one submission. Statements are separated by
+    semicolons outside single-quoted strings (quotes escaped by doubling),
+    double-quoted identifiers, dollar-quoted strings ($$ or $tag$), -- line
+    comments and /* */ block comments. statement_count counts separated pieces
+    that contain something other than whitespace and comments; sql is
+    buffer.text unchanged. requires_terminator is true exactly when
+    buffer.multiline is true and the text does not end with a separating
+    semicolon once trailing whitespace and comments are ignored, including when
+    it ends inside a quote or comment. A text without any statement is
+    InvalidSql, and so is a text that ends inside a quote, identifier, dollar
+    quote or block comment when buffer.multiline is false.
+    """
 
+    ensures Result.Ok(plan) => plan.sql == buffer.text
+    ensures Result.Ok(plan) => plan.statement_count > 0
+    ensures Result.Ok(plan) => (buffer.multiline or not plan.requires_terminator)
+
+    error ClientError.InvalidSql when buffer.text == ""
     error ClientError.InvalidSql
 
     effects []
 
 fn edit_multiline(buffer: InputBuffer, input: Str) -> InputBuffer:
-    ensures result.cursor <= result.text.len
+    doc """
+    Insert input into buffer.text at buffer.cursor and move the cursor to the end
+    of the inserted text.
+    """
+
+    ensures result.text.len == buffer.text.len + input.len
+    ensures result.cursor == buffer.cursor + input.len
+    ensures result.multiline == buffer.multiline
+
+    effects []
+
+fn parse_meta_command(source: Str) -> MetaCommand:
+    doc """
+    Parse one backslash-command line. Trim surrounding whitespace, drop one
+    trailing ";" and trim again. The command word is the text before the first
+    whitespace; the argument is the rest with surrounding whitespace removed.
+    A command word longer than two characters that ends in "+" is read without
+    the "+". Command words are case-sensitive. An unrecognized word, a missing
+    required argument, an argument given to a no-argument command and an invalid
+    argument value all give Unknown(source: source) with the original source.
+    
+    No argument: \q, \quit, quit, exit -> Quit; \# or \refresh -> RefreshCatalog;
+    \? or help -> Help; \conninfo -> ConnectionInfo; \du or \dg -> ListRoles;
+    \dx -> ListExtensions; \l or \list -> ListDatabases; \e -> EditBuffer;
+    \timing -> Timing; \x -> Expanded; \g -> ExecuteBuffer; \G -> ExecuteExpanded;
+    \p -> PrintBuffer; \r -> ResetBuffer.
+    Pattern (the argument, possibly ""): \d Describe, \dD ListDomains,
+    \dE ListForeignTables, \dF ListTextSearchConfigurations, \dT ListDataTypes,
+    \db ListTablespaces, \ddp ListDefaultPrivileges, \df ListFunctions,
+    \di ListIndexes, \dm ListMaterializedViews, \dn ListSchemas, \dp or \z
+    ListPrivileges, \ds ListSequences, \dt ListTables, \dv ListViews, \s History,
+    \fl ListFavorites.
+    Required single-word argument: \sf ShowFunction, \c or \connect Connect,
+    \nd DeleteNamedQuery, \np PrintNamedQuery, \fd DeleteFavorite; path
+    arguments \i ReadFile, \ir ReadRelativeFile, \w WriteBuffer, where one pair of
+    matching surrounding single or double quotes is removed.
+    Optional argument: \h topic -> SqlHelp(topic), or Help when empty;
+    \echo text -> Echo; \qecho text -> QueryOutputEcho; \f name -> Favorite, or
+    ListFavorites(pattern: "") when empty.
+    Structured: \T name -> SetFormat(format) when name, ignoring ASCII case, is
+    that format's \T name; \pager on|off -> SetPager; \n name [words...] -> NamedQuery with the
+    whitespace-separated words after the name as arguments; \ns name sql ->
+    SaveNamedQuery with sql the nonempty rest after the name; \copy table to|from
+    path -> Copy(table, path, from_file: the direction is "from" ignoring ASCII
+    case), removing matching quotes around path.
+    """
 
     effects []
 
 fn recognize_backslash(source: Str) -> BackslashCommand:
-    effects []
+    doc """
+    Classify source through parse_meta_command(source): Quit -> Quit, Help -> Help,
+    ListTables -> Tables, Describe -> Describe, every other command -> Unknown.
+    """
 
-fn parse_meta_command(source: Str) -> MetaCommand:
     effects []
 
 fn render_query(request: RenderRequest) -> RenderedQuery:
+    doc """
+    Render a text table. Each row is read as exactly columns.len cells: missing
+    cells are "" and extra cells are ignored. Lengths count Unicode code points.
+    Horizontal: a header line of the column names, a separator line, then one
+    line per row. Each cell is left-justified with spaces to its column width
+    (the longest of the name and that column's cells) and cells are joined by
+    " | "; the separator joins runs of "-" of each column width with "-+-".
+    Vertical: for each row n counted from 1, the line "-[ RECORD n ]" followed by
+    one line per column holding the name left-justified to the longest column
+    name, " | ", then the cell.
+    Trailing spaces are removed from every line and lines are joined by line
+    feeds without a final one; no columns gives "". terminal_width neither wraps
+    nor truncates. layout is request.layout.
+    """
+
+    ensures result.layout == request.layout
+
     effects []
 
 fn format_query(request: FormatRequest) -> FormattedQuery:
-    ensures result.truncated_rows <= request.max_rows
+    doc """
+    Format a query result. Keep the first max_rows rows (0 keeps none);
+    truncated_rows is the number of rows left out. When max_column_width is
+    positive each kept cell longer than it (in code points) becomes its first
+    max_column_width - 1 code points followed by "…"; column names are not
+    clipped. By format:
+    Aligned: render_query with Horizontal layout; when that result's width
+    exceeds terminal_width use render_query with Vertical layout instead.
+    Vertical: render_query with Vertical layout.
+    Csv and Tsv: RFC 4180 records with "," or a tab as delimiter, a header record
+    of the column names, a field quoted with '"' (inner quotes doubled) only when
+    it contains the delimiter, a quote, CR or LF, records joined by line feeds
+    without a final one.
+    Json: a JSON array holding per row an object that maps each column name to its
+    cell string in column order (a repeated name keeps its last cell), indented
+    by 2 spaces, non-ASCII characters unescaped. JsonLines: the same objects, one
+    compact object per line.
+    Html: the lines "<table>", "<thead><tr>" + one "<th>name</th>" per column +
+    "</tr></thead>", "<tbody>", one "<tr>" + "<td>cell</td>" per cell + "</tr>"
+    line per row, "</tbody>", "</table>", escaping &, <, >, " and '.
+    Latex: "\begin{tabular}{" + one "l" per column + "}", the header row, "\hline",
+    the rows, "\end{tabular}"; cells are joined by " & ", each row ends with
+    " \\"; in cells \ becomes \textbackslash{} and each of & % $ # _ { } gets a
+    preceding \.
+    Markdown: "| " + cells joined by " | " + " |" for the header and each row, with
+    a "|" + "---|" per column separator after the header; "|" in cells is "\|".
+    rendered.layout is Vertical for Vertical and for auto-expanded Aligned
+    output, Horizontal otherwise.
+    """
+
+    ensures (request.query.rows.len <= request.max_rows or result.truncated_rows == request.query.rows.len - request.max_rows)
+    ensures (request.query.rows.len > request.max_rows or result.truncated_rows == 0)
+    ensures (request.format == TableFormat.Vertical => result.rendered.layout == RenderLayout.Vertical)
 
     effects []
 
-fn execute_query(connection: ConnectionSettings, sql: Str) -> Result[QueryResult, DatabaseError]:
-    ensures Result.Ok(query_result) => query_result.rows.len == 0 or query_result.columns.len > 0
+fn remember_history(
+    policy: HistoryPolicy,
+    entries: List[HistoryEntry],
+    entry: HistoryEntry,
+) -> List[HistoryEntry]:
+    doc """
+    Append entry to entries, then apply HistoryPolicy normalization. This is a
+    pure list transformation with no clock or filesystem access.
+    """
 
-    error DatabaseError.ConnectionFailed
-    error DatabaseError.QueryFailed
+    ensures result.len <= policy.max_entries
 
-    effects [database.read, database.write]
-
-fn execute_planned_query(request: QueryRequest) -> Result[ExecutedQuery, ClientError]:
-    ensures Result.Ok(executed) => executed.result.rows.len <= request.max_rows
-
-    error ClientError.QueryFailed
-    error ClientError.TransactionFailed
-
-    effects [database.read, database.write, clock]
-
-fn begin_transaction(mode: TransactionMode) -> TransactionState:
-    ensures result.mode == mode
-
-    effects [database.write]
-
-fn commit_transaction(transaction: TransactionState) -> Result[TransactionState, ClientError]:
-    ensures Result.Ok(committed) => not committed.active
-
-    error ClientError.TransactionFailed
-
-    effects [database.write]
-
-fn rollback_transaction(transaction: TransactionState) -> Result[TransactionState, ClientError]:
-    ensures Result.Ok(rolled_back) => not rolled_back.active
-
-    error ClientError.TransactionFailed
-
-    effects [database.write]
+    effects []
 
 fn load_history(policy: HistoryPolicy) -> Result[List[HistoryEntry], ClientError]:
     doc """
-    Read policy.path as the HistoryEntry JSON format and apply HistoryPolicy
-    normalization only after validating every row, including rows later trimmed.
-    A missing file is an empty success. Invalid UTF-8/JSON/field types, a non-array
-    root, a non-regular or symlink leaf, and other I/O failures return
-    HistoryFailed(path=policy.path, message=a fixed nonsecret category).
-    Reject files larger than 16 MiB using a bounded read; do not execute file content.
+    Read policy.path as the HistoryEntry JSON format, validate every element,
+    including elements normalization later drops, and then apply HistoryPolicy
+    normalization. A missing file is an empty success. Invalid UTF-8 or JSON, a
+    root that is not an array, an element that is not an object with exactly the
+    four fields and their types, a file larger than 16 MiB (read with a bounded
+    read), a symlink or non-regular file and any other I/O failure return
+    HistoryFailed(path: policy.path, message: a fixed category). File content is
+    data and is never executed. policy.path is read from the file system the
+    program runs against: the fs fixture root while a Cott scenario with an fs
+    fixture is active, otherwise the host file system.
     """
 
     ensures Result.Ok(entries) => entries.len <= policy.max_entries
@@ -659,48 +1039,47 @@ fn load_history(policy: HistoryPolicy) -> Result[List[HistoryEntry], ClientError
 
 fn save_history(policy: HistoryPolicy, entries: List[HistoryEntry]) -> Result[Unit, ClientError]:
     doc """
-    Apply HistoryPolicy normalization, then write the HistoryEntry JSON format
-    with ensure_ascii=False, compact separators and one final newline. Preserve
-    field values exactly and reject serialized data larger than 16 MiB.
-    Replace policy.path atomically using an exclusive same-directory temporary
-    file, mode 0600, flush/fsync then os.replace, followed by parent directory fsync.
-    Parent directories are not created. Reject a symlink/non-regular existing leaf.
-    On precommit failure preserve the original and remove the temporary file.
-    Return HistoryFailed(path=policy.path, message=a fixed nonsecret category) for
-    serialization or I/O failure; never leave a partially truncated history file.
+    Apply HistoryPolicy normalization to entries and write the HistoryEntry JSON
+    format with non-ASCII characters unescaped, compact separators and one final
+    line feed, preserving field values exactly; serialized data larger than
+    16 MiB is rejected. Replace policy.path atomically: write an exclusively
+    created same-directory temporary file with mode 0600, flush and fsync it,
+    rename it over the target, then fsync the parent directory. Parent
+    directories are not created; a symlink or non-regular existing target is
+    rejected. A failure before the rename keeps the previous file and removes the
+    temporary file. Serialization and I/O failures return
+    HistoryFailed(path: policy.path, message: a fixed category). policy.path is
+    replaced in the file system the program runs against: the fs fixture root
+    while a Cott scenario with an fs fixture is active, otherwise the host file
+    system.
     """
 
+    # Structural: Unit carries no fact; the history_* scenarios read the file back.
     ensures Result.Ok(saved) => saved == ()
 
     error ClientError.HistoryFailed
 
     effects [file.write]
 
-fn remember_history(
-    policy: HistoryPolicy,
-    entries: List[HistoryEntry],
-    entry: HistoryEntry,
-) -> List[HistoryEntry]:
-    doc """
-    Append entry to entries, then apply the exact HistoryPolicy normalization.
-    This is pure list transformation with no clock or filesystem access.
-    """
-
-    ensures result.len <= policy.max_entries
-
-    effects []
-
 fn load_favorites(store: FavoriteStore) -> Result[List[Favorite], ClientError]:
     doc """
-    Read store.path as the Favorite JSON format; a missing file is an empty success.
-    Preserve all valid entries in file order; more than store.max_entries is an
-    error, not truncation. Validate every row, including tags and duplicate names.
-    Reject invalid UTF-8/JSON, files over 16 MiB, non-regular/symlink leaves and
-    genuine I/O failures. Return FavoriteFailed(name=str(store.path)) for all file,
-    shape, duplicate-name or capacity failures. Do not silently skip invalid rows.
+    Read store.path as the Favorite JSON format; a missing file is an empty
+    success. Entries are checked in file order and the first problem decides the
+    error: an entry whose name is blank or repeats an earlier name gives
+    FavoriteFailed(name: that name), and an entry with a wrong shape gives
+    FavoriteFailed(name: ""). After all entries pass, more than store.max_entries
+    entries is FavoriteFailed(name: ""). Invalid UTF-8 or JSON, a root that is not
+    an array, a file larger than 16 MiB (read with a bounded read), a symlink or
+    non-regular file and any other I/O failure are FavoriteFailed(name: "").
+    Valid entries keep file order and invalid entries are never skipped.
+    store.path is read from the file system the program runs against: the fs
+    fixture root while a Cott scenario with an fs fixture is active, otherwise the
+    host file system.
     """
 
     ensures Result.Ok(favorites) => favorites.len <= store.max_entries
+    ensures Result.Ok(favorites) => unique_by(favorites, Favorite.name)
+    ensures Result.Ok(favorites) => not any_blank_by(favorites, Favorite.name)
 
     error ClientError.FavoriteFailed
 
@@ -708,28 +1087,141 @@ fn load_favorites(store: FavoriteStore) -> Result[List[Favorite], ClientError]:
 
 fn save_favorites(store: FavoriteStore, favorites: List[Favorite]) -> Result[Unit, ClientError]:
     doc """
-    Validate Favorite names and capacity exactly as the persistence format requires,
-    retaining input order. Write UTF-8 JSON with ensure_ascii=False, compact
-    separators and one newline; reject serialized data over 16 MiB.
-    Use an exclusive same-directory temporary file, mode 0600, flush/fsync,
-    os.replace and parent fsync. Do not create parents or follow symlink leaves;
-    preserve the old file and remove the temporary file on precommit failure.
-    Every validation/serialization/I/O failure is FavoriteFailed(name=str(store.path)).
+    Write favorites in the given order as the Favorite JSON format with non-ASCII
+    characters unescaped, compact separators and one final line feed; serialized
+    data larger than 16 MiB is rejected. Replace store.path atomically: write an
+    exclusively created same-directory temporary file with mode 0600, flush and
+    fsync it, rename it over the target, then fsync the parent directory. Parent
+    directories are not created; a symlink or non-regular existing target is
+    rejected; a failure before the rename keeps the previous file and removes the
+    temporary file. The first entry whose name is blank or repeats an earlier name
+    is reported as FavoriteFailed(name: that name); capacity, serialization and
+    I/O failures are FavoriteFailed(name: ""). store.path is replaced in the file
+    system the program runs against: the fs fixture root while a Cott scenario
+    with an fs fixture is active, otherwise the host file system.
     """
 
+    # Structural: Unit carries no fact; the favorites_* scenarios read the file back.
     ensures Result.Ok(saved) => saved == ()
 
+    error ClientError.FavoriteFailed when any_blank_by(favorites, Favorite.name)
+    error ClientError.FavoriteFailed when not unique_by(favorites, Favorite.name)
+    error ClientError.FavoriteFailed when favorites.len > store.max_entries
     error ClientError.FavoriteFailed
 
     effects [file.write]
+
+fn execute_query(connection: ConnectionSettings, sql: Str) -> Result[QueryResult, DatabaseError]:
+    doc """
+    Run sql once on a new autocommit connection built only from the nonempty
+    fields of connection (host, port, user, password, dbname; libpq defaults
+    otherwise; no connection string, TLS settings or SSH hop), then close it.
+    Return the columns and all rows of the last statement that produced rows, in
+    server order, with QueryResult cell text; no columns and no rows when no
+    statement produced rows. Failing to open the connection or authenticate is
+    ConnectionFailed; a statement error is QueryFailed.
+    """
+
+    ensures Result.Ok(query_result) => (query_result.rows.len == 0 or query_result.columns.len > 0)
+
+    error DatabaseError.ConnectionFailed
+    error DatabaseError.QueryFailed
+
+    effects [database.read, database.write]
+
+fn execute_planned_query(request: QueryRequest) -> Result[ExecutedQuery, ClientError]:
+    doc """
+    Execute request.sql as one submission over a new connection with the
+    ConnectionPlan parameters, then close the connection. The text may hold
+    several statements and is sent as one simple-protocol query. AutoCommit
+    commits each statement; Manual runs the text in one transaction committed
+    after the last statement; ReadOnly runs it in one READ ONLY transaction that
+    is always rolled back. A statement error rolls back an open transaction and is
+    QueryFailed; a failed commit or rollback is TransactionFailed; failing to open
+    the connection or authenticate is ConnectionFailed.
+    result holds the columns and the first max_rows rows, in server order, of the
+    last statement that produced rows (no columns and no rows when none did);
+    status is the last statement's command status tag such as "SELECT 2";
+    affected_rows is its row count (0 when unknown); notices are the server
+    notices' primary messages in arrival order; elapsed_ms is the monotonic
+    milliseconds spent executing when timing is true and 0 otherwise.
+    """
+
+    ensures Result.Ok(executed) => executed.result.rows.len <= request.max_rows
+    ensures Result.Ok(executed) => (request.timing or executed.elapsed_ms == 0)
+
+    error ClientError.TunnelUnsupported with request.connection.ssh matches Option.Some(_)
+    error ClientError.ConnectionFailed
+    error ClientError.QueryFailed
+    error ClientError.TransactionFailed
+
+    effects [database.read, database.write, clock]
+
+fn watch_query(request: WatchRequest) -> Result[WatchResult, ClientError]:
+    doc """
+    Execute request.query max_iterations times through execute_planned_query,
+    waiting interval_ms milliseconds between consecutive executions and not
+    after the last. The first failing execution stops the watch and its error is
+    returned unchanged. last_result is the final execution's result.
+    """
+
+    requires request.max_iterations > 0
+
+    ensures Result.Ok(watched) => watched.executions == request.max_iterations
+
+    error ClientError.TunnelUnsupported with request.query.connection.ssh matches Option.Some(_)
+    error ClientError.ConnectionFailed
+    error ClientError.QueryFailed
+    error ClientError.TransactionFailed
+
+    effects [database.read, database.write, clock]
+
+fn refresh_catalog(request: CatalogRefreshRequest) -> Result[Catalog, ClientError]:
+    doc """
+    Read a Catalog snapshot through one read-only connection with the
+    ConnectionPlan parameters using fixed, parameterized catalog queries, then
+    close the connection. Connection and query failures are CatalogFailed.
+    """
+
+    ensures Result.Ok(catalog) => catalog.limit == request.limit
+    ensures Result.Ok(catalog) => catalog.relations.len <= request.limit
+    ensures Result.Ok(catalog) => catalog.routines.len <= request.limit
+    ensures Result.Ok(catalog) => catalog.schemas.len <= request.limit
+
+    error ClientError.TunnelUnsupported with request.connection.ssh matches Option.Some(_)
+    error ClientError.CatalogFailed
+
+    effects [database.read, clock]
 
 fn import_delimited(
     plan: ConnectionPlan,
     request: ImportRequest,
 ) -> Result[TransferResult, ClientError]:
-    ensures Result.Ok(imported) => imported.rows <= request.max_rows
+    doc """
+    Load request.source into request.table in one transaction over a connection
+    with the plan's parameters. table is a table name, optionally
+    schema-qualified with one "."; each part is quoted as an SQL identifier. The
+    file is UTF-8 text with RFC 4180 quoting and the one-character delimiter; when
+    header is true the first record is skipped; a field equal to null_text loads
+    as SQL NULL. Records are loaded with COPY FROM STDIN or parameterized
+    statements, never by building SQL from field text. More than max_rows data
+    records, or a missing, unreadable or malformed file, is
+    ImportFailed(path: request.source, message: a fixed category) and loads
+    nothing. A connection failure is ConnectionFailed; a server error rolls
+    everything back and is QueryFailed. On success rows is the number of loaded
+    records and path is request.source. request.source is read from the file
+    system the program runs against: the fs fixture root while a Cott scenario
+    with an fs fixture is active, otherwise the host file system.
+    """
 
+    ensures Result.Ok(imported) => imported.rows <= request.max_rows
+    ensures Result.Ok(imported) => imported.path == request.source
+
+    error ClientError.ImportFailed when request.delimiter.len != 1
+    error ClientError.ImportFailed when request.table == ""
+    error ClientError.TunnelUnsupported with plan.ssh matches Option.Some(_)
     error ClientError.ImportFailed
+    error ClientError.ConnectionFailed
     error ClientError.QueryFailed
 
     effects [file.read, database.write]
@@ -738,50 +1230,268 @@ fn export_query(
     plan: ConnectionPlan,
     request: ExportRequest,
 ) -> Result[TransferResult, ClientError]:
-    ensures Result.Ok(exported) => exported.rows <= request.max_rows
+    doc """
+    Execute request.sql in one READ ONLY transaction over a connection with the
+    plan's parameters and write its rows to request.target as UTF-8 delimited
+    text: Csv uses request.delimiter and Tsv uses a tab (request.delimiter is then
+    ignored). A header record of column names is written when header is true;
+    fields use RFC 4180 quoting, records end with a line feed, and SQL NULL is an
+    empty field. The target is replaced only after every row was read, through an
+    exclusively created same-directory temporary file with mode 0600 that is
+    flushed, fsynced and renamed over the target, followed by a parent directory
+    fsync; parent directories are not created and a symlink or non-regular target
+    is rejected. More than max_rows result rows, or an
+    I/O failure, is ExportFailed(path: request.target, message: a fixed category)
+    and leaves the target unchanged. Other formats are
+    UnsupportedFormat(value: the format's \T name). A connection failure is
+    ConnectionFailed and a statement error QueryFailed. On success rows is the
+    number of data rows written and path is request.target. request.target is
+    replaced in the file system the program runs against: the fs fixture root
+    while a Cott scenario with an fs fixture is active, otherwise the host file
+    system.
+    """
 
+    ensures Result.Ok(exported) => exported.rows <= request.max_rows
+    ensures Result.Ok(exported) => exported.path == request.target
+
+    error ClientError.UnsupportedFormat when (request.format != TableFormat.Csv and request.format != TableFormat.Tsv)
+    error ClientError.ExportFailed when (request.format == TableFormat.Csv and request.delimiter.len != 1)
+    error ClientError.TunnelUnsupported with plan.ssh matches Option.Some(_)
     error ClientError.ExportFailed
+    error ClientError.ConnectionFailed
     error ClientError.QueryFailed
 
     effects [database.read, file.write]
 
-fn edit_in_editor(request: EditorRequest) -> Result[InputBuffer, ClientError]:
-    ensures Result.Ok(buffer) => buffer.cursor <= buffer.text.len
+fn receive_notifications(request: NotificationRequest) -> Result[List[Notification], ClientError]:
+    doc """
+    LISTEN on every channel, each quoted as an SQL identifier, over one
+    autocommit connection with the ConnectionPlan parameters. Collect
+    notifications in arrival order until max_notifications have arrived or
+    timeout_ms monotonic milliseconds have passed since listening began,
+    whichever comes first; each carries its channel, payload and sender pid.
+    UNLISTEN and close the connection on every path. Connection and listening
+    failures are NotificationFailed.
+    """
 
+    ensures Result.Ok(notifications) => notifications.len <= request.max_notifications
+
+    error ClientError.NotificationFailed when request.channels.len == 0
+    error ClientError.TunnelUnsupported with request.connection.ssh matches Option.Some(_)
+    error ClientError.NotificationFailed
+
+    effects [database.read, clock]
+
+fn edit_in_editor(request: EditorRequest) -> Result[InputBuffer, ClientError]:
+    doc """
+    Write buffer.text as UTF-8 to temporary_path, start the editor on it and wait
+    for it to exit, then read the file back. editor is split into words at
+    whitespace (no shell) and temporary_path is appended as the last argument; the
+    editor inherits the terminal. A zero exit status returns the file's text
+    without one trailing line feed, with the cursor at its end and
+    buffer.multiline kept. temporary_path is removed on every path. A missing
+    editor executable, a nonzero exit or signal, and I/O or decoding failures
+    are EditorFailed with a fixed category message.
+    """
+
+    ensures Result.Ok(edited) => edited.cursor == edited.text.len
+    ensures Result.Ok(edited) => edited.multiline == request.buffer.multiline
+
+    error ClientError.EditorFailed when request.editor == ""
     error ClientError.EditorFailed
 
     effects [file.read, file.write]
 
 fn page_output(request: PagerRequest) -> Result[Unit, ClientError]:
+    doc """
+    Show text on the terminal. When enabled is false, or text has at most
+    terminal_height lines, write text and one line feed to standard output.
+    Otherwise start the pager command, split into words at whitespace (no shell),
+    with text and one line feed on its standard input, and wait for it to exit;
+    a pager that exits with status 0 after closing its input early succeeds.
+    A pager that cannot start or exits nonzero, and a failed write to standard
+    output, are PagerFailed with a fixed category message.
+    """
+
+    # Structural: Unit carries no fact; PAGER_SHOWS_TEXT states the duty.
     ensures Result.Ok(paged) => paged == ()
 
     error ClientError.PagerFailed
 
     effects [file.read, file.write]
 
-fn receive_notifications(request: NotificationRequest) -> Result[List[Notification], ClientError]:
-    ensures Result.Ok(notifications) => notifications.len <= request.max_notifications
-
-    error ClientError.NotificationFailed
-
-    effects [database.read, clock]
-
-fn watch_query(request: WatchRequest) -> Result[WatchResult, ClientError]:
-    ensures Result.Ok(watched) => watched.executions <= request.max_iterations
-
-    error ClientError.QueryFailed
-    error ClientError.TransactionFailed
-
-    effects [database.read, database.write, clock]
-
 fn run_meta_command(
     invocation: CommandInvocation,
     options: SessionOptions,
     catalog: Catalog,
 ) -> Result[CommandResult, ClientError]:
-    ensures Result.Ok(step) => step.quit or step.buffer.cursor <= step.buffer.text.len
+    doc """
+    Execute one parsed backslash command against the session state and return
+    the resulting buffer, options and catalog with the text to show in output
+    ("" for none). quit is true only for Quit. Unless stated otherwise buffer,
+    options and catalog are returned unchanged, output never contains the
+    connection password, and a facade error is returned unchanged with no later
+    step. "A table" below means the output of format_query(FormatRequest(query,
+    options.format, 80, 0, options.max_rows)) for the named columns, rows in
+    source order. A pattern matches psql-style: "" matches everything, "*" any
+    sequence of characters, "?" one character, anything else itself
+    (case-sensitive); a pattern containing "." is matched against "schema.name",
+    otherwise the name.
+    
+    Session: Quit -> output "". Help -> one line per supported command word with a
+    short description. SqlHelp(topic) -> the URL
+    "https://www.postgresql.org/docs/current/sql-" + topic lower-cased without
+    spaces + ".html", or "https://www.postgresql.org/docs/current/sql-commands.html"
+    for "". SetFormat(format) -> options.format = format; "Output format: " + its
+    \T name. Timing -> toggle options.timing; "Timing is on." or "Timing is off.".
+    Expanded -> options.format becomes Vertical, or Aligned when it was Vertical;
+    "Expanded display is on." or "Expanded display is off.". SetPager(enabled) ->
+    options.pager = enabled; "Pager usage is on." or "Pager usage is off.".
+    ConnectionInfo -> 'You are connected to database "D" as user "U" on host "H"
+    at port "P".' from options.connection.settings. Echo(text) and
+    QueryOutputEcho(text) -> text. PrintBuffer -> buffer.text, or
+    "Query buffer is empty.". ResetBuffer -> empty buffer text with cursor 0 and
+    the same multiline; "Query buffer reset (cleared).".
+    
+    Catalog argument (no database access): Describe("") -> a table Schema, Name,
+    Type of every relation; Describe(pattern) -> a table Schema, Relation, Column
+    of each column of every matching relation. ListTables (kinds table and
+    partitioned table), ListViews (view), ListMaterializedViews
+    (materialized view) and ListSequences (sequence) -> a table Schema, Name, Type
+    of matching relations. ListSchemas -> Name; ListFunctions -> Schema, Name,
+    Result data type, Argument data types; ListRoles, ListExtensions and
+    ListDatabases -> Name.
+    
+    Server queries: ListDomains (Schema, Name, Type), ListForeignTables (Schema,
+    Name, Server), ListTextSearchConfigurations (Schema, Name), ListDataTypes
+    (Schema, Name), ListTablespaces (Name, Owner, Location),
+    ListDefaultPrivileges (Owner, Schema, Type, Privileges), ListIndexes (Schema,
+    Name, Table) and ListPrivileges (Schema, Name, Privileges) call
+    execute_planned_query(QueryRequest(options.connection, a fixed catalog query
+    containing no user text, options.max_rows, ReadOnly, false)) and show a table
+    of the result rows whose Name (Schema for ListDefaultPrivileges) matches the
+    pattern. ShowFunction(pattern) fetches non-system function definitions the
+    same way and shows those whose name matches, separated by blank lines, or
+    'No function matches "pattern".'.
+    
+    Connect(database): candidate = options.connection with settings.database =
+    database; connect(candidate), whose error becomes ConnectionFailed with a
+    fixed message; then refresh_catalog(CatalogRefreshRequest(candidate, false,
+    options.catalog_limit)); then options.connection = candidate, catalog = the
+    refreshed catalog, output 'You are now connected to database "D" as user "U".'
+    from the receipt. RefreshCatalog: the same refresh with options.connection;
+    catalog replaced; "Catalog refreshed: N relations, M routines.".
+    
+    ExecuteBuffer and ExecuteExpanded: plan_query(buffer), then
+    execute_planned_query(QueryRequest(options.connection, plan.sql,
+    options.max_rows, options.transaction, options.timing)), then format_query
+    with options.format (Vertical for ExecuteExpanded); output is the rendered
+    text, then the status when nonempty, then "Time: N ms" when options.timing,
+    joined by line feeds; the buffer becomes empty with the same multiline.
+    EditBuffer: edit_in_editor(EditorRequest(buffer, $VISUAL, else $EDITOR, else
+    "vi", a new unique file in the system temporary directory)); buffer = its
+    result; output "". ReadFile(path) and ReadRelativeFile(path) (relative to the
+    current directory): buffer = the file's UTF-8 text with the cursor at its end
+    and the same multiline; a read failure is ImportFailed(path, a fixed
+    category). WriteBuffer(path): replace path with buffer.text as UTF-8; a
+    failure is ExportFailed(path, a fixed category); 'Wrote query buffer to
+    "path".'. These ReadFile, ReadRelativeFile and WriteBuffer paths are read
+    from or replaced in the file system the program runs against: the fs fixture
+    root while a Cott scenario with an fs fixture is active, otherwise the host
+    file system. Copy(table, path, from_file): when from_file,
+    import_delimited(options.connection, ImportRequest(table, path, ",", true, "",
+    1000000)); otherwise export_query(options.connection, ExportRequest(
+    "SELECT * FROM " + table with each dot-separated part quoted as an SQL
+    identifier, path, Csv, ",", true, 1000000)); output "COPY " + rows.
+    
+    History(pattern): with options.history Nothing, "History is disabled.";
+    otherwise load_history(policy) and one line per entry whose sql contains
+    pattern ("" matches all): its 1-based stored position, two spaces, the sql,
+    lines joined by line feeds.
+    
+    Favorites: with options.favorites Nothing every favorite command is
+    FavoriteFailed(name: ""); otherwise load_favorites(store) first; a missing
+    favorite is FavoriteFailed(name: name). NamedQuery(name, arguments): the
+    favorite's sql with "$k" replaced by the k-th argument for k from
+    arguments.len down to 1, executed like ExecuteBuffer while the buffer stays
+    unchanged. SaveNamedQuery(name, sql) and Favorite(name) with sql =
+    buffer.text: replace the sql of the favorite with that name, keeping its
+    position and tags, or append Favorite(name, sql, no tags), then
+    save_favorites; 'Saved favorite "name".'. DeleteNamedQuery(name) and
+    DeleteFavorite(name): remove it, then save_favorites; 'Deleted favorite
+    "name".'. PrintNamedQuery(name): "name: sql". ListFavorites(pattern): a table
+    Name, Query of favorites whose name matches.
+    
+    Unknown(source): InvalidCommand(source: source).
+    """
+
+    ensures Result.Ok(step) => step.quit == (invocation.command == MetaCommand.Quit)
+    ensures Result.Ok(step) => (step.options.history == options.history and step.options.favorites == options.favorites)
+
+    error ClientError.InvalidCommand with invocation.command matches MetaCommand.Unknown(_)
+    error ClientError.InvalidSql
+    error ClientError.ConnectionFailed
+    error ClientError.TunnelUnsupported
+    error ClientError.CatalogFailed
+    error ClientError.QueryFailed
+    error ClientError.TransactionFailed
+    error ClientError.ImportFailed
+    error ClientError.ExportFailed
+    error ClientError.HistoryFailed
+    error ClientError.FavoriteFailed
+    error ClientError.EditorFailed
+
+    effects [file.read, file.write, network, database.read, database.write, clock]
+
+fn run_interactive(request: InteractiveRequest) -> Result[SessionReport, ClientError]:
+    doc """
+    Run one client session over request.options and report its submissions.
+    Setup, stopping at the first error, which is returned unchanged: when
+    options.history is Some(policy) call load_history(policy) and keep the
+    entries. In Interactive mode, and in ExecuteOnce mode when initial_sql is a
+    backslash command, call refresh_catalog(CatalogRefreshRequest(
+    options.connection, false, options.catalog_limit)); otherwise the catalog is
+    empty (every list empty, refreshed_at_ms 0, limit 0).
+    
+    A submission is a text. A text whose first non-whitespace character is "\",
+    or that equals quit or exit after trimming, is a command:
+    run_meta_command(CommandInvocation(parse_meta_command(text), the pending
+    buffer), options, catalog). Other text is SQL: run_meta_command(
+    CommandInvocation(ExecuteBuffer, InputBuffer(text, its length,
+    options.multiline)), options, catalog). A successful submission replaces the
+    session's buffer, options and catalog with the command result and, when its
+    output is nonempty, shows it with page_output(PagerRequest(output, $PAGER or
+    "less -SRXF", options.pager, the terminal height or 24)). After every SQL
+    submission, when history is enabled, set entries = remember_history(policy,
+    entries, HistoryEntry(sql: the text, executed_at_ms: wall-clock Unix
+    milliseconds at submission, database: options.connection.settings.database,
+    success: whether it succeeded)) and call save_history(policy, entries).
+    
+    ExecuteOnce: submit initial_sql once without reading the terminal. Its error
+    is returned unchanged; otherwise the report is SessionReport(1, 0).
+    
+    Interactive: submit a nonempty initial_sql first, then read standard input one
+    line at a time until end of input or a Quit command. Print the prompt
+    "pgcli> ", or "....> " while the pending buffer is nonempty, to standard output
+    only when standard input is a terminal. A command line is submitted at once
+    with the pending buffer. Any other line is added to the pending buffer with
+    edit_multiline, preceded by a line feed when the buffer is nonempty; a blank
+    pending buffer is discarded; when options.multiline is true and
+    plan_query(pending buffer) succeeds with requires_terminator, reading
+    continues; otherwise the pending text is submitted and the buffer cleared. At
+    end of input a nonblank pending buffer is submitted. A submission error, or a
+    PagerFailed while showing output, writes one fixed category line for the
+    ClientError variant to standard error, counts as a failure and the session
+    continues. A standard input or output failure ends the session with
+    TerminalFailed, and a save_history failure ends it with HistoryFailed.
+    """
+
+    ensures Result.Ok(report) => (request.mode != SessionMode.ExecuteOnce or (report.submissions == 1 and report.failures == 0))
 
     error ClientError.InvalidCommand
+    error ClientError.InvalidSql
+    error ClientError.ConnectionFailed
+    error ClientError.TunnelUnsupported
     error ClientError.CatalogFailed
     error ClientError.QueryFailed
     error ClientError.TransactionFailed
@@ -791,61 +1501,657 @@ fn run_meta_command(
     error ClientError.FavoriteFailed
     error ClientError.EditorFailed
     error ClientError.PagerFailed
-    error ClientError.NotificationFailed
-
-    effects [file.read, file.write, database.read, database.write, clock]
-
-fn run_interactive(request: InteractiveRequest) -> Result[Unit, ClientError]:
-    ensures Result.Ok(finished) => finished == ()
-
-    error ClientError.InvalidCommand
-    error ClientError.InvalidSql
-    error ClientError.CatalogFailed
-    error ClientError.QueryFailed
-    error ClientError.TransactionFailed
-    error ClientError.HistoryFailed
-    error ClientError.FavoriteFailed
-    error ClientError.EditorFailed
-    error ClientError.PagerFailed
-    error ClientError.NotificationFailed
     error ClientError.TerminalFailed
 
     effects [file.read, file.write, network, database.read, database.write, clock]
 
 fn run(arguments: List[Str]) -> Never:
     doc """
-    Run a real psycopg line-oriented PostgreSQL REPL. arguments excludes argv[0].
-    Use argparse with program name pgcli-cott, optional positional DSN, -h/--host,
-    -p/--port, -U/--username, -d/--dbname, -c/--command and --help. Reserve -h for
-    host, not help. Unknown or malformed arguments print usage to stderr and exit 2;
-    --help prints usage and exits 0 without connecting. Nonempty supplied flags
-    override the DSN; unspecified connection fields retain libpq defaults and
-    PGHOST/PGPORT/PGUSER/PGDATABASE/PGPASSWORD environment behavior. Never accept a
-    password argument, echo credentials or disable the DSN's TLS verification.
-    Connect once using psycopg.connect with autocommit=True and connect_timeout=10.
-    With -c, execute that complete SQL string once. Otherwise read one complete
-    SQL command per stdin line (no multiline parser); skip empty lines and leave
-    on a line equal to \q or quit after stripping. EOF is normal termination.
-    Print "pgcli> " only when stdin is a terminal. Execute SQL through a real
-    cursor; for row results print tab-separated column names followed by rows in
-    driver order, rendering SQL NULL as NULL and other cells with str. For
-    commands without rows print cursor.statusmessage when nonempty.
-    On a query error print only a fixed "query failed" message to stderr; in -c
-    mode exit 1, otherwise continue accepting lines but remember failure. Normal
-    EOF/quit exits 0 if every query succeeded, otherwise 1. Connection or I/O
-    failure exits 1 with a fixed category message. KeyboardInterrupt exits 130.
-    Close every cursor and the connection before sys.exit; never log raw exception
-    text or leave a background connection. This entrypoint does not create a hidden
-    global session or infer a richer argument grammar from the upstream project.
+    The pgcli-cott command-line entry point; arguments excludes the program name.
+    Call parse_arguments(arguments, EnvironmentInputs read from PGHOST, PGPORT,
+    PGUSER, PGPASSWORD and PGDATABASE, "" when unset).
+    Help: write the usage text to standard output and exit 0 without connecting.
+    InvalidArguments: write the usage text and the error message to standard
+    error and exit 2.
+    Session(connection, mode, initial_sql): call
+    resolve_connection_plan(connection, Nothing); on error write a fixed category
+    message to standard error and exit 2. Otherwise call
+    run_interactive(InteractiveRequest(SessionOptions(connection: the plan,
+    catalog_limit: 1000, max_rows: 1000, history: Nothing, favorites: Nothing,
+    format: Aligned, timing: false, pager: false, multiline: false,
+    transaction: AutoCommit), initial_sql, mode)). Ok(report) exits 0 when
+    report.failures is 0 and 1 otherwise; Err writes a fixed category message for
+    its variant to standard error and exits 1. An interrupt (Ctrl-C) exits 130.
+    The usage text lists [DSN], -h/--host, -p/--port, -U/--username,
+    -d/--dbname, -c/--command and --help. run adds no connection, execution or
+    argument behavior of its own and never prints a password.
     """
 
-    effects [
-        file.read,
-        file.write,
-        network,
-        database.read,
-        database.write,
-        clock,
-        random,
-        process.exit,
-    ]
+    effects [file.read, file.write, network, database.read, database.write, clock, process.exit]
+
+requirement DSN_ERRORS_OMIT_SECRETS for parse_dsn:
+    text "InvalidDsn never contains any part of the rejected connection string, which may include a password."
+    checked_by dsn_parsing assert 3
+
+requirement ARGUMENT_ERRORS_OMIT_VALUES for parse_arguments:
+    text "InvalidArguments messages name the offending option or state that a positional argument is extra, and never contain an argument value."
+    checked_by cli_arguments assert 6
+
+requirement CREDENTIAL_INPUT_STAYS_HIDDEN for resolve_credential:
+    text "A password prompt never falls back to echoed terminal input, and keyring entries are only read, never written or deleted."
+
+requirement CONNECT_RELEASES_RESOURCES for connect:
+    text "On every path the probe closes its PostgreSQL connection, stops the SSH control master it started and removes its temporary control directory."
+
+requirement CONNECT_KEEPS_PEER_CHECKS for connect:
+    text "The probe never weakens TLS verification requested by the plan or its connection string and never accepts an unknown SSH host key."
+
+requirement CONNECT_ERRORS_OMIT_SECRETS for connect:
+    text "ConnectionFailed messages never contain the connection string, a password, private-key contents or raw exception text."
+
+requirement HISTORY_REPLACE_IS_ATOMIC for save_history:
+    text "A failed save reports HistoryFailed and leaves the previous history file readable and unchanged."
+    checked_by history_replace_failure_keeps_previous
+
+requirement FAVORITES_REPLACE_IS_ATOMIC for save_favorites:
+    text "A failed save reports FavoriteFailed and leaves the previous favorites file readable and unchanged."
+    checked_by favorites_replace_failure_keeps_previous
+
+requirement EXECUTE_QUERY_RETURNS_SERVER_ROWS for execute_query:
+    text "The result holds the columns and rows the server returned for the last row-producing statement, never an invented empty result."
+
+requirement PLANNED_QUERY_HONORS_TRANSACTION_MODE for execute_planned_query:
+    text "Manual commits the submission as one transaction, ReadOnly never persists changes, and the result holds the rows the server returned."
+
+requirement WATCH_REPEATS_THROUGH_EXECUTE for watch_query:
+    text "Every iteration runs request.query through execute_planned_query, iterations are interval_ms apart, and the first failure stops the watch."
+
+requirement CATALOG_REFLECTS_SERVER for refresh_catalog:
+    text "The catalog lists the server's actual objects, excluding system schemas unless include_system is true."
+
+requirement IMPORT_IS_ALL_OR_NOTHING for import_delimited:
+    text "An import loads every data record in one transaction or none, and field text is never spliced into SQL."
+
+requirement EXPORT_REPLACES_ATOMICALLY for export_query:
+    text "An export writes the complete result or leaves the target unchanged."
+
+requirement NOTIFICATIONS_ARE_DELIVERED for receive_notifications:
+    text "The result holds the notifications delivered on the listened channels within the timeout, in arrival order, and listening ends before the call returns."
+
+requirement EDITOR_RETURNS_EDITED_TEXT for edit_in_editor:
+    text "The returned buffer holds the text the editor left in the temporary file, and the temporary file is removed."
+
+requirement PAGER_SHOWS_TEXT for page_output:
+    text "A successful call delivered the complete text to standard output, or wrote it to the pager until that pager accepted it all or closed its input early and exited 0."
+
+requirement META_COMMANDS_USE_FACADES for run_meta_command:
+    text "Connection, catalog, query, import, export, editor, history and favorite commands act through the facades named in the contract and return their errors unchanged; session commands return the updated options."
+
+requirement META_OUTPUT_OMITS_PASSWORD for run_meta_command:
+    text "Command output never contains the connection password."
+
+requirement SESSION_COMPOSES_STAGES for run_interactive:
+    text "The session loads enabled history, refreshes the catalog when the mode needs it, runs every submission through run_meta_command, shows its output through page_output and records SQL submissions with remember_history and save_history."
+
+requirement SESSION_EXECUTE_ONCE_SKIPS_TERMINAL for run_interactive:
+    text "ExecuteOnce submits initial_sql exactly once, never reads the terminal and returns the submission's error unchanged."
+
+requirement SESSION_REPORT_COUNTS_SUBMISSIONS for run_interactive:
+    text "The report counts the submissions actually processed and those that failed."
+
+requirement RUN_IS_THIN for run:
+    text "run parses with parse_arguments, resolves the plan with resolve_connection_plan, runs run_interactive with the stated defaults, and exits 0 only when the session succeeded without a failed submission."
+
+data no_inputs: ConnectionInputs = ConnectionInputs(
+    host: "",
+    port: "",
+    user: "",
+    password: "",
+    database: "",
+)
+
+data no_environment: EnvironmentInputs = EnvironmentInputs(
+    host: "",
+    port: "",
+    user: "",
+    password: "",
+    database: "",
+)
+
+data default_tls: TlsSettings = TlsSettings(
+    mode: TlsMode.Default,
+    root_certificate: Option.Nothing,
+    client: Option.Nothing,
+)
+
+data shop_catalog: List[TableCatalog] = List(
+    TableCatalog(
+        schema: "public",
+        name: "orders",
+        columns: List(ColumnCatalog(name: "id"), ColumnCatalog(name: "customer_id")),
+    ),
+    TableCatalog(
+        schema: "public",
+        name: "customers",
+        columns: List(ColumnCatalog(name: "id"), ColumnCatalog(name: "name")),
+    ),
+)
+
+data sample_columns: List[Str] = List("id", "name")
+
+scenario dsn_parsing:
+    call uri = parse_dsn("postgresql://alice:s3cret@db.example.com:6543/sales")
+    assert uri == Result.Ok(
+        value: ConnectionInputs(
+            host: "db.example.com",
+            port: "6543",
+            user: "alice",
+            password: "s3cret",
+            database: "sales",
+        ),
+    )
+    call pairs = parse_dsn("host=db dbname=ops user=bob")
+    assert pairs == Result.Ok(
+        value: ConnectionInputs(host: "db", port: "", user: "bob", password: "", database: "ops"),
+    )
+    call no_database = parse_dsn("postgresql://alice:s3cret@db.example.com")
+    assert no_database matches Result.Err(ConnectionError.InvalidDsn(message)) => not contains(message, "s3cret")
+
+scenario profile_lookup:
+    data profiles: List[ConnectionProfile] = List(
+        ConnectionProfile(
+            name: "dev",
+            dsn: "postgresql://localhost/dev",
+            inputs: no_inputs,
+            tls: default_tls,
+            ssh: Option.Nothing,
+        ),
+        ConnectionProfile(
+            name: "prod",
+            dsn: "postgresql://db.internal/sales",
+            inputs: no_inputs,
+            tls: default_tls,
+            ssh: Option.Nothing,
+        ),
+    )
+    call found = resolve_profile("prod", profiles)
+    assert found matches Result.Ok(profile) => profile.dsn == "postgresql://db.internal/sales"
+    call missing = resolve_profile("Prod", profiles)
+    assert missing == Result.Err(error: ConnectionError.ProfileMissing(name: "Prod"))
+
+scenario connection_merge_checks_database_before_port:
+    call no_database = resolve_connection(
+        ConnectionInputs(host: "", port: "70000", user: "", password: "", database: ""),
+        no_environment,
+    )
+    assert no_database == Result.Err(error: ConnectionError.MissingDatabase)
+    call bad_port = resolve_connection(
+        ConnectionInputs(host: "", port: "", user: "", password: "", database: "sales"),
+        EnvironmentInputs(host: "db", port: "65536", user: "", password: "", database: ""),
+    )
+    assert bad_port == Result.Err(error: ConnectionError.InvalidPort(value: "65536"))
+    call merged = resolve_connection(
+        ConnectionInputs(host: "", port: "5433", user: "", password: "", database: "sales"),
+        EnvironmentInputs(host: "db", port: "6000", user: "env", password: "pw", database: "other"),
+    )
+    assert merged matches Result.Ok(_)
+
+scenario plan_layers_resolve_by_precedence:
+    fixtures:
+        fs certs:
+            file "root.crt" text("root")
+    data profile: ConnectionProfile = ConnectionProfile(
+        name: "work",
+        dsn: "postgresql://profhost/profdb",
+        inputs: ConnectionInputs(
+            host: "",
+            port: "6000",
+            user: "profuser",
+            password: "",
+            database: "",
+        ),
+        tls: TlsSettings(
+            mode: TlsMode.Require,
+            root_certificate: Option.Some(value: certs.path("root.crt")),
+            client: Option.Nothing,
+        ),
+        ssh: Option.Nothing,
+    )
+    call layered = resolve_connection_plan(
+        ConnectionRequest(
+            dsn: "postgresql://dsnuser@dsnhost/dsndb",
+            profile: "work",
+            inputs: ConnectionInputs(
+                host: "",
+                port: "",
+                user: "",
+                password: "",
+                database: "flagdb",
+            ),
+            environment: EnvironmentInputs(
+                host: "envhost",
+                port: "7000",
+                user: "envuser",
+                password: "envpw",
+                database: "envdb",
+            ),
+            tls: default_tls,
+            ssh: Option.Nothing,
+        ),
+        Option.Some(value: profile),
+    )
+    assert layered == Result.Ok(
+        value: ConnectionPlan(
+            settings: ConnectionSettings(
+                host: "dsnhost",
+                port: "6000",
+                user: "dsnuser",
+                password: "envpw",
+                database: "flagdb",
+            ),
+            dsn: "postgresql://dsnuser@dsnhost/dsndb",
+            tls: TlsSettings(
+                mode: TlsMode.Require,
+                root_certificate: Option.Some(value: certs.path("root.crt")),
+                client: Option.Nothing,
+            ),
+            ssh: Option.Nothing,
+        ),
+    )
+    call jumped = resolve_connection_plan(
+        ConnectionRequest(
+            dsn: "",
+            profile: "",
+            inputs: ConnectionInputs(host: "", port: "", user: "", password: "", database: "sales"),
+            environment: no_environment,
+            tls: default_tls,
+            ssh: Option.Some(
+                value: SshSettings(
+                    host: "-oProxyCommand=sh",
+                    port: 22,
+                    user: "ops",
+                    private_key: Option.Nothing,
+                ),
+            ),
+        ),
+        Option.Nothing,
+    )
+    assert jumped matches Result.Err(ConnectionError.SshInvalid(_))
+
+scenario cli_arguments:
+    call full = parse_arguments(
+        List(
+            "-h",
+            "db.example.com",
+            "--port=6543",
+            "-U",
+            "alice",
+            "--dbname",
+            "sales",
+            "-c",
+            "select 1",
+        ),
+        EnvironmentInputs(host: "envhost", port: "", user: "", password: "envpw", database: ""),
+    )
+    assert full matches Result.Ok(CliCommand.Session(connection, mode, sql)) => connection.inputs == ConnectionInputs(host: "db.example.com", port: "6543", user: "alice", password: "", database: "sales") and connection.dsn == "" and mode == SessionMode.ExecuteOnce and sql == "select 1"
+    call positional = parse_arguments(List("postgresql://db/sales", "-p", "5433"), no_environment)
+    assert positional matches Result.Ok(CliCommand.Session(connection, mode, _)) => connection.dsn == "postgresql://db/sales" and connection.inputs.port == "5433" and connection.tls == default_tls and connection.ssh == Option.Nothing and mode == SessionMode.Interactive
+    call help = parse_arguments(List("-d", "sales", "--help"), no_environment)
+    assert help == Result.Ok(value: CliCommand.Help)
+    call dangling = parse_arguments(List("-U"), no_environment)
+    assert dangling matches Result.Err(ClientError.InvalidArguments(_))
+    call extra = parse_arguments(List("db1", "db2"), no_environment)
+    assert extra matches Result.Err(ClientError.InvalidArguments(_))
+    call password = parse_arguments(List("--password", "s3cret"), no_environment)
+    assert password matches Result.Err(ClientError.InvalidArguments(message)) => contains(message, "--password") and not contains(message, "s3cret")
+
+scenario credential_precedence_skips_keyring_and_terminal:
+    fixtures:
+        fs console:
+            file "tty" text("")
+        http secrets:
+            route "/unused" -> response(status: 200, body: text("unused"), encoding: "utf-8")
+    call supplied = resolve_credential(
+        CredentialRequest(
+            service: "pgcli",
+            user: "alice",
+            supplied_password: "flag",
+            environment_password: "env",
+            no_prompt: true,
+            use_keyring: true,
+        ),
+    )
+    assert supplied matches Result.Ok(_)
+    call environment = resolve_credential(
+        CredentialRequest(
+            service: "pgcli",
+            user: "alice",
+            supplied_password: "",
+            environment_password: "env",
+            no_prompt: true,
+            use_keyring: true,
+        ),
+    )
+    assert environment matches Result.Ok(_)
+    call disabled = resolve_credential(
+        CredentialRequest(
+            service: "pgcli",
+            user: "alice",
+            supplied_password: "",
+            environment_password: "",
+            no_prompt: true,
+            use_keyring: false,
+        ),
+    )
+    assert disabled == Result.Err(error: ConnectionError.PromptDisabled)
+
+scenario completion_uses_relation_context:
+    call relations = complete_catalog_sql(
+        CompletionRequest(source: "SELECT * FROM cu", cursor: 16, catalog: shop_catalog),
+        CompletionPolicy(max_candidates: 10, include_keywords: true),
+    )
+    assert relations == CompletionResult(candidates: List("customers"), replace_start: 14)
+    call columns = complete_catalog_sql(
+        CompletionRequest(source: "SELECT cu", cursor: 9, catalog: shop_catalog),
+        CompletionPolicy(max_candidates: 10, include_keywords: true),
+    )
+    assert columns == CompletionResult(
+        candidates: List("customer_id", "customers"),
+        replace_start: 7,
+    )
+    call keyword = complete_catalog_sql(
+        CompletionRequest(source: "sel", cursor: 3, catalog: List()),
+        CompletionPolicy(max_candidates: 10, include_keywords: true),
+    )
+    assert keyword == CompletionResult(candidates: List("SELECT"), replace_start: 0)
+    call no_keyword = complete_catalog_sql(
+        CompletionRequest(source: "sel", cursor: 3, catalog: List()),
+        CompletionPolicy(max_candidates: 10, include_keywords: false),
+    )
+    assert no_keyword.candidates == List()
+    call defaulted = complete_sql(
+        CompletionRequest(source: "SELECT cu", cursor: 9, catalog: shop_catalog),
+    )
+    assert defaulted == columns
+
+scenario highlight_marks_keywords_and_open_quotes:
+    call colored = highlight_sql(HighlightRequest(source: "select 'a' from t", color: true))
+    assert colored == HighlightedSql(
+        text: "\u001b[1mselect\u001b[0m \u001b[32m'a'\u001b[0m \u001b[1mfrom\u001b[0m t",
+        contains_error: false,
+    )
+    call open_quote = highlight_sql(HighlightRequest(source: "select 'oops", color: false))
+    assert open_quote.contains_error
+
+scenario plan_counts_statements:
+    call two = plan_query(InputBuffer(text: "select 1; select ';'", cursor: 0, multiline: false))
+    assert two matches Result.Ok(plan) => plan.statement_count == 2 and not plan.requires_terminator
+    call open = plan_query(InputBuffer(text: "select 1", cursor: 8, multiline: true))
+    assert open matches Result.Ok(plan) => plan.statement_count == 1 and plan.requires_terminator
+    call comment = plan_query(InputBuffer(text: "-- nothing", cursor: 0, multiline: false))
+    assert comment matches Result.Err(ClientError.InvalidSql(_))
+    call dangling = plan_query(InputBuffer(text: "select 'x", cursor: 0, multiline: false))
+    assert dangling matches Result.Err(ClientError.InvalidSql(_))
+
+scenario edit_inserts_at_cursor:
+    call edited = edit_multiline(InputBuffer(text: "selct 1", cursor: 3, multiline: false), "e")
+    assert edited == InputBuffer(text: "select 1", cursor: 4, multiline: false)
+
+scenario meta_commands_parse:
+    fixtures:
+        fs exports:
+            file "out.csv" text("")
+    call tables = parse_meta_command("  \\dt+ public.* ; ")
+    assert tables == MetaCommand.ListTables(pattern: "public.*")
+    call csv = parse_meta_command("\\T CSV")
+    assert csv == MetaCommand.SetFormat(format: TableFormat.Csv)
+    call named = parse_meta_command("\\n daily 7 eu")
+    assert named == MetaCommand.NamedQuery(name: "daily", arguments: List("7", "eu"))
+    call copy = parse_meta_command("\\copy orders to 'out.csv'")
+    assert copy == MetaCommand.Copy(
+        table: "orders",
+        path: exports.path("out.csv"),
+        from_file: false,
+    )
+    call quit_extra = parse_meta_command("\\q now")
+    assert quit_extra == MetaCommand.Unknown(source: "\\q now")
+    call shell = parse_meta_command("\\! ls")
+    assert shell == MetaCommand.Unknown(source: "\\! ls")
+    call describe = recognize_backslash("\\d orders")
+    assert describe == BackslashCommand.Describe
+    call sql_help = recognize_backslash("\\h select")
+    assert sql_help == BackslashCommand.Unknown
+    call quit = recognize_backslash("quit")
+    assert quit == BackslashCommand.Quit
+
+scenario render_layouts:
+    data rows: List[List[Str]] = List(List("1", "alice"), List("22"))
+    call horizontal = render_query(
+        RenderRequest(
+            columns: sample_columns,
+            rows: rows,
+            terminal_width: 80,
+            layout: RenderLayout.Horizontal,
+        ),
+    )
+    assert horizontal == RenderedQuery(
+        text: "id | name\n---+------\n1  | alice\n22 |",
+        layout: RenderLayout.Horizontal,
+        width: 10,
+    )
+    call vertical = render_query(
+        RenderRequest(
+            columns: sample_columns,
+            rows: rows,
+            terminal_width: 80,
+            layout: RenderLayout.Vertical,
+        ),
+    )
+    assert vertical == RenderedQuery(
+        text: "-[ RECORD 1 ]\nid   | 1\nname | alice\n-[ RECORD 2 ]\nid   | 22\nname |",
+        layout: RenderLayout.Vertical,
+        width: 13,
+    )
+
+scenario format_csv_clipping_and_auto_expand:
+    call csv = format_query(
+        FormatRequest(
+            query: QueryResult(
+                columns: List("id", "note"),
+                rows: List(List("1", "a,b"), List("2", "say \"hi\""), List("3", "x")),
+            ),
+            format: TableFormat.Csv,
+            terminal_width: 80,
+            max_column_width: 0,
+            max_rows: 2,
+        ),
+    )
+    assert csv.rendered.text == "id,note\n1,\"a,b\"\n2,\"say \"\"hi\"\"\""
+    assert csv.rendered.width == 14
+    call clipped = format_query(
+        FormatRequest(
+            query: QueryResult(columns: sample_columns, rows: List(List("1", "alice"))),
+            format: TableFormat.Aligned,
+            terminal_width: 80,
+            max_column_width: 3,
+            max_rows: 10,
+        ),
+    )
+    assert clipped.rendered == RenderedQuery(
+        text: "id | name\n---+-----\n1  | al\u2026",
+        layout: RenderLayout.Horizontal,
+        width: 9,
+    )
+    call narrow = format_query(
+        FormatRequest(
+            query: QueryResult(columns: sample_columns, rows: List(List("1", "alice"))),
+            format: TableFormat.Aligned,
+            terminal_width: 5,
+            max_column_width: 0,
+            max_rows: 10,
+        ),
+    )
+    assert narrow.rendered == RenderedQuery(
+        text: "-[ RECORD 1 ]\nid   | 1\nname | alice",
+        layout: RenderLayout.Vertical,
+        width: 13,
+    )
+
+scenario history_normalization:
+    fixtures:
+        fs files:
+            file "history.json" text("[]")
+    data older: List[HistoryEntry] = List(
+        HistoryEntry(sql: "select 1", executed_at_ms: 10, database: "sales", success: true),
+        HistoryEntry(sql: "select 2", executed_at_ms: 20, database: "sales", success: false),
+        HistoryEntry(sql: "select 1", executed_at_ms: 30, database: "ops", success: true),
+    )
+    data newest: HistoryEntry = HistoryEntry(
+        sql: "select 1",
+        executed_at_ms: 40,
+        database: "sales",
+        success: true,
+    )
+    call kept = remember_history(
+        HistoryPolicy(path: files.path("history.json"), max_entries: 2, unique: true),
+        older,
+        newest,
+    )
+    assert kept == List(
+        HistoryEntry(sql: "select 1", executed_at_ms: 30, database: "ops", success: true),
+        newest,
+    )
+    call none = remember_history(
+        HistoryPolicy(path: files.path("history.json"), max_entries: 0, unique: false),
+        older,
+        newest,
+    )
+    assert none == List()
+
+scenario history_round_trip:
+    fixtures:
+        fs files:
+            file "history.json" text("[{\"sql\":\"select 1\",\"executed_at_ms\":10,\"database\":\"sales\",\"success\":true},{\"sql\":\"select 2\",\"executed_at_ms\":20,\"database\":\"sales\",\"success\":false},{\"sql\":\"select 1\",\"executed_at_ms\":30,\"database\":\"sales\",\"success\":true},{\"sql\":\"select 1\",\"executed_at_ms\":40,\"database\":\"ops\",\"success\":true}]")
+    data policy: HistoryPolicy = HistoryPolicy(
+        path: files.path("history.json"),
+        max_entries: 2,
+        unique: true,
+    )
+    call loaded = load_history(policy)
+    assert loaded == Result.Ok(
+        value: List(
+            HistoryEntry(sql: "select 1", executed_at_ms: 30, database: "sales", success: true),
+            HistoryEntry(sql: "select 1", executed_at_ms: 40, database: "ops", success: true),
+        ),
+    )
+    call saved = save_history(
+        policy,
+        List(HistoryEntry(sql: "select 3", executed_at_ms: 50, database: "sales", success: true)),
+    )
+    assert saved matches Result.Ok(_)
+    call reloaded = load_history(policy)
+    assert reloaded == Result.Ok(
+        value: List(
+            HistoryEntry(sql: "select 3", executed_at_ms: 50, database: "sales", success: true),
+        ),
+    )
+
+scenario history_rejects_boolean_timestamp:
+    fixtures:
+        fs files:
+            file "history.json" text("[{\"sql\":\"select 1\",\"executed_at_ms\":true,\"database\":\"sales\",\"success\":true},{\"sql\":\"select 2\",\"executed_at_ms\":20,\"database\":\"sales\",\"success\":true}]")
+    call loaded = load_history(
+        HistoryPolicy(path: files.path("history.json"), max_entries: 1, unique: false),
+    )
+    assert loaded matches Result.Err(ClientError.HistoryFailed(path, _)) => path == files.path("history.json")
+
+scenario history_replace_failure_keeps_previous:
+    fixtures:
+        fs files:
+            file "history.json" text("[{\"sql\":\"select 1\",\"executed_at_ms\":10,\"database\":\"sales\",\"success\":true}]")
+        failure disk_full:
+            point: file.replace
+            occurrence: 1
+            error: disk_full
+    data policy: HistoryPolicy = HistoryPolicy(
+        path: files.path("history.json"),
+        max_entries: 10,
+        unique: false,
+    )
+    call failed = save_history(
+        policy,
+        List(HistoryEntry(sql: "select 2", executed_at_ms: 20, database: "sales", success: true)),
+    )
+    assert failed matches Result.Err(ClientError.HistoryFailed(path, _)) => path == files.path("history.json")
+    call kept = load_history(policy)
+    assert kept == Result.Ok(
+        value: List(
+            HistoryEntry(sql: "select 1", executed_at_ms: 10, database: "sales", success: true),
+        ),
+    )
+
+scenario favorites_round_trip_and_validation:
+    fixtures:
+        fs files:
+            file "favorites.json" text("[{\"name\":\"daily\",\"sql\":\"select 1\",\"tags\":[\"ops\",\"ops\"]}]")
+            file "duplicates.json" text("[{\"name\":\"daily\",\"sql\":\"select 1\",\"tags\":[]},{\"name\":\"daily\",\"sql\":\"select 2\",\"tags\":[]}]")
+    data store: FavoriteStore = FavoriteStore(path: files.path("favorites.json"), max_entries: 2)
+    call loaded = load_favorites(store)
+    assert loaded == Result.Ok(
+        value: List(Favorite(name: "daily", sql: "select 1", tags: List("ops", "ops"))),
+    )
+    call duplicates = load_favorites(
+        FavoriteStore(path: files.path("duplicates.json"), max_entries: 5),
+    )
+    assert duplicates == Result.Err(error: ClientError.FavoriteFailed(name: "daily"))
+    call blank = save_favorites(store, List(Favorite(name: " ", sql: "select 2", tags: List())))
+    assert blank matches Result.Err(ClientError.FavoriteFailed(_))
+    call repeated = save_favorites(
+        store,
+        List(
+            Favorite(name: "daily", sql: "select 1", tags: List()),
+            Favorite(name: "daily", sql: "select 2", tags: List()),
+        ),
+    )
+    assert repeated matches Result.Err(ClientError.FavoriteFailed(_))
+    call crowded = save_favorites(
+        store,
+        List(
+            Favorite(name: "a", sql: "select 1", tags: List()),
+            Favorite(name: "b", sql: "select 2", tags: List()),
+            Favorite(name: "c", sql: "select 3", tags: List()),
+        ),
+    )
+    assert crowded matches Result.Err(ClientError.FavoriteFailed(_))
+    call saved = save_favorites(
+        store,
+        List(
+            Favorite(name: "weekly", sql: "select 7", tags: List()),
+            Favorite(name: "daily", sql: "select 1", tags: List("ops")),
+        ),
+    )
+    assert saved matches Result.Ok(_)
+    call reloaded = load_favorites(store)
+    assert reloaded == Result.Ok(
+        value: List(
+            Favorite(name: "weekly", sql: "select 7", tags: List()),
+            Favorite(name: "daily", sql: "select 1", tags: List("ops")),
+        ),
+    )
+
+scenario favorites_replace_failure_keeps_previous:
+    fixtures:
+        fs files:
+            file "favorites.json" text("[{\"name\":\"daily\",\"sql\":\"select 1\",\"tags\":[]}]")
+        failure disk_full:
+            point: file.replace
+            occurrence: 1
+            error: disk_full
+    data store: FavoriteStore = FavoriteStore(path: files.path("favorites.json"), max_entries: 5)
+    call failed = save_favorites(
+        store,
+        List(Favorite(name: "weekly", sql: "select 7", tags: List())),
+    )
+    assert failed matches Result.Err(ClientError.FavoriteFailed(_))
+    call kept = load_favorites(store)
+    assert kept == Result.Ok(value: List(Favorite(name: "daily", sql: "select 1", tags: List())))

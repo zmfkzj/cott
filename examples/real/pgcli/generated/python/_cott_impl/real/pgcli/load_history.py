@@ -2,97 +2,122 @@ import errno
 import json
 import os
 import stat
+from pathlib import Path
 from typing import Final, cast
 
-from cott_runtime import CottList, Err, Ok, Result
+import cott_runtime
+from cott_runtime import CottContractViolation, CottList, Err, Ok, Result
 from real.pgcli_types import ClientError, ClientError_HistoryFailed, HistoryEntry, HistoryPolicy
 
 _MAX_BYTES: Final[int] = 16777216
 _U64_MAX: Final[int] = 18446744073709551615
-_CHUNK: Final[int] = 65536
+_CHUNK_BYTES: Final[int] = 65536
+_INACTIVE_FIXTURES: Final[str] = "fixture adapters are inactive"
+_MESSAGE_UNREADABLE: Final[str] = "history file unreadable"
+_MESSAGE_TOO_LARGE: Final[str] = "history file too large"
+_MESSAGE_UTF8: Final[str] = "history file is not valid UTF-8"
+_MESSAGE_JSON: Final[str] = "history file is not valid JSON"
+_MESSAGE_ROOT: Final[str] = "history root is not an array"
+_MESSAGE_ENTRY: Final[str] = "history entry is invalid"
 
 
-def _read_bounded(path: str) -> bytes | None:
+def _failure(path: Path, message: str) -> Err[ClientError]:
+    return Err(error=ClientError_HistoryFailed(path=path, message=message))
+
+
+def _read_host(path: Path) -> bytes | None:
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
     try:
-        fd = os.open(path, flags)
+        descriptor = os.open(path, flags)
     except FileNotFoundError:
         return None
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise OSError(errno.EINVAL, "not a regular file")
         chunks: list[bytes] = []
-        total = 0
+        size = 0
         while True:
-            chunk = os.read(fd, _CHUNK)
+            chunk = os.read(descriptor, _CHUNK_BYTES)
             if not chunk:
                 break
-            total += len(chunk)
-            if total > _MAX_BYTES:
-                raise OSError(errno.EFBIG, "too large")
+            size += len(chunk)
+            if size > _MAX_BYTES:
+                raise OSError(errno.EFBIG, "history file too large")
             chunks.append(chunk)
         return b"".join(chunks)
     finally:
-        os.close(fd)
+        os.close(descriptor)
 
 
 def _parse_entry(item: object) -> HistoryEntry | None:
     if not isinstance(item, dict):
         return None
-    obj = cast(dict[object, object], item)
-    if set(obj.keys()) != {"sql", "executed_at_ms", "database", "success"}:
+    fields = cast(dict[object, object], item)
+    if set(fields) != {"sql", "executed_at_ms", "database", "success"}:
         return None
-    sql = obj["sql"]
-    ts = obj["executed_at_ms"]
-    database = obj["database"]
-    success = obj["success"]
-    if not isinstance(sql, str) or type(sql) is not str:
+    sql = fields["sql"]
+    executed_at_ms = fields["executed_at_ms"]
+    database = fields["database"]
+    success = fields["success"]
+    if type(sql) is not str or type(database) is not str or type(success) is not bool:
         return None
-    if not isinstance(database, str) or type(database) is not str:
+    if type(executed_at_ms) is not int or executed_at_ms < 0 or executed_at_ms > _U64_MAX:
         return None
-    if not isinstance(success, bool):
-        return None
-    if isinstance(ts, bool) or not isinstance(ts, int) or type(ts) is not int:
-        return None
-    if ts < 0 or ts > _U64_MAX:
-        return None
-    return HistoryEntry(sql=sql, executed_at_ms=ts, database=database, success=success)
+    return HistoryEntry(sql=sql, executed_at_ms=executed_at_ms, database=database, success=success)
+
+
+def _normalize(entries: list[HistoryEntry], policy: HistoryPolicy) -> list[HistoryEntry]:
+    normalized = entries
+    if policy.unique:
+        last_positions: dict[tuple[str, str], int] = {}
+        for index, entry in enumerate(normalized):
+            last_positions[(entry.database, entry.sql)] = index
+        normalized = [entry for index, entry in enumerate(normalized) if last_positions[(entry.database, entry.sql)] == index]
+    if policy.max_entries == 0:
+        return []
+    if len(normalized) > policy.max_entries:
+        normalized = normalized[len(normalized) - policy.max_entries:]
+    return normalized
 
 
 def load_history(policy: HistoryPolicy) -> Result[CottList[HistoryEntry], ClientError]:
     path = policy.path
+    data: bytes | None
     try:
-        data = _read_bounded(os.fspath(path))
-    except OSError as exc:
-        message = "history file too large" if exc.errno == errno.EFBIG else "history file unreadable"
-        return Err(error=ClientError_HistoryFailed(path=path, message=message))
+        data = cott_runtime._cott_fixture_read(path)
+    except CottContractViolation as error:
+        if error.message == _INACTIVE_FIXTURES:
+            try:
+                data = _read_host(path)
+            except OSError as host_error:
+                message = _MESSAGE_TOO_LARGE if host_error.errno == errno.EFBIG else _MESSAGE_UNREADABLE
+                return _failure(path, message)
+        elif isinstance(error.__cause__, FileNotFoundError):
+            return Ok(value=CottList(values=[]))
+        else:
+            return _failure(path, _MESSAGE_UNREADABLE)
+    except FileNotFoundError:
+        return Ok(value=CottList(values=[]))
+    except OSError:
+        return _failure(path, _MESSAGE_UNREADABLE)
     if data is None:
         return Ok(value=CottList(values=[]))
+    if len(data) > _MAX_BYTES:
+        return _failure(path, _MESSAGE_TOO_LARGE)
     try:
         text = data.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
-        return Err(error=ClientError_HistoryFailed(path=path, message="history file is not valid UTF-8"))
+        return _failure(path, _MESSAGE_UTF8)
     try:
-        root: object = json.loads(text)
+        decoded: object = json.loads(text)
     except (ValueError, RecursionError):
-        return Err(error=ClientError_HistoryFailed(path=path, message="history file is not valid JSON"))
-    if not isinstance(root, list):
-        return Err(error=ClientError_HistoryFailed(path=path, message="history root is not an array"))
-    items = cast(list[object], root)
+        return _failure(path, _MESSAGE_JSON)
+    if not isinstance(decoded, list):
+        return _failure(path, _MESSAGE_ROOT)
     entries: list[HistoryEntry] = []
-    for item in items:
+    for item in cast(list[object], decoded):
         entry = _parse_entry(item)
         if entry is None:
-            return Err(error=ClientError_HistoryFailed(path=path, message="history entry is invalid"))
+            return _failure(path, _MESSAGE_ENTRY)
         entries.append(entry)
-    if policy.unique:
-        last_index: dict[tuple[str, str], int] = {}
-        for index, entry in enumerate(entries):
-            last_index[(entry.database, entry.sql)] = index
-        entries = [entry for index, entry in enumerate(entries) if last_index[(entry.database, entry.sql)] == index]
-    capacity = policy.max_entries
-    if capacity == 0:
-        return Ok(value=CottList(values=[]))
-    if len(entries) > capacity:
-        entries = entries[len(entries) - capacity:]
-    return Ok(value=CottList(values=entries))
+    return Ok(value=CottList(values=_normalize(entries, policy)))

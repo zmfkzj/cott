@@ -4,7 +4,12 @@
 package store.order
 
 /**
- * Validate all order lines, lookup item prices, and produce a receipt.
+ * Price an order against a catalog and summarize it as a receipt.
+ * 
+ * `total_items` is the sum of the line quantities, and `total_cents` is the sum over lines of
+ * the quantity times the matching catalog item's `price_cents`; a SKU on several lines counts
+ * once per line. Callers keep both totals within U32 and U64; larger orders are outside this
+ * contract.
  */
 
 public fun  calculate_order(catalog: store.catalog.Catalog, order: store.order.Order): cott_runtime.CottResult<store.order.OrderReceipt, store.order.OrderError> {
@@ -28,19 +33,19 @@ public fun  calculate_order(catalog: store.catalog.Catalog, order: store.order.O
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(store.order.CottDescriptors_9f3d319abb3722d65ac08faa.type_9ad0089dd3f1851e1099cc6a(), store.order.CottDescriptors_9f3d319abb3722d65ac08faa.type_32fcdae857388d98b85f98ed()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val receipt = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as store.order.OrderReceipt); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((receipt).order_id, (_cottArg_order).order_id)), "store.order.calculate_order", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 796, endByte = 860, startLine = 37, startColumn = 5, endLine = 37, endColumn = 69), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val receipt = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as store.order.OrderReceipt); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((receipt).order_id, (_cottArg_order).order_id)), "store.order.calculate_order", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 1278, endByte = 1342, startLine = 48, startColumn = 5, endLine = 48, endColumn = 69), expected = "true", actual = "false"); true } } else true }
         val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
         val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
         cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("store.order.OrderError.InvalidQuantity", "store.order.OrderError.ItemUnavailable"), "store.order.calculate_order", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("store.order.OrderError.InvalidQuantity", "store.order.OrderError.ItemUnavailable").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
-        if (_cottExpectedErrorClause == "error:2") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "store.order.OrderError.EmptyOrder", "store.order.calculate_order", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 866, endByte = 919, startLine = 39, startColumn = 5, endLine = 39, endColumn = 58))
-        if (_cottActualErrorVariant == "store.order.OrderError.InvalidQuantity") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "store.order.OrderError.InvalidQuantity", "store.order.calculate_order", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 924, endByte = 956, startLine = 40, startColumn = 5, endLine = 40, endColumn = 37))
-        if (_cottActualErrorVariant == "store.order.OrderError.ItemUnavailable") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "store.order.OrderError.ItemUnavailable", "store.order.calculate_order", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 961, endByte = 993, startLine = 41, startColumn = 5, endLine = 41, endColumn = 37))
+        if (_cottExpectedErrorClause == "error:2") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "store.order.OrderError.EmptyOrder", "store.order.calculate_order", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 1348, endByte = 1401, startLine = 50, startColumn = 5, endLine = 50, endColumn = 58))
+        if (_cottActualErrorVariant == "store.order.OrderError.InvalidQuantity") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "store.order.OrderError.InvalidQuantity", "store.order.calculate_order", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 1406, endByte = 1438, startLine = 51, startColumn = 5, endLine = 51, endColumn = 37))
+        if (_cottActualErrorVariant == "store.order.OrderError.ItemUnavailable") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "store.order.OrderError.ItemUnavailable", "store.order.calculate_order", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 1443, endByte = 1475, startLine = 52, startColumn = 5, endLine = 52, endColumn = 37))
     }
     return _cottResult
 }
 
 /**
- * Ensure an order line has positive quantity.
+ * Accept an order line with a positive quantity and return it unchanged.
  */
 
 public fun  validate_line(line: store.order.OrderLine): cott_runtime.CottResult<store.order.OrderLine, store.order.OrderError> {
@@ -49,7 +54,7 @@ public fun  validate_line(line: store.order.OrderLine): cott_runtime.CottResult<
     var _cottExpectedError: kotlin.String? = null
     var _cottExpectedErrorClause: kotlin.String? = null
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        if (_cottExpectedError == null && ((cott_runtime.CottRuntime.canonicalEqual((_cottArg_line).quantity, java.math.BigInteger("0").toLong().toUInt())))) { _cottExpectedError = "store.order.OrderError.InvalidQuantity"; _cottExpectedErrorClause = "error:2" }
+        if (_cottExpectedError == null && ((cott_runtime.CottRuntime.canonicalEqual((_cottArg_line).quantity, java.math.BigInteger("0").toLong().toUInt())))) { _cottExpectedError = "store.order.OrderError.InvalidQuantity"; _cottExpectedErrorClause = "error:4" }
     }
     val _cottRawResult = try {
         cott_impl.store.order.validate_line(_cottArg_line)
@@ -63,11 +68,12 @@ public fun  validate_line(line: store.order.OrderLine): cott_runtime.CottResult<
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(store.order.CottDescriptors_9f3d319abb3722d65ac08faa.type_859b059f6127b34de40687f1(), store.order.CottDescriptors_9f3d319abb3722d65ac08faa.type_32fcdae857388d98b85f98ed()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val valid = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as store.order.OrderLine); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare((valid).quantity, java.math.BigInteger("0").toLong().toUInt()) > 0), "store.order.validate_line", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 500, endByte = 546, startLine = 28, startColumn = 5, endLine = 28, endColumn = 51), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val valid = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as store.order.OrderLine); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual(valid, _cottArg_line)), "store.order.validate_line", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 565, endByte = 606, startLine = 30, startColumn = 5, endLine = 30, endColumn = 46), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultErr(_cottMatchValue) is cott_runtime.Some<*> && (cott_runtime.CottRuntime.variant((cott_runtime.CottRuntime.resultErr(_cottMatchValue) as cott_runtime.Some<*>).value, "store.order.OrderError.InvalidQuantity") is cott_runtime.Some<*> && true))) { val rejected = ((cott_runtime.CottRuntime.variant((cott_runtime.CottRuntime.resultErr(_cottMatchValue) as cott_runtime.Some<*>).value, "store.order.OrderError.InvalidQuantity") as cott_runtime.Some<cott_runtime.CottList<kotlin.Any?>>).value[0] as kotlin.String); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual(rejected, (_cottArg_line).sku)), "store.order.validate_line", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 611, endByte = 691, startLine = 31, startColumn = 5, endLine = 31, endColumn = 85), expected = "true", actual = "false"); true } } else true }
         val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
         val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
         cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>(), "store.order.validate_line", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>().toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
-        if (_cottExpectedErrorClause == "error:2") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "store.order.OrderError.InvalidQuantity", "store.order.validate_line", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 552, endByte = 608, startLine = 30, startColumn = 5, endLine = 30, endColumn = 61))
+        if (_cottExpectedErrorClause == "error:4") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "store.order.OrderError.InvalidQuantity", "store.order.validate_line", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 717, endByte = 773, startLine = 34, startColumn = 5, endLine = 34, endColumn = 61))
     }
     return _cottResult
 }

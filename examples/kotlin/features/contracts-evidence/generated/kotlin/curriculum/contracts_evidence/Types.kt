@@ -57,15 +57,6 @@ public data class LabelAssessment(
 }
 
 public sealed interface LabelEvidenceError {
-    public data object Legacy : LabelEvidenceError, cott_runtime.CottVariant {
-        override val cottVariant: kotlin.String get() = "curriculum.contracts_evidence.LabelEvidenceError.Legacy"
-        override val cottTypeIdentity: kotlin.String get() = "curriculum.contracts_evidence.LabelEvidenceError.Legacy"
-        override val cottFieldNames: cott_runtime.CottList<kotlin.String> get() = cott_runtime.CottList(listOf())
-        override val cottPayload: cott_runtime.CottList<kotlin.Any?> get() = cott_runtime.CottList(listOf())
-        override fun cottField(name: kotlin.String): kotlin.Any? = when (name) {
-            else -> cott_runtime.CottRuntime.violation("unknown canonical field", symbol = cottVariant, phase = "field", actual = name)
-        }
-    }
     public data object Missing : LabelEvidenceError, cott_runtime.CottVariant {
         override val cottVariant: kotlin.String get() = "curriculum.contracts_evidence.LabelEvidenceError.Missing"
         override val cottTypeIdentity: kotlin.String get() = "curriculum.contracts_evidence.LabelEvidenceError.Missing"
@@ -91,10 +82,6 @@ public sealed interface LabelEvidenceError {
         }
     }
 }
-
-public interface BaselineLabelRule
-
-public interface RefinedLabelRule : curriculum.contracts_evidence.BaselineLabelRule
 
 internal object CottDescriptors_1fc6b530b9b5e1e0655ff392 {
     private val descriptors: kotlin.collections.MutableMap<kotlin.collections.List<kotlin.Any>, cott_runtime.CottType<*>> = java.util.HashMap()
@@ -166,7 +153,7 @@ internal object CottDescriptors_1fc6b530b9b5e1e0655ff392 {
                 }
             }
             descriptors[key] = deferred
-            val resolved: cott_runtime.CottType<curriculum.contracts_evidence.LabelEvidenceError> = (cott_runtime.CottTypes.oneOf(listOf(cott_runtime.CottTypes.nominal(_cottDisplayName + "#Legacy", curriculum.contracts_evidence.LabelEvidenceError.Legacy::class.java as java.lang.Class<curriculum.contracts_evidence.LabelEvidenceError.Legacy>, listOf(), { values -> curriculum.contracts_evidence.LabelEvidenceError.Legacy }), cott_runtime.CottTypes.nominal(_cottDisplayName + "#Missing", curriculum.contracts_evidence.LabelEvidenceError.Missing::class.java as java.lang.Class<curriculum.contracts_evidence.LabelEvidenceError.Missing>, listOf(), { values -> curriculum.contracts_evidence.LabelEvidenceError.Missing }), cott_runtime.CottTypes.nominal(_cottDisplayName + "#TooShort", curriculum.contracts_evidence.LabelEvidenceError.TooShort::class.java as java.lang.Class<curriculum.contracts_evidence.LabelEvidenceError.TooShort>, listOf(cott_runtime.CottNominalField<curriculum.contracts_evidence.LabelEvidenceError.TooShort>("actual", cott_runtime.CottTypes.STRING, { value -> value.`actual` })), { values -> curriculum.contracts_evidence.LabelEvidenceError.TooShort(values[0] as kotlin.String) }))) as cott_runtime.CottType<curriculum.contracts_evidence.LabelEvidenceError>)
+            val resolved: cott_runtime.CottType<curriculum.contracts_evidence.LabelEvidenceError> = (cott_runtime.CottTypes.oneOf(listOf(cott_runtime.CottTypes.nominal(_cottDisplayName + "#Missing", curriculum.contracts_evidence.LabelEvidenceError.Missing::class.java as java.lang.Class<curriculum.contracts_evidence.LabelEvidenceError.Missing>, listOf(), { values -> curriculum.contracts_evidence.LabelEvidenceError.Missing }), cott_runtime.CottTypes.nominal(_cottDisplayName + "#TooShort", curriculum.contracts_evidence.LabelEvidenceError.TooShort::class.java as java.lang.Class<curriculum.contracts_evidence.LabelEvidenceError.TooShort>, listOf(cott_runtime.CottNominalField<curriculum.contracts_evidence.LabelEvidenceError.TooShort>("actual", cott_runtime.CottTypes.STRING, { value -> value.`actual` })), { values -> curriculum.contracts_evidence.LabelEvidenceError.TooShort(values[0] as kotlin.String) }))) as cott_runtime.CottType<curriculum.contracts_evidence.LabelEvidenceError>)
             descriptors[key] = resolved
             resolved
         }

@@ -8,10 +8,15 @@ from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, C
 
 from store.order_types import Order as Order, OrderError as OrderError, OrderError_EmptyOrder as OrderError_EmptyOrder, OrderError_InvalidQuantity as OrderError_InvalidQuantity, OrderError_ItemUnavailable as OrderError_ItemUnavailable, OrderLine as OrderLine, OrderReceipt as OrderReceipt
 from store.catalog_types import Catalog, CatalogError
-"""Ensure an order line has positive quantity."""
+"""Accept an order line with a positive quantity and return it unchanged."""
 def validate_line(line: OrderLine) -> Result[OrderLine, OrderError]: ...
 
-"""Validate all order lines, lookup item prices, and produce a receipt."""
+"""Price an order against a catalog and summarize it as a receipt.
+
+`total_items` is the sum of the line quantities, and `total_cents` is the sum over lines of
+the quantity times the matching catalog item's `price_cents`; a SKU on several lines counts
+once per line. Callers keep both totals within U32 and U64; larger orders are outside this
+contract."""
 def calculate_order(catalog: Catalog, order: Order) -> Result[OrderReceipt, OrderError]: ...
 
 __all__ = ["Order", "OrderError", "OrderError_EmptyOrder", "OrderError_InvalidQuantity", "OrderError_ItemUnavailable", "OrderLine", "OrderReceipt", "calculate_order", "validate_line"]

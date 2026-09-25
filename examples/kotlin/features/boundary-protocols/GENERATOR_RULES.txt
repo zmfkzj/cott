@@ -1,4 +1,1 @@
-TextBuffer is exactly java.io.BufferedReader. iter_lines must lazily yield every line without CR or LF terminators and must not close the caller-owned reader.
-Use only the compiler-owned protocol ABI: return CottRuntime.wrapIterator, wrapGenerator, wrapAsyncIterator, or wrapAsyncGenerator around the matching Cott*Source interface; represent progress only with CottStep.Yield/Done and CottGeneratorStep.Yield/Return. Do not substitute Kotlin Sequence, Flow, Channel, raw Iterator, or a locally defined protocol type.
-echo_values must consume its CottIterator in order, yield each item once, ignore sent values, and return the exact ULong yield count. async_lines and echo_async must return the supplied protocol wrapper without eager consumption.
-For the client_session opaque value, use Opaque.of(cott_runtime.CottOpaque_7237d55bbcbee604a7ba6463, raw_id); recover the same ULong payload with unwrap(). Do not reconstruct or compare opaque handles by payload identity.
+Construct an `Opaque["client_session"]` value as `cott_runtime.Opaque.of(cott_runtime.CottOpaque_7237d55bbcbee604a7ba6463, payload)`.

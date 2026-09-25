@@ -28,9 +28,11 @@ def _is_regular_fd(fd: int) -> bool | None:
 
 def configure_presentation(request: PresentationRequest) -> Result[Unit, MediaError]:
     log_file: Path = Path(request.log_file)
-    if log_file.name in ("", ".", ".."):
+    raw: str = str(request.log_file)
+    leaf: str = os.path.basename(raw)
+    if leaf in ("", ".", ".."):
         return _log_failure(log_file, "log file must name a file leaf")
-    flags: int = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW
+    flags: int = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
     try:
         fd: int = os.open(log_file, flags, 0o600)
     except OSError:

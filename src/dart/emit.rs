@@ -1783,7 +1783,13 @@ fn collect_markers(
                     opaques.insert(required_string(object, "tag", "opaque type")?.to_owned());
                 }
                 Some("dyn") => {
-                    let trait_ref = required(object, "trait", "Dyn type")?;
+                    // A scenario `Dyn(value: ...)` expression names its trait as `trait_ref`;
+                    // a `Dyn[...]` type names it as `trait`.
+                    let trait_ref = if object.contains_key("trait_ref") {
+                        required(object, "trait_ref", "Dyn expression")?
+                    } else {
+                        required(object, "trait", "Dyn type")?
+                    };
                     trait_tokens.insert(trait_marker(trait_ref)?, trait_ref.clone());
                 }
                 Some("tuple") => {
@@ -4593,11 +4599,26 @@ fn descriptor_for(
                 "cott_runtime.CottTypes.opaque(const cott_markers.{marker}())"
             ))
         }
-        "dyn" => Ok(format!(
-            "(cott_runtime.CottTypes.dyn(cott_markers.{}) as cott_runtime.CottType<{}>)",
-            trait_marker(required(object, "trait", "Dyn type")?)?,
-            render_contextual_type(ty, None, declarations)?
-        )),
+        "dyn" => {
+            let trait_ref = required(object, "trait", "Dyn type")?;
+            let witness = format!(
+                "cott_runtime.CottTypes.dyn(cott_markers.{})",
+                trait_marker(trait_ref)?
+            );
+            let rendered = render_contextual_type(ty, None, declarations)?;
+            // The marker is typed with the existential trait spelling. Cast only when the
+            // contextual `Dyn` spelling differs: the analyzer rejects an unnecessary cast.
+            if rendered
+                == format!(
+                    "cott_runtime.Dyn<{}>",
+                    render_existential_trait_reference(trait_ref, declarations)?
+                )
+            {
+                Ok(witness)
+            } else {
+                Ok(format!("({witness} as cott_runtime.CottType<{rendered}>)"))
+            }
+        }
         "factory" => {
             let instance = required(object, "instance", "Factory type")?;
             let rendered = render_contextual_type(instance, None, declarations)?;

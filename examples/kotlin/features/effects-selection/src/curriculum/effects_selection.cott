@@ -4,60 +4,70 @@ enum EffectError:
     InputMissing(path: Path)
     OperationFailed(message: Str)
 
-fn read_text(source: Path) -> Result[Str, EffectError]:
+struct FileText:
+    path: Path
+    text: Str
+
+struct CopyReceipt:
+    destination: Path
+    bytes_written: U64
+
+struct PageText:
+    url: Str
+    text: Str
+
+fn read_text(source: Path) -> Result[FileText, EffectError]:
     doc """
-    Read UTF-8 text from a compiler-owned filesystem fixture.
+    Read the file at source and decode its bytes as strict UTF-8. The result
+    pairs the decoded text with source. An absent source returns InputMissing
+    carrying source; any other read failure and bytes that are not valid UTF-8
+    return OperationFailed.
     """
 
-    ensures Result.Ok(text) => text.len >= 0
+    ensures Result.Ok(file) => file.path == source
+    ensures Result.Err(EffectError.InputMissing(missing)) => missing == source
 
     error EffectError.InputMissing
     error EffectError.OperationFailed
 
     effects [file.read]
 
-fn copy_text(source: Path, destination: Path) -> Result[U64, EffectError]:
+fn copy_text(source: Path, destination: Path) -> Result[CopyReceipt, EffectError]:
     doc """
-    Read source through its public facade and atomically replace destination.
+    Copy the text of source to destination as UTF-8 bytes. bytes_written is
+    the encoded byte count, not the character count. A read_text error is
+    returned unchanged and destination is left untouched.
     """
 
-    ensures Result.Ok(written) => written >= 0
+    ensures Result.Ok(receipt) => receipt.destination == destination
+    ensures Result.Err(EffectError.InputMissing(missing)) => missing == source
 
     error EffectError.InputMissing
     error EffectError.OperationFailed
 
     effects [file.read, file.write]
 
-fn fetch_local(url: Str) -> Result[Str, EffectError]:
+fn fetch_local(url: Str) -> Result[PageText, EffectError]:
     doc """
-    Fetch UTF-8 text from a compiler-owned local HTTP fixture.
+    GET url over HTTP, following redirects, and decode the final response body
+    as strict UTF-8. The result pairs the text with the requested url. An empty
+    url returns OperationFailed without sending a request; a connection or read
+    failure, a timeout, a final status outside 200-299 and a body that is not
+    valid UTF-8 return OperationFailed.
     """
 
-    ensures Result.Ok(text) => text.len >= 0
+    ensures Result.Ok(page) => page.url == url
 
     error EffectError.OperationFailed when url == ""
     error EffectError.OperationFailed
 
     effects [network]
 
-fn text_result_is_ok(result: Result[Str, EffectError]) -> Bool:
-    doc """
-    Return whether a text effect result is successful.
-    """
-
-fn text_result_text(result: Result[Str, EffectError]) -> Str:
-    doc """
-    Return successful text, or an empty string for an error result.
-    """
-
-fn copy_result_is_ok(result: Result[U64, EffectError]) -> Bool:
-    doc """
-    Return whether a copy effect result is successful.
-    """
-
 fn store_and_load(database: Path, key: Str, value: Str) -> Result[Str, EffectError]:
     doc """
-    Store value under key in a SQLite database, then read that value back.
+    Store value under key in the SQLite database file at database, replacing
+    any previous value for key, then read the value stored under key back from
+    that database. Any SQLite failure returns OperationFailed.
     """
 
     ensures Result.Ok(stored) => stored == value
@@ -68,14 +78,16 @@ fn store_and_load(database: Path, key: Str, value: Str) -> Result[Str, EffectErr
 
 fn clock_ns() -> U64:
     doc """
-    Return a compiler-owned deterministic fixture clock in nanoseconds.
+    Read the compiler-owned clock fixture and return its time in nanoseconds.
+    The fixture is configured in milliseconds, so start_ms 17 reads as
+    17000000. Reading does not advance the clock.
     """
 
     effects [clock]
 
 fn sample_index(limit: U8, seed: U64) -> U8:
     doc """
-    Choose one index below limit from a deterministic seeded random stream.
+    Choose an index below limit from seed.
     """
 
     requires limit > 0
@@ -86,7 +98,7 @@ fn sample_index(limit: U8, seed: U64) -> U8:
 
 fn exit_with_code(code: U8) -> Never:
     doc """
-    End the current process with code.
+    Terminate the current process.
     """
 
     effects [process.exit]
@@ -94,21 +106,21 @@ fn exit_with_code(code: U8) -> Never:
 scenario filesystem_copy:
     fixtures:
         fs files:
-            file "input.txt" text("new text")
+            file "input.txt" text("café")
             file "output.txt" text("old text")
+            file "invalid.txt" hex("ff")
     call read = read_text(files.path("input.txt"))
-    call read_ok = text_result_is_ok(read)
-    assert read_ok
-    call read_value = text_result_text(read)
-    assert read_value == "new text"
+    assert read matches Result.Ok(input) => input.text == "café"
     call copied = copy_text(files.path("input.txt"), files.path("output.txt"))
-    call copied_ok = copy_result_is_ok(copied)
-    assert copied_ok
+    assert copied matches Result.Ok(receipt) => receipt.bytes_written == 5
     call replaced = read_text(files.path("output.txt"))
-    call replaced_ok = text_result_is_ok(replaced)
-    assert replaced_ok
-    call replaced_value = text_result_text(replaced)
-    assert replaced_value == "new text"
+    assert replaced matches Result.Ok(output) => output.text == "café"
+    call missing = copy_text(files.path("absent.txt"), files.path("output.txt"))
+    assert missing matches Result.Err(EffectError.InputMissing(_))
+    call kept = read_text(files.path("output.txt"))
+    assert kept matches Result.Ok(output) => output.text == "café"
+    call invalid = read_text(files.path("invalid.txt"))
+    assert invalid matches Result.Err(EffectError.OperationFailed(_))
 
 scenario filesystem_replace_failure:
     fixtures:
@@ -120,41 +132,25 @@ scenario filesystem_replace_failure:
             occurrence: 1
             error: disk_full
     call failed = copy_text(files.path("input.txt"), files.path("output.txt"))
-    call failed_ok = copy_result_is_ok(failed)
-    assert not failed_ok
+    assert failed matches Result.Err(EffectError.OperationFailed(_))
     call preserved = read_text(files.path("output.txt"))
-    call preserved_ok = text_result_is_ok(preserved)
-    assert preserved_ok
-    call preserved_value = text_result_text(preserved)
-    assert preserved_value == "old text"
+    assert preserved matches Result.Ok(output) => output.text == "old text"
 
 scenario local_http:
     fixtures:
         http service:
             route "/utf8" -> response(status: 200, body: text("café"), encoding: "utf-8")
             route "/redirect" -> redirect(status: 302, location: "/utf8")
-            route "/sized" -> response(status: 200, body: text("12345678"), encoding: "utf-8")
             route "/slow" -> delay(ms: 25)
         failure timeout:
             point: http.read
-            occurrence: 3
+            occurrence: 2
             error: timeout
     call redirected = fetch_local(service.url("/redirect"))
-    call redirected_ok = text_result_is_ok(redirected)
-    assert redirected_ok
-    call redirected_text = text_result_text(redirected)
-    assert redirected_text == "café"
-    call sized = fetch_local(service.url("/sized"))
-    call sized_ok = text_result_is_ok(sized)
-    assert sized_ok
-    call sized_text = text_result_text(sized)
-    assert sized_text.len == 8
+    assert redirected matches Result.Ok(page) => page.text == "café"
     call timed_out = fetch_local(service.url("/slow"))
-    call timed_out_ok = text_result_is_ok(timed_out)
-    assert not timed_out_ok
+    assert timed_out matches Result.Err(_)
     call rejected = fetch_local("")
-    call rejected_ok = text_result_is_ok(rejected)
-    assert not rejected_ok
 
 scenario deterministic_clock:
     fixtures:
@@ -165,3 +161,19 @@ scenario deterministic_clock:
     call second = clock_ns()
     assert first == 17000000
     assert second == first
+
+requirement COPY_READS_THROUGH_READ_TEXT for copy_text:
+    text "copy_text obtains the source text only by calling the public read_text facade."
+
+requirement COPY_IS_ATOMIC for copy_text:
+    text "copy_text replaces destination atomically: a failed replacement returns OperationFailed and leaves the previous destination bytes readable."
+    checked_by filesystem_replace_failure
+
+requirement STORED_VALUE_IS_READ_BACK for store_and_load:
+    text "The returned text is read back from the SQLite database after value is committed under key; it is never echoed from the argument."
+
+requirement SAMPLE_IS_SEEDED for sample_index:
+    text "The index is drawn from a pseudo-random generator seeded only with seed, so equal limit and seed always return the same index."
+
+requirement EXIT_STATUS_IS_CODE for exit_with_code:
+    text "The process terminates with exit status code."

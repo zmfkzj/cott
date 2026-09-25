@@ -50,6 +50,10 @@ class CatalogRelation:
         if not _cott_validated_construction():
             object.__setattr__(self, "sql", _cott_validate_abi(self.sql, Option[str], path="$.sql"))
 
+"""One column of a relation. ordinal is the 1-based column position; declared_type is
+the declared type text ("" when none); default_sql is the default expression text;
+primary_key_position is the 1-based position within the primary key, 0 when the
+column is not part of it."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CatalogColumn:
@@ -78,6 +82,9 @@ class CatalogColumn:
         if not _cott_validated_construction():
             object.__setattr__(self, "primary_key_position", _cott_validate_abi(self.primary_key_position, U32, path="$.primary_key_position"))
 
+"""A search hit. A Relation match has relation and name equal to the relation name and
+ordinal 0; a Column match names its relation, the column name and the column's
+1-based ordinal."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CatalogMatch:
@@ -126,6 +133,7 @@ class CatalogSnapshot:
         if not _cott_validated_construction():
             object.__setattr__(self, "refreshed_at", _cott_validate_abi(self.refreshed_at, str, path="$.refreshed_at"))
 
+"""cursor counts Unicode scalar values into source."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CompletionRequest:
@@ -187,6 +195,26 @@ class CatalogError_LimitExceeded:
 
 CatalogError: TypeAlias = Union[CatalogError_ConnectionMissing, CatalogError_NamespaceMissing, CatalogError_Failed, CatalogError_LimitExceeded]
 
+"""List the tables and views of a standalone SQLite database's main schema with
+sqlite3, independent of any live connection. Memory is a fresh empty in-memory
+database for this call, so it lists nothing; File(path) opens that existing file
+with mode=ro and never creates it. Rows come from sqlite_schema entries of type
+table or view whose name does not start with "sqlite_", ordered by name in
+Python string order. sql is the stored CREATE text, Nothing when it is SQL NULL.
+Any SQLite failure, including a missing file, is SqliteFailure with SQLite's
+message."""
+"""Describe one relation of the same standalone main schema from PRAGMA table_info,
+in declaration order. Every column's relation is the requested name; not_null
+reflects NOT NULL and default_sql is Nothing when there is no default. A
+relation that does not exist, which includes every relation of a Memory
+database, is SqliteFailure("no such relation"). Other SQLite failures are
+SqliteFailure with SQLite's message."""
+"""Search the same standalone main schema for relations and columns whose name
+contains term after Unicode case folding (Python str.casefold); an empty term
+matches everything. Relations are visited in catalog_relations order; each
+relation contributes its own match first and then its matching columns in
+column order. The result stops after the first 1000 matches without error.
+SQLite failures are SqliteFailure with SQLite's message."""
 """Refresh one namespace through a real temporary driver client, using the
 endpoint formats documented by AdapterKind. This is an independent metadata
 connection, not a lookup of a hidden live-connection registry or a view of
@@ -298,7 +326,17 @@ Malformed endpoint data, missing drivers, authentication, transport, permission
 and metadata API failures return Failed with a fixed nonsecret category message.
 Never include endpoint values, credentials, or raw driver exception text.
 On success read the real clock after enumeration and set refreshed_at to UTC
-ISO-8601 with six fractional digits and a trailing Z. No empty/stub timestamp."""
+ISO-8601 in the form YYYY-MM-DDTHH:MM:SS.ffffffZ (six fractional digits)."""
+"""Offer completions for the identifier being typed at request.cursor. The typed
+prefix is the longest run of ASCII letters, ASCII digits and "_" ending at the
+cursor; replace_start is where it begins and replace_end is the cursor. An empty
+prefix offers no candidates. A candidate matches when it starts with the prefix
+ignoring ASCII case. Relation names come first, in snapshot order, and only when
+request.scope equals snapshot.scope; then these keywords in this order: SELECT,
+FROM, WHERE, GROUP, BY, ORDER, HAVING, LIMIT, JOIN, LEFT, INNER, ON, AS, AND, OR,
+NOT, NULL, INSERT, INTO, VALUES, UPDATE, SET, DELETE, CREATE, TABLE, VIEW, DROP,
+WITH, DISTINCT, UNION. A candidate equal to an earlier one is skipped, spelling is
+kept, and at most maximum_candidates are returned."""
 """Search only relation names already present in snapshot; this pure function does
 not query a database or infer columns from SQL. Preserve snapshot order and
 duplicates. A name matches when term.casefold() is a substring of its

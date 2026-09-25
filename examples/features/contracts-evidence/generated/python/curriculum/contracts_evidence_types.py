@@ -53,11 +53,6 @@ class LabelAssessment:
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
-class LabelEvidenceError_Legacy:
-    pass
-
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
 class LabelEvidenceError_Missing:
     pass
 
@@ -67,15 +62,12 @@ class LabelEvidenceError_TooShort:
     __hash__ = None
     actual: str
 
-LabelEvidenceError: TypeAlias = Union[LabelEvidenceError_Legacy, LabelEvidenceError_Missing, LabelEvidenceError_TooShort]
+LabelEvidenceError: TypeAlias = Union[LabelEvidenceError_Missing, LabelEvidenceError_TooShort]
 
-class BaselineLabelRule:
-    pass
-
-class RefinedLabelRule(BaselineLabelRule):
-    pass
-
-"""Assess labels directly: missing labels and labels shorter than the requested
-minimum are declared errors; successful labels are nominally refined and
-meet the request's minimum length."""
-__all__ = ["AcceptedLabel", "BaselineLabelRule", "LabelAssessment", "LabelEvidenceError", "LabelEvidenceError_Legacy", "LabelEvidenceError_Missing", "LabelEvidenceError_TooShort", "LabelRequest", "RefinedLabelRule"]
+"""Assess the offered label against the request's minimum length. Lengths count
+Unicode scalar values, as Cott `.len` does. A missing label fails with
+`Missing`. An offered label shorter than `minimum_length` fails with
+`TooShort` whose `actual` is the offered label unchanged. Any other label is
+accepted unchanged: the assessment's `text` and `label` are the offered label
+and `length` is its length."""
+__all__ = ["AcceptedLabel", "LabelAssessment", "LabelEvidenceError", "LabelEvidenceError_Missing", "LabelEvidenceError_TooShort", "LabelRequest"]

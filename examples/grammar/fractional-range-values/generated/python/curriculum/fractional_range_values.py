@@ -10,21 +10,21 @@ from typing import Any, Literal, Never, Protocol, TypeVar, final
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 from cott_runtime import _cott_contract_condition
 
-from curriculum.fractional_range_values_types import FractionalRangeError, FractionalRangeError_NonFiniteInput, FractionalRangeError_OutputLimitExceeded, FractionalRangeError_StepDoesNotAdvance, OutputLimit, PositiveStep
+from curriculum.fractional_range_values_types import FractionalRangeError, FractionalRangeError_NonFiniteInput, FractionalRangeError_OutputLimitExceeded, FractionalRangeError_StepDoesNotAdvance, MAX_F64, OutputLimit, PositiveStep
 
 def build_bounded_range(start: F64, stop: F64, step: PositiveStep, limit: OutputLimit) -> Result[CottList[F64], FractionalRangeError]:
-    """Constructs an ascending finite sequence of binary64 values. The start is
-included when start is less than stop; stop is always excluded. If start is
-greater than or equal to stop, the result is an empty list.
+    """Returns, in ascending order, the candidates start + index * step for
+index = 0, 1, 2, ... that lie below stop. Each candidate is computed from
+its own index: the index is converted to binary64, multiplied by step, and
+start is added, each operation rounded to nearest, ties to even, with no
+fused multiply-add and no running sum. The first candidate at or above stop
+ends the sequence and is excluded, so the result is empty when start is at
+or above stop.
 
-The function first rejects a non-finite start, stop, or step with
-NonFiniteInput. Each candidate is computed directly as start plus index
-times step, with binary64 round-to-nearest, ties-to-even after the
-multiplication and addition. A candidate equal to or above stop ends the
-sequence. A candidate that does not exceed the preceding rounded value
-produces StepDoesNotAdvance. After limit values, the next candidate is
-checked only for termination; if it is still below stop,
-OutputLimitExceeded takes precedence."""
+A candidate below stop that does not exceed the preceding value returns
+StepDoesNotAdvance. At most limit values are returned: when the candidate
+after the limit-th value is still below stop, OutputLimitExceeded is
+returned, even if that candidate also fails to advance."""
     start = _cott_validate_abi(start, F64, path="$.start")
     stop = _cott_validate_abi(stop, F64, path="$.stop")
     step = _cott_validate_abi(step, PositiveStep, path="$.step")
@@ -32,46 +32,57 @@ OutputLimitExceeded takes precedence."""
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
+    if _expected_error is None and (_cott_contract_condition(((((not ((-MAX_F64) <= start <= MAX_F64)) or (not ((-MAX_F64) <= stop <= MAX_F64))) or ((step).value > MAX_F64))), "curriculum.fractional_range_values.build_bounded_range", "error:3:condition")):
+        _expected_error = FractionalRangeError_NonFiniteInput
+        _expected_error_span = {"end_byte":1498,"end_column":143,"end_line":40,"start_byte":1360,"start_column":5,"start_line":40}
+        _expected_error_clause = "error:3"
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/fractional_range_values/build_bounded_range.py", "e207bd4dec2841bc0ec418e302e4b716a7078cfaa38a5f2d9b463374db6598e1", "build_bounded_range", expected_project_name="fractional-range-values", expected_cott_symbol="curriculum.fractional_range_values.build_bounded_range")
+        _implementation = _cott_load("_cott_impl/curriculum/fractional_range_values/build_bounded_range.py", "5492a341f0c215747e9f063bec50f5828bc6edd9b2ec3c395093dae5da30a713", "build_bounded_range", expected_project_name="fractional-range-values", expected_cott_symbol="curriculum.fractional_range_values.build_bounded_range")
         _result = _implementation(start, stop, step, limit)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.fractional_range_values.build_bounded_range"
         if _error.span is None:
-            _error.span = {"end_byte":1384,"end_column":1,"end_line":40,"start_byte":240,"start_column":1,"start_line":14}
+            _error.span = {"end_byte":1601,"end_column":1,"end_line":44,"start_byte":285,"start_column":1,"start_line":16}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.fractional_range_values.build_bounded_range", phase="implementation-call", span={"end_byte":1384,"end_column":1,"end_line":40,"start_byte":240,"start_column":1,"start_line":14}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.fractional_range_values.build_bounded_range", phase="implementation-call", span={"end_byte":1601,"end_column":1,"end_line":44,"start_byte":285,"start_column":1,"start_line":16}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.fractional_range_values.build_bounded_range", phase="implementation-call", span={"end_byte":1384,"end_column":1,"end_line":40,"start_byte":240,"start_column":1,"start_line":14}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.fractional_range_values.build_bounded_range", phase="implementation-call", span={"end_byte":1601,"end_column":1,"end_line":44,"start_byte":285,"start_column":1,"start_line":16}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[F64], FractionalRangeError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="curriculum.fractional_range_values.build_bounded_range", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
-        elif type(_result.error) not in (FractionalRangeError_NonFiniteInput, FractionalRangeError_StepDoesNotAdvance, FractionalRangeError_OutputLimitExceeded,):
-            raise CottContractViolation("returned error is not allowed", symbol="curriculum.fractional_range_values.build_bounded_range", phase="error", span={"end_byte":1384,"end_column":1,"end_line":40,"start_byte":240,"start_column":1,"start_line":14}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+        elif type(_result.error) not in (FractionalRangeError_StepDoesNotAdvance, FractionalRangeError_OutputLimitExceeded,):
+            raise CottContractViolation("returned error is not allowed", symbol="curriculum.fractional_range_values.build_bounded_range", phase="error", span={"end_byte":1601,"end_column":1,"end_line":44,"start_byte":285,"start_column":1,"start_line":16}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.fractional_range_values.build_bounded_range", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
         _cott_contract_condition(True, "curriculum.fractional_range_values.build_bounded_range", _expected_error_clause)
-    if type(_result) is Err and type(_result.error) is FractionalRangeError_NonFiniteInput:
-        _cott_contract_condition(True, "curriculum.fractional_range_values.build_bounded_range", "error:2")
     if type(_result) is Err and type(_result.error) is FractionalRangeError_StepDoesNotAdvance:
-        _cott_contract_condition(True, "curriculum.fractional_range_values.build_bounded_range", "error:3")
-    if type(_result) is Err and type(_result.error) is FractionalRangeError_OutputLimitExceeded:
         _cott_contract_condition(True, "curriculum.fractional_range_values.build_bounded_range", "error:4")
+    if type(_result) is Err and type(_result.error) is FractionalRangeError_OutputLimitExceeded:
+        _cott_contract_condition(True, "curriculum.fractional_range_values.build_bounded_range", "error:5")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             values = _cott_match_value.value
-            return (_cott_contract_condition(((len(values) <= 10000)), "curriculum.fractional_range_values.build_bounded_range", "ensures:1"))
+            return (_cott_contract_condition(((len(values) <= (limit).value)), "curriculum.fractional_range_values.build_bounded_range", "ensures:1"))
         _cott_contract_condition((False), "curriculum.fractional_range_values.build_bounded_range", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="curriculum.fractional_range_values.build_bounded_range", clause="ensures:1", phase="ensures", span={"end_byte":1235,"end_column":53,"end_line":35,"start_byte":1187,"start_column":5,"start_line":35}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.fractional_range_values.build_bounded_range", clause="ensures:1", phase="ensures", span={"end_byte":1284,"end_column":53,"end_line":37,"start_byte":1236,"start_column":5,"start_line":37}, expected="true", actual="false")
+    def _cott_match_ensures_2() -> bool:
+        _cott_match_value = _result
+        if type(_cott_match_value) is Ok and True:
+            values = _cott_match_value.value
+            return (_cott_contract_condition((((len(values) == 0) == (start >= stop))), "curriculum.fractional_range_values.build_bounded_range", "ensures:2"))
+        _cott_contract_condition((False), "curriculum.fractional_range_values.build_bounded_range", "ensures:2:applicable")
+        return True
+    if not (_cott_match_ensures_2()):
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.fractional_range_values.build_bounded_range", clause="ensures:2", phase="ensures", span={"end_byte":1354,"end_column":70,"end_line":38,"start_byte":1289,"start_column":5,"start_line":38}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[F64], FractionalRangeError], path="$.return", validator=_cott_validate_abi)
     return _result
 
-__all__ = ["FractionalRangeError", "FractionalRangeError_NonFiniteInput", "FractionalRangeError_OutputLimitExceeded", "FractionalRangeError_StepDoesNotAdvance", "OutputLimit", "PositiveStep", "build_bounded_range"]
+__all__ = ["FractionalRangeError", "FractionalRangeError_NonFiniteInput", "FractionalRangeError_OutputLimitExceeded", "FractionalRangeError_StepDoesNotAdvance", "MAX_F64", "OutputLimit", "PositiveStep", "build_bounded_range"]

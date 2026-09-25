@@ -1,12 +1,12 @@
 package cott_impl.curriculum.effects_selection
 
-internal fun copy_text(source: java.nio.file.Path, destination: java.nio.file.Path): cott_runtime.CottResult<kotlin.ULong, curriculum.effects_selection.EffectError> {
+internal fun copy_text(source: java.nio.file.Path, destination: java.nio.file.Path): cott_runtime.CottResult<curriculum.effects_selection.CopyReceipt, curriculum.effects_selection.EffectError> {
+    val file = when (val result = curriculum.effects_selection.read_text(source)) {
+        is cott_runtime.Ok -> result.value
+        is cott_runtime.Err -> return cott_runtime.Err(result.error)
+    }
     return try {
-        val text = when (val result = curriculum.effects_selection.read_text(source)) {
-            is cott_runtime.Ok -> result.value
-            is cott_runtime.Err -> return cott_runtime.Err(result.error)
-        }
-        val bytes = text.toByteArray(kotlin.text.Charsets.UTF_8)
+        val bytes = file.text.toByteArray(kotlin.text.Charsets.UTF_8)
         val target = destination.toAbsolutePath()
         val temporary = java.nio.file.Files.createTempFile(target.parent, ".cott-copy-", ".tmp")
         try {
@@ -25,7 +25,7 @@ internal fun copy_text(source: java.nio.file.Path, destination: java.nio.file.Pa
             }
             throw failure
         }
-        cott_runtime.Ok(bytes.size.toULong())
+        cott_runtime.Ok(curriculum.effects_selection.CopyReceipt(destination, bytes.size.toULong()))
     } catch (failure: Exception) {
         cott_runtime.Err(
             curriculum.effects_selection.EffectError.OperationFailed(

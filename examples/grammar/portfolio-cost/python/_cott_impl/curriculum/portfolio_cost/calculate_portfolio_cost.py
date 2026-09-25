@@ -10,17 +10,17 @@ from curriculum.portfolio_cost_types import (
     PortfolioError_TotalOverflow,
 )
 
-
 def calculate_portfolio_cost(rows: CottList[Holding]) -> Result[F64, PortfolioError]:
     total = 0.0
     for holding in rows:
         if holding.shares < 0:
             return Err(error=PortfolioError_NegativeShares())
-        if not isfinite(holding.price):
+        price = holding.price
+        if not isfinite(price):
             return Err(error=PortfolioError_NonFinitePrice())
-        if holding.price < 0.0:
+        if price < 0.0:
             return Err(error=PortfolioError_NegativePrice())
-        product = holding.shares * holding.price
+        product = float(holding.shares) * price
         if not isfinite(product):
             return Err(error=PortfolioError_TotalOverflow())
         total = total + product

@@ -6,6 +6,5 @@ def render_response(response: Response) -> str:
     for header in response.headers:
         lines.append(f"{header.name}: {header.value}")
     lines.append("")
-    body = response.body.encode("utf-8", "replace").decode("utf-8", "replace")
-    lines.append(body)
+    lines.append(response.body)
     return "\n".join(lines)

@@ -978,7 +978,7 @@ fn render_json(value: &Value) -> Result<String, String> {
             values
                 .iter()
                 .map(|(key, value)| Ok(format!(
-                    "cott_runtime.CottMapEntry({}, {})",
+                    "MapEntry({}, {})",
                     dart_string(key),
                     render_json(value)?
                 )))

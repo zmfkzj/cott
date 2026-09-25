@@ -16,24 +16,17 @@ struct LabelAssessment:
     invariant self.text == self.label.value
 
 enum LabelEvidenceError:
-    Legacy
     Missing
     TooShort(actual: Str)
 
-rule BaselineLabelRule:
-    error LabelEvidenceError.Legacy
-    error LabelEvidenceError.Missing
-
-rule RefinedLabelRule(BaselineLabelRule):
-    override error LabelEvidenceError.Missing when false
-
-    delete error LabelEvidenceError.Legacy
-
 fn assess_label(request: LabelRequest) -> Result[LabelAssessment, LabelEvidenceError]:
     doc """
-    Assess labels directly: missing labels and labels shorter than the requested
-    minimum are declared errors; successful labels are nominally refined and
-    meet the request's minimum length.
+    Assess the offered label against the request's minimum length. Lengths count
+    Unicode scalar values, as Cott `.len` does. A missing label fails with
+    `Missing`. An offered label shorter than `minimum_length` fails with
+    `TooShort` whose `actual` is the offered label unchanged. Any other label is
+    accepted unchanged: the assessment's `text` and `label` are the offered label
+    and `length` is its length.
     """
 
     requires request.minimum_length > 0
@@ -41,7 +34,18 @@ fn assess_label(request: LabelRequest) -> Result[LabelAssessment, LabelEvidenceE
     ensures Result.Ok(value) => value.text.len >= request.minimum_length
     ensures Result.Err(LabelEvidenceError.TooShort(actual)) => actual.len < request.minimum_length
 
-    error LabelEvidenceError.Missing
+    errors complete
+    error LabelEvidenceError.Missing with request.label matches Option.Nothing
     error LabelEvidenceError.TooShort with request.label matches Option.Some(text) when (text.len < request.minimum_length)
 
     effects []
+
+scenario short_label_reports_offered_text:
+    call short = assess_label(LabelRequest(label: Option.Some(value: "ok"), minimum_length: 3))
+    assert short == Result.Err(error: LabelEvidenceError.TooShort(actual: "ok"))
+
+scenario accepted_label_is_reported_unchanged:
+    call accepted = assess_label(
+        LabelRequest(label: Option.Some(value: "evidence"), minimum_length: 3),
+    )
+    assert accepted matches Result.Ok(value) => value.text == "evidence"

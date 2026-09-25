@@ -449,6 +449,13 @@ pub enum ScenarioStep {
         target: QualifiedName,
         arguments: Vec<Expr>,
     },
+    /// Named arguments invoke an impl initializer, not a value constructor.
+    Init {
+        span: Span,
+        binding: ScenarioBinding,
+        target: QualifiedName,
+        arguments: Vec<ConstructArgument>,
+    },
     Spawn {
         span: Span,
         worker: ScenarioWorker,

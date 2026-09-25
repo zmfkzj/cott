@@ -24,5 +24,7 @@ class HelloResponse:
         if not _cott_validated_construction():
             object.__setattr__(self, "method", _cott_validate_abi(self.method, str, path="$.method"))
 
-"""Return FastAPI's official `Hello World` message and the injected request method."""
+"""Answer FastAPI's tutorial root route. `message` is the fixed greeting `Hello World`.
+`method` is the HTTP method token of `request` exactly as received (for example `GET`),
+neither normalized nor replaced by a default."""
 __all__ = ["HelloResponse", "HttpRequest"]

@@ -4,18 +4,18 @@
 package curriculum.stock_record
 
 /**
- * Computes the value of a validated stock record.
- * 
- * The caller supplies non-negative shares and a non-negative price.
- * ValuationOverflow is returned when the binary64 product is not finite.
+ * Computes the value of a validated stock record: the share count converted
+ * to the nearest binary64 value, multiplied by the price with binary64
+ * round-to-nearest, ties-to-even. The name does not affect the value.
+ * ValuationOverflow is returned when the product is not finite.
  */
 
 public fun  value_record(record: curriculum.stock_record.StockRecord): cott_runtime.CottResult<kotlin.Double, curriculum.stock_record.StockRecordError> {
     cott_runtime.CottRuntime.requireIdentity("stock-record", "0.1.0", 1)
     val _cottArg_record = cott_runtime.CottRuntime.abi(record, curriculum.stock_record.CottDescriptors_ac4d443eb41dd5f9e51f52f3.type_02b69f13e51a94900d62a497(), cott_runtime.RuntimeValidation.BOUNDARY, "\$.record")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare((_cottArg_record).price, kotlin.Double.fromBits(0)) >= 0), "curriculum.stock_record.value_record", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 512, endByte = 540, startLine = 23, startColumn = 5, endLine = 23, endColumn = 33), expected = "true", actual = "false")
-        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare((_cottArg_record).shares, java.math.BigInteger("0").toLong()) >= 0), "curriculum.stock_record.value_record", "requires", clause = "requires:2", span = cott_runtime.CottSpan(startByte = 545, endByte = 572, startLine = 24, startColumn = 5, endLine = 24, endColumn = 32), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare((_cottArg_record).shares, java.math.BigInteger("0").toLong()) >= 0), "curriculum.stock_record.value_record", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 644, endByte = 671, startLine = 25, startColumn = 5, endLine = 25, endColumn = 32), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare((_cottArg_record).price, kotlin.Double.fromBits(0)) >= 0), "curriculum.stock_record.value_record", "requires", clause = "requires:2", span = cott_runtime.CottSpan(startByte = 676, endByte = 704, startLine = 26, startColumn = 5, endLine = 26, endColumn = 33), expected = "true", actual = "false")
     }
     var _cottExpectedError: kotlin.String? = null
     var _cottExpectedErrorClause: kotlin.String? = null
@@ -33,20 +33,23 @@ public fun  value_record(record: curriculum.stock_record.StockRecord): cott_runt
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(cott_runtime.CottTypes.F64, curriculum.stock_record.CottDescriptors_ac4d443eb41dd5f9e51f52f3.type_82e51356fcc62a4664c7d1c7()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val `value` = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.Double); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(`value`, kotlin.Double.fromBits(0)) >= 0), "curriculum.stock_record.value_record", "ensures", clause = "ensures:3", span = cott_runtime.CottSpan(startByte = 578, endByte = 618, startLine = 26, startColumn = 5, endLine = 26, endColumn = 45), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val `value` = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.Double); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(kotlin.Double.fromBits(0), `value`) <= 0 && cott_runtime.CottRuntime.canonicalCompare(`value`, curriculum.stock_record.MAX_F64) <= 0), "curriculum.stock_record.value_record", "ensures", clause = "ensures:3", span = cott_runtime.CottSpan(startByte = 710, endByte = 761, startLine = 28, startColumn = 5, endLine = 28, endColumn = 56), expected = "true", actual = "false"); true } } else true }
         val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
         val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
         cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("curriculum.stock_record.StockRecordError.ValuationOverflow"), "curriculum.stock_record.value_record", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("curriculum.stock_record.StockRecordError.ValuationOverflow").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
-        if (_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.ValuationOverflow") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.ValuationOverflow", "curriculum.stock_record.value_record", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 624, endByte = 664, startLine = 28, startColumn = 5, endLine = 28, endColumn = 45))
+        if (_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.ValuationOverflow") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.ValuationOverflow", "curriculum.stock_record.value_record", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 767, endByte = 807, startLine = 30, startColumn = 5, endLine = 30, endColumn = 45))
     }
     return _cottResult
 }
 
 /**
- * Validates and values one raw stock record.
+ * Validates one raw stock record and values it. For a record that passes
+ * every validation clause, it calls the public
+ * curriculum.stock_record.value_record facade and returns that result,
+ * including ValuationOverflow, unchanged.
  * 
- * Validation reports EmptyName, NegativeShares, NonFinitePrice, then
- * NegativePrice in source order. A valid record is valued by value_record.
+ * On Kotlin the F64 boundary rejects NaN and infinite prices before the call,
+ * so NonFinitePrice is never returned.
  */
 
 public fun  value_stock_record(record: curriculum.stock_record.StockRecord): cott_runtime.CottResult<kotlin.Double, curriculum.stock_record.StockRecordError> {
@@ -57,6 +60,7 @@ public fun  value_stock_record(record: curriculum.stock_record.StockRecord): cot
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
         if (_cottExpectedError == null && ((cott_runtime.CottRuntime.canonicalEqual(cott_runtime.CottRuntime.length((_cottArg_record).name), java.math.BigInteger("0").toString().toULong())))) { _cottExpectedError = "curriculum.stock_record.StockRecordError.EmptyName"; _cottExpectedErrorClause = "error:2" }
         if (_cottExpectedError == null && ((cott_runtime.CottRuntime.canonicalCompare((_cottArg_record).shares, java.math.BigInteger("0").toLong()) < 0))) { _cottExpectedError = "curriculum.stock_record.StockRecordError.NegativeShares"; _cottExpectedErrorClause = "error:3" }
+        if (_cottExpectedError == null && (!((cott_runtime.CottRuntime.canonicalCompare(cott_runtime.CottRuntime.f64Negate(curriculum.stock_record.MAX_F64), (_cottArg_record).price) <= 0 && cott_runtime.CottRuntime.canonicalCompare((_cottArg_record).price, curriculum.stock_record.MAX_F64) <= 0)))) { _cottExpectedError = "curriculum.stock_record.StockRecordError.NonFinitePrice"; _cottExpectedErrorClause = "error:4" }
         if (_cottExpectedError == null && ((cott_runtime.CottRuntime.canonicalCompare((_cottArg_record).price, kotlin.Double.fromBits(0)) < 0))) { _cottExpectedError = "curriculum.stock_record.StockRecordError.NegativePrice"; _cottExpectedErrorClause = "error:5" }
     }
     val _cottRawResult = try {
@@ -71,15 +75,15 @@ public fun  value_stock_record(record: curriculum.stock_record.StockRecord): cot
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(cott_runtime.CottTypes.F64, curriculum.stock_record.CottDescriptors_ac4d443eb41dd5f9e51f52f3.type_82e51356fcc62a4664c7d1c7()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val `value` = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.Double); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(`value`, kotlin.Double.fromBits(0)) >= 0), "curriculum.stock_record.value_stock_record", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 968, endByte = 1008, startLine = 38, startColumn = 5, endLine = 38, endColumn = 45), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val `value` = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.Double); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(kotlin.Double.fromBits(0), `value`) <= 0 && cott_runtime.CottRuntime.canonicalCompare(`value`, curriculum.stock_record.MAX_F64) <= 0), "curriculum.stock_record.value_stock_record", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 1278, endByte = 1329, startLine = 43, startColumn = 5, endLine = 43, endColumn = 56), expected = "true", actual = "false"); true } } else true }
         val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
         val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
-        cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("curriculum.stock_record.StockRecordError.NonFinitePrice", "curriculum.stock_record.StockRecordError.ValuationOverflow"), "curriculum.stock_record.value_stock_record", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("curriculum.stock_record.StockRecordError.NonFinitePrice", "curriculum.stock_record.StockRecordError.ValuationOverflow").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
-        if (_cottExpectedErrorClause == "error:2") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.EmptyName", "curriculum.stock_record.value_stock_record", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 1014, endByte = 1072, startLine = 40, startColumn = 5, endLine = 40, endColumn = 63))
-        if (_cottExpectedErrorClause == "error:3") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.NegativeShares", "curriculum.stock_record.value_stock_record", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 1077, endByte = 1137, startLine = 41, startColumn = 5, endLine = 41, endColumn = 65))
-        if (_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.NonFinitePrice") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.NonFinitePrice", "curriculum.stock_record.value_stock_record", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 1142, endByte = 1179, startLine = 42, startColumn = 5, endLine = 42, endColumn = 42))
-        if (_cottExpectedErrorClause == "error:5") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.NegativePrice", "curriculum.stock_record.value_stock_record", "error", clause = "error:5", span = cott_runtime.CottSpan(startByte = 1184, endByte = 1244, startLine = 43, startColumn = 5, endLine = 43, endColumn = 65))
-        if (_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.ValuationOverflow") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.ValuationOverflow", "curriculum.stock_record.value_stock_record", "error", clause = "error:6", span = cott_runtime.CottSpan(startByte = 1249, endByte = 1289, startLine = 44, startColumn = 5, endLine = 44, endColumn = 45))
+        cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("curriculum.stock_record.StockRecordError.ValuationOverflow"), "curriculum.stock_record.value_stock_record", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("curriculum.stock_record.StockRecordError.ValuationOverflow").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
+        if (_cottExpectedErrorClause == "error:2") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.EmptyName", "curriculum.stock_record.value_stock_record", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 1335, endByte = 1393, startLine = 45, startColumn = 5, endLine = 45, endColumn = 63))
+        if (_cottExpectedErrorClause == "error:3") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.NegativeShares", "curriculum.stock_record.value_stock_record", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 1398, endByte = 1458, startLine = 46, startColumn = 5, endLine = 46, endColumn = 65))
+        if (_cottExpectedErrorClause == "error:4") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.NonFinitePrice", "curriculum.stock_record.value_stock_record", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 1463, endByte = 1547, startLine = 47, startColumn = 5, endLine = 47, endColumn = 89))
+        if (_cottExpectedErrorClause == "error:5") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.NegativePrice", "curriculum.stock_record.value_stock_record", "error", clause = "error:5", span = cott_runtime.CottSpan(startByte = 1552, endByte = 1612, startLine = 48, startColumn = 5, endLine = 48, endColumn = 65))
+        if (_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.ValuationOverflow") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.stock_record.StockRecordError.ValuationOverflow", "curriculum.stock_record.value_stock_record", "error", clause = "error:6", span = cott_runtime.CottSpan(startByte = 1617, endByte = 1657, startLine = 49, startColumn = 5, endLine = 49, endColumn = 45))
     }
     return _cottResult
 }

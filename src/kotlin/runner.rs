@@ -11,7 +11,7 @@ use crate::manifest::VerificationConfig;
 
 use super::emit;
 use super::expressions;
-use super::types;
+use super::types::{self, KotlinTypeContext};
 use super::{KotlinCallable, KotlinPlan};
 
 const EVENT_PREFIX: &str = "COTT_KOTLIN_VERIFY:";
@@ -184,20 +184,22 @@ pub(crate) fn render(
         }
     }
 
-    for strategy in strategies {
-        let Some(scenario) = strategy.scenario.as_ref() else {
-            continue;
-        };
-        match render_scenario(strategy, &declarations, &mut source, &mut main_lines) {
-            Ok(loopback) => {
-                expected_scenarios.insert(scenario.id.clone());
-                needs_loopback |= loopback;
-            }
-            Err(reason) => {
-                unavailable.insert(strategy.symbol.clone(), reason);
+    emit::with_type_context(plan, |types| {
+        for strategy in strategies {
+            let Some(scenario) = strategy.scenario.as_ref() else {
+                continue;
+            };
+            match render_scenario(strategy, &declarations, types, &mut source, &mut main_lines) {
+                Ok(loopback) => {
+                    expected_scenarios.insert(scenario.id.clone());
+                    needs_loopback |= loopback;
+                }
+                Err(reason) => {
+                    unavailable.insert(strategy.symbol.clone(), reason);
+                }
             }
         }
-    }
+    })?;
     let total_cases = expected_cases
         .values()
         .map(|value| u64::from(*value))
@@ -1896,6 +1898,7 @@ fn const_numeric(value: &Value, declarations: &BTreeMap<&str, &Value>) -> Result
 fn render_scenario(
     strategy: &ContractTestStrategy,
     declarations: &BTreeMap<&str, &Value>,
+    types: &dyn KotlinTypeContext,
     output: &mut String,
     main_lines: &mut Vec<String>,
 ) -> Result<bool, String> {
@@ -1929,17 +1932,13 @@ fn render_scenario(
                 .get("target")
                 .and_then(Value::as_str)
                 .ok_or("scenario call has no target")?;
-            if declarations.values().any(|declaration| {
-                declaration.get("kind").and_then(Value::as_str) == Some("impl")
-                    && target.starts_with(
-                        declaration
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or("\0"),
-                    )
+            if target.rsplit_once('.').is_some_and(|(owner, _)| {
+                declarations.get(owner).is_some_and(|declaration| {
+                    declaration.get("kind").and_then(Value::as_str) == Some("impl")
+                })
             }) {
                 return Err(
-                    "implementation-method scenarios require explicit receiver fixtures".to_owned(),
+                    "scenario impl methods require a receiver-bearing method_call step".to_owned(),
                 );
             }
         }
@@ -2070,12 +2069,87 @@ fn render_scenario(
                     .get("target")
                     .and_then(Value::as_str)
                     .ok_or("scenario call has no target")?;
-                let arguments = scenario_arguments(step)?;
+                let arguments = scenario_arguments(step, types)?;
                 writeln!(
                     source,
                     "            val {} = {}({})",
                     quoted(local_name(binding)),
                     qualified(target),
+                    arguments.join(", ")
+                )
+                .unwrap();
+            }
+            Some("init") => {
+                let binding = step
+                    .get("binding")
+                    .and_then(Value::as_str)
+                    .ok_or("scenario initializer has no binding")?;
+                let target = step
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .ok_or("scenario initializer has no target")?;
+                let owner = declarations.get(target).ok_or_else(|| {
+                    format!("scenario initializer `{target}` has no public facade")
+                })?;
+                if owner.get("kind").and_then(Value::as_str) != Some("impl")
+                    || owner.get("public").and_then(Value::as_bool) != Some(true)
+                {
+                    return Err(format!(
+                        "scenario initializer `{target}` has no public facade"
+                    ));
+                }
+                let arguments = scenario_arguments(step, types)?;
+                writeln!(
+                    source,
+                    "            val {} = {}({})",
+                    quoted(local_name(binding)),
+                    qualified(target),
+                    arguments.join(", ")
+                )
+                .unwrap();
+            }
+            Some("method_call") => {
+                let binding = step
+                    .get("binding")
+                    .and_then(Value::as_str)
+                    .ok_or("scenario method call has no binding")?;
+                let target = step
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .ok_or("scenario method call has no target")?;
+                let (owner_symbol, method) = target
+                    .rsplit_once('.')
+                    .ok_or("scenario method call has no owner")?;
+                let owner = declarations
+                    .get(owner_symbol)
+                    .ok_or_else(|| format!("scenario method `{target}` has no public facade"))?;
+                if owner.get("kind").and_then(Value::as_str) != Some("impl")
+                    || owner.get("public").and_then(Value::as_bool) != Some(true)
+                    || !owner
+                        .get("selected_methods")
+                        .and_then(Value::as_array)
+                        .is_some_and(|methods| {
+                            methods.iter().any(|slot| {
+                                slot.get("trait_method")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|name| local_name(name) == method)
+                            })
+                        })
+                {
+                    return Err(format!("scenario method `{target}` has no public facade"));
+                }
+                let receiver = expressions::render_scenario_expression(
+                    step.get("receiver")
+                        .ok_or("scenario method call has no receiver")?,
+                    types,
+                )?;
+                let arguments = scenario_arguments(step, types)?;
+                writeln!(
+                    source,
+                    "            val {} = ({}).{}({})",
+                    quoted(local_name(binding)),
+                    receiver,
+                    quoted(method),
                     arguments.join(", ")
                 )
                 .unwrap();
@@ -2089,7 +2163,7 @@ fn render_scenario(
                     .get("target")
                     .and_then(Value::as_str)
                     .ok_or("scenario spawn has no target")?;
-                let arguments = scenario_arguments(step)?;
+                let arguments = scenario_arguments(step, types)?;
                 let local = local_name(worker).to_owned();
                 workers.insert(local.clone());
                 writeln!(
@@ -2133,9 +2207,10 @@ fn render_scenario(
                 }
             }
             Some("assert") => {
-                let expression = expressions::render_expression(
+                let expression = expressions::render_scenario_expression(
                     step.get("expression")
                         .ok_or("scenario assertion has no expression")?,
+                    types,
                 )?;
                 writeln!(source, "            check({expression}) {{ \"scenario assertion step:{step_id} failed\" }}; _assertions += 1").unwrap();
             }
@@ -2144,9 +2219,10 @@ fn render_scenario(
                     .get("binding")
                     .and_then(Value::as_str)
                     .ok_or("scenario data has no binding")?;
-                let expression = expressions::render_expression(
+                let expression = expressions::render_scenario_expression(
                     step.get("expression")
                         .ok_or("scenario data has no expression")?,
+                    types,
                 )?;
                 writeln!(
                     source,
@@ -2193,12 +2269,12 @@ fn render_scenario(
     Ok(false)
 }
 
-fn scenario_arguments(step: &Value) -> Result<Vec<String>, String> {
+fn scenario_arguments(step: &Value, types: &dyn KotlinTypeContext) -> Result<Vec<String>, String> {
     step.get("arguments")
         .and_then(Value::as_array)
         .ok_or_else(|| "scenario call has no arguments".to_owned())?
         .iter()
-        .map(expressions::render_expression)
+        .map(|argument| expressions::render_scenario_expression(argument, types))
         .collect()
 }
 

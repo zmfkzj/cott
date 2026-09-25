@@ -18,47 +18,65 @@ _BACKOFF_CAP: Final[float] = 8.0
 
 
 def _url_ok(url: str) -> bool:
-    if url == "" or any(ord(c) < 0x21 or ord(c) == 0x7F for c in url):
+    if url == "" or any(ord(c) < 0x21 or 0x7F <= ord(c) <= 0x9F or c.isspace() for c in url):
         return False
     try:
         parts = urlsplit(url)
+        _ = parts.port
     except ValueError:
         return False
-    if parts.scheme not in ("http", "https") or not parts.hostname:
-        return False
-    try:
-        parts.port
-    except ValueError:
-        return False
-    return True
+    return parts.scheme in ("http", "https") and bool(parts.hostname)
 
 
 def _sleep_backoff(attempt: int) -> None:
     time.sleep(min(_BACKOFF * (2 ** attempt), _BACKOFF_CAP))
 
 
-def _is_regular_fd(fd: int) -> bool:
+def _close_quiet(fd: int) -> bool:
     try:
-        return stat.S_ISREG(os.fstat(fd).st_mode)
+        os.close(fd)
     except OSError:
         return False
+    return True
 
 
-def _open_file(path: Path, append: bool, file_retries: int) -> Result[int, MediaError]:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW | (os.O_APPEND if append else os.O_TRUNC)
+def _open_parent(destination: Path) -> int | None:
+    absolute = destination.is_absolute()
+    components = destination.parts[1:-1] if absolute else destination.parts[:-1]
+    try:
+        dfd = os.open("/" if absolute else ".", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    except OSError:
+        return None
+    for component in components:
+        try:
+            next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dfd)
+        except OSError:
+            _close_quiet(dfd)
+            return None
+        _close_quiet(dfd)
+        dfd = next_fd
+    return dfd
+
+
+def _open_file(dfd: int, name: str, append: bool, file_retries: int) -> Result[int, MediaError]:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK | (os.O_APPEND if append else os.O_TRUNC)
     attempt = 0
     while True:
         try:
-            fd = os.open(path, flags, 0o644)
+            fd = os.open(name, flags, 0o644, dir_fd=dfd)
         except OSError:
             if attempt >= file_retries:
-                return Err(error=MediaError_OutputFailure(message=f"cannot open {path}"))
+                return Err(error=MediaError_OutputFailure(message="cannot open output file"))
             _sleep_backoff(attempt)
             attempt += 1
             continue
-        if not _is_regular_fd(fd):
-            os.close(fd)
-            return Err(error=MediaError_OutputFailure(message=f"not a regular file {path}"))
+        try:
+            regular = stat.S_ISREG(os.fstat(fd).st_mode)
+        except OSError:
+            regular = False
+        if not regular:
+            _close_quiet(fd)
+            return Err(error=MediaError_OutputFailure(message="output is not a regular file"))
         return Ok(value=fd)
 
 
@@ -66,48 +84,50 @@ def _write_all(fd: int, chunk: bytes) -> bool:
     view = memoryview(chunk)
     try:
         while view:
-            view = view[os.write(fd, view):]
+            written = os.write(fd, view)
+            if written <= 0:
+                return False
+            view = view[written:]
     except OSError:
         return False
     return True
 
 
-def _connect(url: str, offset: int) -> Result[http.client.HTTPResponse, MediaError]:
+def _connect(url: str, offset: int) -> Result[tuple[http.client.HTTPConnection, http.client.HTTPResponse], MediaError]:
     current = url
     for _ in range(_MAX_REDIRECTS + 1):
         if not _url_ok(current):
             return Err(error=MediaError_NetworkFailure(message="redirect to unsupported URL"))
         parts = urlsplit(current)
         host = parts.hostname or ""
-        port = parts.port
         target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
         headers = {"User-Agent": "yt-dlp", "Accept-Encoding": "identity"}
         if offset > 0:
             headers["Range"] = f"bytes={offset}-"
         connection: http.client.HTTPConnection
         if parts.scheme == "https":
-            connection = http.client.HTTPSConnection(host, port, timeout=_TIMEOUT, context=ssl.create_default_context())
+            connection = http.client.HTTPSConnection(host, parts.port, timeout=_TIMEOUT, context=ssl.create_default_context())
         else:
-            connection = http.client.HTTPConnection(host, port, timeout=_TIMEOUT)
+            connection = http.client.HTTPConnection(host, parts.port, timeout=_TIMEOUT)
         try:
             connection.request("GET", target, headers=headers)
             response = connection.getresponse()
         except (OSError, ValueError, http.client.HTTPException, socket.timeout):
             connection.close()
-            return Err(error=MediaError_NetworkFailure(message=f"connection failure fetching from {host}"))
+            return Err(error=MediaError_NetworkFailure(message="connection failure"))
         if response.status in (301, 302, 303, 307, 308):
             location = response.getheader("Location")
             status = response.status
             connection.close()
-            if location is None:
+            if location is None or location.strip() == "":
                 return Err(error=MediaError_HttpStatus(status=status))
-            current = urljoin(current, location)
+            current = urljoin(current, location.strip())
             continue
-        return Ok(value=response)
+        return Ok(value=(connection, response))
     return Err(error=MediaError_NetworkFailure(message="too many redirects"))
 
 
-def _stream(response: http.client.HTTPResponse, fd: int, policy: FragmentPolicy, work: Path, start_total: int, limit: int) -> Result[tuple[int, int], MediaError]:
+def _stream(response: http.client.HTTPResponse, fd: int, policy: FragmentPolicy, start_total: int, limit: int) -> Result[int, MediaError]:
     read_size = policy.buffer_size if policy.chunk_size == 0 else min(policy.buffer_size, policy.chunk_size)
     rate = policy.rate_limit_bytes_per_second
     started = time.monotonic()
@@ -116,16 +136,16 @@ def _stream(response: http.client.HTTPResponse, fd: int, policy: FragmentPolicy,
     while True:
         try:
             chunk = response.read(read_size)
-        except (OSError, http.client.HTTPException, socket.timeout):
-            return Err(error=MediaError_NetworkFailure(message="connection failure while reading"))
+        except (OSError, ValueError, http.client.HTTPException, socket.timeout):
+            return Err(error=MediaError_NetworkFailure(message="connection failure while reading body"))
         if not chunk:
             break
         total += len(chunk)
         received += len(chunk)
-        if limit > 0 and total > limit:
+        if total > limit:
             return Err(error=MediaError_SizeLimit())
         if not _write_all(fd, chunk):
-            return Err(error=MediaError_OutputFailure(message=f"cannot write {work}"))
+            return Err(error=MediaError_OutputFailure(message="cannot write output file"))
         if rate > 0:
             ahead = received / rate - (time.monotonic() - started)
             if ahead > 0:
@@ -133,102 +153,177 @@ def _stream(response: http.client.HTTPResponse, fd: int, policy: FragmentPolicy,
     try:
         os.fsync(fd)
     except OSError:
-        return Err(error=MediaError_OutputFailure(message=f"cannot flush {work}"))
-    return Ok(value=(total, received))
+        return Err(error=MediaError_OutputFailure(message="cannot flush output file"))
+    return Ok(value=received)
 
 
-def _consume(response: http.client.HTTPResponse, policy: FragmentPolicy, work: Path, offset: int, limit: int) -> Result[int, MediaError]:
+def _sync_existing(dfd: int, name: str, total: int) -> Result[int, MediaError]:
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dfd)
+    except OSError:
+        return Err(error=MediaError_OutputFailure(message="cannot open existing output file"))
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return Err(error=MediaError_OutputFailure(message="output is not a regular file"))
+        if info.st_size != total:
+            return Err(error=MediaError_HttpStatus(status=416))
+        os.fsync(fd)
+    except OSError:
+        return Err(error=MediaError_OutputFailure(message="cannot flush output file"))
+    finally:
+        _close_quiet(fd)
+    return Ok(value=0)
+
+
+def _decimal(text: str) -> int:
+    return int(text) if text != "" and text.isascii() and text.isdigit() else -1
+
+
+def _range_complete(content_range: str, offset: int) -> bool:
+    unit, _, spec = content_range.strip().partition(" ")
+    unsat, _, total = spec.strip().partition("/")
+    return unit == "bytes" and unsat == "*" and _decimal(total) == offset
+
+
+def _partial_span(content_range: str, offset: int) -> tuple[int, int]:
+    unit, _, spec = content_range.strip().partition(" ")
+    span, _, total_text = spec.strip().partition("/")
+    first_text, dash, last_text = span.partition("-")
+    first = _decimal(first_text)
+    last = _decimal(last_text)
+    total = _decimal(total_text)
+    if unit != "bytes" or dash == "" or first != offset or last < first or total <= last:
+        return (-1, -1)
+    return (last - first + 1, total)
+
+
+def _consume(response: http.client.HTTPResponse, policy: FragmentPolicy, dfd: int, name: str, offset: int, limit: int, known_total: int) -> Result[int, MediaError]:
     status = response.status
     if status == 416 and offset > 0:
-        return Ok(value=offset)
-    if status not in (200, 206):
+        if not _range_complete(response.getheader("Content-Range") or "", offset):
+            return Err(error=MediaError_HttpStatus(status=status))
+        return _sync_existing(dfd, name, offset)
+    if status < 200 or status > 299 or (status == 206 and offset == 0):
         return Err(error=MediaError_HttpStatus(status=status))
-    append = status == 206 and offset > 0
-    start_total = offset if append else 0
+    append = status == 206
     length = response.getheader("Content-Length")
-    stripped = length.strip() if length is not None else ""
-    expected = int(stripped) if stripped.isascii() and stripped.isdigit() else -1
-    if limit > 0 and expected >= 0 and start_total + expected > limit:
+    expected = _decimal(length.strip() if length is not None else "")
+    if length is not None and expected < 0:
+        return Err(error=MediaError_NetworkFailure(message="malformed Content-Length"))
+    resource_total = -1
+    if append:
+        span, resource_total = _partial_span(response.getheader("Content-Range") or "", offset)
+        if span < 0 or (expected >= 0 and expected != span) or (known_total >= 0 and resource_total != known_total):
+            return Err(error=MediaError_NetworkFailure(message="unexpected partial content range"))
+        if resource_total > limit:
+            return Err(error=MediaError_SizeLimit())
+        expected = span
+    start_total = offset if append else 0
+    if expected >= 0 and start_total + expected > limit:
         return Err(error=MediaError_SizeLimit())
-    opened = _open_file(work, append, policy.file_access_retries)
-    match opened:
+    streamed: Result[int, MediaError]
+    match _open_file(dfd, name, append, policy.file_access_retries):
         case Err(error=open_error):
             return Err(error=open_error)
         case Ok(value=fd):
             try:
-                streamed = _stream(response, fd, policy, work, start_total, limit)
+                streamed = _stream(response, fd, policy, start_total, limit)
             finally:
-                os.close(fd)
+                _close_quiet(fd)
     match streamed:
         case Err(error=stream_error):
             return Err(error=stream_error)
-        case Ok(value=(total, received)):
+        case Ok(value=received):
             if expected >= 0 and received != expected:
                 return Err(error=MediaError_NetworkFailure(message="incomplete response body"))
-            return Ok(value=total)
+            if append and offset + received < resource_total:
+                return Ok(value=resource_total)
+            return Ok(value=0)
 
 
-def _existing_size(work: Path) -> Result[int, MediaError]:
+def _existing_size(dfd: int, name: str) -> Result[int, MediaError]:
     try:
-        info = os.stat(work, follow_symlinks=False)
+        info = os.stat(name, dir_fd=dfd, follow_symlinks=False)
     except FileNotFoundError:
         return Ok(value=0)
     except OSError:
-        return Err(error=MediaError_OutputFailure(message=f"cannot inspect {work}"))
+        return Err(error=MediaError_OutputFailure(message="cannot inspect output file"))
     if not stat.S_ISREG(info.st_mode):
-        return Err(error=MediaError_OutputFailure(message=f"not a regular file {work}"))
+        return Err(error=MediaError_OutputFailure(message="output is not a regular file"))
     return Ok(value=info.st_size)
 
 
-def _attempt(request: TransferRequest, policy: FragmentPolicy, work: Path) -> Result[int, MediaError]:
-    offset = 0
-    if policy.continue_download:
-        sized = _existing_size(work)
-        match sized:
-            case Err(error=size_error):
-                return Err(error=size_error)
-            case Ok(value=size):
-                offset = size
+def _attempt(request: TransferRequest, policy: FragmentPolicy, dfd: int, name: str) -> Result[int, MediaError]:
+    resume = policy.continue_download
     limit = request.max_bytes
-    if limit > 0 and offset > limit:
-        return Err(error=MediaError_SizeLimit())
-    connected = _connect(request.url, offset)
-    match connected:
-        case Err(error=connect_error):
-            return Err(error=connect_error)
-        case Ok(value=response):
-            try:
-                return _consume(response, policy, work, offset, limit)
-            finally:
-                response.close()
+    known_total = -1
+    while True:
+        offset = 0
+        if resume:
+            match _existing_size(dfd, name):
+                case Err(error=size_error):
+                    return Err(error=size_error)
+                case Ok(value=size):
+                    offset = size
+        if offset > limit:
+            return Err(error=MediaError_SizeLimit())
+        outcome: Result[int, MediaError]
+        match _connect(request.url, offset):
+            case Err(error=connect_error):
+                return Err(error=connect_error)
+            case Ok(value=(connection, response)):
+                try:
+                    outcome = _consume(response, policy, dfd, name, offset, limit, known_total)
+                finally:
+                    response.close()
+                    connection.close()
+        match outcome:
+            case Ok(value=0):
+                return outcome
+            case Ok(value=total):
+                known_total = total
+                resume = True
+            case Err():
+                return outcome
 
 
-def _finish(request: TransferRequest, policy: FragmentPolicy, work: Path, destination: Path, written: int) -> Result[TransferReceipt, MediaError]:
-    if work != destination:
+def _finish(request: TransferRequest, policy: FragmentPolicy, dfd: int, work: str, destination: Path) -> Result[TransferReceipt, MediaError]:
+    target = destination.name
+    if work != target:
         tries = 0
         while True:
             try:
-                os.replace(work, destination)
+                os.replace(work, target, src_dir_fd=dfd, dst_dir_fd=dfd)
                 break
             except OSError:
                 if tries >= policy.file_access_retries:
-                    return Err(error=MediaError_OutputFailure(message=f"cannot rename to {destination}"))
+                    return Err(error=MediaError_OutputFailure(message="cannot rename part file"))
                 _sleep_backoff(tries)
                 tries += 1
-    return Ok(value=TransferReceipt(url=request.url, destination=destination, bytes_written=written, simulated=False))
+        try:
+            os.fsync(dfd)
+        except OSError:
+            return Err(error=MediaError_OutputFailure(message="cannot flush output directory"))
+    try:
+        info = os.stat(target, dir_fd=dfd, follow_symlinks=False)
+    except OSError:
+        return Err(error=MediaError_OutputFailure(message="cannot inspect output file"))
+    if not stat.S_ISREG(info.st_mode):
+        return Err(error=MediaError_OutputFailure(message="output is not a regular file"))
+    return Ok(value=TransferReceipt(url=request.url, destination=destination, bytes_written=info.st_size, simulated=False))
 
 
-def _transfer_one(request: TransferRequest, policy: FragmentPolicy, retries: int) -> Result[TransferReceipt, MediaError]:
-    destination = Path(request.destination)
-    if request.simulate:
-        return Ok(value=TransferReceipt(url=request.url, destination=destination, bytes_written=0, simulated=True))
-    work = destination.with_name(destination.name + ".part") if policy.part_files else destination
+def _transfer_in(request: TransferRequest, policy: FragmentPolicy, retries: int, dfd: int, destination: Path) -> Result[TransferReceipt, MediaError]:
+    work = destination.name + ".part" if policy.part_files else destination.name
     attempt = 0
     while True:
-        outcome = _attempt(request, policy, work)
-        match outcome:
-            case Ok(value=written):
-                return _finish(request, policy, work, destination, written)
+        # The work file only ever holds a contiguous verbatim body prefix: 200 truncates
+        # and rewrites from 0, 206 appends at the checked offset, and write/fsync errors
+        # are terminal OutputFailure. A retry therefore resumes from the file's actual size.
+        match _attempt(request, policy, dfd, work):
+            case Ok(value=_):
+                return _finish(request, policy, dfd, work, destination)
             case Err(error=error):
                 retryable = isinstance(error, MediaError_NetworkFailure) or (isinstance(error, MediaError_HttpStatus) and (error.status >= 500 or error.status == 429))
                 if not retryable:
@@ -239,6 +334,21 @@ def _transfer_one(request: TransferRequest, policy: FragmentPolicy, retries: int
                     return Err(error=MediaError_RetryExhausted(attempts=attempt + 1))
                 _sleep_backoff(attempt)
                 attempt += 1
+
+
+def _transfer_one(request: TransferRequest, policy: FragmentPolicy, retries: int) -> Result[TransferReceipt, MediaError]:
+    destination = Path(request.destination)
+    if request.simulate:
+        return Ok(value=TransferReceipt(url=request.url, destination=destination, bytes_written=0, simulated=True))
+    if os.name != "posix" or not (os.O_NOFOLLOW and os.O_DIRECTORY and os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd and os.rename in os.supports_dir_fd):
+        return Err(error=MediaError_OutputFailure(message="platform lacks descriptor-relative file operations"))
+    dfd = _open_parent(destination)
+    if dfd is None:
+        return Err(error=MediaError_OutputFailure(message="cannot open output directory without following symlinks"))
+    try:
+        return _transfer_in(request, policy, retries, dfd, destination)
+    finally:
+        _close_quiet(dfd)
 
 
 def transfer_fragments(fragments: CottList[TransferRequest], policy: FragmentPolicy) -> Result[CottList[TransferReceipt], MediaError]:
@@ -253,10 +363,10 @@ def transfer_fragments(fragments: CottList[TransferRequest], policy: FragmentPol
             return Err(error=MediaError_InvalidInput(message="invalid fragment URL"))
         destination = Path(fragment.destination)
         if destination.name in ("", ".", ".."):
-            return Err(error=MediaError_InvalidInput(message=f"invalid destination {destination}"))
+            return Err(error=MediaError_InvalidInput(message="destination has no file name"))
         key = os.path.abspath(destination)
         if key in seen:
-            return Err(error=MediaError_InvalidInput(message=f"duplicate destination {destination}"))
+            return Err(error=MediaError_InvalidInput(message="duplicate fragment destination"))
         seen.add(key)
         requests.append(fragment)
     retries = policy.fragment_retries if len(requests) > 1 else policy.retries

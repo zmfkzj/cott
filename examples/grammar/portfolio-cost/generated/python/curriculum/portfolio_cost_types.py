@@ -8,6 +8,8 @@ from typing import Annotated, Any, Final, ForwardRef, Generic, Literal, Never, P
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_descending_by, _cott_ends_with, _cott_euclidean_mod, _cott_normalize_f32, _cott_starts_with, _cott_unique_by, _cott_validate_abi, _cott_validated_construction
 from cott_runtime import _cott_contract_condition
+MAX_F64: Final[F64] = 179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Holding:
@@ -43,18 +45,19 @@ class PortfolioError_TotalOverflow:
 
 PortfolioError: TypeAlias = Union[PortfolioError_NegativeShares, PortfolioError_NonFinitePrice, PortfolioError_NegativePrice, PortfolioError_TotalOverflow]
 
-"""Computes the total market value of a portfolio from a list of holdings.
-Each holding supplies an I64 share count and an F64 price.
+"""Computes the total market value of a portfolio: the sum of shares times
+price over its holdings.
 
-Holdings are processed in list order and evaluation stops at the first
-error. For each holding, a negative share count returns NegativeShares;
-otherwise a NaN or infinite price returns NonFinitePrice; otherwise a
-price below zero returns NegativePrice. Zero shares, positive or negative
-zero prices, and an empty list are accepted.
+Holdings are examined one at a time in list order, and the first failing
+holding decides the error. A holding fails with NegativeShares when its
+share count is negative, otherwise with NonFinitePrice when its price is
+NaN or infinite, otherwise with NegativePrice when its price is below zero.
+Zero shares, signed-zero prices and an empty list are accepted.
 
-Starting from 0.0, each accepted share count is multiplied by its price
-and the product is added to the running total using F64 arithmetic, in
-list order. TotalOverflow is returned if either operation produces a
-non-finite value. Otherwise Ok contains the finite, non-negative total;
-ordinary F64 rounding and underflow are retained."""
-__all__ = ["Holding", "PortfolioError", "PortfolioError_NegativePrice", "PortfolioError_NegativeShares", "PortfolioError_NonFinitePrice", "PortfolioError_TotalOverflow"]
+The running total starts at 0.0. For each accepted holding, the share count
+is converted to the nearest binary64 value and multiplied by the price, and
+the product is added to the running total; every operation is binary64,
+rounded to nearest, ties to even. If the product or the new running total
+is not finite, TotalOverflow is returned at that holding, before later
+holdings are examined."""
+__all__ = ["Holding", "MAX_F64", "PortfolioError", "PortfolioError_NegativePrice", "PortfolioError_NegativeShares", "PortfolioError_NonFinitePrice", "PortfolioError_TotalOverflow"]

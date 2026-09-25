@@ -48,7 +48,8 @@ public data class SearchSnapshot(
         cott_runtime.CottRuntime.abi(result, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.result")
         cott_runtime.CottRuntime.abi(status, curriculum.workflow_scenario.CottDescriptors_67896165e35eb4706311ede7.type_53adf4c9b69f841b226bf175(), cott_runtime.RuntimeValidation.BOUNDARY, "\$.status")
         cott_runtime.CottRuntime.invariant((cott_runtime.CottRuntime.canonicalCompare((this).request_id, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.workflow_scenario.SearchSnapshot", clause = "invariant:0", span = cott_runtime.CottSpan(startByte = 211, endByte = 240, startLine = 14, startColumn = 5, endLine = 14, endColumn = 34), expected = "true", actual = "false")
-        cott_runtime.CottRuntime.invariant((cott_runtime.CottRuntime.canonicalCompare((this).applied_request_id, (this).request_id) <= 0), "curriculum.workflow_scenario.SearchSnapshot", clause = "invariant:1", span = cott_runtime.CottSpan(startByte = 245, endByte = 297, startLine = 15, startColumn = 5, endLine = 15, endColumn = 57), expected = "true", actual = "false")
+        run { val _cottMatchValue = (this).status; if ((cott_runtime.CottRuntime.variant(_cottMatchValue, "curriculum.workflow_scenario.SearchStatus.Loading") is cott_runtime.Some<*>)) { run { cott_runtime.CottRuntime.invariant((((cott_runtime.CottRuntime.canonicalEqual((this).applied_request_id, java.math.BigInteger("0").toString().toULong()))) && ((cott_runtime.CottRuntime.canonicalEqual((this).result, "")))), "curriculum.workflow_scenario.SearchSnapshot", clause = "invariant:1", span = cott_runtime.CottSpan(startByte = 245, endByte = 351, startLine = 15, startColumn = 5, endLine = 15, endColumn = 111), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = (this).status; if ((cott_runtime.CottRuntime.variant(_cottMatchValue, "curriculum.workflow_scenario.SearchStatus.Ready") is cott_runtime.Some<*>)) { run { cott_runtime.CottRuntime.invariant((cott_runtime.CottRuntime.canonicalEqual((this).applied_request_id, (this).request_id)), "curriculum.workflow_scenario.SearchSnapshot", clause = "invariant:2", span = cott_runtime.CottSpan(startByte = 356, endByte = 450, startLine = 16, startColumn = 5, endLine = 16, endColumn = 99), expected = "true", actual = "false"); true } } else true }
     }
 }
 
@@ -69,7 +70,7 @@ public data class SearchResult(
         cott_runtime.CottRuntime.abi(request_id, cott_runtime.CottTypes.U64, cott_runtime.RuntimeValidation.BOUNDARY, "\$.request_id")
         cott_runtime.CottRuntime.abi(query, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.query")
         cott_runtime.CottRuntime.abi(result, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.result")
-        cott_runtime.CottRuntime.invariant((cott_runtime.CottRuntime.canonicalCompare((this).request_id, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.workflow_scenario.SearchResult", clause = "invariant:0", span = cott_runtime.CottSpan(startByte = 376, endByte = 405, startLine = 22, startColumn = 5, endLine = 22, endColumn = 34), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.invariant((cott_runtime.CottRuntime.canonicalCompare((this).request_id, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.workflow_scenario.SearchResult", clause = "invariant:0", span = cott_runtime.CottSpan(startByte = 529, endByte = 558, startLine = 23, startColumn = 5, endLine = 23, endColumn = 34), expected = "true", actual = "false")
     }
 }
 
@@ -111,7 +112,7 @@ public data class SaveSnapshot(
         cott_runtime.CottRuntime.abi(revision, cott_runtime.CottTypes.U64, cott_runtime.RuntimeValidation.BOUNDARY, "\$.revision")
         cott_runtime.CottRuntime.abi(text, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.text")
         cott_runtime.CottRuntime.abi(status, curriculum.workflow_scenario.CottDescriptors_67896165e35eb4706311ede7.type_40a289e696e333b6612dea58(), cott_runtime.RuntimeValidation.BOUNDARY, "\$.status")
-        cott_runtime.CottRuntime.invariant((cott_runtime.CottRuntime.canonicalCompare((this).revision, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.workflow_scenario.SaveSnapshot", clause = "invariant:0", span = cott_runtime.CottSpan(startByte = 529, endByte = 556, startLine = 33, startColumn = 5, endLine = 33, endColumn = 32), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.invariant((cott_runtime.CottRuntime.canonicalCompare((this).revision, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.workflow_scenario.SaveSnapshot", clause = "invariant:0", span = cott_runtime.CottSpan(startByte = 682, endByte = 709, startLine = 34, startColumn = 5, endLine = 34, endColumn = 32), expected = "true", actual = "false")
     }
 }
 
@@ -132,7 +133,7 @@ public data class SaveReceipt(
         cott_runtime.CottRuntime.abi(revision, cott_runtime.CottTypes.U64, cott_runtime.RuntimeValidation.BOUNDARY, "\$.revision")
         cott_runtime.CottRuntime.abi(text, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.text")
         cott_runtime.CottRuntime.abi(status, curriculum.workflow_scenario.CottDescriptors_67896165e35eb4706311ede7.type_40a289e696e333b6612dea58(), cott_runtime.RuntimeValidation.BOUNDARY, "\$.status")
-        cott_runtime.CottRuntime.invariant((cott_runtime.CottRuntime.canonicalCompare((this).revision, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.workflow_scenario.SaveReceipt", clause = "invariant:0", span = cott_runtime.CottSpan(startByte = 638, endByte = 665, startLine = 40, startColumn = 5, endLine = 40, endColumn = 32), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.invariant((cott_runtime.CottRuntime.canonicalCompare((this).revision, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.workflow_scenario.SaveReceipt", clause = "invariant:0", span = cott_runtime.CottSpan(startByte = 791, endByte = 818, startLine = 41, startColumn = 5, endLine = 41, endColumn = 32), expected = "true", actual = "false")
     }
 }
 

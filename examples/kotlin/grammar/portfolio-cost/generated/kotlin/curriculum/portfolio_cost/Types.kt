@@ -3,6 +3,8 @@
 
 package curriculum.portfolio_cost
 
+public val MAX_F64: kotlin.Double = kotlin.Double.fromBits(9218868437227405311)
+
 public data class Holding(
     public val shares: kotlin.Long,
     public val price: kotlin.Double,

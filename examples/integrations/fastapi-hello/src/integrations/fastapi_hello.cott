@@ -9,9 +9,17 @@ struct HelloResponse:
 @get("/")
 fn read_root(request: HttpRequest) -> HelloResponse:
     doc """
-    Return FastAPI's official `Hello World` message and the injected request method.
+    Answer FastAPI's tutorial root route. `message` is the fixed greeting `Hello World`.
+    `method` is the HTTP method token of `request` exactly as received (for example `GET`),
+    neither normalized nor replaced by a default.
     """
 
     ensures result.message == "Hello World"
 
     effects []
+
+# HttpRequest is external: contracts cannot read its method and scenarios cannot construct it, so
+# the method relation is a requirement with no Cott check.
+requirement METHOD_IS_REQUEST_METHOD for read_root:
+    text "`result.method` equals the HTTP method of `request`, never a constant or an empty string."
+    assumption "The projected HttpRequest type exposes the incoming request's HTTP method."

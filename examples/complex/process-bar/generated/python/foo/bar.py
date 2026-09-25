@@ -10,17 +10,18 @@ from typing import Any, Literal, Never, Protocol, TypeVar, final
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 from cott_runtime import _cott_contract_condition
 
-from foo.bar_types import BarError, BarError_InvalidPayload, BarError_ProcessingFailed, BarError_ServiceUnavailable, BarOptions, InputPayload, MAX_PAYLOAD_SIZE, OutputPayload, PayloadFormat, PayloadFormat_Raw, PayloadFormat_Structured, PayloadFormat_Text, PayloadSize, Probability
+from foo.bar_types import BarError, BarError_InvalidPayload, BarOptions, InputPayload, MAX_PAYLOAD_SIZE, OutputPayload, PayloadFormat, PayloadFormat_Raw, PayloadFormat_Structured, PayloadFormat_Text, PayloadSize, Probability
 
 def validate_payload(data: InputPayload) -> Result[InputPayload, BarError]:
-    """Reject empty payload bytes before pure processing."""
+    """Reject a payload without bytes. declared_size is caller-supplied metadata
+carried to the output; it is not compared with the byte count."""
     data = _cott_validate_abi(data, InputPayload, path="$.data")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
     if _expected_error is None and (_cott_contract_condition(((len((data).data) == 0)), "foo.bar.validate_payload", "error:4:condition")):
         _expected_error = BarError_InvalidPayload
-        _expected_error_span = {"end_byte":1038,"end_column":58,"end_line":44,"start_byte":985,"start_column":5,"start_line":44}
+        _expected_error_span = {"end_byte":1070,"end_column":58,"end_line":43,"start_byte":1017,"start_column":5,"start_line":43}
         _expected_error_clause = "error:4"
     try:
         _implementation = _cott_load("_cott_impl/foo/bar/validate_payload.py", "3d1c11fb7ee24365f68d8a954981e6fe75b6d6cbe8a27daf74cf94aac1847804", "validate_payload", expected_project_name="process-bar", expected_cott_symbol="foo.bar.validate_payload")
@@ -29,19 +30,19 @@ def validate_payload(data: InputPayload) -> Result[InputPayload, BarError]:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "foo.bar.validate_payload"
         if _error.span is None:
-            _error.span = {"end_byte":1056,"end_column":1,"end_line":48,"start_byte":615,"start_column":1,"start_line":35}
+            _error.span = {"end_byte":1088,"end_column":1,"end_line":47,"start_byte":557,"start_column":1,"start_line":33}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="foo.bar.validate_payload", phase="implementation-call", span={"end_byte":1056,"end_column":1,"end_line":48,"start_byte":615,"start_column":1,"start_line":35}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="foo.bar.validate_payload", phase="implementation-call", span={"end_byte":1088,"end_column":1,"end_line":47,"start_byte":557,"start_column":1,"start_line":33}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="foo.bar.validate_payload", phase="implementation-call", span={"end_byte":1056,"end_column":1,"end_line":48,"start_byte":615,"start_column":1,"start_line":35}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="foo.bar.validate_payload", phase="implementation-call", span={"end_byte":1088,"end_column":1,"end_line":47,"start_byte":557,"start_column":1,"start_line":33}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[InputPayload, BarError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="foo.bar.validate_payload", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in ():
-            raise CottContractViolation("returned error is not allowed", symbol="foo.bar.validate_payload", phase="error", span={"end_byte":1056,"end_column":1,"end_line":48,"start_byte":615,"start_column":1,"start_line":35}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="foo.bar.validate_payload", phase="error", span={"end_byte":1088,"end_column":1,"end_line":47,"start_byte":557,"start_column":1,"start_line":33}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="foo.bar.validate_payload", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -54,7 +55,7 @@ def validate_payload(data: InputPayload) -> Result[InputPayload, BarError]:
         _cott_contract_condition((False), "foo.bar.validate_payload", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="foo.bar.validate_payload", clause="ensures:1", phase="ensures", span={"end_byte":829,"end_column":64,"end_line":40,"start_byte":770,"start_column":5,"start_line":40}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="foo.bar.validate_payload", clause="ensures:1", phase="ensures", span={"end_byte":861,"end_column":64,"end_line":39,"start_byte":802,"start_column":5,"start_line":39}, expected="true", actual="false")
     def _cott_match_ensures_2() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
@@ -63,7 +64,7 @@ def validate_payload(data: InputPayload) -> Result[InputPayload, BarError]:
         _cott_contract_condition((False), "foo.bar.validate_payload", "ensures:2:applicable")
         return True
     if not (_cott_match_ensures_2()):
-        raise CottContractViolation("ensures clause failed", symbol="foo.bar.validate_payload", clause="ensures:2", phase="ensures", span={"end_byte":911,"end_column":82,"end_line":41,"start_byte":834,"start_column":5,"start_line":41}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="foo.bar.validate_payload", clause="ensures:2", phase="ensures", span={"end_byte":943,"end_column":82,"end_line":40,"start_byte":866,"start_column":5,"start_line":40}, expected="true", actual="false")
     def _cott_match_ensures_3() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
@@ -72,12 +73,13 @@ def validate_payload(data: InputPayload) -> Result[InputPayload, BarError]:
         _cott_contract_condition((False), "foo.bar.validate_payload", "ensures:3:applicable")
         return True
     if not (_cott_match_ensures_3()):
-        raise CottContractViolation("ensures clause failed", symbol="foo.bar.validate_payload", clause="ensures:3", phase="ensures", span={"end_byte":979,"end_column":68,"end_line":42,"start_byte":916,"start_column":5,"start_line":42}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="foo.bar.validate_payload", clause="ensures:3", phase="ensures", span={"end_byte":1011,"end_column":68,"end_line":41,"start_byte":948,"start_column":5,"start_line":41}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[InputPayload, BarError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def process_payload_bytes(data: bytes, options: BarOptions) -> Result[bytes, BarError]:
-    """Perform the pure byte-processing step without changing payload bytes."""
+    """The byte-processing stage of this fixture is the identity: it always
+succeeds with the input bytes, whatever the options."""
     data = _cott_validate_abi(data, bytes, path="$.data")
     options = _cott_validate_abi(options, BarOptions, path="$.options")
     _expected_error = None
@@ -90,27 +92,23 @@ def process_payload_bytes(data: bytes, options: BarOptions) -> Result[bytes, Bar
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "foo.bar.process_payload_bytes"
         if _error.span is None:
-            _error.span = {"end_byte":1384,"end_column":1,"end_line":60,"start_byte":1056,"start_column":1,"start_line":48}
+            _error.span = {"end_byte":1418,"end_column":1,"end_line":59,"start_byte":1088,"start_column":1,"start_line":47}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="foo.bar.process_payload_bytes", phase="implementation-call", span={"end_byte":1384,"end_column":1,"end_line":60,"start_byte":1056,"start_column":1,"start_line":48}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="foo.bar.process_payload_bytes", phase="implementation-call", span={"end_byte":1418,"end_column":1,"end_line":59,"start_byte":1088,"start_column":1,"start_line":47}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="foo.bar.process_payload_bytes", phase="implementation-call", span={"end_byte":1384,"end_column":1,"end_line":60,"start_byte":1056,"start_column":1,"start_line":48}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="foo.bar.process_payload_bytes", phase="implementation-call", span={"end_byte":1418,"end_column":1,"end_line":59,"start_byte":1088,"start_column":1,"start_line":47}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[bytes, BarError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="foo.bar.process_payload_bytes", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
-        elif type(_result.error) not in (BarError_ServiceUnavailable, BarError_ProcessingFailed,):
-            raise CottContractViolation("returned error is not allowed", symbol="foo.bar.process_payload_bytes", phase="error", span={"end_byte":1384,"end_column":1,"end_line":60,"start_byte":1056,"start_column":1,"start_line":48}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+        elif type(_result.error) not in ():
+            raise CottContractViolation("returned error is not allowed", symbol="foo.bar.process_payload_bytes", phase="error", span={"end_byte":1418,"end_column":1,"end_line":59,"start_byte":1088,"start_column":1,"start_line":47}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="foo.bar.process_payload_bytes", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
         _cott_contract_condition(True, "foo.bar.process_payload_bytes", _expected_error_clause)
-    if type(_result) is Err and type(_result.error) is BarError_ServiceUnavailable:
-        _cott_contract_condition(True, "foo.bar.process_payload_bytes", "error:2")
-    if type(_result) is Err and type(_result.error) is BarError_ProcessingFailed:
-        _cott_contract_condition(True, "foo.bar.process_payload_bytes", "error:3")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
@@ -119,7 +117,7 @@ def process_payload_bytes(data: bytes, options: BarOptions) -> Result[bytes, Bar
         _cott_contract_condition((False), "foo.bar.process_payload_bytes", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="foo.bar.process_payload_bytes", clause="ensures:1", phase="ensures", span={"end_byte":1291,"end_column":54,"end_line":53,"start_byte":1242,"start_column":5,"start_line":53}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="foo.bar.process_payload_bytes", clause="ensures:1", phase="ensures", span={"end_byte":1379,"end_column":54,"end_line":53,"start_byte":1330,"start_column":5,"start_line":53}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[bytes, BarError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -135,62 +133,59 @@ def build_output(data: bytes, source_size: PayloadSize, format: PayloadFormat) -
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "foo.bar.build_output"
         if _error.span is None:
-            _error.span = {"end_byte":1709,"end_column":1,"end_line":71,"start_byte":1384,"start_column":1,"start_line":60}
+            _error.span = {"end_byte":1743,"end_column":1,"end_line":70,"start_byte":1418,"start_column":1,"start_line":59}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="foo.bar.build_output", phase="implementation-call", span={"end_byte":1709,"end_column":1,"end_line":71,"start_byte":1384,"start_column":1,"start_line":60}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="foo.bar.build_output", phase="implementation-call", span={"end_byte":1743,"end_column":1,"end_line":70,"start_byte":1418,"start_column":1,"start_line":59}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="foo.bar.build_output", phase="implementation-call", span={"end_byte":1709,"end_column":1,"end_line":71,"start_byte":1384,"start_column":1,"start_line":60}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="foo.bar.build_output", phase="implementation-call", span={"end_byte":1743,"end_column":1,"end_line":70,"start_byte":1418,"start_column":1,"start_line":59}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, OutputPayload, path="$.return")
     if not (_cott_contract_condition((((_result).data == data)), "foo.bar.build_output", "ensures:1")):
-        raise CottContractViolation("ensures clause failed", symbol="foo.bar.build_output", clause="ensures:1", phase="ensures", span={"end_byte":1609,"end_column":32,"end_line":65,"start_byte":1582,"start_column":5,"start_line":65}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="foo.bar.build_output", clause="ensures:1", phase="ensures", span={"end_byte":1643,"end_column":32,"end_line":64,"start_byte":1616,"start_column":5,"start_line":64}, expected="true", actual="false")
     if not (_cott_contract_condition(((((_result).source_size).value == (source_size).value)), "foo.bar.build_output", "ensures:2")):
-        raise CottContractViolation("ensures clause failed", symbol="foo.bar.build_output", clause="ensures:2", phase="ensures", span={"end_byte":1655,"end_column":46,"end_line":66,"start_byte":1614,"start_column":5,"start_line":66}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="foo.bar.build_output", clause="ensures:2", phase="ensures", span={"end_byte":1689,"end_column":46,"end_line":65,"start_byte":1648,"start_column":5,"start_line":65}, expected="true", actual="false")
     if not (_cott_contract_condition((((_result).format == format)), "foo.bar.build_output", "ensures:3")):
-        raise CottContractViolation("ensures clause failed", symbol="foo.bar.build_output", clause="ensures:3", phase="ensures", span={"end_byte":1691,"end_column":36,"end_line":67,"start_byte":1660,"start_column":5,"start_line":67}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="foo.bar.build_output", clause="ensures:3", phase="ensures", span={"end_byte":1725,"end_column":36,"end_line":66,"start_byte":1694,"start_column":5,"start_line":66}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, OutputPayload, path="$.return", validator=_cott_validate_abi)
     return _result
 
 def process_bar(data: InputPayload, options: BarOptions) -> Result[OutputPayload, BarError]:
-    """Compose validate_payload, process_payload_bytes, and build_output in that
-order, propagating validation and processing errors unchanged."""
+    """Domain-named operation of the fixture: validate the payload, process its
+bytes, then build the output from the processed bytes and the validated
+metadata."""
     data = _cott_validate_abi(data, InputPayload, path="$.data")
     options = _cott_validate_abi(options, BarOptions, path="$.options")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
-    if _expected_error is None and (_cott_contract_condition(((len((data).data) == 0)), "foo.bar.process_bar", "error:4:condition")):
+    if _expected_error is None and (_cott_contract_condition(((len((data).data) == 0)), "foo.bar.process_bar", "error:5:condition")):
         _expected_error = BarError_InvalidPayload
-        _expected_error_span = {"end_byte":2219,"end_column":58,"end_line":81,"start_byte":2166,"start_column":5,"start_line":81}
-        _expected_error_clause = "error:4"
+        _expected_error_span = {"end_byte":2295,"end_column":58,"end_line":82,"start_byte":2242,"start_column":5,"start_line":82}
+        _expected_error_clause = "error:5"
     try:
-        _implementation = _cott_load("_cott_impl/foo/bar/process_bar.py", "bcfdaf0e77f3305c27798935a3ee1057ba80afd315e1f6d7984db0cc79fb46d6", "process_bar", expected_project_name="process-bar", expected_cott_symbol="foo.bar.process_bar")
+        _implementation = _cott_load("_cott_impl/foo/bar/process_bar.py", "5a1f81ad6ba0598cb4171701508085e2637187d7681537a2c5e7eec3f172f9b9", "process_bar", expected_project_name="process-bar", expected_cott_symbol="foo.bar.process_bar")
         _result = _implementation(data, options)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "foo.bar.process_bar"
         if _error.span is None:
-            _error.span = {"end_byte":2310,"end_column":1,"end_line":86,"start_byte":1709,"start_column":1,"start_line":71}
+            _error.span = {"end_byte":2313,"end_column":1,"end_line":86,"start_byte":1743,"start_column":1,"start_line":70}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="foo.bar.process_bar", phase="implementation-call", span={"end_byte":2310,"end_column":1,"end_line":86,"start_byte":1709,"start_column":1,"start_line":71}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="foo.bar.process_bar", phase="implementation-call", span={"end_byte":2313,"end_column":1,"end_line":86,"start_byte":1743,"start_column":1,"start_line":70}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="foo.bar.process_bar", phase="implementation-call", span={"end_byte":2310,"end_column":1,"end_line":86,"start_byte":1709,"start_column":1,"start_line":71}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="foo.bar.process_bar", phase="implementation-call", span={"end_byte":2313,"end_column":1,"end_line":86,"start_byte":1743,"start_column":1,"start_line":70}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[OutputPayload, BarError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="foo.bar.process_bar", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
-        elif type(_result.error) not in (BarError_ServiceUnavailable, BarError_ProcessingFailed,):
-            raise CottContractViolation("returned error is not allowed", symbol="foo.bar.process_bar", phase="error", span={"end_byte":2310,"end_column":1,"end_line":86,"start_byte":1709,"start_column":1,"start_line":71}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+        elif type(_result.error) not in ():
+            raise CottContractViolation("returned error is not allowed", symbol="foo.bar.process_bar", phase="error", span={"end_byte":2313,"end_column":1,"end_line":86,"start_byte":1743,"start_column":1,"start_line":70}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="foo.bar.process_bar", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
         _cott_contract_condition(True, "foo.bar.process_bar", _expected_error_clause)
-    if type(_result) is Err and type(_result.error) is BarError_ServiceUnavailable:
-        _cott_contract_condition(True, "foo.bar.process_bar", "error:5")
-    if type(_result) is Err and type(_result.error) is BarError_ProcessingFailed:
-        _cott_contract_condition(True, "foo.bar.process_bar", "error:6")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
@@ -199,7 +194,7 @@ order, propagating validation and processing errors unchanged."""
         _cott_contract_condition((False), "foo.bar.process_bar", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="foo.bar.process_bar", clause="ensures:1", phase="ensures", span={"end_byte":2024,"end_column":58,"end_line":77,"start_byte":1971,"start_column":5,"start_line":77}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="foo.bar.process_bar", clause="ensures:1", phase="ensures", span={"end_byte":2080,"end_column":58,"end_line":77,"start_byte":2027,"start_column":5,"start_line":77}, expected="true", actual="false")
     def _cott_match_ensures_2() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
@@ -208,7 +203,7 @@ order, propagating validation and processing errors unchanged."""
         _cott_contract_condition((False), "foo.bar.process_bar", "ensures:2:applicable")
         return True
     if not (_cott_match_ensures_2()):
-        raise CottContractViolation("ensures clause failed", symbol="foo.bar.process_bar", clause="ensures:2", phase="ensures", span={"end_byte":2098,"end_column":74,"end_line":78,"start_byte":2029,"start_column":5,"start_line":78}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="foo.bar.process_bar", clause="ensures:2", phase="ensures", span={"end_byte":2154,"end_column":74,"end_line":78,"start_byte":2085,"start_column":5,"start_line":78}, expected="true", actual="false")
     def _cott_match_ensures_3() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
@@ -217,8 +212,8 @@ order, propagating validation and processing errors unchanged."""
         _cott_contract_condition((False), "foo.bar.process_bar", "ensures:3:applicable")
         return True
     if not (_cott_match_ensures_3()):
-        raise CottContractViolation("ensures clause failed", symbol="foo.bar.process_bar", clause="ensures:3", phase="ensures", span={"end_byte":2160,"end_column":62,"end_line":79,"start_byte":2103,"start_column":5,"start_line":79}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="foo.bar.process_bar", clause="ensures:3", phase="ensures", span={"end_byte":2216,"end_column":62,"end_line":79,"start_byte":2159,"start_column":5,"start_line":79}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[OutputPayload, BarError], path="$.return", validator=_cott_validate_abi)
     return _result
 
-__all__ = ["BarError", "BarError_InvalidPayload", "BarError_ProcessingFailed", "BarError_ServiceUnavailable", "BarOptions", "InputPayload", "MAX_PAYLOAD_SIZE", "OutputPayload", "PayloadFormat", "PayloadFormat_Raw", "PayloadFormat_Structured", "PayloadFormat_Text", "PayloadSize", "Probability", "build_output", "process_bar", "process_payload_bytes", "validate_payload"]
+__all__ = ["BarError", "BarError_InvalidPayload", "BarOptions", "InputPayload", "MAX_PAYLOAD_SIZE", "OutputPayload", "PayloadFormat", "PayloadFormat_Raw", "PayloadFormat_Structured", "PayloadFormat_Text", "PayloadSize", "Probability", "build_output", "process_bar", "process_payload_bytes", "validate_payload"]

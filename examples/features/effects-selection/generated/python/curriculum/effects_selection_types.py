@@ -22,18 +22,63 @@ class EffectError_OperationFailed:
 
 EffectError: TypeAlias = Union[EffectError_InputMissing, EffectError_OperationFailed]
 
-"""Read UTF-8 text from a compiler-owned filesystem fixture."""
-"""Read source through curriculum.effects_selection.read_text, encode the
-successful text as UTF-8 bytes and atomically replace destination with those
-bytes. Return the encoded byte count, not the character count. If replacement
-fails, return OperationFailed and preserve the previous destination bytes."""
-"""Fetch UTF-8 text from a compiler-owned local HTTP fixture."""
-"""Return whether a text effect result is successful."""
-"""Return successful text, or an empty string for an error result."""
-"""Return whether a copy effect result is successful."""
-"""Store value under key in a SQLite database, then read that value back."""
-"""Return the compiler-owned fixture clock in nanoseconds: the configured
-start_ms multiplied by 1000000. Reading the clock does not advance it."""
-"""Choose one index below limit from a deterministic seeded random stream."""
-"""End the current process with code."""
-__all__ = ["EffectError", "EffectError_InputMissing", "EffectError_OperationFailed"]
+@final
+@dataclass(frozen=True, slots=True, kw_only=True)
+class FileText:
+    __hash__ = None
+    path: Path
+    text: str
+
+    def __post_init__(self) -> None:
+        if not _cott_validated_construction():
+            object.__setattr__(self, "path", _cott_validate_abi(self.path, Path, path="$.path"))
+        if not _cott_validated_construction():
+            object.__setattr__(self, "text", _cott_validate_abi(self.text, str, path="$.text"))
+
+@final
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CopyReceipt:
+    __hash__ = None
+    destination: Path
+    bytes_written: U64
+
+    def __post_init__(self) -> None:
+        if not _cott_validated_construction():
+            object.__setattr__(self, "destination", _cott_validate_abi(self.destination, Path, path="$.destination"))
+        if not _cott_validated_construction():
+            object.__setattr__(self, "bytes_written", _cott_validate_abi(self.bytes_written, U64, path="$.bytes_written"))
+
+@final
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PageText:
+    __hash__ = None
+    url: str
+    text: str
+
+    def __post_init__(self) -> None:
+        if not _cott_validated_construction():
+            object.__setattr__(self, "url", _cott_validate_abi(self.url, str, path="$.url"))
+        if not _cott_validated_construction():
+            object.__setattr__(self, "text", _cott_validate_abi(self.text, str, path="$.text"))
+
+"""Read the file at source and decode its bytes as strict UTF-8. The result
+pairs the decoded text with source. An absent source returns InputMissing
+carrying source; any other read failure and bytes that are not valid UTF-8
+return OperationFailed."""
+"""Copy the text of source to destination as UTF-8 bytes. bytes_written is
+the encoded byte count, not the character count. A read_text error is
+returned unchanged and destination is left untouched."""
+"""GET url over HTTP, following redirects, and decode the final response body
+as strict UTF-8. The result pairs the text with the requested url. An empty
+url returns OperationFailed without sending a request; a connection or read
+failure, a timeout, a final status outside 200-299 and a body that is not
+valid UTF-8 return OperationFailed."""
+"""Store value under key in the SQLite database file at database, replacing
+any previous value for key, then read the value stored under key back from
+that database. Any SQLite failure returns OperationFailed."""
+"""Read the compiler-owned clock fixture and return its time in nanoseconds.
+The fixture is configured in milliseconds, so start_ms 17 reads as
+17000000. Reading does not advance the clock."""
+"""Choose an index below limit from seed."""
+"""Terminate the current process."""
+__all__ = ["CopyReceipt", "EffectError", "EffectError_InputMissing", "EffectError_OperationFailed", "FileText", "PageText"]

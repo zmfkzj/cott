@@ -1,5 +1,7 @@
 module curriculum.stock_record
 
+const MAX_F64: F64 = 1.7976931348623157e308
+
 struct StockRecord:
     name: Str
     shares: I64
@@ -14,31 +16,60 @@ enum StockRecordError:
 
 fn value_record(record: StockRecord) -> Result[F64, StockRecordError]:
     doc """
-    Computes the value of a validated stock record.
-    
-    The caller supplies non-negative shares and a non-negative price.
-    ValuationOverflow is returned when the binary64 product is not finite.
+    Computes the value of a validated stock record: the share count converted
+    to the nearest binary64 value, multiplied by the price with binary64
+    round-to-nearest, ties-to-even. The name does not affect the value.
+    ValuationOverflow is returned when the product is not finite.
     """
 
-    requires record.price >= 0.0
     requires record.shares >= 0
+    requires record.price >= 0.0
 
-    ensures Result.Ok(value) => value >= 0.0
+    ensures Result.Ok(value) => 0.0 <= value <= MAX_F64
 
     error StockRecordError.ValuationOverflow
 
 fn value_stock_record(record: StockRecord) -> Result[F64, StockRecordError]:
     doc """
-    Validates and values one raw stock record.
-    
-    Validation reports EmptyName, NegativeShares, NonFinitePrice, then
-    NegativePrice in source order. A valid record is valued by value_record.
+    Validates one raw stock record and values it. For a record that passes
+    every validation clause, it calls the public
+    curriculum.stock_record.value_record facade and returns that result,
+    including ValuationOverflow, unchanged.
     """
 
-    ensures Result.Ok(value) => value >= 0.0
+    ensures Result.Ok(value) => 0.0 <= value <= MAX_F64
 
     error StockRecordError.EmptyName when record.name.len == 0
     error StockRecordError.NegativeShares when record.shares < 0
-    error StockRecordError.NonFinitePrice
+    error StockRecordError.NonFinitePrice when not (-MAX_F64 <= record.price <= MAX_F64)
     error StockRecordError.NegativePrice when record.price < 0.0
     error StockRecordError.ValuationOverflow
+
+data acme: StockRecord = StockRecord(name: "ACME", shares: 12, price: 2.5)
+
+data oversized: StockRecord = StockRecord(name: "HUGE", shares: 2, price: 1.0e308)
+
+scenario valid_record_is_valued:
+    call direct = value_record(acme)
+    assert direct matches Result.Ok(value) => value == 30.0
+    call validated = value_stock_record(acme)
+    assert validated == direct
+
+scenario negative_price_is_rejected:
+    call rejected = value_stock_record(StockRecord(name: "SHORT", shares: 1, price: -1.0))
+
+scenario overflow_is_reported:
+    call direct = value_record(oversized)
+    assert direct matches Result.Err(StockRecordError.ValuationOverflow)
+    call validated = value_stock_record(oversized)
+    assert validated == direct
+
+requirement VALUE_IS_SHARES_TIMES_PRICE for value_record:
+    text "A valid record is valued at its share count times its price, or ValuationOverflow when that product is not finite."
+    checked_by valid_record_is_valued assert 1
+    checked_by overflow_is_reported assert 1
+
+requirement VALID_RECORD_IS_VALUED_BY_VALUE_RECORD for value_stock_record:
+    text "A record that passes validation is valued by calling the public value_record facade, whose result, including ValuationOverflow, is returned unchanged."
+    checked_by valid_record_is_valued assert 2
+    checked_by overflow_is_reported assert 2

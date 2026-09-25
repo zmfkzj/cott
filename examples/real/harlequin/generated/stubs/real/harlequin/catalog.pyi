@@ -8,10 +8,30 @@ from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, C
 
 from real.harlequin.catalog_types import CatalogColumn as CatalogColumn, CatalogError as CatalogError, CatalogError_ConnectionMissing as CatalogError_ConnectionMissing, CatalogError_Failed as CatalogError_Failed, CatalogError_LimitExceeded as CatalogError_LimitExceeded, CatalogError_NamespaceMissing as CatalogError_NamespaceMissing, CatalogMatch as CatalogMatch, CatalogMatchKind as CatalogMatchKind, CatalogMatchKind_Column as CatalogMatchKind_Column, CatalogMatchKind_Relation as CatalogMatchKind_Relation, CatalogRelation as CatalogRelation, CatalogScope as CatalogScope, CatalogSnapshot as CatalogSnapshot, CompletionRequest as CompletionRequest, CompletionResult as CompletionResult, RelationKind as RelationKind, RelationKind_Table as RelationKind_Table, RelationKind_View as RelationKind_View
 from real.harlequin.core_types import Connection, DatabaseTarget, SqlClientError
+"""List the tables and views of a standalone SQLite database's main schema with
+sqlite3, independent of any live connection. Memory is a fresh empty in-memory
+database for this call, so it lists nothing; File(path) opens that existing file
+with mode=ro and never creates it. Rows come from sqlite_schema entries of type
+table or view whose name does not start with "sqlite_", ordered by name in
+Python string order. sql is the stored CREATE text, Nothing when it is SQL NULL.
+Any SQLite failure, including a missing file, is SqliteFailure with SQLite's
+message."""
 def catalog_relations(database: DatabaseTarget) -> Result[CottList[CatalogRelation], SqlClientError]: ...
 
+"""Describe one relation of the same standalone main schema from PRAGMA table_info,
+in declaration order. Every column's relation is the requested name; not_null
+reflects NOT NULL and default_sql is Nothing when there is no default. A
+relation that does not exist, which includes every relation of a Memory
+database, is SqliteFailure("no such relation"). Other SQLite failures are
+SqliteFailure with SQLite's message."""
 def catalog_columns(database: DatabaseTarget, relation: str) -> Result[CottList[CatalogColumn], SqlClientError]: ...
 
+"""Search the same standalone main schema for relations and columns whose name
+contains term after Unicode case folding (Python str.casefold); an empty term
+matches everything. Relations are visited in catalog_relations order; each
+relation contributes its own match first and then its matching columns in
+column order. The result stops after the first 1000 matches without error.
+SQLite failures are SqliteFailure with SQLite's message."""
 def search_catalog(database: DatabaseTarget, term: str) -> Result[CottList[CatalogMatch], SqlClientError]: ...
 
 """Refresh one namespace through a real temporary driver client, using the
@@ -125,9 +145,19 @@ Malformed endpoint data, missing drivers, authentication, transport, permission
 and metadata API failures return Failed with a fixed nonsecret category message.
 Never include endpoint values, credentials, or raw driver exception text.
 On success read the real clock after enumeration and set refreshed_at to UTC
-ISO-8601 with six fractional digits and a trailing Z. No empty/stub timestamp."""
+ISO-8601 in the form YYYY-MM-DDTHH:MM:SS.ffffffZ (six fractional digits)."""
 def refresh_catalog(connection: Connection, scope: CatalogScope) -> Result[CatalogSnapshot, CatalogError]: ...
 
+"""Offer completions for the identifier being typed at request.cursor. The typed
+prefix is the longest run of ASCII letters, ASCII digits and "_" ending at the
+cursor; replace_start is where it begins and replace_end is the cursor. An empty
+prefix offers no candidates. A candidate matches when it starts with the prefix
+ignoring ASCII case. Relation names come first, in snapshot order, and only when
+request.scope equals snapshot.scope; then these keywords in this order: SELECT,
+FROM, WHERE, GROUP, BY, ORDER, HAVING, LIMIT, JOIN, LEFT, INNER, ON, AS, AND, OR,
+NOT, NULL, INSERT, INTO, VALUES, UPDATE, SET, DELETE, CREATE, TABLE, VIEW, DROP,
+WITH, DISTINCT, UNION. A candidate equal to an earlier one is skipped, spelling is
+kept, and at most maximum_candidates are returned."""
 def complete_sql(request: CompletionRequest, snapshot: CatalogSnapshot) -> CompletionResult: ...
 
 """Search only relation names already present in snapshot; this pure function does

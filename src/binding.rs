@@ -1068,6 +1068,18 @@ pub fn resolve_implementations(
     paths: &ProjectPaths,
     plan: &PythonArtifactPlan,
 ) -> Result<ImplementationResolution, Vec<BindingDiagnostic>> {
+    resolve_implementations_with_emit_baseline(config, paths, plan, None)
+}
+
+/// The in-memory baseline is supplied only by an explicit emit after the
+/// previous schema's envelope, identity, and source bytes were authenticated.
+/// All ordinary resolution paths still load through the strict current reader.
+pub(crate) fn resolve_implementations_with_emit_baseline(
+    config: &ProjectConfig,
+    paths: &ProjectPaths,
+    plan: &PythonArtifactPlan,
+    emit_baseline: Option<&GenerationRecord>,
+) -> Result<ImplementationResolution, Vec<BindingDiagnostic>> {
     let callables = plan
         .callables()
         .into_iter()
@@ -1160,22 +1172,23 @@ pub fn resolve_implementations(
         .parent()
         .unwrap_or(&paths.generated_dir)
         .join("generation.json");
-    let record = match load_generation_record(paths) {
-        Ok(record) => record,
-        Err(message) => {
-            return Err(vec![BindingDiagnostic {
-                path: generation_path,
-                message,
-            }]);
+    let loaded = if emit_baseline.is_none() {
+        match load_generation_record(paths) {
+            Ok(record) => record,
+            Err(message) => {
+                return Err(vec![BindingDiagnostic {
+                    path: generation_path,
+                    message,
+                }]);
+            }
         }
+    } else {
+        None
     };
-    let recorded_agents = record
-        .as_ref()
-        .map(recorded_agent_sources)
-        .unwrap_or_default();
-    let pending_runs = record.as_ref().map(pending_agent_runs).unwrap_or_default();
+    let record = emit_baseline.or(loaded.as_ref());
+    let recorded_agents = record.map(recorded_agent_sources).unwrap_or_default();
+    let pending_runs = record.map(pending_agent_runs).unwrap_or_default();
     let unresolved_symbols = record
-        .as_ref()
         .map(|record| {
             record
                 .current
@@ -1200,7 +1213,7 @@ pub fn resolve_implementations(
             }]);
         }
     };
-    let (baseline_hashes, invalidate_all) = match &record {
+    let (baseline_hashes, invalidate_all) = match record {
         None => (BTreeMap::new(), false),
         Some(record) => match recorded_intent_baseline(record, config, paths, &rules) {
             Ok(Some(hashes)) => (hashes, false),

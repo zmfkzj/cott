@@ -19,7 +19,7 @@ lifecycle_limit = 5
 
 [[verification.coverage.rules]]
 symbol = "curriculum.contracts_evidence.assess_label"
-clauses = ["ensures:2", "error:5"]
+clauses = ["ensures:2", "error:5", "error:6"]
 allow_unobserved = false
 allow_trust_declaration = false
 allow_unknown = false

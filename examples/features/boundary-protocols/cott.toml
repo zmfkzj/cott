@@ -13,6 +13,3 @@ runtime_validation = "boundary"
 
 [target.python.external_types]
 "curriculum.boundary_protocols.TextBuffer" = "io:StringIO"
-
-[generator]
-rules = "generator.rules"

@@ -82,6 +82,26 @@ pub fn resolve(
     allowed_runtime_packages: &BTreeSet<String>,
     generator_rules: Option<&str>,
 ) -> Result<Vec<DartBinding>, String> {
+    resolve_with_baseline(
+        config,
+        paths,
+        plan,
+        allowed_runtime_packages,
+        generator_rules,
+        None,
+    )
+}
+
+/// Used only by emit after the old record was fully authenticated and its
+/// original bytes frozen in the publication transaction's input snapshot.
+pub(crate) fn resolve_with_baseline(
+    config: &DartProjectConfig,
+    paths: &DartPaths,
+    plan: &DartPlan,
+    allowed_runtime_packages: &BTreeSet<String>,
+    generator_rules: Option<&str>,
+    authenticated_cutover: Option<&DartGenerationRecord>,
+) -> Result<Vec<DartBinding>, String> {
     let callables = callable_index(plan)?;
     validate_manifest_bindings(config, paths, plan, &callables)?;
 
@@ -101,8 +121,13 @@ pub fn resolve(
     }
 
     let generation_path = paths.artifact_root.join("generation.json");
-    let record = load_generation_record(&generation_path)?;
-    if let Some(record) = &record
+    let owned_record = if authenticated_cutover.is_some() {
+        None
+    } else {
+        load_generation_record(&generation_path)?
+    };
+    let record = authenticated_cutover.or(owned_record.as_ref());
+    if let Some(record) = record
         && record.current.project_name != config.project.name
     {
         return Err(path_error(
@@ -129,7 +154,6 @@ pub fn resolve(
     let current_intent = intent::fingerprints(plan.contract_surface(), rules)
         .map_err(|message| format!("Dart implementation intent: {message}"))?;
     let baseline_intent = record
-        .as_ref()
         .map(|record| recorded_intent(record, paths))
         .transpose()?;
 
@@ -194,7 +218,7 @@ pub fn resolve(
             };
             let source_origin = project_relative(&paths.root, &source.disk_path)?;
             let disposition = validate_agent_provenance(
-                record.as_ref(),
+                record,
                 callable,
                 &target_symbol,
                 &source_origin,
@@ -231,7 +255,7 @@ pub fn resolve(
         let relative = source_relative(paths, source)?;
         if relative.starts_with("cott_impl") && !expected_agent_files.contains(&source.disk_path) {
             if retired_agent_source_is_authenticated(
-                record.as_ref(),
+                record,
                 &callables,
                 paths,
                 &source.disk_path,

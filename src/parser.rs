@@ -1020,14 +1020,41 @@ impl Parser {
                 let st = self.bump().span;
                 let (name, span) = self.name("call result binding")?;
                 self.expect(TokenKind::Equal, "expected `=` after call result binding")?;
-                let (target, arguments, end) = self.parse_scenario_invocation()?;
-                self.newline();
-                Some(ScenarioStep::Call {
-                    span: Self::join(st, end),
-                    binding: ScenarioBinding { span, name },
-                    target,
-                    arguments,
-                })
+                let target = self.parse_qname()?;
+                if self.at(&TokenKind::LParen)
+                    && matches!(
+                        self.tokens.get(self.pos + 1).map(|token| &token.kind),
+                        Some(TokenKind::Name(_))
+                    )
+                    && matches!(
+                        self.tokens.get(self.pos + 2).map(|token| &token.kind),
+                        Some(TokenKind::Colon)
+                    )
+                {
+                    let previous = std::mem::replace(&mut self.allow_scenario_values, true);
+                    let parsed = self.parse_construct(target);
+                    self.allow_scenario_values = previous;
+                    let parsed = parsed?;
+                    let ExprKind::Construct { path, arguments } = parsed.kind else {
+                        unreachable!("parse_construct produces a constructor")
+                    };
+                    self.newline();
+                    Some(ScenarioStep::Init {
+                        span: Self::join(st, parsed.span),
+                        binding: ScenarioBinding { span, name },
+                        target: path,
+                        arguments,
+                    })
+                } else {
+                    let (arguments, end) = self.parse_scenario_invocation_arguments()?;
+                    self.newline();
+                    Some(ScenarioStep::Call {
+                        span: Self::join(st, end),
+                        binding: ScenarioBinding { span, name },
+                        target,
+                        arguments,
+                    })
+                }
             }
             TokenKind::Keyword(Keyword::Spawn) => {
                 let st = self.bump().span;
@@ -1121,6 +1148,11 @@ impl Parser {
 
     fn parse_scenario_invocation(&mut self) -> Option<(QualifiedName, Vec<Expr>, Span)> {
         let target = self.parse_qname()?;
+        let (arguments, end) = self.parse_scenario_invocation_arguments()?;
+        Some((target, arguments, end))
+    }
+
+    fn parse_scenario_invocation_arguments(&mut self) -> Option<(Vec<Expr>, Span)> {
         self.expect(
             TokenKind::LParen,
             "expected `(` after scenario facade target",
@@ -1145,7 +1177,7 @@ impl Parser {
                 "expected `)` after scenario call arguments",
             )?
             .span;
-        Some((target, arguments, end))
+        Some((arguments, end))
     }
 
     fn parse_scenario_value(&mut self) -> Option<Expr> {

@@ -298,8 +298,8 @@ fn verify_in_scratch(
     if runtime.status != Some(0) {
         evidence_key.fill(0);
         return Err(format!(
-            "bounded Kotlin contract runner failed with status {:?}",
-            runtime.status
+            "bounded Kotlin contract runner failed with status {:?}; {}",
+            runtime.status, runtime.resources
         ));
     }
     let events = runner::parse_events(&runtime.stdout, &evidence_key);
@@ -492,8 +492,8 @@ public final class DependencyProbe {
         )?;
         if dependency_probe.status != Some(0) {
             return Err(format!(
-                "Kotlin dependency identity probe failed with status {:?}",
-                dependency_probe.status
+                "Kotlin dependency identity probe failed with status {:?}; {}",
+                dependency_probe.status, dependency_probe.resources
             ));
         }
         let dependency_output = std::str::from_utf8(&dependency_probe.stdout)
@@ -1643,11 +1643,15 @@ fn require_compile_success(
     }
     let diagnostics = sanitized_diagnostics(&completed.stdout, &completed.stderr, scratch);
     Err(if diagnostics.is_empty() {
-        format!("{label} failed with status {:?}", completed.status)
+        format!(
+            "{label} failed with status {:?}; {}",
+            completed.status, completed.resources
+        )
     } else {
         format!(
-            "{label} failed with status {:?}:\n{}",
+            "{label} failed with status {:?}; {}:\n{}",
             completed.status,
+            completed.resources,
             diagnostics.join("\n")
         )
     })
@@ -1797,5 +1801,59 @@ fn finish_scratch<T>(scratch: PathBuf, result: Result<T, String>) -> Result<T, S
             scratch.display()
         )),
         (Ok(value), Ok(())) => Ok(value),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::time::Duration;
+
+    use crate::sandbox::{CompletedProcess, ResourceReport};
+
+    #[test]
+    fn killed_compile_failure_names_signal_and_resource_usage_against_limits() {
+        let completed = CompletedProcess {
+            status: Some(137),
+            timed_out: false,
+            stdout: Vec::new(),
+            stderr: b"compiler output before the kill\n".to_vec(),
+            resources: ResourceReport {
+                signal: Some(libc::SIGKILL),
+                user_cpu: Duration::from_millis(29_500),
+                system_cpu: Duration::from_millis(700),
+                max_rss_bytes: 900 * 1024 * 1024,
+                memory_peak_bytes: Some(1200 * 1024 * 1024),
+                oom_kills: Some(0),
+                cpu_limit: Duration::from_secs(30),
+                address_space_limit_bytes: 4 * 1024 * 1024 * 1024,
+            },
+        };
+        let message = super::require_compile_success(
+            "Kotlin module compilation",
+            &completed,
+            Path::new("/scratch"),
+        )
+        .expect_err("a killed compiler is a failure");
+        let status_line = message.lines().next().expect("status line");
+        assert!(status_line.contains("status Some(137)"), "{message}");
+        assert!(status_line.contains("SIGKILL (9)"), "{message}");
+        assert!(status_line.contains("CPU 30.200s"), "{message}");
+        assert!(status_line.contains("RLIMIT_CPU 30s"), "{message}");
+        assert!(
+            status_line.contains(
+                "max RSS 900.0 MiB, scope memory peak 1200.0 MiB against RLIMIT_AS 4096.0 MiB"
+            ),
+            "{message}"
+        );
+        assert!(
+            status_line.contains("OOM kills 0; CPU time reached RLIMIT_CPU"),
+            "{message}"
+        );
+        assert!(!status_line.contains("OOM killer killed"), "{message}");
+        assert!(
+            message.ends_with("compiler output before the kill"),
+            "{message}"
+        );
     }
 }

@@ -1,19 +1,17 @@
 from cott_runtime import Err, I64, Ok, Result
-from curriculum.cta_row_types import (
-    DayType,
-    DayType_Saturday,
-    DayType_SundayHoliday,
-    DayType_Weekday,
-    RideCount,
-    RideRow,
-    RideRowError,
-    RideRowError_InvalidDate,
-    RideRowError_InvalidDayType,
-    RideRowError_InvalidRidership,
-    RideRowError_InvalidRoute,
-    RouteCode,
-    ServiceDate,
-)
+from curriculum.cta_row_types import DayType, DayType_Saturday, DayType_SundayHoliday, DayType_Weekday, RideCount, RideRow, RideRowError, RideRowError_InvalidDate, RideRowError_InvalidDayType, RideRowError_InvalidRidership, RideRowError_InvalidRoute, RouteCode, ServiceDate
+
+
+def _valid_route(value: str) -> bool:
+    if not 1 <= len(value) <= 4:
+        return False
+    has_digit = False
+    for char in value:
+        if "0" <= char <= "9":
+            has_digit = True
+        elif not "A" <= char <= "Z":
+            return False
+    return has_digit
 
 
 def _valid_date(value: str) -> bool:
@@ -49,15 +47,7 @@ def decode_row(route: str, date: str, day_type: str, rides: I64) -> Result[RideR
         return Err(error=RideRowError_InvalidDayType())
     if not 0 <= rides <= 9223372036854775807:
         return Err(error=RideRowError_InvalidRidership())
-    if not 1 <= len(route) <= 4:
-        return Err(error=RideRowError_InvalidRoute())
-    has_digit = False
-    for char in route:
-        if "0" <= char <= "9":
-            has_digit = True
-        elif not "A" <= char <= "Z":
-            return Err(error=RideRowError_InvalidRoute())
-    if not has_digit:
+    if not _valid_route(route):
         return Err(error=RideRowError_InvalidRoute())
     if not _valid_date(date):
         return Err(error=RideRowError_InvalidDate())

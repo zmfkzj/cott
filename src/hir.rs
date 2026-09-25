@@ -828,6 +828,26 @@ pub enum HirScenarioStep {
         return_type: HirType,
         arguments: Vec<HirExpr>,
     },
+    Init {
+        step_id: u32,
+        span: Span,
+        binding: SymbolId,
+        target: SymbolId,
+        parameters: Vec<HirType>,
+        return_type: HirType,
+        arguments: Vec<HirExpr>,
+    },
+    MethodCall {
+        step_id: u32,
+        span: Span,
+        binding: SymbolId,
+        target: SymbolId,
+        receiver: HirExpr,
+        callable_kind: HirCallableKind,
+        parameters: Vec<HirType>,
+        return_type: HirType,
+        arguments: Vec<HirExpr>,
+    },
     Spawn {
         step_id: u32,
         span: Span,
@@ -1225,6 +1245,11 @@ pub enum HirExprKind {
     Construct {
         symbol: SymbolId,
         fields: Vec<(String, HirExpr)>,
+    },
+    /// Scenario-only wrapping of a concrete impl instance for a checked trait.
+    Dyn {
+        trait_ref: HirType,
+        value: Box<HirExpr>,
     },
     /// Scenario-only user enum payload variant, payloads in declaration order.
     Variant {
@@ -2300,6 +2325,208 @@ impl<'a> OwnedLower<'a> {
             .unwrap_or_default()
     }
 
+    fn scenario_implements_trait(&mut self, impl_symbol: &SymbolId, requested: &HirType) -> bool {
+        let mut pending = self.declaration_traits(impl_symbol);
+        let mut visited = Vec::new();
+        while let Some(trait_ref) = pending.pop() {
+            if &trait_ref == requested {
+                return true;
+            }
+            if visited.contains(&trait_ref) {
+                continue;
+            }
+            visited.push(trait_ref.clone());
+            let HirType::Named { symbol, args } = trait_ref else {
+                continue;
+            };
+            let Some(source_index) = self
+                .modules
+                .iter()
+                .position(|module| module == &symbol.module)
+            else {
+                continue;
+            };
+            let Some(declaration) = self.parsed.sources[source_index]
+                .syntax
+                .declarations
+                .iter()
+                .find_map(|declaration| match declaration {
+                    Declaration::Trait(declaration) if declaration.name == symbol.name => {
+                        Some(declaration.clone())
+                    }
+                    _ => None,
+                })
+            else {
+                continue;
+            };
+            let substitutions = declaration
+                .generics
+                .iter()
+                .zip(args)
+                .map(|(generic, arg)| {
+                    let name = match generic {
+                        ast::GenericParam::Type { name, .. }
+                        | ast::GenericParam::Const { name, .. } => name.clone(),
+                    };
+                    (name, arg)
+                })
+                .collect::<HashMap<_, _>>();
+            let generics = GenericScope::from_declared(&declaration.generics);
+            for parent in &declaration.parents {
+                let parent = self.ty(source_index, parent, &generics);
+                pending.push(substitute_hir_type(parent, &substitutions));
+            }
+        }
+        false
+    }
+
+    /// Resolve a selected trait slot when an impl omits the method because a
+    /// specialization or trait default supplies its public receiver facade.
+    fn scenario_trait_method(
+        &mut self,
+        impl_symbol: &SymbolId,
+        name: &str,
+        associated: &[ast::AssociatedTypeAssignment],
+        required_effects: &mut BTreeMap<String, HirEffect>,
+    ) -> Option<(Vec<HirType>, HirType, HirCallableKind)> {
+        let mut pending = self.declaration_traits(impl_symbol);
+        let mut visited = Vec::new();
+        while let Some(trait_ref) = pending.pop() {
+            if visited.contains(&trait_ref) {
+                continue;
+            }
+            visited.push(trait_ref.clone());
+            let HirType::Named { symbol, args } = trait_ref else {
+                continue;
+            };
+            let concrete_trait_ref = HirType::Named {
+                symbol: symbol.clone(),
+                args: args.clone(),
+            };
+            let source_index = self
+                .modules
+                .iter()
+                .position(|module| module == &symbol.module)?;
+            let declaration = self.parsed.sources[source_index]
+                .syntax
+                .declarations
+                .iter()
+                .find_map(|declaration| match declaration {
+                    Declaration::Trait(declaration) if declaration.name == symbol.name => {
+                        Some(declaration.clone())
+                    }
+                    _ => None,
+                })?;
+            let substitutions = declaration
+                .generics
+                .iter()
+                .zip(args)
+                .map(|(generic, arg)| {
+                    let name = match generic {
+                        ast::GenericParam::Type { name, .. }
+                        | ast::GenericParam::Const { name, .. } => name.clone(),
+                    };
+                    (name, arg)
+                })
+                .collect::<HashMap<_, _>>();
+            let generics = GenericScope::from_declared(&declaration.generics);
+            if let Some(method) = declaration
+                .methods
+                .iter()
+                .find(|method| method.name == name)
+            {
+                let parameters: Vec<HirType> = method
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .map(|(index, parameter)| {
+                        let ty = self.parameter(source_index, parameter, &generics, index).ty;
+                        substitute_hir_type(ty, &substitutions)
+                    })
+                    .collect();
+                let return_type = self.ty(source_index, &method.return_type, &generics);
+                let return_type = substitute_hir_type(return_type, &substitutions);
+                let mut assignments = Vec::new();
+                for (source_order, assignment) in associated.iter().enumerate() {
+                    let owners = self.trait_associated_types(&symbol, &assignment.name);
+                    let impl_index = self
+                        .modules
+                        .iter()
+                        .position(|module| module == &impl_symbol.module)?;
+                    let ty = self.ty(impl_index, &assignment.ty, &GenericScope::default());
+                    for trait_id in owners {
+                        assignments.push(HirAssociatedTypeAssignment {
+                            id: SymbolId::new(
+                                impl_symbol.module.clone(),
+                                format!("{}.{}", impl_symbol.name, assignment.name),
+                            ),
+                            span: assignment.span.clone(),
+                            trait_id,
+                            name: assignment.name.clone(),
+                            ty: ty.clone(),
+                            source_order,
+                        });
+                    }
+                }
+                let impl_index = self
+                    .modules
+                    .iter()
+                    .position(|module| module == &impl_symbol.module)?;
+                let specializations = self.parsed.sources[impl_index]
+                    .syntax
+                    .declarations
+                    .iter()
+                    .filter_map(|declaration| match declaration {
+                        Declaration::Specialize(specialization)
+                            if specialization.name == impl_symbol.name =>
+                        {
+                            Some(specialization.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let specialized = specializations.iter().find_map(|specialization| {
+                    (self.ty(impl_index, &specialization.trait_, &GenericScope::default())
+                        == concrete_trait_ref)
+                        .then(|| {
+                            specialization
+                                .entries
+                                .iter()
+                                .find(|entry| entry.name == name)
+                        })
+                        .flatten()
+                        .map(|entry| &entry.target)
+                });
+                let selected_source = specialized
+                    .map(|target| (target, impl_index))
+                    .or_else(|| method.default.as_ref().map(|target| (target, source_index)));
+                if let Some((target, owner_index)) = selected_source
+                    && let Some(function_id) = self.resolve(owner_index, target, &target.span)
+                    && let Some(function) = scenario_function(self, &function_id)
+                    && let FunctionBody::Clauses { clauses, .. } = &function.body
+                {
+                    scenario_required_effects(clauses, required_effects);
+                }
+                return Some((
+                    parameters
+                        .into_iter()
+                        .map(|ty| substitute_associated_type(ty, &assignments))
+                        .collect(),
+                    substitute_associated_type(return_type, &assignments),
+                    match method.callable_kind {
+                        ast::CallableKind::Sync => HirCallableKind::Sync,
+                        ast::CallableKind::Async => HirCallableKind::Async,
+                    },
+                ));
+            }
+            for parent in &declaration.parents {
+                let parent = self.ty(source_index, parent, &generics);
+                pending.push(substitute_hir_type(parent, &substitutions));
+            }
+        }
+        None
+    }
+
     fn ty(&mut self, module: usize, value: &ast::Type, generics: &GenericScope) -> HirType {
         if value.arguments.is_empty()
             && let Some(projection) = self.associated_projection(module, value, generics)
@@ -2702,9 +2929,12 @@ impl<'a> OwnedLower<'a> {
         }
         let expected = self.ty(module, &declaration.ty, &GenericScope::default());
         let value = self.value(module, &declaration.value, &expected);
+        // Named lengths evaluate while this constant is still resolving, so a
+        // self-referential length reports the dependency cycle.
+        let checked = self.evaluated_lengths(&expected);
         self.resolving_constants.remove(symbol);
         if let Some(value) = &value {
-            let length_mismatch = match (value, &expected) {
+            let length_mismatch = match (value, &checked) {
                 (
                     HirValue::Array(values),
                     HirType::Array {
@@ -2728,7 +2958,7 @@ impl<'a> OwnedLower<'a> {
                 self.error(module, declaration.value.span().clone(), message);
                 return None;
             }
-            if !hir_value_matches_type(value, &expected) {
+            if !hir_value_matches_type(value, &checked) {
                 self.error(
                     module,
                     declaration.value.span().clone(),
@@ -2775,7 +3005,8 @@ impl<'a> OwnedLower<'a> {
                     })?;
                 let carrier = self.ty(source_module, &carrier, &GenericScope::default());
                 let argument = self.value(module, argument, &carrier)?;
-                if !hir_value_matches_type(&argument, &carrier) {
+                let checked = self.evaluated_lengths(&carrier);
+                if !hir_value_matches_type(&argument, &checked) {
                     self.error(
                         module,
                         span.clone(),
@@ -3089,12 +3320,83 @@ impl<'a> OwnedLower<'a> {
             | HirExprKind::FixturePath { .. }
             | HirExprKind::FixtureUrl { .. }
             | HirExprKind::Construct { .. }
+            | HirExprKind::Dyn { .. }
             | HirExprKind::Variant { .. }
             | HirExprKind::OptionSome(_)
             | HirExprKind::ResultValue { .. }
             | HirExprKind::Collection { .. }
             | HirExprKind::MapLiteral { .. }
             | HirExprKind::Match { .. } => None,
+        }
+    }
+
+    /// The unsigned value of a closed const argument: a literal, a named
+    /// constant, or arithmetic over them. Const parameters, undefined
+    /// arithmetic and values outside the argument's domain have none.
+    fn const_argument_value(&mut self, argument: &HirConstArgument) -> Option<u64> {
+        let value = match argument {
+            HirConstArgument::Value { value, .. } => *value,
+            HirConstArgument::Parameter { .. } => return None,
+            HirConstArgument::Reference { symbol, .. } => match self.constant_value(symbol)? {
+                HirValue::Integer(text) => text.replace('_', "").parse().ok()?,
+                _ => return None,
+            },
+            HirConstArgument::Binary {
+                op, left, right, ..
+            } => {
+                let left = self.const_argument_value(left)?;
+                let right = self.const_argument_value(right)?;
+                match op {
+                    HirBinaryOp::Add => left.checked_add(right),
+                    HirBinaryOp::Subtract => left.checked_sub(right),
+                    HirBinaryOp::Multiply => left.checked_mul(right),
+                    HirBinaryOp::Divide => left.checked_div(right),
+                    HirBinaryOp::Remainder => left.checked_rem(right),
+                    HirBinaryOp::And | HirBinaryOp::Or => None,
+                }?
+            }
+        };
+        let maximum = match const_argument_type(argument) {
+            HirConstType::U8 => u64::from(u8::MAX),
+            HirConstType::U16 => u64::from(u16::MAX),
+            HirConstType::U32 => u64::from(u32::MAX),
+            HirConstType::U64 => u64::MAX,
+        };
+        (value <= maximum).then_some(value)
+    }
+
+    /// `ty` with every evaluable Array/Buffer length replaced by its value, so
+    /// constant and default values check against named or arithmetic lengths
+    /// exactly as against literal ones. Only used for checking; lowered types
+    /// keep their canonical const arguments.
+    fn evaluated_lengths(&mut self, ty: &HirType) -> HirType {
+        let evaluated = |lower: &mut Self, length: &HirConstArgument| {
+            lower.const_argument_value(length).map_or_else(
+                || length.clone(),
+                |value| HirConstArgument::Value {
+                    value,
+                    ty: const_argument_type(length),
+                },
+            )
+        };
+        match ty {
+            HirType::Array { item, length } => HirType::Array {
+                item: Box::new(self.evaluated_lengths(item)),
+                length: evaluated(self, length),
+            },
+            HirType::Buffer { length } => HirType::Buffer {
+                length: evaluated(self, length),
+            },
+            HirType::Tuple { items } => HirType::Tuple {
+                items: items
+                    .iter()
+                    .map(|item| self.evaluated_lengths(item))
+                    .collect(),
+            },
+            HirType::Option { item } => HirType::Option {
+                item: Box::new(self.evaluated_lengths(item)),
+            },
+            other => other.clone(),
         }
     }
 }
@@ -4645,6 +4947,9 @@ impl<'a> OwnedLower<'a> {
                     return invalid_scenario_value(value.span.clone());
                 }
             },
+            ExprKind::Name(path) if json_variant_path(path) => {
+                self.json_value(module, &value.span, &path.segments[1], None, env)
+            }
             _ => {
                 let before = self.errors.len();
                 let mut lowered = self.expr(module, value, env);
@@ -4696,7 +5001,16 @@ impl<'a> OwnedLower<'a> {
             && !invalid
             && lowered.ty != *expected
         {
-            self.error(module, value.span.clone(), mismatch.to_owned());
+            let message = if *expected == HirType::Primitive(PrimitiveType::Bytes)
+                && lowered.ty == HirType::Primitive(PrimitiveType::Str)
+            {
+                format!(
+                    "{mismatch}; Str does not convert to Bytes, write `Bytes(\"<lowercase hex>\")`"
+                )
+            } else {
+                mismatch.to_owned()
+            };
+            self.error(module, value.span.clone(), message);
         }
         lowered
     }
@@ -4735,11 +5049,79 @@ impl<'a> OwnedLower<'a> {
                 );
                 return invalid_scenario_value(span);
             }
+            ["Dyn"] => {
+                let Some(ty @ HirType::Dyn { trait_ref }) = expected else {
+                    self.error(
+                        module,
+                        span.clone(),
+                        "`Dyn(value: ...)` requires an expected Dyn[Trait] type",
+                    );
+                    return invalid_scenario_value(span);
+                };
+                if arguments.len() != 1
+                    || arguments[0]
+                        .label
+                        .as_ref()
+                        .and_then(|label| match &label.kind {
+                            ExprKind::Name(name) if name.segments.len() == 1 => {
+                                name.segments.first().map(String::as_str)
+                            }
+                            _ => None,
+                        })
+                        != Some("value")
+                {
+                    self.error(
+                        module,
+                        span.clone(),
+                        "Dyn construction requires exactly `value: <impl instance>`",
+                    );
+                    return invalid_scenario_value(span);
+                }
+                let inner = self.scenario_value(
+                    module,
+                    &arguments[0].value,
+                    None,
+                    env,
+                    "invalid Dyn value",
+                );
+                let HirType::Named { symbol, args } = &inner.ty else {
+                    self.error(
+                        module,
+                        arguments[0].value.span.clone(),
+                        "Dyn value must be an impl instance",
+                    );
+                    return invalid_scenario_value(span);
+                };
+                if !args.is_empty()
+                    || self.declarations.get(symbol) != Some(&OwnedDeclKind::Impl)
+                    || !self.scenario_implements_trait(symbol, trait_ref)
+                {
+                    self.error(
+                        module,
+                        arguments[0].value.span.clone(),
+                        "Dyn value does not implement the requested trait",
+                    );
+                    return invalid_scenario_value(span);
+                }
+                return HirExpr {
+                    span,
+                    ty: ty.clone(),
+                    reference: None,
+                    kind: HirExprKind::Dyn {
+                        trait_ref: (**trait_ref).clone(),
+                        value: Box::new(inner),
+                    },
+                };
+            }
+            ["Bytes"] => return self.bytes_value(module, &span, arguments),
+            ["JsonValue", variant] => {
+                return self.json_value(module, &span, variant, Some(arguments), env);
+            }
             ["JsonValue", ..] => {
                 self.error(
                     module,
                     span.clone(),
-                    "JsonValue scenario values are not supported; obtain them from a facade call",
+                    "JsonValue scenario values name one variant, e.g. `JsonValue.Integer(value: 1)`",
                 );
                 return invalid_scenario_value(span);
             }
@@ -4817,6 +5199,296 @@ impl<'a> OwnedLower<'a> {
         }
     }
 
+    fn scenario_impl(&self, symbol: &SymbolId) -> Option<(usize, &ast::ImplDecl)> {
+        let source_index = self
+            .modules
+            .iter()
+            .position(|module| module == &symbol.module)?;
+        self.parsed.sources[source_index]
+            .syntax
+            .declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                Declaration::Impl(value) if value.name == symbol.name => {
+                    Some((source_index, value))
+                }
+                _ => None,
+            })
+    }
+
+    fn scenario_init_step(
+        &mut self,
+        module: usize,
+        scenario: &SymbolId,
+        step_id: u32,
+        span: &Span,
+        binding: &ast::ScenarioBinding,
+        target: &ast::QualifiedName,
+        arguments: &[(Option<String>, &Expr)],
+        env: &mut ScenarioEnv,
+        workers: &HashMap<String, (SymbolId, HirType, bool)>,
+        required_effects: &mut BTreeMap<String, HirEffect>,
+    ) -> Option<HirScenarioStep> {
+        let symbol = self.resolve(module, target, &target.span)?;
+        let Some((source_index, implementation)) = self.scenario_impl(&symbol) else {
+            self.error(
+                module,
+                target.span.clone(),
+                "scenario initializer target must be an impl declaration",
+            );
+            return None;
+        };
+        let Some(initializer) = implementation.initializer.clone() else {
+            self.error(
+                module,
+                target.span.clone(),
+                "scenario impl has no initializer",
+            );
+            return None;
+        };
+        let parameters = initializer
+            .parameters
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| {
+                self.parameter(source_index, parameter, &GenericScope::default(), index)
+                    .ty
+            })
+            .collect::<Vec<_>>();
+        let mut ordered = vec![None; parameters.len()];
+        let mut position = 0usize;
+        for (label, expression) in arguments {
+            let index = if let Some(label) = label {
+                initializer
+                    .parameters
+                    .iter()
+                    .position(|parameter| parameter.name == *label)
+            } else {
+                let index = position;
+                position += 1;
+                (index < parameters.len()).then_some(index)
+            };
+            let Some(index) = index else {
+                self.error(
+                    module,
+                    expression.span.clone(),
+                    "unknown or extra scenario initializer argument",
+                );
+                continue;
+            };
+            if ordered[index].replace(*expression).is_some() {
+                self.error(
+                    module,
+                    expression.span.clone(),
+                    "duplicate scenario initializer argument",
+                );
+            }
+        }
+        if ordered.iter().any(Option::is_none) {
+            self.error(
+                module,
+                span.clone(),
+                "scenario initializer argument count does not match impl signature",
+            );
+        }
+        let arguments = ordered
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, argument)| {
+                argument.map(|argument| {
+                    self.scenario_value(
+                        module,
+                        argument,
+                        Some(&parameters[index]),
+                        env,
+                        "scenario initializer argument does not match parameter type",
+                    )
+                })
+            })
+            .collect();
+        scenario_required_effects(&initializer.clauses, required_effects);
+        let local = SymbolId::new(
+            scenario.module.clone(),
+            format!("{}.{}", scenario.name, binding.name),
+        );
+        if env.contains_key(&binding.name)
+            || workers.contains_key(&binding.name)
+            || self.test_data_decl(module, &binding.name).is_some()
+        {
+            self.error(
+                module,
+                binding.span.clone(),
+                "duplicate scenario value or worker binding",
+            );
+        }
+        let return_type = HirType::Named {
+            symbol: symbol.clone(),
+            args: Vec::new(),
+        };
+        env.insert(
+            binding.name.clone(),
+            (local.clone(), return_type.clone(), true),
+        );
+        Some(HirScenarioStep::Init {
+            step_id,
+            span: span.clone(),
+            binding: local,
+            target: symbol,
+            parameters,
+            return_type,
+            arguments,
+        })
+    }
+
+    fn scenario_method_step(
+        &mut self,
+        module: usize,
+        scenario: &SymbolId,
+        step_id: u32,
+        span: &Span,
+        binding: &ast::ScenarioBinding,
+        target: &ast::QualifiedName,
+        arguments: &[Expr],
+        env: &mut ScenarioEnv,
+        workers: &HashMap<String, (SymbolId, HirType, bool)>,
+        required_effects: &mut BTreeMap<String, HirEffect>,
+    ) -> Option<HirScenarioStep> {
+        let [receiver_name, method_name] = target.segments.as_slice() else {
+            self.error(
+                module,
+                target.span.clone(),
+                "scenario receiver call must name one method",
+            );
+            return None;
+        };
+        let Some((receiver_id, receiver_type, true)) = env.get(receiver_name).cloned() else {
+            self.error(
+                module,
+                target.span.clone(),
+                "scenario method receiver must be a bound impl value",
+            );
+            return None;
+        };
+        let HirType::Named { symbol, args } = &receiver_type else {
+            self.error(
+                module,
+                target.span.clone(),
+                "scenario method receiver must be an impl instance",
+            );
+            return None;
+        };
+        if !args.is_empty() || self.declarations.get(symbol) != Some(&OwnedDeclKind::Impl) {
+            self.error(
+                module,
+                target.span.clone(),
+                "scenario method receiver must be an impl instance",
+            );
+            return None;
+        }
+        let Some((source_index, implementation)) = self.scenario_impl(symbol) else {
+            self.error(
+                module,
+                target.span.clone(),
+                "scenario receiver impl declaration is unavailable",
+            );
+            return None;
+        };
+        let explicit = implementation
+            .methods
+            .iter()
+            .find(|method| &method.name == method_name)
+            .cloned();
+        let associated = implementation.associated_types.clone();
+        let (parameters, return_type, callable_kind) = if let Some(method) = explicit {
+            let parameters = method
+                .parameters
+                .iter()
+                .enumerate()
+                .map(|(index, parameter)| {
+                    self.parameter(source_index, parameter, &GenericScope::default(), index)
+                        .ty
+                })
+                .collect::<Vec<_>>();
+            scenario_required_effects(&method.clauses, required_effects);
+            let return_type = self.ty(source_index, &method.return_type, &GenericScope::default());
+            let callable_kind = match method.callable_kind {
+                ast::CallableKind::Sync => HirCallableKind::Sync,
+                ast::CallableKind::Async => HirCallableKind::Async,
+            };
+            (parameters, return_type, callable_kind)
+        } else if let Some(selected) =
+            self.scenario_trait_method(symbol, method_name, &associated, required_effects)
+        {
+            selected
+        } else {
+            self.error(
+                module,
+                target.span.clone(),
+                "scenario impl has no such receiver method",
+            );
+            return None;
+        };
+        if arguments.len() != parameters.len() {
+            self.error(
+                module,
+                span.clone(),
+                "scenario method argument count does not match method signature",
+            );
+        }
+        let arguments = arguments
+            .iter()
+            .enumerate()
+            .map(|(index, argument)| {
+                self.scenario_value(
+                    module,
+                    argument,
+                    parameters.get(index),
+                    env,
+                    "scenario method argument does not match parameter type",
+                )
+            })
+            .collect();
+        // The trait selection above owns the public signature; receiver is not a parameter.
+        let local = SymbolId::new(
+            scenario.module.clone(),
+            format!("{}.{}", scenario.name, binding.name),
+        );
+        if env.contains_key(&binding.name)
+            || workers.contains_key(&binding.name)
+            || self.test_data_decl(module, &binding.name).is_some()
+        {
+            self.error(
+                module,
+                binding.span.clone(),
+                "duplicate scenario value or worker binding",
+            );
+        }
+        env.insert(
+            binding.name.clone(),
+            (local.clone(), return_type.clone(), true),
+        );
+        let method_target = SymbolId::new(
+            symbol.module.clone(),
+            format!("{}.{}", symbol.name, method_name),
+        );
+        let receiver = HirExpr {
+            span: target.span.clone(),
+            ty: receiver_type,
+            reference: Some(HirReference::Binding(receiver_id.clone())),
+            kind: HirExprKind::BindingRef(receiver_id),
+        };
+        Some(HirScenarioStep::MethodCall {
+            step_id,
+            span: span.clone(),
+            binding: local,
+            target: method_target,
+            receiver,
+            callable_kind,
+            parameters,
+            return_type,
+            arguments,
+        })
+    }
     fn scenario_generic_arguments(
         &mut self,
         module: usize,
@@ -5237,10 +5909,17 @@ impl<'a> OwnedLower<'a> {
             _ => None,
         };
         let Some(ty) = shape else {
+            let hint = if container == "Buffer"
+                && expected == Some(&HirType::Primitive(PrimitiveType::Bytes))
+            {
+                "; write `Bytes(\"<lowercase hex>\")` for Bytes"
+            } else {
+                ""
+            };
             self.error(
                 module,
                 span.clone(),
-                format!("`{container}(...)` requires an expected {container} type"),
+                format!("`{container}(...)` requires an expected {container} type{hint}"),
             );
             return invalid_scenario_value(span.clone());
         };
@@ -5292,54 +5971,10 @@ impl<'a> OwnedLower<'a> {
             return invalid_scenario_value(span.clone());
         }
         if let HirType::Buffer { length } = &ty {
-            let hex = match arguments {
-                [
-                    ast::ConstructArgument {
-                        value:
-                            Expr {
-                                kind:
-                                    ExprKind::Literal(ast::Literal {
-                                        kind: LiteralKind::String(hex),
-                                        ..
-                                    }),
-                                ..
-                            },
-                        ..
-                    },
-                ] => hex,
-                _ => {
-                    self.error(
-                        module,
-                        span.clone(),
-                        "`Buffer(...)` requires one lowercase hexadecimal string",
-                    );
-                    return invalid_scenario_value(span.clone());
-                }
-            };
-            let bytes = (hex.len() % 2 == 0
-                && hex
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
-            .then(|| {
-                hex.as_bytes()
-                    .chunks_exact(2)
-                    .filter_map(|pair| {
-                        std::str::from_utf8(pair)
-                            .ok()
-                            .and_then(|pair| u8::from_str_radix(pair, 16).ok())
-                    })
-                    .collect::<Vec<_>>()
-            });
-            let Some(bytes) = bytes else {
-                self.error(
-                    module,
-                    span.clone(),
-                    "Buffer hex must contain lowercase hexadecimal byte pairs",
-                );
+            let Some(bytes) = self.hex_argument(module, span, "Buffer", arguments) else {
                 return invalid_scenario_value(span.clone());
             };
-            if !matches!(length, HirConstArgument::Value { value, .. } if *value == bytes.len() as u64)
-            {
+            if self.const_argument_value(length) != Some(bytes.len() as u64) {
                 self.error(
                     module,
                     span.clone(),
@@ -5370,11 +6005,10 @@ impl<'a> OwnedLower<'a> {
             }
             _ => unreachable!("container shape was checked"),
         };
-        if let HirType::Array {
-            length: HirConstArgument::Value { value, .. },
-            ..
-        } = &ty
-            && *value != arguments.len() as u64
+        if let HirType::Array { length, .. } = &ty
+            && self
+                .const_argument_value(length)
+                .is_some_and(|value| value != arguments.len() as u64)
         {
             self.error(
                 module,
@@ -5408,6 +6042,225 @@ impl<'a> OwnedLower<'a> {
                     _ => HirCollectionKind::Array,
                 },
                 items,
+            },
+        }
+    }
+
+    /// The one positional lowercase hexadecimal string of `Buffer(...)` and
+    /// `Bytes(...)`, decoded to bytes.
+    fn hex_argument(
+        &mut self,
+        module: usize,
+        span: &Span,
+        constructor: &str,
+        arguments: &[ast::ConstructArgument],
+    ) -> Option<Vec<u8>> {
+        let hex = match arguments {
+            [
+                ast::ConstructArgument {
+                    label: None,
+                    value:
+                        Expr {
+                            kind:
+                                ExprKind::Literal(ast::Literal {
+                                    kind: LiteralKind::String(hex),
+                                    ..
+                                }),
+                            ..
+                        },
+                    ..
+                },
+            ] => hex,
+            _ => {
+                self.error(
+                    module,
+                    span.clone(),
+                    format!("`{constructor}(...)` requires one lowercase hexadecimal string"),
+                );
+                return None;
+            }
+        };
+        let lowercase_pairs = hex.len() % 2 == 0
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        if !lowercase_pairs {
+            self.error(
+                module,
+                span.clone(),
+                format!("{constructor} hex must contain lowercase hexadecimal byte pairs"),
+            );
+            return None;
+        }
+        hex.as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                std::str::from_utf8(pair)
+                    .ok()
+                    .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+            })
+            .collect()
+    }
+
+    /// `Bytes("hex")`: the closed Bytes literal, parallel to `Buffer("hex")`
+    /// but without a length; mismatching expected types are reported by
+    /// `scenario_value`.
+    fn bytes_value(
+        &mut self,
+        module: usize,
+        span: &Span,
+        arguments: &[ast::ConstructArgument],
+    ) -> HirExpr {
+        let Some(bytes) = self.hex_argument(module, span, "Bytes", arguments) else {
+            return invalid_scenario_value(span.clone());
+        };
+        HirExpr {
+            span: span.clone(),
+            ty: HirType::Primitive(PrimitiveType::Bytes),
+            reference: None,
+            kind: HirExprKind::Literal(HirValue::Bytes(bytes)),
+        }
+    }
+
+    /// Closed §12.5 `JsonValue` constructors. Payloads are compile-time values,
+    /// so the canonical form is one `json` literal whose integers are I64 and
+    /// whose floats are finite F64. `arguments` is `None` for a bare variant
+    /// name such as `JsonValue.Null`.
+    fn json_value(
+        &mut self,
+        module: usize,
+        span: &Span,
+        variant: &str,
+        arguments: Option<&[ast::ConstructArgument]>,
+        env: &ScenarioEnv,
+    ) -> HirExpr {
+        let primitive = |primitive| HirType::Primitive(primitive);
+        let payload_type = match variant {
+            "Null" => None,
+            "Boolean" => Some(primitive(PrimitiveType::Bool)),
+            "Integer" => Some(primitive(PrimitiveType::I64)),
+            "Float" => Some(primitive(PrimitiveType::F64)),
+            "String" => Some(primitive(PrimitiveType::Str)),
+            "Array" => Some(HirType::List {
+                item: Box::new(primitive(PrimitiveType::JsonValue)),
+            }),
+            "Object" => Some(HirType::Map {
+                key: Box::new(primitive(PrimitiveType::Str)),
+                value: Box::new(primitive(PrimitiveType::JsonValue)),
+            }),
+            _ => {
+                self.error(
+                    module,
+                    span.clone(),
+                    format!(
+                        "unknown JsonValue variant `{variant}`; expected Null, Boolean, Integer, Float, String, Array or Object"
+                    ),
+                );
+                return invalid_scenario_value(span.clone());
+            }
+        };
+        let json = match (payload_type, arguments) {
+            (None, None) => serde_json::Value::Null,
+            (None, Some(_)) => {
+                self.error(
+                    module,
+                    span.clone(),
+                    "payloadless variant `JsonValue.Null` takes no arguments; write `JsonValue.Null`",
+                );
+                return invalid_scenario_value(span.clone());
+            }
+            (Some(payload_type), arguments) => {
+                let argument = match arguments {
+                    Some([argument])
+                        if construct_field_label(argument)
+                            .is_some_and(|(name, _)| name == "value") =>
+                    {
+                        argument
+                    }
+                    _ => {
+                        self.error(
+                            module,
+                            span.clone(),
+                            format!(
+                                "`JsonValue.{variant}` requires exactly one `value: ...` argument"
+                            ),
+                        );
+                        return invalid_scenario_value(span.clone());
+                    }
+                };
+                let before = self.errors.len();
+                let payload = self.scenario_value(
+                    module,
+                    &argument.value,
+                    Some(&payload_type),
+                    env,
+                    "scenario value does not match its variant field type",
+                );
+                if self.errors.len() != before {
+                    return invalid_scenario_value(span.clone());
+                }
+                let Some(json) = self.json_payload(&payload) else {
+                    self.error(
+                        module,
+                        argument.value.span.clone(),
+                        format!(
+                            "`JsonValue.{variant}` payload must be a compile-time value: a literal, constant, module data or nested JsonValue, List or Map constructor"
+                        ),
+                    );
+                    return invalid_scenario_value(span.clone());
+                };
+                json
+            }
+        };
+        HirExpr {
+            span: span.clone(),
+            ty: HirType::Primitive(PrimitiveType::JsonValue),
+            reference: None,
+            kind: HirExprKind::Literal(HirValue::Json(json)),
+        }
+    }
+
+    /// The JSON form of one type-checked `JsonValue` payload, or `None` when
+    /// it is not a compile-time value. I64 integers and finite F64 floats keep
+    /// their JSON number kind; object keys are the canonical sorted map keys.
+    fn json_payload(&mut self, payload: &HirExpr) -> Option<serde_json::Value> {
+        match &payload.kind {
+            HirExprKind::Collection {
+                kind: HirCollectionKind::List,
+                items,
+            } => items
+                .iter()
+                .map(|item| self.json_payload(item))
+                .collect::<Option<Vec<_>>>()
+                .map(serde_json::Value::Array),
+            HirExprKind::MapLiteral { entries } => {
+                let mut object = serde_json::Map::new();
+                for (key, value) in entries {
+                    let HirValue::String(key) = self.eval_hir_constant(key, None)? else {
+                        return None;
+                    };
+                    object.insert(key, self.json_payload(value)?);
+                }
+                Some(serde_json::Value::Object(object))
+            }
+            _ => match self.eval_hir_constant(payload, None)? {
+                HirValue::Json(value) => Some(value),
+                HirValue::Bool(value) => Some(serde_json::Value::Bool(value)),
+                HirValue::String(value) => Some(serde_json::Value::String(value)),
+                HirValue::Integer(text) if payload.ty == HirType::Primitive(PrimitiveType::F64) => {
+                    let number = text.replace('_', "").parse::<f64>().ok()?;
+                    serde_json::Number::from_f64(number).map(serde_json::Value::Number)
+                }
+                HirValue::Integer(text) => text
+                    .replace('_', "")
+                    .parse::<i64>()
+                    .ok()
+                    .map(serde_json::Value::from),
+                HirValue::F64 { bits } => {
+                    let number = f64::from_bits(u64::from_str_radix(&bits, 16).ok()?);
+                    serde_json::Number::from_f64(number).map(serde_json::Value::Number)
+                }
+                _ => None,
             },
         }
     }
@@ -5459,11 +6312,16 @@ fn option_nothing_path(path: &ast::QualifiedName) -> bool {
     path.segments.len() == 2 && path.segments[0] == "Option" && path.segments[1] == "Nothing"
 }
 
+/// A bare `JsonValue.Variant` name such as `JsonValue.Null`.
+fn json_variant_path(path: &ast::QualifiedName) -> bool {
+    path.segments.len() == 2 && path.segments[0] == "JsonValue"
+}
+
 /// Operands whose type comes from the other comparison operand.
 fn scenario_value_needs_expected(value: &Expr) -> bool {
     match &value.kind {
         ExprKind::Construct { .. } => true,
-        ExprKind::Name(path) => option_nothing_path(path),
+        ExprKind::Name(path) => option_nothing_path(path) || json_variant_path(path),
         ExprKind::Parenthesized(inner) => scenario_value_needs_expected(inner),
         _ => false,
     }
@@ -5589,15 +6447,15 @@ impl<'a> OwnedLower<'a> {
             (_, Some(value)) => self.value(module, value, &ty),
             (_, None) => None,
         };
-        if default
-            .as_ref()
-            .is_some_and(|value| !hir_value_matches_type(value, &ty))
-        {
-            self.error(
-                module,
-                field.default.as_ref().unwrap().span().clone(),
-                "default value does not match its declared type",
-            );
+        if let Some(value) = &default {
+            let checked = self.evaluated_lengths(&ty);
+            if !hir_value_matches_type(value, &checked) {
+                self.error(
+                    module,
+                    field.default.as_ref().unwrap().span().clone(),
+                    "default value does not match its declared type",
+                );
+            }
         }
         HirField {
             span: field.span.clone(),
@@ -8702,6 +9560,41 @@ impl<'a> OwnedLower<'a> {
                 for (step_id, step) in value.steps.iter().enumerate() {
                     let step_id = step_id as u32;
                     match step {
+                        ast::ScenarioStep::Init {
+                            span,
+                            binding,
+                            target,
+                            arguments,
+                        } => {
+                            let arguments = arguments
+                                .iter()
+                                .map(|argument| {
+                                    let label = argument.label.as_ref().and_then(|label| {
+                                        match &label.kind {
+                                            ExprKind::Name(path) if path.segments.len() == 1 => {
+                                                path.segments.first().cloned()
+                                            }
+                                            _ => None,
+                                        }
+                                    });
+                                    (label, &argument.value)
+                                })
+                                .collect::<Vec<_>>();
+                            if let Some(step) = self.scenario_init_step(
+                                module,
+                                &id,
+                                step_id,
+                                span,
+                                binding,
+                                target,
+                                &arguments,
+                                &mut env,
+                                &workers,
+                                &mut required_effects,
+                            ) {
+                                steps.push(step);
+                            }
+                        }
                         step @ (ast::ScenarioStep::Call { .. }
                         | ast::ScenarioStep::Spawn { .. }) => {
                             let (span, binding_name, binding_span, target, arguments, is_call) =
@@ -8729,6 +9622,55 @@ impl<'a> OwnedLower<'a> {
                                     }
                                     _ => unreachable!(),
                                 };
+                            if is_call {
+                                let ast::ScenarioStep::Call { binding, .. } = step else {
+                                    unreachable!()
+                                };
+                                if target
+                                    .segments
+                                    .first()
+                                    .is_some_and(|name| env.contains_key(name))
+                                {
+                                    if let Some(step) = self.scenario_method_step(
+                                        module,
+                                        &id,
+                                        step_id,
+                                        span,
+                                        binding,
+                                        target,
+                                        arguments,
+                                        &mut env,
+                                        &workers,
+                                        &mut required_effects,
+                                    ) {
+                                        steps.push(step);
+                                    }
+                                    continue;
+                                }
+                                if self.lookup(module, target).as_ref().is_some_and(|symbol| {
+                                    self.declarations.get(symbol) == Some(&OwnedDeclKind::Impl)
+                                }) {
+                                    let positional = arguments
+                                        .iter()
+                                        .map(|argument| (None, argument))
+                                        .collect::<Vec<_>>();
+                                    if let Some(step) = self.scenario_init_step(
+                                        module,
+                                        &id,
+                                        step_id,
+                                        span,
+                                        binding,
+                                        target,
+                                        &positional,
+                                        &mut env,
+                                        &workers,
+                                        &mut required_effects,
+                                    ) {
+                                        steps.push(step);
+                                    }
+                                    continue;
+                                }
+                            }
                             let Some(symbol) = self.resolve(module, target, &target.span) else {
                                 continue;
                             };
@@ -8998,6 +9940,14 @@ impl<'a> OwnedLower<'a> {
                         | ast::ScenarioStep::Spawn { arguments, .. } => {
                             for argument in arguments {
                                 scenario_fixture_references(argument, &mut fixture_references);
+                            }
+                        }
+                        ast::ScenarioStep::Init { arguments, .. } => {
+                            for argument in arguments {
+                                scenario_fixture_references(
+                                    &argument.value,
+                                    &mut fixture_references,
+                                );
                             }
                         }
                         ast::ScenarioStep::Assert {
@@ -9425,6 +10375,21 @@ fn scenario_http_outcome(value: &ast::ScenarioHttpOutcome) -> HirScenarioHttpOut
     }
 }
 
+fn scenario_required_effects(clauses: &[ast::Clause], required: &mut BTreeMap<String, HirEffect>) {
+    for clause in clauses {
+        if let ClauseKind::Effects { effects } = &clause.kind {
+            for (source_order, effect) in effects.iter().enumerate() {
+                let key = effect.segments.join(".");
+                required.entry(key.clone()).or_insert(HirEffect {
+                    span: effect.span.clone(),
+                    key,
+                    source_order,
+                });
+            }
+        }
+    }
+}
+
 fn scenario_function(lower: &OwnedLower<'_>, symbol: &SymbolId) -> Option<ast::FunctionDecl> {
     let module = lower
         .modules
@@ -9790,6 +10755,7 @@ fn walk_expr_mut(expr: &mut HirExpr, visit: &mut impl FnMut(&mut HirExpr)) {
         | HirExprKind::Len { value: base }
         | HirExprKind::Unary { operand: base, .. }
         | HirExprKind::OptionSome(base)
+        | HirExprKind::Dyn { value: base, .. }
         | HirExprKind::ResultValue { value: base, .. } => walk_expr_mut(base, visit),
         HirExprKind::Binary { left, right, .. } => {
             walk_expr_mut(left, visit);
@@ -12219,6 +13185,14 @@ fn owned_visit_declaration<F: FnMut(&ast::QualifiedName)>(
                         visit(target);
                         for argument in arguments {
                             owned_visit_expr(argument, &mut visit);
+                        }
+                    }
+                    ast::ScenarioStep::Init {
+                        target, arguments, ..
+                    } => {
+                        visit(target);
+                        for argument in arguments {
+                            owned_visit_expr(&argument.value, &mut visit);
                         }
                     }
                     ast::ScenarioStep::Assert { expression, .. } => {

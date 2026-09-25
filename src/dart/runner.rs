@@ -278,13 +278,14 @@ pub(crate) fn render(
             .filter(|step| {
                 matches!(
                     step.get("kind").and_then(Value::as_str),
-                    Some("call" | "spawn")
+                    Some("call" | "spawn" | "init" | "method_call")
                 )
             })
             .filter_map(|step| step.get("target").and_then(Value::as_str))
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
         match render_scenario(
+            config,
             plan,
             strategy,
             &aliases,
@@ -2613,6 +2614,7 @@ fn bounded_product_indices(lengths: &[usize], limit: usize) -> Vec<Vec<usize>> {
 }
 
 fn render_scenario(
+    config: &DartProjectConfig,
     plan: &DartPlan,
     strategy: &ContractTestStrategy,
     aliases: &BTreeMap<String, String>,
@@ -2650,41 +2652,62 @@ fn render_scenario(
         }
     }
     for step in &scenario.steps {
-        if matches!(
-            step.get("kind").and_then(Value::as_str),
-            Some("call" | "spawn")
-        ) {
-            let target = step
-                .get("target")
-                .and_then(Value::as_str)
-                .ok_or("Dart scenario call has no target")?;
-            let callable = plan
-                .callables()
+        let Some(kind @ ("call" | "spawn" | "init" | "method_call")) =
+            step.get("kind").and_then(Value::as_str)
+        else {
+            continue;
+        };
+        let target = step
+            .get("target")
+            .and_then(Value::as_str)
+            .ok_or("Dart scenario invocation has no target")?;
+        if kind == "init" {
+            let owner = plan
+                .modules
                 .iter()
-                .find(|callable| callable.symbol == target)
-                .ok_or_else(|| format!("Dart scenario target `{target}` is not callable"))?;
-            if !callable_is_public(callable)? {
+                .flat_map(|module| &module.declarations)
+                .find(|declaration| declaration.get("name").and_then(Value::as_str) == Some(target))
+                .ok_or_else(|| format!("Dart scenario initializer `{target}` has no owner"))?;
+            if owner.get("kind").and_then(Value::as_str) != Some("impl") {
+                return Err(format!(
+                    "Dart scenario initializer `{target}` is not an implementation"
+                )
+                .into());
+            }
+            if owner.get("public").and_then(Value::as_bool) != Some(true) {
                 return Err(RenderFailure::unavailable(format!(
-                    "scenario target `{target}` is not a public consumer facade"
+                    "scenario initializer `{target}` is not a public consumer facade"
                 )));
             }
-            if callable.owner.is_some() {
-                return Err(RenderFailure::unavailable(
-                    "implementation-method scenarios require an explicit receiver fixture",
-                ));
-            }
-            let generics = callable
-                .declaration
-                .get("generics")
-                .and_then(Value::as_array)
-                .ok_or_else(|| {
-                    format!("Dart scenario target `{target}` has no generic inventory")
-                })?;
-            if !generics.is_empty() {
-                return Err(RenderFailure::unavailable(format!(
-                    "generic scenario target `{target}` has no explicit concrete scenario witness"
-                )));
-            }
+            continue;
+        }
+        let callable = plan
+            .callables()
+            .iter()
+            .find(|callable| callable.symbol == target)
+            .ok_or_else(|| format!("Dart scenario target `{target}` is not callable"))?;
+        if !callable_is_public(callable)? {
+            return Err(RenderFailure::unavailable(format!(
+                "scenario target `{target}` is not a public consumer facade"
+            )));
+        }
+        if (kind == "method_call") != callable.owner.is_some() {
+            return Err(RenderFailure::unavailable(format!(
+                "scenario target `{target}` has no matching public receiver facade"
+            )));
+        }
+        // Impl methods carry no generic list of their own; their receiver's impl owns it.
+        let generics = callable
+            .owner
+            .as_ref()
+            .unwrap_or(&callable.declaration)
+            .get("generics")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("Dart scenario target `{target}` has no generic inventory"))?;
+        if !generics.is_empty() {
+            return Err(RenderFailure::unavailable(format!(
+                "generic scenario target `{target}` has no explicit concrete scenario witness"
+            )));
         }
     }
 
@@ -2889,7 +2912,7 @@ fn render_scenario(
                     .get("target")
                     .and_then(Value::as_str)
                     .ok_or("Dart scenario call has no target")?;
-                let arguments = scenario_arguments(step, aliases, plan.enum_projection())?;
+                let arguments = scenario_arguments(step, plan, aliases)?;
                 let asynchronous =
                     step.get("callable_kind").and_then(Value::as_str) == Some("async");
                 writeln!(
@@ -2898,6 +2921,85 @@ fn render_scenario(
                     escape_identifier(local_name(binding))?,
                     if asynchronous { "await " } else { "" },
                     emit::render_consumer_symbol(target, aliases)?,
+                    arguments.join(", ")
+                )
+                .unwrap();
+            }
+            Some("init") => {
+                let binding = step
+                    .get("binding")
+                    .and_then(Value::as_str)
+                    .ok_or("Dart scenario initializer has no binding")?;
+                let target = step
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .ok_or("Dart scenario initializer has no target")?;
+                let owner = plan
+                    .modules
+                    .iter()
+                    .flat_map(|module| &module.declarations)
+                    .find(|declaration| {
+                        declaration.get("name").and_then(Value::as_str) == Some(target)
+                    })
+                    .ok_or("Dart scenario initializer has no canonical owner")?;
+                let arguments = scenario_named_arguments(
+                    step,
+                    initializer_parameters(owner)?,
+                    &[],
+                    plan,
+                    aliases,
+                )?;
+                writeln!(
+                    rendered,
+                    "      final {} = {}({});",
+                    escape_identifier(local_name(binding))?,
+                    emit::render_consumer_symbol(target, aliases)?,
+                    arguments.join(", ")
+                )
+                .unwrap();
+            }
+            Some("method_call") => {
+                let binding = step
+                    .get("binding")
+                    .and_then(Value::as_str)
+                    .ok_or("Dart scenario method call has no binding")?;
+                let target = step
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .ok_or("Dart scenario method call has no target")?;
+                let callable = plan
+                    .callables()
+                    .iter()
+                    .find(|callable| callable.symbol == target)
+                    .ok_or("Dart scenario method has no canonical callable")?;
+                let parameters = callable
+                    .declaration
+                    .get("parameters")
+                    .and_then(Value::as_array)
+                    .ok_or("Dart scenario method has no canonical parameters")?;
+                let witnesses = emit::render_consumer_callable_witnesses(
+                    config,
+                    plan,
+                    callable,
+                    &BTreeMap::new(),
+                    aliases,
+                )?;
+                let arguments =
+                    scenario_named_arguments(step, parameters, &witnesses, plan, aliases)?;
+                let receiver = super::expressions::render_scenario_expression(
+                    step.get("receiver")
+                        .ok_or("Dart scenario method call has no receiver")?,
+                    plan,
+                    aliases,
+                )?;
+                let asynchronous =
+                    step.get("callable_kind").and_then(Value::as_str) == Some("async");
+                writeln!(
+                    rendered,
+                    "      final {} = {}({receiver}).{}({});",
+                    escape_identifier(local_name(binding))?,
+                    if asynchronous { "await " } else { "" },
+                    escape_identifier(local_name(&callable.name))?,
                     arguments.join(", ")
                 )
                 .unwrap();
@@ -2915,7 +3017,7 @@ fn render_scenario(
                     .get("target")
                     .and_then(Value::as_str)
                     .ok_or("Dart scenario spawn has no target")?;
-                let arguments = scenario_arguments(step, aliases, plan.enum_projection())?;
+                let arguments = scenario_arguments(step, plan, aliases)?;
                 writeln!(
                     rendered,
                     "      {worker} = _ScenarioWorker<{ty}>.start(Future<{ty}>.sync(() => {}({})));",
@@ -2968,11 +3070,11 @@ fn render_scenario(
                     .get("binding")
                     .and_then(Value::as_str)
                     .ok_or("Dart scenario data has no binding")?;
-                let expression = emit::render_consumer_expression(
+                let expression = super::expressions::render_scenario_expression(
                     step.get("expression")
                         .ok_or("Dart scenario data has no expression")?,
+                    plan,
                     aliases,
-                    plan.enum_projection(),
                 )?;
                 writeln!(
                     rendered,
@@ -2982,11 +3084,11 @@ fn render_scenario(
                 .unwrap();
             }
             Some("assert") => {
-                let expression = emit::render_consumer_expression(
+                let expression = super::expressions::render_scenario_expression(
                     step.get("expression")
                         .ok_or("Dart scenario assertion has no expression")?,
+                    plan,
                     aliases,
-                    plan.enum_projection(),
                 )?;
                 writeln!(
                     rendered,
@@ -3058,15 +3160,51 @@ fn render_scenario(
 
 fn scenario_arguments(
     step: &Value,
+    plan: &DartPlan,
     aliases: &BTreeMap<String, String>,
-    projection: &DartEnumProjection,
 ) -> Result<Vec<String>, String> {
     step.get("arguments")
         .and_then(Value::as_array)
         .ok_or("Dart scenario call has no arguments")?
         .iter()
-        .map(|argument| emit::render_consumer_expression(argument, aliases, projection))
+        .map(|argument| super::expressions::render_scenario_expression(argument, plan, aliases))
         .collect()
+}
+
+fn scenario_named_arguments(
+    step: &Value,
+    parameters: &[Value],
+    witnesses: &[String],
+    plan: &DartPlan,
+    aliases: &BTreeMap<String, String>,
+) -> Result<Vec<String>, String> {
+    let arguments = step
+        .get("arguments")
+        .and_then(Value::as_array)
+        .ok_or("Dart scenario invocation has no arguments")?;
+    if arguments.len() != parameters.len() {
+        return Err("Dart scenario invocation has mismatched parameter arity".to_owned());
+    }
+    let mut positional = Vec::new();
+    let mut named = Vec::new();
+    for (argument, parameter) in arguments.iter().zip(parameters) {
+        let value = super::expressions::render_scenario_expression(argument, plan, aliases)?;
+        match parameter.get("kind").and_then(Value::as_str) {
+            Some("positional" | "vararg") => positional.push(value),
+            Some("keyword_only" | "kwarg") => {
+                let name = parameter
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or("Dart scenario named parameter has no name")?;
+                named.push(format!("{}: {value}", escape_identifier(name)?));
+            }
+            Some(other) => return Err(format!("unsupported Dart scenario parameter `{other}`")),
+            None => return Err("Dart scenario parameter has no kind".to_owned()),
+        }
+    }
+    positional.extend(witnesses.iter().cloned());
+    positional.extend(named);
+    Ok(positional)
 }
 
 fn render_fixture_bytes(data: &Value) -> Result<String, String> {

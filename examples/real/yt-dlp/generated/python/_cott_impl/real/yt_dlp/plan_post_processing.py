@@ -4,10 +4,6 @@ from cott_runtime import CottList, Err, Nothing, Ok, Result, Some
 from real.yt_dlp_types import ExternalToolRequest, MediaError, MediaError_ExternalToolMissing, MediaError_InvalidInput, MediaItem, PostProcessorKind, PostProcessorKind_ConvertThumbnails, PostProcessorKind_EmbedMetadata, PostProcessorKind_EmbedSubtitle, PostProcessorKind_EmbedThumbnail, PostProcessorKind_ExtractAudio, PostProcessorKind_Fixup, PostProcessorKind_RecodeVideo, PostProcessorKind_RemuxVideo, PostProcessorKind_SplitChapters, PostProcessorKind_SponsorBlock, PostProcessRequest
 
 
-def _invalid(message: str) -> Result[CottList[ExternalToolRequest], MediaError]:
-    return Err(error=MediaError_InvalidInput(message=message))
-
-
 def _protocol_args(kind: PostProcessorKind, request: PostProcessRequest) -> Result[list[str], MediaError]:
     match kind:
         case PostProcessorKind_ExtractAudio():
@@ -47,11 +43,11 @@ def _plan_with_tool(tool: ExternalToolRequest, request: PostProcessRequest) -> R
     if len(tool.executable) == 0:
         return Err(error=MediaError_ExternalToolMissing(name=tool.executable))
     if Path(tool.input) == Path("."):
-        return _invalid("external tool input must not be the current directory")
+        return Err(error=MediaError_InvalidInput(message="external tool input must not be the current directory"))
     if Path(tool.output) == Path("."):
-        return _invalid("external tool output must not be the current directory")
+        return Err(error=MediaError_InvalidInput(message="external tool output must not be the current directory"))
     if tool.timeout_ms == 0:
-        return _invalid("external tool timeout_ms must be nonzero")
+        return Err(error=MediaError_InvalidInput(message="external tool timeout_ms must be nonzero"))
     base: list[str] = [argument for argument in tool.arguments]
     planned: list[ExternalToolRequest] = []
     for kind in request.kinds:
@@ -64,8 +60,8 @@ def _plan_with_tool(tool: ExternalToolRequest, request: PostProcessRequest) -> R
 
 
 def plan_post_processing(item: MediaItem, request: PostProcessRequest) -> Result[CottList[ExternalToolRequest], MediaError]:
-    empty: CottList[ExternalToolRequest] = CottList(values=[])
     if len(request.kinds) == 0:
+        empty: CottList[ExternalToolRequest] = CottList(values=[])
         return Ok(value=empty)
     match request.external_tool:
         case Nothing():

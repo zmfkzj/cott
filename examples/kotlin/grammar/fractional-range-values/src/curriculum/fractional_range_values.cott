@@ -1,9 +1,11 @@
 module curriculum.fractional_range_values
 
+const MAX_F64: F64 = 1.7976931348623157e308
+
 newtype PositiveStep(F64)
     where self > 0.0
 
-newtype OutputLimit(U32)
+newtype OutputLimit(U64)
     where 1 <= self <= 10000
 
 enum FractionalRangeError:
@@ -18,22 +20,62 @@ fn build_bounded_range(
     limit: OutputLimit,
 ) -> Result[List[F64], FractionalRangeError]:
     doc """
-    Constructs an ascending finite sequence of binary64 values. The start is
-    included when start is less than stop; stop is always excluded. If start is
-    greater than or equal to stop, the result is an empty list.
+    Returns, in ascending order, the candidates start + index * step for
+    index = 0, 1, 2, ... that lie below stop. Each candidate is computed from
+    its own index: the index is converted to binary64, multiplied by step, and
+    start is added, each operation rounded to nearest, ties to even, with no
+    fused multiply-add and no running sum. The first candidate at or above stop
+    ends the sequence and is excluded, so the result is empty when start is at
+    or above stop.
     
-    The function first rejects a non-finite start, stop, or step with
-    NonFiniteInput. Each candidate is computed directly as start plus index
-    times step, with binary64 round-to-nearest, ties-to-even after the
-    multiplication and addition. A candidate equal to or above stop ends the
-    sequence. A candidate that does not exceed the preceding rounded value
-    produces StepDoesNotAdvance. After limit values, the next candidate is
-    checked only for termination; if it is still below stop,
-    OutputLimitExceeded takes precedence.
+    A candidate below stop that does not exceed the preceding value returns
+    StepDoesNotAdvance. At most limit values are returned: when the candidate
+    after the limit-th value is still below stop, OutputLimitExceeded is
+    returned, even if that candidate also fails to advance.
+    
+    On Kotlin the F64 boundary rejects NaN and infinities before the call, so
+    NonFiniteInput is never returned.
     """
 
-    ensures Result.Ok(values) => values.len <= 10000
+    ensures Result.Ok(values) => values.len <= limit
+    ensures Result.Ok(values) => (values.len == 0) == (start >= stop)
 
-    error FractionalRangeError.NonFiniteInput
+    error FractionalRangeError.NonFiniteInput when (not (-MAX_F64 <= start <= MAX_F64) or not (-MAX_F64 <= stop <= MAX_F64) or step > MAX_F64)
     error FractionalRangeError.StepDoesNotAdvance
     error FractionalRangeError.OutputLimitExceeded
+
+scenario tenth_steps_are_computed_from_the_index:
+    call range = build_bounded_range(0.0, 1.0, PositiveStep(0.1), OutputLimit(20))
+    assert range matches Result.Ok(values) => values == List(0.0, 0.1, 0.2, 0.30000000000000004, 0.4, 0.5, 0.6000000000000001, 0.7000000000000001, 0.8, 0.9)
+
+scenario output_limit_counts_returned_values:
+    call exact = build_bounded_range(1.0, 2.0, PositiveStep(0.25), OutputLimit(4))
+    assert exact matches Result.Ok(values) => values == List(1.0, 1.25, 1.5, 1.75)
+    call over = build_bounded_range(1.0, 2.0, PositiveStep(0.25), OutputLimit(3))
+    assert over matches Result.Err(FractionalRangeError.OutputLimitExceeded)
+
+scenario stalled_step_is_rejected:
+    call stalled = build_bounded_range(
+        9007199254740992.0,
+        9007199254740996.0,
+        PositiveStep(1.0),
+        OutputLimit(10),
+    )
+    assert stalled matches Result.Err(FractionalRangeError.StepDoesNotAdvance)
+    call limited = build_bounded_range(
+        9007199254740992.0,
+        9007199254740996.0,
+        PositiveStep(1.0),
+        OutputLimit(1),
+    )
+    assert limited matches Result.Err(FractionalRangeError.OutputLimitExceeded)
+
+requirement VALUES_ARE_COMPUTED_FROM_THE_INDEX for build_bounded_range:
+    text "Each returned value is start plus index times step, rounded once after the multiplication and once after the addition, never a running sum."
+    checked_by tenth_steps_are_computed_from_the_index
+    checked_by output_limit_counts_returned_values assert 1
+
+requirement LIMIT_PRECEDES_STALLED_STEP for build_bounded_range:
+    text "A range that still has a candidate below stop after limit values returns OutputLimitExceeded; otherwise a candidate that does not exceed its predecessor returns StepDoesNotAdvance."
+    checked_by output_limit_counts_returned_values assert 2
+    checked_by stalled_step_is_rejected

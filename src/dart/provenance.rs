@@ -13,6 +13,8 @@ use super::DartOwner;
 pub const DART_GENERATION_SCHEMA_VERSION: u32 = 2;
 pub const DART_RUNTIME_ABI_VERSION: u32 = 2;
 const DART_GENERATION_DOMAIN: &str = "cott.dart.generation.v2";
+const LEGACY_CANONICAL_IR_SCHEMA_VERSION: u32 = 8;
+const LEGACY_CONTRACT_STRATEGY_SCHEMA_VERSION: u64 = 5;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DartGenerationRecord {
@@ -118,6 +120,24 @@ impl DartGenerationRecord {
             .map_err(|error| format!("invalid Dart generation record: {error}"))
     }
 
+    /// Restricted compiler-internal cutover input. Normal parsing never calls this reader.
+    pub(crate) fn parse_legacy_for_emit(bytes: &[u8]) -> Result<Self, String> {
+        let wire = snapshot_record::parse_json(bytes)?;
+        validate_legacy_schema(&wire)?;
+        let (current, last_verified) =
+            snapshot_record::decode_legacy(&wire, DART_GENERATION_SCHEMA_VERSION)?;
+        let record = Self {
+            schema_version: DART_GENERATION_SCHEMA_VERSION,
+            current: serde_json::from_value(current).map_err(|error| error.to_string())?,
+            last_verified: last_verified
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|error| error.to_string())?,
+        };
+        record.validate_legacy_identities(&wire)?;
+        Ok(record)
+    }
+
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
         let value = serde_json::to_value(self)
             .map_err(|error| format!("serialize Dart generation record: {error}"))?;
@@ -148,25 +168,52 @@ impl DartGenerationRecord {
         }
         Ok(())
     }
+
+    fn validate_legacy_identities(&self, wire: &Value) -> Result<(), String> {
+        validate_snapshot_identity_for_schema(&self.current, LEGACY_CANONICAL_IR_SCHEMA_VERSION)?;
+        if let Some(snapshot) = &self.last_verified {
+            if !snapshot.verified || snapshot.project_name != self.current.project_name {
+                return Err("invalid legacy Dart last_verified snapshot".to_owned());
+            }
+            validate_snapshot_identity_for_schema(snapshot, LEGACY_CANONICAL_IR_SCHEMA_VERSION)?;
+        }
+        if self.current.verified && wire["current"] != wire["last_verified"] {
+            return Err("verified legacy Dart current must equal last_verified".to_owned());
+        }
+        Ok(())
+    }
 }
 
 fn validate_snapshot_identity(snapshot: &DartGenerationSnapshot) -> Result<(), String> {
-    validate_snapshot_contents(snapshot)?;
+    validate_snapshot_identity_for_schema(snapshot, crate::provenance::CANONICAL_IR_SCHEMA_VERSION)
+}
+
+fn validate_snapshot_identity_for_schema(
+    snapshot: &DartGenerationSnapshot,
+    canonical_ir_schema: u32,
+) -> Result<(), String> {
+    validate_snapshot_contents_for_schema(snapshot, canonical_ir_schema)?;
     if !valid_digest(&snapshot.generation_id) {
         return Err("Dart generation_id must be a lowercase SHA-256 digest".to_owned());
     }
-    let mut expected = snapshot.clone();
-    expected.compute_generation_id()?;
-    if expected.generation_id != snapshot.generation_id {
+    let expected = snapshot_record::digest(&normalized_generation_identity(snapshot)?)?;
+    if expected != snapshot.generation_id {
         return Err(format!(
             "Dart generation identity mismatch: expected {}, got {}",
-            expected.generation_id, snapshot.generation_id
+            expected, snapshot.generation_id
         ));
     }
     Ok(())
 }
 
 fn validate_snapshot_contents(snapshot: &DartGenerationSnapshot) -> Result<(), String> {
+    validate_snapshot_contents_for_schema(snapshot, crate::provenance::CANONICAL_IR_SCHEMA_VERSION)
+}
+
+fn validate_snapshot_contents_for_schema(
+    snapshot: &DartGenerationSnapshot,
+    canonical_ir_schema: u32,
+) -> Result<(), String> {
     if snapshot.target != "dart" {
         return Err("Dart generation target must be `dart`".to_owned());
     }
@@ -176,10 +223,9 @@ fn validate_snapshot_contents(snapshot: &DartGenerationSnapshot) -> Result<(), S
             env!("CARGO_PKG_VERSION")
         ));
     }
-    if snapshot.canonical_ir_schema != crate::provenance::CANONICAL_IR_SCHEMA_VERSION {
+    if snapshot.canonical_ir_schema != canonical_ir_schema {
         return Err(format!(
-            "Dart canonical IR schema must be {}",
-            crate::provenance::CANONICAL_IR_SCHEMA_VERSION
+            "Dart canonical IR schema must be {canonical_ir_schema}"
         ));
     }
     if snapshot.runtime_abi != DART_RUNTIME_ABI_VERSION {
@@ -223,6 +269,19 @@ fn validate_snapshot_contents(snapshot: &DartGenerationSnapshot) -> Result<(), S
     }
     if snapshot.verified && !snapshot.unresolved.is_empty() {
         return Err("verified Dart generation snapshot has unresolved callables".to_owned());
+    }
+    if canonical_ir_schema == LEGACY_CANONICAL_IR_SCHEMA_VERSION && snapshot.verified {
+        let strategies = snapshot
+            .verification
+            .pointer("/contract_tests/strategies")
+            .and_then(Value::as_array)
+            .ok_or("verified legacy Dart record has no contract strategy evidence")?;
+        if strategies.iter().any(|strategy| {
+            strategy.get("schema_version").and_then(Value::as_u64)
+                != Some(LEGACY_CONTRACT_STRATEGY_SCHEMA_VERSION)
+        }) {
+            return Err("legacy Dart contract strategy schema must be 5".to_owned());
+        }
     }
 
     validate_path_hashes("input", &snapshot.inputs)?;
@@ -901,6 +960,27 @@ fn validate_schema(value: &Value) -> Result<(), String> {
             .expect("embedded Dart generation schema is valid JSON")
     });
     let validator = jsonschema::validator_for(&SCHEMA).map_err(|error| error.to_string())?;
+    let errors = validator
+        .iter_errors(value)
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn validate_legacy_schema(value: &Value) -> Result<(), String> {
+    static LEGACY_SCHEMA: LazyLock<Value> = LazyLock::new(|| {
+        let mut schema: Value =
+            serde_json::from_str(include_str!("../../schemas/dart-generation.schema.json"))
+                .expect("embedded Dart generation schema is valid JSON");
+        schema["$defs"]["snapshot"]["properties"]["canonical_ir_schema"]["const"] =
+            json!(LEGACY_CANONICAL_IR_SCHEMA_VERSION);
+        schema
+    });
+    let validator = jsonschema::validator_for(&LEGACY_SCHEMA).map_err(|error| error.to_string())?;
     let errors = validator
         .iter_errors(value)
         .map(|error| error.to_string())

@@ -8,7 +8,7 @@ implementations are checked projections; generated target facades are the only p
 Runtime code does not read authored `.cott` live.
 
 `architecture.md` is the normative implemented v1.0 contract. Package `1.0.0`, Canonical IR schema
-`8`, contract-test strategy schema `5`, and diagnostics schema `1` remain unchanged.
+`9`, contract-test strategy schema `6`, and diagnostics schema `1` are current.
 Python uses generation schema `8`, domain `cott.generation.v8`, and runtime ABI `7`.
 Kotlin uses generation schema `2`, domain `cott.kotlin.generation.v2`, and runtime ABI `1`.
 Dart uses generation schema `2`, domain `cott.dart.generation.v2`, and runtime ABI `2`.

@@ -34,13 +34,15 @@ public sealed interface AccessCodeError {
 }
 
 /**
- * Base error clauses for an access code.
+ * Base rule requires a nonempty success value and allows a legacy-format failure.
+ * The strict rule strengthens that success obligation and removes the error.
  */
 
 public interface BaseAccessCodeRule
 
 /**
- * Current access-code clauses composed from the base rule.
+ * Current rule strengthens the minimum success length from one to four, then
+ * deletes the legacy-format error allowance.
  */
 
 public interface StrictAccessCodeRule : curriculum.assignment_rule.BaseAccessCodeRule

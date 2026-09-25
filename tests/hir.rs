@@ -5,8 +5,8 @@ use cott::diagnostics::Span;
 use cott::hir::{
     APPLIED_RULE_ANNOTATION, HirBinaryOp, HirCallableKind, HirClause, HirClauseKind, HirCompareOp,
     HirConstArgument, HirContract, HirDeclaration, HirDoc, HirExpr, HirExprKind, HirGenericArg,
-    HirGenericParam, HirPattern, HirPatternKind, HirTrait, HirType, HirUnaryOp, HirValue,
-    HirVariance, ModuleId, PrimitiveType, SymbolId, is_assignable, lower,
+    HirGenericParam, HirPattern, HirPatternKind, HirScenarioStep, HirTrait, HirType, HirUnaryOp,
+    HirValue, HirVariance, ModuleId, PrimitiveType, SymbolId, is_assignable, lower,
 };
 use cott::ir::{load, render};
 
@@ -2890,4 +2890,188 @@ fn preservation_does_not_choose_between_ambiguous_imported_structs() {
             .any(|error| error.path == Path::new("src/authoring.cott")
                 && error.diagnostic.message.contains("duplicate import"))
     );
+}
+
+#[test]
+fn scenario_impl_initializer_and_method_calls_preserve_receiver_and_argument_types() {
+    let parsed = parse_project([SourceFile::new(
+        "src/authoring.cott",
+        r#"module authoring
+trait TaskView:
+    fn summary(self) -> Str
+impl SimpleTask for TaskView:
+    state:
+        title: Str
+        urgency: I32
+    init(title: Str, urgency: I32):
+        ensures self.title == title
+    fn summary(self) -> Str:
+        ensures result == self.title
+scenario task_summary:
+    call task = SimpleTask(title: "Launch", urgency: 1)
+    call summary = task.summary()
+    assert summary == "Launch"
+"#,
+    )])
+    .expect("scenario fixture should parse");
+    let project = lower(Path::new("src"), parsed).expect("scenario should lower");
+    let HirDeclaration::Scenario(scenario) =
+        declaration(&project, "authoring", "scenario.task_summary")
+    else {
+        panic!("expected scenario");
+    };
+    let HirScenarioStep::Init {
+        target,
+        binding,
+        parameters,
+        return_type,
+        arguments,
+        ..
+    } = &scenario.steps[0]
+    else {
+        panic!("initializer must be a distinct scenario step");
+    };
+    assert_eq!(target.as_string(), "authoring.SimpleTask");
+    assert_eq!(binding.as_string(), "authoring.scenario.task_summary.task");
+    assert_eq!(
+        parameters,
+        &[
+            HirType::Primitive(PrimitiveType::Str),
+            HirType::Primitive(PrimitiveType::I32),
+        ]
+    );
+    assert_eq!(
+        return_type,
+        &HirType::Named {
+            symbol: target.clone(),
+            args: vec![],
+        }
+    );
+    assert_eq!(arguments.len(), 2);
+    let HirScenarioStep::MethodCall {
+        receiver,
+        target: method,
+        parameters,
+        return_type,
+        ..
+    } = &scenario.steps[1]
+    else {
+        panic!("receiver invocation must be a distinct scenario step");
+    };
+    assert_eq!(method.as_string(), "authoring.SimpleTask.summary");
+    assert_eq!(
+        receiver.ty,
+        HirType::Named {
+            symbol: target.clone(),
+            args: vec![],
+        }
+    );
+    assert!(matches!(
+        &receiver.kind,
+        HirExprKind::BindingRef(id) if id == binding
+    ));
+    assert!(parameters.is_empty());
+    assert_eq!(*return_type, HirType::Primitive(PrimitiveType::Str));
+}
+
+#[test]
+fn scenario_impl_calls_reject_wrong_receiver_types_nonimplementers_and_unknown_methods() {
+    let declarations = r#"module authoring
+trait TaskView:
+    fn summary(self) -> Str
+trait OtherView:
+    fn label(self) -> Str
+impl SimpleTask for TaskView:
+    state:
+        title: Str
+        urgency: I32
+    init(title: Str, urgency: I32):
+        ensures self.title == title
+    fn summary(self) -> Str:
+        ensures result == self.title
+impl OtherTask for OtherView:
+    state:
+        title: Str
+    init(title: Str):
+        ensures self.title == title
+    fn label(self) -> Str:
+        ensures result == self.title
+fn text() -> Str:
+    effects []
+"#;
+    for (steps, diagnostic) in [
+        (
+            "    call task = SimpleTask(title: \"Launch\", urgency: \"high\")\n",
+            "scenario initializer argument does not match parameter type",
+        ),
+        (
+            "    call text_value = text()\n    call result = text_value.summary()\n",
+            "scenario method receiver must be an impl instance",
+        ),
+        (
+            "    call task = SimpleTask(title: \"Launch\", urgency: 1)\n    call result = task.unknown()\n",
+            "scenario impl has no such receiver method",
+        ),
+        (
+            "    call other = OtherTask(title: \"Launch\")\n    data view: Dyn[TaskView] = Dyn(value: other)\n",
+            "Dyn value does not implement the requested trait",
+        ),
+    ] {
+        assert_authoring_error(
+            &format!("{declarations}scenario invalid:\n{steps}"),
+            diagnostic,
+        );
+    }
+}
+
+#[test]
+fn scenario_receiver_call_resolves_selected_trait_default_without_impl_method() {
+    let parsed = parse_project([SourceFile::new(
+        "src/authoring.cott",
+        r#"module authoring
+fn default_read(receiver: Reader, amount: I32) -> I32:
+    effects []
+trait Reader:
+    fn read(self, amount: I32) -> I32 = default_read
+    fn reset(self) -> I32
+impl Counter for Reader:
+    state:
+        count: I32
+    init(count: I32):
+        ensures self.count == count
+    fn reset(self) -> I32:
+        ensures result == self.count
+scenario selected:
+    call counter = Counter(count: 2)
+    call observed = counter.read(5)
+    assert observed == 5
+"#,
+    )])
+    .expect("selected trait default should parse");
+    let project = lower(Path::new("src"), parsed).expect("selected method should lower");
+    let HirDeclaration::Scenario(scenario) =
+        declaration(&project, "authoring", "scenario.selected")
+    else {
+        panic!("expected scenario");
+    };
+    let HirScenarioStep::MethodCall {
+        target,
+        receiver,
+        parameters,
+        return_type,
+        arguments,
+        ..
+    } = &scenario.steps[1]
+    else {
+        panic!("selected trait default must lower as a receiver call");
+    };
+    assert_eq!(target.as_string(), "authoring.Counter.read");
+    assert!(matches!(
+        &receiver.kind,
+        HirExprKind::BindingRef(symbol) if symbol.as_string() == "authoring.scenario.selected.counter"
+    ));
+    assert_eq!(parameters, &[HirType::Primitive(PrimitiveType::I32)]);
+    assert_eq!(*return_type, HirType::Primitive(PrimitiveType::I32));
+    assert_eq!(arguments.len(), 1);
+    assert_eq!(arguments[0].ty, HirType::Primitive(PrimitiveType::I32));
 }

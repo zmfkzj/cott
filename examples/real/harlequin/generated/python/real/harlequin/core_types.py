@@ -8,11 +8,12 @@ from typing import Annotated, Any, Final, ForwardRef, Generic, Literal, Never, P
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_descending_by, _cott_ends_with, _cott_euclidean_mod, _cott_normalize_f32, _cott_starts_with, _cott_unique_by, _cott_validate_abi, _cott_validated_construction
 from cott_runtime import _cott_contract_condition
-"""AdapterKind selects the driver and the interpretation of Connection.endpoint.
-Use the project's lock-selected SDKs, not a fabricated Cott adapter or raw wire
-protocol. JSON endpoint forms below are ordinary JSON objects, without a prefix;
-reject unknown keys and values of the wrong type. Credentials are connection data,
-never SQL text, public identifiers, or diagnostic messages.
+"""AdapterKind selects the driver and the interpretation of a connection endpoint.
+Each adapter uses the named lock-selected SDK; no raw wire protocol or invented
+adapter layer replaces it. JSON endpoint forms below are ordinary JSON objects,
+without a prefix; unknown keys and values of the wrong type are invalid.
+Credentials are connection data, never SQL text, public identifiers, or diagnostic
+messages.
 
 Sqlite: sqlite3; endpoint is a filesystem path, a native file: URI, or :memory:.
 DuckDb: duckdb; endpoint is a filesystem path or :memory:.
@@ -42,8 +43,9 @@ space string. Use ConnectionPool with the SDK's Config, not an HTTP/SQL adapter.
 Adbc: adbc_driver_manager; endpoint is JSON with required driver string naming a
 trusted deployment-installed ADBC driver library or manifest. Optional uri and
 entrypoint are strings; db and connection are string-to-string driver option maps;
-catalog is an optional exact metadata catalog selector. The manager is not itself
-a database driver. Driver options contain no application SQL to execute."""
+catalog is an optional exact catalog selector used only by catalog refresh. The
+manager is not itself a database driver. Driver options contain no application SQL
+to execute."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AdapterKind_DuckDb:
@@ -180,6 +182,9 @@ class Configuration:
         if not _cott_validated_construction():
             object.__setattr__(self, "keymap", _cott_validate_abi(self.keymap, str, path="$.keymap"))
 
+"""Parsed command line. connection is the positional connection string (endpoint
+text); query_file is the --query-file path. read_only and no_config are the
+--read-only and --no-config switches."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CliOptions:
@@ -190,7 +195,6 @@ class CliOptions:
     query_file: Option[Path]
     read_only: bool
     no_config: bool
-    source_argument_count: U64
 
     def __post_init__(self) -> None:
         if not _cott_validated_construction():
@@ -205,8 +209,6 @@ class CliOptions:
             object.__setattr__(self, "read_only", _cott_validate_abi(self.read_only, bool, path="$.read_only"))
         if not _cott_validated_construction():
             object.__setattr__(self, "no_config", _cott_validate_abi(self.no_config, bool, path="$.no_config"))
-        if not _cott_validated_construction():
-            object.__setattr__(self, "source_argument_count", _cott_validate_abi(self.source_argument_count, U64, path="$.source_argument_count"))
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -233,14 +235,15 @@ payload is a shared dict[str, object] with exactly these keys: id, adapter, endp
 read_only, driver, cleanup, lock, closed, transaction. The first four equal the
 Connection metadata; driver is the actual SDK connection/client/session; cleanup
 is a contextlib.ExitStack of actual close/release callbacks; lock is threading.Lock;
-closed is initially false; transaction is initially None or the currently active
-lease's unique object. No other mutable registry or module-global session exists.
-The dictionary and lock are shared by all copies of this handle, not cloned.
-Check the tag, complete shape, metadata equality and concrete SDK driver type before
-using it. Acquire lock before testing closed/transaction or touching the driver.
-Malformed, metadata-mismatched, closed or stale handles cause the operation's
-declared error, never a new connection opened from endpoint. Opaque is a typed
-host-handle carrier, not a cryptographic seal or a way to serialize a session."""
+closed is initially false; transaction is None or the unwrapped object of the
+currently active TransactionLease. No other mutable registry or module-global
+session exists. The dictionary and lock are shared by all copies of this handle,
+not cloned. Check the tag, complete shape, metadata equality and concrete SDK driver
+type before using it. Acquire lock before testing closed/transaction or touching
+the driver. Malformed, metadata-mismatched, closed or stale handles cause the
+operation's declared error, never a new connection opened from endpoint. Opaque is
+a typed host-handle carrier, not a cryptographic seal or a way to serialize a
+session."""
 SessionHandle: TypeAlias = Opaque[Literal["harlequin.session"]]
 
 """An explicit connection owner. Call disconnect exactly once when finished; repeated
@@ -269,6 +272,8 @@ class Connection:
         if not _cott_validated_construction():
             object.__setattr__(self, "session", _cott_validate_abi(self.session, Opaque[Literal["harlequin.session"]], path="$.session"))
 
+"""An editor tab. cursor counts Unicode scalar values into source; dirty means the
+source was edited since the tab was opened."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class QueryTab:
@@ -307,6 +312,8 @@ class QueryHistoryEntry:
         if not _cott_validated_construction():
             object.__setattr__(self, "succeeded", _cott_validate_abi(self.succeeded, bool, path="$.succeeded"))
 
+"""Executed queries, oldest first, holding at most capacity entries. Capacity zero
+keeps no history."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class QueryHistory:
@@ -319,25 +326,31 @@ class QueryHistory:
             object.__setattr__(self, "entries", _cott_validate_abi(self.entries, CottList[QueryHistoryEntry], path="$.entries"))
         if not _cott_validated_construction():
             object.__setattr__(self, "capacity", _cott_validate_abi(self.capacity, U64, path="$.capacity"))
+        if not (_cott_contract_condition(((len((self).entries) <= (self).capacity)), "real.harlequin.core.QueryHistory", "invariant:0")):
+            raise CottContractViolation("invariant failed", symbol="real.harlequin.core.QueryHistory", clause="invariant:0", phase="invariant", span={"end_byte":6120,"end_column":48,"end_line":156,"start_byte":6077,"start_column":5,"start_line":156}, expected="true", actual="false")
 
+"""Editor state for one connection, identified by that connection's id. Tab ids are
+unique; active_tab_id names one of the tabs or is Nothing."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class IdeSession:
     __hash__ = None
-    connection: Connection
+    connection_id: str
     tabs: CottList[QueryTab]
     active_tab_id: Option[str]
     history: QueryHistory
 
     def __post_init__(self) -> None:
         if not _cott_validated_construction():
-            object.__setattr__(self, "connection", _cott_validate_abi(self.connection, Connection, path="$.connection"))
+            object.__setattr__(self, "connection_id", _cott_validate_abi(self.connection_id, str, path="$.connection_id"))
         if not _cott_validated_construction():
             object.__setattr__(self, "tabs", _cott_validate_abi(self.tabs, CottList[QueryTab], path="$.tabs"))
         if not _cott_validated_construction():
             object.__setattr__(self, "active_tab_id", _cott_validate_abi(self.active_tab_id, Option[str], path="$.active_tab_id"))
         if not _cott_validated_construction():
             object.__setattr__(self, "history", _cott_validate_abi(self.history, QueryHistory, path="$.history"))
+        if not (_cott_contract_condition((_cott_unique_by((self).tabs, "id")), "real.harlequin.core.IdeSession", "invariant:0")):
+            raise CottContractViolation("invariant failed", symbol="real.harlequin.core.IdeSession", clause="invariant:0", phase="invariant", span={"end_byte":6446,"end_column":48,"end_line":168,"start_byte":6403,"start_column":5,"start_line":168}, expected="true", actual="false")
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -450,21 +463,43 @@ class QueryBatch:
         if not _cott_validated_construction():
             object.__setattr__(self, "results", _cott_validate_abi(self.results, CottList[QueryResult], path="$.results"))
 
-"""Lease identity for one transaction on one SessionHandle. Its opaque value is a
-fresh unique object, compared by identity against session payload transaction.
-No lookup by connection id and no driver reconnection is permitted."""
+"""Lease identity for one transaction on one SessionHandle. Its opaque value is a fresh
+unique object that begin_transaction also stores, unwrapped, as the session payload
+transaction. A lease has authority exactly while that payload entry is the same
+object (identity, `is`) as the lease's unwrapped value; the Opaque wrapper itself is
+not the identity and may be rebuilt at facade boundaries. No lookup by connection
+id and no driver reconnection is permitted."""
 TransactionLease: TypeAlias = Opaque[Literal["harlequin.transaction"]]
 
-"""An immutable snapshot containing its actual owning connection and lease.
-active is a result-state snapshot, not authority: even an old active=True copy
-cannot commit or roll back after its lease has completed or its connection closed."""
+@final
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TransactionStatus_Active:
+    pass
+
+@final
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TransactionStatus_Committed:
+    pass
+
+@final
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TransactionStatus_RolledBack:
+    pass
+
+TransactionStatus: TypeAlias = Union[TransactionStatus_Active, TransactionStatus_Committed, TransactionStatus_RolledBack]
+
+"""An immutable snapshot of one lease and its actual owning connection. status is
+Active in the snapshot begin_transaction returns and Committed or RolledBack in the
+snapshot returned by the completing call. A snapshot is not authority: even an old
+Active copy cannot commit or roll back after its lease has completed or its
+connection closed."""
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Transaction:
     __hash__ = None
     connection: Connection
     lease: Opaque[Literal["harlequin.transaction"]]
-    active: bool
+    status: TransactionStatus
 
     def __post_init__(self) -> None:
         if not _cott_validated_construction():
@@ -472,7 +507,7 @@ class Transaction:
         if not _cott_validated_construction():
             object.__setattr__(self, "lease", _cott_validate_abi(self.lease, Opaque[Literal["harlequin.transaction"]], path="$.lease"))
         if not _cott_validated_construction():
-            object.__setattr__(self, "active", _cott_validate_abi(self.active, bool, path="$.active"))
+            object.__setattr__(self, "status", _cott_validate_abi(self.status, TransactionStatus, path="$.status"))
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -572,11 +607,22 @@ class ConnectionError_AuthenticationFailed:
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ConnectionError_TransactionsUnsupported:
+    __hash__ = None
+    adapter: AdapterKind
+
+@final
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ConnectionError_LeaseRejected:
+    pass
+
+@final
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ConnectionError_Failed:
     __hash__ = None
     message: str
 
-ConnectionError: TypeAlias = Union[ConnectionError_AdapterUnavailable, ConnectionError_InvalidEndpoint, ConnectionError_AuthenticationFailed, ConnectionError_Failed]
+ConnectionError: TypeAlias = Union[ConnectionError_AdapterUnavailable, ConnectionError_InvalidEndpoint, ConnectionError_AuthenticationFailed, ConnectionError_TransactionsUnsupported, ConnectionError_LeaseRejected, ConnectionError_Failed]
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -584,12 +630,7 @@ class SessionError_TabMissing:
     __hash__ = None
     tab_id: str
 
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class SessionError_HistoryCapacityInvalid:
-    pass
-
-SessionError: TypeAlias = Union[SessionError_TabMissing, SessionError_HistoryCapacityInvalid]
+SessionError: TypeAlias = Union[SessionError_TabMissing]
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -683,20 +724,67 @@ Databricks | Databricks | ["databricks"] | false | true | true
 Adbc | ADBC | ["adbc"] | true | true | false
 Cassandra | Cassandra | ["cassandra"] | false | true | false
 NebulaGraph | NebulaGraph | ["nebula"] | false | true | false"""
-"""Use tomllib; cast each dict/list to dict[str, object]/list[object] before use."""
-"""Use isinstance, not match, for each Option; select the named or default profile."""
+"""Parse process arguments (without the program name) from left to right.
+Value options: --profile NAME or -P NAME, --adapter NAME or -a NAME, and
+--query-file PATH or -f PATH. Switches: --read-only or -r, and --no-config.
+A long value option also accepts --option=VALUE; otherwise its value is the next
+argument verbatim, even when that argument starts with "-". A repeated value
+option keeps its last value; a repeated switch is harmless. "--" ends option
+parsing and every later argument is positional. Before "--", "-" alone is
+positional and any other argument starting with "-" must be one of the options
+above. The single positional argument is the connection string.
+An adapter NAME is one of the uri_schemes labels of adapter_descriptors (duckdb,
+sqlite, postgres, postgresql, mysql, odbc, bigquery, trino, databricks, adbc,
+cassandra, nebula), compared ignoring ASCII case.
+The first offending argument decides the error: UnknownOption carries the whole
+argument as given (a switch written with "=VALUE" is unknown); MissingOptionValue
+names the long option ("--profile") whose value is missing at the end;
+InvalidAdapter carries NAME as given; a second positional argument is
+ConflictingConnectionInputs. After the scan, --profile together with --no-config
+is ConflictingConnectionInputs. Absent options are Nothing and absent switches
+false."""
+"""Read the UTF-8 TOML file at path. Top-level keys, all optional: default_profile
+(string), theme (string, default "harlequin"), keymap (string, default
+"default") and profiles, an array of tables. Each profile table has required
+name (string), adapter (a parse_cli adapter label, compared ignoring ASCII case)
+and connection (string, the endpoint), optional read_only (boolean, default
+false) and optional settings, a table of string values that become Setting
+entries in file order. Profiles keep file order. default_profile is not
+resolved here.
+A path that does not exist is Missing(path). An unreadable file, invalid UTF-8
+or TOML, an unknown key, a missing required key or a value of the wrong type is
+Invalid(path, message); message names the offending key (or says "invalid
+TOML") and never repeats a configured value. Top-level keys are checked first,
+then profiles in file order; a profile is validated before its name is compared,
+and a name equal to an earlier profile's is ProfileDuplicate(name). A file that
+exists but cannot be read, including an access refusal, is Invalid(path, message).
+The path is read from the file system the program runs against: the fs fixture
+root while a Cott scenario with an fs fixture is active, otherwise the host file
+system. While such a fixture is active the host file system is never used, even
+when the fixture read fails."""
+"""Plan the connection request without I/O. With options.no_config the
+configuration is ignored, as if it had no profiles and no default_profile.
+The selected profile name is options.profile, else configuration.default_profile,
+else none. A selected name without a profile of exactly that name is
+ProfileMissing(name). With no selected name the base request is DuckDb, endpoint
+":memory:", no settings and read_only false; otherwise it is the profile's
+adapter, endpoint, settings and read_only. Then options.adapter replaces the
+adapter, options.connection replaces the endpoint, and options.read_only true
+makes the request read-only. Settings always come from the profile."""
 """Open and retain a real SDK session using AdapterKind's endpoint formats.
-Return a fresh UUID hex id and SessionHandle with the exact documented payload.
-The returned driver stays open; no probe-and-close success is allowed.
-Register actual resource cleanup callbacks with ExitStack as resources are
-acquired, and transfer that stack into the session only on complete success.
-A failed construction closes every acquired resource before returning an error.
-Do not use SDK connection context managers that implicitly commit on exit.
+Return a fresh random UUID as 32 lowercase hexadecimal digits for id and a
+SessionHandle with the exact documented payload. The returned driver stays
+open; no probe-and-close success is allowed. Register actual resource cleanup
+callbacks with ExitStack as resources are acquired, and transfer that stack into
+the session only on complete success. A failed construction closes every
+acquired resource before returning an error. Do not use SDK connection context
+managers that implicitly commit on exit.
 
-Reject duplicate settings names. For JSON endpoint adapters, settings override
-known top-level fields: string fields use literal text, integers use decimal,
-booleans use true/false, and object/list fields use JSON. Validate the resulting
-object against AdapterKind's fields and retain its canonical JSON as endpoint.
+Settings are validated before any driver is loaded: a blank or repeated setting
+name is InvalidEndpoint. For JSON endpoint adapters, settings override known
+top-level fields: string fields use literal text, integers use decimal, booleans
+use true/false, and object/list fields use JSON. Validate the resulting object
+against AdapterKind's fields and retain its canonical JSON as endpoint.
 PostgreSQL settings are libpq string parameters merged with make_conninfo.
 ODBC settings are connection-string keyword/value overrides: keyword names
 contain only ASCII letters/digits/underscore/space; brace-quote values and
@@ -706,16 +794,16 @@ permit only threads and memory_limit as documented driver config strings.
 Unknown/invalid settings are InvalidEndpoint, not silently ignored.
 
 SQLite uses sqlite3.Connection, isolation_level=None and check_same_thread=False;
-its session lock serializes operations. :memory: remains alive in this connection.
-A file endpoint opens an existing file URI with mode=ro or mode=rw according
-to read_only, never silently creates a missing file. Apply query_only when
-read_only is true. DuckDB retains DuckDBPyConnection; pass read_only for files,
-and use an in-memory connection for :memory:.
+its session lock serializes operations. :memory: remains alive in this
+connection. A file endpoint opens an existing file URI with mode=ro or mode=rw
+according to read_only, never silently creates a missing file. Apply query_only
+when read_only is true. DuckDB retains DuckDBPyConnection; pass read_only for
+files, and use an in-memory connection for :memory:.
 PostgreSQL retains psycopg.Connection; MySQL retains pymysql.Connection;
 ODBC retains pyodbc.Connection; ADBC retains adbc_driver_manager.dbapi.Connection.
-These four use manual-commit mode for their lifetime; outside an explicit
-transaction execute_statements commits each successful statement. ADBC driver
-failure to support manual commit is an error, not an ignored warning.
+These four use manual-commit mode for their lifetime. ADBC driver failure to
+support manual commit is an error, not an ignored warning. connect reads no
+catalog metadata.
 BigQuery retains google.cloud.bigquery.Client, Trino retains its DBAPI
 Connection, and Databricks retains databricks.sql.Connection.
 Cassandra retains the real Session and registers Session.shutdown before
@@ -727,7 +815,7 @@ Missing driver capabilities return AdapterUnavailable; malformed endpoint or
 settings return InvalidEndpoint with an empty redacted endpoint payload.
 Recognizable authentication failures return AuthenticationFailed with a fixed
 nonsecret message; other actual connection failures return Failed similarly.
-Never return a descriptor without a usable SDK driver or retain a hidden owner."""
+Never retain a hidden owner of the driver."""
 """Validate SessionHandle and lock it. If already closed, return Unit successfully.
 Otherwise invalidate the active lease and mark closed before cleanup, so no
 stale handle can regain authority even if the SDK reports a close failure.
@@ -735,61 +823,163 @@ Roll back an outstanding supported transaction on this same driver, then close
 the ExitStack so every registered callback is attempted. Do not commit or
 reopen any connection. Cleanup failure returns Failed with a fixed message;
 success returns Unit. No resource is transferred to a hidden registry."""
-"""Borrow and lock the live connection. Reject closed/malformed handles and an
-already active lease. Transactions are supported for Sqlite, DuckDb, PostgreSql,
-MySql, Odbc and Adbc, matching adapter_descriptors; other kinds return Failed
-as an explicit unsupported capability, not a pretend active transaction.
-Start a real transaction on the existing SDK driver: SQLite/DuckDB execute
-BEGIN, PostgreSQL executes BEGIN (READ ONLY when requested), and MySQL uses
-begin(). ODBC/ADBC are already in manual-commit mode; their physical transaction
-may start lazily with the first statement. Do not open, close or roll back a
-new connection as a substitute. Install a fresh TransactionLease object as the
-session's active transaction and return Transaction(connection=connection,
-lease=that lease, active=true). If starting fails, return Failed and leave no
-active lease. The caller retains ownership of the connection."""
-"""Borrow transaction.connection and acquire its session lock. Require active=true,
-an open matching SessionHandle, and exact lease object identity with its active
-transaction. Reject a stale, already-finished, disconnected or wrong-owner
-lease as Failed without touching a different session.
+"""Transactions are supported for Sqlite, DuckDb, PostgreSql, MySql, Odbc and Adbc,
+matching adapter_descriptors; every other kind is TransactionsUnsupported(adapter)
+before the session is touched, never a pretend active transaction.
+Otherwise borrow and lock the live connection; a closed or malformed handle or an
+already active lease is Failed. Start a real transaction on the existing SDK
+driver: SQLite/DuckDB execute BEGIN, PostgreSQL executes BEGIN (READ ONLY when
+the connection is read-only), and MySQL uses begin(). ODBC/ADBC are already in
+manual-commit mode; their physical transaction may start lazily with the first
+statement. Do not open, close or roll back a new connection as a substitute.
+Install a fresh TransactionLease object as the session's active transaction and
+return Transaction(connection=connection, lease=that lease, status=Active). If
+starting fails, return Failed and leave no active lease. The caller retains
+ownership of the connection."""
+"""A snapshot whose status is not Active is LeaseRejected without touching any
+session. Otherwise borrow transaction.connection and acquire its session lock.
+The lease has authority only when the session is open, matches the connection,
+and its payload transaction is the lease's unwrapped object; a stale,
+already-finished, disconnected or wrong-owner lease is LeaseRejected without
+touching a different session.
 Call the actual existing SDK driver's commit. Never reconnect by id/endpoint.
 On success clear the active lease and return the same connection and lease
-with active=false. On a driver failure, clear the lease, mark the session closed,
-attempt rollback and every registered cleanup callback, and return Failed with
-a fixed nonsecret message; do not leave an ambiguously reusable transaction."""
-"""Apply the same ownership and live-lease requirements as commit_transaction,
-but call the existing SDK driver's rollback. Success clears the active lease
-and returns the same connection and lease with active=false. Double completion,
-stale leases and disconnected sessions are Failed, never successful no-ops.
-A driver failure clears the lease, marks the session closed, attempts all
-cleanup callbacks and returns Failed with a fixed nonsecret message."""
-"""Use isinstance checks, not match, for active_tab_id."""
-"""Split SQL with real.harlequin.core.split_statements and propagate its errors.
-Validate and lock connection.session, then execute every statement through its
-actual retained SDK driver. Never reconnect using endpoint or a string id.
-Closed/malformed sessions return ExecutionFailed with a fixed nonsecret message.
-Reject raw BEGIN/START TRANSACTION/COMMIT/ROLLBACK/SAVEPOINT/RELEASE commands as
-ExecutionFailed: transaction ownership belongs to the explicit lease API.
-read_only rejects write-intent statements as ReadOnlyViolation before execution;
-retain the driver's read-only controls too. Use concrete SDK methods, not
-reflection or invented host adapters. Return one QueryResult per split statement.
-Column names and rows remain in driver order. QueryBatch.statements preserves
-the exact split strings. Fetch at most maximum_rows+1 rows; overflow returns
-ResultLimitExceeded(limit=maximum_rows), not a truncated success.
+with status=Committed. On a driver failure, clear the lease, mark the session
+closed, attempt rollback and every registered cleanup callback, and return Failed
+with a fixed nonsecret message; do not leave an ambiguously reusable transaction."""
+"""Apply the same status and lease-authority checks as commit_transaction, with the
+same LeaseRejected results, but call the existing SDK driver's rollback. Success
+clears the active lease and returns the same connection and lease with
+status=RolledBack. Double completion, stale leases and disconnected sessions are
+never successful no-ops. A driver failure clears the lease, marks the session
+closed, attempts all cleanup callbacks and returns Failed with a fixed nonsecret
+message."""
+"""Replace the tab's source and move its cursor, clamped to the end of source.
+The tab becomes dirty when source differs from its previous source."""
+"""Append entry as the newest entry; when history is full, drop the oldest entries
+so that at most capacity remain."""
+"""Start editor state for connection: no tabs, no active tab, empty history with
+history_capacity."""
+"""A tab with the same id is replaced in place; otherwise tab is appended.
+The added tab becomes active."""
+"""Make the tab with tab_id active. An unknown id is TabMissing(tab_id)."""
+"""Remove the tab with tab_id, keeping the order of the others. When it was active,
+the tab that followed it becomes active, else the tab that preceded it, else
+none; otherwise the active tab is unchanged. An unknown id is TabMissing(tab_id)."""
+"""Split SQL text at semicolons outside quoted text and comments. Quoted text is
+'...' (string), "..." or `...` (identifiers); a doubled quote character inside
+continues it. Comments are -- to the end of the line and /* ... */ (not nested).
+Each statement is its source text between separators with surrounding ASCII
+whitespace (space, TAB, LF, VT, FF, CR) removed; comments inside it are kept.
+A piece containing only whitespace and comments is dropped. No other quoting
+(dollar quotes, backslash escapes) is recognized.
+An unclosed quote is UnterminatedSql with that quote character as delimiter; an
+unclosed block comment is UnterminatedSql("*/"). Text without any statement is
+EmptySql. Scanning reports UnterminatedSql before EmptySql."""
+"""Run SQL on a standalone SQLite database with sqlite3, independent of any live
+connection. Memory opens a fresh empty in-memory database that exists only for
+this call; File(path) opens that existing file, never creating it, with mode=ro
+when read_only. Split sql with real.harlequin.core.split_statements and propagate
+its errors. A statement whose first keyword, ignoring comments and ASCII case, is
+BEGIN, START, COMMIT, ROLLBACK, SAVEPOINT, RELEASE or END is SqliteFailure before
+anything runs. With read_only, PRAGMA query_only is enabled, and a statement that
+SQLite refuses as a write (SQLITE_READONLY) is ReadOnlyViolation(statement).
+All statements execute in one transaction that is committed only after every
+statement succeeds; any failure rolls back the whole batch.
+Return one QueryResult per statement, in order: column names from the cursor
+description (none for statements without a result set), every row, and
+affected_rows equal to the cursor rowcount (-1 when SQLite reports none).
+NULL, INTEGER, REAL, TEXT and BLOB values become Null, Integer, Real, Text and
+Blob; a non-finite REAL is UnsupportedValue("REAL"). Other SQLite errors are
+SqliteFailure with SQLite's message."""
+"""Run SQL on the connection's retained live session. Split sql with
+real.harlequin.core.split_statements and propagate its errors unchanged. Then
+validate and lock connection.session; a closed or malformed session is
+ExecutionFailed for the first statement with a fixed message. Never reconnect
+using endpoint or a string id.
+Before running anything, check the statements in order. A statement whose first
+keyword, ignoring comments and ASCII case, is BEGIN, START, COMMIT, ROLLBACK,
+SAVEPOINT, RELEASE, END or ABORT is ExecutionFailed with a fixed message:
+transaction ownership belongs to the explicit lease API. On a read-only
+connection a statement whose first keyword is not SELECT, WITH, VALUES, SHOW,
+DESCRIBE, DESC, EXPLAIN, MATCH, GO, FETCH or LOOKUP is ReadOnlyViolation(statement);
+the driver's own read-only controls stay active as well.
+Then execute the statements in order through the retained driver itself, in the
+session's current transaction, stopping at the first failure. With an active
+lease nothing is committed or rolled back here: later statements and calls see
+the effects, and rollback_transaction undoes them. Without a lease, PostgreSQL,
+MySQL, ODBC and ADBC commit each successful statement and roll back a failed one,
+so earlier statements stay committed; SQLite and DuckDB use autocommit mode.
+Fetch at most maximum_rows+1 rows per statement; more than maximum_rows rows is
+ResultLimitExceeded(limit=maximum_rows), not a truncated success. Column names
+and rows keep driver order; affected_rows is the driver's nonnegative row count
+or -1. QueryBatch holds the exact split strings and one QueryResult per statement.
 Convert null to Cell.Null, bool to Integer(0/1), signed-I64 integers to Integer,
-finite floats to Real, strings to Text and binary buffers to Blob. Decimal/date/
-time/UUID scalar values become their exact string representation in Text;
-unsupported nested/opaque values and out-of-range numbers are UnsupportedValue.
+finite floats to Real, strings to Text and bytes, bytearray or memoryview to
+Blob. Decimal, date, time, datetime, timedelta and UUID values become Text of
+their str() form; other values, out-of-range integers and non-finite floats are
+UnsupportedValue(type name).
 Use DBAPI cursors for the SQL adapters, BigQuery query(...).result(), Cassandra
 Session.execute, and NebulaGraph Session.execute/as_primitive with checked
 success status. Close cursors/results, but never the borrowed session.
-With an active lease do not commit or roll back automatically; the explicit
-transaction owner decides. Without a lease, commit each successful statement
-for transactional SDKs and roll back its failed statement; previous successful
-statements are already committed. SDK failures are ExecutionFailed; an actual
-cancellation is Cancelled. Error messages never contain connection credentials."""
-"""Set sdk: Any = boto3; client: Any = sdk.client("s3"); decode Body to source: str."""
-"""Parse arguments with real.harlequin.core.parse_cli, then connect with the parsed
-adapter (DuckDb when absent), connection endpoint (":memory:" when absent) and
-read_only flag; read SQL at sql> until .quit/EOF; execute and print tab-separated
-results."""
-__all__ = ["AdapterDescriptor", "AdapterKind", "AdapterKind_Adbc", "AdapterKind_BigQuery", "AdapterKind_Cassandra", "AdapterKind_Databricks", "AdapterKind_DuckDb", "AdapterKind_MySql", "AdapterKind_NebulaGraph", "AdapterKind_Odbc", "AdapterKind_PostgreSql", "AdapterKind_Sqlite", "AdapterKind_Trino", "Cell", "Cell_Blob", "Cell_Integer", "Cell_Null", "Cell_Real", "Cell_Text", "CliError", "CliError_ConflictingConnectionInputs", "CliError_InvalidAdapter", "CliError_MissingOptionValue", "CliError_UnknownOption", "CliOptions", "Configuration", "ConfigurationError", "ConfigurationError_Invalid", "ConfigurationError_Missing", "ConfigurationError_ProfileDuplicate", "ConfigurationError_ProfileMissing", "Connection", "ConnectionError", "ConnectionError_AdapterUnavailable", "ConnectionError_AuthenticationFailed", "ConnectionError_Failed", "ConnectionError_InvalidEndpoint", "ConnectionProfile", "ConnectionRequest", "DatabaseTarget", "DatabaseTarget_File", "DatabaseTarget_Memory", "FileError", "FileError_InvalidEncoding", "FileError_NotFound", "FileError_PermissionDenied", "FileError_TransferFailed", "FileLocation", "FileLocation_Local", "FileLocation_S3", "FileReference", "IdeSession", "LoadedFile", "QueryBatch", "QueryHistory", "QueryHistoryEntry", "QueryResult", "QueryTab", "SavedFile", "SessionError", "SessionError_HistoryCapacityInvalid", "SessionError_TabMissing", "SessionHandle", "Setting", "SqlClientError", "SqlClientError_Cancelled", "SqlClientError_EmptySql", "SqlClientError_ExecutionFailed", "SqlClientError_ReadOnlyViolation", "SqlClientError_ResultLimitExceeded", "SqlClientError_SqliteFailure", "SqlClientError_UnsupportedValue", "SqlClientError_UnterminatedSql", "Transaction", "TransactionLease", "TypedRow"]
+Driver failures are ExecutionFailed(statement, fixed message); an actual
+cancellation is Cancelled."""
+"""Read a query file as UTF-8 text and return its complete decoded source. Local
+reads the file at path. S3 gets the object key from bucket with boto3 and its
+default credential and region configuration.
+A missing file, bucket or key is NotFound(reference); an access refusal is
+PermissionDenied(reference); bytes that are not UTF-8 are
+InvalidEncoding(reference); any other I/O, transport or service failure is
+TransferFailed(reference, message) with a fixed message that contains no
+credential or service response text.
+The local path is read from the file system the program runs against: the fs
+fixture root while a Cott scenario with an fs fixture is active, otherwise the
+host file system. While such a fixture is active the host file system is never
+used, even when the fixture read fails."""
+"""Write source as UTF-8 text. A reference that is not writable is
+PermissionDenied(reference) before any I/O. Local writes a temporary file in the
+same directory and atomically replaces path with it, creating or replacing the
+file; a failed write leaves any previous file unchanged and removes the
+temporary file. S3 puts the object key into bucket with boto3.
+bytes_written is the UTF-8 byte length of source. An access refusal is
+PermissionDenied(reference); any other failure, including a missing directory,
+is TransferFailed(reference, message) with a fixed message that contains no
+credential or service response text.
+The local path is replaced in the file system the program runs against: the fs
+fixture root while a Cott scenario with an fs fixture is active, otherwise the
+host file system; the replacement is atomic in both. While such a fixture is
+active the host file system is never used, even when the fixture write fails."""
+"""The command-line composition root: parse, compose the facades below, print, exit.
+1. real.harlequin.core.parse_cli(arguments); an error exits with status 2.
+2. With options.no_config the configuration is empty (no profiles, no
+default_profile, theme "harlequin", keymap "default") and no file is read.
+Otherwise real.harlequin.core.load_configuration(Path(".harlequin.toml")) in the
+current directory; Missing means the empty configuration, any other error exits
+with status 2.
+3. real.harlequin.core.resolve_profile(configuration, options); an error exits
+with status 2.
+4. real.harlequin.core.connect(request); an error exits with status 1. After a
+successful connect, real.harlequin.core.disconnect runs exactly once before exit
+on every path; its failure makes a zero exit status 1.
+5. Batch mode, when options.query_file is Some(path):
+real.harlequin.core.load_query_file(FileReference(location=Local(path),
+writable=false)), then one real.harlequin.core.execute_statements(connection,
+source, 1000); print its results and exit 0, or exit 1 on a file or SQL error.
+No prompt is shown and nothing is read from stdin.
+6. Interactive mode otherwise: write "sql> " to stdout and read one stdin line;
+stop at end of input or at a line equal to ".quit" after removing surrounding
+whitespace; skip blank lines; run every other line with
+real.harlequin.core.execute_statements(connection, line, 1000) and print its
+results, or print its error and continue with the next line. Exit 0 at the end.
+Printing a QueryResult: with columns, one line of column names and then one line
+per row, fields separated by TAB; a cell prints as NULL, the decimal integer, the
+float's Python repr, the text, or 0x followed by lowercase hexadecimal for a
+blob; TAB, LF, CR and backslash in names and text print as \\t, \\n, \\r and \\\\.
+Without columns it prints "OK" when affected_rows is negative, else
+"OK, N rows affected".
+Each error prints one stderr line "harlequin: " followed by a fixed description
+of the error variant; only CliError, ConfigurationError and SqlClientError
+payload text (arguments, option names, paths, profile names, statements,
+delimiters, type names, limits) may follow. Endpoints, credentials, opaque
+values and driver messages are never printed."""
+__all__ = ["AdapterDescriptor", "AdapterKind", "AdapterKind_Adbc", "AdapterKind_BigQuery", "AdapterKind_Cassandra", "AdapterKind_Databricks", "AdapterKind_DuckDb", "AdapterKind_MySql", "AdapterKind_NebulaGraph", "AdapterKind_Odbc", "AdapterKind_PostgreSql", "AdapterKind_Sqlite", "AdapterKind_Trino", "Cell", "Cell_Blob", "Cell_Integer", "Cell_Null", "Cell_Real", "Cell_Text", "CliError", "CliError_ConflictingConnectionInputs", "CliError_InvalidAdapter", "CliError_MissingOptionValue", "CliError_UnknownOption", "CliOptions", "Configuration", "ConfigurationError", "ConfigurationError_Invalid", "ConfigurationError_Missing", "ConfigurationError_ProfileDuplicate", "ConfigurationError_ProfileMissing", "Connection", "ConnectionError", "ConnectionError_AdapterUnavailable", "ConnectionError_AuthenticationFailed", "ConnectionError_Failed", "ConnectionError_InvalidEndpoint", "ConnectionError_LeaseRejected", "ConnectionError_TransactionsUnsupported", "ConnectionProfile", "ConnectionRequest", "DatabaseTarget", "DatabaseTarget_File", "DatabaseTarget_Memory", "FileError", "FileError_InvalidEncoding", "FileError_NotFound", "FileError_PermissionDenied", "FileError_TransferFailed", "FileLocation", "FileLocation_Local", "FileLocation_S3", "FileReference", "IdeSession", "LoadedFile", "QueryBatch", "QueryHistory", "QueryHistoryEntry", "QueryResult", "QueryTab", "SavedFile", "SessionError", "SessionError_TabMissing", "SessionHandle", "Setting", "SqlClientError", "SqlClientError_Cancelled", "SqlClientError_EmptySql", "SqlClientError_ExecutionFailed", "SqlClientError_ReadOnlyViolation", "SqlClientError_ResultLimitExceeded", "SqlClientError_SqliteFailure", "SqlClientError_UnsupportedValue", "SqlClientError_UnterminatedSql", "Transaction", "TransactionLease", "TransactionStatus", "TransactionStatus_Active", "TransactionStatus_Committed", "TransactionStatus_RolledBack", "TypedRow"]

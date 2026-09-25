@@ -38,16 +38,33 @@ private fun powerSet(labels: List<String>): List<List<String>> =
         labels.filterIndexed { index, _ -> mask and (1 shl index) != 0 }
     }
 
+// The contract's any_blank_by table: the 25 Unicode White_Space code points, not Kotlin's isWhitespace.
+private const val WHITE_SPACE =
+    "\t\n\u000b\u000c\r \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+
+private fun isBlank(name: String): Boolean = name.all { it in WHITE_SPACE }
+
+// Unicode code point order, not String.compareTo's UTF-16 code unit order.
+private fun compareCodePoints(left: String, right: String): Int {
+    val leftPoints = left.codePoints().toArray()
+    val rightPoints = right.codePoints().toArray()
+    for (index in 0 until minOf(leftPoints.size, rightPoints.size)) {
+        val comparison = leftPoints[index].compareTo(rightPoints[index])
+        if (comparison != 0) return comparison
+    }
+    return leftPoints.size.compareTo(rightPoints.size)
+}
+
 private fun lexicographicallyLess(left: List<String>, right: List<String>): Boolean {
     for (index in 0 until minOf(left.size, right.size)) {
-        val comparison = left[index].compareTo(right[index])
+        val comparison = compareCodePoints(left[index], right[index])
         if (comparison != 0) return comparison < 0
     }
     return left.size < right.size
 }
 
 private fun expectedOrder(steps: List<RawStep>): Expected {
-    if (steps.any { it.name.trim().isEmpty() }) return Expected.Failure("BlankStepName")
+    if (steps.any { isBlank(it.name) }) return Expected.Failure("BlankStepName")
 
     val names = steps.map { it.name }
     if (names.toSet().size != names.size) return Expected.Failure("DuplicateStep")
@@ -103,6 +120,17 @@ private fun enumeratedCases(): List<Case> {
 
 private fun explicitCases(): List<Case> = listOf(
     case("empty", emptyList()),
+    case("unicode-white-space", listOf(RawStep("\u0085\u2007\u202f", emptyList()))),
+    case("bom-is-not-white-space", listOf(RawStep("\ufeff", emptyList()))),
+    case("separator-is-not-white-space", listOf(RawStep("\u001c", emptyList()))),
+    case(
+        "code-point-order",
+        listOf(
+            RawStep("\uff5e", emptyList()),
+            RawStep("\ud83d\ude00", emptyList()),
+        ),
+        Expected.Success(listOf("\uff5e", "\ud83d\ude00")),
+    ),
     case(
         "shuffled-chain",
         listOf(

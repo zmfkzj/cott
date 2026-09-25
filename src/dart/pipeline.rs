@@ -27,7 +27,7 @@ use crate::provenance::{AgentRun, SemanticCoverage};
 use crate::requirements::{Evidence, RequirementModel, RequirementReport};
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession};
 
-use super::binding::{agent_source_origin, requires_binding, resolve};
+use super::binding::{agent_source_origin, requires_binding, resolve_with_baseline};
 use super::dependencies::{self, PackageMetadata};
 use super::emit;
 use super::provenance::{
@@ -79,12 +79,21 @@ pub(crate) struct SourceProject {
     pub generation_bytes: Option<Vec<u8>>,
     pub generation_snapshot: InputSnapshot,
     pub inputs: BTreeMap<String, String>,
+    cutover: bool,
     pub package_metadata: PackageMetadata,
 }
 
 pub(crate) fn load_sources(
     project: Option<PathBuf>,
     inspection: bool,
+) -> Result<SourceProject, Failure> {
+    load_sources_internal(project, inspection, false)
+}
+
+fn load_sources_internal(
+    project: Option<PathBuf>,
+    inspection: bool,
+    allow_legacy_emit: bool,
 ) -> Result<SourceProject, Failure> {
     let root = project_root(project)?;
     let session = if inspection {
@@ -134,14 +143,16 @@ pub(crate) fn load_sources(
     let plan = DartPlan::from_ir(&ir).map_err(|message| Failure::new(3, message))?;
 
     let generation = generation_relative(&paths)?;
-    let (baseline, baseline_bytes, baseline_identity) = match read_generation_record(&paths)? {
-        Some((record, leaf)) => (
-            Some(record),
-            Some(leaf.bytes),
-            Some((leaf.device, leaf.inode)),
-        ),
-        None => (None, None, None),
-    };
+    let (baseline, baseline_bytes, baseline_identity, cutover) =
+        match read_generation_record(&paths, allow_legacy_emit)? {
+            Some((record, leaf, cutover)) => (
+                Some(record),
+                Some(leaf.bytes),
+                Some((leaf.device, leaf.inode)),
+                cutover,
+            ),
+            None => (None, None, None, false),
+        };
     let generation_snapshot = match &baseline_bytes {
         Some(bytes) => InputSnapshot::capture_expected(
             &paths.root,
@@ -190,6 +201,16 @@ pub(crate) fn load_sources(
             "Dart source",
         )?;
     }
+    if cutover
+        && baseline
+            .as_ref()
+            .is_some_and(|record| record.current.inputs != inputs)
+    {
+        return Err(Failure::new(
+            4,
+            "legacy Dart inputs differ from the current source and implementation bytes",
+        ));
+    }
 
     Ok(SourceProject {
         session,
@@ -201,11 +222,20 @@ pub(crate) fn load_sources(
         generation_bytes: baseline_bytes,
         generation_snapshot,
         inputs,
+        cutover,
         package_metadata,
     })
 }
 
 pub(crate) fn load(project: Option<PathBuf>, inspection: bool) -> Result<Project, Failure> {
+    load_internal(project, inspection, false)
+}
+
+fn load_internal(
+    project: Option<PathBuf>,
+    inspection: bool,
+    allow_legacy_emit: bool,
+) -> Result<Project, Failure> {
     let SourceProject {
         session,
         config,
@@ -217,18 +247,30 @@ pub(crate) fn load(project: Option<PathBuf>, inspection: bool) -> Result<Project
         generation_snapshot,
         mut inputs,
         package_metadata,
-    } = load_sources(project, inspection)?;
+        cutover,
+    } = load_sources_internal(project, inspection, allow_legacy_emit)?;
 
-    let bindings = resolve(
+    let bindings = resolve_with_baseline(
         &config,
         &paths,
         &plan,
         dependencies::runtime_package_names(&package_metadata),
         generator_rules.as_deref(),
+        if cutover { baseline.as_ref() } else { None },
     )
     .map_err(|message| Failure::new(4, message))?;
     for binding in &bindings {
         insert_binding_input(&paths, binding, &mut inputs, false)?;
+    }
+    if cutover
+        && baseline
+            .as_ref()
+            .is_some_and(|record| record.current.inputs != inputs)
+    {
+        return Err(Failure::new(
+            4,
+            "legacy Dart source and AgentRun evidence differs from the current inputs",
+        ));
     }
 
     let mut extra = Vec::new();
@@ -723,7 +765,7 @@ pub(crate) fn format(project: Option<PathBuf>, check: bool) -> Result<(), Failur
 }
 
 pub(crate) fn emit(project: Option<PathBuf>, ir_only: bool) -> Result<PathBuf, Failure> {
-    let loaded = load(project, false)?;
+    let loaded = load_internal(project, false, true)?;
     let planned = project_emission(&loaded, &loaded.bindings)?;
     let pending = planned.unresolved.into_iter().collect::<BTreeSet<_>>();
     publish(&loaded, &loaded.bindings, &[], &pending, None, ir_only)?;
@@ -1923,16 +1965,43 @@ fn binding_record(binding: &DartBinding) -> Result<DartBindingRecord, Failure> {
 
 fn read_generation_record(
     paths: &DartPaths,
-) -> Result<Option<(DartGenerationRecord, RegularLeaf)>, Failure> {
+    allow_legacy_emit: bool,
+) -> Result<Option<(DartGenerationRecord, RegularLeaf, bool)>, Failure> {
     let path = paths.artifact_root.join("generation.json");
     let Some(leaf) = read_regular_leaf(&path, "Dart generation record")
         .map_err(|message| Failure::new(6, message))?
     else {
         return Ok(None);
     };
-    let record = DartGenerationRecord::parse(&leaf.bytes)
-        .map_err(|message| Failure::new(4, format!("invalid {}: {message}", path.display())))?;
-    Ok(Some((record, leaf)))
+    let (record, cutover) = match DartGenerationRecord::parse(&leaf.bytes) {
+        Ok(record) => (record, false),
+        Err(message) if allow_legacy_emit => {
+            let mut record =
+                DartGenerationRecord::parse_legacy_for_emit(&leaf.bytes).map_err(|legacy| {
+                    Failure::new(
+                        4,
+                        format!("invalid {}: {message}; {legacy}", path.display()),
+                    )
+                })?;
+            record.current.canonical_ir_schema = crate::provenance::CANONICAL_IR_SCHEMA_VERSION;
+            record.current.verified = false;
+            record.current.verification = Value::Null;
+            record.current.semantic_coverage = SemanticCoverage::default();
+            record.last_verified = None;
+            record
+                .current
+                .compute_generation_id()
+                .map_err(|error| Failure::new(4, error))?;
+            (record, true)
+        }
+        Err(message) => {
+            return Err(Failure::new(
+                4,
+                format!("invalid {}: {message}", path.display()),
+            ));
+        }
+    };
+    Ok(Some((record, leaf, cutover)))
 }
 
 struct RegularLeaf {

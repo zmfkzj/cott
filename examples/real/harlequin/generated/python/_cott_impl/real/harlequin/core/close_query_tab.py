@@ -22,4 +22,4 @@ def close_query_tab(session: IdeSession, tab_id: str) -> Result[IdeSession, Sess
             active = Some(value=remaining[closed_index].id)
         else:
             active = Some(value=remaining[-1].id)
-    return Ok(value=IdeSession(connection=session.connection, tabs=CottList(values=remaining), active_tab_id=active, history=session.history))
+    return Ok(value=IdeSession(connection_id=session.connection_id, tabs=CottList(values=remaining), active_tab_id=active, history=session.history))

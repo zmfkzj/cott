@@ -4,13 +4,24 @@ use declarations.core.{ByteBlock, LABEL_BYTES, Label, LabelFrame, NonEmptyLabel}
 
 fn package_label(
     label: NonEmptyLabel,
-    values: Array[U8, 4],
-    raw: Buffer[4],
-) -> Tuple[Label, LabelFrame[Array[U8, 4]], ByteBlock[4]]:
+    values: Array[U8, LABEL_BYTES],
+    raw: Buffer[LABEL_BYTES],
+) -> Tuple[Label, LabelFrame[Array[U8, LABEL_BYTES]], ByteBlock[LABEL_BYTES]]:
     doc """
-    Return a named fixed-width label, its covariant array-payload frame, and matching raw bytes.
+    Package a label with its fixed-width payload for display. The tuple holds, in order, the
+    label's plain text, a frame pairing `label` with `values`, and a block holding `raw`.
     """
 
-    requires values.len == LABEL_BYTES
-
     effects []
+
+scenario package_label_keeps_inputs:
+    call packaged = package_label(NonEmptyLabel("Cott"), Array(3, 1, 4, 1), Buffer("636f7474"))
+    assert packaged == Tuple(
+        "Cott",
+        LabelFrame(label: NonEmptyLabel("Cott"), value: Array(3, 1, 4, 1)),
+        ByteBlock(raw: Buffer("636f7474")),
+    )
+
+requirement RETURNS_INPUTS_UNCHANGED for package_label:
+    text "Every tuple element carries its inputs unchanged: the text of label, LabelFrame(label, values) and ByteBlock(raw)."
+    checked_by package_label_keeps_inputs

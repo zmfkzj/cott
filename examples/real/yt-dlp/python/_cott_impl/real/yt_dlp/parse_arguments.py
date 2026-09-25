@@ -17,23 +17,26 @@ def parse_arguments(arguments: CottList[str]) -> Result[CottList[CliInput], Medi
     while index < count:
         argument: str = arguments[index]
         index += 1
+        if not argument.startswith("-"):
+            inputs.append(CliInput(kind=InputKind_Argument(), value=argument))
+            continue
         if argument.startswith("--") and "=" in argument:
             name, _, inline = argument.partition("=")
             inline_kind: InputKind | None = _option_kind(name)
-            if inline_kind is not None:
-                if inline == "":
-                    return Err(error=MediaError_InvalidInput(message=f"option {name} requires a non-empty value"))
-                inputs.append(CliInput(kind=inline_kind, value=inline))
-                continue
+            if inline_kind is None or name == "-a":
+                return Err(error=MediaError_InvalidInput(message="unknown option"))
+            if inline == "":
+                return Err(error=MediaError_InvalidInput(message="option requires a non-empty value"))
+            inputs.append(CliInput(kind=inline_kind, value=inline))
+            continue
         kind: InputKind | None = _option_kind(argument)
         if kind is None:
-            inputs.append(CliInput(kind=InputKind_Argument(), value=argument))
-            continue
+            return Err(error=MediaError_InvalidInput(message="unknown option"))
         if index >= count:
-            return Err(error=MediaError_InvalidInput(message=f"option {argument} requires a value"))
+            return Err(error=MediaError_InvalidInput(message="option requires a value"))
         value: str = arguments[index]
         index += 1
         if value == "":
-            return Err(error=MediaError_InvalidInput(message=f"option {argument} requires a non-empty value"))
+            return Err(error=MediaError_InvalidInput(message="option requires a non-empty value"))
         inputs.append(CliInput(kind=kind, value=value))
     return Ok(value=CottList(values=inputs))

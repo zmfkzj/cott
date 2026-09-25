@@ -409,7 +409,7 @@ fn verification_limits_reach_evidence_and_generated_strategies() {
             .expect("generated contract strategy"),
     )
     .expect("generated contract strategy is JSON");
-    assert_eq!(strategy["schema_version"], 5);
+    assert_eq!(strategy["schema_version"], 6);
     assert_eq!(strategy["proof_node_limit"], 17);
     assert_eq!(strategy["proof_branch_limit"], 19);
     assert_eq!(strategy["candidate_limit"], 23);
@@ -705,6 +705,199 @@ fn emit_rejects_stale_generation_compatibility_without_mutating_managed_tree() {
     assert_eq!(file_snapshot(&project.path.join("generated")), before);
 }
 
+/// Re-create a previous, internally consistent IR8/strategy5 publication from
+/// a real verified fixture. Only the emitted compiler-owned IR and strategy
+/// bytes change; source, implementation and verification provenance stay intact.
+fn install_legacy_python_generation(root: &Path) {
+    let generation_path = root.join("generated/generation.json");
+    let mut record =
+        snapshot::read(&fs::read(&generation_path).expect("verified generation record"));
+    assert_eq!(record["current"]["verified"], true);
+    assert_eq!(record["current"], record["last_verified"]);
+
+    let ir_path = root.join("generated/ir/app.json");
+    let mut ir: serde_json::Value =
+        serde_json::from_slice(&fs::read(&ir_path).expect("current IR")).expect("IR JSON");
+    assert_eq!(ir["schema_version"], 9);
+    ir["schema_version"] = serde_json::json!(8);
+    let mut ir_bytes = serde_json::to_vec(&ir).expect("legacy IR JSON");
+    ir_bytes.push(b'\n');
+    fs::write(&ir_path, &ir_bytes).expect("legacy IR bytes");
+    let ir_hash = format!("sha256:{}", cott::hash::sha256_hex(&ir_bytes));
+
+    let strategy_path = root.join("generated/tests/generated/app/run.json");
+    let mut strategy: serde_json::Value =
+        serde_json::from_slice(&fs::read(&strategy_path).expect("current strategy"))
+            .expect("strategy JSON");
+    strategy["seed"] = serde_json::json!(ir_hash);
+    assert_eq!(strategy["schema_version"], 6);
+    strategy["schema_version"] = serde_json::json!(5);
+    let mut strategy_bytes = serde_json::to_vec(&strategy).expect("legacy strategy JSON");
+    strategy_bytes.push(b'\n');
+    fs::write(&strategy_path, &strategy_bytes).expect("legacy strategy bytes");
+    let strategy_hash = format!("sha256:{}", cott::hash::sha256_hex(&strategy_bytes));
+
+    for key in ["current", "last_verified"] {
+        let snapshot = &mut record[key];
+        snapshot["compatibility"]["canonical_ir_schema"] = serde_json::json!(8);
+        snapshot["compatibility"]["contract_strategy_schema"] = serde_json::json!(5);
+        snapshot["ir"]["app"] = serde_json::json!(ir_hash);
+        snapshot["managed_files"]["generated/ir/app.json"] = serde_json::json!(ir_hash);
+        snapshot["managed_files"]["generated/tests/generated/app/run.json"] =
+            serde_json::json!(strategy_hash);
+        recompute_generation_id(snapshot);
+    }
+    assert_eq!(record["current"], record["last_verified"]);
+    fs::write(generation_path, snapshot::bytes(&record)).expect("legacy generation record");
+}
+
+fn verified_legacy_python_project() -> TempDir {
+    let project = project();
+    for command in [&["emit", "python"][..], &["verify"][..]] {
+        let output = cott(&project.path, command);
+        assert!(
+            output.status.success(),
+            "{command:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    install_legacy_python_generation(&project.path);
+    project
+}
+
+#[test]
+fn emit_converts_intact_legacy_python_ir_and_strategy_then_requires_real_verify() {
+    let project = verified_legacy_python_project();
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let converted = generation_record(&project.path);
+    assert_eq!(converted["schema_version"], 8);
+    assert_eq!(
+        converted["current"]["compatibility"]["canonical_ir_schema"],
+        9
+    );
+    assert_eq!(
+        converted["current"]["compatibility"]["contract_strategy_schema"],
+        6
+    );
+    assert_eq!(converted["current"]["verified"], false);
+    assert!(converted["last_verified"].is_null());
+    assert!(converted["current"]["verification"].is_null());
+    let current_ir: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/ir/app.json")).expect("regenerated IR"),
+    )
+    .expect("current IR JSON");
+    let current_strategy: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.path.join("generated/tests/generated/app/run.json"))
+            .expect("regenerated strategy"),
+    )
+    .expect("current strategy JSON");
+    assert_eq!(current_ir["schema_version"], 9);
+    assert_eq!(current_strategy["schema_version"], 6);
+    let verified = cott(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let verified_record = generation_record(&project.path);
+    assert_eq!(verified_record["current"]["verified"], true);
+    assert_eq!(verified_record["current"], verified_record["last_verified"]);
+}
+
+#[test]
+fn emit_converts_legacy_python_record_after_authored_contract_changes() {
+    let project = verified_legacy_python_project();
+    fs::write(
+        project.path.join("src/app.cott"),
+        "module app\n\nfn run() -> I32:\n    ensures result == 8\n",
+    )
+    .expect("change authored contract after verified legacy publication");
+
+    let emitted = cott(&project.path, &["emit", "python"]);
+    assert!(
+        emitted.status.success(),
+        "new authored intent must not be compared against old recorded source: {}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let converted = generation_record(&project.path);
+    assert_eq!(converted["current"]["verified"], false);
+    assert!(converted["last_verified"].is_null());
+
+    // The authentic old binding still returns 7. Verification must enforce the
+    // *new* clause, not replay the old source/IR while calling the conversion a success.
+    let rejected = cott(&project.path, &["verify"]);
+    assert!(
+        !rejected.status.success(),
+        "new ensures result == 8 was not enforced against the old implementation"
+    );
+    assert_eq!(
+        generation_record(&project.path)["current"]["verified"],
+        false
+    );
+}
+
+#[test]
+fn old_python_generation_is_rejected_by_read_only_commands_without_mutation() {
+    let project = verified_legacy_python_project();
+    let before = file_snapshot(&project.path.join("generated"));
+    for command in [
+        &["verify"][..],
+        &["requirements"][..],
+        &["diff"][..],
+        &["prompt", "app.run"][..],
+    ] {
+        let output = cott(&project.path, command);
+        assert!(
+            !output.status.success(),
+            "{command:?} accepted an old generation record"
+        );
+        assert_eq!(
+            file_snapshot(&project.path.join("generated")),
+            before,
+            "{command:?} mutated the old publication"
+        );
+    }
+}
+
+#[test]
+fn emit_rejects_tampered_legacy_python_record_and_ir_without_resealing() {
+    for tamper in ["record", "ir"] {
+        let project = verified_legacy_python_project();
+        if tamper == "record" {
+            let path = project.path.join("generated/generation.json");
+            let mut wire: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).expect("legacy wire"))
+                    .expect("legacy wire JSON");
+            let current = wire["current"]
+                .as_str()
+                .expect("content-addressed snapshot")
+                .to_owned();
+            wire["snapshots"][&current]["compatibility"]["canonical_ir_schema"] =
+                serde_json::json!(7);
+            fs::write(&path, serde_json::to_vec(&wire).expect("tampered wire"))
+                .expect("tamper legacy snapshot without changing digest");
+        } else {
+            let path = project.path.join("generated/ir/app.json");
+            let mut bytes = fs::read(&path).expect("legacy IR");
+            bytes.extend_from_slice(b" ");
+            fs::write(path, bytes).expect("tamper legacy IR without changing recorded hash");
+        }
+        let before = file_snapshot(&project.path.join("generated"));
+        let rejected = cott(&project.path, &["emit", "python"]);
+        assert!(!rejected.status.success(), "{tamper} was accepted");
+        assert_eq!(
+            file_snapshot(&project.path.join("generated")),
+            before,
+            "{tamper} was resealed"
+        );
+    }
+}
+
 #[test]
 fn verify_compares_implementation_identity_without_importing_the_baseline() {
     let project = project();
@@ -797,6 +990,107 @@ fn verify_compares_implementation_identity_without_importing_the_baseline() {
         "_cott_impl.app.run:run"
     );
     assert_eq!(record["current"], record["last_verified"]);
+}
+
+#[test]
+fn verify_records_added_and_removed_implementations_that_the_runtime_loads() {
+    let project = project();
+    for arguments in [&["emit", "python"][..], &["verify"][..]] {
+        let output = cott(&project.path, arguments);
+        assert!(
+            output.status.success(),
+            "{arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    // Replace the verified callable: one implementation disappears and one appears.
+    fs::write(
+        project.path.join("src/app.cott"),
+        "module app\n\nfn start() -> I32\n",
+    )
+    .expect("source should be writable");
+    fs::write(
+        project.path.join("cott.toml"),
+        NORMATIVE_MANIFEST.replace(
+            "\"app.run\" = \"cott_bindings.app.run:run\"",
+            "\"app.start\" = \"cott_bindings.app.start:start\"",
+        ),
+    )
+    .expect("manifest should be writable");
+    fs::remove_file(project.path.join("python/cott_bindings/app/run.py"))
+        .expect("old binding should be removable");
+    fs::write(
+        project.path.join("python/cott_bindings/app/start.py"),
+        BINDING.replace("def run()", "def start()"),
+    )
+    .expect("new binding should be writable");
+    for arguments in [&["emit", "python"][..], &["verify"][..]] {
+        let output = cott(&project.path, arguments);
+        assert!(
+            output.status.success(),
+            "{arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let record: serde_json::Value = snapshot::read(
+        &fs::read(project.path.join("generated/generation.json"))
+            .expect("verified generation record"),
+    );
+    let entries = record["current"]["verification"]["implementation_comparison"]["entries"]
+        .as_array()
+        .expect("implementation comparison entries");
+    let identity_fields = [
+        "callable_kind",
+        "concrete",
+        "content_hash",
+        "kind",
+        "method",
+        "owner",
+        "python_symbol",
+        "runtime_origin",
+        "selection",
+        "source_origin",
+    ];
+    for (entry, symbol, status) in [
+        (&entries[0], "app.run", "removed"),
+        (&entries[1], "app.start", "added"),
+    ] {
+        assert_eq!(entry["cott_symbol"], symbol);
+        assert_eq!(entry["status"], status);
+        let changed_fields = entry["changed_fields"]
+            .as_object()
+            .expect("changed implementation fields");
+        assert_eq!(
+            changed_fields
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            identity_fields
+        );
+        let absent_side = if status == "added" { "before" } else { "after" };
+        assert!(
+            changed_fields
+                .values()
+                .all(|change| change[absent_side].is_null()),
+            "{entry}"
+        );
+    }
+    assert_eq!(entries.len(), 2);
+
+    // The generated runtime validates both snapshots, including this comparison, before loading.
+    retarget_generation_to_host_python(&project.path);
+    let output = Command::new("/usr/bin/python3")
+        .args(["-c", "from app import start\nprint(start())"])
+        .current_dir(project.path.join("generated/python"))
+        .output()
+        .expect("generated facade should run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"7\n");
 }
 
 #[test]
@@ -1765,17 +2059,137 @@ printf '%s\n' 'class ReaderState:' '    def read(self, amount: int) -> int:' '  
             .exists()
     );
 }
+
+/// Fails like strict BasedPyright over the complete candidate bundle whenever an included
+/// implementation carries the marker, while the per-callable source audit accepts it.
+const BUNDLE_REJECTING_BASEDPYRIGHT: &str = r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'basedpyright 1.39.9\nbased on pyright 1.1.411\n'
+  exit 0
+fi
+include=$(sed -n 's/.*"include":\["\([^"]*\)"\].*/\1/p' "$2")
+found=$(grep -rl BUNDLE_TYPE_ERROR "$include")
+if [ -n "$found" ]; then
+  printf '%s:5:12 - error: Type "str" is not assignable to return type "int" (reportReturnType)\n' $found
+  exit 1
+fi
+exit 0
+"#;
+
+#[test]
+fn generate_keeps_bundle_rejected_candidates_retryable_until_a_repair_verifies() {
+    let project = project();
+    make_unresolved(&project);
+    write_exec(
+        &project.path.join(".venv/bin/basedpyright"),
+        BUNDLE_REJECTING_BASEDPYRIGHT,
+    );
+    let tools = project.path.join("tools");
+    fs::create_dir(&tools).expect("tool directory");
+    let omp = tools.join("omp");
+    // Every candidate passes the per-callable audit; repair prompts must carry the complete
+    // bundle diagnostic together with the rejected candidate.
+    write_exec(
+        &omp,
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
+message=
+for message; do :; done
+prompt=$(cat "${message#@}") || exit 64
+case "$prompt" in
+  *'VALIDATION FEEDBACK'*)
+    case "$prompt" in
+      *'reportReturnType'*'_cott_impl/app/run.py'*|*'_cott_impl/app/run.py'*'reportReturnType'*) ;;
+      *) printf '%s\n' 'repair prompt omitted the bundle diagnostic' >&2; exit 64 ;;
+    esac
+    case "$prompt" in
+      *'## app.run (existing)'*'BUNDLE_TYPE_ERROR'*) ;;
+      *) printf '%s\n' 'repair prompt omitted the rejected candidate' >&2; exit 64 ;;
+    esac
+    ;;
+esac
+printf 'from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7  # BUNDLE_TYPE_ERROR\n' > implementation.py
+"#,
+    );
+    let rejected = generate_with_omp(&project.path, &tools, &[]);
+    let stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert_eq!(rejected.status.code(), Some(5), "{stderr}");
+    assert!(
+        stderr.contains("generated candidate validation failed"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("agent generation for `app.run` failed"),
+        "{stderr}"
+    );
+    let record = generation_record(&project.path);
+    assert_eq!(
+        record["current"]["unresolved"]
+            .as_array()
+            .expect("unresolved records")
+            .iter()
+            .map(|pending| pending["cott_symbol"].as_str().expect("pending symbol"))
+            .collect::<Vec<_>>(),
+        ["app.run"],
+        "a bundle-rejected candidate must stay unresolved"
+    );
+    assert_eq!(record["current"]["verified"], false);
+    assert!(
+        fs::read_to_string(project.path.join("python/_cott_impl/app/run.py"))
+            .expect("rejected candidate is kept for repair")
+            .contains("BUNDLE_TYPE_ERROR")
+    );
+    let refused = cott(&project.path, &["verify"]);
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("unresolved implementations: app.run"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    // The next generate resumes the pending callable from its kept candidate.
+    write_exec(
+        &omp,
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo omp/17.2.12; exit 0; fi
+message=
+for message; do :; done
+prompt=$(cat "${message#@}") || exit 64
+case "$prompt" in
+  *'Symbol: app.run'*'## app.run (existing)'*'BUNDLE_TYPE_ERROR'*) ;;
+  *) printf '%s\n' 'resumed prompt omitted the kept candidate' >&2; exit 64 ;;
+esac
+printf 'from cott_runtime import I32\n\n\ndef run() -> I32:\n    return 7\n' > implementation.py
+"#,
+    );
+    let repaired = generate_with_omp(&project.path, &tools, &[]);
+    assert!(
+        repaired.status.success(),
+        "{}",
+        String::from_utf8_lossy(&repaired.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&repaired.stderr).contains("generate [1/1] done `app.run`"),
+        "{}",
+        String::from_utf8_lossy(&repaired.stderr)
+    );
+    assert_eq!(
+        generation_record(&project.path)["current"]["unresolved"],
+        serde_json::json!([])
+    );
+    let verified = cott(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+}
 #[test]
 fn process_bar_generation_records_unresolved_and_verified_transitions() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/complex/process-bar");
     let project = TempDir::new();
     fs::copy(fixture.join("cott.toml"), project.path.join("cott.toml"))
         .expect("process-bar manifest should be copied");
-    fs::copy(
-        fixture.join("GENERATOR_RULES.txt"),
-        project.path.join("GENERATOR_RULES.txt"),
-    )
-    .expect("process-bar generator rules should be copied");
     fs::create_dir_all(project.path.join("src/foo")).expect("fixture source directory");
     fs::copy(
         fixture.join("src/foo/bar.cott"),
@@ -2186,10 +2600,18 @@ esac
             .join("python/_cott_impl/foo/bar/validate_payload.py"),
     )
     .expect("verified implementation should be removable for regeneration");
-    let rules = project.path.join("GENERATOR_RULES.txt");
-    let rules_text = fs::read_to_string(&rules).expect("generator rules should be readable");
-    fs::write(&rules, format!("{rules_text}Prefer direct code.\n"))
-        .expect("generator rules should be changeable before replacement");
+    // The fixture has no generator rules; adding them changes rule inputs before the replacement.
+    let manifest = fs::read_to_string(project.path.join("cott.toml")).expect("manifest");
+    fs::write(
+        project.path.join("cott.toml"),
+        format!("{manifest}\n[generator]\nrules = \"GENERATOR_RULES.txt\"\n"),
+    )
+    .expect("manifest should accept generator rules");
+    fs::write(
+        project.path.join("GENERATOR_RULES.txt"),
+        "Prefer direct code.\n",
+    )
+    .expect("generator rules should be writable before replacement");
     let reopened = cott(&project.path, &["emit", "python"]);
     assert!(
         reopened.status.success(),
@@ -2242,9 +2664,9 @@ fn diff_enforces_version_compatibility_and_emits_closed_json() {
         baseline["current"]["compatibility"],
         serde_json::json!({
             "generation_schema": 8,
-            "canonical_ir_schema": 8,
+            "canonical_ir_schema": 9,
             "runtime_abi": 7,
-            "contract_strategy_schema": 5
+            "contract_strategy_schema": 6
         })
     );
     let manifest = fs::read_to_string(project.path.join("cott.toml")).expect("manifest");

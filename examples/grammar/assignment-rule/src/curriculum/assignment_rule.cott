@@ -6,27 +6,43 @@ enum AccessCodeError:
     TooShort
 
 doc """
-Base error clauses for an access code.
+Base rule requires a nonempty success value and allows a legacy-format failure.
+The strict rule strengthens that success obligation and removes the error.
 """
 rule BaseAccessCodeRule:
+    ensures Result.Ok(value) => value.len >= 1
+
     error AccessCodeError.LegacyFormat
-    error AccessCodeError.EmptyCode
 
 doc """
-Current access-code clauses composed from the base rule.
+Current rule strengthens the minimum success length from one to four, then
+deletes the legacy-format error allowance.
 """
 rule StrictAccessCodeRule(BaseAccessCodeRule):
-    override error AccessCodeError.EmptyCode when false
+    override ensures Result.Ok(value) => value.len >= 4
 
     delete error AccessCodeError.LegacyFormat
 
-    error AccessCodeError.TooShort
-
 fn validate_access_code(code: Str) -> Result[Str, AccessCodeError]:
     doc """
-    Trim an access code and require at least four characters.
+    Validate a code without modifying it: empty input fails first, then a code
+    shorter than four characters fails. A legacy prefix is not rejected.
     """
 
     rule StrictAccessCodeRule
 
-    ensures Result.Ok(trimmed) => trimmed.len >= 4
+    ensures Result.Ok(validated) => validated == code
+
+    errors complete
+    error AccessCodeError.EmptyCode when code.len == 0
+    error AccessCodeError.TooShort when code.len < 4
+
+scenario strict_rule_rejects_empty_then_short:
+    call empty = validate_access_code("")
+    assert empty matches Result.Err(AccessCodeError.EmptyCode)
+    call short = validate_access_code("abc")
+    assert short matches Result.Err(AccessCodeError.TooShort)
+
+scenario deleted_legacy_error_allows_unmodified_code:
+    call accepted = validate_access_code("LEGACY:42")
+    assert accepted matches Result.Ok(value) => value == "LEGACY:42"

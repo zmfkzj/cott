@@ -1,7 +1,7 @@
 package cott_impl.foo.bar
 
 internal fun process_bar(`data`: foo.bar.InputPayload, options: foo.bar.BarOptions): cott_runtime.CottResult<foo.bar.OutputPayload, foo.bar.BarError> {
-    val validated = when (val result = foo.bar.validate_payload(data)) {
+    val validated = when (val result = foo.bar.validate_payload(`data`)) {
         is cott_runtime.Ok -> result.value
         is cott_runtime.Err -> return result
     }
@@ -9,5 +9,5 @@ internal fun process_bar(`data`: foo.bar.InputPayload, options: foo.bar.BarOptio
         is cott_runtime.Ok -> result.value
         is cott_runtime.Err -> return result
     }
-    return cott_runtime.Ok(foo.bar.build_output(processed, data.declared_size, data.format))
+    return cott_runtime.Ok(foo.bar.build_output(processed, validated.declared_size, validated.format))
 }

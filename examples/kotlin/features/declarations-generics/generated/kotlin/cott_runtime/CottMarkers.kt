@@ -7,9 +7,9 @@ package cott_runtime
 @Retention(AnnotationRetention.BINARY)
 public annotation class CottKeywordOnly
 
-public object CottConst_c2c52450381b94ef6ed74457 : CottConst {
+public object CottConst_80ab874e99e0bb981db822e3 : CottConst {
     override val value: java.math.BigInteger
-        get() = CottRuntime.mathInt(java.math.BigInteger("4"))
+        get() = CottRuntime.mathInt(cott_runtime.CottRuntime.mathInt(declarations.core.LABEL_BYTES))
 }
 
 public data class CottTuple3<out T0, out T1, out T2>(

@@ -1,4 +1,4 @@
-from cott_runtime import Err, Ok, Result
+from cott_runtime import U32, U64, Err, Ok, Result
 from store.catalog import find_item
 from store.catalog_types import Catalog
 from store.order import validate_line
@@ -9,8 +9,8 @@ def calculate_order(catalog: Catalog, order: Order) -> Result[OrderReceipt, Orde
     if len(order.lines) == 0:
         return Err(error=OrderError_EmptyOrder())
 
-    total_items = 0
-    total_cents = 0
+    total_items: U32 = 0
+    total_cents: U64 = 0
     for line in order.lines:
         validated = validate_line(line)
         if isinstance(validated, Err):

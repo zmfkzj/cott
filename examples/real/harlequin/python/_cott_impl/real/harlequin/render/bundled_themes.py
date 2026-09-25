@@ -10,7 +10,5 @@ def bundled_themes() -> CottList[Theme]:
             Theme(name="monokai", foreground="#F8F8F2", background="#272822", accent="#F92672"),
             Theme(name="dracula", foreground="#F8F8F2", background="#282A36", accent="#BD93F9"),
             Theme(name="nord", foreground="#D8DEE9", background="#2E3440", accent="#88C0D0"),
-            Theme(name="solarized-dark", foreground="#839496", background="#002B36", accent="#B58900"),
-            Theme(name="solarized-light", foreground="#657B83", background="#FDF6E3", accent="#268BD2"),
         ]
     )

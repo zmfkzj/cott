@@ -4,20 +4,24 @@
 package curriculum.portfolio_cost
 
 /**
- * Computes the total market value of a portfolio from a list of holdings.
- * Each holding supplies an I64 share count and an F64 price.
+ * Computes the total market value of a portfolio: the sum of shares times
+ * price over its holdings.
  * 
- * Holdings are processed in list order and evaluation stops at the first
- * error. For each holding, a negative share count returns NegativeShares;
- * otherwise a NaN or infinite price returns NonFinitePrice; otherwise a
- * price below zero returns NegativePrice. Zero shares, positive or negative
- * zero prices, and an empty list are accepted.
+ * Holdings are examined one at a time in list order, and the first failing
+ * holding decides the error. A holding fails with NegativeShares when its
+ * share count is negative, otherwise with NonFinitePrice when its price is
+ * NaN or infinite, otherwise with NegativePrice when its price is below zero.
+ * Zero shares, signed-zero prices and an empty list are accepted.
  * 
- * Starting from 0.0, each accepted share count is multiplied by its price
- * and the product is added to the running total using F64 arithmetic, in
- * list order. TotalOverflow is returned if either operation produces a
- * non-finite value. Otherwise Ok contains the finite, non-negative total;
- * ordinary F64 rounding and underflow are retained.
+ * The running total starts at 0.0. For each accepted holding, the share count
+ * is converted to the nearest binary64 value and multiplied by the price, and
+ * the product is added to the running total; every operation is binary64,
+ * rounded to nearest, ties to even. If the product or the new running total
+ * is not finite, TotalOverflow is returned at that holding, before later
+ * holdings are examined.
+ * 
+ * On Kotlin the F64 boundary rejects NaN and infinite prices before the call,
+ * so NonFinitePrice is never returned.
  */
 
 public fun  calculate_portfolio_cost(rows: cott_runtime.CottList<curriculum.portfolio_cost.Holding>): cott_runtime.CottResult<kotlin.Double, curriculum.portfolio_cost.PortfolioError> {
@@ -39,14 +43,14 @@ public fun  calculate_portfolio_cost(rows: cott_runtime.CottList<curriculum.port
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(cott_runtime.CottTypes.F64, curriculum.portfolio_cost.CottDescriptors_44adce877c5bcc1e68fd6c05.type_5914792fce063405f8c81131()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val total = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.Double); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(total, kotlin.Double.fromBits(0)) >= 0), "curriculum.portfolio_cost.calculate_portfolio_cost", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 1139, endByte = 1179, startLine = 31, startColumn = 5, endLine = 31, endColumn = 45), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val total = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.Double); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(kotlin.Double.fromBits(0), total) <= 0 && cott_runtime.CottRuntime.canonicalCompare(total, curriculum.portfolio_cost.MAX_F64) <= 0), "curriculum.portfolio_cost.calculate_portfolio_cost", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 1364, endByte = 1415, startLine = 37, startColumn = 5, endLine = 37, endColumn = 56), expected = "true", actual = "false"); true } } else true }
         val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
         val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
         cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("curriculum.portfolio_cost.PortfolioError.NegativeShares", "curriculum.portfolio_cost.PortfolioError.NonFinitePrice", "curriculum.portfolio_cost.PortfolioError.NegativePrice", "curriculum.portfolio_cost.PortfolioError.TotalOverflow"), "curriculum.portfolio_cost.calculate_portfolio_cost", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("curriculum.portfolio_cost.PortfolioError.NegativeShares", "curriculum.portfolio_cost.PortfolioError.NonFinitePrice", "curriculum.portfolio_cost.PortfolioError.NegativePrice", "curriculum.portfolio_cost.PortfolioError.TotalOverflow").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
-        if (_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.NegativeShares") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.NegativeShares", "curriculum.portfolio_cost.calculate_portfolio_cost", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 1185, endByte = 1220, startLine = 33, startColumn = 5, endLine = 33, endColumn = 40))
-        if (_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.NonFinitePrice") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.NonFinitePrice", "curriculum.portfolio_cost.calculate_portfolio_cost", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 1225, endByte = 1260, startLine = 34, startColumn = 5, endLine = 34, endColumn = 40))
-        if (_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.NegativePrice") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.NegativePrice", "curriculum.portfolio_cost.calculate_portfolio_cost", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 1265, endByte = 1299, startLine = 35, startColumn = 5, endLine = 35, endColumn = 39))
-        if (_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.TotalOverflow") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.TotalOverflow", "curriculum.portfolio_cost.calculate_portfolio_cost", "error", clause = "error:5", span = cott_runtime.CottSpan(startByte = 1304, endByte = 1338, startLine = 36, startColumn = 5, endLine = 36, endColumn = 39))
+        if (_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.NegativeShares") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.NegativeShares", "curriculum.portfolio_cost.calculate_portfolio_cost", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 1421, endByte = 1456, startLine = 39, startColumn = 5, endLine = 39, endColumn = 40))
+        if (_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.NonFinitePrice") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.NonFinitePrice", "curriculum.portfolio_cost.calculate_portfolio_cost", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 1461, endByte = 1496, startLine = 40, startColumn = 5, endLine = 40, endColumn = 40))
+        if (_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.NegativePrice") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.NegativePrice", "curriculum.portfolio_cost.calculate_portfolio_cost", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 1501, endByte = 1535, startLine = 41, startColumn = 5, endLine = 41, endColumn = 39))
+        if (_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.TotalOverflow") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.portfolio_cost.PortfolioError.TotalOverflow", "curriculum.portfolio_cost.calculate_portfolio_cost", "error", clause = "error:5", span = cott_runtime.CottSpan(startByte = 1540, endByte = 1574, startLine = 42, startColumn = 5, endLine = 42, endColumn = 39))
     }
     return _cottResult
 }

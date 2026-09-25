@@ -92,12 +92,222 @@ pub struct CompletedProcess {
     pub timed_out: bool,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+    pub resources: ResourceReport,
 }
 
 impl CompletedProcess {
     pub const fn outcome(&self) -> SandboxOutcome {
         SandboxOutcome::Exited
     }
+}
+
+/// How the sandboxed process tree ended and what it used, next to the rlimits
+/// the sandbox applied. It names the cause of a kill; it never changes a limit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResourceReport {
+    /// The terminating signal: the launcher's own wait signal, or the signal
+    /// bubblewrap reports for its killed child as exit status `128 + signal`.
+    pub signal: Option<i32>,
+    /// The larger of the scope cgroup's `cpu.stat` (every sandbox process,
+    /// sampled while the scope exists) and the launcher's `wait4` rusage,
+    /// which cannot see processes bubblewrap's PID-namespace init never reaps.
+    pub user_cpu: Duration,
+    pub system_cpu: Duration,
+    /// `ru_maxrss` of the launcher's `wait4`: largest reaped process.
+    pub max_rss_bytes: u64,
+    /// Scope cgroup `memory.peak`, when the memory controller is delegated.
+    pub memory_peak_bytes: Option<u64>,
+    /// Scope processes killed by any OOM killer (`memory.events` `oom_kill`).
+    pub oom_kills: Option<u64>,
+    /// Effective per-process `RLIMIT_CPU` (soft = hard, so the kernel sends
+    /// `SIGKILL` when a process reaches it).
+    pub cpu_limit: Duration,
+    /// Per-process `RLIMIT_AS`.
+    pub address_space_limit_bytes: u64,
+}
+
+impl ResourceReport {
+    pub fn cpu_time(&self) -> Duration {
+        self.user_cpu.saturating_add(self.system_cpu)
+    }
+
+    pub fn signal_name(&self) -> Option<&'static str> {
+        Some(match self.signal? {
+            libc::SIGHUP => "SIGHUP",
+            libc::SIGINT => "SIGINT",
+            libc::SIGQUIT => "SIGQUIT",
+            libc::SIGILL => "SIGILL",
+            libc::SIGTRAP => "SIGTRAP",
+            libc::SIGABRT => "SIGABRT",
+            libc::SIGBUS => "SIGBUS",
+            libc::SIGFPE => "SIGFPE",
+            libc::SIGKILL => "SIGKILL",
+            libc::SIGUSR1 => "SIGUSR1",
+            libc::SIGSEGV => "SIGSEGV",
+            libc::SIGUSR2 => "SIGUSR2",
+            libc::SIGPIPE => "SIGPIPE",
+            libc::SIGALRM => "SIGALRM",
+            libc::SIGTERM => "SIGTERM",
+            libc::SIGSYS => "SIGSYS",
+            libc::SIGXCPU => "SIGXCPU",
+            libc::SIGXFSZ => "SIGXFSZ",
+            _ => return None,
+        })
+    }
+
+    fn new(
+        raw_status: libc::c_int,
+        usage: &libc::rusage,
+        scope: &ScopeUsage,
+        limits: &ResourceLimits,
+    ) -> Self {
+        let signal = if libc::WIFSIGNALED(raw_status) {
+            Some(libc::WTERMSIG(raw_status))
+        } else if libc::WIFEXITED(raw_status) {
+            Some(libc::WEXITSTATUS(raw_status) - 128).filter(|signal| (1..=64).contains(signal))
+        } else {
+            None
+        };
+        let duration = |time: libc::timeval| {
+            Duration::from_secs(time.tv_sec.max(0) as u64)
+                + Duration::from_micros(time.tv_usec.max(0) as u64)
+        };
+        Self {
+            signal,
+            user_cpu: duration(usage.ru_utime).max(scope.user_cpu),
+            system_cpu: duration(usage.ru_stime).max(scope.system_cpu),
+            // Linux reports ru_maxrss in KiB.
+            max_rss_bytes: (usage.ru_maxrss.max(0) as u64).saturating_mul(1024),
+            memory_peak_bytes: scope.memory_peak_bytes,
+            oom_kills: scope.oom_kills,
+            cpu_limit: Duration::from_secs(effective_cpu_limit_seconds(limits)),
+            address_space_limit_bytes: limits.address_space_bytes,
+        }
+    }
+}
+
+impl std::fmt::Display for ResourceReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.signal, self.signal_name()) {
+            (Some(signal), Some(name)) => write!(f, "terminating signal {name} ({signal})")?,
+            (Some(signal), None) => write!(f, "terminating signal {signal}")?,
+            (None, _) => f.write_str("no terminating signal")?,
+        }
+        let mib = |bytes: u64| bytes as f64 / (1024.0 * 1024.0);
+        write!(
+            f,
+            "; CPU {:.3}s (user {:.3}s + system {:.3}s) against RLIMIT_CPU {}s per process; max RSS {:.1} MiB",
+            self.cpu_time().as_secs_f64(),
+            self.user_cpu.as_secs_f64(),
+            self.system_cpu.as_secs_f64(),
+            self.cpu_limit.as_secs(),
+            mib(self.max_rss_bytes),
+        )?;
+        if let Some(peak) = self.memory_peak_bytes {
+            write!(f, ", scope memory peak {:.1} MiB", mib(peak))?;
+        }
+        write!(
+            f,
+            " against RLIMIT_AS {:.1} MiB per process",
+            mib(self.address_space_limit_bytes)
+        )?;
+        if let Some(kills) = self.oom_kills {
+            write!(f, "; OOM kills {kills}")?;
+        }
+        if self.signal == Some(libc::SIGKILL) {
+            // cgroup CPU is sampled, so allow one sampling interval of shortfall.
+            if self.cpu_time().saturating_add(CPU_SAMPLE_TOLERANCE) >= self.cpu_limit {
+                f.write_str(
+                    "; CPU time reached RLIMIT_CPU, which the kernel enforces with SIGKILL because soft = hard",
+                )?;
+            }
+            if self.oom_kills.is_some_and(|kills| kills > 0) {
+                f.write_str("; the kernel OOM killer killed a scope process")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+const CPU_SAMPLE_TOLERANCE: Duration = Duration::from_millis(50);
+
+const fn effective_cpu_limit_seconds(limits: &ResourceLimits) -> u64 {
+    let seconds = limits.cpu_time.as_secs();
+    if seconds == 0 { 1 } else { seconds }
+}
+
+/// Monotonic accounting of the sandbox scope cgroup. systemd removes the
+/// scope as soon as it is empty, so it is sampled while the tree runs and
+/// keeps the largest value observed. Reads are diagnostic only: a scope that
+/// is already gone leaves the previous sample in place.
+#[derive(Clone, Copy, Debug, Default)]
+struct ScopeUsage {
+    user_cpu: Duration,
+    system_cpu: Duration,
+    memory_peak_bytes: Option<u64>,
+    oom_kills: Option<u64>,
+}
+
+impl ScopeUsage {
+    fn sample(&mut self, cgroup: &Path) {
+        fn counter(text: &str, key: &str) -> Option<u64> {
+            text.lines().find_map(|line| {
+                line.strip_prefix(key)?
+                    .strip_prefix(' ')?
+                    .trim()
+                    .parse()
+                    .ok()
+            })
+        }
+        let larger = |current: Option<u64>, sample: Option<u64>| match (current, sample) {
+            (Some(current), Some(sample)) => Some(current.max(sample)),
+            (current, sample) => current.or(sample),
+        };
+        if let Ok(stat) = std::fs::read_to_string(cgroup.join("cpu.stat")) {
+            if let Some(user) = counter(&stat, "user_usec") {
+                self.user_cpu = self.user_cpu.max(Duration::from_micros(user));
+            }
+            if let Some(system) = counter(&stat, "system_usec") {
+                self.system_cpu = self.system_cpu.max(Duration::from_micros(system));
+            }
+        }
+        if let Ok(peak) = std::fs::read_to_string(cgroup.join("memory.peak")) {
+            self.memory_peak_bytes = larger(self.memory_peak_bytes, peak.trim().parse().ok());
+        }
+        if let Ok(events) = std::fs::read_to_string(cgroup.join("memory.events")) {
+            self.oom_kills = larger(self.oom_kills, counter(&events, "oom_kill"));
+        }
+    }
+}
+
+/// Reap `process_id` if it has exited, collecting its wait status and the
+/// accumulated rusage of the process and its reaped descendants.
+fn try_reap(process_id: u32) -> io::Result<Option<(libc::c_int, libc::rusage)>> {
+    loop {
+        let mut status = 0;
+        let mut usage = unsafe { std::mem::zeroed::<libc::rusage>() };
+        match unsafe {
+            libc::wait4(
+                process_id as libc::pid_t,
+                &mut status,
+                libc::WNOHANG,
+                &mut usage,
+            )
+        } {
+            0 => return Ok(None),
+            -1 => {
+                let error = io::Error::last_os_error();
+                if error.kind() != io::ErrorKind::Interrupted {
+                    return Err(error);
+                }
+            }
+            _ => return Ok(Some((status, usage))),
+        }
+    }
+}
+
+fn wait_status_code(raw_status: libc::c_int) -> Option<i32> {
+    libc::WIFEXITED(raw_status).then(|| libc::WEXITSTATUS(raw_status))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -347,7 +557,7 @@ pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
                     Ok(())
                 }
             };
-            set(libc::RLIMIT_CPU, limits.cpu_time.as_secs().max(1))?;
+            set(libc::RLIMIT_CPU, effective_cpu_limit_seconds(&limits))?;
             set(libc::RLIMIT_AS, limits.address_space_bytes)?;
             set(libc::RLIMIT_NOFILE, limits.open_files)?;
             set(libc::RLIMIT_FSIZE, limits.file_size_bytes)?;
@@ -445,7 +655,8 @@ pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
     let stdin = thread::spawn(move || stdin.write_all(&input));
     let mut termination = None;
     let mut child_error = None;
-    let status = 'wait: loop {
+    let mut scope_usage = ScopeUsage::default();
+    let reaped = 'wait: loop {
         while let Ok((stream, exceeded)) = stream_rx.try_recv() {
             if exceeded {
                 termination = Some(SandboxOutcome::StreamLimitExceeded {
@@ -458,12 +669,20 @@ pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
                 break 'wait None;
             }
         }
-        match child.try_wait() {
-            Ok(Some(status)) => {
+        if let Some(cgroup) = &scope.cgroup {
+            scope_usage.sample(cgroup);
+        }
+        // Reap through wait4 rather than `Child::try_wait` so the kernel's
+        // rusage for the whole reaped tree is available to the report.
+        match try_reap(child.id()) {
+            Ok(Some(reaped)) => {
+                if let Some(cgroup) = &scope.cgroup {
+                    scope_usage.sample(cgroup);
+                }
                 if let Err(error) = kill_process_session(child.id()) {
                     child_error = Some(error);
                 }
-                break status.code();
+                break Some(reaped);
             }
             Ok(None) => {}
             Err(error) => {
@@ -513,6 +732,12 @@ pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
             _ => unreachable!("only terminating outcomes are recorded"),
         });
     }
+    let (raw_status, usage) = reaped.ok_or_else(|| {
+        SandboxError::Io(io::Error::other(
+            "sandbox launcher ended without a wait status",
+        ))
+    })?;
+    let status = wait_status_code(raw_status);
     if is_loopback_setup_failure(status, &stderr.0) {
         return Err(SandboxError::UnsupportedLoopback);
     }
@@ -545,6 +770,7 @@ pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
         timed_out: false,
         stdout: stdout.0,
         stderr: stderr.0,
+        resources: ResourceReport::new(raw_status, &usage, &scope_usage, &spec.limits),
     })
 }
 

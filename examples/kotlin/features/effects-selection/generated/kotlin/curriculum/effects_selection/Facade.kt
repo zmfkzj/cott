@@ -4,7 +4,9 @@
 package curriculum.effects_selection
 
 /**
- * Return a compiler-owned deterministic fixture clock in nanoseconds.
+ * Read the compiler-owned clock fixture and return its time in nanoseconds.
+ * The fixture is configured in milliseconds, so start_ms 17 reads as
+ * 17000000. Reading does not advance the clock.
  */
 
 public fun  clock_ns(): kotlin.ULong {
@@ -24,31 +26,12 @@ public fun  clock_ns(): kotlin.ULong {
 }
 
 /**
- * Return whether a copy effect result is successful.
+ * Copy the text of source to destination as UTF-8 bytes. bytes_written is
+ * the encoded byte count, not the character count. A read_text error is
+ * returned unchanged and destination is left untouched.
  */
 
-public fun  copy_result_is_ok(result: cott_runtime.CottResult<kotlin.ULong, curriculum.effects_selection.EffectError>): kotlin.Boolean {
-    cott_runtime.CottRuntime.requireIdentity("effects-selection", "0.1.0", 1)
-    val _cottArg_result = cott_runtime.CottRuntime.abi(result, cott_runtime.CottTypes.result(cott_runtime.CottTypes.U64, curriculum.effects_selection.CottDescriptors_e0ed559648b287a5e596b5e2.type_5d4869fd44c33ef359d10485()), cott_runtime.RuntimeValidation.BOUNDARY, "\$.result")
-    val _cottRawResult = try {
-        cott_impl.curriculum.effects_selection.copy_result_is_ok(_cottArg_result)
-    } catch (error: cott_runtime.CottContractViolation) {
-        if (error.symbol == null) error.symbol = "curriculum.effects_selection.copy_result_is_ok"
-        throw error
-    } catch (error: java.util.concurrent.CancellationException) {
-        cott_runtime.CottRuntime.violation("synchronous implementation threw cancellation", symbol = "curriculum.effects_selection.copy_result_is_ok", phase = "implementation-call", cause = error)
-    } catch (error: kotlin.Throwable) {
-        cott_runtime.CottRuntime.violation("implementation raised an undeclared exception", symbol = "curriculum.effects_selection.copy_result_is_ok", phase = "implementation-call", expected = "declared Result error or ordinary return", actual = error::class.java.name, cause = error)
-    }
-    val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.BOOL, cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
-    return _cottResult
-}
-
-/**
- * Read source through its public facade and atomically replace destination.
- */
-
-public fun  copy_text(source: java.nio.file.Path, destination: java.nio.file.Path): cott_runtime.CottResult<kotlin.ULong, curriculum.effects_selection.EffectError> {
+public fun  copy_text(source: java.nio.file.Path, destination: java.nio.file.Path): cott_runtime.CottResult<curriculum.effects_selection.CopyReceipt, curriculum.effects_selection.EffectError> {
     cott_runtime.CottRuntime.requireIdentity("effects-selection", "0.1.0", 1)
     val _cottArg_source = cott_runtime.CottRuntime.abi(source, cott_runtime.CottTypes.PATH, cott_runtime.RuntimeValidation.BOUNDARY, "\$.source")
     val _cottArg_destination = cott_runtime.CottRuntime.abi(destination, cott_runtime.CottTypes.PATH, cott_runtime.RuntimeValidation.BOUNDARY, "\$.destination")
@@ -66,20 +49,21 @@ public fun  copy_text(source: java.nio.file.Path, destination: java.nio.file.Pat
     } catch (error: kotlin.Throwable) {
         cott_runtime.CottRuntime.violation("implementation raised an undeclared exception", symbol = "curriculum.effects_selection.copy_text", phase = "implementation-call", expected = "declared Result error or ordinary return", actual = error::class.java.name, cause = error)
     }
-    val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(cott_runtime.CottTypes.U64, curriculum.effects_selection.CottDescriptors_e0ed559648b287a5e596b5e2.type_5d4869fd44c33ef359d10485()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
+    val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(curriculum.effects_selection.CottDescriptors_e0ed559648b287a5e596b5e2.type_78326246ef43de6e040e33d1(), curriculum.effects_selection.CottDescriptors_e0ed559648b287a5e596b5e2.type_5d4869fd44c33ef359d10485()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val written = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.ULong); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(written, java.math.BigInteger("0").toString().toULong()) >= 0), "curriculum.effects_selection.copy_text", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 581, endByte = 623, startLine = 24, startColumn = 5, endLine = 24, endColumn = 47), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val receipt = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as curriculum.effects_selection.CopyReceipt); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((receipt).destination, _cottArg_destination)), "curriculum.effects_selection.copy_text", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 1167, endByte = 1231, startLine = 42, startColumn = 5, endLine = 42, endColumn = 69), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultErr(_cottMatchValue) is cott_runtime.Some<*> && (cott_runtime.CottRuntime.variant((cott_runtime.CottRuntime.resultErr(_cottMatchValue) as cott_runtime.Some<*>).value, "curriculum.effects_selection.EffectError.InputMissing") is cott_runtime.Some<*> && true))) { val missing = ((cott_runtime.CottRuntime.variant((cott_runtime.CottRuntime.resultErr(_cottMatchValue) as cott_runtime.Some<*>).value, "curriculum.effects_selection.EffectError.InputMissing") as cott_runtime.Some<cott_runtime.CottList<kotlin.Any?>>).value[0] as java.nio.file.Path); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual(missing, _cottArg_source)), "curriculum.effects_selection.copy_text", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 1236, endByte = 1310, startLine = 43, startColumn = 5, endLine = 43, endColumn = 79), expected = "true", actual = "false"); true } } else true }
         val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
         val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
         cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("curriculum.effects_selection.EffectError.InputMissing", "curriculum.effects_selection.EffectError.OperationFailed"), "curriculum.effects_selection.copy_text", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("curriculum.effects_selection.EffectError.InputMissing", "curriculum.effects_selection.EffectError.OperationFailed").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
-        if (_cottActualErrorVariant == "curriculum.effects_selection.EffectError.InputMissing") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.effects_selection.EffectError.InputMissing", "curriculum.effects_selection.copy_text", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 629, endByte = 659, startLine = 26, startColumn = 5, endLine = 26, endColumn = 35))
-        if (_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed", "curriculum.effects_selection.copy_text", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 664, endByte = 697, startLine = 27, startColumn = 5, endLine = 27, endColumn = 38))
+        if (_cottActualErrorVariant == "curriculum.effects_selection.EffectError.InputMissing") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.effects_selection.EffectError.InputMissing", "curriculum.effects_selection.copy_text", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 1316, endByte = 1346, startLine = 45, startColumn = 5, endLine = 45, endColumn = 35))
+        if (_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed", "curriculum.effects_selection.copy_text", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 1351, endByte = 1384, startLine = 46, startColumn = 5, endLine = 46, endColumn = 38))
     }
     return _cottResult
 }
 
 /**
- * End the current process with code.
+ * Terminate the current process.
  */
 
 public fun  exit_with_code(code: kotlin.UByte): kotlin.Nothing {
@@ -99,10 +83,14 @@ public fun  exit_with_code(code: kotlin.UByte): kotlin.Nothing {
 }
 
 /**
- * Fetch UTF-8 text from a compiler-owned local HTTP fixture.
+ * GET url over HTTP, following redirects, and decode the final response body
+ * as strict UTF-8. The result pairs the text with the requested url. An empty
+ * url returns OperationFailed without sending a request; a connection or read
+ * failure, a timeout, a final status outside 200-299 and a body that is not
+ * valid UTF-8 return OperationFailed.
  */
 
-public fun  fetch_local(url: kotlin.String): cott_runtime.CottResult<kotlin.String, curriculum.effects_selection.EffectError> {
+public fun  fetch_local(url: kotlin.String): cott_runtime.CottResult<curriculum.effects_selection.PageText, curriculum.effects_selection.EffectError> {
     cott_runtime.CottRuntime.requireIdentity("effects-selection", "0.1.0", 1)
     val _cottArg_url = cott_runtime.CottRuntime.abi(url, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.url")
     var _cottExpectedError: kotlin.String? = null
@@ -120,23 +108,26 @@ public fun  fetch_local(url: kotlin.String): cott_runtime.CottResult<kotlin.Stri
     } catch (error: kotlin.Throwable) {
         cott_runtime.CottRuntime.violation("implementation raised an undeclared exception", symbol = "curriculum.effects_selection.fetch_local", phase = "implementation-call", expected = "declared Result error or ordinary return", actual = error::class.java.name, cause = error)
     }
-    val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(cott_runtime.CottTypes.STRING, curriculum.effects_selection.CottDescriptors_e0ed559648b287a5e596b5e2.type_5d4869fd44c33ef359d10485()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
+    val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(curriculum.effects_selection.CottDescriptors_e0ed559648b287a5e596b5e2.type_77ddce7defc9e95e7956c9f6(), curriculum.effects_selection.CottDescriptors_e0ed559648b287a5e596b5e2.type_5d4869fd44c33ef359d10485()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val text = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.String); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(cott_runtime.CottRuntime.length(text), java.math.BigInteger("0").toString().toULong()) >= 0), "curriculum.effects_selection.fetch_local", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 878, endByte = 918, startLine = 36, startColumn = 5, endLine = 36, endColumn = 45), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val page = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as curriculum.effects_selection.PageText); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((page).url, _cottArg_url)), "curriculum.effects_selection.fetch_local", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 1864, endByte = 1906, startLine = 59, startColumn = 5, endLine = 59, endColumn = 47), expected = "true", actual = "false"); true } } else true }
         val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
         val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
         cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("curriculum.effects_selection.EffectError.OperationFailed"), "curriculum.effects_selection.fetch_local", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("curriculum.effects_selection.EffectError.OperationFailed").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
-        if (_cottExpectedErrorClause == "error:2") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed", "curriculum.effects_selection.fetch_local", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 924, endByte = 972, startLine = 38, startColumn = 5, endLine = 38, endColumn = 53))
-        if (_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed", "curriculum.effects_selection.fetch_local", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 977, endByte = 1010, startLine = 39, startColumn = 5, endLine = 39, endColumn = 38))
+        if (_cottExpectedErrorClause == "error:2") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed", "curriculum.effects_selection.fetch_local", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 1912, endByte = 1960, startLine = 61, startColumn = 5, endLine = 61, endColumn = 53))
+        if (_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed", "curriculum.effects_selection.fetch_local", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 1965, endByte = 1998, startLine = 62, startColumn = 5, endLine = 62, endColumn = 38))
     }
     return _cottResult
 }
 
 /**
- * Read UTF-8 text from a compiler-owned filesystem fixture.
+ * Read the file at source and decode its bytes as strict UTF-8. The result
+ * pairs the decoded text with source. An absent source returns InputMissing
+ * carrying source; any other read failure and bytes that are not valid UTF-8
+ * return OperationFailed.
  */
 
-public fun  read_text(source: java.nio.file.Path): cott_runtime.CottResult<kotlin.String, curriculum.effects_selection.EffectError> {
+public fun  read_text(source: java.nio.file.Path): cott_runtime.CottResult<curriculum.effects_selection.FileText, curriculum.effects_selection.EffectError> {
     cott_runtime.CottRuntime.requireIdentity("effects-selection", "0.1.0", 1)
     val _cottArg_source = cott_runtime.CottRuntime.abi(source, cott_runtime.CottTypes.PATH, cott_runtime.RuntimeValidation.BOUNDARY, "\$.source")
     var _cottExpectedError: kotlin.String? = null
@@ -153,20 +144,21 @@ public fun  read_text(source: java.nio.file.Path): cott_runtime.CottResult<kotli
     } catch (error: kotlin.Throwable) {
         cott_runtime.CottRuntime.violation("implementation raised an undeclared exception", symbol = "curriculum.effects_selection.read_text", phase = "implementation-call", expected = "declared Result error or ordinary return", actual = error::class.java.name, cause = error)
     }
-    val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(cott_runtime.CottTypes.STRING, curriculum.effects_selection.CottDescriptors_e0ed559648b287a5e596b5e2.type_5d4869fd44c33ef359d10485()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
+    val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(curriculum.effects_selection.CottDescriptors_e0ed559648b287a5e596b5e2.type_db30bc346770d42244a541cf(), curriculum.effects_selection.CottDescriptors_e0ed559648b287a5e596b5e2.type_5d4869fd44c33ef359d10485()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val text = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.String); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(cott_runtime.CottRuntime.length(text), java.math.BigInteger("0").toString().toULong()) >= 0), "curriculum.effects_selection.read_text", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 262, endByte = 302, startLine = 12, startColumn = 5, endLine = 12, endColumn = 45), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val `file` = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as curriculum.effects_selection.FileText); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((`file`).path, _cottArg_source)), "curriculum.effects_selection.read_text", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 625, endByte = 671, startLine = 27, startColumn = 5, endLine = 27, endColumn = 51), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultErr(_cottMatchValue) is cott_runtime.Some<*> && (cott_runtime.CottRuntime.variant((cott_runtime.CottRuntime.resultErr(_cottMatchValue) as cott_runtime.Some<*>).value, "curriculum.effects_selection.EffectError.InputMissing") is cott_runtime.Some<*> && true))) { val missing = ((cott_runtime.CottRuntime.variant((cott_runtime.CottRuntime.resultErr(_cottMatchValue) as cott_runtime.Some<*>).value, "curriculum.effects_selection.EffectError.InputMissing") as cott_runtime.Some<cott_runtime.CottList<kotlin.Any?>>).value[0] as java.nio.file.Path); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual(missing, _cottArg_source)), "curriculum.effects_selection.read_text", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 676, endByte = 750, startLine = 28, startColumn = 5, endLine = 28, endColumn = 79), expected = "true", actual = "false"); true } } else true }
         val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
         val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
         cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("curriculum.effects_selection.EffectError.InputMissing", "curriculum.effects_selection.EffectError.OperationFailed"), "curriculum.effects_selection.read_text", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("curriculum.effects_selection.EffectError.InputMissing", "curriculum.effects_selection.EffectError.OperationFailed").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
-        if (_cottActualErrorVariant == "curriculum.effects_selection.EffectError.InputMissing") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.effects_selection.EffectError.InputMissing", "curriculum.effects_selection.read_text", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 308, endByte = 338, startLine = 14, startColumn = 5, endLine = 14, endColumn = 35))
-        if (_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed", "curriculum.effects_selection.read_text", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 343, endByte = 376, startLine = 15, startColumn = 5, endLine = 15, endColumn = 38))
+        if (_cottActualErrorVariant == "curriculum.effects_selection.EffectError.InputMissing") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.effects_selection.EffectError.InputMissing", "curriculum.effects_selection.read_text", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 756, endByte = 786, startLine = 30, startColumn = 5, endLine = 30, endColumn = 35))
+        if (_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed", "curriculum.effects_selection.read_text", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 791, endByte = 824, startLine = 31, startColumn = 5, endLine = 31, endColumn = 38))
     }
     return _cottResult
 }
 
 /**
- * Choose one index below limit from a deterministic seeded random stream.
+ * Choose an index below limit from seed.
  */
 
 public fun  sample_index(limit: kotlin.UByte, seed: kotlin.ULong): kotlin.UByte {
@@ -174,7 +166,7 @@ public fun  sample_index(limit: kotlin.UByte, seed: kotlin.ULong): kotlin.UByte 
     val _cottArg_limit = cott_runtime.CottRuntime.abi(limit, cott_runtime.CottTypes.U8, cott_runtime.RuntimeValidation.BOUNDARY, "\$.limit")
     val _cottArg_seed = cott_runtime.CottRuntime.abi(seed, cott_runtime.CottTypes.U64, cott_runtime.RuntimeValidation.BOUNDARY, "\$.seed")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottArg_limit, java.math.BigInteger("0").toInt().toUByte()) > 0), "curriculum.effects_selection.sample_index", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 2063, endByte = 2081, startLine = 81, startColumn = 5, endLine = 81, endColumn = 23), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottArg_limit, java.math.BigInteger("0").toInt().toUByte()) > 0), "curriculum.effects_selection.sample_index", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 2858, endByte = 2876, startLine = 93, startColumn = 5, endLine = 93, endColumn = 23), expected = "true", actual = "false")
     }
     val _cottRawResult = try {
         cott_impl.curriculum.effects_selection.sample_index(_cottArg_limit, _cottArg_seed)
@@ -188,13 +180,15 @@ public fun  sample_index(limit: kotlin.UByte, seed: kotlin.ULong): kotlin.UByte 
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.U8, cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottResult, _cottArg_limit) < 0), "curriculum.effects_selection.sample_index", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 2087, endByte = 2109, startLine = 83, startColumn = 5, endLine = 83, endColumn = 27), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottResult, _cottArg_limit) < 0), "curriculum.effects_selection.sample_index", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 2882, endByte = 2904, startLine = 95, startColumn = 5, endLine = 95, endColumn = 27), expected = "true", actual = "false")
     }
     return _cottResult
 }
 
 /**
- * Store value under key in a SQLite database, then read that value back.
+ * Store value under key in the SQLite database file at database, replacing
+ * any previous value for key, then read the value stored under key back from
+ * that database. Any SQLite failure returns OperationFailed.
  */
 
 public fun  store_and_load(database: java.nio.file.Path, key: kotlin.String, `value`: kotlin.String): cott_runtime.CottResult<kotlin.String, curriculum.effects_selection.EffectError> {
@@ -218,53 +212,11 @@ public fun  store_and_load(database: java.nio.file.Path, key: kotlin.String, `va
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(cott_runtime.CottTypes.STRING, curriculum.effects_selection.CottDescriptors_e0ed559648b287a5e596b5e2.type_5d4869fd44c33ef359d10485()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val stored = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.String); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual(stored, _cottArg_value)), "curriculum.effects_selection.store_and_load", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 1651, endByte = 1695, startLine = 63, startColumn = 5, endLine = 63, endColumn = 49), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val stored = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.String); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual(stored, _cottArg_value)), "curriculum.effects_selection.store_and_load", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 2352, endByte = 2396, startLine = 73, startColumn = 5, endLine = 73, endColumn = 49), expected = "true", actual = "false"); true } } else true }
         val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
         val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
         cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("curriculum.effects_selection.EffectError.OperationFailed"), "curriculum.effects_selection.store_and_load", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("curriculum.effects_selection.EffectError.OperationFailed").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
-        if (_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed", "curriculum.effects_selection.store_and_load", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 1701, endByte = 1734, startLine = 65, startColumn = 5, endLine = 65, endColumn = 38))
+        if (_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.effects_selection.EffectError.OperationFailed", "curriculum.effects_selection.store_and_load", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 2402, endByte = 2435, startLine = 75, startColumn = 5, endLine = 75, endColumn = 38))
     }
-    return _cottResult
-}
-
-/**
- * Return whether a text effect result is successful.
- */
-
-public fun  text_result_is_ok(result: cott_runtime.CottResult<kotlin.String, curriculum.effects_selection.EffectError>): kotlin.Boolean {
-    cott_runtime.CottRuntime.requireIdentity("effects-selection", "0.1.0", 1)
-    val _cottArg_result = cott_runtime.CottRuntime.abi(result, cott_runtime.CottTypes.result(cott_runtime.CottTypes.STRING, curriculum.effects_selection.CottDescriptors_e0ed559648b287a5e596b5e2.type_5d4869fd44c33ef359d10485()), cott_runtime.RuntimeValidation.BOUNDARY, "\$.result")
-    val _cottRawResult = try {
-        cott_impl.curriculum.effects_selection.text_result_is_ok(_cottArg_result)
-    } catch (error: cott_runtime.CottContractViolation) {
-        if (error.symbol == null) error.symbol = "curriculum.effects_selection.text_result_is_ok"
-        throw error
-    } catch (error: java.util.concurrent.CancellationException) {
-        cott_runtime.CottRuntime.violation("synchronous implementation threw cancellation", symbol = "curriculum.effects_selection.text_result_is_ok", phase = "implementation-call", cause = error)
-    } catch (error: kotlin.Throwable) {
-        cott_runtime.CottRuntime.violation("implementation raised an undeclared exception", symbol = "curriculum.effects_selection.text_result_is_ok", phase = "implementation-call", expected = "declared Result error or ordinary return", actual = error::class.java.name, cause = error)
-    }
-    val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.BOOL, cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
-    return _cottResult
-}
-
-/**
- * Return successful text, or an empty string for an error result.
- */
-
-public fun  text_result_text(result: cott_runtime.CottResult<kotlin.String, curriculum.effects_selection.EffectError>): kotlin.String {
-    cott_runtime.CottRuntime.requireIdentity("effects-selection", "0.1.0", 1)
-    val _cottArg_result = cott_runtime.CottRuntime.abi(result, cott_runtime.CottTypes.result(cott_runtime.CottTypes.STRING, curriculum.effects_selection.CottDescriptors_e0ed559648b287a5e596b5e2.type_5d4869fd44c33ef359d10485()), cott_runtime.RuntimeValidation.BOUNDARY, "\$.result")
-    val _cottRawResult = try {
-        cott_impl.curriculum.effects_selection.text_result_text(_cottArg_result)
-    } catch (error: cott_runtime.CottContractViolation) {
-        if (error.symbol == null) error.symbol = "curriculum.effects_selection.text_result_text"
-        throw error
-    } catch (error: java.util.concurrent.CancellationException) {
-        cott_runtime.CottRuntime.violation("synchronous implementation threw cancellation", symbol = "curriculum.effects_selection.text_result_text", phase = "implementation-call", cause = error)
-    } catch (error: kotlin.Throwable) {
-        cott_runtime.CottRuntime.violation("implementation raised an undeclared exception", symbol = "curriculum.effects_selection.text_result_text", phase = "implementation-call", expected = "declared Result error or ordinary return", actual = error::class.java.name, cause = error)
-    }
-    val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     return _cottResult
 }

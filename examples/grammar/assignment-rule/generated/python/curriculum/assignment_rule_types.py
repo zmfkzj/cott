@@ -25,13 +25,16 @@ class AccessCodeError_TooShort:
 
 AccessCodeError: TypeAlias = Union[AccessCodeError_LegacyFormat, AccessCodeError_EmptyCode, AccessCodeError_TooShort]
 
-"""Base error clauses for an access code."""
+"""Base rule requires a nonempty success value and allows a legacy-format failure.
+The strict rule strengthens that success obligation and removes the error."""
 class BaseAccessCodeRule:
     pass
 
-"""Current access-code clauses composed from the base rule."""
+"""Current rule strengthens the minimum success length from one to four, then
+deletes the legacy-format error allowance."""
 class StrictAccessCodeRule(BaseAccessCodeRule):
     pass
 
-"""Trim an access code and require at least four characters."""
+"""Validate a code without modifying it: empty input fails first, then a code
+shorter than four characters fails. A legacy prefix is not rejected."""
 __all__ = ["AccessCodeError", "AccessCodeError_EmptyCode", "AccessCodeError_LegacyFormat", "AccessCodeError_TooShort", "BaseAccessCodeRule", "StrictAccessCodeRule"]

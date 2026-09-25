@@ -1,6 +1,8 @@
 use cott::hash::sha256_hex;
 use cott::kotlin::KotlinOwner;
-use cott::kotlin::provenance::{KotlinBindingRecord, KotlinGenerationRecord};
+use cott::kotlin::provenance::{
+    KOTLIN_GENERATION_SCHEMA_VERSION, KotlinBindingRecord, KotlinGenerationRecord,
+};
 use cott::project::{discover_kotlin_contract_sources, load_kotlin_config_with_paths};
 use cott::provenance::{AgentRun, AgentStatus, StreamDigest};
 use cott::transaction::InputSnapshot;
@@ -530,4 +532,221 @@ fn nonregular_generation_record_is_rejected_without_blocking() {
         String::from_utf8_lossy(&symlink_output.stderr)
     );
     assert!(String::from_utf8_lossy(&symlink_output.stderr).contains("generation record"));
+}
+
+const LEGACY_KOTLIN_AGENT_SOURCE: &[u8] =
+    b"package cott_impl.demo.main\n\ninternal fun main(): cott_runtime.CottUnit = cott_runtime.CottUnit\n";
+
+/// A verified previous IR8/strategy5 Kotlin record with one authentic agent source; returns
+/// the project, its sealed legacy record bytes and the recorded AgentRun.
+fn sealed_legacy_kotlin_project() -> (TempDir, Vec<u8>, AgentRun) {
+    let project = kotlin_project("module demo.main\n\nfn main() -> Unit\n");
+    let compiler = std::env::var_os("COTT_KOTLIN_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp/cott-kotlin-toolchain/kotlinc"))
+        .join("bin/kotlinc");
+    let java = std::env::var_os("JAVA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp/cott-kotlin-toolchain/jdk"))
+        .join("bin/java");
+    let manifest_path = project.path.join("cott.toml");
+    let manifest = fs::read_to_string(&manifest_path).expect("Kotlin manifest");
+    fs::write(
+        &manifest_path,
+        manifest
+            .replace(
+                "compiler = \"kotlinc\"",
+                &format!("compiler = {compiler:?}"),
+            )
+            .replace("java = \"java\"", &format!("java = {java:?}")),
+    )
+    .expect("pin test toolchain");
+    let initial = run(&project.path, &["emit", "kotlin"]);
+    assert!(
+        initial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
+
+    let generation = project.path.join("generated/generation.json");
+    let mut record =
+        KotlinGenerationRecord::parse(&fs::read(&generation).expect("generation record"))
+            .expect("valid initial generation record");
+    let source_origin = "kotlin/cott_impl/demo/main/main.kt".to_owned();
+    let source_path = project.path.join(&source_origin);
+    fs::create_dir_all(source_path.parent().expect("agent source parent"))
+        .expect("agent source directory");
+    fs::write(&source_path, LEGACY_KOTLIN_AGENT_SOURCE).expect("durable agent source");
+    let source_hash = digest(LEGACY_KOTLIN_AGENT_SOURCE);
+    record
+        .current
+        .inputs
+        .insert(source_origin.clone(), source_hash.clone());
+    record.current.implementations = vec![KotlinBindingRecord {
+        cott_symbol: "demo.main.main".to_owned(),
+        target_symbol: "cott_impl.demo.main.main".to_owned(),
+        source_origin,
+        runtime_origin: "kotlin/cott_impl/demo/main/main.kt".to_owned(),
+        content_hash: source_hash.clone(),
+        owner: KotlinOwner::Agent,
+    }];
+    record.current.unresolved.clear();
+    record.current.agent_runs = vec![AgentRun {
+        symbol: "demo.main.main".to_owned(),
+        adapter: "fixture".to_owned(),
+        adapter_version: "1".to_owned(),
+        argv_template: Vec::new(),
+        executable: "/fixture/agent".to_owned(),
+        executable_hash: fixture_digest(1),
+        prompt_hash: fixture_digest(2),
+        implementation_hash: source_hash,
+        environment_names: Vec::new(),
+        duration_ms: 1,
+        status: AgentStatus {
+            exit_code: Some(0),
+            signal: None,
+            timed_out: false,
+            cancelled: false,
+        },
+        stdout: StreamDigest {
+            bytes: 0,
+            sha256: fixture_digest(3),
+            truncated: false,
+        },
+        stderr: StreamDigest {
+            bytes: 0,
+            sha256: fixture_digest(4),
+            truncated: false,
+        },
+    }];
+    record.current.canonical_ir_schema = 8;
+    record.current.verified = true;
+    record.current.verification =
+        serde_json::json!({"contract_tests": {"strategies": [{"schema_version": 5}]}});
+    let mut identity = serde_json::to_value(&record.current).expect("legacy snapshot JSON");
+    for field in [
+        "generation_id",
+        "verified",
+        "verification",
+        "semantic_coverage",
+        "agent_runs",
+    ] {
+        identity
+            .as_object_mut()
+            .expect("snapshot object")
+            .remove(field);
+    }
+    record.current.generation_id = cott::snapshot_record::digest(&serde_json::json!({
+        "domain": "cott.kotlin.generation.v2",
+        "schema_version": KOTLIN_GENERATION_SCHEMA_VERSION,
+        "current": identity,
+    }))
+    .expect("seal prior Kotlin generation identity");
+    let old_run = record.current.agent_runs[0].clone();
+    record.last_verified = Some(record.current.clone());
+    let legacy_bytes = serde_json::to_vec(&record).expect("seal legacy full snapshot envelope");
+    fs::write(&generation, &legacy_bytes).expect("publish legacy fixture record");
+    (project, legacy_bytes, old_run)
+}
+
+#[test]
+fn sealed_legacy_kotlin_record_requires_explicit_emit() {
+    let (project, legacy_bytes, old_run) = sealed_legacy_kotlin_project();
+    let generation = project.path.join("generated/generation.json");
+    let source_path = project.path.join("kotlin/cott_impl/demo/main/main.kt");
+
+    for command in [
+        &["check"][..],
+        &["verify"][..],
+        &["requirements"][..],
+        &["deploy"][..],
+        &["diff"][..],
+        &["emit", "ir"][..],
+        &["generate", "--agent", "omp", "--target", "kotlin"][..],
+    ] {
+        let result = run(&project.path, command);
+        assert!(
+            !result.status.success(),
+            "{command:?} must reject legacy evidence before explicit target emit"
+        );
+        assert_eq!(
+            fs::read(&generation).expect("legacy record unchanged"),
+            legacy_bytes,
+            "{command:?} must not silently migrate the legacy record"
+        );
+    }
+
+    let mut tampered: serde_json::Value =
+        serde_json::from_slice(&legacy_bytes).expect("legacy JSON");
+    let current = tampered["current"]
+        .as_str()
+        .expect("snapshot reference")
+        .to_owned();
+    tampered["snapshots"][&current]["project_version"] = serde_json::json!("9.9.9");
+    fs::write(
+        &generation,
+        serde_json::to_vec(&tampered).expect("tampered legacy JSON"),
+    )
+    .expect("tamper snapshot bytes");
+    let rejected = run(&project.path, &["emit", "kotlin"]);
+    assert!(
+        !rejected.status.success(),
+        "tampered snapshot must not convert"
+    );
+    fs::write(&generation, &legacy_bytes).expect("restore sealed snapshot");
+    fs::write(&source_path, b"package cott_impl.demo.main\n// changed\n")
+        .expect("tamper implementation bytes");
+    let rejected = run(&project.path, &["emit", "kotlin"]);
+    assert!(
+        !rejected.status.success(),
+        "tampered agent source must not convert"
+    );
+    assert_eq!(
+        fs::read(&generation).expect("legacy record remains sealed"),
+        legacy_bytes
+    );
+    fs::write(&source_path, LEGACY_KOTLIN_AGENT_SOURCE)
+        .expect("restore authenticated agent source");
+
+    let emitted = run(&project.path, &["emit", "kotlin"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let converted =
+        KotlinGenerationRecord::parse(&fs::read(&generation).expect("converted record"))
+            .expect("current-schema Kotlin record");
+    assert_eq!(converted.current.canonical_ir_schema, 9);
+    assert!(!converted.current.verified);
+    assert!(converted.last_verified.is_none());
+    assert_eq!(converted.current.agent_runs, vec![old_run]);
+    assert_eq!(converted.current.implementations.len(), 1);
+}
+
+#[test]
+#[ignore = "requires the pinned Kotlin 2.2.10/JDK 17 toolchain and bubblewrap"]
+fn legacy_kotlin_emit_then_real_verify_certifies_new_schema() {
+    let (project, _, _) = sealed_legacy_kotlin_project();
+    let generation = project.path.join("generated/generation.json");
+    let emitted = run(&project.path, &["emit", "kotlin"]);
+    assert!(
+        emitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let verified = run(&project.path, &["verify"]);
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+    let certified = KotlinGenerationRecord::parse(&fs::read(generation).expect("verified record"))
+        .expect("verified current-schema record");
+    assert!(certified.current.verified);
+    assert!(
+        certified
+            .current_is_last_verified()
+            .expect("certified snapshot digest")
+    );
 }

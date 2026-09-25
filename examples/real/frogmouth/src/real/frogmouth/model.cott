@@ -8,7 +8,12 @@ struct Location:
     kind: LocationKind
     target: Str
 
+    invariant self.target.len > 0
+    invariant (self.kind == LocationKind.Http => starts_with(self.target, "http://") or starts_with(self.target, "https://"))
+
 struct Document:
     location: Location
     title: Str
     markdown: Str
+
+    invariant self.title.len > 0

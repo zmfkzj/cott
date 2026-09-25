@@ -1281,24 +1281,20 @@ print(json.dumps(result,sort_keys=True,separators=(",",":")))"#
     require_success("dependency provenance probe", &probe)?;
     let installed: BTreeMap<String, Value> = serde_json::from_slice(&probe.stdout)
         .map_err(|error| format!("invalid dependency provenance output: {error}"))?;
-    dependencies.retain(|dependency| {
-        dependency
-            .get("name")
-            .and_then(Value::as_str)
-            .is_some_and(|name| installed.contains_key(name))
-    });
+    // Verify publishes the same production lock closure that planning lists. Only a
+    // distribution an implementation or type projection actually imports carries observed
+    // installed evidence; the others remain lock identities that authorize no import.
     for dependency in &mut dependencies {
         let name = dependency
             .get("name")
             .and_then(Value::as_str)
             .ok_or("dependency provenance omitted a name")?;
-        let evidence = installed
-            .get(name)
-            .ok_or_else(|| format!("installed dependency provenance omitted `{name}`"))?;
-        dependency
-            .as_object_mut()
-            .expect("dependency is an object")
-            .insert("installed".to_owned(), evidence.clone());
+        if let Some(evidence) = installed.get(name) {
+            dependency
+                .as_object_mut()
+                .expect("dependency is an object")
+                .insert("installed".to_owned(), evidence.clone());
+        }
     }
     Ok(Value::Array(dependencies))
 }

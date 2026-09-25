@@ -1020,3 +1020,119 @@ fn native_complete_errors_is_opt_in_and_rejects_err_without_conditions() {
         "Dart contract execution failed for `demo.runner.echo` case 0 (failed: error error-return)",
     );
 }
+
+/// Negative integer literals and integer arithmetic in scenario call arguments, data and
+/// constructor fields are exact ABI values (`int` for I32/I8, `BigInt` for I64), including the
+/// minimum value whose negated operand is outside its own type.
+#[test]
+#[ignore = "requires COTT_DART, bubblewrap, and the provisioned Dart 3.13.3 SDK"]
+fn native_scenario_negative_integers_use_exact_dart_abi_types() {
+    let bindings = [
+        (
+            "demo.runner.widen",
+            "widen.dart",
+            "_widen",
+            "BigInt _widen(int left, int right) {\n  return BigInt.from(left) + BigInt.from(right);\n}\n"
+                .to_owned(),
+        ),
+        (
+            "demo.runner.shares",
+            "shares.dart",
+            "_shares",
+            dart_body("BigInt _shares({T}Holding holding) {\n  return holding.shares;\n}\n"),
+        ),
+    ];
+    let fixture = Fixture::new(
+        "negative-integers",
+        r#"module demo.runner
+
+struct Holding:
+    shares: I64
+    small: I8
+
+fn widen(left: I32, right: I32) -> I64:
+    requires left <= right + 0
+
+fn shares(holding: Holding) -> I64:
+    ensures result == holding.shares
+
+data low_i32: I32 = -2147483648
+
+scenario negative_arguments:
+    call low = widen(-2147483648, -1)
+    assert low == -2147483649
+    call again = widen(low_i32, -(1 + 2))
+    assert again == -2147483651
+    data owned: Holding = Holding(shares: -5, small: -128)
+    call count = shares(owned)
+    assert count == -5
+    assert owned.small == -128
+    call nested = shares(Holding(shares: -7, small: -1))
+    assert nested == -7
+"#,
+        &borrowed(&bindings),
+    );
+    let generation = assert_verifies(&fixture);
+    assert_scenario_passed(&generation, "demo.runner.scenario.negative_arguments", 5);
+}
+
+const IMPL_DYN_SCENARIO: &str = r#"module demo.runner
+trait TaskView:
+    fn summary(self) -> Str
+impl SimpleTask for TaskView:
+    state:
+        title: Str
+        urgency: I32
+    init(title: Str, urgency: I32):
+        ensures self.title == title
+        ensures self.urgency == urgency
+    fn summary(self) -> Str:
+        ensures result == self.title
+        effects []
+fn inspect(view: Dyn[TaskView]) -> Str:
+    effects []
+scenario view:
+    call task = SimpleTask(title: "Launch", urgency: 1)
+    call summary = task.summary()
+    assert summary == "Launch"
+    data wrapped: Dyn[TaskView] = Dyn(value: task)
+    call observed = inspect(wrapped)
+    assert observed == "Launch"
+    call nested = inspect(Dyn(value: task))
+    assert nested == "Launch"
+"#;
+
+fn impl_dyn_bindings(inspect: &str) -> [(&'static str, &'static str, &'static str, String); 2] {
+    [
+        (
+            "demo.runner.SimpleTask.summary",
+            "summary.dart",
+            "_summary",
+            dart_body("String _summary({T}SimpleTask self) {\n  return self.title;\n}\n"),
+        ),
+        (
+            "demo.runner.inspect",
+            "inspect.dart",
+            "_inspect",
+            dart_body(&format!(
+                "String _inspect(cott_runtime.Dyn<{{T}}TaskView> view) {{\n  return {inspect};\n}}\n"
+            )),
+        ),
+    ]
+}
+
+#[test]
+#[ignore = "requires COTT_DART, bubblewrap, and the provisioned Dart 3.13.3 SDK"]
+fn native_impl_scenario_executes_initializer_receiver_method_and_nested_dyn_argument() {
+    let correct = impl_dyn_bindings("view.value.summary()");
+    let fixture = Fixture::new("scenario-impl-dyn", IMPL_DYN_SCENARIO, &borrowed(&correct));
+    let generation = assert_verifies(&fixture);
+    assert_scenario_passed(&generation, "demo.runner.scenario.view", 3);
+
+    let wrong = impl_dyn_bindings("'wrong'");
+    fixture.write(IMPL_DYN_SCENARIO, &borrowed(&wrong));
+    assert_verify_rejects(
+        &fixture,
+        "Dart scenario `demo.runner.scenario.view` failed: assertion step:5 failed",
+    );
+}

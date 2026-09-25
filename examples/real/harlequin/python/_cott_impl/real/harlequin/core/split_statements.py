@@ -1,5 +1,9 @@
+from typing import Final
+
 from cott_runtime import CottList, Err, Ok, Result
 from real.harlequin.core_types import SqlClientError, SqlClientError_EmptySql, SqlClientError_UnterminatedSql
+
+_WS: Final[str] = " \t\n\v\f\r"
 
 
 def split_statements(sql: str) -> Result[CottList[str], SqlClientError]:
@@ -10,7 +14,7 @@ def split_statements(sql: str) -> Result[CottList[str], SqlClientError]:
     has_code = False
     while i < n:
         ch = sql[i]
-        if ch in ("'", '"', "`"):
+        if ch == "'" or ch == '"' or ch == "`":
             has_code = True
             j = i + 1
             while True:
@@ -32,19 +36,17 @@ def split_statements(sql: str) -> Result[CottList[str], SqlClientError]:
                 return Err(error=SqlClientError_UnterminatedSql(delimiter="*/"))
             i = j + 2
         elif ch == ";":
-            stmt = sql[start:i].strip()
             if has_code:
-                statements.append(stmt)
+                statements.append(sql[start:i].strip(_WS))
             i += 1
             start = i
             has_code = False
         else:
-            if not ch.isspace():
+            if ch not in _WS:
                 has_code = True
             i += 1
-    tail = sql[start:].strip()
     if has_code:
-        statements.append(tail)
+        statements.append(sql[start:].strip(_WS))
     if not statements:
         return Err(error=SqlClientError_EmptySql())
     return Ok(value=CottList(values=statements))

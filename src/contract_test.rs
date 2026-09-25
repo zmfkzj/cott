@@ -133,7 +133,7 @@ impl ContractTestStrategy {
     }
 }
 
-/// Derive metadata-only contract test strategies from canonical IR v8 module
+/// Derive metadata-only contract test strategies from canonical IR v9 module
 /// bytes, preserving canonical module, declaration, and selected-slot order.
 pub fn derive_strategies(
     ir: &CanonicalIr,
@@ -827,7 +827,7 @@ fn scenario_strategy(
         }
         let kind = required_string(step, "kind")
             .map_err(|error| format!("{context} scenario {id} step {index}: {error}"))?;
-        if matches!(kind, "call" | "spawn")
+        if matches!(kind, "call" | "init" | "method_call" | "spawn")
             && required_string(step, "target")
                 .map_err(|error| format!("{context} scenario {id} step {index}: {error}"))?
                 .is_empty()

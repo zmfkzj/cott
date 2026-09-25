@@ -4,7 +4,8 @@
 package curriculum.assignment_rule
 
 /**
- * Trim an access code and require at least four characters.
+ * Validate a code without modifying it: empty input fails first, then a code
+ * shorter than four characters fails. A legacy prefix is not rejected.
  */
 
 public fun  validate_access_code(code: kotlin.String): cott_runtime.CottResult<kotlin.String, curriculum.assignment_rule.AccessCodeError> {
@@ -13,7 +14,8 @@ public fun  validate_access_code(code: kotlin.String): cott_runtime.CottResult<k
     var _cottExpectedError: kotlin.String? = null
     var _cottExpectedErrorClause: kotlin.String? = null
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        if (_cottExpectedError == null && (false)) { _cottExpectedError = "curriculum.assignment_rule.AccessCodeError.EmptyCode"; _cottExpectedErrorClause = "error:0" }
+        if (_cottExpectedError == null && ((cott_runtime.CottRuntime.canonicalEqual(cott_runtime.CottRuntime.length(_cottArg_code), java.math.BigInteger("0").toString().toULong())))) { _cottExpectedError = "curriculum.assignment_rule.AccessCodeError.EmptyCode"; _cottExpectedErrorClause = "error:2" }
+        if (_cottExpectedError == null && ((cott_runtime.CottRuntime.canonicalCompare(cott_runtime.CottRuntime.length(_cottArg_code), java.math.BigInteger("4").toString().toULong()) < 0))) { _cottExpectedError = "curriculum.assignment_rule.AccessCodeError.TooShort"; _cottExpectedErrorClause = "error:3" }
     }
     val _cottRawResult = try {
         cott_impl.curriculum.assignment_rule.validate_access_code(_cottArg_code)
@@ -27,12 +29,13 @@ public fun  validate_access_code(code: kotlin.String): cott_runtime.CottResult<k
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(cott_runtime.CottTypes.STRING, curriculum.assignment_rule.CottDescriptors_b6af748919dd7f83edfeb233.type_1837c2cc8e53c5662ebdfa77()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val trimmed = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.String); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(cott_runtime.CottRuntime.length(trimmed), java.math.BigInteger("4").toString().toULong()) >= 0), "curriculum.assignment_rule.validate_access_code", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 696, endByte = 742, startLine = 32, startColumn = 5, endLine = 32, endColumn = 51), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val `value` = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.String); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(cott_runtime.CottRuntime.length(`value`), java.math.BigInteger("4").toString().toULong()) >= 0), "curriculum.assignment_rule.validate_access_code", "ensures", clause = "ensures:0", span = cott_runtime.CottSpan(startByte = 563, endByte = 614, startLine = 22, startColumn = 5, endLine = 22, endColumn = 56), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val validated = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as kotlin.String); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual(validated, _cottArg_code)), "curriculum.assignment_rule.validate_access_code", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 939, endByte = 988, startLine = 34, startColumn = 5, endLine = 34, endColumn = 54), expected = "true", actual = "false"); true } } else true }
         val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
         val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
-        cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("curriculum.assignment_rule.AccessCodeError.TooShort"), "curriculum.assignment_rule.validate_access_code", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("curriculum.assignment_rule.AccessCodeError.TooShort").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
-        if (_cottExpectedErrorClause == "error:0") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.assignment_rule.AccessCodeError.EmptyCode", "curriculum.assignment_rule.validate_access_code", "error", clause = "error:0", span = cott_runtime.CottSpan(startByte = 374, endByte = 425, startLine = 19, startColumn = 5, endLine = 19, endColumn = 56))
-        if (_cottActualErrorVariant == "curriculum.assignment_rule.AccessCodeError.TooShort") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.assignment_rule.AccessCodeError.TooShort", "curriculum.assignment_rule.validate_access_code", "error", clause = "error:1", span = cott_runtime.CottSpan(startByte = 478, endByte = 508, startLine = 23, startColumn = 5, endLine = 23, endColumn = 35))
+        cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>(), "curriculum.assignment_rule.validate_access_code", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>().toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
+        if (_cottExpectedErrorClause == "error:2") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.assignment_rule.AccessCodeError.EmptyCode", "curriculum.assignment_rule.validate_access_code", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 1014, endByte = 1064, startLine = 37, startColumn = 5, endLine = 37, endColumn = 55))
+        if (_cottExpectedErrorClause == "error:3") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.assignment_rule.AccessCodeError.TooShort", "curriculum.assignment_rule.validate_access_code", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 1069, endByte = 1117, startLine = 38, startColumn = 5, endLine = 38, endColumn = 53))
     }
     return _cottResult
 }

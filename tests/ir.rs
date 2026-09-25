@@ -34,7 +34,7 @@ fn checked_in_canonical_ir_schema_is_parseable() {
     );
     assert_eq!(
         object.get("$id").and_then(serde_json::Value::as_str),
-        Some("https://cott.dev/schema/canonical-ir/v8")
+        Some("https://cott.dev/schema/canonical-ir/v9")
     );
     assert_eq!(
         object
@@ -44,7 +44,7 @@ fn checked_in_canonical_ir_schema_is_parseable() {
             .and_then(serde_json::Value::as_object)
             .and_then(|version| version.get("const"))
             .and_then(serde_json::Value::as_u64),
-        Some(8)
+        Some(9)
     );
 
     let definitions = object
@@ -298,7 +298,7 @@ fn renders_and_closes_advanced_type_nodes() {
     assert_eq!(first.modules[0].bytes, second.modules[0].bytes);
 
     let text = json(&first.modules[0]);
-    assert!(text.contains(r#""schema_version":8"#));
+    assert!(text.contains(r#""schema_version":9"#));
     assert_in_order(
         text,
         &[
@@ -326,7 +326,7 @@ fn renders_and_closes_advanced_type_nodes() {
     ));
 
     let value = load(&first.modules[0].bytes).expect("advanced canonical IR must load");
-    assert_eq!(value["schema_version"], 8);
+    assert_eq!(value["schema_version"], 9);
     assert_eq!(value["declarations"][0]["kind"], "external_type");
     let external = value["declarations"][0]
         .as_object()
@@ -350,7 +350,7 @@ fn renders_and_closes_factory_type_nodes() {
     ));
 
     let value = load(&rendered.modules[0].bytes).expect("Factory canonical IR must load");
-    assert_eq!(value["schema_version"], 8);
+    assert_eq!(value["schema_version"], 9);
     let declarations = value["declarations"].as_array().expect("declarations");
     let alias = declarations
         .iter()
@@ -558,12 +558,12 @@ fn assert_schema_rejects(value: serde_json::Value, message: &str) {
 }
 
 #[test]
-fn schema_rejects_v7_documents() {
+fn schema_rejects_v8_documents() {
     let rendered = render(&advanced_types_project()).expect("advanced fixture must render");
     let mut value: serde_json::Value =
         serde_json::from_slice(&rendered.modules[0].bytes).expect("canonical IR must parse");
-    value["schema_version"] = serde_json::json!(7);
-    assert_schema_rejects(value, "v7 canonical IR must fail closed");
+    value["schema_version"] = serde_json::json!(8);
+    assert_schema_rejects(value, "v8 canonical IR must fail closed");
 }
 
 #[test]
@@ -719,7 +719,7 @@ async fn fetch() -> I32
     let rendered = render(&project).expect("v0.3 HIR must render");
     let value = load(&rendered.modules[0].bytes).expect("v0.3 IR must load");
     let declarations = value["declarations"].as_array().expect("declarations");
-    assert_eq!(value["schema_version"], 8);
+    assert_eq!(value["schema_version"], 9);
     assert_eq!(
         declarations[0]["associated_types"][0]["name"],
         "v03.Stream.Item"
@@ -1006,7 +1006,7 @@ enum Tree:
     assert_eq!(first.modules[0].bytes, second.modules[0].bytes);
 
     let value = load(&first.modules[0].bytes).expect("recursive canonical IR must load");
-    assert_eq!(value["schema_version"], 8);
+    assert_eq!(value["schema_version"], 9);
     let chain = value["declarations"]
         .as_array()
         .expect("declarations")
@@ -1053,4 +1053,215 @@ struct Location:
         .expect("struct declaration");
     assert_eq!(location["invariants"][0]["clause_id"], 0);
     assert_eq!(location["invariants"][0]["expression"]["kind"], "intrinsic");
+}
+
+#[test]
+fn canonical_scenario_init_method_and_dyn_nodes_are_stable_and_closed() {
+    let source_text = r#"module dispatch
+trait TaskView[+T]:
+    fn summary(self) -> T
+impl SimpleTask for TaskView[Str]:
+    state:
+        title: Str
+        urgency: I32
+    init(title: Str, urgency: I32):
+        ensures self.title == title
+    fn summary(self) -> Str:
+        ensures result == self.title
+fn inspect(view: Dyn[TaskView[Str]]) -> Str:
+    effects []
+scenario view:
+    call task = SimpleTask(title: "Launch", urgency: 1)
+    call summary = task.summary()
+    data wrapped: Dyn[TaskView[Str]] = Dyn(value: task)
+    call inspected = inspect(Dyn(value: task))
+    assert inspected == summary
+"#;
+    let parsed = parse_project([source("src/dispatch.cott", source_text)])
+        .expect("scenario fixture should parse");
+    let project = cott::hir::lower(Path::new("src"), parsed).expect("scenario should lower");
+    let first = render(&project).expect("scenario should render");
+    let second = render(&project).expect("scenario should render twice");
+    assert_eq!(first.modules[0].bytes, second.modules[0].bytes);
+    let text = json(&first.modules[0]);
+    assert!(text.ends_with('\n'));
+    assert!(!text[..text.len() - 1].chars().any(char::is_whitespace));
+    let value = load(&first.modules[0].bytes).expect("scenario IR should validate");
+    let steps = value["declarations"]
+        .as_array()
+        .expect("declarations")
+        .iter()
+        .find(|declaration| declaration["kind"] == "scenario")
+        .expect("scenario declaration")["steps"]
+        .as_array()
+        .expect("scenario steps");
+    let named = serde_json::json!({"args": [], "kind": "named", "name": "dispatch.SimpleTask"});
+    let string = serde_json::json!({"kind": "primitive", "name": "str"});
+    let integer = serde_json::json!({"kind": "primitive", "name": "i32"});
+    let trait_ref = serde_json::json!({
+        "args": [{"kind": "type", "type": string}],
+        "kind": "named",
+        "name": "dispatch.TaskView"
+    });
+    let dyn_type = serde_json::json!({"kind": "dyn", "trait": trait_ref});
+    let init = steps[0].as_object().expect("initializer object");
+    assert_eq!(
+        init.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "arguments",
+            "binding",
+            "kind",
+            "parameters",
+            "return_type",
+            "span",
+            "step_id",
+            "target"
+        ]
+    );
+    assert_eq!(steps[0]["kind"], "init");
+    assert_eq!(steps[0]["target"], "dispatch.SimpleTask");
+    assert_eq!(steps[0]["binding"], "dispatch.scenario.view.task");
+    assert_eq!(steps[0]["parameters"], serde_json::json!([string, integer]));
+    assert_eq!(steps[0]["return_type"], named);
+    assert_eq!(steps[0]["arguments"][0]["value"]["value"], "Launch");
+    assert_eq!(steps[0]["arguments"][1]["value"]["value"], "1");
+    assert_eq!(
+        steps[0]["span"]["start_byte"],
+        source_text.find("call task =").expect("initializer step")
+    );
+    let method = steps[1].as_object().expect("method call object");
+    assert_eq!(
+        method.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "arguments",
+            "binding",
+            "callable_kind",
+            "kind",
+            "parameters",
+            "receiver",
+            "return_type",
+            "span",
+            "step_id",
+            "target"
+        ]
+    );
+    assert_eq!(steps[1]["target"], "dispatch.SimpleTask.summary");
+    assert_eq!(steps[1]["callable_kind"], "sync");
+    assert_eq!(steps[1]["parameters"], serde_json::json!([]));
+    assert_eq!(steps[1]["return_type"], string);
+    assert_eq!(
+        steps[1]["receiver"],
+        serde_json::json!({
+            "kind": "binding_ref",
+            "symbol": "dispatch.scenario.view.task",
+            "reference": {"kind": "binding", "symbol": "dispatch.scenario.view.task"},
+            "span": steps[1]["receiver"]["span"],
+            "type": named
+        })
+    );
+    let receiver_bytes = format!(
+        "\"receiver\":{{\"kind\":\"binding_ref\",\"symbol\":\"dispatch.scenario.view.task\",\"reference\":{{\"kind\":\"binding\",\"symbol\":\"dispatch.scenario.view.task\"}},\"span\":{},\"type\":{{\"args\":[],\"kind\":\"named\",\"name\":\"dispatch.SimpleTask\"}}}}",
+        steps[1]["receiver"]["span"]
+    );
+    assert!(text.contains(&receiver_bytes), "{text}");
+    for expression in [&steps[2]["expression"], &steps[3]["arguments"][0]] {
+        let dyn_node = expression.as_object().expect("Dyn expression");
+        assert_eq!(
+            dyn_node.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["kind", "span", "trait_ref", "type", "value"]
+        );
+        assert_eq!(expression["kind"], "dyn");
+        assert_eq!(expression["trait_ref"], trait_ref);
+        assert_eq!(expression["type"], dyn_type);
+        assert_eq!(expression["value"]["kind"], "binding_ref");
+        assert_eq!(expression["value"]["symbol"], "dispatch.scenario.view.task");
+        let bytes = format!(
+            "\"kind\":\"dyn\",\"trait_ref\":{},\"value\":{{\"kind\":\"binding_ref\",\"symbol\":\"dispatch.scenario.view.task\",\"reference\":{{\"kind\":\"binding\",\"symbol\":\"dispatch.scenario.view.task\"}},\"span\":{},\"type\":{{\"args\":[],\"kind\":\"named\",\"name\":\"dispatch.SimpleTask\"}}}},\"span\":{},\"type\":{}",
+            serde_json::to_string(&trait_ref).unwrap(),
+            expression["value"]["span"],
+            expression["span"],
+            serde_json::to_string(&dyn_type).unwrap()
+        );
+        assert!(text.contains(&bytes), "{text}");
+    }
+    for (step_index, field) in [(0, "extra"), (1, "extra")] {
+        let mut malformed = value.clone();
+        let scenario = malformed["declarations"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|declaration| declaration["kind"] == "scenario")
+            .unwrap();
+        scenario["steps"][step_index][field] = serde_json::Value::Null;
+        assert_schema_rejects(malformed, "new scenario step fields must fail closed");
+    }
+    let mut malformed = value.clone();
+    let scenario = malformed["declarations"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|declaration| declaration["kind"] == "scenario")
+        .unwrap();
+    scenario["steps"][2]["expression"]["reference"] = serde_json::Value::Null;
+    assert_schema_rejects(malformed, "Dyn reference must not be accepted");
+    let mut malformed = value.clone();
+    let scenario = malformed["declarations"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|declaration| declaration["kind"] == "scenario")
+        .unwrap();
+    scenario["steps"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("receiver");
+    assert_schema_rejects(malformed, "receiver method must carry its bound receiver");
+}
+
+#[test]
+fn canonical_scenario_method_call_targets_selected_trait_default() {
+    let parsed = parse_project([source(
+        "src/selected.cott",
+        r#"module selected
+fn default_read(receiver: Reader, amount: I32) -> I32:
+    effects []
+trait Reader:
+    fn read(self, amount: I32) -> I32 = default_read
+    fn reset(self) -> I32
+impl Counter for Reader:
+    state:
+        count: I32
+    init(count: I32):
+        ensures self.count == count
+    fn reset(self) -> I32:
+        ensures result == self.count
+scenario dispatch:
+    call counter = Counter(count: 2)
+    call observed = counter.read(5)
+    assert observed == 5
+"#,
+    )])
+    .expect("selected method fixture should parse");
+    let hir = cott::hir::lower(Path::new("src"), parsed).expect("selected method should lower");
+    let rendered = render(&hir).expect("selected scenario should render");
+    let value = load(&rendered.modules[0].bytes).expect("selected scenario IR should validate");
+    let scenario = value["declarations"]
+        .as_array()
+        .expect("declarations")
+        .iter()
+        .find(|declaration| declaration["kind"] == "scenario")
+        .expect("scenario");
+    let step = &scenario["steps"][1];
+    assert_eq!(step["kind"], "method_call");
+    assert_eq!(step["target"], "selected.Counter.read");
+    assert_eq!(step["callable_kind"], "sync");
+    assert_eq!(
+        step["parameters"],
+        serde_json::json!([{"kind": "primitive", "name": "i32"}])
+    );
+    assert_eq!(step["arguments"][0]["value"]["value"], "5");
+    assert_eq!(
+        step["receiver"]["reference"],
+        serde_json::json!({"kind": "binding", "symbol": "selected.scenario.dispatch.counter"})
+    );
 }

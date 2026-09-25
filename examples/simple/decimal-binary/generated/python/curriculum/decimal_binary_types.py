@@ -65,8 +65,10 @@ zeros are allowed and ignored. Any other input returns `InvalidBinary`.
 After the entire string is validated, more than 63 significant digits
 returns `Overflow`, so invalid characters take priority over overflow."""
 """Route DecimalToBinary through curriculum.decimal_binary.decimal_to_binary
-and BinaryToDecimal through curriculum.decimal_binary.binary_to_decimal.
-Wrap the successful scalar in the corresponding ConversionResult variant.
-
-Errors from the selected operation are returned unchanged."""
+and wrap its successful digits in ConversionResult.Binary; do not call
+binary_to_decimal on this branch. Route BinaryToDecimal through
+curriculum.decimal_binary.binary_to_decimal and wrap its successful value
+in ConversionResult.Decimal; do not call decimal_to_binary on this branch.
+Return the selected leaf's NegativeDecimal, InvalidBinary or Overflow
+unchanged, without trying the opposite conversion."""
 __all__ = ["Conversion", "ConversionError", "ConversionError_InvalidBinary", "ConversionError_NegativeDecimal", "ConversionError_Overflow", "ConversionResult", "ConversionResult_Binary", "ConversionResult_Decimal", "Conversion_BinaryToDecimal", "Conversion_DecimalToBinary"]

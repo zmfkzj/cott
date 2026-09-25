@@ -4,7 +4,8 @@
 package store.catalog
 
 /**
- * Look up an item in the catalog by its SKU.
+ * Look up the catalog item whose SKU is `sku`. SKUs are unique within a catalog, so at most
+ * one item matches.
  */
 
 public fun  find_item(catalog: store.catalog.Catalog, sku: kotlin.String): cott_runtime.CottResult<store.catalog.Item, store.catalog.CatalogError> {
@@ -12,7 +13,7 @@ public fun  find_item(catalog: store.catalog.Catalog, sku: kotlin.String): cott_
     val _cottArg_catalog = cott_runtime.CottRuntime.abi(catalog, store.catalog.CottDescriptors_eb0aacb2da8f689e55fcdc1e.type_f0a2171535377548075dc148(), cott_runtime.RuntimeValidation.BOUNDARY, "\$.catalog")
     val _cottArg_sku = cott_runtime.CottRuntime.abi(sku, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.sku")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(cott_runtime.CottRuntime.length(_cottArg_sku), java.math.BigInteger("0").toString().toULong()) > 0), "store.catalog.find_item", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 314, endByte = 334, startLine = 19, startColumn = 5, endLine = 19, endColumn = 25), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(cott_runtime.CottRuntime.length(_cottArg_sku), java.math.BigInteger("0").toString().toULong()) > 0), "store.catalog.find_item", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 430, endByte = 450, startLine = 22, startColumn = 5, endLine = 22, endColumn = 25), expected = "true", actual = "false")
     }
     var _cottExpectedError: kotlin.String? = null
     var _cottExpectedErrorClause: kotlin.String? = null
@@ -30,11 +31,12 @@ public fun  find_item(catalog: store.catalog.Catalog, sku: kotlin.String): cott_
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(store.catalog.CottDescriptors_eb0aacb2da8f689e55fcdc1e.type_87a046c4c3d17ab9812d0d8c(), store.catalog.CottDescriptors_eb0aacb2da8f689e55fcdc1e.type_bbb1f8bb173b259c026a757a()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val item = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as store.catalog.Item); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((item).sku, _cottArg_sku)), "store.catalog.find_item", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 340, endByte = 382, startLine = 21, startColumn = 5, endLine = 21, endColumn = 47), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val item = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as store.catalog.Item); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((item).sku, _cottArg_sku)), "store.catalog.find_item", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 456, endByte = 498, startLine = 24, startColumn = 5, endLine = 24, endColumn = 47), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultErr(_cottMatchValue) is cott_runtime.Some<*> && (cott_runtime.CottRuntime.variant((cott_runtime.CottRuntime.resultErr(_cottMatchValue) as cott_runtime.Some<*>).value, "store.catalog.CatalogError.ItemNotFound") is cott_runtime.Some<*> && true))) { val missing = ((cott_runtime.CottRuntime.variant((cott_runtime.CottRuntime.resultErr(_cottMatchValue) as cott_runtime.Some<*>).value, "store.catalog.CatalogError.ItemNotFound") as cott_runtime.Some<cott_runtime.CottList<kotlin.Any?>>).value[0] as kotlin.String); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual(missing, _cottArg_sku)), "store.catalog.find_item", "ensures", clause = "ensures:3", span = cott_runtime.CottSpan(startByte = 503, endByte = 575, startLine = 25, startColumn = 5, endLine = 25, endColumn = 77), expected = "true", actual = "false"); true } } else true }
         val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
         val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
         cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("store.catalog.CatalogError.ItemNotFound"), "store.catalog.find_item", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("store.catalog.CatalogError.ItemNotFound").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
-        if (_cottActualErrorVariant == "store.catalog.CatalogError.ItemNotFound") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "store.catalog.CatalogError.ItemNotFound", "store.catalog.find_item", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 388, endByte = 419, startLine = 23, startColumn = 5, endLine = 23, endColumn = 36))
+        if (_cottActualErrorVariant == "store.catalog.CatalogError.ItemNotFound") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "store.catalog.CatalogError.ItemNotFound", "store.catalog.find_item", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 581, endByte = 612, startLine = 27, startColumn = 5, endLine = 27, endColumn = 36))
     }
     return _cottResult
 }

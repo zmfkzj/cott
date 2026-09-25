@@ -487,3 +487,36 @@ fn check(flag:Bool,other:Bool)->Bool:
     );
     assert_eq!(formatted(&output), output);
 }
+
+#[test]
+fn formats_scenario_init_receiver_calls_and_nested_dyn_values_idempotently() {
+    let source = r#"module demo
+trait TaskView:
+  fn summary(self)->Str
+impl SimpleTask for TaskView:
+  state:
+    title:Str
+    urgency:I32
+  init(title:Str,urgency:I32):
+    ensures self.title==title
+  fn summary(self)->Str:
+    ensures result==self.title
+fn inspect(view:Dyn[TaskView])->Str:
+  effects []
+scenario dispatch:
+  call task=SimpleTask(title:"Launch",urgency:1)
+  call summary=task.summary()
+  assert summary=="Launch"
+  data view:Dyn[TaskView]=Dyn(value:task)
+  call checked=inspect(Dyn(value:task))
+  assert checked==summary
+"#;
+    let output = formatted(source);
+    assert!(
+        output.contains(
+            "    call task = SimpleTask(title: \"Launch\", urgency: 1)\n    call summary = task.summary()\n    assert summary == \"Launch\"\n    data view: Dyn[TaskView] = Dyn(value: task)\n    call checked = inspect(Dyn(value: task))\n    assert checked == summary\n"
+        ),
+        "{output}"
+    );
+    assert_eq!(formatted(&output), output);
+}

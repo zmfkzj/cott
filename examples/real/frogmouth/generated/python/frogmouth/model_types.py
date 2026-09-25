@@ -32,6 +32,10 @@ class Location:
             object.__setattr__(self, "kind", _cott_validate_abi(self.kind, LocationKind, path="$.kind"))
         if not _cott_validated_construction():
             object.__setattr__(self, "target", _cott_validate_abi(self.target, str, path="$.target"))
+        if not (_cott_contract_condition(((len((self).target) > 0)), "frogmouth.model.Location", "invariant:0")):
+            raise CottContractViolation("invariant failed", symbol="frogmouth.model.Location", clause="invariant:0", phase="invariant", span={"end_byte":153,"end_column":34,"end_line":11,"start_byte":124,"start_column":5,"start_line":11}, expected="true", actual="false")
+        if not (_cott_contract_condition((((not ((self).kind == LocationKind_Http())) or (_cott_starts_with((self).target, "http://") or _cott_starts_with((self).target, "https://")))), "frogmouth.model.Location", "invariant:1")):
+            raise CottContractViolation("invariant failed", symbol="frogmouth.model.Location", clause="invariant:1", phase="invariant", span={"end_byte":279,"end_column":126,"end_line":12,"start_byte":158,"start_column":5,"start_line":12}, expected="true", actual="false")
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -48,5 +52,7 @@ class Document:
             object.__setattr__(self, "title", _cott_validate_abi(self.title, str, path="$.title"))
         if not _cott_validated_construction():
             object.__setattr__(self, "markdown", _cott_validate_abi(self.markdown, str, path="$.markdown"))
+        if not (_cott_contract_condition(((len((self).title) > 0)), "frogmouth.model.Document", "invariant:0")):
+            raise CottContractViolation("invariant failed", symbol="frogmouth.model.Document", clause="invariant:0", phase="invariant", span={"end_byte":387,"end_column":33,"end_line":19,"start_byte":359,"start_column":5,"start_line":19}, expected="true", actual="false")
 
 __all__ = ["Document", "Location", "LocationKind", "LocationKind_Http", "LocationKind_Local"]

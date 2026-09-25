@@ -23,8 +23,24 @@ fn decimal_to_binary(value: I64) -> Result[Str, ConversionError]:
     """
 
     ensures Result.Ok(digits) => digits.len > 0
+    ensures Result.Ok(digits) => (value == 0 => digits == "0")
+    ensures Result.Ok(digits) => (value > 0 => digits != "0")
 
     error ConversionError.NegativeDecimal when value < 0
+
+scenario canonical_decimal_values:
+    call zero = decimal_to_binary(0)
+    assert zero matches Result.Ok(digits) => digits == "0"
+    call six = decimal_to_binary(6)
+    assert six matches Result.Ok(digits) => digits == "110"
+    call largest = decimal_to_binary(9223372036854775807)
+    assert largest matches Result.Ok(digits) => digits == "111111111111111111111111111111111111111111111111111111111111111"
+    call negative = decimal_to_binary(-1)
+    assert negative matches Result.Err(ConversionError.NegativeDecimal)
+
+requirement CANONICAL_BINARY for decimal_to_binary:
+    text "Successful conversion writes the shortest ASCII binary representation of the input, without leading zeros."
+    checked_by canonical_decimal_values
 
 fn binary_to_decimal(digits: Str) -> Result[I64, ConversionError]:
     doc """
@@ -37,16 +53,38 @@ fn binary_to_decimal(digits: Str) -> Result[I64, ConversionError]:
     """
 
     ensures Result.Ok(value) => value >= 0
+    ensures Result.Ok(value) => (digits == "0" => value == 0)
 
     error ConversionError.InvalidBinary
     error ConversionError.Overflow
 
+scenario binary_validation_and_boundaries:
+    call zero = binary_to_decimal("0000")
+    assert zero matches Result.Ok(value) => value == 0
+    call leading = binary_to_decimal("00110")
+    assert leading matches Result.Ok(value) => value == 6
+    call largest = binary_to_decimal("111111111111111111111111111111111111111111111111111111111111111")
+    assert largest matches Result.Ok(value) => value == 9223372036854775807
+    call overflow = binary_to_decimal("1111111111111111111111111111111111111111111111111111111111111111")
+    assert overflow matches Result.Err(ConversionError.Overflow)
+    call invalid = binary_to_decimal("1111111111111111111111111111111111111111111111111111111111111111x")
+    assert invalid matches Result.Err(ConversionError.InvalidBinary)
+    call empty = binary_to_decimal("")
+    assert empty matches Result.Err(ConversionError.InvalidBinary)
+
+requirement BINARY_VALIDATION for binary_to_decimal:
+    text "Parse only nonempty ASCII binary input, ignore leading zeros, and reject invalid characters before checking significant-digit overflow."
+    checked_by binary_validation_and_boundaries
+
 fn convert_binary_decimal(operation: Conversion) -> Result[ConversionResult, ConversionError]:
     doc """
-    Routes a tagged conversion through the matching decimal or binary
-    conversion operation and wraps its successful scalar result.
-    
-    Errors from the selected operation are returned unchanged.
+    Route DecimalToBinary through curriculum.decimal_binary.decimal_to_binary
+    and wrap its successful digits in ConversionResult.Binary; do not call
+    binary_to_decimal on this branch. Route BinaryToDecimal through
+    curriculum.decimal_binary.binary_to_decimal and wrap its successful value
+    in ConversionResult.Decimal; do not call decimal_to_binary on this branch.
+    Return the selected leaf's NegativeDecimal, InvalidBinary or Overflow
+    unchanged, without trying the opposite conversion.
     """
 
     ensures Result.Ok(ConversionResult.Binary(digits)) => digits.len > 0
@@ -55,3 +93,23 @@ fn convert_binary_decimal(operation: Conversion) -> Result[ConversionResult, Con
     error ConversionError.NegativeDecimal
     error ConversionError.InvalidBinary
     error ConversionError.Overflow
+
+scenario composed_conversions_and_errors:
+    call forward = convert_binary_decimal(Conversion.DecimalToBinary(value: 6))
+    assert forward matches Result.Ok(ConversionResult.Binary(digits)) => digits == "110"
+    call backward = convert_binary_decimal(Conversion.BinaryToDecimal(digits: "00110"))
+    assert backward matches Result.Ok(ConversionResult.Decimal(value)) => value == 6
+    call negative = convert_binary_decimal(Conversion.DecimalToBinary(value: -1))
+    assert negative matches Result.Err(ConversionError.NegativeDecimal)
+    call invalid = convert_binary_decimal(Conversion.BinaryToDecimal(digits: "10x"))
+    assert invalid matches Result.Err(ConversionError.InvalidBinary)
+    call overflow = convert_binary_decimal(
+        Conversion.BinaryToDecimal(
+            digits: "1111111111111111111111111111111111111111111111111111111111111111",
+        ),
+    )
+    assert overflow matches Result.Err(ConversionError.Overflow)
+
+requirement ROUTE_AND_PROPAGATE for convert_binary_decimal:
+    text "Use only the selected conversion facade, wrap its scalar success in the matching result variant, and propagate its error unchanged."
+    checked_by composed_conversions_and_errors

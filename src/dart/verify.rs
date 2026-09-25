@@ -314,8 +314,9 @@ fn verify_in_scratch(
     if runtime.status != Some(0) {
         evidence_key.fill(0);
         return Err(format!(
-            "bounded Dart contract runner failed with status {:?}: {}",
+            "bounded Dart contract runner failed with status {:?}; {}: {}",
             runtime.status,
+            runtime.resources,
             diagnostics(&runtime)
         ));
     }
@@ -2066,8 +2067,8 @@ fn require_success(
     let scratch_text = scratch.to_string_lossy();
     let details = diagnostics(process).replace(scratch_text.as_ref(), "<scratch>");
     Err(format!(
-        "{label} failed with status {:?}: {details}",
-        process.status
+        "{label} failed with status {:?}; {}: {details}",
+        process.status, process.resources
     ))
 }
 
@@ -2210,4 +2211,63 @@ fn path_argument(path: &Path, label: &str) -> Result<String, String> {
     path.to_str()
         .map(str::to_owned)
         .ok_or_else(|| format!("{label} path is not UTF-8"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::time::Duration;
+
+    use crate::sandbox::{CompletedProcess, ResourceReport};
+
+    #[test]
+    fn killed_compile_failure_names_signal_and_resource_usage_against_limits() {
+        let completed = CompletedProcess {
+            status: Some(137),
+            timed_out: false,
+            stdout: Vec::new(),
+            stderr: b"kernel compile output before the kill".to_vec(),
+            resources: ResourceReport {
+                signal: Some(libc::SIGKILL),
+                user_cpu: Duration::from_millis(1_250),
+                system_cpu: Duration::from_millis(250),
+                max_rss_bytes: 1536 * 1024 * 1024,
+                memory_peak_bytes: Some(1800 * 1024 * 1024),
+                oom_kills: Some(1),
+                cpu_limit: Duration::from_secs(60),
+                address_space_limit_bytes: 2 * 1024 * 1024 * 1024,
+            },
+        };
+        let message = super::require_success(
+            "Dart contract runner kernel compilation",
+            &completed,
+            Path::new("/scratch"),
+        )
+        .expect_err("a killed compiler is a failure");
+        assert!(
+            message.contains("status Some(137); terminating signal SIGKILL (9)"),
+            "{message}"
+        );
+        assert!(message.contains("CPU 1.500s"), "{message}");
+        assert!(message.contains("RLIMIT_CPU 60s"), "{message}");
+        assert!(
+            message.contains(
+                "max RSS 1536.0 MiB, scope memory peak 1800.0 MiB against RLIMIT_AS 2048.0 MiB"
+            ),
+            "{message}"
+        );
+        assert!(
+            message.contains("OOM kills 1; the kernel OOM killer killed a scope process"),
+            "{message}"
+        );
+        // Low CPU with SIGKILL is not attributed to RLIMIT_CPU.
+        assert!(
+            !message.contains("CPU time reached RLIMIT_CPU"),
+            "{message}"
+        );
+        assert!(
+            message.ends_with("kernel compile output before the kill"),
+            "{message}"
+        );
+    }
 }

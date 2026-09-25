@@ -7,10 +7,10 @@ def resolve_live_media(items: CottList[MediaItem], request: LiveRequest) -> Resu
         return Err(error=MediaError_InvalidInput(message="concurrent_fragments must be greater than zero"))
     match request.mode:
         case LiveMode_Default() | LiveMode_FromStart():
-            return Ok(value=CottList(values=[item for item in items]))
+            return Ok(value=items)
         case LiveMode_Wait():
             if request.wait_for_video_ms == 0:
                 return Err(error=MediaError_InvalidInput(message="wait_for_video_ms must be greater than zero"))
             if len(items) == 0:
                 return Err(error=MediaError_RetryExhausted(attempts=1))
-            return Ok(value=CottList(values=[item for item in items]))
+            return Ok(value=items)

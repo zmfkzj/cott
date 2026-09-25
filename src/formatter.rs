@@ -670,6 +670,40 @@ impl<'a> Printer<'a> {
                 &format!("call {} = {}(", binding.name, qname(target)),
                 arguments,
             ),
+            ScenarioStep::Init {
+                binding,
+                target,
+                arguments,
+                ..
+            } => {
+                let prefix = format!("call {} = {}(", binding.name, qname(target));
+                let inline = arguments
+                    .iter()
+                    .map(|argument| {
+                        let label = argument
+                            .label
+                            .as_ref()
+                            .map(|label| format!("{}: ", self.expr(label, 0)))
+                            .unwrap_or_default();
+                        format!("{label}{}", self.expr(&argument.value, 0))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if 4 + prefix.chars().count() + inline.chars().count() + 1 <= 100 {
+                    self.push(1, format!("{prefix}{inline})"));
+                } else {
+                    self.push(1, prefix);
+                    for argument in arguments {
+                        let label = argument
+                            .label
+                            .as_ref()
+                            .map(|label| format!("{}: ", self.expr(label, 0)))
+                            .unwrap_or_default();
+                        self.value_lines(2, &label, &argument.value, ",");
+                    }
+                    self.push(1, ")".to_owned());
+                }
+            }
             ScenarioStep::Spawn {
                 worker,
                 target,
@@ -1313,42 +1347,22 @@ impl<'a> Printer<'a> {
         self.expression_line(indent, &prefix, condition);
     }
 
+    /// An overlong binary or chained-comparison expression is enclosed in
+    /// parentheses on its own line. That parenthesized form is the formatter's
+    /// fixed point: reparsing it yields a parenthesized expression, which is
+    /// printed unchanged, so the first run already produces the final layout.
     fn expression_line(&mut self, indent: usize, prefix: &str, expression: &Expr) {
         let rendered = self.expr(expression, 0);
-        if indent * 4 + prefix.chars().count() + rendered.chars().count() <= 100 {
-            self.push(indent, format!("{prefix}{rendered}"));
-            return;
-        }
-        if let Some(parts) = self.break_expression(expression) {
-            self.push(indent, format!("{prefix}("));
-            for (index, (operator, value)) in parts.into_iter().enumerate() {
-                let line = if index == 0 {
-                    value
-                } else {
-                    format!("{} {value}", operator.unwrap_or_default())
-                };
-                self.push(indent + 1, line);
-            }
-            self.push(indent, ")".to_owned());
+        let enclose = indent * 4 + prefix.chars().count() + rendered.chars().count() > 100
+            && match &expression.kind {
+                ExprKind::Binary { .. } => true,
+                ExprKind::Comparison { rest, .. } => !rest.is_empty(),
+                _ => false,
+            };
+        if enclose {
+            self.push(indent, format!("{prefix}({rendered})"));
         } else {
             self.push(indent, format!("{prefix}{rendered}"));
-        }
-    }
-
-    fn break_expression(&self, expression: &Expr) -> Option<Vec<(Option<&'static str>, String)>> {
-        match &expression.kind {
-            ExprKind::Binary { left, op, right } => Some(vec![
-                (None, self.expr(left, 0)),
-                (Some(binary_operator(*op)), self.expr(right, 0)),
-            ]),
-            ExprKind::Comparison { first, rest } if !rest.is_empty() => {
-                let mut parts = vec![(None, self.expr(first, 0))];
-                parts.extend(rest.iter().map(|(operator, expression)| {
-                    (Some(compare_operator(*operator)), self.expr(expression, 0))
-                }));
-                Some(parts)
-            }
-            _ => None,
         }
     }
 

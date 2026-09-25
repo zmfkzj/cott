@@ -1,7 +1,23 @@
 module real.harlequin.render
 
-use real.harlequin.catalog.{CatalogColumn, CatalogMatch, CatalogRelation}
-use real.harlequin.core.{FileReference, QueryResult}
+use real.harlequin.catalog.{
+    CatalogColumn,
+    CatalogMatch,
+    CatalogMatchKind,
+    CatalogRelation,
+    RelationKind,
+}
+use real.harlequin.core.{
+    Cell,
+    FileError,
+    FileLocation,
+    FileReference,
+    LoadedFile,
+    QueryResult,
+    SavedFile,
+    TypedRow,
+    load_query_file,
+}
 
 enum RenderLayout:
     Table
@@ -69,52 +85,64 @@ fn render_vertical(result: QueryResult) -> Str:
 fn render_result(result: QueryResult, options: RenderOptions) -> Result[Str, RenderError]:
     doc """
     terminal_width or maximum_cell_width zero returns InvalidWidth with that zero
-    width. Reject a NUL in a column name or Text cell as UnsupportedCell.
-    Keep only the first maximum_rows rows, preserving columns and order.
+    width. Keep only the first maximum_rows rows, preserving columns and order.
+    A NUL in a column name or in a Text cell of a kept row is UnsupportedCell.
     Use the render_table cell mapping, truncating every column/cell string to
     maximum_cell_width Unicode code points before formatting. Table uses " | "
     headers/rows; Vertical uses "Row N" and "column: value" lines.
     Clip each resulting line to terminal_width code points without ellipsis.
     Join with LF and no trailing LF. If output would be empty or whitespace only,
     use "(no rows)" clipped to terminal_width so successful output is nonempty.
-    Do not replace real row rendering with a debug repr of the whole QueryResult.
     """
 
     ensures Result.Ok(rendered) => rendered.len > 0
+    ensures Result.Err(RenderError.InvalidWidth(width)) => width == 0
 
-    error RenderError.InvalidWidth
+    error RenderError.InvalidWidth when (options.terminal_width == 0 or options.maximum_cell_width == 0)
     error RenderError.UnsupportedCell
 
     effects []
 
 fn render_catalog_relations(relations: List[CatalogRelation]) -> Str:
     doc """
-    This diagnostic view joins the standard generated CatalogRelation string
-    representation for each value with LF, preserving order. No trailing LF;
-    empty input returns "". No database access or extra records are introduced.
+    One line per relation in input order: "table NAME" or "view NAME". Stored SQL is
+    not shown. Lines are joined with LF without a trailing LF; empty input is "".
     """
 
     effects []
 
 fn render_catalog_columns(columns: List[CatalogColumn]) -> Str:
     doc """
-    This diagnostic view joins the standard generated CatalogColumn string
-    representation for each value with LF, retaining all fields and input order.
-    No trailing LF; empty input returns "". It is not an inferred SQL declaration.
+    One line per column in input order: RELATION.NAME, then " " and declared_type
+    when it is nonempty, " NOT NULL" when not_null, " DEFAULT " and default_sql when
+    present, and " PRIMARY KEY " followed by primary_key_position when it is nonzero.
+    ordinal is not shown. Lines are joined with LF without a trailing LF; empty input
+    is "".
     """
 
     effects []
 
 fn render_catalog_matches(catalog_matches: List[CatalogMatch]) -> Str:
     doc """
-    This diagnostic view joins the standard generated CatalogMatch string
-    representation for each value with LF, preserving order and all fields.
-    No trailing LF; empty input returns "".
+    One line per match in input order: "relation NAME" for a Relation match and
+    "column RELATION.NAME" for a Column match. Lines are joined with LF without a
+    trailing LF; empty input is "".
     """
 
     effects []
 
 fn bundled_themes() -> List[Theme]:
+    doc """
+    Return exactly these built-in themes, in this order, as
+    name | foreground | background | accent:
+    harlequin | #DDDDDD | #0C0C0C | #FEFFAC
+    monokai | #F8F8F2 | #272822 | #F92672
+    dracula | #F8F8F2 | #282A36 | #BD93F9
+    nord | #D8DEE9 | #2E3440 | #88C0D0
+    """
+
+    ensures (unique_by(result, Theme.name))
+
     effects []
 
 fn bundled_keymaps() -> List[Keymap]:
@@ -126,32 +154,301 @@ fn bundled_keymaps() -> List[Keymap]:
     client's static defaults, not a runtime scan of upstream packages or plugins.
     """
 
+    ensures (unique_by(result, Keymap.name))
+
     effects []
 
 fn resolve_theme(themes: List[Theme], name: Str) -> Option[Theme]:
     doc """
     Return Some containing the first Theme whose name exactly equals name,
-    case-sensitively; return Nothing when there is no match. Do not clone or edit it.
+    case-sensitively; return Nothing when there is no match.
     """
+
+    ensures Option.Some(theme) => theme.name == name
 
     effects []
 
 fn resolve_keymap(keymaps: List[Keymap], name: Str) -> Option[Keymap]:
     doc """
     Return Some containing the first Keymap whose name exactly equals name,
-    case-sensitively; return Nothing when there is no match. Do not clone or edit it.
+    case-sensitively; return Nothing when there is no match.
     """
+
+    ensures Option.Some(keymap) => keymap.name == name
 
     effects []
 
-fn export_result(request: ExportRequest) -> Result[Unit, RenderError]:
+fn export_result(request: ExportRequest) -> Result[SavedFile, RenderError]:
     doc """
-    Match destination.location as FileLocation_Local/S3; serialize row.values; use boto3 Any.
+    Serialize request.result in request.format as UTF-8 text and write it to
+    request.destination. Every line, including the last, ends with LF. A field's
+    text is "" for Null, the decimal integer, the float's Python repr, the stored
+    text, or lowercase hexadecimal for a blob.
+    Csv: a header line of column names, then one line per row, fields separated by
+    "," and enclosed in '"' (inner quotes doubled) when they contain ",", '"', CR or
+    LF.
+    Tsv: the same lines separated by TAB without quoting; TAB, LF, CR and backslash
+    in a field are written as \t, \n, \r and \\.
+    Json: one line holding {"columns":[...],"rows":[[...],...]} with no whitespace
+    between tokens and non-ASCII characters unescaped; cells are null, numbers,
+    strings, and lowercase hexadecimal strings for blobs.
+    Markdown: "| " + fields joined by " | " + " |" for the header, then "| --- |"
+    with " --- |" repeated for each further column, then each row the same way; "|"
+    in a field is written as "\|" and each CR LF, LF or CR as "<br>".
+    Sql: one line per row, INSERT INTO "result" ("a", "b") VALUES (...); with names
+    double-quoted (inner quotes doubled) and values NULL, the integer, the float's
+    repr, single-quoted text (inner quotes doubled) or X'hex' for blobs.
+    A result without columns produces empty text in Csv, Tsv, Markdown and Sql.
+    Json and Sql reject a non-finite float as UnsupportedCell(message).
+    A destination that is not writable is DestinationDenied(destination) before any
+    I/O; an access refusal by the filesystem or S3 is DestinationDenied too. A Local
+    destination is written to a temporary file in the same directory and atomically
+    replaces path; S3 puts the object key into bucket with boto3. Other failures are
+    ExportFailed(destination, message) with a fixed message that contains no
+    credential or service response text. The receipt reports the destination and the
+    number of UTF-8 bytes written.
+    A Local destination is replaced in the file system the program runs against: the
+    fs fixture root while a Cott scenario with an fs fixture is active, otherwise the
+    host file system; the replacement is atomic in both. While such a fixture is
+    active the host file system is never used, even when the fixture write fails.
     """
 
-    ensures Result.Ok(written) => request.destination.writable
+    ensures Result.Ok(saved) => saved.reference == request.destination
+    ensures Result.Err(RenderError.DestinationDenied(denied)) => denied == request.destination
+    ensures Result.Err(RenderError.ExportFailed(failed, _)) => failed == request.destination
 
+    error RenderError.DestinationDenied when not request.destination.writable
     error RenderError.DestinationDenied
+    error RenderError.UnsupportedCell
     error RenderError.ExportFailed
 
     effects [file.write, network]
+
+data mixed_result: QueryResult = QueryResult(
+    columns: List("id", "note", "data"),
+    rows: List(
+        TypedRow(
+            values: List(Cell.Integer(value: 1), Cell.Text(value: "a|b"), Cell.Text(value: "zz")),
+        ),
+        TypedRow(values: List(Cell.Null, Cell.Real(value: 2.5), Cell.Null)),
+    ),
+    affected_rows: -1,
+)
+
+data export_rows: QueryResult = QueryResult(
+    columns: List("id", "note"),
+    rows: List(
+        TypedRow(values: List(Cell.Integer(value: 1), Cell.Text(value: "a,b"))),
+        TypedRow(values: List(Cell.Null, Cell.Text(value: "x|y"))),
+    ),
+    affected_rows: -1,
+)
+
+scenario results_render_as_table_vertical_and_bounded_views:
+    call table = render_table(mixed_result)
+    assert table == "id | note | data\n1 | a|b | zz\nNULL | 2.5 | NULL"
+    call vertical = render_vertical(mixed_result)
+    assert vertical == "Row 1\nid: 1\nnote: a|b\ndata: zz\nRow 2\nid: NULL\nnote: 2.5\ndata: NULL"
+    call bounded = render_result(
+        mixed_result,
+        RenderOptions(
+            layout: RenderLayout.Table,
+            terminal_width: 12,
+            maximum_cell_width: 3,
+            maximum_rows: 1,
+        ),
+    )
+    assert bounded == Result.Ok(value: "id | not | d\n1 | a|b | zz")
+    call empty = render_result(
+        QueryResult(columns: List(), rows: List(), affected_rows: 0),
+        RenderOptions(
+            layout: RenderLayout.Vertical,
+            terminal_width: 5,
+            maximum_cell_width: 8,
+            maximum_rows: 10,
+        ),
+    )
+    assert empty == Result.Ok(value: "(no r")
+    call zero = render_result(
+        mixed_result,
+        RenderOptions(
+            layout: RenderLayout.Table,
+            terminal_width: 0,
+            maximum_cell_width: 8,
+            maximum_rows: 10,
+        ),
+    )
+    assert zero matches Result.Err(RenderError.InvalidWidth(_))
+
+scenario catalog_views_are_line_oriented:
+    call relations = render_catalog_relations(
+        List(
+            CatalogRelation(
+                name: "users",
+                kind: RelationKind.Table,
+                sql: Option.Some(value: "CREATE TABLE users(id)"),
+            ),
+            CatalogRelation(name: "active", kind: RelationKind.View, sql: Option.Nothing),
+        ),
+    )
+    assert relations == "table users\nview active"
+    call columns = render_catalog_columns(
+        List(
+            CatalogColumn(
+                relation: "users",
+                ordinal: 1,
+                name: "id",
+                declared_type: "INTEGER",
+                not_null: true,
+                default_sql: Option.Nothing,
+                primary_key_position: 1,
+            ),
+            CatalogColumn(
+                relation: "users",
+                ordinal: 2,
+                name: "note",
+                declared_type: "",
+                not_null: false,
+                default_sql: Option.Some(value: "'x'"),
+                primary_key_position: 0,
+            ),
+        ),
+    )
+    assert columns == "users.id INTEGER NOT NULL PRIMARY KEY 1\nusers.note DEFAULT 'x'"
+    call found = render_catalog_matches(
+        List(
+            CatalogMatch(
+                kind: CatalogMatchKind.Relation,
+                relation: "users",
+                name: "users",
+                ordinal: 0,
+            ),
+            CatalogMatch(kind: CatalogMatchKind.Column, relation: "users", name: "id", ordinal: 1),
+        ),
+    )
+    assert found == "relation users\ncolumn users.id"
+
+scenario bundled_themes_and_keymaps_resolve_by_exact_name:
+    call themes = bundled_themes()
+    assert themes == List(
+        Theme(name: "harlequin", foreground: "#DDDDDD", background: "#0C0C0C", accent: "#FEFFAC"),
+        Theme(name: "monokai", foreground: "#F8F8F2", background: "#272822", accent: "#F92672"),
+        Theme(name: "dracula", foreground: "#F8F8F2", background: "#282A36", accent: "#BD93F9"),
+        Theme(name: "nord", foreground: "#D8DEE9", background: "#2E3440", accent: "#88C0D0"),
+    )
+    call keymaps = bundled_keymaps()
+    assert keymaps == List(
+        Keymap(
+            name: "default",
+            bindings: List(
+                KeyBinding(key: "ctrl+enter", command: "execute"),
+                KeyBinding(key: "ctrl+s", command: "save"),
+                KeyBinding(key: "ctrl+q", command: "quit"),
+            ),
+        ),
+        Keymap(
+            name: "vim",
+            bindings: List(
+                KeyBinding(key: "ctrl+enter", command: "execute"),
+                KeyBinding(key: ":w", command: "save"),
+                KeyBinding(key: ":q", command: "quit"),
+            ),
+        ),
+    )
+    call nord = resolve_theme(themes, "nord")
+    assert nord matches Option.Some(theme) => theme.accent == "#88C0D0"
+    call wrong_case = resolve_theme(themes, "Nord")
+    assert wrong_case == Option.Nothing
+    call vim = resolve_keymap(keymaps, "vim")
+    assert vim matches Option.Some(keymap) => keymap.bindings.len == 3
+    call unknown = resolve_keymap(keymaps, "emacs")
+    assert unknown == Option.Nothing
+
+scenario exports_write_each_format:
+    fixtures:
+        fs files:
+            file "readme.txt" text("exports land beside this file")
+        http s3:
+            route "/unused" -> response(status: 404, body: text(""), encoding: "utf-8")
+    call csv = export_result(
+        ExportRequest(
+            result: export_rows,
+            format: ExportFormat.Csv,
+            destination: FileReference(
+                location: FileLocation.Local(path: files.path("out.csv")),
+                writable: true,
+            ),
+        ),
+    )
+    assert csv matches Result.Ok(saved) => saved.bytes_written == 21
+    call csv_text = load_query_file(
+        FileReference(location: FileLocation.Local(path: files.path("out.csv")), writable: false),
+    )
+    assert csv_text matches Result.Ok(file) => file.source == "id,note\n1,\"a,b\"\n,x|y\n"
+    call tsv = export_result(
+        ExportRequest(
+            result: export_rows,
+            format: ExportFormat.Tsv,
+            destination: FileReference(
+                location: FileLocation.Local(path: files.path("out.tsv")),
+                writable: true,
+            ),
+        ),
+    )
+    call tsv_text = load_query_file(
+        FileReference(location: FileLocation.Local(path: files.path("out.tsv")), writable: false),
+    )
+    assert tsv_text matches Result.Ok(file) => file.source == "id\tnote\n1\ta,b\n\tx|y\n"
+    call json = export_result(
+        ExportRequest(
+            result: export_rows,
+            format: ExportFormat.Json,
+            destination: FileReference(
+                location: FileLocation.Local(path: files.path("out.json")),
+                writable: true,
+            ),
+        ),
+    )
+    call json_text = load_query_file(
+        FileReference(location: FileLocation.Local(path: files.path("out.json")), writable: false),
+    )
+    assert json_text matches Result.Ok(file) => file.source == "{\"columns\":[\"id\",\"note\"],\"rows\":[[1,\"a,b\"],[null,\"x|y\"]]}\n"
+    call markdown = export_result(
+        ExportRequest(
+            result: export_rows,
+            format: ExportFormat.Markdown,
+            destination: FileReference(
+                location: FileLocation.Local(path: files.path("out.md")),
+                writable: true,
+            ),
+        ),
+    )
+    call markdown_text = load_query_file(
+        FileReference(location: FileLocation.Local(path: files.path("out.md")), writable: false),
+    )
+    assert markdown_text matches Result.Ok(file) => file.source == "| id | note |\n| --- | --- |\n| 1 | a,b |\n|  | x\\|y |\n"
+    call sql = export_result(
+        ExportRequest(
+            result: export_rows,
+            format: ExportFormat.Sql,
+            destination: FileReference(
+                location: FileLocation.Local(path: files.path("out.sql")),
+                writable: true,
+            ),
+        ),
+    )
+    call sql_text = load_query_file(
+        FileReference(location: FileLocation.Local(path: files.path("out.sql")), writable: false),
+    )
+    assert sql_text matches Result.Ok(file) => file.source == "INSERT INTO \"result\" (\"id\", \"note\") VALUES (1, 'a,b');\nINSERT INTO \"result\" (\"id\", \"note\") VALUES (NULL, 'x|y');\n"
+    call denied = export_result(
+        ExportRequest(
+            result: export_rows,
+            format: ExportFormat.Csv,
+            destination: FileReference(
+                location: FileLocation.Local(path: files.path("readme.txt")),
+                writable: false,
+            ),
+        ),
+    )
+    assert denied matches Result.Err(RenderError.DestinationDenied(_))

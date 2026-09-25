@@ -4,8 +4,8 @@ internal fun request_save(snapshot: curriculum.workflow_scenario.SaveSnapshot, r
     require(revision > 0uL)
     if (revision <= snapshot.revision) return snapshot
     return curriculum.workflow_scenario.SaveSnapshot(
-        revision = revision,
-        text = text,
-        status = curriculum.workflow_scenario.SaveStatus.Queued
+        revision,
+        text,
+        curriculum.workflow_scenario.SaveStatus.Queued
     )
 }

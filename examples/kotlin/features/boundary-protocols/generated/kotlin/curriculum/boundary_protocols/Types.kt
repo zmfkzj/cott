@@ -5,9 +5,23 @@ package curriculum.boundary_protocols
 
 public typealias TextBuffer = java.io.BufferedReader
 
+public data class ConnectionId(public val value: kotlin.ULong) : cott_runtime.CottFieldValue {
+    override val cottTypeIdentity: kotlin.String get() = "curriculum.boundary_protocols.ConnectionId"
+    override val cottFieldNames: cott_runtime.CottList<kotlin.String> get() = cott_runtime.CottList(listOf("value"))
+    override fun cottField(name: kotlin.String): kotlin.Any? = when (name) {
+        "value" -> value
+        else -> cott_runtime.CottRuntime.violation("unknown canonical field", symbol = cottTypeIdentity, phase = "field", actual = name)
+    }
+    init {
+        cott_runtime.CottRuntime.abi(value, cott_runtime.CottTypes.U64, cott_runtime.RuntimeValidation.BOUNDARY, "$.value")
+        val _cottResult = value
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottResult, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.boundary_protocols.ConnectionId", "refinement", clause = "refinement", span = cott_runtime.CottSpan(startByte = 100, endByte = 108, startLine = 6, startColumn = 11, endLine = 6, endColumn = 19), expected = "true", actual = "false")
+    }
+}
+
 public data class HandleBundle(
     public val handle: cott_runtime.Opaque<cott_runtime.CottOpaque_7237d55bbcbee604a7ba6463>,
-    public val raw_id: kotlin.ULong,
+    public val raw_id: curriculum.boundary_protocols.ConnectionId,
 ) : cott_runtime.CottFieldValue {
     override val cottTypeIdentity: kotlin.String get() = "curriculum.boundary_protocols.HandleBundle"
     override val cottFieldNames: cott_runtime.CottList<kotlin.String> get() = cott_runtime.CottList(listOf("handle", "raw_id"))
@@ -18,24 +32,30 @@ public data class HandleBundle(
     }
     init {
         cott_runtime.CottRuntime.abi(handle, cott_runtime.CottTypes.opaque(cott_runtime.CottOpaque_7237d55bbcbee604a7ba6463), cott_runtime.RuntimeValidation.BOUNDARY, "\$.handle")
-        cott_runtime.CottRuntime.abi(raw_id, cott_runtime.CottTypes.U64, cott_runtime.RuntimeValidation.BOUNDARY, "\$.raw_id")
-    }
-}
-
-public sealed interface HandleError {
-    public data object InvalidHandle : HandleError, cott_runtime.CottVariant {
-        override val cottVariant: kotlin.String get() = "curriculum.boundary_protocols.HandleError.InvalidHandle"
-        override val cottTypeIdentity: kotlin.String get() = "curriculum.boundary_protocols.HandleError.InvalidHandle"
-        override val cottFieldNames: cott_runtime.CottList<kotlin.String> get() = cott_runtime.CottList(listOf())
-        override val cottPayload: cott_runtime.CottList<kotlin.Any?> get() = cott_runtime.CottList(listOf())
-        override fun cottField(name: kotlin.String): kotlin.Any? = when (name) {
-            else -> cott_runtime.CottRuntime.violation("unknown canonical field", symbol = cottVariant, phase = "field", actual = name)
-        }
+        cott_runtime.CottRuntime.abi(raw_id, curriculum.boundary_protocols.CottDescriptors_ccc85c1f1a903d6fd4f728e8.type_6658f616e2f909cd1e2f042a(), cott_runtime.RuntimeValidation.BOUNDARY, "\$.raw_id")
     }
 }
 
 internal object CottDescriptors_ccc85c1f1a903d6fd4f728e8 {
     private val descriptors: kotlin.collections.MutableMap<kotlin.collections.List<kotlin.Any>, cott_runtime.CottType<*>> = java.util.HashMap()
+
+    internal fun  type_6658f616e2f909cd1e2f042a(): cott_runtime.CottType<curriculum.boundary_protocols.ConnectionId> =
+        kotlin.synchronized(cott_runtime.CottTypes) {
+            val key: kotlin.collections.List<kotlin.Any> = listOf("curriculum.boundary_protocols.ConnectionId")
+            val existing = descriptors[key]
+            if (existing != null) return@synchronized existing as cott_runtime.CottType<curriculum.boundary_protocols.ConnectionId>
+            val _cottDisplayName: kotlin.String = key.joinToString(separator = "|")
+            val deferred: cott_runtime.CottType<curriculum.boundary_protocols.ConnectionId> = cott_runtime.CottTypes.deferred(_cottDisplayName) {
+                kotlin.synchronized(cott_runtime.CottTypes) {
+                    descriptors[key] as? cott_runtime.CottType<curriculum.boundary_protocols.ConnectionId>
+                        ?: cott_runtime.CottRuntime.violation("recursive descriptor was resolved before initialization", symbol = "curriculum.boundary_protocols.ConnectionId", phase = "validation")
+                }
+            }
+            descriptors[key] = deferred
+            val resolved: cott_runtime.CottType<curriculum.boundary_protocols.ConnectionId> = cott_runtime.CottTypes.nominal(_cottDisplayName, curriculum.boundary_protocols.ConnectionId::class.java as java.lang.Class<curriculum.boundary_protocols.ConnectionId>, listOf(cott_runtime.CottNominalField<curriculum.boundary_protocols.ConnectionId>("value", cott_runtime.CottTypes.U64, { value -> value.`value` })), { values -> curriculum.boundary_protocols.ConnectionId(values[0] as kotlin.ULong) })
+            descriptors[key] = resolved
+            resolved
+        }
 
     internal fun  type_e32ad51e3fb1241cf54631b7(): cott_runtime.CottType<curriculum.boundary_protocols.HandleBundle> =
         kotlin.synchronized(cott_runtime.CottTypes) {
@@ -50,25 +70,7 @@ internal object CottDescriptors_ccc85c1f1a903d6fd4f728e8 {
                 }
             }
             descriptors[key] = deferred
-            val resolved: cott_runtime.CottType<curriculum.boundary_protocols.HandleBundle> = cott_runtime.CottTypes.nominal(_cottDisplayName, curriculum.boundary_protocols.HandleBundle::class.java as java.lang.Class<curriculum.boundary_protocols.HandleBundle>, listOf(cott_runtime.CottNominalField<curriculum.boundary_protocols.HandleBundle>("handle", cott_runtime.CottTypes.opaque(cott_runtime.CottOpaque_7237d55bbcbee604a7ba6463), { value -> value.handle }), cott_runtime.CottNominalField<curriculum.boundary_protocols.HandleBundle>("raw_id", cott_runtime.CottTypes.U64, { value -> value.raw_id })), { values -> curriculum.boundary_protocols.HandleBundle(values[0] as cott_runtime.Opaque<cott_runtime.CottOpaque_7237d55bbcbee604a7ba6463>, values[1] as kotlin.ULong) })
-            descriptors[key] = resolved
-            resolved
-        }
-
-    internal fun  type_bcdbf0518eb07674fc22a2f7(): cott_runtime.CottType<curriculum.boundary_protocols.HandleError> =
-        kotlin.synchronized(cott_runtime.CottTypes) {
-            val key: kotlin.collections.List<kotlin.Any> = listOf("curriculum.boundary_protocols.HandleError")
-            val existing = descriptors[key]
-            if (existing != null) return@synchronized existing as cott_runtime.CottType<curriculum.boundary_protocols.HandleError>
-            val _cottDisplayName: kotlin.String = key.joinToString(separator = "|")
-            val deferred: cott_runtime.CottType<curriculum.boundary_protocols.HandleError> = cott_runtime.CottTypes.deferred(_cottDisplayName) {
-                kotlin.synchronized(cott_runtime.CottTypes) {
-                    descriptors[key] as? cott_runtime.CottType<curriculum.boundary_protocols.HandleError>
-                        ?: cott_runtime.CottRuntime.violation("recursive descriptor was resolved before initialization", symbol = "curriculum.boundary_protocols.HandleError", phase = "validation")
-                }
-            }
-            descriptors[key] = deferred
-            val resolved: cott_runtime.CottType<curriculum.boundary_protocols.HandleError> = (cott_runtime.CottTypes.oneOf(listOf(cott_runtime.CottTypes.nominal(_cottDisplayName + "#InvalidHandle", curriculum.boundary_protocols.HandleError.InvalidHandle::class.java as java.lang.Class<curriculum.boundary_protocols.HandleError.InvalidHandle>, listOf(), { values -> curriculum.boundary_protocols.HandleError.InvalidHandle }))) as cott_runtime.CottType<curriculum.boundary_protocols.HandleError>)
+            val resolved: cott_runtime.CottType<curriculum.boundary_protocols.HandleBundle> = cott_runtime.CottTypes.nominal(_cottDisplayName, curriculum.boundary_protocols.HandleBundle::class.java as java.lang.Class<curriculum.boundary_protocols.HandleBundle>, listOf(cott_runtime.CottNominalField<curriculum.boundary_protocols.HandleBundle>("handle", cott_runtime.CottTypes.opaque(cott_runtime.CottOpaque_7237d55bbcbee604a7ba6463), { value -> value.handle }), cott_runtime.CottNominalField<curriculum.boundary_protocols.HandleBundle>("raw_id", curriculum.boundary_protocols.CottDescriptors_ccc85c1f1a903d6fd4f728e8.type_6658f616e2f909cd1e2f042a(), { value -> value.raw_id })), { values -> curriculum.boundary_protocols.HandleBundle(values[0] as cott_runtime.Opaque<cott_runtime.CottOpaque_7237d55bbcbee604a7ba6463>, values[1] as curriculum.boundary_protocols.ConnectionId) })
             descriptors[key] = resolved
             resolved
         }

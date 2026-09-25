@@ -27,7 +27,7 @@ use crate::provenance::{AgentRun, SemanticCoverage};
 use crate::requirements::{Evidence, RequirementModel, RequirementReport};
 use crate::transaction::{ChangeSet, InputSnapshot, Operation, ProjectSession};
 
-use super::binding::{agent_source_origin, requires_binding, resolve};
+use super::binding::{agent_source_origin, requires_binding, resolve, resolve_for_emit};
 use super::emit;
 use super::provenance::{
     KOTLIN_GENERATION_SCHEMA_VERSION, KOTLIN_RUNTIME_ABI_VERSION, KotlinBindingRecord,
@@ -77,11 +77,20 @@ pub(crate) struct SourceProject {
     pub generation_bytes: Option<Vec<u8>>,
     pub generation_snapshot: InputSnapshot,
     pub inputs: BTreeMap<String, String>,
+    legacy_cutover: bool,
 }
 
 pub(crate) fn load_sources(
     project: Option<PathBuf>,
     inspection: bool,
+) -> Result<SourceProject, Failure> {
+    load_sources_internal(project, inspection, false)
+}
+
+fn load_sources_internal(
+    project: Option<PathBuf>,
+    inspection: bool,
+    emit_cutover: bool,
 ) -> Result<SourceProject, Failure> {
     let root = project_root(project)?;
     let session = if inspection {
@@ -105,14 +114,16 @@ pub(crate) fn load_sources(
     let plan = KotlinPlan::from_ir(&ir).map_err(|message| Failure::new(3, message))?;
 
     let generation = generation_relative(&paths)?;
-    let (baseline, baseline_bytes, baseline_identity) = match read_generation_record(&paths)? {
-        Some((record, leaf)) => (
-            Some(record),
-            Some(leaf.bytes),
-            Some((leaf.device, leaf.inode)),
-        ),
-        None => (None, None, None),
-    };
+    let (baseline, baseline_bytes, baseline_identity, legacy_cutover) =
+        match read_generation_record(&paths, emit_cutover)? {
+            Some((record, leaf, converted)) => (
+                Some(record),
+                Some(leaf.bytes),
+                Some((leaf.device, leaf.inode)),
+                converted,
+            ),
+            None => (None, None, None, false),
+        };
     let generation_snapshot = match &baseline_bytes {
         Some(bytes) => InputSnapshot::capture_expected(
             &paths.root,
@@ -168,6 +179,45 @@ pub(crate) fn load_sources(
             "Kotlin source",
         )?;
     }
+    if legacy_cutover {
+        let record = baseline
+            .as_ref()
+            .expect("legacy cutover requires authenticated record");
+        if record.current.project_name != config.project.name {
+            return Err(Failure::new(
+                4,
+                "legacy Kotlin generation provenance belongs to a different project identity",
+            ));
+        }
+        for implementation in &record.current.implementations {
+            if inputs.get(&implementation.source_origin) != Some(&implementation.content_hash)
+                || record.current.inputs.get(&implementation.source_origin)
+                    != Some(&implementation.content_hash)
+            {
+                return Err(Failure::new(
+                    4,
+                    format!(
+                        "legacy Kotlin implementation source is not authenticated: {}",
+                        implementation.source_origin
+                    ),
+                ));
+            }
+            if implementation.owner == KotlinOwner::Agent
+                && !record.current.agent_runs.iter().any(|run| {
+                    run.symbol == implementation.cott_symbol
+                        && run.implementation_hash == implementation.content_hash
+                })
+            {
+                return Err(Failure::new(
+                    4,
+                    format!(
+                        "legacy Kotlin agent implementation has no matching AgentRun: {}",
+                        implementation.cott_symbol
+                    ),
+                ));
+            }
+        }
+    }
 
     Ok(SourceProject {
         session,
@@ -179,10 +229,19 @@ pub(crate) fn load_sources(
         generation_bytes: baseline_bytes,
         generation_snapshot,
         inputs,
+        legacy_cutover,
     })
 }
 
 pub(crate) fn load(project: Option<PathBuf>, inspection: bool) -> Result<Project, Failure> {
+    load_internal(project, inspection, false)
+}
+
+fn load_internal(
+    project: Option<PathBuf>,
+    inspection: bool,
+    emit_cutover: bool,
+) -> Result<Project, Failure> {
     let SourceProject {
         session,
         config,
@@ -193,10 +252,21 @@ pub(crate) fn load(project: Option<PathBuf>, inspection: bool) -> Result<Project
         generation_bytes: baseline_bytes,
         generation_snapshot,
         mut inputs,
-    } = load_sources(project, inspection)?;
+        legacy_cutover,
+    } = load_sources_internal(project, inspection, emit_cutover)?;
 
-    let bindings = resolve(&config, &paths, &plan, generator_rules.as_deref())
-        .map_err(|message| Failure::new(4, message))?;
+    let bindings = if legacy_cutover {
+        resolve_for_emit(
+            &config,
+            &paths,
+            &plan,
+            generator_rules.as_deref(),
+            baseline.as_ref().expect("legacy cutover requires record"),
+        )
+    } else {
+        resolve(&config, &paths, &plan, generator_rules.as_deref())
+    }
+    .map_err(|message| Failure::new(4, message))?;
     for binding in &bindings {
         insert_binding_input(&paths, binding, &mut inputs, false)?;
     }
@@ -573,9 +643,8 @@ pub(crate) fn format(project: Option<PathBuf>, check: bool) -> Result<(), Failur
         .apply(&snapshot, &changes)
         .map_err(|error| Failure::new(6, error.to_string()))
 }
-
 pub(crate) fn emit(project: Option<PathBuf>, ir_only: bool) -> Result<PathBuf, Failure> {
-    let loaded = load(project, false)?;
+    let loaded = load_internal(project, false, !ir_only)?;
     let planned = emit::emit(&loaded.config, &loaded.plan, &loaded.bindings)
         .map_err(|message| Failure::new(4, message))?;
     let pending = planned.unresolved.into_iter().collect::<BTreeSet<_>>();
@@ -1726,16 +1795,32 @@ fn binding_record(binding: &KotlinBinding) -> Result<KotlinBindingRecord, Failur
 
 fn read_generation_record(
     paths: &KotlinPaths,
-) -> Result<Option<(KotlinGenerationRecord, RegularLeaf)>, Failure> {
+    emit_cutover: bool,
+) -> Result<Option<(KotlinGenerationRecord, RegularLeaf, bool)>, Failure> {
     let path = paths.artifact_root.join("generation.json");
     let Some(leaf) = read_regular_leaf(&path, "Kotlin generation record")
         .map_err(|message| Failure::new(6, message))?
     else {
         return Ok(None);
     };
-    let record = KotlinGenerationRecord::parse(&leaf.bytes)
-        .map_err(|message| Failure::new(4, format!("invalid {}: {message}", path.display())))?;
-    Ok(Some((record, leaf)))
+    let (record, converted) = match KotlinGenerationRecord::parse(&leaf.bytes) {
+        Ok(record) => (record, false),
+        Err(error) if emit_cutover => (
+            KotlinGenerationRecord::convert_legacy_for_emit(&leaf.bytes)
+                .map_err(|message| {
+                    Failure::new(4, format!("invalid {}: {message}", path.display()))
+                })?
+                .ok_or_else(|| Failure::new(4, format!("invalid {}: {error}", path.display())))?,
+            true,
+        ),
+        Err(error) => {
+            return Err(Failure::new(
+                4,
+                format!("invalid {}: {error}", path.display()),
+            ));
+        }
+    };
+    Ok(Some((record, leaf, converted)))
 }
 
 struct RegularLeaf {

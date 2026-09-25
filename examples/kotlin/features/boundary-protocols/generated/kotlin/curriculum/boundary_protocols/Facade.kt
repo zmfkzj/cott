@@ -4,7 +4,8 @@
 package curriculum.boundary_protocols
 
 /**
- * Deliberately adapt an unconstrained value to an explicitly narrowed boundary value.
+ * Retype an unconstrained `Any` value as `Unknown`, so that callers must narrow it explicitly
+ * before use.
  */
 
 public fun  adapt_unknown(`value`: kotlin.Any?): kotlin.Any? {
@@ -25,7 +26,7 @@ public fun  adapt_unknown(`value`: kotlin.Any?): kotlin.Any? {
 }
 
 /**
- * Return the supplied async iterator.
+ * Pass an async line iterator across the boundary.
  */
 
 public suspend fun  async_lines(values: cott_runtime.CottAsyncIterator<kotlin.String>): cott_runtime.CottAsyncIterator<kotlin.String> {
@@ -46,7 +47,7 @@ public suspend fun  async_lines(values: cott_runtime.CottAsyncIterator<kotlin.St
 }
 
 /**
- * Return the supplied async generator.
+ * Pass an async generator across the boundary.
  */
 
 public suspend fun  echo_async(values: cott_runtime.CottAsyncGenerator<kotlin.Any?, kotlin.Any?, cott_runtime.CottUnit>): cott_runtime.CottAsyncGenerator<kotlin.Any?, kotlin.Any?, cott_runtime.CottUnit> {
@@ -67,7 +68,8 @@ public suspend fun  echo_async(values: cott_runtime.CottAsyncGenerator<kotlin.An
 }
 
 /**
- * Yield each value, discard sent unknown values, and return the yield count.
+ * Re-yield the values of an iterator from a generator. Values sent into the generator are
+ * ignored; its return value is the number of values it yielded.
  */
 
 public fun  echo_values(values: cott_runtime.CottIterator<kotlin.Any?>): cott_runtime.CottGenerator<kotlin.Any?, kotlin.Any?, kotlin.ULong> {
@@ -88,10 +90,12 @@ public fun  echo_values(values: cott_runtime.CottIterator<kotlin.Any?>): cott_ru
 }
 
 /**
- * Explicitly adapt a client-session opaque handle to its raw ID.
+ * Explicitly adapt a client-session opaque handle back to its connection ID by reading the
+ * handle's opaque payload. `bundle` comes from `wrap_handle`; a handle carrying any other
+ * payload is outside this contract.
  */
 
-public fun  extract_handle_id(bundle: curriculum.boundary_protocols.HandleBundle): kotlin.ULong {
+public fun  extract_handle_id(bundle: curriculum.boundary_protocols.HandleBundle): curriculum.boundary_protocols.ConnectionId {
     cott_runtime.CottRuntime.requireIdentity("boundary-protocols", "0.1.0", 1)
     val _cottArg_bundle = cott_runtime.CottRuntime.abi(bundle, curriculum.boundary_protocols.CottDescriptors_ccc85c1f1a903d6fd4f728e8.type_e32ad51e3fb1241cf54631b7(), cott_runtime.RuntimeValidation.BOUNDARY, "\$.bundle")
     val _cottRawResult = try {
@@ -104,15 +108,14 @@ public fun  extract_handle_id(bundle: curriculum.boundary_protocols.HandleBundle
     } catch (error: kotlin.Throwable) {
         cott_runtime.CottRuntime.violation("implementation raised an undeclared exception", symbol = "curriculum.boundary_protocols.extract_handle_id", phase = "implementation-call", expected = "declared Result error or ordinary return", actual = error::class.java.name, cause = error)
     }
-    val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.U64, cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
-    if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottResult, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.boundary_protocols.extract_handle_id", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 624, endByte = 642, startLine = 28, startColumn = 5, endLine = 28, endColumn = 23), expected = "true", actual = "false")
-    }
+    val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, curriculum.boundary_protocols.CottDescriptors_ccc85c1f1a903d6fd4f728e8.type_6658f616e2f909cd1e2f042a(), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     return _cottResult
 }
 
 /**
- * Lazily yield buffer lines without trailing line endings.
+ * Iterate the lines of a caller-owned text buffer. A line ends at LF, CR or CRLF, and the
+ * terminator is not part of the yielded line. A final line without a terminator is still
+ * yielded; an empty buffer yields nothing.
  */
 
 public fun  iter_lines(buffer: curriculum.boundary_protocols.TextBuffer): cott_runtime.CottIterator<kotlin.String> {
@@ -133,17 +136,16 @@ public fun  iter_lines(buffer: curriculum.boundary_protocols.TextBuffer): cott_r
 }
 
 /**
- * Wrap a nonzero connection ID in a client-session opaque handle.
+ * Wrap a connection ID in a client-session opaque handle.
+ * 
+ * The handle's opaque payload is the U64 value carried by `raw_id`, not the `ConnectionId`
+ * wrapper and not a target object derived from it. `HandleBundle.raw_id` repeats the same ID
+ * as plain data.
  */
 
-public fun  wrap_handle(raw_id: kotlin.ULong): cott_runtime.CottResult<curriculum.boundary_protocols.HandleBundle, curriculum.boundary_protocols.HandleError> {
+public fun  wrap_handle(raw_id: curriculum.boundary_protocols.ConnectionId): curriculum.boundary_protocols.HandleBundle {
     cott_runtime.CottRuntime.requireIdentity("boundary-protocols", "0.1.0", 1)
-    val _cottArg_raw_id = cott_runtime.CottRuntime.abi(raw_id, cott_runtime.CottTypes.U64, cott_runtime.RuntimeValidation.BOUNDARY, "\$.raw_id")
-    var _cottExpectedError: kotlin.String? = null
-    var _cottExpectedErrorClause: kotlin.String? = null
-    if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        if (_cottExpectedError == null && ((cott_runtime.CottRuntime.canonicalEqual(_cottArg_raw_id, java.math.BigInteger("0").toString().toULong())))) { _cottExpectedError = "curriculum.boundary_protocols.HandleError.InvalidHandle"; _cottExpectedErrorClause = "error:2" }
-    }
+    val _cottArg_raw_id = cott_runtime.CottRuntime.abi(raw_id, curriculum.boundary_protocols.CottDescriptors_ccc85c1f1a903d6fd4f728e8.type_6658f616e2f909cd1e2f042a(), cott_runtime.RuntimeValidation.BOUNDARY, "\$.raw_id")
     val _cottRawResult = try {
         cott_impl.curriculum.boundary_protocols.wrap_handle(_cottArg_raw_id)
     } catch (error: cott_runtime.CottContractViolation) {
@@ -154,13 +156,9 @@ public fun  wrap_handle(raw_id: kotlin.ULong): cott_runtime.CottResult<curriculu
     } catch (error: kotlin.Throwable) {
         cott_runtime.CottRuntime.violation("implementation raised an undeclared exception", symbol = "curriculum.boundary_protocols.wrap_handle", phase = "implementation-call", expected = "declared Result error or ordinary return", actual = error::class.java.name, cause = error)
     }
-    val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(curriculum.boundary_protocols.CottDescriptors_ccc85c1f1a903d6fd4f728e8.type_e32ad51e3fb1241cf54631b7(), curriculum.boundary_protocols.CottDescriptors_ccc85c1f1a903d6fd4f728e8.type_bcdbf0518eb07674fc22a2f7()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
+    val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, curriculum.boundary_protocols.CottDescriptors_ccc85c1f1a903d6fd4f728e8.type_e32ad51e3fb1241cf54631b7(), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val bundle = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as curriculum.boundary_protocols.HandleBundle); run { cott_runtime.CottRuntime.checkContract((((cott_runtime.CottRuntime.canonicalEqual((bundle).raw_id, _cottArg_raw_id))) && ((cott_runtime.CottRuntime.canonicalCompare((bundle).raw_id, java.math.BigInteger("0").toString().toULong()) > 0))), "curriculum.boundary_protocols.wrap_handle", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 335, endByte = 409, startLine = 17, startColumn = 5, endLine = 17, endColumn = 79), expected = "true", actual = "false"); true } } else true }
-        val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
-        val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
-        cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>(), "curriculum.boundary_protocols.wrap_handle", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>().toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
-        if (_cottExpectedErrorClause == "error:2") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.boundary_protocols.HandleError.InvalidHandle", "curriculum.boundary_protocols.wrap_handle", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 415, endByte = 463, startLine = 19, startColumn = 5, endLine = 19, endColumn = 53))
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual(((_cottResult).raw_id).`value`, (_cottArg_raw_id).`value`)), "curriculum.boundary_protocols.wrap_handle", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 545, endByte = 576, startLine = 21, startColumn = 5, endLine = 21, endColumn = 36), expected = "true", actual = "false")
     }
     return _cottResult
 }

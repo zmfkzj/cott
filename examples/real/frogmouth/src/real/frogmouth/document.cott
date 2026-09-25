@@ -1,6 +1,7 @@
 module frogmouth.document
 
-use frogmouth.model.{Document, Location}
+use frogmouth.model.{Document, Location, LocationKind}
+use frogmouth.navigation.{NavigationError}
 
 enum LoadError:
     NotFound(source: Str)
@@ -9,14 +10,63 @@ enum LoadError:
     NetworkFailed(source: Str, message: Str)
     ReadFailed(source: Str, message: Str)
 
+enum OpenError:
+    Navigation(cause: NavigationError)
+    Load(cause: LoadError)
+
+fn derive_title(location: Location, markdown: Str) -> Str:
+    doc """
+    Choose a document title. Split markdown into lines at LF and remove one
+    trailing CR from each. A heading line starts with a run of one to six "#"
+    characters (the whole leading run) followed by a space; its text is the rest
+    of the line with leading and trailing spaces and tabs removed. The title is
+    the text of the first heading line whose text is non-empty. Without one, the
+    title is the last non-empty "/"-separated segment of location.target, or
+    location.target itself when it has no non-empty segment. Only this line rule
+    applies: code blocks, setext headings and inline markup are not interpreted.
+    """
+
+    ensures result.len > 0
+    ensures (contains(markdown, result) or contains(location.target, result))
+    ensures (not contains(markdown, "# ") => contains(location.target, result))
+
+    effects []
+
 fn load_document(location: Location) -> Result[Document, LoadError]:
     doc """
-    Load at most 5 MiB of UTF-8 Markdown and derive a title from its first heading.
+    Load Markdown for location, reading at most 5242880 bytes (5 MiB) plus one
+    byte to detect a larger document.
+    
+    Local: read the file at location.target from the file system the program
+    runs against: the fs fixture root while a Cott scenario with an fs fixture
+    is active, otherwise the host file system, where a relative target is
+    relative to the process working directory. A missing file is NotFound; any
+    other open or read failure is ReadFailed. While a scenario fs fixture is
+    active, a target the fixture does not permit (absolute, or outside the
+    fixture root) is a contract violation raised by the fixture, not a read
+    failure.
+    
+    Http: send one GET to location.target, following redirects, with a 30000
+    millisecond timeout for the connection attempt and each blocking read. A
+    final status of 404 or 410 is NotFound. Any other final status outside
+    200-299 is NetworkFailed whose message contains the decimal status. Name
+    resolution, connection, timeout and incomplete-response failures are
+    NetworkFailed.
+    
+    More than 5242880 bytes is TooLarge. Bytes that are not strict UTF-8 are
+    InvalidEncoding. The markdown is the decoded text with one leading U+FEFF
+    removed, otherwise unchanged, and the title is
+    frogmouth.document.derive_title(location, markdown). Every LoadError's
+    source is location.target.
     """
 
     ensures Result.Ok(document) => document.location == location
-    ensures Result.Ok(document) => document.title.len > 0
     ensures Result.Ok(document) => document.markdown.len <= 5242880
+    ensures Result.Err(LoadError.NotFound(source)) => source == location.target
+    ensures Result.Err(LoadError.InvalidEncoding(source)) => source == location.target
+    ensures Result.Err(LoadError.TooLarge(source)) => source == location.target
+    ensures Result.Err(LoadError.NetworkFailed(source, _)) => source == location.target
+    ensures Result.Err(LoadError.ReadFailed(source, _)) => source == location.target
 
     error LoadError.NotFound
     error LoadError.InvalidEncoding
@@ -25,3 +75,75 @@ fn load_document(location: Location) -> Result[Document, LoadError]:
     error LoadError.ReadFailed
 
     effects [file.read, network]
+
+fn open_location(value: Str, working_directory: Path) -> Result[Document, OpenError]:
+    doc """
+    The frogmouth composition root, used by the address bar and by reload. Call
+    frogmouth.navigation.resolve_location(value, working_directory); its error is
+    returned as OpenError.Navigation and nothing is loaded. Otherwise return
+    frogmouth.document.load_document of the resolved location, with its error
+    returned as OpenError.Load.
+    """
+
+    ensures Result.Ok(document) => (document.location.kind == LocationKind.Http => document.location.target == value)
+    ensures Result.Ok(document) => (document.location.kind == LocationKind.Local => ends_with(document.location.target, value))
+
+    error OpenError.Navigation when (value == "" or (contains(value, "://") and not (starts_with(value, "http://") or starts_with(value, "https://"))))
+    error OpenError.Load
+
+    effects [file.read, network]
+
+requirement LOAD_TITLE_IS_DERIVED for load_document:
+    text "A loaded document's title is derive_title(location, markdown) of its own location and markdown."
+    checked_by open_location_loads_local_and_http_documents assert 1
+    checked_by open_location_loads_local_and_http_documents assert 2
+
+requirement OPEN_RESOLVES_THEN_LOADS for open_location:
+    text "open_location returns load_document of the Location that resolve_location produced; a navigation error is returned as OpenError.Navigation without loading, and a load error is returned unchanged inside OpenError.Load."
+    checked_by open_location_loads_local_and_http_documents
+
+scenario titles_come_from_first_heading_or_target:
+    call heading = derive_title(
+        Location(kind: LocationKind.Local, target: "/notes/todo.md"),
+        "#hashtag\n#   \n####### deep\n### Plan  \n# Later",
+    )
+    assert heading == "Plan"
+    call segment = derive_title(
+        Location(kind: LocationKind.Http, target: "https://example.com/docs/"),
+        "no headings",
+    )
+    assert segment == "docs"
+    call root = derive_title(Location(kind: LocationKind.Local, target: "/"), "")
+    assert root == "/"
+
+scenario open_location_loads_local_and_http_documents:
+    fixtures:
+        fs files:
+            file "docs/guide.md" text("intro\r\n## Setup Guide \nbody\n")
+            file "docs/latin1.md" hex("636166e90a")
+        http service:
+            route "/readme.md" -> response(status: 200, body: text("# Remote\ntext"), encoding: "utf-8")
+            route "/gone.md" -> response(status: 404, body: text("missing"), encoding: "utf-8")
+            route "/broken.md" -> response(status: 500, body: text("oops"), encoding: "utf-8")
+    call local = open_location("guide.md", files.path("docs"))
+    assert (local == Result.Ok(value: Document(location: Location(kind: LocationKind.Local, target: "docs/guide.md"), title: "Setup Guide", markdown: "intro\r\n## Setup Guide \nbody\n")))
+    call remote = open_location(service.url("/readme.md"), files.path("docs"))
+    assert remote matches Result.Ok(document) => document.title == "Remote" and document.markdown == "# Remote\ntext"
+    call missing = open_location("absent.md", files.path("docs"))
+    assert missing == Result.Err(
+        error: OpenError.Load(cause: LoadError.NotFound(source: "docs/absent.md")),
+    )
+    call encoded = open_location("latin1.md", files.path("docs"))
+    assert encoded == Result.Err(
+        error: OpenError.Load(cause: LoadError.InvalidEncoding(source: "docs/latin1.md")),
+    )
+    call gone = open_location(service.url("/gone.md"), files.path("docs"))
+    assert gone matches Result.Err(OpenError.Load(LoadError.NotFound(source))) => source == service.url("/gone.md")
+    call broken = open_location(service.url("/broken.md"), files.path("docs"))
+    assert broken matches Result.Err(OpenError.Load(LoadError.NetworkFailed(source, message))) => contains(message, "500")
+    call unsupported = open_location("ftp://mirror/readme.md", files.path("docs"))
+    assert unsupported == Result.Err(
+        error: OpenError.Navigation(cause: NavigationError.UnsupportedScheme(scheme: "ftp")),
+    )
+    call empty = open_location("", files.path("docs"))
+    assert empty == Result.Err(error: OpenError.Navigation(cause: NavigationError.EmptyInput))

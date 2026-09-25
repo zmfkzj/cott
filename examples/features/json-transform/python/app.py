@@ -15,7 +15,7 @@ async def main() -> None:
     payload = await wrap_scalar_json("greeting", "Hello Cott")
     extracted = extract_string_field(payload, "greeting")
     if isinstance(extracted, Ok):
-        print(f"Extracted JSON field: {extracted.value}")
+        print(f"Extracted JSON field: {extracted.value.text}")
 
     chain = JsonChain_Link(value="first", next=Some(value=JsonChain_End()))
     print(f"Recursive JSON chain: {chain.value}")

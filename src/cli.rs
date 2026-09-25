@@ -21,7 +21,7 @@ use crate::agent::{
 };
 use crate::binding::{
     PythonFileRole, ResolvedBinding, audit_facade_file, recorded_intent_baseline,
-    resolve_implementations, validate_candidate,
+    resolve_implementations, resolve_implementations_with_emit_baseline, validate_candidate,
 };
 use crate::compiler::{ProjectDiagnostic, parse_project};
 use crate::diagnostics::{
@@ -1647,6 +1647,111 @@ fn shadow_warnings(
     Ok(warnings)
 }
 
+/// Authenticate a previous compiler record and its complete input/managed byte
+/// set for the explicit emit transaction. Normal readers never accept it.
+fn legacy_python_record_for_emit(
+    paths: &ProjectPaths,
+) -> Result<Option<(GenerationRecord, InputSnapshot)>, String> {
+    let artifact_root = artifact_root_for_paths(paths)?;
+    let generation = artifact_root.join("generation.json");
+    let relative = generation
+        .strip_prefix(&paths.root)
+        .map_err(|_| "generation record escaped project root".to_owned())?
+        .to_path_buf();
+    let old_bytes = match fs::read(&generation) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "read generation provenance {}: {error}",
+                generation.display()
+            ));
+        }
+    };
+    let Some(record) = GenerationRecord::legacy_for_emit(&old_bytes).map_err(|error| {
+        format!(
+            "invalid generation provenance {}: {error}",
+            generation.display()
+        )
+    })?
+    else {
+        return Ok(None);
+    };
+    let inputs = record
+        .current
+        .inputs
+        .as_object()
+        .ok_or("legacy generation inputs must be an object")?;
+    let mut expected = BTreeMap::new();
+    // Contracts, manifests, rules, and manifest-selected bindings may have
+    // intentionally changed for this emit. Their new bytes are independently
+    // captured by the emission plan. Agent-owned sources are different: only
+    // the recorded AgentRun/content hash can authorize their continued use.
+    for (path, hash) in inputs {
+        let source = Path::new(path);
+        if !source
+            .components()
+            .any(|component| component.as_os_str() == std::ffi::OsStr::new("_cott_impl"))
+        {
+            continue;
+        }
+        let hash = hash
+            .as_str()
+            .ok_or("legacy agent source hash must be a digest")?;
+        expected.insert(source.to_path_buf(), hash.to_owned());
+    }
+    for (path, hash) in &record.current.managed_files {
+        if expected.insert(PathBuf::from(path), hash.clone()).is_some() {
+            return Err(format!("legacy input overlaps managed file: {path}"));
+        }
+    }
+    for implementation in record
+        .current
+        .implementations
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        if implementation
+            .get("owner")
+            .and_then(serde_json::Value::as_str)
+            != Some("agent")
+        {
+            continue;
+        }
+        let symbol = implementation
+            .get("cott_symbol")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("legacy agent implementation has no symbol")?;
+        let path = implementation
+            .get("source_origin")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("legacy agent implementation has no source path")?;
+        let hash = implementation
+            .get("content_hash")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("legacy agent implementation has no content digest")?;
+        if !record
+            .current
+            .agent_runs
+            .iter()
+            .any(|run| run.symbol == symbol && run.implementation_hash == hash)
+            || inputs.get(path).and_then(serde_json::Value::as_str) != Some(hash)
+        {
+            return Err(format!(
+                "legacy agent source or AgentRun evidence disagrees: {symbol}"
+            ));
+        }
+    }
+    expected.insert(
+        relative.clone(),
+        format!("sha256:{}", sha256_hex(&old_bytes)),
+    );
+    let snapshot = InputSnapshot::capture_expected(&paths.root, expected, [])
+        .map_err(|error| format!("legacy generation provenance changed: {error}"))?;
+    Ok(Some((record, snapshot)))
+}
+
 struct PlannedProject {
     session: ProjectSession,
     config: crate::manifest::ProjectConfig,
@@ -1670,6 +1775,13 @@ fn plan(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
 }
 
 fn plan_with_session(session: ProjectSession) -> Result<PlannedProject, i32> {
+    plan_with_session_impl(session, false)
+}
+
+fn plan_with_session_impl(
+    session: ProjectSession,
+    explicit_emit: bool,
+) -> Result<PlannedProject, i32> {
     let root = session.root().to_path_buf();
     let (config, paths) = match load_config_with_paths(&root) {
         Ok(config) => config,
@@ -1682,6 +1794,17 @@ fn plan_with_session(session: ProjectSession) -> Result<PlannedProject, i32> {
         eprintln!("error: {message}");
         return Err(2);
     }
+    let legacy = if explicit_emit {
+        match legacy_python_record_for_emit(&paths) {
+            Ok(legacy) => legacy,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return Err(4);
+            }
+        }
+    } else {
+        None
+    };
     if let Err(diagnostics) = audit_authored_python(&paths) {
         for diagnostic in diagnostics {
             eprintln!("error: {diagnostic}");
@@ -1742,7 +1865,12 @@ fn plan_with_session(session: ProjectSession) -> Result<PlannedProject, i32> {
             return Err(1);
         }
     };
-    let resolution = match resolve_implementations(&config, &paths, &plan) {
+    let resolution = match resolve_implementations_with_emit_baseline(
+        &config,
+        &paths,
+        &plan,
+        legacy.as_ref().map(|(record, _)| record),
+    ) {
         Ok(resolution) => resolution,
         Err(diagnostics) => {
             for diagnostic in diagnostics {
@@ -1764,7 +1892,7 @@ fn plan_with_session(session: ProjectSession) -> Result<PlannedProject, i32> {
     }
     let bindings = resolution.resolved;
     add_binding_input_hashes(&paths, &bindings, &mut input_hashes);
-    let input_snapshot =
+    let mut input_snapshot =
         match capture_resolution_inputs(&paths.root, &input_hashes, &resolution.pending_sources) {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -1772,6 +1900,9 @@ fn plan_with_session(session: ProjectSession) -> Result<PlannedProject, i32> {
                 return Err(6);
             }
         };
+    if let Some((_, snapshot)) = &legacy {
+        input_snapshot.merge_missing(snapshot.clone());
+    }
     let mut emission = match emit(&config, &plan, &ir, &bindings) {
         Ok(emission) => emission,
         Err(diagnostics) => {
@@ -1779,7 +1910,13 @@ fn plan_with_session(session: ProjectSession) -> Result<PlannedProject, i32> {
             return Err(4);
         }
     };
-    if let Err(message) = enrich_generation_record(&paths, &config, input_hashes, &mut emission) {
+    if let Err(message) = enrich_generation_record(
+        &paths,
+        &config,
+        input_hashes,
+        &mut emission,
+        legacy.as_ref().map(|(record, _)| record),
+    ) {
         eprintln!("error: {message}");
         return Err(4);
     }
@@ -1792,6 +1929,17 @@ fn plan_with_session(session: ProjectSession) -> Result<PlannedProject, i32> {
         input_snapshot,
     })
 }
+fn plan_for_emit(project_argument: Option<PathBuf>) -> Result<PlannedProject, i32> {
+    let Ok(root) = project_root(project_argument) else {
+        return Err(2);
+    };
+    let session = ProjectSession::acquire(&root).map_err(|error| {
+        eprintln!("error: {error}");
+        6
+    })?;
+    plan_with_session_impl(session, true)
+}
+
 fn collect_input_hashes(
     config: &crate::manifest::ProjectConfig,
     paths: &ProjectPaths,
@@ -2244,6 +2392,7 @@ fn enrich_generation_record(
     config: &crate::manifest::ProjectConfig,
     inputs: BTreeMap<String, String>,
     emission: &mut Emission,
+    emit_baseline: Option<&GenerationRecord>,
 ) -> Result<(), String> {
     let bytes = emission
         .files
@@ -2257,18 +2406,23 @@ fn enrich_generation_record(
         crate::python_verify::planned_dependency_records(&config.project.name, paths)?;
     let existing_path = artifact_root_for_paths(paths)?.join("generation.json");
     if existing_path.exists() {
-        let existing = fs::read(&existing_path).map_err(|error| {
-            format!(
-                "failed to read existing generation record {}: {error}",
-                existing_path.display()
-            )
-        })?;
-        let existing = GenerationRecord::parse(&existing).map_err(|error| {
-            format!(
-                "invalid existing generation record {}: {error}",
-                existing_path.display()
-            )
-        })?;
+        let existing = match emit_baseline {
+            Some(record) => record.clone(),
+            None => {
+                let bytes = fs::read(&existing_path).map_err(|error| {
+                    format!(
+                        "failed to read existing generation record {}: {error}",
+                        existing_path.display()
+                    )
+                })?;
+                GenerationRecord::parse(&bytes).map_err(|error| {
+                    format!(
+                        "invalid existing generation record {}: {error}",
+                        existing_path.display()
+                    )
+                })?
+            }
+        };
         merge_dependency_evidence(&mut dependencies, &existing.current.dependencies);
         record.last_verified = existing.last_verified;
         let planned_runtime = record.current.tools.get("runtime").cloned();
@@ -2626,6 +2780,13 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
             return 2;
         }
     };
+    let legacy = match legacy_python_record_for_emit(&paths) {
+        Ok(legacy) => legacy,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 4;
+        }
+    };
     let sources = match discover_sources_from_paths(&paths) {
         Ok(sources) => sources,
         Err(error) => {
@@ -2676,14 +2837,23 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
             return 4;
         }
     };
-    let input_snapshot = match capture_expected_inputs(&paths, &input_hashes, []) {
+    let mut input_snapshot = match capture_expected_inputs(&paths, &input_hashes, []) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             eprintln!("error: {error}");
             return 6;
         }
     };
-    if let Err(error) = enrich_generation_record(&paths, &config, input_hashes, &mut emission) {
+    if let Some((_, snapshot)) = &legacy {
+        input_snapshot.merge_missing(snapshot.clone());
+    }
+    if let Err(error) = enrich_generation_record(
+        &paths,
+        &config,
+        input_hashes,
+        &mut emission,
+        legacy.as_ref().map(|(record, _)| record),
+    ) {
         eprintln!("error: {error}");
         return 4;
     }
@@ -2730,15 +2900,18 @@ fn emit_ir(project_argument: Option<PathBuf>) -> i32 {
             return 1;
         }
     };
-    let trusted = match actual.get(Path::new("generation.json")) {
-        Some(bytes) => match GenerationRecord::parse(bytes) {
-            Ok(record) => Some(record),
-            Err(error) => {
-                eprintln!("error: invalid existing generation record: {error}");
-                return 4;
-            }
+    let trusted = match legacy.as_ref() {
+        Some((record, _)) => Some(record.clone()),
+        None => match actual.get(Path::new("generation.json")) {
+            Some(bytes) => match GenerationRecord::parse(bytes) {
+                Ok(record) => Some(record),
+                Err(error) => {
+                    eprintln!("error: invalid existing generation record: {error}");
+                    return 4;
+                }
+            },
+            None => None,
         },
-        None => None,
     };
     let mut managed_files = BTreeMap::new();
     match &trusted {
@@ -3054,6 +3227,9 @@ fn generate_project(
     }
     unresolved.sort_by(|left, right| left.cott_symbol.cmp(&right.cott_symbol));
     let mut bindings = resolution.resolved;
+    // Record inputs are rebuilt from the final binding set: a candidate left pending for
+    // repair is not a trusted input.
+    let base_inputs = input_hashes.clone();
     add_binding_input_hashes(&paths, &bindings, &mut input_hashes);
     let input_snapshot =
         match capture_resolution_inputs(&paths.root, &input_hashes, &resolution.pending_sources) {
@@ -3063,9 +3239,14 @@ fn generate_project(
                 return 6;
             }
         };
+    // Prompts reference only the bindings frozen by this generate's resolution snapshot.
+    let references = bindings.clone();
     let mut durable_sources = Vec::new();
     let mut generated_runs = Vec::new();
     let mut generation_failure = None;
+    let mut validation_failed = false;
+    let mut validated_emission = None;
+    let mut pending_repairs = BTreeSet::new();
     let generation_total = unresolved.len();
     let generation_positions = unresolved
         .iter()
@@ -3096,20 +3277,24 @@ fn generate_project(
                 return 4;
             }
         };
+        // `repair` carries a candidate rejected by complete validation and its diagnostic.
         let generate_candidate =
             |unresolved_binding: &crate::binding::UnresolvedBinding,
-             bindings: &[ResolvedBinding]|
+             repair: Option<(&[u8], &str)>|
              -> Result<(PythonCallable, AgentRunCandidate), (i32, String)> {
                 let callable = callables
                     .get(&unresolved_binding.cott_symbol)
                     .expect("resolution callable was selected from the artifact plan");
-                let existing = match pending_implementation(
-                    &paths.root,
-                    &unresolved_binding.source,
-                    &resolution.pending_sources,
-                ) {
-                    Ok(existing) => existing,
-                    Err(error) => return Err((6, error)),
+                let existing = match repair {
+                    Some((bytes, _)) => Some(bytes.to_vec()),
+                    None => match pending_implementation(
+                        &paths.root,
+                        &unresolved_binding.source,
+                        &resolution.pending_sources,
+                    ) {
+                        Ok(existing) => existing,
+                        Err(error) => return Err((6, error)),
+                    },
                 };
                 let temporary = match agent_workspace() {
                     Ok(paths) => paths,
@@ -3119,17 +3304,22 @@ fn generate_project(
                 };
                 let target = temporary.workspace.join("implementation.py");
                 let fully_qualified = callable.cott_symbol.clone();
-                let position = generation_positions[&fully_qualified];
-                eprintln!("generate [{position}/{generation_total}] start `{fully_qualified}`");
+                let progress = match (repair, generation_positions.get(&fully_qualified)) {
+                    (None, Some(position)) => format!("generate [{position}/{generation_total}]"),
+                    _ => "generate repair".to_owned(),
+                };
+                eprintln!("{progress} start `{fully_qualified}`");
                 let result = (|| {
+                    let mut feedback =
+                        repair.map_or_else(String::new, |(_, feedback)| feedback.to_owned());
                     let prompt = render_generation_prompt(
                         &plan,
                         callable,
                         &rules,
-                        bindings,
+                        &references,
                         &config.python.external_types,
                         existing.as_deref(),
-                        None,
+                        (!feedback.is_empty()).then_some(feedback.as_str()),
                     )?;
                     let mut candidate = run_agent(
                         AgentSelection { kind: agent, model },
@@ -3140,10 +3330,7 @@ fn generate_project(
                         prompt,
                         config.generator.timeout_seconds,
                     )?;
-                    eprintln!(
-                        "generate [{position}/{generation_total}] validate `{fully_qualified}`"
-                    );
-                    let mut feedback = String::new();
+                    eprintln!("{progress} validate `{fully_qualified}`");
                     for attempt in 0..=2 {
                         match validate_candidate(
                             &config,
@@ -3153,17 +3340,12 @@ fn generate_project(
                             &candidate.implementation,
                         ) {
                             Ok(()) => {
-                                eprintln!(
-                                    "generate [{position}/{generation_total}] done `{fully_qualified}`"
-                                );
+                                eprintln!("{progress} done `{fully_qualified}`");
                                 return Ok(candidate);
                             }
                             Err(validation_error) if attempt == 2 => return Err(validation_error),
                             Err(validation_error) => {
-                                eprintln!(
-                                    "generate [{position}/{generation_total}] retry {}/2 `{fully_qualified}`",
-                                    attempt + 1
-                                );
+                                eprintln!("{progress} retry {}/2 `{fully_qualified}`", attempt + 1);
                                 if !feedback.is_empty() {
                                     feedback.push('\n');
                                 }
@@ -3172,7 +3354,7 @@ fn generate_project(
                                     &plan,
                                     callable,
                                     &rules,
-                                    bindings,
+                                    &references,
                                     &config.python.external_types,
                                     Some(&candidate.implementation),
                                     Some(feedback.as_str()),
@@ -3192,9 +3374,7 @@ fn generate_project(
                                     retry_prompt,
                                     config.generator.timeout_seconds,
                                 )?;
-                                eprintln!(
-                                    "generate [{position}/{generation_total}] validate `{fully_qualified}`"
-                                );
+                                eprintln!("{progress} validate `{fully_qualified}`");
                             }
                         }
                     }
@@ -3210,6 +3390,7 @@ fn generate_project(
                         )
                     })
             };
+        // A candidate replaces any earlier binding, durable source and run for its callable.
         let merge_candidate =
             |unresolved_binding: crate::binding::UnresolvedBinding,
              callable: PythonCallable,
@@ -3219,7 +3400,6 @@ fn generate_project(
              generated_runs: &mut Vec<(String, AgentKind, AgentRunCandidate)>| {
                 let fully_qualified = callable.cott_symbol.clone();
                 let bytes = candidate.implementation.clone();
-                generated_runs.push((fully_qualified, agent, candidate));
                 let generated_relative = unresolved_binding
                     .source
                     .strip_prefix(&paths.python_source_dir)
@@ -3230,6 +3410,10 @@ fn generate_project(
                     .strip_prefix(&paths.root)
                     .expect("implementation path is project-relative")
                     .to_path_buf();
+                bindings.retain(|binding| binding.cott_symbol != fully_qualified);
+                durable_sources.retain(|(path, _)| *path != relative_source);
+                generated_runs.retain(|(symbol, _, _)| *symbol != fully_qualified);
+                generated_runs.push((fully_qualified, agent, candidate));
                 durable_sources.push((relative_source, bytes.clone()));
                 let implementation_module = match &callable.kind {
                     PythonCallableKind::Function | PythonCallableKind::AsyncFunction => {
@@ -3257,18 +3441,16 @@ fn generate_project(
                     bytes,
                 });
             };
-        let prompt_refs = bindings.len();
         if jobs == 1 {
             for unresolved_binding in unresolved {
-                let (callable, candidate) =
-                    match generate_candidate(&unresolved_binding, &bindings[..prompt_refs]) {
-                        Ok(candidate) => candidate,
-                        Err((code, error)) => {
-                            eprintln!("error: {error}");
-                            generation_failure = Some(code);
-                            break;
-                        }
-                    };
+                let (callable, candidate) = match generate_candidate(&unresolved_binding, None) {
+                    Ok(candidate) => candidate,
+                    Err((code, error)) => {
+                        eprintln!("error: {error}");
+                        generation_failure = Some(code);
+                        break;
+                    }
+                };
                 merge_candidate(
                     unresolved_binding,
                     callable,
@@ -3283,11 +3465,9 @@ fn generate_project(
                 let generated = run_scoped_wave(
                     wave,
                     |unresolved_binding| {
-                        generate_candidate(unresolved_binding, &bindings[..prompt_refs]).map(
-                            |(callable, candidate)| {
-                                (unresolved_binding.clone(), callable, candidate)
-                            },
-                        )
+                        generate_candidate(unresolved_binding, None).map(|(callable, candidate)| {
+                            (unresolved_binding.clone(), callable, candidate)
+                        })
                     },
                     |_| (1, "agent worker panicked".to_owned()),
                 );
@@ -3314,51 +3494,136 @@ fn generate_project(
                 }
             }
         }
+        // Complete-candidate validation is stronger than the per-callable source audit. The
+        // candidates its diagnostic implicates get bounded repair runs; if they still fail they
+        // stay unresolved with their audited source kept, so a later generate resumes them.
+        let mut attempts = 0usize;
+        while generation_failure.is_none() && !generated_runs.is_empty() {
+            bindings.sort_by(|left, right| left.cott_symbol.cmp(&right.cott_symbol));
+            let fresh = generated_runs
+                .iter()
+                .map(|(symbol, _, _)| symbol.clone())
+                .collect::<BTreeSet<_>>();
+            let emission = match python_generation_emission(
+                &config,
+                &paths,
+                &plan,
+                &ir,
+                &base_inputs,
+                &bindings,
+                &generated_runs,
+            ) {
+                Ok(emission) => emission,
+                Err(code) => return code,
+            };
+            let error = match validate_candidate_bundle(&config, &paths, &ir, &emission, &fresh) {
+                Ok(Ok(())) => {
+                    validated_emission = Some(emission);
+                    break;
+                }
+                Ok(Err(error)) => error,
+                Err(code) => return code,
+            };
+            let mut repairable = fresh.clone();
+            if requested.is_none() {
+                repairable.extend(
+                    bindings
+                        .iter()
+                        .filter(|binding| binding.owner == crate::binding::BindingOwner::Agent)
+                        .map(|binding| binding.cott_symbol.clone()),
+                );
+            }
+            let implicated = implicated_agent_candidates(&error, &bindings, &repairable, &fresh);
+            if attempts == COMPLETE_VALIDATION_RETRIES {
+                eprintln!("error: generated candidate validation failed: {error}");
+                validation_failed = true;
+                pending_repairs = implicated;
+                break;
+            }
+            attempts += 1;
+            eprintln!(
+                "generate repair {attempts}/{COMPLETE_VALIDATION_RETRIES}: complete candidate validation failed: {error}"
+            );
+            let feedback = format!(
+                "Complete Python candidate validation failed. Repair the selected implementation without weakening the canonical contract. Exact diagnostic:\n{error}"
+            );
+            let repairs = bindings
+                .iter()
+                .filter(|binding| implicated.contains(&binding.cott_symbol))
+                .map(|binding| {
+                    (
+                        crate::binding::UnresolvedBinding {
+                            module: binding.module.clone(),
+                            function: binding.function.clone(),
+                            cott_symbol: binding.cott_symbol.clone(),
+                            kind: binding.kind.clone(),
+                            expected_implementation_function: binding
+                                .implementation_function
+                                .clone(),
+                            source: binding.source.clone(),
+                        },
+                        binding.bytes.clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            for wave in repairs.chunks(jobs) {
+                let repaired = run_scoped_wave(
+                    wave,
+                    |(unresolved_binding, rejected)| {
+                        generate_candidate(
+                            unresolved_binding,
+                            Some((rejected.as_slice(), feedback.as_str())),
+                        )
+                        .map(|(callable, candidate)| {
+                            (unresolved_binding.clone(), callable, candidate)
+                        })
+                    },
+                    |_| (1, "agent worker panicked".to_owned()),
+                );
+                for result in repaired {
+                    match result {
+                        Ok((unresolved_binding, callable, candidate)) => merge_candidate(
+                            unresolved_binding,
+                            callable,
+                            candidate,
+                            &mut bindings,
+                            &mut durable_sources,
+                            &mut generated_runs,
+                        ),
+                        Err((code, error)) => {
+                            eprintln!("error: {error}");
+                            generation_failure.get_or_insert(code);
+                        }
+                    }
+                }
+                if generation_failure.is_some() {
+                    break;
+                }
+            }
+            if generation_failure.is_some() {
+                pending_repairs = implicated;
+            }
+        }
     }
-    bindings.sort_by(|left, right| left.cott_symbol.cmp(&right.cott_symbol));
-    add_binding_input_hashes(&paths, &bindings, &mut input_hashes);
-    let mut emission = match emit(&config, &plan, &ir, &bindings) {
-        Ok(emission) => emission,
-        Err(diagnostics) => {
-            print_emit_diagnostics(&paths, &diagnostics);
-            return 4;
+    let emission = match validated_emission {
+        Some(emission) => emission,
+        None => {
+            bindings.retain(|binding| !pending_repairs.contains(&binding.cott_symbol));
+            bindings.sort_by(|left, right| left.cott_symbol.cmp(&right.cott_symbol));
+            match python_generation_emission(
+                &config,
+                &paths,
+                &plan,
+                &ir,
+                &base_inputs,
+                &bindings,
+                &generated_runs,
+            ) {
+                Ok(emission) => emission,
+                Err(code) => return code,
+            }
         }
     };
-    if let Err(message) = enrich_generation_record(&paths, &config, input_hashes, &mut emission) {
-        eprintln!("error: {message}");
-        return 4;
-    }
-    let generated_scope = generated_runs
-        .iter()
-        .map(|(symbol, _, _)| symbol.clone())
-        .collect::<std::collections::BTreeSet<_>>();
-    if let Err(message) = add_agent_runs(&mut emission, generated_runs) {
-        eprintln!("error: {message}");
-        return 4;
-    }
-    let mut validation_failed = false;
-    if !generated_scope.is_empty() && generation_failure.is_none() {
-        let staged = match materialize_candidate_artifacts(&emission) {
-            Ok(path) => path,
-            Err(error) => {
-                eprintln!("error: {error}");
-                return 6;
-            }
-        };
-        let validation = verify_python(&config, &paths, &staged, &ir, Some(&generated_scope));
-        let cleanup = fs::remove_dir_all(&staged);
-        if let Err(error) = cleanup {
-            eprintln!(
-                "error: remove candidate staging {}: {error}",
-                staged.display()
-            );
-            return 6;
-        }
-        if let Err(error) = validation {
-            eprintln!("error: generated candidate validation failed: {error}");
-            validation_failed = true;
-        }
-    }
     match publish_with_sources(
         &PlannedProject {
             session,
@@ -3375,6 +3640,81 @@ fn generate_project(
             eprintln!("error: {error}");
             6
         }
+    }
+}
+
+/// Repair runs after a failed complete-candidate validation, matching Kotlin and Dart.
+const COMPLETE_VALIDATION_RETRIES: usize = 2;
+
+/// The unverified generation emission for `bindings` (sorted by symbol) and this run's agents.
+fn python_generation_emission(
+    config: &crate::manifest::ProjectConfig,
+    paths: &ProjectPaths,
+    plan: &PythonArtifactPlan,
+    ir: &crate::ir::CanonicalIr,
+    base_inputs: &BTreeMap<String, String>,
+    bindings: &[ResolvedBinding],
+    runs: &[(String, AgentKind, AgentRunCandidate)],
+) -> Result<Emission, i32> {
+    let mut inputs = base_inputs.clone();
+    add_binding_input_hashes(paths, bindings, &mut inputs);
+    let mut emission = emit(config, plan, ir, bindings).map_err(|diagnostics| {
+        print_emit_diagnostics(paths, &diagnostics);
+        4
+    })?;
+    let report = |message: String| {
+        eprintln!("error: {message}");
+        4
+    };
+    enrich_generation_record(paths, config, inputs, &mut emission, None).map_err(report)?;
+    add_agent_runs(&mut emission, runs.to_vec()).map_err(report)?;
+    Ok(emission)
+}
+
+/// Runs the complete verifier over a staged copy; the outer error is a filesystem exit code.
+fn validate_candidate_bundle(
+    config: &crate::manifest::ProjectConfig,
+    paths: &ProjectPaths,
+    ir: &crate::ir::CanonicalIr,
+    emission: &Emission,
+    scope: &BTreeSet<String>,
+) -> Result<Result<(), String>, i32> {
+    let staged = materialize_candidate_artifacts(emission).map_err(|error| {
+        eprintln!("error: {error}");
+        6
+    })?;
+    let validation = verify_python(config, paths, &staged, ir, Some(scope));
+    if let Err(error) = fs::remove_dir_all(&staged) {
+        eprintln!(
+            "error: remove candidate staging {}: {error}",
+            staged.display()
+        );
+        return Err(6);
+    }
+    Ok(validation.map(|_| ()))
+}
+
+/// Repairable agent candidates a complete-validation diagnostic names by Cott symbol or
+/// implementation path. A diagnostic that names none implicates every candidate of this run.
+fn implicated_agent_candidates(
+    message: &str,
+    bindings: &[ResolvedBinding],
+    repairable: &BTreeSet<String>,
+    fresh: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let named = bindings
+        .iter()
+        .filter(|binding| repairable.contains(&binding.cott_symbol))
+        .filter(|binding| {
+            message.contains(&binding.cott_symbol)
+                || message.contains(binding.generated_relative.to_string_lossy().as_ref())
+        })
+        .map(|binding| binding.cott_symbol.clone())
+        .collect::<BTreeSet<_>>();
+    if named.is_empty() {
+        fresh.clone()
+    } else {
+        named
     }
 }
 
@@ -4432,7 +4772,7 @@ fn format_for_target(project: Option<PathBuf>, check: bool) -> i32 {
 }
 
 fn emit_python_project(project: Option<PathBuf>) -> i32 {
-    match plan(project) {
+    match plan_for_emit(project) {
         Ok(plan) => match publish(&plan) {
             Ok(()) => {
                 println!("{}", generated_path(&plan.paths));

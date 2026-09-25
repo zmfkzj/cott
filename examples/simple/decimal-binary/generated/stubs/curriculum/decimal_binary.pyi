@@ -23,10 +23,12 @@ returns `Overflow`, so invalid characters take priority over overflow."""
 def binary_to_decimal(digits: str) -> Result[I64, ConversionError]: ...
 
 """Route DecimalToBinary through curriculum.decimal_binary.decimal_to_binary
-and BinaryToDecimal through curriculum.decimal_binary.binary_to_decimal.
-Wrap the successful scalar in the corresponding ConversionResult variant.
-
-Errors from the selected operation are returned unchanged."""
+and wrap its successful digits in ConversionResult.Binary; do not call
+binary_to_decimal on this branch. Route BinaryToDecimal through
+curriculum.decimal_binary.binary_to_decimal and wrap its successful value
+in ConversionResult.Decimal; do not call decimal_to_binary on this branch.
+Return the selected leaf's NegativeDecimal, InvalidBinary or Overflow
+unchanged, without trying the opposite conversion."""
 def convert_binary_decimal(operation: Conversion) -> Result[ConversionResult, ConversionError]: ...
 
 __all__ = ["Conversion", "ConversionError", "ConversionError_InvalidBinary", "ConversionError_NegativeDecimal", "ConversionError_Overflow", "ConversionResult", "ConversionResult_Binary", "ConversionResult_Decimal", "Conversion_BinaryToDecimal", "Conversion_DecimalToBinary", "binary_to_decimal", "convert_binary_decimal", "decimal_to_binary"]

@@ -26,13 +26,11 @@ def search_catalog(database: DatabaseTarget, term: str) -> Result[CottList[Catal
     try:
         connection = _connect(database)
         try:
-            rows = connection.execute(
-                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name"
-            ).fetchall()
-            for (relation,) in rows:
+            rows = connection.execute("SELECT name FROM sqlite_schema WHERE type IN ('table', 'view')").fetchall()
+            names = sorted(str(row[0]) for row in rows if not str(row[0]).startswith("sqlite_"))
+            for relation_name in names:
                 if len(matches) >= _MAX_MATCHES:
                     break
-                relation_name = str(relation)
                 if needle in relation_name.casefold():
                     matches.append(CatalogMatch(kind=CatalogMatchKind_Relation(), relation=relation_name, name=relation_name, ordinal=0))
                 columns = connection.execute("PRAGMA table_info(" + _quote_identifier(relation_name) + ")").fetchall()
@@ -41,7 +39,7 @@ def search_catalog(database: DatabaseTarget, term: str) -> Result[CottList[Catal
                         break
                     column_name = str(column[1])
                     if needle in column_name.casefold():
-                        ordinal: U32 = int(column[0])
+                        ordinal: U32 = int(column[0]) + 1
                         matches.append(CatalogMatch(kind=CatalogMatchKind_Column(), relation=relation_name, name=column_name, ordinal=ordinal))
         finally:
             connection.close()

@@ -507,6 +507,85 @@ fn timeout_kills_the_complete_process_group() {
 }
 
 #[test]
+fn cpu_limit_kill_reports_signal_and_cpu_usage_against_the_limit() {
+    let cwd = scratch();
+    let mut cpu_limits = limits(Duration::from_secs(20), 4096);
+    cpu_limits.cpu_time = Duration::from_secs(1);
+    let result = run(&sandbox(
+        "/bin/sh",
+        &["-c", "while :; do :; done"],
+        cwd.clone(),
+        NetworkAccess::Disabled,
+        cpu_limits,
+    ));
+    fs::remove_dir_all(&cwd).expect("remove scratch");
+    let completed = match result {
+        Err(SandboxError::Unavailable(reason)) => {
+            eprintln!("skipping CPU-limit diagnostics test: {reason}");
+            return;
+        }
+        result => result.expect("CPU-bound sandbox must complete through its CPU limit"),
+    };
+    // bubblewrap reports its SIGKILLed child as 128 + 9.
+    assert_eq!(completed.status, Some(137), "{completed:?}");
+    let report = completed.resources;
+    assert_eq!(report.signal, Some(9), "{report:?}");
+    assert_eq!(report.signal_name(), Some("SIGKILL"));
+    assert_eq!(report.cpu_limit, Duration::from_secs(1));
+    assert_eq!(report.address_space_limit_bytes, 128 * 1024 * 1024);
+    // The shell runs inside bubblewrap's PID namespace, so its CPU comes from the
+    // sampled scope cgroup rather than the launcher's rusage.
+    assert!(
+        report.cpu_time() >= Duration::from_millis(950),
+        "{report:?}"
+    );
+    assert!(report.max_rss_bytes > 0, "{report:?}");
+    assert!(
+        !report.oom_kills.is_some_and(|kills| kills > 0),
+        "{report:?}"
+    );
+    let text = report.to_string();
+    assert!(
+        text.starts_with("terminating signal SIGKILL (9); CPU "),
+        "{text}"
+    );
+    assert!(text.contains("against RLIMIT_CPU 1s per process"), "{text}");
+    assert!(
+        text.contains("against RLIMIT_AS 128.0 MiB per process"),
+        "{text}"
+    );
+    assert!(text.ends_with("CPU time reached RLIMIT_CPU, which the kernel enforces with SIGKILL because soft = hard"), "{text}");
+}
+
+#[test]
+fn normal_exit_reports_no_terminating_signal() {
+    let cwd = scratch();
+    let result = run(&sandbox(
+        "/bin/sh",
+        &["-c", "exit 3"],
+        cwd.clone(),
+        NetworkAccess::Disabled,
+        limits(Duration::from_secs(10), 4096),
+    ));
+    fs::remove_dir_all(&cwd).expect("remove scratch");
+    let completed = match result {
+        Err(SandboxError::Unavailable(reason)) => {
+            eprintln!("skipping exit diagnostics test: {reason}");
+            return;
+        }
+        result => result.expect("sandbox must complete"),
+    };
+    assert_eq!(completed.status, Some(3), "{completed:?}");
+    assert_eq!(completed.resources.signal, None);
+    assert!(
+        completed
+            .resources
+            .to_string()
+            .starts_with("no terminating signal; CPU ")
+    );
+}
+
+#[test]
 fn isolated_loopback_is_available_or_reports_unsupported() {
     let cwd = scratch();
     let result = run(&sandbox(

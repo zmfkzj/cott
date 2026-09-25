@@ -227,10 +227,10 @@ fn render(value: &Value, form: Form, output: &mut String) -> Result<(), String> 
     Ok(())
 }
 
-// Exhaustive over canonical-ir v8 expression/type/value/pattern/const kinds.
-// Expressions have no call or quantifier node in v8: collection predicates are
-// the closed intrinsics below. Future expression kinds must be implemented here,
-// never recovered from source or silently treated as prose.
+// Exhaustive over canonical-ir v9 expression/type/value/pattern/const kinds.
+// Expressions have no general call or quantifier node: collection predicates
+// are the closed intrinsics below. Future expression kinds must be implemented
+// here, never recovered from source or silently treated as prose.
 fn fields(form: Form, kind: &str) -> Result<&'static [(&'static str, Form)], String> {
     use Form::*;
     let fields: &[(&str, Form)] = match form {
@@ -254,6 +254,7 @@ fn fields(form: Form, kind: &str) -> Result<&'static [(&'static str, Form)], Str
             ],
             "fixture_path" | "fixture_url" => &[("fixture", Raw), ("path", Raw)],
             "construct" => &[("fields", ExpressionMembers), ("symbol", Raw)],
+            "dyn" => &[("trait_ref", Type), ("value", Expression)],
             "variant" => &[("fields", Expressions), ("symbol", Raw)],
             "option_some" | "result_ok" | "result_err" => &[("payload", Expression)],
             "list" | "set" | "tuple" | "array" => &[("items", Expressions)],

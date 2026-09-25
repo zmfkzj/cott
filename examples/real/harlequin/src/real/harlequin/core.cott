@@ -1,11 +1,12 @@
 module real.harlequin.core
 
 doc """
-AdapterKind selects the driver and the interpretation of Connection.endpoint.
-Use the project's lock-selected SDKs, not a fabricated Cott adapter or raw wire
-protocol. JSON endpoint forms below are ordinary JSON objects, without a prefix;
-reject unknown keys and values of the wrong type. Credentials are connection data,
-never SQL text, public identifiers, or diagnostic messages.
+AdapterKind selects the driver and the interpretation of a connection endpoint.
+Each adapter uses the named lock-selected SDK; no raw wire protocol or invented
+adapter layer replaces it. JSON endpoint forms below are ordinary JSON objects,
+without a prefix; unknown keys and values of the wrong type are invalid.
+Credentials are connection data, never SQL text, public identifiers, or diagnostic
+messages.
 
 Sqlite: sqlite3; endpoint is a filesystem path, a native file: URI, or :memory:.
 DuckDb: duckdb; endpoint is a filesystem path or :memory:.
@@ -35,8 +36,9 @@ space string. Use ConnectionPool with the SDK's Config, not an HTTP/SQL adapter.
 Adbc: adbc_driver_manager; endpoint is JSON with required driver string naming a
 trusted deployment-installed ADBC driver library or manifest. Optional uri and
 entrypoint are strings; db and connection are string-to-string driver option maps;
-catalog is an optional exact metadata catalog selector. The manager is not itself
-a database driver. Driver options contain no application SQL to execute.
+catalog is an optional exact catalog selector used only by catalog refresh. The
+manager is not itself a database driver. Driver options contain no application SQL
+to execute.
 """
 enum AdapterKind:
     DuckDb
@@ -76,6 +78,11 @@ struct Configuration:
     theme: Str
     keymap: Str
 
+doc """
+Parsed command line. connection is the positional connection string (endpoint
+text); query_file is the --query-file path. read_only and no_config are the
+--read-only and --no-config switches.
+"""
 struct CliOptions:
     profile: Option[Str]
     adapter: Option[AdapterKind]
@@ -83,7 +90,6 @@ struct CliOptions:
     query_file: Option[Path]
     read_only: Bool
     no_config: Bool
-    source_argument_count: U64
 
 struct ConnectionRequest:
     adapter: AdapterKind
@@ -98,14 +104,15 @@ payload is a shared dict[str, object] with exactly these keys: id, adapter, endp
 read_only, driver, cleanup, lock, closed, transaction. The first four equal the
 Connection metadata; driver is the actual SDK connection/client/session; cleanup
 is a contextlib.ExitStack of actual close/release callbacks; lock is threading.Lock;
-closed is initially false; transaction is initially None or the currently active
-lease's unique object. No other mutable registry or module-global session exists.
-The dictionary and lock are shared by all copies of this handle, not cloned.
-Check the tag, complete shape, metadata equality and concrete SDK driver type before
-using it. Acquire lock before testing closed/transaction or touching the driver.
-Malformed, metadata-mismatched, closed or stale handles cause the operation's
-declared error, never a new connection opened from endpoint. Opaque is a typed
-host-handle carrier, not a cryptographic seal or a way to serialize a session.
+closed is initially false; transaction is None or the unwrapped object of the
+currently active TransactionLease. No other mutable registry or module-global
+session exists. The dictionary and lock are shared by all copies of this handle,
+not cloned. Check the tag, complete shape, metadata equality and concrete SDK driver
+type before using it. Acquire lock before testing closed/transaction or touching
+the driver. Malformed, metadata-mismatched, closed or stale handles cause the
+operation's declared error, never a new connection opened from endpoint. Opaque is
+a typed host-handle carrier, not a cryptographic seal or a way to serialize a
+session.
 """
 alias SessionHandle = Opaque["harlequin.session"]
 
@@ -122,6 +129,10 @@ struct Connection:
     read_only: Bool
     session: SessionHandle
 
+doc """
+An editor tab. cursor counts Unicode scalar values into source; dirty means the
+source was edited since the tab was opened.
+"""
 struct QueryTab:
     id: Str
     title: Str
@@ -134,15 +145,27 @@ struct QueryHistoryEntry:
     executed_at: Str
     succeeded: Bool
 
+doc """
+Executed queries, oldest first, holding at most capacity entries. Capacity zero
+keeps no history.
+"""
 struct QueryHistory:
     entries: List[QueryHistoryEntry]
     capacity: U64
 
+    invariant self.entries.len <= self.capacity
+
+doc """
+Editor state for one connection, identified by that connection's id. Tab ids are
+unique; active_tab_id names one of the tabs or is Nothing.
+"""
 struct IdeSession:
-    connection: Connection
+    connection_id: Str
     tabs: List[QueryTab]
     active_tab_id: Option[Str]
     history: QueryHistory
+
+    invariant unique_by(self.tabs, QueryTab.id)
 
 struct FileReference:
     location: FileLocation
@@ -176,21 +199,31 @@ struct QueryBatch:
     results: List[QueryResult]
 
 doc """
-Lease identity for one transaction on one SessionHandle. Its opaque value is a
-fresh unique object, compared by identity against session payload transaction.
-No lookup by connection id and no driver reconnection is permitted.
+Lease identity for one transaction on one SessionHandle. Its opaque value is a fresh
+unique object that begin_transaction also stores, unwrapped, as the session payload
+transaction. A lease has authority exactly while that payload entry is the same
+object (identity, `is`) as the lease's unwrapped value; the Opaque wrapper itself is
+not the identity and may be rebuilt at facade boundaries. No lookup by connection
+id and no driver reconnection is permitted.
 """
 alias TransactionLease = Opaque["harlequin.transaction"]
 
+enum TransactionStatus:
+    Active
+    Committed
+    RolledBack
+
 doc """
-An immutable snapshot containing its actual owning connection and lease.
-active is a result-state snapshot, not authority: even an old active=True copy
-cannot commit or roll back after its lease has completed or its connection closed.
+An immutable snapshot of one lease and its actual owning connection. status is
+Active in the snapshot begin_transaction returns and Committed or RolledBack in the
+snapshot returned by the completing call. A snapshot is not authority: even an old
+Active copy cannot commit or roll back after its lease has completed or its
+connection closed.
 """
 struct Transaction:
     connection: Connection
     lease: TransactionLease
-    active: Bool
+    status: TransactionStatus
 
 struct LoadedFile:
     reference: FileReference
@@ -216,11 +249,12 @@ enum ConnectionError:
     AdapterUnavailable(adapter: AdapterKind)
     InvalidEndpoint(endpoint: Str)
     AuthenticationFailed(message: Str)
+    TransactionsUnsupported(adapter: AdapterKind)
+    LeaseRejected
     Failed(message: Str)
 
 enum SessionError:
     TabMissing(tab_id: Str)
-    HistoryCapacityInvalid
 
 enum FileError:
     NotFound(reference: FileReference)
@@ -263,7 +297,29 @@ fn adapter_descriptors() -> List[AdapterDescriptor]:
     effects []
 
 fn parse_cli(arguments: List[Str]) -> Result[CliOptions, CliError]:
-    ensures Result.Ok(options) => options.source_argument_count <= arguments.len
+    doc """
+    Parse process arguments (without the program name) from left to right.
+    Value options: --profile NAME or -P NAME, --adapter NAME or -a NAME, and
+    --query-file PATH or -f PATH. Switches: --read-only or -r, and --no-config.
+    A long value option also accepts --option=VALUE; otherwise its value is the next
+    argument verbatim, even when that argument starts with "-". A repeated value
+    option keeps its last value; a repeated switch is harmless. "--" ends option
+    parsing and every later argument is positional. Before "--", "-" alone is
+    positional and any other argument starting with "-" must be one of the options
+    above. The single positional argument is the connection string.
+    An adapter NAME is one of the uri_schemes labels of adapter_descriptors (duckdb,
+    sqlite, postgres, postgresql, mysql, odbc, bigquery, trino, databricks, adbc,
+    cassandra, nebula), compared ignoring ASCII case.
+    The first offending argument decides the error: UnknownOption carries the whole
+    argument as given (a switch written with "=VALUE" is unknown); MissingOptionValue
+    names the long option ("--profile") whose value is missing at the end;
+    InvalidAdapter carries NAME as given; a second positional argument is
+    ConflictingConnectionInputs. After the scan, --profile together with --no-config
+    is ConflictingConnectionInputs. Absent options are Nothing and absent switches
+    false.
+    """
+
+    ensures Result.Ok(options) => (arguments.len == 0 => not options.read_only and not options.no_config)
 
     error CliError.UnknownOption
     error CliError.MissingOptionValue
@@ -274,10 +330,30 @@ fn parse_cli(arguments: List[Str]) -> Result[CliOptions, CliError]:
 
 fn load_configuration(path: Path) -> Result[Configuration, ConfigurationError]:
     doc """
-    Use tomllib; cast each dict/list to dict[str, object]/list[object] before use.
+    Read the UTF-8 TOML file at path. Top-level keys, all optional: default_profile
+    (string), theme (string, default "harlequin"), keymap (string, default
+    "default") and profiles, an array of tables. Each profile table has required
+    name (string), adapter (a parse_cli adapter label, compared ignoring ASCII case)
+    and connection (string, the endpoint), optional read_only (boolean, default
+    false) and optional settings, a table of string values that become Setting
+    entries in file order. Profiles keep file order. default_profile is not
+    resolved here.
+    A path that does not exist is Missing(path). An unreadable file, invalid UTF-8
+    or TOML, an unknown key, a missing required key or a value of the wrong type is
+    Invalid(path, message); message names the offending key (or says "invalid
+    TOML") and never repeats a configured value. Top-level keys are checked first,
+    then profiles in file order; a profile is validated before its name is compared,
+    and a name equal to an earlier profile's is ProfileDuplicate(name). A file that
+    exists but cannot be read, including an access refusal, is Invalid(path, message).
+    The path is read from the file system the program runs against: the fs fixture
+    root while a Cott scenario with an fs fixture is active, otherwise the host file
+    system. While such a fixture is active the host file system is never used, even
+    when the fixture read fails.
     """
 
-    ensures Result.Ok(configuration) => configuration.profiles.len <= 100000
+    ensures Result.Ok(configuration) => unique_by(configuration.profiles, ConnectionProfile.name)
+    ensures Result.Err(ConfigurationError.Missing(missing)) => missing == path
+    ensures Result.Err(ConfigurationError.Invalid(invalid, _)) => invalid == path
 
     error ConfigurationError.Missing
     error ConfigurationError.Invalid
@@ -290,11 +366,20 @@ fn resolve_profile(
     options: CliOptions,
 ) -> Result[ConnectionRequest, ConfigurationError]:
     doc """
-    Use isinstance, not match, for each Option; select the named or default profile.
+    Plan the connection request without I/O. With options.no_config the
+    configuration is ignored, as if it had no profiles and no default_profile.
+    The selected profile name is options.profile, else configuration.default_profile,
+    else none. A selected name without a profile of exactly that name is
+    ProfileMissing(name). With no selected name the base request is DuckDb, endpoint
+    ":memory:", no settings and read_only false; otherwise it is the profile's
+    adapter, endpoint, settings and read_only. Then options.adapter replaces the
+    adapter, options.connection replaces the endpoint, and options.read_only true
+    makes the request read-only. Settings always come from the profile.
     """
 
-    ensures Result.Ok(request) => request.endpoint.len > 0
+    ensures Result.Ok(request) => (options.read_only => request.read_only)
 
+    error ConfigurationError.ProfileMissing with options.profile matches Option.Some(_) when (options.no_config or configuration.profiles.len == 0)
     error ConfigurationError.ProfileMissing
 
     effects []
@@ -302,17 +387,19 @@ fn resolve_profile(
 fn connect(request: ConnectionRequest) -> Result[Connection, ConnectionError]:
     doc """
     Open and retain a real SDK session using AdapterKind's endpoint formats.
-    Return a fresh UUID hex id and SessionHandle with the exact documented payload.
-    The returned driver stays open; no probe-and-close success is allowed.
-    Register actual resource cleanup callbacks with ExitStack as resources are
-    acquired, and transfer that stack into the session only on complete success.
-    A failed construction closes every acquired resource before returning an error.
-    Do not use SDK connection context managers that implicitly commit on exit.
+    Return a fresh random UUID as 32 lowercase hexadecimal digits for id and a
+    SessionHandle with the exact documented payload. The returned driver stays
+    open; no probe-and-close success is allowed. Register actual resource cleanup
+    callbacks with ExitStack as resources are acquired, and transfer that stack into
+    the session only on complete success. A failed construction closes every
+    acquired resource before returning an error. Do not use SDK connection context
+    managers that implicitly commit on exit.
     
-    Reject duplicate settings names. For JSON endpoint adapters, settings override
-    known top-level fields: string fields use literal text, integers use decimal,
-    booleans use true/false, and object/list fields use JSON. Validate the resulting
-    object against AdapterKind's fields and retain its canonical JSON as endpoint.
+    Settings are validated before any driver is loaded: a blank or repeated setting
+    name is InvalidEndpoint. For JSON endpoint adapters, settings override known
+    top-level fields: string fields use literal text, integers use decimal, booleans
+    use true/false, and object/list fields use JSON. Validate the resulting object
+    against AdapterKind's fields and retain its canonical JSON as endpoint.
     PostgreSQL settings are libpq string parameters merged with make_conninfo.
     ODBC settings are connection-string keyword/value overrides: keyword names
     contain only ASCII letters/digits/underscore/space; brace-quote values and
@@ -322,16 +409,16 @@ fn connect(request: ConnectionRequest) -> Result[Connection, ConnectionError]:
     Unknown/invalid settings are InvalidEndpoint, not silently ignored.
     
     SQLite uses sqlite3.Connection, isolation_level=None and check_same_thread=False;
-    its session lock serializes operations. :memory: remains alive in this connection.
-    A file endpoint opens an existing file URI with mode=ro or mode=rw according
-    to read_only, never silently creates a missing file. Apply query_only when
-    read_only is true. DuckDB retains DuckDBPyConnection; pass read_only for files,
-    and use an in-memory connection for :memory:.
+    its session lock serializes operations. :memory: remains alive in this
+    connection. A file endpoint opens an existing file URI with mode=ro or mode=rw
+    according to read_only, never silently creates a missing file. Apply query_only
+    when read_only is true. DuckDB retains DuckDBPyConnection; pass read_only for
+    files, and use an in-memory connection for :memory:.
     PostgreSQL retains psycopg.Connection; MySQL retains pymysql.Connection;
     ODBC retains pyodbc.Connection; ADBC retains adbc_driver_manager.dbapi.Connection.
-    These four use manual-commit mode for their lifetime; outside an explicit
-    transaction execute_statements commits each successful statement. ADBC driver
-    failure to support manual commit is an error, not an ignored warning.
+    These four use manual-commit mode for their lifetime. ADBC driver failure to
+    support manual commit is an error, not an ignored warning. connect reads no
+    catalog metadata.
     BigQuery retains google.cloud.bigquery.Client, Trino retains its DBAPI
     Connection, and Databricks retains databricks.sql.Connection.
     Cassandra retains the real Session and registers Session.shutdown before
@@ -343,19 +430,31 @@ fn connect(request: ConnectionRequest) -> Result[Connection, ConnectionError]:
     settings return InvalidEndpoint with an empty redacted endpoint payload.
     Recognizable authentication failures return AuthenticationFailed with a fixed
     nonsecret message; other actual connection failures return Failed similarly.
-    Never return a descriptor without a usable SDK driver or retain a hidden owner.
+    Never retain a hidden owner of the driver.
     """
 
     ensures Result.Ok(connection) => connection.adapter == request.adapter
-    ensures Result.Ok(connection) => connection.id.len > 0
     ensures Result.Ok(connection) => connection.read_only == request.read_only
+    ensures Result.Ok(connection) => connection.id.len == 32
+    ensures Result.Err(ConnectionError.InvalidEndpoint(shown)) => shown == ""
 
+    error ConnectionError.InvalidEndpoint when (any_blank_by(request.settings, Setting.name) or not unique_by(request.settings, Setting.name))
     error ConnectionError.AdapterUnavailable
     error ConnectionError.InvalidEndpoint
     error ConnectionError.AuthenticationFailed
     error ConnectionError.Failed
 
     effects [database.read, database.write, network, file.read, random]
+
+requirement CONNECT_RETAINS_A_LIVE_SESSION for connect:
+    text """
+    A successful connect returns an open, retained SDK session: later calls that
+    borrow the Connection use that same driver, so state created by one call,
+    including a :memory: database, is visible to the next.
+    """
+
+requirement CONNECT_ERRORS_OMIT_SECRETS for connect:
+    text "No connect error payload contains the endpoint, a credential or raw driver exception text."
 
 fn disconnect(connection: Connection) -> Result[Unit, ConnectionError]:
     doc """
@@ -368,87 +467,152 @@ fn disconnect(connection: Connection) -> Result[Unit, ConnectionError]:
     success returns Unit. No resource is transferred to a hidden registry.
     """
 
+    # Structural: Unit carries no observable fact; the duty is DISCONNECT_ROLLS_BACK_AND_CLOSES.
     ensures Result.Ok(closed) => closed == ()
 
     error ConnectionError.Failed
 
     effects [database.read, database.write, network]
 
+requirement DISCONNECT_ROLLS_BACK_AND_CLOSES for disconnect:
+    text """
+    disconnect rolls back an active transaction on the retained driver instead of
+    committing it, closes every owned resource, and is idempotent; afterwards no
+    operation can use the Connection or its leases.
+    """
+
 fn begin_transaction(connection: Connection) -> Result[Transaction, ConnectionError]:
     doc """
-    Borrow and lock the live connection. Reject closed/malformed handles and an
-    already active lease. Transactions are supported for Sqlite, DuckDb, PostgreSql,
-    MySql, Odbc and Adbc, matching adapter_descriptors; other kinds return Failed
-    as an explicit unsupported capability, not a pretend active transaction.
-    Start a real transaction on the existing SDK driver: SQLite/DuckDB execute
-    BEGIN, PostgreSQL executes BEGIN (READ ONLY when requested), and MySQL uses
-    begin(). ODBC/ADBC are already in manual-commit mode; their physical transaction
-    may start lazily with the first statement. Do not open, close or roll back a
-    new connection as a substitute. Install a fresh TransactionLease object as the
-    session's active transaction and return Transaction(connection=connection,
-    lease=that lease, active=true). If starting fails, return Failed and leave no
-    active lease. The caller retains ownership of the connection.
+    Transactions are supported for Sqlite, DuckDb, PostgreSql, MySql, Odbc and Adbc,
+    matching adapter_descriptors; every other kind is TransactionsUnsupported(adapter)
+    before the session is touched, never a pretend active transaction.
+    Otherwise borrow and lock the live connection; a closed or malformed handle or an
+    already active lease is Failed. Start a real transaction on the existing SDK
+    driver: SQLite/DuckDB execute BEGIN, PostgreSQL executes BEGIN (READ ONLY when
+    the connection is read-only), and MySQL uses begin(). ODBC/ADBC are already in
+    manual-commit mode; their physical transaction may start lazily with the first
+    statement. Do not open, close or roll back a new connection as a substitute.
+    Install a fresh TransactionLease object as the session's active transaction and
+    return Transaction(connection=connection, lease=that lease, status=Active). If
+    starting fails, return Failed and leave no active lease. The caller retains
+    ownership of the connection.
     """
 
     ensures Result.Ok(transaction) => transaction.connection == connection
-    ensures Result.Ok(transaction) => transaction.active
+    ensures Result.Ok(transaction) => transaction.status == TransactionStatus.Active
+    ensures Result.Err(ConnectionError.TransactionsUnsupported(kind)) => kind == connection.adapter
 
+    error ConnectionError.TransactionsUnsupported when (connection.adapter == AdapterKind.BigQuery or connection.adapter == AdapterKind.Trino or connection.adapter == AdapterKind.Databricks or connection.adapter == AdapterKind.Cassandra or connection.adapter == AdapterKind.NebulaGraph)
     error ConnectionError.Failed
 
     effects [database.write, network]
+
+requirement TRANSACTIONS_USE_THE_RETAINED_DRIVER for begin_transaction:
+    text """
+    begin_transaction starts a real transaction on the Connection's retained
+    driver; statements executed under its lease become durable only through
+    commit_transaction and are discarded by rollback_transaction.
+    """
 
 fn commit_transaction(transaction: Transaction) -> Result[Transaction, ConnectionError]:
     doc """
-    Borrow transaction.connection and acquire its session lock. Require active=true,
-    an open matching SessionHandle, and exact lease object identity with its active
-    transaction. Reject a stale, already-finished, disconnected or wrong-owner
-    lease as Failed without touching a different session.
+    A snapshot whose status is not Active is LeaseRejected without touching any
+    session. Otherwise borrow transaction.connection and acquire its session lock.
+    The lease has authority only when the session is open, matches the connection,
+    and its payload transaction is the lease's unwrapped object; a stale,
+    already-finished, disconnected or wrong-owner lease is LeaseRejected without
+    touching a different session.
     Call the actual existing SDK driver's commit. Never reconnect by id/endpoint.
     On success clear the active lease and return the same connection and lease
-    with active=false. On a driver failure, clear the lease, mark the session closed,
-    attempt rollback and every registered cleanup callback, and return Failed with
-    a fixed nonsecret message; do not leave an ambiguously reusable transaction.
+    with status=Committed. On a driver failure, clear the lease, mark the session
+    closed, attempt rollback and every registered cleanup callback, and return Failed
+    with a fixed nonsecret message; do not leave an ambiguously reusable transaction.
     """
 
     ensures Result.Ok(updated) => updated.connection == transaction.connection
-    ensures Result.Ok(updated) => not updated.active
+    ensures Result.Ok(updated) => updated.status == TransactionStatus.Committed
 
+    error ConnectionError.LeaseRejected when transaction.status != TransactionStatus.Active
+    error ConnectionError.LeaseRejected
     error ConnectionError.Failed
 
     effects [database.write, network]
+
+requirement LEASES_HAVE_SINGLE_USE_AUTHORITY for commit_transaction:
+    text """
+    Only the session's currently active lease can complete its transaction, once:
+    finished, stale, foreign-connection and disconnected leases are LeaseRejected
+    and reach no driver.
+    """
 
 fn rollback_transaction(transaction: Transaction) -> Result[Transaction, ConnectionError]:
     doc """
-    Apply the same ownership and live-lease requirements as commit_transaction,
-    but call the existing SDK driver's rollback. Success clears the active lease
-    and returns the same connection and lease with active=false. Double completion,
-    stale leases and disconnected sessions are Failed, never successful no-ops.
-    A driver failure clears the lease, marks the session closed, attempts all
-    cleanup callbacks and returns Failed with a fixed nonsecret message.
+    Apply the same status and lease-authority checks as commit_transaction, with the
+    same LeaseRejected results, but call the existing SDK driver's rollback. Success
+    clears the active lease and returns the same connection and lease with
+    status=RolledBack. Double completion, stale leases and disconnected sessions are
+    never successful no-ops. A driver failure clears the lease, marks the session
+    closed, attempts all cleanup callbacks and returns Failed with a fixed nonsecret
+    message.
     """
 
     ensures Result.Ok(updated) => updated.connection == transaction.connection
-    ensures Result.Ok(updated) => not updated.active
+    ensures Result.Ok(updated) => updated.status == TransactionStatus.RolledBack
 
+    error ConnectionError.LeaseRejected when transaction.status != TransactionStatus.Active
+    error ConnectionError.LeaseRejected
     error ConnectionError.Failed
 
     effects [database.write, network]
 
+requirement ROLLBACK_DISCARDS_LEASED_STATEMENTS for rollback_transaction:
+    text """
+    A successful rollback_transaction undoes, on the retained driver, every
+    statement executed on the Connection since its lease began.
+    """
+
 fn open_query_tab(id: Str, title: Str, source: Str) -> QueryTab:
+    ensures result.id == id
+    ensures result.title == title
+    ensures result.source == source
+    ensures result.cursor == 0
+    ensures not result.dirty
+
     effects []
 
 fn edit_query_tab(tab: QueryTab, source: Str, cursor: U64) -> QueryTab:
-    ensures result.cursor <= result.source.len
+    doc """
+    Replace the tab's source and move its cursor, clamped to the end of source.
+    The tab becomes dirty when source differs from its previous source.
+    """
+
+    ensures preserves result from tab except source, cursor, dirty
+    ensures result.source == source
+    ensures (cursor <= source.len => result.cursor == cursor)
+    ensures (cursor > source.len => result.cursor == source.len)
+    ensures result.dirty == (tab.dirty or source != tab.source)
 
     effects []
 
 fn append_query_history(history: QueryHistory, entry: QueryHistoryEntry) -> QueryHistory:
-    ensures result.entries.len <= history.capacity
+    doc """
+    Append entry as the newest entry; when history is full, drop the oldest entries
+    so that at most capacity remain.
+    """
+
+    ensures result.capacity == history.capacity
+    ensures (history.entries.len < history.capacity => result.entries.len == history.entries.len + 1)
+    ensures (history.entries.len == history.capacity => result.entries.len == history.capacity)
 
     effects []
 
 fn start_session(connection: Connection, history_capacity: U64) -> IdeSession:
-    ensures result.connection == connection
+    doc """
+    Start editor state for connection: no tabs, no active tab, empty history with
+    history_capacity.
+    """
+
+    ensures result.connection_id == connection.id
     ensures result.tabs.len == 0
     ensures result.history.entries.len == 0
     ensures result.history.capacity == history_capacity
@@ -456,12 +620,24 @@ fn start_session(connection: Connection, history_capacity: U64) -> IdeSession:
     effects []
 
 fn add_query_tab(session: IdeSession, tab: QueryTab) -> IdeSession:
-    ensures result.tabs.len == session.tabs.len + 1
+    doc """
+    A tab with the same id is replaced in place; otherwise tab is appended.
+    The added tab becomes active.
+    """
+
+    ensures result.connection_id == session.connection_id
+    ensures result.history == session.history
 
     effects []
 
 fn activate_query_tab(session: IdeSession, tab_id: Str) -> Result[IdeSession, SessionError]:
-    ensures Result.Ok(updated) => updated.tabs.len == session.tabs.len
+    doc """
+    Make the tab with tab_id active. An unknown id is TabMissing(tab_id).
+    """
+
+    ensures Result.Ok(updated) => updated.tabs == session.tabs
+    ensures Result.Ok(updated) => (updated.connection_id == session.connection_id and updated.history == session.history)
+    ensures Result.Err(SessionError.TabMissing(missing)) => missing == tab_id
 
     error SessionError.TabMissing
 
@@ -469,16 +645,33 @@ fn activate_query_tab(session: IdeSession, tab_id: Str) -> Result[IdeSession, Se
 
 fn close_query_tab(session: IdeSession, tab_id: Str) -> Result[IdeSession, SessionError]:
     doc """
-    Use isinstance checks, not match, for active_tab_id.
+    Remove the tab with tab_id, keeping the order of the others. When it was active,
+    the tab that followed it becomes active, else the tab that preceded it, else
+    none; otherwise the active tab is unchanged. An unknown id is TabMissing(tab_id).
     """
 
-    ensures Result.Ok(updated) => updated.tabs.len < session.tabs.len
+    ensures Result.Ok(updated) => updated.tabs.len + 1 == session.tabs.len
+    ensures Result.Ok(updated) => (updated.connection_id == session.connection_id and updated.history == session.history)
+    ensures Result.Err(SessionError.TabMissing(missing)) => missing == tab_id
 
     error SessionError.TabMissing
 
     effects []
 
 fn split_statements(sql: Str) -> Result[List[Str], SqlClientError]:
+    doc """
+    Split SQL text at semicolons outside quoted text and comments. Quoted text is
+    '...' (string), "..." or `...` (identifiers); a doubled quote character inside
+    continues it. Comments are -- to the end of the line and /* ... */ (not nested).
+    Each statement is its source text between separators with surrounding ASCII
+    whitespace (space, TAB, LF, VT, FF, CR) removed; comments inside it are kept.
+    A piece containing only whitespace and comments is dropped. No other quoting
+    (dollar quotes, backslash escapes) is recognized.
+    An unclosed quote is UnterminatedSql with that quote character as delimiter; an
+    unclosed block comment is UnterminatedSql("*/"). Text without any statement is
+    EmptySql. Scanning reports UnterminatedSql before EmptySql.
+    """
+
     ensures Result.Ok(statements) => statements.len > 0
 
     error SqlClientError.EmptySql
@@ -491,6 +684,25 @@ fn execute_sql(
     sql: Str,
     read_only: Bool,
 ) -> Result[List[QueryResult], SqlClientError]:
+    doc """
+    Run SQL on a standalone SQLite database with sqlite3, independent of any live
+    connection. Memory opens a fresh empty in-memory database that exists only for
+    this call; File(path) opens that existing file, never creating it, with mode=ro
+    when read_only. Split sql with real.harlequin.core.split_statements and propagate
+    its errors. A statement whose first keyword, ignoring comments and ASCII case, is
+    BEGIN, START, COMMIT, ROLLBACK, SAVEPOINT, RELEASE or END is SqliteFailure before
+    anything runs. With read_only, PRAGMA query_only is enabled, and a statement that
+    SQLite refuses as a write (SQLITE_READONLY) is ReadOnlyViolation(statement).
+    All statements execute in one transaction that is committed only after every
+    statement succeeds; any failure rolls back the whole batch.
+    Return one QueryResult per statement, in order: column names from the cursor
+    description (none for statements without a result set), every row, and
+    affected_rows equal to the cursor rowcount (-1 when SQLite reports none).
+    NULL, INTEGER, REAL, TEXT and BLOB values become Null, Integer, Real, Text and
+    Blob; a non-finite REAL is UnsupportedValue("REAL"). Other SQLite errors are
+    SqliteFailure with SQLite's message.
+    """
+
     ensures Result.Ok(results) => results.len > 0
 
     error SqlClientError.EmptySql
@@ -501,39 +713,55 @@ fn execute_sql(
 
     effects [database.read, database.write]
 
+requirement EXECUTE_SQL_RUNS_EACH_STATEMENT_ATOMICALLY for execute_sql:
+    text """
+    execute_sql returns one QueryResult per split statement with SQLite's actual
+    columns and rows, and a File database keeps the batch's changes only when every
+    statement succeeded.
+    """
+
 fn execute_statements(
     connection: Connection,
     sql: Str,
     maximum_rows: U32,
 ) -> Result[QueryBatch, SqlClientError]:
     doc """
-    Split SQL with real.harlequin.core.split_statements and propagate its errors.
-    Validate and lock connection.session, then execute every statement through its
-    actual retained SDK driver. Never reconnect using endpoint or a string id.
-    Closed/malformed sessions return ExecutionFailed with a fixed nonsecret message.
-    Reject raw BEGIN/START TRANSACTION/COMMIT/ROLLBACK/SAVEPOINT/RELEASE commands as
-    ExecutionFailed: transaction ownership belongs to the explicit lease API.
-    read_only rejects write-intent statements as ReadOnlyViolation before execution;
-    retain the driver's read-only controls too. Use concrete SDK methods, not
-    reflection or invented host adapters. Return one QueryResult per split statement.
-    Column names and rows remain in driver order. QueryBatch.statements preserves
-    the exact split strings. Fetch at most maximum_rows+1 rows; overflow returns
-    ResultLimitExceeded(limit=maximum_rows), not a truncated success.
+    Run SQL on the connection's retained live session. Split sql with
+    real.harlequin.core.split_statements and propagate its errors unchanged. Then
+    validate and lock connection.session; a closed or malformed session is
+    ExecutionFailed for the first statement with a fixed message. Never reconnect
+    using endpoint or a string id.
+    Before running anything, check the statements in order. A statement whose first
+    keyword, ignoring comments and ASCII case, is BEGIN, START, COMMIT, ROLLBACK,
+    SAVEPOINT, RELEASE, END or ABORT is ExecutionFailed with a fixed message:
+    transaction ownership belongs to the explicit lease API. On a read-only
+    connection a statement whose first keyword is not SELECT, WITH, VALUES, SHOW,
+    DESCRIBE, DESC, EXPLAIN, MATCH, GO, FETCH or LOOKUP is ReadOnlyViolation(statement);
+    the driver's own read-only controls stay active as well.
+    Then execute the statements in order through the retained driver itself, in the
+    session's current transaction, stopping at the first failure. With an active
+    lease nothing is committed or rolled back here: later statements and calls see
+    the effects, and rollback_transaction undoes them. Without a lease, PostgreSQL,
+    MySQL, ODBC and ADBC commit each successful statement and roll back a failed one,
+    so earlier statements stay committed; SQLite and DuckDB use autocommit mode.
+    Fetch at most maximum_rows+1 rows per statement; more than maximum_rows rows is
+    ResultLimitExceeded(limit=maximum_rows), not a truncated success. Column names
+    and rows keep driver order; affected_rows is the driver's nonnegative row count
+    or -1. QueryBatch holds the exact split strings and one QueryResult per statement.
     Convert null to Cell.Null, bool to Integer(0/1), signed-I64 integers to Integer,
-    finite floats to Real, strings to Text and binary buffers to Blob. Decimal/date/
-    time/UUID scalar values become their exact string representation in Text;
-    unsupported nested/opaque values and out-of-range numbers are UnsupportedValue.
+    finite floats to Real, strings to Text and bytes, bytearray or memoryview to
+    Blob. Decimal, date, time, datetime, timedelta and UUID values become Text of
+    their str() form; other values, out-of-range integers and non-finite floats are
+    UnsupportedValue(type name).
     Use DBAPI cursors for the SQL adapters, BigQuery query(...).result(), Cassandra
     Session.execute, and NebulaGraph Session.execute/as_primitive with checked
     success status. Close cursors/results, but never the borrowed session.
-    With an active lease do not commit or roll back automatically; the explicit
-    transaction owner decides. Without a lease, commit each successful statement
-    for transactional SDKs and roll back its failed statement; previous successful
-    statements are already committed. SDK failures are ExecutionFailed; an actual
-    cancellation is Cancelled. Error messages never contain connection credentials.
+    Driver failures are ExecutionFailed(statement, fixed message); an actual
+    cancellation is Cancelled.
     """
 
-    ensures Result.Ok(batch) => batch.statements.len == batch.results.len
+    ensures Result.Ok(batch) => batch.statements.len == batch.results.len and batch.results.len > 0
+    ensures Result.Err(SqlClientError.ResultLimitExceeded(limit)) => limit == maximum_rows
 
     error SqlClientError.EmptySql
     error SqlClientError.UnterminatedSql
@@ -545,12 +773,43 @@ fn execute_statements(
 
     effects [database.read, database.write, network]
 
+requirement STATEMENTS_RUN_IN_THE_RETAINED_SESSION for execute_statements:
+    text """
+    Every statement runs on the Connection's retained driver in its current
+    transaction, never on a new or duplicate driver connection, so leased
+    statements are visible to later calls and undone by rollback_transaction.
+    """
+
+requirement STATEMENT_RESULTS_ARE_COMPLETE_OR_REJECTED for execute_statements:
+    text """
+    Each QueryResult holds every row the statement produced, at most maximum_rows;
+    a larger result is ResultLimitExceeded rather than a truncated or empty success.
+    """
+
+requirement STATEMENT_ERRORS_OMIT_SECRETS for execute_statements:
+    text "No execute_statements error payload contains the endpoint, a credential or raw driver exception text."
+
 fn load_query_file(reference: FileReference) -> Result[LoadedFile, FileError]:
     doc """
-    Set sdk: Any = boto3; client: Any = sdk.client("s3"); decode Body to source: str.
+    Read a query file as UTF-8 text and return its complete decoded source. Local
+    reads the file at path. S3 gets the object key from bucket with boto3 and its
+    default credential and region configuration.
+    A missing file, bucket or key is NotFound(reference); an access refusal is
+    PermissionDenied(reference); bytes that are not UTF-8 are
+    InvalidEncoding(reference); any other I/O, transport or service failure is
+    TransferFailed(reference, message) with a fixed message that contains no
+    credential or service response text.
+    The local path is read from the file system the program runs against: the fs
+    fixture root while a Cott scenario with an fs fixture is active, otherwise the
+    host file system. While such a fixture is active the host file system is never
+    used, even when the fixture read fails.
     """
 
     ensures Result.Ok(loaded) => loaded.reference == reference
+    ensures Result.Err(FileError.NotFound(missing)) => missing == reference
+    ensures Result.Err(FileError.PermissionDenied(denied)) => denied == reference
+    ensures Result.Err(FileError.InvalidEncoding(undecodable)) => undecodable == reference
+    ensures Result.Err(FileError.TransferFailed(failed, _)) => failed == reference
 
     error FileError.NotFound
     error FileError.PermissionDenied
@@ -560,28 +819,458 @@ fn load_query_file(reference: FileReference) -> Result[LoadedFile, FileError]:
     effects [file.read, network]
 
 fn save_query_file(reference: FileReference, source: Str) -> Result[SavedFile, FileError]:
-    ensures Result.Ok(saved) => saved.reference == reference
+    doc """
+    Write source as UTF-8 text. A reference that is not writable is
+    PermissionDenied(reference) before any I/O. Local writes a temporary file in the
+    same directory and atomically replaces path with it, creating or replacing the
+    file; a failed write leaves any previous file unchanged and removes the
+    temporary file. S3 puts the object key into bucket with boto3.
+    bytes_written is the UTF-8 byte length of source. An access refusal is
+    PermissionDenied(reference); any other failure, including a missing directory,
+    is TransferFailed(reference, message) with a fixed message that contains no
+    credential or service response text.
+    The local path is replaced in the file system the program runs against: the fs
+    fixture root while a Cott scenario with an fs fixture is active, otherwise the
+    host file system; the replacement is atomic in both. While such a fixture is
+    active the host file system is never used, even when the fixture write fails.
+    """
 
+    ensures Result.Ok(saved) => saved.reference == reference and saved.bytes_written >= source.len
+    ensures Result.Err(FileError.PermissionDenied(denied)) => denied == reference
+    ensures Result.Err(FileError.TransferFailed(failed, _)) => failed == reference
+
+    error FileError.PermissionDenied when not reference.writable
     error FileError.PermissionDenied
     error FileError.TransferFailed
 
     effects [file.write, network]
 
+requirement SAVE_REPLACES_ATOMICALLY for save_query_file:
+    text "A failed local save leaves the previous file content unchanged."
+    checked_by failed_save_keeps_the_previous_query
+
 fn run(arguments: List[Str]) -> Never:
     doc """
-    Parse arguments with real.harlequin.core.parse_cli, then connect with the parsed
-    adapter (DuckDb when absent), connection endpoint (":memory:" when absent) and
-    read_only flag; read SQL at sql> until .quit/EOF; execute and print tab-separated
-    results.
+    The command-line composition root: parse, compose the facades below, print, exit.
+    1. real.harlequin.core.parse_cli(arguments); an error exits with status 2.
+    2. With options.no_config the configuration is empty (no profiles, no
+    default_profile, theme "harlequin", keymap "default") and no file is read.
+    Otherwise real.harlequin.core.load_configuration(Path(".harlequin.toml")) in the
+    current directory; Missing means the empty configuration, any other error exits
+    with status 2.
+    3. real.harlequin.core.resolve_profile(configuration, options); an error exits
+    with status 2.
+    4. real.harlequin.core.connect(request); an error exits with status 1. After a
+    successful connect, real.harlequin.core.disconnect runs exactly once before exit
+    on every path; its failure makes a zero exit status 1.
+    5. Batch mode, when options.query_file is Some(path):
+    real.harlequin.core.load_query_file(FileReference(location=Local(path),
+    writable=false)), then one real.harlequin.core.execute_statements(connection,
+    source, 1000); print its results and exit 0, or exit 1 on a file or SQL error.
+    No prompt is shown and nothing is read from stdin.
+    6. Interactive mode otherwise: write "sql> " to stdout and read one stdin line;
+    stop at end of input or at a line equal to ".quit" after removing surrounding
+    whitespace; skip blank lines; run every other line with
+    real.harlequin.core.execute_statements(connection, line, 1000) and print its
+    results, or print its error and continue with the next line. Exit 0 at the end.
+    Printing a QueryResult: with columns, one line of column names and then one line
+    per row, fields separated by TAB; a cell prints as NULL, the decimal integer, the
+    float's Python repr, the text, or 0x followed by lowercase hexadecimal for a
+    blob; TAB, LF, CR and backslash in names and text print as \t, \n, \r and \\.
+    Without columns it prints "OK" when affected_rows is negative, else
+    "OK, N rows affected".
+    Each error prints one stderr line "harlequin: " followed by a fixed description
+    of the error variant; only CliError, ConfigurationError and SqlClientError
+    payload text (arguments, option names, paths, profile names, statements,
+    delimiters, type names, limits) may follow. Endpoints, credentials, opaque
+    values and driver messages are never printed.
     """
 
-    effects [
-        file.read,
-        file.write,
-        network,
-        database.read,
-        database.write,
-        clock,
-        random,
-        process.exit,
-    ]
+    effects [file.read, network, database.read, database.write, random, process.exit]
+
+requirement RUN_COMPOSES_THE_CONFIGURED_CONNECTION for run:
+    text """
+    run derives the connection request only through parse_cli, load_configuration
+    (unless --no-config) and resolve_profile, and executes all SQL through the one
+    Connection returned by connect.
+    """
+
+requirement RUN_MODES_AND_EXIT_STATUS for run:
+    text """
+    With --query-file run executes that file once without prompting; otherwise it
+    runs the sql> loop until .quit or end of input. Exit status is 2 for argument,
+    configuration and profile errors, 1 for connection, batch and disconnect
+    failures, and 0 otherwise.
+    """
+
+requirement RUN_ALWAYS_DISCONNECTS for run:
+    text "After a successful connect, run calls disconnect exactly once before exiting on every path."
+
+data warehouse_configuration: Configuration = Configuration(
+    profiles: List(
+        ConnectionProfile(
+            name: "warehouse",
+            adapter: AdapterKind.PostgreSql,
+            endpoint: "dbname=sales",
+            settings: List(Setting(name: "connect_timeout", value: "5")),
+            read_only: false,
+        ),
+        ConnectionProfile(
+            name: "local",
+            adapter: AdapterKind.Sqlite,
+            endpoint: "app.db",
+            settings: List(),
+            read_only: true,
+        ),
+    ),
+    default_profile: Option.Some(value: "local"),
+    theme: "harlequin",
+    keymap: "default",
+)
+
+data two_tabs: IdeSession = IdeSession(
+    connection_id: "c1",
+    tabs: List(
+        QueryTab(id: "a", title: "A", source: "select 1", cursor: 0, dirty: false),
+        QueryTab(id: "b", title: "B", source: "select 2", cursor: 3, dirty: true),
+    ),
+    active_tab_id: Option.Some(value: "a"),
+    history: QueryHistory(entries: List(), capacity: 2),
+)
+
+scenario adapter_descriptors_follow_the_published_table:
+    call descriptors = adapter_descriptors()
+    assert descriptors == List(
+        AdapterDescriptor(
+            kind: AdapterKind.DuckDb,
+            display_name: "DuckDB",
+            uri_schemes: List("duckdb"),
+            supports_transactions: true,
+            supports_catalog: true,
+            supports_files: true,
+        ),
+        AdapterDescriptor(
+            kind: AdapterKind.Sqlite,
+            display_name: "SQLite",
+            uri_schemes: List("sqlite"),
+            supports_transactions: true,
+            supports_catalog: true,
+            supports_files: true,
+        ),
+        AdapterDescriptor(
+            kind: AdapterKind.PostgreSql,
+            display_name: "PostgreSQL",
+            uri_schemes: List("postgres", "postgresql"),
+            supports_transactions: true,
+            supports_catalog: true,
+            supports_files: false,
+        ),
+        AdapterDescriptor(
+            kind: AdapterKind.MySql,
+            display_name: "MySQL",
+            uri_schemes: List("mysql"),
+            supports_transactions: true,
+            supports_catalog: true,
+            supports_files: false,
+        ),
+        AdapterDescriptor(
+            kind: AdapterKind.Odbc,
+            display_name: "ODBC",
+            uri_schemes: List("odbc"),
+            supports_transactions: true,
+            supports_catalog: true,
+            supports_files: false,
+        ),
+        AdapterDescriptor(
+            kind: AdapterKind.BigQuery,
+            display_name: "BigQuery",
+            uri_schemes: List("bigquery"),
+            supports_transactions: false,
+            supports_catalog: true,
+            supports_files: false,
+        ),
+        AdapterDescriptor(
+            kind: AdapterKind.Trino,
+            display_name: "Trino",
+            uri_schemes: List("trino"),
+            supports_transactions: false,
+            supports_catalog: true,
+            supports_files: false,
+        ),
+        AdapterDescriptor(
+            kind: AdapterKind.Databricks,
+            display_name: "Databricks",
+            uri_schemes: List("databricks"),
+            supports_transactions: false,
+            supports_catalog: true,
+            supports_files: true,
+        ),
+        AdapterDescriptor(
+            kind: AdapterKind.Adbc,
+            display_name: "ADBC",
+            uri_schemes: List("adbc"),
+            supports_transactions: true,
+            supports_catalog: true,
+            supports_files: false,
+        ),
+        AdapterDescriptor(
+            kind: AdapterKind.Cassandra,
+            display_name: "Cassandra",
+            uri_schemes: List("cassandra"),
+            supports_transactions: false,
+            supports_catalog: true,
+            supports_files: false,
+        ),
+        AdapterDescriptor(
+            kind: AdapterKind.NebulaGraph,
+            display_name: "NebulaGraph",
+            uri_schemes: List("nebula"),
+            supports_transactions: false,
+            supports_catalog: true,
+            supports_files: false,
+        ),
+    )
+
+scenario command_line_options_are_parsed:
+    call parsed = parse_cli(
+        List("-a", "SQLite", "--profile=warehouse", "-r", "-f", "q.sql", "db.sqlite"),
+    )
+    assert parsed matches Result.Ok(options) => options.profile == Option.Some(value: "warehouse") and options.adapter == Option.Some(value: AdapterKind.Sqlite) and options.connection == Option.Some(value: "db.sqlite") and options.query_file != Option.Nothing and options.read_only and not options.no_config
+    call escaped = parse_cli(List("--no-config", "--", "-weird.db"))
+    assert escaped matches Result.Ok(options) => options.connection == Option.Some(value: "-weird.db") and options.no_config and options.profile == Option.Nothing and options.query_file == Option.Nothing
+
+scenario command_line_errors_name_the_first_offending_argument:
+    call unknown = parse_cli(List("--read-only=yes"))
+    assert unknown == Result.Err(error: CliError.UnknownOption(argument: "--read-only=yes"))
+    call missing = parse_cli(List("-r", "--profile"))
+    assert missing == Result.Err(error: CliError.MissingOptionValue(option: "--profile"))
+    call invalid = parse_cli(List("--adapter", "oracle", "--bogus"))
+    assert invalid == Result.Err(error: CliError.InvalidAdapter(value: "oracle"))
+    call two_sources = parse_cli(List("a.db", "b.db"))
+    assert two_sources == Result.Err(error: CliError.ConflictingConnectionInputs)
+    call profile_without_config = parse_cli(List("-P", "warehouse", "--no-config"))
+    assert profile_without_config == Result.Err(error: CliError.ConflictingConnectionInputs)
+
+scenario configuration_files_are_loaded_in_order:
+    fixtures:
+        fs files:
+            file "harlequin.toml" text("default_profile = \"local\"\ntheme = \"nord\"\n\n[[profiles]]\nname = \"local\"\nadapter = \"sqlite\"\nconnection = \"app.db\"\nread_only = true\n\n[profiles.settings]\ntimeout = \"5\"\n\n[[profiles]]\nname = \"lake\"\nadapter = \"DuckDB\"\nconnection = \":memory:\"\n")
+            file "twice.toml" text("[[profiles]]\nname = \"a\"\nadapter = \"sqlite\"\nconnection = \"a.db\"\n\n[[profiles]]\nname = \"a\"\nadapter = \"duckdb\"\nconnection = \"b.db\"\n")
+            file "broken.toml" text("theme = \n")
+    call loaded = load_configuration(files.path("harlequin.toml"))
+    assert loaded == Result.Ok(
+        value: Configuration(
+            profiles: List(
+                ConnectionProfile(
+                    name: "local",
+                    adapter: AdapterKind.Sqlite,
+                    endpoint: "app.db",
+                    settings: List(Setting(name: "timeout", value: "5")),
+                    read_only: true,
+                ),
+                ConnectionProfile(
+                    name: "lake",
+                    adapter: AdapterKind.DuckDb,
+                    endpoint: ":memory:",
+                    settings: List(),
+                    read_only: false,
+                ),
+            ),
+            default_profile: Option.Some(value: "local"),
+            theme: "nord",
+            keymap: "default",
+        ),
+    )
+    call duplicate = load_configuration(files.path("twice.toml"))
+    assert duplicate == Result.Err(error: ConfigurationError.ProfileDuplicate(name: "a"))
+    call broken = load_configuration(files.path("broken.toml"))
+    assert broken matches Result.Err(ConfigurationError.Invalid(_, _))
+    call absent = load_configuration(files.path("absent.toml"))
+    assert absent == Result.Err(error: ConfigurationError.Missing(path: files.path("absent.toml")))
+
+scenario profiles_resolve_with_command_line_overrides:
+    call defaulted = resolve_profile(
+        warehouse_configuration,
+        CliOptions(
+            profile: Option.Nothing,
+            adapter: Option.Nothing,
+            connection: Option.Nothing,
+            query_file: Option.Nothing,
+            read_only: false,
+            no_config: false,
+        ),
+    )
+    assert defaulted == Result.Ok(
+        value: ConnectionRequest(
+            adapter: AdapterKind.Sqlite,
+            endpoint: "app.db",
+            settings: List(),
+            read_only: true,
+        ),
+    )
+    call overridden = resolve_profile(
+        warehouse_configuration,
+        CliOptions(
+            profile: Option.Some(value: "warehouse"),
+            adapter: Option.Nothing,
+            connection: Option.Some(value: "dbname=audit"),
+            query_file: Option.Nothing,
+            read_only: true,
+            no_config: false,
+        ),
+    )
+    assert overridden == Result.Ok(
+        value: ConnectionRequest(
+            adapter: AdapterKind.PostgreSql,
+            endpoint: "dbname=audit",
+            settings: List(Setting(name: "connect_timeout", value: "5")),
+            read_only: true,
+        ),
+    )
+    call unconfigured = resolve_profile(
+        warehouse_configuration,
+        CliOptions(
+            profile: Option.Nothing,
+            adapter: Option.Some(value: AdapterKind.Sqlite),
+            connection: Option.Nothing,
+            query_file: Option.Nothing,
+            read_only: false,
+            no_config: true,
+        ),
+    )
+    assert unconfigured == Result.Ok(
+        value: ConnectionRequest(
+            adapter: AdapterKind.Sqlite,
+            endpoint: ":memory:",
+            settings: List(),
+            read_only: false,
+        ),
+    )
+    call missing = resolve_profile(
+        warehouse_configuration,
+        CliOptions(
+            profile: Option.Some(value: "archive"),
+            adapter: Option.Nothing,
+            connection: Option.Nothing,
+            query_file: Option.Nothing,
+            read_only: false,
+            no_config: false,
+        ),
+    )
+    assert missing == Result.Err(error: ConfigurationError.ProfileMissing(name: "archive"))
+
+scenario tabs_are_added_replaced_activated_and_closed:
+    call added = add_query_tab(
+        two_tabs,
+        QueryTab(id: "c", title: "C", source: "", cursor: 0, dirty: false),
+    )
+    assert added.tabs.len == 3 and added.active_tab_id == Option.Some(value: "c")
+    call replaced = add_query_tab(
+        added,
+        QueryTab(id: "a", title: "A2", source: "select 9", cursor: 1, dirty: true),
+    )
+    assert replaced.tabs == List(
+        QueryTab(id: "a", title: "A2", source: "select 9", cursor: 1, dirty: true),
+        QueryTab(id: "b", title: "B", source: "select 2", cursor: 3, dirty: true),
+        QueryTab(id: "c", title: "C", source: "", cursor: 0, dirty: false),
+    )
+    assert replaced.active_tab_id == Option.Some(value: "a")
+    call activated = activate_query_tab(replaced, "b")
+    assert activated matches Result.Ok(session) => session.active_tab_id == Option.Some(value: "b")
+    call closed_active_first = close_query_tab(two_tabs, "a")
+    assert closed_active_first matches Result.Ok(session) => session.tabs.len == 1 and session.active_tab_id == Option.Some(value: "b")
+    call closed_active_last = close_query_tab(added, "c")
+    assert closed_active_last matches Result.Ok(session) => session.active_tab_id == Option.Some(value: "b")
+    call closed_inactive = close_query_tab(two_tabs, "b")
+    assert closed_inactive matches Result.Ok(session) => session.active_tab_id == Option.Some(value: "a")
+    call unknown = activate_query_tab(two_tabs, "z")
+    assert unknown == Result.Err(error: SessionError.TabMissing(tab_id: "z"))
+
+scenario history_keeps_the_newest_entries:
+    data first: QueryHistoryEntry = QueryHistoryEntry(
+        source: "select 1",
+        executed_at: "2026-01-01T00:00:00Z",
+        succeeded: true,
+    )
+    data second: QueryHistoryEntry = QueryHistoryEntry(
+        source: "select 2",
+        executed_at: "2026-01-01T00:00:01Z",
+        succeeded: false,
+    )
+    data third: QueryHistoryEntry = QueryHistoryEntry(
+        source: "select 3",
+        executed_at: "2026-01-01T00:00:02Z",
+        succeeded: true,
+    )
+    call one = append_query_history(QueryHistory(entries: List(), capacity: 2), first)
+    call two = append_query_history(one, second)
+    call three = append_query_history(two, third)
+    assert three.entries == List(second, third)
+
+scenario statements_split_outside_quotes_and_comments:
+    call split = split_statements(" select 'a;b' ; -- skip; this\n/* c; */ select \"x;\" ;; select 2")
+    assert split == Result.Ok(
+        value: List("select 'a;b'", "-- skip; this\n/* c; */ select \"x;\"", "select 2"),
+    )
+    call quote = split_statements("select 'it''s")
+    assert quote == Result.Err(error: SqlClientError.UnterminatedSql(delimiter: "'"))
+    call comment = split_statements("select 1 /* open")
+    assert comment == Result.Err(error: SqlClientError.UnterminatedSql(delimiter: "*/"))
+    call empty = split_statements(" -- nothing\n ; /* */ ")
+    assert empty == Result.Err(error: SqlClientError.EmptySql)
+
+scenario query_files_round_trip_as_utf8:
+    fixtures:
+        fs files:
+            file "saved.sql" text("select 1;")
+            file "latin1.sql" hex("e9")
+        http s3:
+            route "/unused" -> response(status: 404, body: text(""), encoding: "utf-8")
+    call saved = save_query_file(
+        FileReference(location: FileLocation.Local(path: files.path("saved.sql")), writable: true),
+        "select 'é';",
+    )
+    assert saved matches Result.Ok(receipt) => receipt.bytes_written == 12
+    call loaded = load_query_file(
+        FileReference(location: FileLocation.Local(path: files.path("saved.sql")), writable: false),
+    )
+    assert loaded matches Result.Ok(file) => file.source == "select 'é';"
+    call denied = save_query_file(
+        FileReference(location: FileLocation.Local(path: files.path("saved.sql")), writable: false),
+        "drop table t;",
+    )
+    assert denied matches Result.Err(FileError.PermissionDenied(_))
+    call undecodable = load_query_file(
+        FileReference(
+            location: FileLocation.Local(path: files.path("latin1.sql")),
+            writable: false,
+        ),
+    )
+    assert undecodable matches Result.Err(FileError.InvalidEncoding(_))
+    call absent = load_query_file(
+        FileReference(
+            location: FileLocation.Local(path: files.path("absent.sql")),
+            writable: false,
+        ),
+    )
+    assert absent matches Result.Err(FileError.NotFound(_))
+
+scenario failed_save_keeps_the_previous_query:
+    fixtures:
+        fs files:
+            file "saved.sql" text("select 1;")
+        http s3:
+            route "/unused" -> response(status: 404, body: text(""), encoding: "utf-8")
+        failure disk_full:
+            point: file.replace
+            occurrence: 1
+            error: disk_full
+    call failed = save_query_file(
+        FileReference(location: FileLocation.Local(path: files.path("saved.sql")), writable: true),
+        "select 2;",
+    )
+    assert failed matches Result.Err(FileError.TransferFailed(_, _))
+    call kept = load_query_file(
+        FileReference(location: FileLocation.Local(path: files.path("saved.sql")), writable: false),
+    )
+    assert kept matches Result.Ok(file) => file.source == "select 1;"

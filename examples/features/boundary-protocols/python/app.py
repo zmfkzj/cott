@@ -5,8 +5,8 @@ import io
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from cott_runtime import Ok
 from curriculum.boundary_protocols import (
+    ConnectionId,
     adapt_unknown,
     async_lines,
     echo_async,
@@ -47,12 +47,11 @@ class _ProtocolValues(AsyncGenerator[Any, object]):
         self._closed = True
 
 async def main() -> None:
-    result = wrap_handle(raw_id=42)
-    if isinstance(result, Ok):
-        if result.value.raw_id != 42:
-            raise RuntimeError("wrap_handle did not retain the raw ID")
-        print(f"Wrapped raw id: {result.value.raw_id}")
-        print(f"Extracted handle id: {extract_handle_id(bundle=result.value)}")
+    bundle = wrap_handle(raw_id=ConnectionId(value=42))
+    if bundle.raw_id.value != 42:
+        raise RuntimeError("wrap_handle did not retain the raw ID")
+    print(f"Wrapped raw id: {bundle.raw_id.value}")
+    print(f"Extracted handle id: {extract_handle_id(bundle=bundle).value}")
 
     unknown = adapt_unknown(value={"label": "explicit"})
     if not isinstance(unknown, dict):

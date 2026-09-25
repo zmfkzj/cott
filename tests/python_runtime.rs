@@ -96,6 +96,10 @@ def rejected(dependencies, source):
 
 rejected([sdk], b"from cott_test_namespace import other\n")
 rejected([sdk], b"import cott_test_namespace\n")
+# A production lock identity without installed evidence is accepted beside the imports it does
+# not serve, but never authorizes an import that needs observed provenance.
+_cott_validate_dependencies([sdk, {"name": "unimported-driver", "version": "3.0.0"}], source, {})
+rejected([{"name": "selected-driver", "version": "1.0.0"}], source)
 import types
 fake = types.ModuleType("cott_test_namespace.sdk")
 fake.__file__ = str(root / "untrusted.py")
@@ -425,7 +429,7 @@ def _read_record(text: str) -> dict:
     return dict(schema_version=wire["schema_version"], current=current, last_verified=last)
 
 _current = dict(generation_id="", verified=True, project_version="0.3.0", compatibility=dict(
-    generation_schema=8, canonical_ir_schema=8, runtime_abi=7, contract_strategy_schema=5,
+    generation_schema=8, canonical_ir_schema=9, runtime_abi=7, contract_strategy_schema=6,
 ), inputs={{}}, tools=dict(
     python=dict(implementation=sys.implementation.name, version=platform.python_version(), cache_tag=sys.implementation.cache_tag, os=sys.platform, machine=platform.machine(), platform=sysconfig.get_platform(), executable=str(Path(sys.executable).resolve()), content_hash="sha256:"+hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest()),
     runtime=dict(abi=_runtime._COTT_RUNTIME_ABI, version=_runtime._COTT_RUNTIME_VERSION),
@@ -1116,6 +1120,109 @@ else:
     assert!(
         output.status.success(),
         "generated runtime failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The Python OUTPUT RULES promise agents these exact fixture file adapter outcomes.
+#[test]
+fn fixture_file_adapters_raise_the_failures_the_output_rules_promise() {
+    if Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+
+    let temp = TempDir::new();
+    write_runtime(&temp.path);
+    let script = r#"
+import os
+from pathlib import Path
+import cott_runtime as _runtime
+from cott_runtime import CottContractViolation
+
+def raised(call):
+    try:
+        call()
+    except BaseException as error:
+        return error
+    raise AssertionError("fixture adapter call did not fail")
+
+for call in (
+    lambda: _runtime._cott_fixture_read("inactive.txt"),
+    lambda: _runtime._cott_fixture_write("inactive.txt", b"data"),
+    lambda: _runtime._cott_fixture_replace("inactive.txt", b"data"),
+    lambda: _runtime._cott_fixture_write(Path("/escape"), "not bytes"),
+):
+    error = raised(call)
+    assert type(error) is CottContractViolation, error
+    assert error.message == "fixture adapters are inactive", error.message
+    assert str(error) == "fixture adapters are inactive [phase=fixture]", str(error)
+assert not Path("inactive.txt").exists()
+
+root = Path("fixture-root")
+root.mkdir()
+def active(failures, action):
+    with _runtime._cott_fixture_activate(
+        _runtime._cott_fixture_runner_token(),
+        root=root,
+        http_url=None,
+        clock=None,
+        failures={point: {"occurrence": 1, "error": "injected " + point} for point in failures},
+        transcript_limit=64,
+    ):
+        return action()
+
+missing = active((), lambda: raised(lambda: _runtime._cott_fixture_read("absent.txt")))
+assert type(missing) is CottContractViolation and type(missing.__cause__) is FileNotFoundError, repr(missing)
+
+if os.geteuid() != 0:
+    (root / "locked.txt").write_bytes(b"secret")
+    (root / "locked.txt").chmod(0)
+    denied = active((), lambda: raised(lambda: _runtime._cott_fixture_read("locked.txt")))
+    assert type(denied) is CottContractViolation and type(denied.__cause__) is PermissionError, repr(denied)
+
+for point, call in (
+    ("file.open", lambda: _runtime._cott_fixture_read("value.txt")),
+    ("file.read", lambda: _runtime._cott_fixture_read("value.txt")),
+    ("file.write", lambda: _runtime._cott_fixture_write("value.txt", b"new")),
+    ("file.write", lambda: _runtime._cott_fixture_replace("value.txt", b"new")),
+):
+    (root / "value.txt").write_bytes(b"old")
+    injected = active((point,), lambda: raised(call))
+    assert type(injected) is OSError and str(injected) == "injected " + point, repr(injected)
+    assert (root / "value.txt").read_bytes() == b"old"
+
+for point, call, keeps_previous in (
+    ("file.flush", lambda: _runtime._cott_fixture_write("value.txt", b"new"), False),
+    ("file.flush", lambda: _runtime._cott_fixture_replace("value.txt", b"new"), True),
+    ("file.replace", lambda: _runtime._cott_fixture_replace("value.txt", b"new"), True),
+):
+    (root / "value.txt").write_bytes(b"old")
+    wrapped = active((point,), lambda: raised(call))
+    assert type(wrapped) is CottContractViolation, repr(wrapped)
+    assert type(wrapped.__cause__) is OSError and str(wrapped.__cause__) == "injected " + point, repr(wrapped.__cause__)
+    if keeps_previous:
+        assert (root / "value.txt").read_bytes() == b"old"
+    assert [path.name for path in root.iterdir() if path.name.startswith(".")] == []
+
+unsafe = active((), lambda: raised(lambda: _runtime._cott_fixture_write("../escape", b"data")))
+assert type(unsafe) is CottContractViolation and unsafe.__cause__ is None, repr(unsafe)
+not_bytes = active((), lambda: raised(lambda: _runtime._cott_fixture_replace("value.txt", "text")))
+assert type(not_bytes) is CottContractViolation and not_bytes.__cause__ is None, repr(not_bytes)
+
+active((), lambda: _runtime._cott_fixture_replace(Path("nested/deeper/value.txt"), b"replaced"))
+assert (root / "nested/deeper/value.txt").read_bytes() == b"replaced"
+assert [path.name for path in (root / "nested/deeper").iterdir()] == ["value.txt"]
+"#;
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(script)
+        .current_dir(&temp.path)
+        .output()
+        .expect("python3 should execute generated runtime");
+    assert!(
+        output.status.success(),
+        "fixture adapter contract failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

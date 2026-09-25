@@ -1,12 +1,9 @@
 import sqlite3
 from pathlib import Path
-from typing import Final
 
-from cott_runtime import CottList, Err, Nothing, Ok, Result, Some
+from cott_runtime import CottList, Err, Nothing, Ok, Option, Result, Some
 from real.harlequin.catalog_types import CatalogRelation, RelationKind_Table, RelationKind_View
 from real.harlequin.core_types import DatabaseTarget, DatabaseTarget_File, SqlClientError, SqlClientError_SqliteFailure
-
-_MAX_RELATIONS: Final[int] = 100000
 
 
 def catalog_relations(database: DatabaseTarget) -> Result[CottList[CatalogRelation], SqlClientError]:
@@ -17,19 +14,24 @@ def catalog_relations(database: DatabaseTarget) -> Result[CottList[CatalogRelati
         else:
             connection = sqlite3.connect(":memory:")
         try:
-            rows = connection.execute(
-                "SELECT name, type, sql FROM sqlite_schema WHERE type IN ('table', 'view') LIMIT ?",
-                (_MAX_RELATIONS,),
+            rows: list[tuple[object, object, object]] = connection.execute(
+                "SELECT name, type, sql FROM main.sqlite_schema WHERE type IN ('table', 'view')"
             ).fetchall()
         finally:
             connection.close()
-    except (sqlite3.Error, OSError, ValueError) as error:
+    except sqlite3.Error as error:
         return Err(error=SqlClientError_SqliteFailure(message=str(error)))
-    return Ok(value=CottList(values=[
-        CatalogRelation(
-            name=name,
-            kind=RelationKind_Table() if kind == "table" else RelationKind_View(),
-            sql=Nothing() if sql is None else Some(value=sql),
+    relations: list[CatalogRelation] = []
+    for name, kind, sql in rows:
+        if not isinstance(name, str) or name.startswith("sqlite_"):
+            continue
+        stored: Option[str] = Some(value=sql) if isinstance(sql, str) else Nothing()
+        relations.append(
+            CatalogRelation(
+                name=name,
+                kind=RelationKind_Table() if kind == "table" else RelationKind_View(),
+                sql=stored,
+            )
         )
-        for name, kind, sql in rows
-    ]))
+    relations.sort(key=lambda relation: relation.name)
+    return Ok(value=CottList(values=relations))

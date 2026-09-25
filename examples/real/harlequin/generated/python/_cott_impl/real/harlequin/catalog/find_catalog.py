@@ -9,9 +9,9 @@ _MAX_MATCHES: Final[int] = 1000
 def find_catalog(snapshot: CatalogSnapshot, term: str, maximum_matches: U64) -> Result[CottList[CatalogMatch], CatalogError]:
     if maximum_matches > _MAX_MATCHES:
         return Err(error=CatalogError_LimitExceeded(limit=_MAX_MATCHES))
-    needle = term.casefold()
     found: list[CatalogMatch] = []
     if maximum_matches > 0:
+        needle = term.casefold()
         for relation in snapshot.relations:
             name = relation.name
             if needle in name.casefold():

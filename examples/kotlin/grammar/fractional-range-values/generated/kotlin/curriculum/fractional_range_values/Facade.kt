@@ -4,18 +4,21 @@
 package curriculum.fractional_range_values
 
 /**
- * Constructs an ascending finite sequence of binary64 values. The start is
- * included when start is less than stop; stop is always excluded. If start is
- * greater than or equal to stop, the result is an empty list.
+ * Returns, in ascending order, the candidates start + index * step for
+ * index = 0, 1, 2, ... that lie below stop. Each candidate is computed from
+ * its own index: the index is converted to binary64, multiplied by step, and
+ * start is added, each operation rounded to nearest, ties to even, with no
+ * fused multiply-add and no running sum. The first candidate at or above stop
+ * ends the sequence and is excluded, so the result is empty when start is at
+ * or above stop.
  * 
- * The function first rejects a non-finite start, stop, or step with
- * NonFiniteInput. Each candidate is computed directly as start plus index
- * times step, with binary64 round-to-nearest, ties-to-even after the
- * multiplication and addition. A candidate equal to or above stop ends the
- * sequence. A candidate that does not exceed the preceding rounded value
- * produces StepDoesNotAdvance. After limit values, the next candidate is
- * checked only for termination; if it is still below stop,
- * OutputLimitExceeded takes precedence.
+ * A candidate below stop that does not exceed the preceding value returns
+ * StepDoesNotAdvance. At most limit values are returned: when the candidate
+ * after the limit-th value is still below stop, OutputLimitExceeded is
+ * returned, even if that candidate also fails to advance.
+ * 
+ * On Kotlin the F64 boundary rejects NaN and infinities before the call, so
+ * NonFiniteInput is never returned.
  */
 
 public fun  build_bounded_range(start: kotlin.Double, stop: kotlin.Double, step: curriculum.fractional_range_values.PositiveStep, limit: curriculum.fractional_range_values.OutputLimit): cott_runtime.CottResult<cott_runtime.CottList<kotlin.Double>, curriculum.fractional_range_values.FractionalRangeError> {
@@ -27,6 +30,7 @@ public fun  build_bounded_range(start: kotlin.Double, stop: kotlin.Double, step:
     var _cottExpectedError: kotlin.String? = null
     var _cottExpectedErrorClause: kotlin.String? = null
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
+        if (_cottExpectedError == null && (((((!((cott_runtime.CottRuntime.canonicalCompare(cott_runtime.CottRuntime.f64Negate(curriculum.fractional_range_values.MAX_F64), _cottArg_start) <= 0 && cott_runtime.CottRuntime.canonicalCompare(_cottArg_start, curriculum.fractional_range_values.MAX_F64) <= 0))) || (!((cott_runtime.CottRuntime.canonicalCompare(cott_runtime.CottRuntime.f64Negate(curriculum.fractional_range_values.MAX_F64), _cottArg_stop) <= 0 && cott_runtime.CottRuntime.canonicalCompare(_cottArg_stop, curriculum.fractional_range_values.MAX_F64) <= 0))))) || ((cott_runtime.CottRuntime.canonicalCompare((_cottArg_step).`value`, curriculum.fractional_range_values.MAX_F64) > 0))))) { _cottExpectedError = "curriculum.fractional_range_values.FractionalRangeError.NonFiniteInput"; _cottExpectedErrorClause = "error:3" }
     }
     val _cottRawResult = try {
         cott_impl.curriculum.fractional_range_values.build_bounded_range(_cottArg_start, _cottArg_stop, _cottArg_step, _cottArg_limit)
@@ -40,13 +44,14 @@ public fun  build_bounded_range(start: kotlin.Double, stop: kotlin.Double, step:
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(cott_runtime.CottTypes.list(cott_runtime.CottTypes.F64), curriculum.fractional_range_values.CottDescriptors_82be1279693347f6697a6f1a.type_0c8957cfbd93f67eedbb70cb()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val values = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as cott_runtime.CottList<kotlin.Double>); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(cott_runtime.CottRuntime.length(values), java.math.BigInteger("10000").toString().toULong()) <= 0), "curriculum.fractional_range_values.build_bounded_range", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 1187, endByte = 1235, startLine = 35, startColumn = 5, endLine = 35, endColumn = 53), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val values = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as cott_runtime.CottList<kotlin.Double>); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(cott_runtime.CottRuntime.length(values), (_cottArg_limit).`value`) <= 0), "curriculum.fractional_range_values.build_bounded_range", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 1357, endByte = 1405, startLine = 40, startColumn = 5, endLine = 40, endColumn = 53), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val values = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as cott_runtime.CottList<kotlin.Double>); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((cott_runtime.CottRuntime.canonicalEqual(cott_runtime.CottRuntime.length(values), java.math.BigInteger("0").toString().toULong())), (cott_runtime.CottRuntime.canonicalCompare(_cottArg_start, _cottArg_stop) >= 0))), "curriculum.fractional_range_values.build_bounded_range", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 1410, endByte = 1475, startLine = 41, startColumn = 5, endLine = 41, endColumn = 70), expected = "true", actual = "false"); true } } else true }
         val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
         val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
-        cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("curriculum.fractional_range_values.FractionalRangeError.NonFiniteInput", "curriculum.fractional_range_values.FractionalRangeError.StepDoesNotAdvance", "curriculum.fractional_range_values.FractionalRangeError.OutputLimitExceeded"), "curriculum.fractional_range_values.build_bounded_range", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("curriculum.fractional_range_values.FractionalRangeError.NonFiniteInput", "curriculum.fractional_range_values.FractionalRangeError.StepDoesNotAdvance", "curriculum.fractional_range_values.FractionalRangeError.OutputLimitExceeded").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
-        if (_cottActualErrorVariant == "curriculum.fractional_range_values.FractionalRangeError.NonFiniteInput") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.fractional_range_values.FractionalRangeError.NonFiniteInput", "curriculum.fractional_range_values.build_bounded_range", "error", clause = "error:2", span = cott_runtime.CottSpan(startByte = 1241, endByte = 1282, startLine = 37, startColumn = 5, endLine = 37, endColumn = 46))
-        if (_cottActualErrorVariant == "curriculum.fractional_range_values.FractionalRangeError.StepDoesNotAdvance") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.fractional_range_values.FractionalRangeError.StepDoesNotAdvance", "curriculum.fractional_range_values.build_bounded_range", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 1287, endByte = 1332, startLine = 38, startColumn = 5, endLine = 38, endColumn = 50))
-        if (_cottActualErrorVariant == "curriculum.fractional_range_values.FractionalRangeError.OutputLimitExceeded") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.fractional_range_values.FractionalRangeError.OutputLimitExceeded", "curriculum.fractional_range_values.build_bounded_range", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 1337, endByte = 1383, startLine = 39, startColumn = 5, endLine = 39, endColumn = 51))
+        cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("curriculum.fractional_range_values.FractionalRangeError.StepDoesNotAdvance", "curriculum.fractional_range_values.FractionalRangeError.OutputLimitExceeded"), "curriculum.fractional_range_values.build_bounded_range", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("curriculum.fractional_range_values.FractionalRangeError.StepDoesNotAdvance", "curriculum.fractional_range_values.FractionalRangeError.OutputLimitExceeded").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
+        if (_cottExpectedErrorClause == "error:3") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.fractional_range_values.FractionalRangeError.NonFiniteInput", "curriculum.fractional_range_values.build_bounded_range", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 1481, endByte = 1619, startLine = 43, startColumn = 5, endLine = 43, endColumn = 143))
+        if (_cottActualErrorVariant == "curriculum.fractional_range_values.FractionalRangeError.StepDoesNotAdvance") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.fractional_range_values.FractionalRangeError.StepDoesNotAdvance", "curriculum.fractional_range_values.build_bounded_range", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 1624, endByte = 1669, startLine = 44, startColumn = 5, endLine = 44, endColumn = 50))
+        if (_cottActualErrorVariant == "curriculum.fractional_range_values.FractionalRangeError.OutputLimitExceeded") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.fractional_range_values.FractionalRangeError.OutputLimitExceeded", "curriculum.fractional_range_values.build_bounded_range", "error", clause = "error:5", span = cott_runtime.CottSpan(startByte = 1674, endByte = 1720, startLine = 45, startColumn = 5, endLine = 45, endColumn = 51))
     }
     return _cottResult
 }

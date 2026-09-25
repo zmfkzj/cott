@@ -8,8 +8,7 @@ import cott_runtime.CottRuntime
 import cott_runtime.CottStep
 import cott_runtime.CottTypes
 import cott_runtime.CottUnit
-import cott_runtime.Err
-import cott_runtime.Ok
+import curriculum.boundary_protocols.ConnectionId
 import curriculum.boundary_protocols.adapt_unknown
 import curriculum.boundary_protocols.async_lines
 import curriculum.boundary_protocols.echo_async
@@ -57,14 +56,10 @@ private fun yielded(step: CottGeneratorStep<Any?, *>): Any? = when (step) {
 }
 
 public fun main(): Unit = runBlocking {
-    when (val result = wrap_handle(42uL)) {
-        is Ok -> {
-            check(result.value.raw_id == 42uL)
-            println("Wrapped raw id: ${result.value.raw_id}")
-            println("Extracted handle id: ${extract_handle_id(result.value)}")
-        }
-        is Err -> error("unexpected handle error: ${result.error}")
-    }
+    val bundle = wrap_handle(ConnectionId(42uL))
+    check(bundle.raw_id.value == 42uL)
+    println("Wrapped raw id: ${bundle.raw_id.value}")
+    println("Extracted handle id: ${extract_handle_id(bundle).value}")
 
     val unknown = adapt_unknown(mapOf("label" to "explicit"))
     val label = (unknown as? Map<*, *>)?.get("label") as? String

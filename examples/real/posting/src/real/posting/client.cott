@@ -34,37 +34,75 @@ enum PostingError:
 
 fn parse_method(source: Str) -> Result[HttpMethod, PostingError]:
     doc """
-    Accept standard HTTP methods case-insensitively; preserve other non-empty methods.
+    Parse an HTTP method name. A source equal to GET, HEAD, POST, PUT, PATCH,
+    DELETE or OPTIONS under ASCII case-insensitive comparison is that standard
+    variant. Any other HTTP token is HttpMethod.Custom with the source unchanged
+    (no case mapping). An HTTP token is one or more of the ASCII characters A-Z,
+    a-z, 0-9 and ! # $ % & ' * + - . ^ _ ` | ~. Every other source, including the
+    empty string, is InvalidRequest.
     """
 
-    ensures Result.Ok(method) => source.len > 0
+    ensures Result.Ok(HttpMethod.Custom(name)) => name == source
 
+    error PostingError.InvalidRequest when source == ""
     error PostingError.InvalidRequest
 
     effects []
 
 fn parse_arguments(arguments: List[Str]) -> Result[Request, PostingError]:
     doc """
-    Parse METHOD URL [BODY]; use a 30-second timeout and no headers.
+    Parse the command line METHOD URL [BODY]. The method is
+    real.posting.client.parse_method of METHOD, and its error is returned
+    unchanged. URL and BODY are copied verbatim; the URL is not validated here
+    (real.posting.client.send_request validates it). A missing BODY is the empty
+    string. The request has no headers and a 30000 millisecond timeout.
     """
 
-    ensures Result.Ok(request) => arguments.len >= 2
+    ensures Result.Ok(request) => request.headers.len == 0
+    ensures Result.Ok(request) => request.timeout_ms == 30000
+    ensures Result.Ok(request) => (arguments.len == 2 => request.body == "")
 
-    error PostingError.InvalidArguments
+    error PostingError.InvalidArguments when arguments.len < 2 or arguments.len > 3
     error PostingError.InvalidRequest
 
     effects []
 
 fn send_request(request: Request) -> Result[Response, PostingError]:
     doc """
-    Send one HTTP request and retain status, final URL, headers, and the response
-    body decoded as UTF-8 with replacement characters for undecodable bytes. An HTTP
-    error status is still a received Response; InvalidRequest covers a non-HTTP(S)
-    URL, and NetworkFailed covers connection, timeout, and URL errors.
+    Send one HTTP/1.1 request over the host network stack. The method name is
+    the upper-case standard name or the Custom name unchanged; request.headers
+    are sent in order; a non-empty body is sent as its UTF-8 bytes and an empty
+    body sends no payload. timeout_ms bounds the connection attempt and each
+    blocking read, in milliseconds.
+    
+    HttpMethod.Get and HttpMethod.Head requests follow 301, 302, 303, 307 and 308
+    responses that carry a Location header, resolving a relative Location against
+    the current URL, at most 10 times; a further redirect response is returned as
+    received. Requests with any other method, including a Custom one, never follow
+    redirects.
+    
+    The Response holds the final status, the final URL (request.url when no
+    redirect was followed), the received headers in received order with
+    duplicates kept, and the body decoded as UTF-8 with each undecodable byte
+    sequence replaced by U+FFFD; a Content-Type charset is ignored. A received
+    status of 400 or above is still a successful Response, never an error.
+    
+    InvalidRequest: timeout_ms is 0; the URL does not start with the lower-case
+    "http://" or "https://" or has no host; a header name is blank or not an
+    HTTP token (as defined by real.posting.client.parse_method); a header value
+    contains CR or LF; or the method is a Custom name that is not an HTTP token.
+    No connection is attempted for an InvalidRequest. NetworkFailed: name
+    resolution, connection, timeout, a connection closed before a complete
+    response, or a final status outside 100-599.
     """
 
-    ensures Result.Ok(response) => response.status > 0
+    ensures Result.Ok(response) => 100 <= response.status <= 599
+    ensures Result.Ok(response) => (not (request.method == HttpMethod.Get or request.method == HttpMethod.Head) => response.url == request.url)
+    ensures Result.Ok(response) => (request.method == HttpMethod.Head => response.body == "")
 
+    error PostingError.InvalidRequest when request.timeout_ms == 0
+    error PostingError.InvalidRequest when not (starts_with(request.url, "http://") or starts_with(request.url, "https://"))
+    error PostingError.InvalidRequest when any_blank_by(request.headers, Header.name)
     error PostingError.InvalidRequest
     error PostingError.NetworkFailed
 
@@ -72,23 +110,190 @@ fn send_request(request: Request) -> Result[Response, PostingError]:
 
 fn render_response(response: Response) -> Str:
     doc """
-    Render status and final URL, then headers and a UTF-8 replacement-decoded body.
+    Render a response as LF-separated lines: first the decimal status, one space
+    and the URL; then one "NAME: VALUE" line per header in order; then one empty
+    line; then the body unchanged. There is no trailing LF after the body.
     """
+
+    ensures (contains(result, response.url))
+    ensures (ends_with(result, response.body))
+    ensures (contains(result, "\n\n"))
 
     effects []
 
 fn execute(arguments: List[Str]) -> Result[Str, PostingError]:
     doc """
-    Call real.posting.client.parse_arguments, pass its request to
-    real.posting.client.send_request, and return the successful response rendered
-    by real.posting.client.render_response. Return an error from either earlier
-    operation unchanged; do not send a request after argument parsing fails.
+    The posting composition root. Call real.posting.client.parse_arguments with
+    arguments, pass its Request to real.posting.client.send_request, and return
+    real.posting.client.render_response of the received Response. An error from
+    parse_arguments is returned unchanged and no request is sent; an error from
+    send_request is returned unchanged and nothing is rendered.
     """
 
-    ensures Result.Ok(rendered) => rendered.len > 0
+    # Structural: the rendered response always has its blank separator line; the
+    # composition itself is carried by the requirements below.
+    ensures Result.Ok(rendered) => contains(rendered, "\n\n")
 
-    error PostingError.InvalidArguments
+    error PostingError.InvalidArguments when arguments.len < 2 or arguments.len > 3
     error PostingError.InvalidRequest
     error PostingError.NetworkFailed
 
     effects [network]
+
+requirement EXECUTE_RENDERS_RECEIVED_RESPONSE for execute:
+    text "On success, execute returns render_response of the Response that send_request received for the Request built by parse_arguments."
+    checked_by execute_renders_received_response assert 1
+    checked_by execute_renders_received_response assert 2
+    checked_by execute_renders_received_response assert 3
+
+requirement EXECUTE_RETURNS_STAGE_ERRORS_UNCHANGED for execute:
+    text "An error from parse_arguments is returned unchanged without sending a request, and an error from send_request is returned unchanged without rendering."
+    checked_by execute_renders_received_response assert 4
+    checked_by execute_renders_received_response assert 5
+
+scenario methods_are_normalized_or_preserved:
+    call lower = parse_method("get")
+    assert lower == Result.Ok(value: HttpMethod.Get)
+    call mixed = parse_method("oPtIoNs")
+    assert mixed == Result.Ok(value: HttpMethod.Options)
+    call head = parse_method("head")
+    assert head == Result.Ok(value: HttpMethod.Head)
+    call put = parse_method("Put")
+    assert put == Result.Ok(value: HttpMethod.Put)
+    call patch = parse_method("pAtCh")
+    assert patch == Result.Ok(value: HttpMethod.Patch)
+    call custom = parse_method("purge")
+    assert custom == Result.Ok(value: HttpMethod.Custom(name: "purge"))
+    call spaced = parse_method("GET X")
+    assert spaced matches Result.Err(PostingError.InvalidRequest(_))
+
+scenario arguments_build_requests:
+    call full = parse_arguments(List("post", "https://api.example/items", "{\"id\":1}"))
+    assert (full == Result.Ok(value: Request(method: HttpMethod.Post, url: "https://api.example/items", headers: List(), body: "{\"id\":1}", timeout_ms: 30000)))
+    call bodyless = parse_arguments(List("DELETE", "http://api.example/items/1"))
+    assert (bodyless == Result.Ok(value: Request(method: HttpMethod.Delete, url: "http://api.example/items/1", headers: List(), body: "", timeout_ms: 30000)))
+    call bad_method = parse_arguments(List("GET X", "http://api.example/"))
+    assert bad_method matches Result.Err(PostingError.InvalidRequest(_))
+
+scenario responses_render_status_headers_and_body:
+    call rendered = render_response(
+        Response(
+            status: 404,
+            url: "http://api.example/items/9",
+            headers: List(
+                Header(name: "Content-Type", value: "text/plain"),
+                Header(name: "X-Trace", value: "a1"),
+            ),
+            body: "missing\nitem",
+        ),
+    )
+    assert (rendered == "404 http://api.example/items/9\nContent-Type: text/plain\nX-Trace: a1\n\nmissing\nitem")
+    call headerless = render_response(
+        Response(status: 204, url: "http://api.example/", headers: List(), body: ""),
+    )
+    assert headerless == "204 http://api.example/\n\n"
+
+scenario send_request_reports_received_responses:
+    fixtures:
+        http service:
+            route "/moved" -> redirect(status: 302, location: "/target")
+            route "/target" -> response(status: 200, body: text("arrived"), encoding: "utf-8")
+            route "/missing" -> response(status: 404, body: text("gone"), encoding: "utf-8")
+            route "/binary" -> response(status: 200, body: hex("6361ff"), encoding: "utf-8")
+            route "/drop" -> disconnect()
+            route "/slow" -> delay(ms: 300)
+    call moved = send_request(
+        Request(
+            method: HttpMethod.Get,
+            url: service.url("/moved"),
+            headers: List(),
+            body: "",
+            timeout_ms: 5000,
+        ),
+    )
+    assert moved matches Result.Ok(response) => response.status == 200 and response.body == "arrived"
+    assert moved matches Result.Ok(response) => response.url == service.url("/target")
+    call missing = send_request(
+        Request(
+            method: HttpMethod.Get,
+            url: service.url("/missing"),
+            headers: List(),
+            body: "",
+            timeout_ms: 5000,
+        ),
+    )
+    assert missing matches Result.Ok(response) => response.status == 404 and response.body == "gone"
+    call binary = send_request(
+        Request(
+            method: HttpMethod.Get,
+            url: service.url("/binary"),
+            headers: List(),
+            body: "",
+            timeout_ms: 5000,
+        ),
+    )
+    assert binary matches Result.Ok(response) => response.body == "ca\ufffd"
+    call dropped = send_request(
+        Request(
+            method: HttpMethod.Get,
+            url: service.url("/drop"),
+            headers: List(),
+            body: "",
+            timeout_ms: 5000,
+        ),
+    )
+    assert dropped matches Result.Err(PostingError.NetworkFailed(_))
+    call slow = send_request(
+        Request(
+            method: HttpMethod.Get,
+            url: service.url("/slow"),
+            headers: List(),
+            body: "",
+            timeout_ms: 20,
+        ),
+    )
+    assert slow matches Result.Err(PostingError.NetworkFailed(_))
+    call no_timeout = send_request(
+        Request(
+            method: HttpMethod.Get,
+            url: service.url("/target"),
+            headers: List(),
+            body: "",
+            timeout_ms: 0,
+        ),
+    )
+    assert no_timeout matches Result.Err(PostingError.InvalidRequest(_))
+    call wrong_scheme = send_request(
+        Request(
+            method: HttpMethod.Get,
+            url: "ftp://api.example/",
+            headers: List(),
+            body: "",
+            timeout_ms: 5000,
+        ),
+    )
+    assert wrong_scheme matches Result.Err(PostingError.InvalidRequest(_))
+    call blank_header = send_request(
+        Request(
+            method: HttpMethod.Get,
+            url: service.url("/target"),
+            headers: List(Header(name: " ", value: "x")),
+            body: "",
+            timeout_ms: 5000,
+        ),
+    )
+    assert blank_header matches Result.Err(PostingError.InvalidRequest(_))
+
+scenario execute_renders_received_response:
+    fixtures:
+        http service:
+            route "/hello" -> response(status: 200, body: text("hello"), encoding: "utf-8")
+            route "/drop" -> disconnect()
+    call rendered = execute(List("get", service.url("/hello")))
+    assert rendered matches Result.Ok(text) => starts_with(text, "200 ") and contains(text, service.url("/hello"))
+    assert rendered matches Result.Ok(text) => contains(text, "\nContent-Type: text/plain; charset=utf-8\n")
+    assert rendered matches Result.Ok(text) => ends_with(text, "\n\nhello")
+    call bad_method = execute(List("GET X", service.url("/hello")))
+    assert bad_method matches Result.Err(PostingError.InvalidRequest(_))
+    call dropped = execute(List("GET", service.url("/drop")))
+    assert dropped matches Result.Err(PostingError.NetworkFailed(_))

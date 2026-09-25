@@ -23,12 +23,12 @@ The function performs no additional validation, raises no declared errors, and d
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.checked_add.checked_add"
         if _error.span is None:
-            _error.span = {"end_byte":569,"end_column":1,"end_line":12,"start_byte":31,"start_column":1,"start_line":3}
+            _error.span = {"end_byte":570,"end_column":1,"end_line":13,"start_byte":31,"start_column":1,"start_line":3}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.checked_add.checked_add", phase="implementation-call", span={"end_byte":569,"end_column":1,"end_line":12,"start_byte":31,"start_column":1,"start_line":3}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.checked_add.checked_add", phase="implementation-call", span={"end_byte":570,"end_column":1,"end_line":13,"start_byte":31,"start_column":1,"start_line":3}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.checked_add.checked_add", phase="implementation-call", span={"end_byte":569,"end_column":1,"end_line":12,"start_byte":31,"start_column":1,"start_line":3}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.checked_add.checked_add", phase="implementation-call", span={"end_byte":570,"end_column":1,"end_line":13,"start_byte":31,"start_column":1,"start_line":3}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, I64, path="$.return")
     if not (_cott_contract_condition(((_result >= (-4294967296))), "curriculum.checked_add.checked_add", "ensures:1")):
         raise CottContractViolation("ensures clause failed", symbol="curriculum.checked_add.checked_add", clause="ensures:1", phase="ensures", span={"end_byte":535,"end_column":34,"end_line":10,"start_byte":506,"start_column":5,"start_line":10}, expected="true", actual="false")

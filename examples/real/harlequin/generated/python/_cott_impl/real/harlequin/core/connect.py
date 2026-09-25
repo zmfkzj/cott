@@ -9,7 +9,6 @@ import urllib.parse
 import uuid
 import warnings
 from collections.abc import Mapping
-from contextlib import AbstractContextManager
 from typing import Final, cast
 
 import adbc_driver_manager.dbapi
@@ -416,17 +415,6 @@ def _open_adbc(obj: dict[str, object], read_only: bool, stack: contextlib.ExitSt
     for warning in caught:
         if "autocommit" in str(warning.message).lower():
             return ConnectionError_Failed(message="adapter does not support manual commit")
-    catalog = _opt_str(obj, "catalog")
-    if catalog is not None:
-        reader = cast(AbstractContextManager[object], conn.adbc_get_objects(depth="catalogs", catalog_filter=catalog))
-        with reader as source:
-            bridge = duckdb.connect(database=":memory:")
-            try:
-                rows = duckdb.from_arrow(source, connection=bridge).project("catalog_name").fetchall()
-            finally:
-                bridge.close()
-        if not any(row[0] == catalog for row in rows):
-            return ConnectionError_Failed(message="catalog not found")
     return (_canonical(obj), conn)
 
 
@@ -486,7 +474,7 @@ def _is_unavailable(error: Exception) -> bool:
 def connect(request: ConnectionRequest) -> Result[Connection, ConnectionError]:
     settings: dict[str, str] = {}
     for setting in request.settings:
-        if setting.name in settings:
+        if not setting.name.strip() or setting.name in settings:
             return Err(error=_invalid())
         settings[setting.name] = setting.value
     try:

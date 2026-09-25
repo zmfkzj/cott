@@ -9,27 +9,63 @@ struct LogEntry:
     line: U64
     text: Str
 
+    invariant self.line > 0
+
 enum ToolongError:
     InvalidArguments(message: Str)
     ReadFailed(path: Path, message: Str)
 
 fn parse_arguments(arguments: List[Str]) -> Result[ViewerOptions, ToolongError]:
     doc """
-    Parse [--contains TEXT] followed by one or more log paths.
+    Parse the command line [--contains TEXT] PATH... . Only the first argument
+    can be the option: when it is exactly "--contains", the second argument is
+    TEXT (any string, including an empty one or one starting with "--") and
+    contains is Option.Some(TEXT); every later argument is a path. Otherwise
+    contains is Option.Nothing and every argument, including a later
+    "--contains", is a path. Each path argument becomes one source, in argument
+    order. InvalidArguments: no arguments, "--contains" without TEXT, or no path.
     """
 
     ensures Result.Ok(options) => options.sources.len > 0
+    ensures Result.Ok(options) => (options.sources.len == arguments.len or options.sources.len + 2 == arguments.len)
 
+    error ToolongError.InvalidArguments when arguments.len == 0
     error ToolongError.InvalidArguments
+
+    effects []
+
+fn parse_log(source: Path, text: Str) -> List[LogEntry]:
+    doc """
+    Split the text of one log file into entries. Split text at every LF; drop the
+    last piece when it is empty (text ending in LF, or empty text); then remove
+    one trailing CR from each remaining piece. Empty lines in the middle are
+    kept. No other character (CR alone, VT, FF, NEL, U+2028, U+2029) separates
+    lines. Entry i, counted from one in piece order, has this source, line i and
+    the piece as text.
+    """
+
+    ensures (text == "" => result.len == 0)
+    ensures (text != "" and not contains(text, "\n") => result.len == 1)
 
     effects []
 
 fn load_entries(sources: List[Path]) -> Result[List[LogEntry], ToolongError]:
     doc """
-    Read UTF-8 log lines in source order and number each source from one.
+    Read each source completely, in list order, and decode its bytes as strict
+    UTF-8. Each source path is read from the file system the program runs
+    against: the fs fixture root while a Cott scenario with an fs fixture is
+    active, otherwise the host file system, where a relative path is relative to
+    the process working directory. The result is the concatenation of
+    real.toolong.parse_log(source, text) for every source, so numbering restarts
+    at one for each source. The first source that is missing, cannot be opened
+    or read, or is not strict UTF-8 stops loading with ToolongError.ReadFailed
+    whose path is that source; no entries are returned then. While a scenario fs
+    fixture is active, a path the fixture does not permit (absolute, or outside
+    the fixture root) is a contract violation raised by the fixture, not a read
+    failure.
     """
 
-    ensures Result.Ok(entries) => sources.len > 0
+    ensures Result.Ok(entries) => (sources.len == 0 => entries.len == 0)
 
     error ToolongError.ReadFailed
 
@@ -37,30 +73,136 @@ fn load_entries(sources: List[Path]) -> Result[List[LogEntry], ToolongError]:
 
 fn filter_entries(entries: List[LogEntry], contains: Option[Str]) -> List[LogEntry]:
     doc """
-    Keep all entries without a filter; otherwise keep case-insensitive substring matches.
+    Without a filter return entries unchanged. With a filter keep, in their
+    original order and multiplicity, exactly the entries whose text contains the
+    filter as a substring after mapping the ASCII letters A-Z to a-z in both
+    strings. Every other code point compares exactly: there is no Unicode case
+    folding or normalization. An empty filter keeps every entry.
     """
+
+    ensures result.len <= entries.len
+    ensures contains matches Option.Nothing => result == entries
+    ensures contains matches Option.Some(needle) => (needle == "" => result == entries)
 
     effects []
 
 fn render_entries(entries: List[LogEntry]) -> Str:
     doc """
-    Render path:line and text for each entry, separated by newlines.
+    Render one line per entry in order: the source path text, ":", the decimal
+    line number, one space and the text. Lines are joined with LF and there is no
+    trailing LF, so no entries render as the empty string.
     """
+
+    ensures (entries.len == 0 => result == "")
+    ensures (entries.len > 0 => contains(result, ":"))
 
     effects []
 
 fn execute(arguments: List[Str]) -> Result[Str, ToolongError]:
     doc """
-    Call real.toolong.parse_arguments, then real.toolong.load_entries on its
-    sources. Pass the entries and parsed contains option to real.toolong.filter_entries
-    and return real.toolong.render_entries of those matches.
-    Return an error from parsing or loading unchanged; do not load files after
-    argument parsing fails.
+    The toolong composition root. Call real.toolong.parse_arguments with
+    arguments, then real.toolong.load_entries with its sources, then
+    real.toolong.filter_entries with the loaded entries and its contains value,
+    and return real.toolong.render_entries of the kept entries. An error from
+    parse_arguments is returned unchanged before any file is read; an error from
+    load_entries is returned unchanged and nothing is filtered or rendered.
     """
 
-    ensures Result.Ok(rendered) => arguments.len > 0
+    # Structural: a non-empty rendering always has a "path:line" prefix; the
+    # composition itself is carried by the requirements below.
+    ensures Result.Ok(rendered) => (rendered == "" or contains(rendered, ":"))
 
+    error ToolongError.InvalidArguments when arguments.len == 0
     error ToolongError.InvalidArguments
     error ToolongError.ReadFailed
 
     effects [file.read]
+
+requirement LOAD_PARSES_EACH_SOURCE_IN_ORDER for load_entries:
+    text "load_entries returns parse_log(source, text) of every source in list order, and stops at the first unreadable source with ReadFailed for that source."
+    checked_by load_numbers_each_source_from_one
+
+requirement EXECUTE_RENDERS_FILTERED_LOADED_ENTRIES for execute:
+    text "On success, execute returns render_entries(filter_entries(entries, options.contains)) where entries are load_entries(options.sources) for the options parse_arguments produced."
+    checked_by execute_filters_loaded_files assert 1
+    checked_by execute_filters_loaded_files assert 2
+
+requirement EXECUTE_RETURNS_STAGE_ERRORS_UNCHANGED for execute:
+    text "An error from parse_arguments is returned unchanged before any file is read, and an error from load_entries is returned unchanged without filtering or rendering."
+    checked_by execute_filters_loaded_files assert 3
+    checked_by execute_filters_loaded_files assert 4
+    checked_by execute_filters_loaded_files assert 5
+
+data app_path_entries: List[LogEntry] = List(
+    LogEntry(source: files.path("app.log"), line: 1, text: "boot ok"),
+    LogEntry(source: files.path("app.log"), line: 2, text: "ERROR disk full"),
+    LogEntry(source: files.path("app.log"), line: 3, text: ""),
+    LogEntry(source: files.path("app.log"), line: 4, text: "Érror in accent"),
+    LogEntry(source: files.path("app.log"), line: 5, text: "retry errors"),
+)
+
+scenario arguments_select_filter_and_paths:
+    fixtures:
+        fs files:
+            file "app.log" text("")
+            file "db.log" text("")
+    call filtered = parse_arguments(List("--contains", "--error", "app.log", "db.log"))
+    assert (filtered == Result.Ok(value: ViewerOptions(sources: List(files.path("app.log"), files.path("db.log")), contains: Option.Some(value: "--error"))))
+    call plain = parse_arguments(List("app.log", "--contains", "db.log"))
+    assert plain matches Result.Ok(options) => options.contains == Option.Nothing and options.sources.len == 3
+    call missing_text = parse_arguments(List("--contains"))
+    assert missing_text matches Result.Err(ToolongError.InvalidArguments(_))
+    call missing_path = parse_arguments(List("--contains", "error"))
+    assert missing_path matches Result.Err(ToolongError.InvalidArguments(_))
+
+scenario log_text_splits_at_lf_only:
+    fixtures:
+        fs files:
+            file "app.log" text("")
+    call entries = parse_log(files.path("app.log"), "boot ok\r\nERROR disk full\n\nÉrror in accent\u000bx\rretry errors\n")
+    assert (entries == List(LogEntry(source: files.path("app.log"), line: 1, text: "boot ok"), LogEntry(source: files.path("app.log"), line: 2, text: "ERROR disk full"), LogEntry(source: files.path("app.log"), line: 3, text: ""), LogEntry(source: files.path("app.log"), line: 4, text: "Érror in accent\u000bx\rretry errors")))
+
+scenario filter_uses_ascii_case_mapping_and_render_formats_lines:
+    fixtures:
+        fs files:
+            file "app.log" text("")
+    data entries: List[LogEntry] = app_path_entries
+    call kept = filter_entries(entries, Option.Some(value: "eRRor"))
+    assert (kept == List(LogEntry(source: files.path("app.log"), line: 2, text: "ERROR disk full"), LogEntry(source: files.path("app.log"), line: 5, text: "retry errors")))
+    call accented = filter_entries(entries, Option.Some(value: "érror"))
+    assert accented == List()
+    call rendered = render_entries(kept)
+    assert rendered == "app.log:2 ERROR disk full\napp.log:5 retry errors"
+
+scenario load_numbers_each_source_from_one:
+    fixtures:
+        fs files:
+            file "app.log" text("boot ok\r\nERROR disk full\n")
+            file "db.log" text("Error: lock")
+            file "bad.log" hex("6f6bff0a")
+    call loaded = load_entries(List(files.path("app.log"), files.path("db.log")))
+    assert (loaded == Result.Ok(value: List(LogEntry(source: files.path("app.log"), line: 1, text: "boot ok"), LogEntry(source: files.path("app.log"), line: 2, text: "ERROR disk full"), LogEntry(source: files.path("db.log"), line: 1, text: "Error: lock"))))
+    call undecodable = load_entries(
+        List(files.path("app.log"), files.path("bad.log"), files.path("absent.log")),
+    )
+    assert undecodable matches Result.Err(ToolongError.ReadFailed(path, _)) => path == files.path("bad.log")
+    call absent = load_entries(List(files.path("absent.log"), files.path("bad.log")))
+    assert absent matches Result.Err(ToolongError.ReadFailed(path, _)) => path == files.path("absent.log")
+
+scenario execute_filters_loaded_files:
+    fixtures:
+        fs files:
+            file "app.log" text("boot ok\r\nERROR disk full\nretry\n")
+            file "db.log" text("Error: lock\nerrors cleared")
+    call filtered = execute(List("--contains", "error", "app.log", "db.log"))
+    assert filtered == Result.Ok(
+        value: "app.log:2 ERROR disk full\ndb.log:1 Error: lock\ndb.log:2 errors cleared",
+    )
+    call everything = execute(List("db.log"))
+    assert everything == Result.Ok(value: "db.log:1 Error: lock\ndb.log:2 errors cleared")
+    call usage = execute(List("--contains"))
+    assert usage matches Result.Err(ToolongError.InvalidArguments(_))
+    call absent = execute(List("app.log", "absent.log"))
+    assert absent matches Result.Err(ToolongError.ReadFailed(path, _)) => path == files.path("absent.log")
+    call empty = execute(List())
+    assert empty matches Result.Err(ToolongError.InvalidArguments(_))

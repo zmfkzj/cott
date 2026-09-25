@@ -1,119 +1,110 @@
-import csv
 import html
-import io
 import json
 from typing import Final
 
-from cott_runtime import U16
-from real.pgcli_types import FormatRequest, FormattedQuery, RenderLayout, RenderLayout_Horizontal, RenderLayout_Vertical, RenderedQuery, TableFormat, TableFormat_Aligned, TableFormat_Csv, TableFormat_Html, TableFormat_Json, TableFormat_JsonLines, TableFormat_Latex, TableFormat_Markdown, TableFormat_Tsv
+from cott_runtime import U16, U64, CottList
+from real.pgcli import render_query
+from real.pgcli_types import FormatRequest, FormattedQuery, RenderLayout, RenderLayout_Horizontal, RenderLayout_Vertical, RenderRequest, RenderedQuery, TableFormat, TableFormat_Aligned, TableFormat_Csv, TableFormat_Html, TableFormat_Json, TableFormat_JsonLines, TableFormat_Latex, TableFormat_Markdown, TableFormat_Tsv
 
 _U16_MAX: Final[int] = 65535
+_LATEX_SPECIAL: Final[str] = "&%$#_{}"
 
 
 def _clip(value: str, limit: int) -> str:
     if limit <= 0 or len(value) <= limit:
         return value
-    if limit == 1:
-        return value[:1]
     return value[: limit - 1] + "…"
 
 
-def _row_line(cells: list[str], widths: list[int]) -> str:
-    padded = [(cells[i] if i < len(cells) else "").ljust(w) for i, w in enumerate(widths)]
-    return "| " + " | ".join(padded) + " |"
-
-
-def _aligned(columns: list[str], rows: list[list[str]]) -> str:
-    widths = [len(c) for c in columns]
-    for row in rows:
-        for i, cell in enumerate(row):
-            if i < len(widths) and len(cell) > widths[i]:
-                widths[i] = len(cell)
-    sep = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
-
-    out = [sep, _row_line(columns, widths), sep]
-    out.extend(_row_line(r, widths) for r in rows)
-    out.append(sep)
-    return "\n".join(out)
-
-
-def _vertical(columns: list[str], rows: list[list[str]]) -> str:
-    label = max((len(c) for c in columns), default=0)
-    out: list[str] = []
-    for n, row in enumerate(rows, start=1):
-        out.append(f"-[ RECORD {n} ]" + "-" * max(label, 1))
-        for i, col in enumerate(columns):
-            cell = row[i] if i < len(row) else ""
-            out.append(f"{col.ljust(label)} | {cell}")
-    return "\n".join(out)
+def _delimited_field(value: str, delimiter: str) -> str:
+    if delimiter in value or '"' in value or "\r" in value or "\n" in value:
+        return '"' + value.replace('"', '""') + '"'
+    return value
 
 
 def _delimited(columns: list[str], rows: list[list[str]], delimiter: str) -> str:
-    buf = io.StringIO()
-    writer = csv.writer(buf, delimiter=delimiter, lineterminator="\n")
-    writer.writerow(columns)
-    writer.writerows(rows)
-    return buf.getvalue().rstrip("\n")
+    records = [columns, *rows]
+    return "\n".join(delimiter.join(_delimited_field(field, delimiter) for field in record) for record in records)
 
 
-def _records(columns: list[str], rows: list[list[str]]) -> list[dict[str, str]]:
-    return [{col: (row[i] if i < len(row) else "") for i, col in enumerate(columns)} for row in rows]
-
-
-def _markdown_cell(value: str) -> str:
-    return value.replace("|", "\\|")
+def _record(columns: list[str], row: list[str]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for name, cell in zip(columns, row):
+        result[name] = cell
+    return result
 
 
 def _latex_cell(value: str) -> str:
-    out = value.replace("\\", "\\textbackslash{}")
-    for ch in "&%$#_{}":
-        out = out.replace(ch, "\\" + ch)
-    return out
+    parts: list[str] = []
+    for character in value:
+        if character == "\\":
+            parts.append("\\textbackslash{}")
+        elif character in _LATEX_SPECIAL:
+            parts.append("\\" + character)
+        else:
+            parts.append(character)
+    return "".join(parts)
+
+
+def _markdown_line(cells: list[str]) -> str:
+    return "| " + " | ".join(cell.replace("|", "\\|") for cell in cells) + " |"
+
+
+def _measure(text: str) -> int:
+    return min(max((len(line) for line in text.split("\n")), default=0), _U16_MAX)
+
+
+def _render(columns: list[str], rows: list[list[str]], terminal_width: U16, layout: RenderLayout) -> RenderedQuery:
+    return render_query(RenderRequest(columns=CottList(values=columns), rows=CottList(values=[CottList(values=row) for row in rows]), terminal_width=terminal_width, layout=layout))
 
 
 def format_query(request: FormatRequest) -> FormattedQuery:
     limit = int(request.max_column_width)
-    columns: list[str] = [_clip(str(c), limit) for c in request.query.columns]
-    kept: list[list[str]] = []
+    columns = [column for column in request.query.columns]
+    column_count = len(columns)
+    total_rows = 0
+    kept_rows: list[list[str]] = []
     for row in request.query.rows:
-        if len(kept) >= request.max_rows:
-            break
-        kept.append([_clip(str(cell), limit) for cell in row])
+        total_rows += 1
+        if len(kept_rows) >= request.max_rows:
+            continue
+        cells = [cell for cell in row][:column_count]
+        cells.extend([""] * (column_count - len(cells)))
+        kept_rows.append([_clip(cell, limit) for cell in cells])
+    truncated_rows: U64 = total_rows - len(kept_rows)
 
-    fmt: TableFormat = request.format
-    layout: RenderLayout = RenderLayout_Horizontal()
-    if isinstance(fmt, TableFormat_Aligned):
-        text = _aligned(columns, kept)
-        if max((len(l) for l in text.split("\n")), default=0) > request.terminal_width:
-            text = _vertical(columns, kept)
-            layout = RenderLayout_Vertical()
-    elif isinstance(fmt, TableFormat_Csv):
-        text = _delimited(columns, kept, ",")
-    elif isinstance(fmt, TableFormat_Tsv):
-        text = _delimited(columns, kept, "\t")
-    elif isinstance(fmt, TableFormat_Json):
-        text = json.dumps(_records(columns, kept), ensure_ascii=False, indent=2)
-    elif isinstance(fmt, TableFormat_JsonLines):
-        text = "\n".join(json.dumps(r, ensure_ascii=False) for r in _records(columns, kept))
-    elif isinstance(fmt, TableFormat_Html):
-        head = "".join(f"<th>{html.escape(c)}</th>" for c in columns)
-        body = "".join("<tr>" + "".join(f"<td>{html.escape(c)}</td>" for c in r) + "</tr>" for r in kept)
-        text = f"<table>\n<thead><tr>{head}</tr></thead>\n<tbody>{body}</tbody>\n</table>"
-    elif isinstance(fmt, TableFormat_Latex):
-        spec = "l" * len(columns)
-        lines = [f"\\begin{{tabular}}{{{spec}}}", " & ".join(_latex_cell(c) for c in columns) + " \\\\", "\\hline"]
-        lines.extend(" & ".join(_latex_cell(c) for c in r) + " \\\\" for r in kept)
+    table_format: TableFormat = request.format
+    if isinstance(table_format, TableFormat_Aligned):
+        rendered = _render(columns, kept_rows, request.terminal_width, RenderLayout_Horizontal())
+        if rendered.width > request.terminal_width:
+            rendered = _render(columns, kept_rows, request.terminal_width, RenderLayout_Vertical())
+        return FormattedQuery(rendered=rendered, truncated_rows=truncated_rows)
+
+    if isinstance(table_format, TableFormat_Csv):
+        text = _delimited(columns, kept_rows, ",")
+    elif isinstance(table_format, TableFormat_Tsv):
+        text = _delimited(columns, kept_rows, "\t")
+    elif isinstance(table_format, TableFormat_Json):
+        text = json.dumps([_record(columns, row) for row in kept_rows], ensure_ascii=False, indent=2)
+    elif isinstance(table_format, TableFormat_JsonLines):
+        text = "\n".join(json.dumps(_record(columns, row), ensure_ascii=False) for row in kept_rows)
+    elif isinstance(table_format, TableFormat_Html):
+        lines = ["<table>", "<thead><tr>" + "".join(f"<th>{html.escape(column)}</th>" for column in columns) + "</tr></thead>", "<tbody>"]
+        lines.extend("<tr>" + "".join(f"<td>{html.escape(cell)}</td>" for cell in row) + "</tr>" for row in kept_rows)
+        lines.extend(["</tbody>", "</table>"])
+        text = "\n".join(lines)
+    elif isinstance(table_format, TableFormat_Latex):
+        lines = ["\\begin{tabular}{" + "l" * column_count + "}", " & ".join(_latex_cell(column) for column in columns) + " \\\\", "\\hline"]
+        lines.extend(" & ".join(_latex_cell(cell) for cell in row) + " \\\\" for row in kept_rows)
         lines.append("\\end{tabular}")
         text = "\n".join(lines)
-    elif isinstance(fmt, TableFormat_Markdown):
-        lines = ["| " + " | ".join(_markdown_cell(c) for c in columns) + " |", "|" + "|".join("---" for _ in columns) + "|"]
-        lines.extend("| " + " | ".join(_markdown_cell(c) for c in r) + " |" for r in kept)
+    elif isinstance(table_format, TableFormat_Markdown):
+        lines = [_markdown_line(columns), "|" + "---|" * column_count]
+        lines.extend(_markdown_line(row) for row in kept_rows)
         text = "\n".join(lines)
     else:
-        text = _vertical(columns, kept)
-        layout = RenderLayout_Vertical()
+        rendered = _render(columns, kept_rows, request.terminal_width, RenderLayout_Vertical())
+        return FormattedQuery(rendered=rendered, truncated_rows=truncated_rows)
 
-    measured = max((len(l) for l in text.split("\n")), default=0)
-    width: U16 = min(measured, _U16_MAX)
-    rendered = RenderedQuery(text=text, layout=layout, width=width)
-    return FormattedQuery(rendered=rendered, truncated_rows=len(kept))
+    width: U16 = _measure(text)
+    return FormattedQuery(rendered=RenderedQuery(text=text, layout=RenderLayout_Horizontal(), width=width), truncated_rows=truncated_rows)

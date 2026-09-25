@@ -1,9 +1,9 @@
 # cta-row
 
 ## Purpose
-Decodes string and integer input into a public-transit row with an enum and nominal types in a defined order.
+Decodes a transit row into nominal values with a defined error priority and scenario-observed format boundaries.
 
 ## Key points
-- The `DayType` enum maps `U`, `A`, and `W` to Sunday/public-holiday, Saturday, and weekday variants, respectively; successful values are stored in `RideRow`.
-- `RideRow` combines the `RouteCode`, `ServiceDate`, and `RideCount` nominal types with `DayType` to represent a validated row.
-- The implementation returns the first error in this order: day type, ride count, route, date. A route is 1–4 ASCII uppercase letters or digits containing at least one digit, and a date must be a valid `MM/DD/YYYY` Gregorian-calendar date.
+- `RideRow` combines `RouteCode`, `ServiceDate`, `RideCount`, and `DayType`. Formal success clauses preserve the route and date strings and map `U`, `A`, and `W` to Sunday/public-holiday, Saturday, and weekday variants.
+- Conditional clauses require `InvalidDayType` before `InvalidRidership`; the route and date errors remain bare because the full ASCII-route and Gregorian-date predicates are not expressible by the contract intrinsics.
+- Scenarios observe all four error-priority positions, route length/digit boundaries, leap-year and year-zero rejection, valid dates and day variants, and exact ride counts at zero, 42, and the signed maximum. They do not exhaustively establish route/date validity or ride-count preservation for every input.

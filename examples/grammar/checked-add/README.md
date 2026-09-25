@@ -1,9 +1,9 @@
 # checked-add
 
 ## Purpose
-Connects a return integer type wider than its inputs and a result-range contract to an external Python implementation.
+Shows a wider result type and boundary observations for a manifest-bound Python addition.
 
 ## Key points
-- `checked_add` accepts two `I32` values and returns `I64`, declaring with `ensures` the exact possible-sum range from `-4294967296` through `4294967294`.
-- In this range, adding two signed 32-bit integers cannot overflow `I64`, so there are no declared errors.
-- The implementation mapping in `cott.toml` connects the function to `cott_bindings.curriculum.checked_add.checked_add:checked_add`, and the Python binding adds the two arguments unchanged.
+- `checked_add` accepts two `I32` values and returns `I64`. Its `ensures` clauses bound every returned value to `-4294967296` through `4294967294`; those bounds alone do not establish that the value is the sum.
+- A scenario observes the exact results at both extreme input pairs, rejecting a constant or 32-bit-wrapped implementation at those inputs. Other input pairs are not exhaustively checked for exact addition.
+- `cott.toml` retains the manifest-owned Python binding `cott_bindings.curriculum.checked_add.checked_add:checked_add`; no error variant is declared.

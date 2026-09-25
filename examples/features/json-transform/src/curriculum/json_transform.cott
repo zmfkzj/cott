@@ -8,18 +8,64 @@ enum JsonTransformError:
     NotAnObject
     MissingField(field_name: Str)
 
+struct StringField:
+    name: Str
+    text: Str
+
 async fn wrap_scalar_json(key: Str, value: Str) -> JsonValue:
     doc """
-    Wrap a string key-value pair into a structured JsonValue object.
+    Wrap one string member into a JSON object.
     """
 
     requires key.len > 0
 
     effects []
 
-fn extract_string_field(payload: JsonValue, field: Str) -> Result[Str, JsonTransformError]:
+fn extract_string_field(payload: JsonValue, field: Str) -> Result[StringField, JsonTransformError]:
     doc """
-    Extract a string field value from a JSON object payload.
+    Read the top-level member of a JSON object whose key equals `field` exactly
+    (no case folding, normalization or nested lookup). A payload that is not a
+    JSON object fails with `NotAnObject`, checked first. An object without that
+    member, or whose member is not a JSON string, fails with
+    `MissingField(field_name: field)`. Otherwise the result's `name` is `field`
+    and its `text` is the member's string value. Contract clauses cannot inspect
+    `JsonValue` structure, so both failures are declared without conditions.
     """
 
+    ensures Result.Ok(found) => found.name == field
+    ensures Result.Err(JsonTransformError.MissingField(name)) => name == field
+
+    error JsonTransformError.NotAnObject
+    error JsonTransformError.MissingField
+
     effects []
+
+scenario wrapped_member_round_trips:
+    call payload = wrap_scalar_json("greeting", "Hello Cott")
+    assert payload == JsonValue.Object(
+        value: Map("greeting": JsonValue.String(value: "Hello Cott")),
+    )
+    call found = extract_string_field(payload, "greeting")
+    assert found matches Result.Ok(member) => member.text == "Hello Cott"
+    call absent = extract_string_field(payload, "farewell")
+    assert absent matches Result.Err(JsonTransformError.MissingField(_))
+
+scenario shape_failures_are_reported:
+    call scalar = extract_string_field(JsonValue.String(value: "count"), "count")
+    assert scalar == Result.Err(error: JsonTransformError.NotAnObject)
+    call numeric = extract_string_field(
+        JsonValue.Object(value: Map("count": JsonValue.Integer(value: 7))),
+        "count",
+    )
+    assert numeric matches Result.Err(JsonTransformError.MissingField(_))
+
+requirement WRAPPED_OBJECT_HAS_ONE_STRING_MEMBER for wrap_scalar_json:
+    text "The result is a JSON object whose only member maps `key` to the JSON string `value`."
+    checked_by wrapped_member_round_trips assert 1
+
+requirement SHAPE_FAILURES_ARE_REPORTED for extract_string_field:
+    text """
+    A payload that is not a JSON object returns `NotAnObject`, and an object whose `field`
+    member is not a JSON string returns `MissingField`, never an `Ok` result.
+    """
+    checked_by shape_failures_are_reported

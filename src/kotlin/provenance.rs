@@ -120,6 +120,50 @@ impl KotlinGenerationRecord {
         validate_schema(&value)?;
         canonical_json(&value)
     }
+    /// Only the explicit emit cutover may inspect a sealed IR-8 record. Normal
+    /// record parsing continues to require the current canonical IR schema.
+    pub(crate) fn convert_legacy_for_emit(bytes: &[u8]) -> Result<Option<Self>, String> {
+        let wire = snapshot_record::parse_json(bytes)
+            .map_err(|error| format!("invalid Kotlin generation JSON: {error}"))?;
+        let (current, last_verified) =
+            snapshot_record::decode_legacy(&wire, KOTLIN_GENERATION_SCHEMA_VERSION)?;
+        let mut record = Self {
+            schema_version: KOTLIN_GENERATION_SCHEMA_VERSION,
+            current: serde_json::from_value(current)
+                .map_err(|error| format!("invalid legacy Kotlin generation record: {error}"))?,
+            last_verified: last_verified
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|error| format!("invalid legacy Kotlin generation record: {error}"))?,
+        };
+        if record.current.canonical_ir_schema != 8 {
+            return Ok(None);
+        }
+        validate_legacy_snapshot_identity(&record.current)?;
+        if let Some(previous) = &record.last_verified {
+            if !previous.verified || previous.project_name != record.current.project_name {
+                return Err("invalid legacy Kotlin last_verified snapshot".to_owned());
+            }
+            validate_legacy_snapshot_identity(previous)?;
+        }
+        if record.current.verified {
+            let previous = record
+                .last_verified
+                .as_ref()
+                .ok_or("verified legacy Kotlin current snapshot requires last_verified")?;
+            if previous.snapshot_digest()? != record.current.snapshot_digest()? {
+                return Err("verified legacy Kotlin current differs from last_verified".to_owned());
+            }
+        }
+        record.current.canonical_ir_schema = crate::provenance::CANONICAL_IR_SCHEMA_VERSION;
+        record.current.verified = false;
+        record.current.verification = Value::Null;
+        record.current.semantic_coverage = SemanticCoverage::default();
+        record.current.compute_generation_id()?;
+        record.last_verified = None;
+        record.canonical_bytes()?;
+        Ok(Some(record))
+    }
 
     fn from_wire(wire: &Value) -> Result<Self, String> {
         validate_schema(wire)?;
@@ -178,6 +222,22 @@ impl KotlinGenerationRecord {
 
 fn validate_snapshot_identity(snapshot: &KotlinGenerationSnapshot) -> Result<(), String> {
     validate_snapshot_contents(snapshot)?;
+    if let Some(strategies) = snapshot.verification.pointer("/contract_tests/strategies") {
+        let strategies = strategies
+            .as_array()
+            .ok_or("Kotlin contract strategies must be an array")?;
+        if strategies.iter().any(|strategy| {
+            strategy.get("schema_version").and_then(Value::as_u64)
+                != Some(u64::from(
+                    crate::provenance::CONTRACT_STRATEGY_SCHEMA_VERSION,
+                ))
+        }) {
+            return Err(format!(
+                "Kotlin contract strategy schema must be {}",
+                crate::provenance::CONTRACT_STRATEGY_SCHEMA_VERSION
+            ));
+        }
+    }
     if !valid_digest(&snapshot.generation_id) {
         return Err("Kotlin generation_id must be a lowercase SHA-256 digest".to_owned());
     }
@@ -188,6 +248,35 @@ fn validate_snapshot_identity(snapshot: &KotlinGenerationSnapshot) -> Result<(),
             "Kotlin generation identity mismatch: expected {}, got {}",
             expected.generation_id, snapshot.generation_id
         ));
+    }
+    Ok(())
+}
+
+fn validate_legacy_snapshot_identity(snapshot: &KotlinGenerationSnapshot) -> Result<(), String> {
+    if snapshot.canonical_ir_schema != 8 {
+        return Err("legacy Kotlin canonical IR schema must be 8".to_owned());
+    }
+    let mut shape = snapshot.clone();
+    shape.canonical_ir_schema = crate::provenance::CANONICAL_IR_SCHEMA_VERSION;
+    validate_snapshot_contents(&shape)?;
+    if !valid_digest(&snapshot.generation_id)
+        || snapshot_record::digest(&normalized_generation_identity(snapshot)?)?
+            != snapshot.generation_id
+    {
+        return Err("legacy Kotlin generation identity mismatch".to_owned());
+    }
+    if snapshot.verified {
+        let strategies = snapshot
+            .verification
+            .pointer("/contract_tests/strategies")
+            .and_then(Value::as_array)
+            .ok_or("verified legacy Kotlin snapshot has no contract strategies")?;
+        if strategies
+            .iter()
+            .any(|strategy| strategy.get("schema_version").and_then(Value::as_u64) != Some(5))
+        {
+            return Err("legacy Kotlin contract strategy schema must be 5".to_owned());
+        }
     }
     Ok(())
 }

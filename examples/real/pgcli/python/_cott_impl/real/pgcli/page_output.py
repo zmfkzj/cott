@@ -1,36 +1,91 @@
-import shlex
 import subprocess
 import sys
+from typing import IO
 
 from cott_runtime import UNIT, Err, Ok, Result, Unit
 from real.pgcli_types import ClientError, ClientError_PagerFailed, PagerRequest
 
 
-def _write_stdout(text: str) -> Result[Unit, ClientError]:
+def _fail(message: str) -> Result[Unit, ClientError]:
+    return Err(error=ClientError_PagerFailed(message=message))
+
+
+def _write_stdout(data: str) -> Result[Unit, ClientError]:
+    offset = 0
+    total = len(data)
     try:
-        sys.stdout.write(text)
+        while offset < total:
+            written = sys.stdout.write(data[offset:])
+            if written <= 0:
+                return _fail("cannot write output")
+            offset += written
         sys.stdout.flush()
-    except OSError as exc:
-        return Err(error=ClientError_PagerFailed(message=f"cannot write output: {exc.strerror or exc}"))
+    except (OSError, ValueError):
+        return _fail("cannot write output")
     return Ok(value=UNIT)
 
 
+def _reap(process: subprocess.Popen[str]) -> Result[Unit, ClientError]:
+    try:
+        process.wait()
+    except (OSError, subprocess.SubprocessError):
+        return _fail("pager failed")
+    return _fail("pager failed")
+
+
+def _abort(process: subprocess.Popen[str]) -> Result[Unit, ClientError]:
+    try:
+        process.kill()
+    except OSError:
+        return _reap(process)
+    return _reap(process)
+
+
+def _ignore_close_error(stdin: IO[str]) -> None:
+    try:
+        stdin.close()
+    except (OSError, ValueError):
+        return
+
+def _feed_and_close(stdin: IO[str], data: str) -> bool:
+    offset = 0
+    total = len(data)
+    try:
+        while offset < total:
+            written = stdin.write(data[offset:])
+            if written <= 0:
+                return False
+            offset += written
+        stdin.flush()
+        stdin.close()
+    except BrokenPipeError:
+        _ignore_close_error(stdin)
+        return True
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def page_output(request: PagerRequest) -> Result[Unit, ClientError]:
-    if not request.enabled:
-        return _write_stdout(request.text)
-    height = request.terminal_height
-    if height > 0 and len(request.text.splitlines()) < height:
-        return _write_stdout(request.text)
-    try:
-        argv = shlex.split(request.pager)
-    except ValueError as exc:
-        return Err(error=ClientError_PagerFailed(message=f"invalid pager command: {exc}"))
+    data = request.text + "\n"
+    if not request.enabled or len(request.text.splitlines()) <= request.terminal_height:
+        return _write_stdout(data)
+    argv = request.pager.split()
     if not argv:
-        return Err(error=ClientError_PagerFailed(message="pager command is empty"))
+        return _fail("cannot start pager")
     try:
-        completed = subprocess.run(argv, input=request.text, text=True, check=False)
-    except OSError as exc:
-        return Err(error=ClientError_PagerFailed(message=f"cannot start pager: {exc.strerror or exc}"))
-    if completed.returncode != 0:
-        return Err(error=ClientError_PagerFailed(message=f"pager exited with status {completed.returncode}"))
+        process: subprocess.Popen[str] = subprocess.Popen(argv, stdin=subprocess.PIPE, text=True)
+    except (OSError, ValueError):
+        return _fail("cannot start pager")
+    stdin = process.stdin
+    if stdin is None:
+        return _abort(process)
+    if not _feed_and_close(stdin, data):
+        return _abort(process)
+    try:
+        status = process.wait()
+    except (OSError, subprocess.SubprocessError):
+        return _fail("pager failed")
+    if status != 0:
+        return _fail("pager failed")
     return Ok(value=UNIT)

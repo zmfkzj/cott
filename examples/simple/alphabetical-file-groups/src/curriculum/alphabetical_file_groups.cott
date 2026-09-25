@@ -18,7 +18,8 @@ fn classify_filename(filename: Str) -> Result[FileMove, FileGroupError]:
 
     ensures Result.Ok(move) => move.filename == filename
 
-    error FileGroupError.EmptyFilename
+    errors complete
+    error FileGroupError.EmptyFilename when filename.len == 0
 
 fn group_filenames(filenames: List[Str]) -> Result[List[FileMove], FileGroupError]:
     doc """
@@ -32,3 +33,31 @@ fn group_filenames(filenames: List[Str]) -> Result[List[FileMove], FileGroupErro
     ensures Result.Ok(moves) => moves.len == filenames.len
 
     error FileGroupError.EmptyFilename
+
+scenario letter_folders_and_misc:
+    call latin = classify_filename("Alpha.txt")
+    assert latin matches Result.Ok(move) => move == FileMove(filename: "Alpha.txt", folder: "a")
+    call fold = classify_filename("ßeta.txt")
+    assert fold matches Result.Ok(move) => move == FileMove(filename: "ßeta.txt", folder: "ss")
+    call dotted = classify_filename("İmage.txt")
+    assert dotted matches Result.Ok(move) => move == FileMove(filename: "İmage.txt", folder: "i̇")
+    call nonletter = classify_filename("4-notes.txt")
+    assert nonletter matches Result.Ok(move) => move == FileMove(filename: "4-notes.txt", folder: "misc")
+    call empty = classify_filename("")
+    assert empty matches Result.Err(FileGroupError.EmptyFilename)
+
+requirement FOLDER_SELECTION for classify_filename:
+    text "Choose the full Unicode case-fold of the first code point if it is a letter, otherwise choose misc."
+    checked_by letter_folders_and_misc
+
+scenario groups_preserve_order_and_multiplicity:
+    call grouped = group_filenames(List("Alpha.txt", "ßeta.txt", "4-notes.txt", "Alpha.txt"))
+    assert grouped matches Result.Ok(moves) => moves == List(FileMove(filename: "Alpha.txt", folder: "a"), FileMove(filename: "ßeta.txt", folder: "ss"), FileMove(filename: "4-notes.txt", folder: "misc"), FileMove(filename: "Alpha.txt", folder: "a"))
+    call none = group_filenames(List())
+    assert none matches Result.Ok(moves) => moves == List()
+    call stopped = group_filenames(List("Alpha.txt", "", "4-notes.txt", ""))
+    assert stopped matches Result.Err(FileGroupError.EmptyFilename)
+
+requirement ORDERED_GROUPING for group_filenames:
+    text "Call classify_filename for each filename in input order, preserve every successful move including duplicates, and return the first error unchanged without processing later filenames."
+    checked_by groups_preserve_order_and_multiplicity

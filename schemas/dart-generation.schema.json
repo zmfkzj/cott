@@ -56,7 +56,7 @@
         "generation_id": {"$ref": "#/$defs/digest"},
         "verified": {"type": "boolean"},
         "compiler_version": {"const": "1.0.0"},
-        "canonical_ir_schema": {"const": 8},
+        "canonical_ir_schema": {"const": 9},
         "runtime_abi": {"const": 2},
         "project_name": {
           "type": "string",

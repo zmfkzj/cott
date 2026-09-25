@@ -69,6 +69,28 @@ pub fn resolve(
     plan: &KotlinPlan,
     generator_rules: Option<&str>,
 ) -> Result<Vec<KotlinBinding>, String> {
+    resolve_with_record(config, paths, plan, generator_rules, None)
+}
+
+/// Emit alone may pass the previously authenticated legacy baseline. Other
+/// callers must load the strict current-schema record from disk.
+pub(crate) fn resolve_for_emit(
+    config: &KotlinProjectConfig,
+    paths: &KotlinPaths,
+    plan: &KotlinPlan,
+    generator_rules: Option<&str>,
+    legacy_baseline: &KotlinGenerationRecord,
+) -> Result<Vec<KotlinBinding>, String> {
+    resolve_with_record(config, paths, plan, generator_rules, Some(legacy_baseline))
+}
+
+fn resolve_with_record(
+    config: &KotlinProjectConfig,
+    paths: &KotlinPaths,
+    plan: &KotlinPlan,
+    generator_rules: Option<&str>,
+    legacy_baseline: Option<&KotlinGenerationRecord>,
+) -> Result<Vec<KotlinBinding>, String> {
     let callables = callable_index(plan)?;
     validate_manifest_bindings(config, paths, plan, &callables)?;
 
@@ -86,7 +108,10 @@ pub fn resolve(
     }
 
     let generation_path = paths.artifact_root.join("generation.json");
-    let record = load_generation_record(&generation_path)?;
+    let record = match legacy_baseline {
+        Some(record) => Some(record.clone()),
+        None => load_generation_record(&generation_path)?,
+    };
     if let Some(record) = &record
         && record.current.project_name != config.project.name
     {

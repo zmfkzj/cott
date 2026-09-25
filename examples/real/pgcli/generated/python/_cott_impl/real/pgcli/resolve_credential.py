@@ -5,7 +5,8 @@ from typing import Final
 import keyring
 
 from cott_runtime import Err, Ok, Result
-from real.pgcli_types import ConnectionError, ConnectionError_CredentialUnavailable, ConnectionError_PromptDisabled, CredentialRequest, CredentialResolution, PasswordSource_Environment, PasswordSource_Keyring, PasswordSource_None, PasswordSource_Prompt, PasswordSource_Supplied
+from real.pgcli import prompt_policy
+from real.pgcli_types import ConnectionError, ConnectionError_CredentialUnavailable, CredentialRequest, CredentialResolution, PasswordSource_Environment, PasswordSource_Keyring, PasswordSource_None, PasswordSource_Prompt, PasswordSource_Supplied, PromptAction_PromptPassword
 
 _PROMPT: Final[str] = "Password: "
 _KEYRING_MISSING_IDENTITY: Final[str] = "keyring lookup requires a service and user"
@@ -32,8 +33,11 @@ def resolve_credential(request: CredentialRequest) -> Result[CredentialResolutio
             return _unavailable(_KEYRING_FAILED)
         if stored is not None and stored != "":
             return Ok(value=CredentialResolution(password=stored, source=PasswordSource_Keyring()))
-    if request.no_prompt:
-        return Err(error=ConnectionError_PromptDisabled())
+    policy = prompt_policy(request.no_prompt, "")
+    if isinstance(policy, Err):
+        return Err(error=policy.error)
+    if not isinstance(policy.value, PromptAction_PromptPassword):
+        return _unavailable(_PROMPT_FAILED)
     response: str
     try:
         with warnings.catch_warnings():

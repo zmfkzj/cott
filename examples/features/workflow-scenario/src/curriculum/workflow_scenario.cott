@@ -12,7 +12,8 @@ struct SearchSnapshot:
     status: SearchStatus
 
     invariant self.request_id > 0
-    invariant self.applied_request_id <= self.request_id
+    invariant self.status matches SearchStatus.Loading => (self.applied_request_id == 0 and self.result == "")
+    invariant self.status matches SearchStatus.Ready => self.applied_request_id == self.request_id
 
 struct SearchResult:
     request_id: U64
@@ -41,51 +42,83 @@ struct SaveReceipt:
 
 fn begin_search(request_id: U64, query: Str) -> SearchSnapshot:
     doc """
-    Start an immutable public search snapshot for the supplied request.
+    Start the snapshot of a new search request. Nothing is applied yet, so the
+    snapshot is Loading with applied_request_id 0 and an empty result.
     """
 
     requires request_id > 0
+
+    ensures result.request_id == request_id
+    ensures result.query == query
+    ensures result.status == SearchStatus.Loading
 
     effects []
 
 async fn resolve_search(request_id: U64, query: Str) -> SearchResult:
     doc """
-    Resolve one immutable search result without observing host state.
+    Resolve one search request without observing host state. This lesson's
+    resolver is a deterministic stand-in: the result text is the query followed
+    by " result", so query "new" resolves to "new result".
     """
 
     requires request_id > 0
+
+    ensures result.request_id == request_id
+    ensures result.query == query
+    ensures (starts_with(result.result, query) and ends_with(result.result, " result"))
+    ensures result.result.len == query.len + 7
 
     effects []
 
 fn apply_search(snapshot: SearchSnapshot, candidate: SearchResult) -> SearchSnapshot:
     doc """
-    Apply a result only when it still belongs to the snapshot's newest request.
+    Apply a resolved result only when it belongs to the snapshot's request.
+    A matching candidate makes the snapshot Ready with the candidate's result;
+    a candidate for any other request is stale and leaves the snapshot
+    unchanged, so an older result can never overwrite a newer request.
     """
+
+    ensures preserves result from snapshot except applied_request_id, result, status
+    ensures (candidate.request_id == snapshot.request_id => result.status == SearchStatus.Ready and result.result == candidate.result)
+    ensures (candidate.request_id != snapshot.request_id => result == snapshot)
 
     effects []
 
 fn begin_save(revision: U64, text: Str) -> SaveSnapshot:
     doc """
-    Queue the first immutable save request.
+    Queue the first save request for revision.
     """
 
     requires revision > 0
+
+    ensures result.revision == revision
+    ensures result.text == text
+    ensures result.status == SaveStatus.Queued
 
     effects []
 
 fn request_save(snapshot: SaveSnapshot, revision: U64, text: Str) -> SaveSnapshot:
     doc """
-    Coalesce a newer save request into the public queued snapshot.
+    Coalesce a save request into the pending snapshot. Only a strictly newer
+    revision replaces the pending request and queues it; an equal or older
+    revision is ignored and the snapshot is returned unchanged.
     """
 
     requires revision > 0
+
+    ensures (revision > snapshot.revision => result.revision == revision and result.text == text and result.status == SaveStatus.Queued)
+    ensures (revision <= snapshot.revision => result == snapshot)
 
     effects []
 
 fn flush_save(snapshot: SaveSnapshot) -> SaveReceipt:
     doc """
-    Return the public receipt for the currently coalesced save request.
+    Flush the coalesced save request and return its Flushed receipt.
     """
+
+    ensures result.revision == snapshot.revision
+    ensures result.text == snapshot.text
+    ensures result.status == SaveStatus.Flushed
 
     effects []
 
@@ -125,12 +158,23 @@ scenario latest_result_and_coalesced_save:
     await new_worker as new_result
     call applied = apply_search(newest_state, new_result)
     call protected = apply_search(applied, old_result)
-    assert protected.request_id == NEW_REQUEST_ID
-    assert protected.applied_request_id == NEW_REQUEST_ID
-    assert protected.query == NEW_QUERY
-    assert protected.result == NEW_RESULT
+    assert protected == SearchSnapshot(
+        request_id: NEW_REQUEST_ID,
+        applied_request_id: NEW_REQUEST_ID,
+        query: NEW_QUERY,
+        result: NEW_RESULT,
+        status: SearchStatus.Ready,
+    )
     call first_save = begin_save(FIRST_SAVE_REVISION, DRAFT_TEXT)
     call coalesced_save = request_save(first_save, LATEST_SAVE_REVISION, PUBLISHED_TEXT)
-    call flushed = flush_save(coalesced_save)
-    assert flushed.revision == LATEST_SAVE_REVISION
-    assert flushed.text == PUBLISHED_TEXT
+    call stale_save = request_save(coalesced_save, FIRST_SAVE_REVISION, DRAFT_TEXT)
+    call flushed = flush_save(stale_save)
+    assert flushed == SaveReceipt(
+        revision: LATEST_SAVE_REVISION,
+        text: PUBLISHED_TEXT,
+        status: SaveStatus.Flushed,
+    )
+
+requirement PENDING_SEARCH_IS_CANCELLABLE for resolve_search:
+    text "A spawned resolution stays pending until the scheduler's next turn, so cancelling it before that turn ends it cancelled instead of completed."
+    checked_by latest_result_and_coalesced_save

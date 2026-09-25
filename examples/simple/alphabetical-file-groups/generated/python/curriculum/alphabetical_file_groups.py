@@ -22,32 +22,34 @@ folder. Select "misc" when the leading code point is not a letter."""
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
+    if _expected_error is None and (_cott_contract_condition(((len(filename) == 0)), "curriculum.alphabetical_file_groups.classify_filename", "error:3:condition")):
+        _expected_error = FileGroupError_EmptyFilename
+        _expected_error_span = {"end_byte":659,"end_column":62,"end_line":22,"start_byte":602,"start_column":5,"start_line":22}
+        _expected_error_clause = "error:3"
     try:
-        _implementation = _cott_load("_cott_impl/curriculum/alphabetical_file_groups/classify_filename.py", "251269c83ce588c764a4cee837d91a7aef51f2314163d9f499d750cf88b04bf7", "classify_filename", expected_project_name="alphabetical-file-groups", expected_cott_symbol="curriculum.alphabetical_file_groups.classify_filename")
+        _implementation = _cott_load("_cott_impl/curriculum/alphabetical_file_groups/classify_filename.py", "deca9e8dd73f71465c1c0dc60fc28894a2402ca0317db53c928e855d1424bbbc", "classify_filename", expected_project_name="alphabetical-file-groups", expected_cott_symbol="curriculum.alphabetical_file_groups.classify_filename")
         _result = _implementation(filename)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.alphabetical_file_groups.classify_filename"
         if _error.span is None:
-            _error.span = {"end_byte":618,"end_column":1,"end_line":23,"start_byte":136,"start_column":1,"start_line":10}
+            _error.span = {"end_byte":661,"end_column":1,"end_line":24,"start_byte":136,"start_column":1,"start_line":10}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.alphabetical_file_groups.classify_filename", phase="implementation-call", span={"end_byte":618,"end_column":1,"end_line":23,"start_byte":136,"start_column":1,"start_line":10}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.alphabetical_file_groups.classify_filename", phase="implementation-call", span={"end_byte":661,"end_column":1,"end_line":24,"start_byte":136,"start_column":1,"start_line":10}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.alphabetical_file_groups.classify_filename", phase="implementation-call", span={"end_byte":618,"end_column":1,"end_line":23,"start_byte":136,"start_column":1,"start_line":10}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.alphabetical_file_groups.classify_filename", phase="implementation-call", span={"end_byte":661,"end_column":1,"end_line":24,"start_byte":136,"start_column":1,"start_line":10}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[FileMove, FileGroupError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="curriculum.alphabetical_file_groups.classify_filename", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
-        elif type(_result.error) not in (FileGroupError_EmptyFilename,):
-            raise CottContractViolation("returned error is not allowed", symbol="curriculum.alphabetical_file_groups.classify_filename", phase="error", span={"end_byte":618,"end_column":1,"end_line":23,"start_byte":136,"start_column":1,"start_line":10}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+        elif type(_result.error) not in ():
+            raise CottContractViolation("returned error is not allowed", symbol="curriculum.alphabetical_file_groups.classify_filename", phase="error", span={"end_byte":661,"end_column":1,"end_line":24,"start_byte":136,"start_column":1,"start_line":10}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.alphabetical_file_groups.classify_filename", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
         _cott_contract_condition(True, "curriculum.alphabetical_file_groups.classify_filename", _expected_error_clause)
-    if type(_result) is Err and type(_result.error) is FileGroupError_EmptyFilename:
-        _cott_contract_condition(True, "curriculum.alphabetical_file_groups.classify_filename", "error:2")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
@@ -77,19 +79,19 @@ succeeds with an empty move list."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "curriculum.alphabetical_file_groups.group_filenames"
         if _error.span is None:
-            _error.span = {"end_byte":1084,"end_column":1,"end_line":35,"start_byte":618,"start_column":1,"start_line":23}
+            _error.span = {"end_byte":1128,"end_column":1,"end_line":37,"start_byte":661,"start_column":1,"start_line":24}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.alphabetical_file_groups.group_filenames", phase="implementation-call", span={"end_byte":1084,"end_column":1,"end_line":35,"start_byte":618,"start_column":1,"start_line":23}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="curriculum.alphabetical_file_groups.group_filenames", phase="implementation-call", span={"end_byte":1128,"end_column":1,"end_line":37,"start_byte":661,"start_column":1,"start_line":24}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.alphabetical_file_groups.group_filenames", phase="implementation-call", span={"end_byte":1084,"end_column":1,"end_line":35,"start_byte":618,"start_column":1,"start_line":23}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="curriculum.alphabetical_file_groups.group_filenames", phase="implementation-call", span={"end_byte":1128,"end_column":1,"end_line":37,"start_byte":661,"start_column":1,"start_line":24}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[FileMove], FileGroupError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="curriculum.alphabetical_file_groups.group_filenames", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (FileGroupError_EmptyFilename,):
-            raise CottContractViolation("returned error is not allowed", symbol="curriculum.alphabetical_file_groups.group_filenames", phase="error", span={"end_byte":1084,"end_column":1,"end_line":35,"start_byte":618,"start_column":1,"start_line":23}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="curriculum.alphabetical_file_groups.group_filenames", phase="error", span={"end_byte":1128,"end_column":1,"end_line":37,"start_byte":661,"start_column":1,"start_line":24}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="curriculum.alphabetical_file_groups.group_filenames", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -104,7 +106,7 @@ succeeds with an empty move list."""
         _cott_contract_condition((False), "curriculum.alphabetical_file_groups.group_filenames", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="curriculum.alphabetical_file_groups.group_filenames", clause="ensures:1", phase="ensures", span={"end_byte":1043,"end_column":59,"end_line":32,"start_byte":989,"start_column":5,"start_line":32}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="curriculum.alphabetical_file_groups.group_filenames", clause="ensures:1", phase="ensures", span={"end_byte":1086,"end_column":59,"end_line":33,"start_byte":1032,"start_column":5,"start_line":33}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[FileMove], FileGroupError], path="$.return", validator=_cott_validate_abi)
     return _result
 

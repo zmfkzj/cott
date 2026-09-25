@@ -1,10 +1,12 @@
 module store.order
 
-use store.catalog.{Catalog, CatalogError}
+use store.catalog.{Catalog, CatalogError, Item}
 
 struct OrderLine:
     sku: Str
     quantity: U32
+
+    invariant self.sku.len > 0
 
 struct Order:
     order_id: Str
@@ -22,16 +24,25 @@ enum OrderError:
 
 fn validate_line(line: OrderLine) -> Result[OrderLine, OrderError]:
     doc """
-    Ensure an order line has positive quantity.
+    Accept an order line with a positive quantity and return it unchanged.
     """
 
-    ensures Result.Ok(valid) => valid.quantity > 0
+    ensures Result.Ok(valid) => valid == line
+    ensures Result.Err(OrderError.InvalidQuantity(rejected)) => rejected == line.sku
 
+    errors complete
     error OrderError.InvalidQuantity when line.quantity == 0
+
+    effects []
 
 fn calculate_order(catalog: Catalog, order: Order) -> Result[OrderReceipt, OrderError]:
     doc """
-    Validate all order lines, lookup item prices, and produce a receipt.
+    Price an order against a catalog and summarize it as a receipt.
+    
+    `total_items` is the sum of the line quantities, and `total_cents` is the sum over lines of
+    the quantity times the matching catalog item's `price_cents`; a SKU on several lines counts
+    once per line. Callers keep both totals within U32 and U64; larger orders are outside this
+    contract.
     """
 
     ensures Result.Ok(receipt) => receipt.order_id == order.order_id
@@ -39,3 +50,58 @@ fn calculate_order(catalog: Catalog, order: Order) -> Result[OrderReceipt, Order
     error OrderError.EmptyOrder when order.lines.len == 0
     error OrderError.InvalidQuantity
     error OrderError.ItemUnavailable
+
+    effects []
+
+data pantry: Catalog = Catalog(
+    items: List(
+        Item(sku: "SKU-APPLE", name: "Honeycrisp Apple", price_cents: 150),
+        Item(sku: "SKU-COFFEE", name: "Dark Roast Coffee", price_cents: 1200),
+    ),
+)
+
+scenario receipt_counts_every_line:
+    call receipt = calculate_order(
+        pantry,
+        Order(
+            order_id: "ORD-1",
+            lines: List(
+                OrderLine(sku: "SKU-APPLE", quantity: 4),
+                OrderLine(sku: "SKU-COFFEE", quantity: 2),
+                OrderLine(sku: "SKU-APPLE", quantity: 1),
+            ),
+        ),
+    )
+    assert receipt matches Result.Ok(value) => value.total_items == 7 and value.total_cents == 3150
+
+scenario first_failing_line_decides:
+    call unavailable = calculate_order(
+        pantry,
+        Order(
+            order_id: "ORD-2",
+            lines: List(
+                OrderLine(sku: "SKU-APPLE", quantity: 1),
+                OrderLine(sku: "SKU-TEA", quantity: 1),
+                OrderLine(sku: "SKU-COFFEE", quantity: 0),
+            ),
+        ),
+    )
+    assert unavailable == Result.Err(
+        error: OrderError.ItemUnavailable(cause: CatalogError.ItemNotFound(sku: "SKU-TEA")),
+    )
+    call invalid = calculate_order(
+        pantry,
+        Order(order_id: "ORD-3", lines: List(OrderLine(sku: "SKU-TEA", quantity: 0))),
+    )
+    assert invalid == Result.Err(error: OrderError.InvalidQuantity(sku: "SKU-TEA"))
+
+requirement COMPOSES_THROUGH_FACADES for calculate_order:
+    text "Each line is checked through the public store.order.validate_line facade and priced through the public store.catalog.find_item facade; calculate_order does not repeat their validation or lookup logic."
+
+requirement FIRST_FAILING_LINE_DECIDES for calculate_order:
+    text "A nonempty order is processed line by line in order, validating each line before looking up its SKU; the first failure is returned: a validate_line error unchanged, a find_item error wrapped as OrderError.ItemUnavailable(cause: that error)."
+    checked_by first_failing_line_decides
+
+requirement RECEIPT_COUNTS_EVERY_LINE for calculate_order:
+    text "A successful receipt's totals include every order line, priced with the catalog item for its SKU."
+    checked_by receipt_counts_every_line

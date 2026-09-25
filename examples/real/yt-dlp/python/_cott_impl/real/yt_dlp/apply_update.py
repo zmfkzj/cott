@@ -12,7 +12,7 @@ from urllib.parse import urljoin, urlsplit
 
 from cott_runtime import UNIT, Err, Ok, Result, Unit
 from real.yt_dlp import resolve_update_repository
-from real.yt_dlp_types import MediaError, MediaError_NetworkFailure, MediaError_OutputFailure, MediaError_UpdateUnavailable, UpdatePolicy_Apply, UpdatePolicy_Check, UpdatePolicy_Master, UpdatePolicy_Never, UpdatePolicy_Nightly, UpdateRequest
+from real.yt_dlp_types import MediaError, MediaError_NetworkFailure, MediaError_OutputFailure, MediaError_UpdateUnavailable, UpdateOutcome, UpdateOutcome_Available, UpdateOutcome_Current, UpdateOutcome_Disabled, UpdateOutcome_Installed, UpdatePolicy_Apply, UpdatePolicy_Check, UpdatePolicy_Master, UpdatePolicy_Never, UpdatePolicy_Nightly, UpdateRequest
 
 _ASSET: Final[str] = "yt-dlp"
 _MANIFEST: Final[str] = "SHA2-256SUMS"
@@ -25,22 +25,23 @@ _HEAD: Final[int] = 512
 _HOST_GITHUB: Final[str] = "github.com"
 _HOST_ASSETS: Final[str] = "release-assets.githubusercontent.com"
 _HEXDIGITS: Final[str] = "0123456789abcdefABCDEF"
-
-
-def _unavailable(message: str) -> Result[Unit, MediaError]:
-    return Err(error=MediaError_UpdateUnavailable(message=message))
+_REPO_STABLE: Final[str] = "yt-dlp/yt-dlp"
+_REPO_NIGHTLY: Final[str] = "yt-dlp/yt-dlp-nightly-builds"
+_REPO_MASTER: Final[str] = "yt-dlp/yt-dlp-master-builds"
 
 
 def _looks_html(head: bytes) -> bool:
-    lowered = head.lstrip().lower()
+    lowered: bytes = head.lstrip().lower()
     return lowered.startswith(b"<!doctype") or lowered.startswith(b"<html") or lowered.startswith(b"<head") or lowered.startswith(b"<body")
 
 
 def _write_all(out_fd: int, chunk: bytes) -> bool:
-    view = memoryview(chunk)
+    view: memoryview = memoryview(chunk)
     try:
         while view:
-            written = os.write(out_fd, view)
+            written: int = os.write(out_fd, view)
+            if written <= 0:
+                return False
             view = view[written:]
     except OSError:
         return False
@@ -49,13 +50,13 @@ def _write_all(out_fd: int, chunk: bytes) -> bool:
 
 def _read_body(response: http.client.HTTPResponse, label: str, cap: int, out_fd: int) -> Result[tuple[bytes, str], MediaError]:
     digest = hashlib.sha256()
-    buffer = bytearray()
-    head = bytearray()
-    total = 0
+    buffer: bytearray = bytearray()
+    head: bytearray = bytearray()
+    total: int = 0
     while True:
         try:
-            chunk = response.read(_CHUNK)
-        except (ssl.SSLError, ssl.CertificateError):
+            chunk: bytes = response.read(_CHUNK)
+        except ssl.SSLError:
             return Err(error=MediaError_NetworkFailure(message=f"TLS failure reading {label}"))
         except (TimeoutError, socket.timeout):
             return Err(error=MediaError_NetworkFailure(message=f"timeout reading {label}"))
@@ -82,38 +83,38 @@ def _read_body(response: http.client.HTTPResponse, label: str, cap: int, out_fd:
 
 def _fetch(repository: str, channel: str, asset: str, cap: int, out_fd: int) -> Result[tuple[bytes, str], MediaError]:
     try:
-        context = ssl.create_default_context()
+        context: ssl.SSLContext = ssl.create_default_context()
         context.check_hostname = True
         context.verify_mode = ssl.CERT_REQUIRED
     except (ssl.SSLError, OSError, ValueError):
         return Err(error=MediaError_NetworkFailure(message=f"cannot establish verifying TLS context ({channel})"))
-    url = f"https://{_HOST_GITHUB}/{repository}/releases/latest/download/{asset}"
-    label = f"{asset} ({channel})"
-    redirects = 0
+    url: str = f"https://{_HOST_GITHUB}/{repository}/releases/latest/download/{asset}"
+    label: str = f"{asset} ({channel})"
+    redirects: int = 0
     while True:
         parts = urlsplit(url)
-        host = parts.hostname or ""
+        host: str = parts.hostname or ""
         try:
-            port = parts.port
+            port: int | None = parts.port
         except ValueError:
             return Err(error=MediaError_UpdateUnavailable(message=f"forbidden redirect while fetching {label}"))
         if parts.scheme != "https" or host not in (_HOST_GITHUB, _HOST_ASSETS) or parts.username is not None or parts.password is not None or port not in (None, 443):
             return Err(error=MediaError_UpdateUnavailable(message=f"forbidden redirect while fetching {label}"))
-        request_target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+        request_target: str = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
         connection = http.client.HTTPSConnection(host, 443, timeout=_TIMEOUT, context=context)
         try:
             try:
                 connection.request("GET", request_target, headers={"User-Agent": "yt-dlp-updater", "Accept": "application/octet-stream", "Accept-Encoding": "identity"})
-                response = connection.getresponse()
-            except (ssl.SSLError, ssl.CertificateError):
+                response: http.client.HTTPResponse = connection.getresponse()
+            except ssl.SSLError:
                 return Err(error=MediaError_NetworkFailure(message=f"TLS failure fetching {label} from {host}"))
             except (socket.gaierror, TimeoutError, socket.timeout):
                 return Err(error=MediaError_NetworkFailure(message=f"DNS or timeout failure fetching {label} from {host}"))
             except (OSError, http.client.HTTPException):
                 return Err(error=MediaError_NetworkFailure(message=f"connection failure fetching {label} from {host}"))
-            status = response.status
+            status: int = response.status
             if status in (301, 302, 303, 307, 308):
-                location = response.getheader("Location")
+                location: str | None = response.getheader("Location")
                 if location is None or redirects >= _MAX_REDIRECTS or not location.isascii() or not location.isprintable() or any(c.isspace() for c in location):
                     return Err(error=MediaError_UpdateUnavailable(message=f"invalid or excessive redirect fetching {label}"))
                 redirects += 1
@@ -123,17 +124,17 @@ def _fetch(repository: str, channel: str, asset: str, cap: int, out_fd: int) -> 
                 return Err(error=MediaError_UpdateUnavailable(message=f"{label} not found (HTTP 404)"))
             if status != 200:
                 return Err(error=MediaError_NetworkFailure(message=f"HTTP {status} fetching {label}"))
-            content_type = (response.getheader("Content-Type") or "").lower()
+            content_type: str = (response.getheader("Content-Type") or "").lower()
             if "text/html" in content_type or "application/xhtml" in content_type:
                 return Err(error=MediaError_UpdateUnavailable(message=f"HTML payload for {label}"))
             if (response.getheader("Content-Encoding") or "identity").lower() not in ("identity", ""):
                 return Err(error=MediaError_UpdateUnavailable(message=f"unexpected encoding for {label}"))
-            length_header = response.getheader("Content-Length")
+            length_header: str | None = response.getheader("Content-Length")
             if length_header is not None:
-                stripped = length_header.strip()
+                stripped: str = length_header.strip()
                 if not stripped.isascii() or not stripped.isdigit():
                     return Err(error=MediaError_UpdateUnavailable(message=f"malformed Content-Length for {label}"))
-                significant = stripped.lstrip("0")
+                significant: str = stripped.lstrip("0")
                 if len(significant) > 19 or int(significant or "0") > cap:
                     return Err(error=MediaError_UpdateUnavailable(message=f"{label} exceeds size limit"))
             return _read_body(response, label, cap, out_fd)
@@ -143,21 +144,21 @@ def _fetch(repository: str, channel: str, asset: str, cap: int, out_fd: int) -> 
 
 def _parse_manifest(data: bytes, channel: str) -> Result[str, MediaError]:
     try:
-        text = data.decode("utf-8")
+        text: str = data.decode("utf-8")
     except UnicodeDecodeError:
         return Err(error=MediaError_UpdateUnavailable(message=f"malformed checksum manifest ({channel})"))
     found: list[str] = []
     for raw_line in text.split("\n"):
-        line = raw_line.rstrip("\r")
-        pieces = line.split(" ", 1)
+        line: str = raw_line.rstrip("\r")
+        pieces: list[str] = line.split(" ", 1)
         if len(pieces) != 2:
             continue
-        name = pieces[1]
+        name: str = pieces[1]
         if name.startswith(" ") or name.startswith("*"):
             name = name[1:]
         if name != _ASSET:
             continue
-        checksum = pieces[0]
+        checksum: str = pieces[0]
         if len(checksum) != 64 or any(c not in _HEXDIGITS for c in checksum):
             return Err(error=MediaError_UpdateUnavailable(message=f"malformed checksum for {_ASSET} ({channel})"))
         found.append(checksum.lower())
@@ -169,68 +170,77 @@ def _parse_manifest(data: bytes, channel: str) -> Result[str, MediaError]:
 def _platform_safe() -> bool:
     if os.name != "posix":
         return False
+    return os.O_NOFOLLOW != 0 and os.O_DIRECTORY != 0 and os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd and os.rename in os.supports_dir_fd and os.unlink in os.supports_dir_fd and os.stat in os.supports_follow_symlinks and os.chmod in os.supports_fd
+
+
+def _close(fd: int) -> bool:
     try:
-        flags_ok = os.O_NOFOLLOW != 0 and os.O_DIRECTORY != 0
-    except AttributeError:
+        os.close(fd)
+    except OSError:
         return False
-    return flags_ok and os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd and os.rename in os.supports_dir_fd and os.unlink in os.supports_dir_fd and os.stat in os.supports_follow_symlinks and os.chmod in os.supports_fd
+    return True
 
 
 def _open_parent(target: Path) -> Result[tuple[int, str], MediaError]:
-    shown = str(target)
+    shown: str = str(target)
     if not _platform_safe():
         return Err(error=MediaError_OutputFailure(message=f"platform lacks no-follow directory-fd operations for {shown}"))
-    name = target.name
+    name: str = target.name
     if shown in ("", ".", "/") or name in ("", ".", "..") or "\x00" in shown:
         return Err(error=MediaError_OutputFailure(message=f"invalid update target {shown}"))
-    parts = target.parts[:-1]
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-    start = "/" if target.is_absolute() else "."
-    components = parts[1:] if target.is_absolute() else parts
+    parts: tuple[str, ...] = target.parts[:-1]
+    flags: int = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    start: str = "/" if target.is_absolute() else "."
+    components: tuple[str, ...] = parts[1:] if target.is_absolute() else parts
     try:
-        dfd = os.open(start, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        dfd: int = os.open(start, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     except OSError:
         return Err(error=MediaError_OutputFailure(message=f"cannot open base directory for {shown}"))
     for component in components:
         try:
-            next_fd = os.open(component, flags, dir_fd=dfd)
+            next_fd: int = os.open(component, flags, dir_fd=dfd)
         except OSError:
-            os.close(dfd)
+            _close(dfd)
             return Err(error=MediaError_OutputFailure(message=f"unsafe or inaccessible directory in {shown}"))
-        os.close(dfd)
+        if not _close(dfd):
+            _close(next_fd)
+            return Err(error=MediaError_OutputFailure(message=f"cannot close directory in {shown}"))
         dfd = next_fd
     return Ok(value=(dfd, name))
 
 
 def _inspect_target(dfd: int, name: str, shown: str) -> Result[tuple[int, int, int, str], MediaError]:
     try:
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dfd)
+        fd: int = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dfd)
     except FileNotFoundError:
         return Ok(value=(-1, -1, 0, ""))
     except OSError as error:
         if error.errno == errno.ELOOP:
             return Err(error=MediaError_OutputFailure(message=f"update target is a symlink: {shown}"))
         return Err(error=MediaError_OutputFailure(message=f"cannot open update target {shown}"))
+    result: Result[tuple[int, int, int, str], MediaError]
     try:
-        info = os.fstat(fd)
+        info: os.stat_result = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
-            return Err(error=MediaError_OutputFailure(message=f"update target is not a regular file: {shown}"))
-        digest = hashlib.sha256()
-        while True:
-            chunk = os.read(fd, _CHUNK)
-            if not chunk:
-                break
-            digest.update(chunk)
-        return Ok(value=(info.st_dev, info.st_ino, info.st_mode, digest.hexdigest()))
+            result = Err(error=MediaError_OutputFailure(message=f"update target is not a regular file: {shown}"))
+        else:
+            digest = hashlib.sha256()
+            while True:
+                chunk: bytes = os.read(fd, _CHUNK)
+                if not chunk:
+                    break
+                digest.update(chunk)
+            result = Ok(value=(info.st_dev, info.st_ino, info.st_mode, digest.hexdigest()))
     except OSError:
-        return Err(error=MediaError_OutputFailure(message=f"cannot read update target {shown}"))
-    finally:
-        os.close(fd)
+        result = Err(error=MediaError_OutputFailure(message=f"cannot read update target {shown}"))
+    if not _close(fd):
+        return Err(error=MediaError_OutputFailure(message=f"cannot close update target {shown}"))
+    return result
 
 
 def _target_unchanged(dfd: int, name: str, dev: int, ino: int) -> bool:
     try:
-        current = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+        current: os.stat_result = os.stat(name, dir_fd=dfd, follow_symlinks=False)
     except FileNotFoundError:
         return dev < 0
     except OSError:
@@ -240,6 +250,7 @@ def _target_unchanged(dfd: int, name: str, dev: int, ino: int) -> bool:
 
 def _commit(fd: int, dfd: int, temp_name: str, name: str, shown: str, dev: int, ino: int, mode: int) -> Result[Unit, MediaError]:
     try:
+        os.fsync(fd)
         os.fchmod(fd, (mode & 0o777) if dev >= 0 else 0o755)
         os.fsync(fd)
     except OSError:
@@ -253,22 +264,22 @@ def _commit(fd: int, dfd: int, temp_name: str, name: str, shown: str, dev: int, 
     return Ok(value=UNIT)
 
 
-def _install(dfd: int, name: str, shown: str, repository: str, channel: str, expected: str, dev: int, ino: int, mode: int) -> Result[Unit, MediaError]:
-    temp_name = f".{name}.update-{secrets.token_hex(16)}"
+def _install(dfd: int, name: str, shown: str, repository: str, channel: str, expected: str, dev: int, ino: int, mode: int) -> Result[UpdateOutcome, MediaError]:
+    temp_name: str = f".{name}.update-{secrets.token_hex(16)}"
     try:
-        fd = os.open(temp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=dfd)
+        fd: int = os.open(temp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=dfd)
     except OSError:
         return Err(error=MediaError_OutputFailure(message=f"cannot create temporary file beside {shown}"))
-    committed = False
+    committed: bool = False
     outcome: Result[Unit, MediaError] = Ok(value=UNIT)
     try:
-        fetched = _fetch(repository, channel, _ASSET, _ASSET_CAP, fd)
+        fetched: Result[tuple[bytes, str], MediaError] = _fetch(repository, channel, _ASSET, _ASSET_CAP, fd)
         match fetched:
             case Err(error=fetch_error):
                 outcome = Err(error=fetch_error)
             case Ok(value=(_, digest)):
                 if not secrets.compare_digest(digest, expected):
-                    outcome = _unavailable(f"checksum mismatch for {_ASSET} ({channel})")
+                    outcome = Err(error=MediaError_UpdateUnavailable(message=f"checksum mismatch for {_ASSET} ({channel})"))
                 else:
                     outcome = _commit(fd, dfd, temp_name, name, shown, dev, ino, mode)
                     match outcome:
@@ -277,72 +288,83 @@ def _install(dfd: int, name: str, shown: str, repository: str, channel: str, exp
                         case Err():
                             committed = False
     finally:
-        try:
-            os.close(fd)
-        except OSError:
-            if not committed:
-                outcome = Err(error=MediaError_OutputFailure(message=f"cannot close temporary file for {shown}"))
+        if not _close(fd) and not committed:
+            outcome = Err(error=MediaError_OutputFailure(message=f"cannot close temporary file for {shown}"))
         if not committed:
             try:
                 os.unlink(temp_name, dir_fd=dfd)
             except OSError:
                 outcome = Err(error=MediaError_OutputFailure(message=f"cannot clean up temporary file for {shown}"))
-    if committed:
-        try:
-            os.fsync(dfd)
-        except OSError:
-            return Err(error=MediaError_OutputFailure(message=f"directory fsync failed for {shown}"))
-    return outcome
+    match outcome:
+        case Err(error=install_error):
+            return Err(error=install_error)
+        case Ok():
+            try:
+                os.fsync(dfd)
+            except OSError:
+                return Err(error=MediaError_OutputFailure(message=f"directory fsync failed for {shown}"))
+            return Ok(value=UpdateOutcome_Installed())
 
 
-def _run(dfd: int, name: str, shown: str, repository: str, channel: str, install: bool) -> Result[Unit, MediaError]:
-    manifest = _fetch(repository, channel, _MANIFEST, _MANIFEST_CAP, -1)
+def _run(dfd: int, name: str, shown: str, repository: str, channel: str, install: bool) -> Result[UpdateOutcome, MediaError]:
+    manifest: Result[tuple[bytes, str], MediaError] = _fetch(repository, channel, _MANIFEST, _MANIFEST_CAP, -1)
     match manifest:
         case Err(error=manifest_error):
             return Err(error=manifest_error)
         case Ok(value=(manifest_bytes, _)):
-            parsed = _parse_manifest(manifest_bytes, channel)
+            parsed: Result[str, MediaError] = _parse_manifest(manifest_bytes, channel)
     match parsed:
         case Err(error=parse_error):
             return Err(error=parse_error)
         case Ok(value=expected):
-            inspected = _inspect_target(dfd, name, shown)
+            inspected: Result[tuple[int, int, int, str], MediaError] = _inspect_target(dfd, name, shown)
     match inspected:
         case Err(error=inspect_error):
             return Err(error=inspect_error)
         case Ok(value=(dev, ino, mode, current_digest)):
             if dev >= 0 and secrets.compare_digest(current_digest, expected):
-                return Ok(value=UNIT)
+                return Ok(value=UpdateOutcome_Current())
             if not install:
-                return Ok(value=UNIT)
+                return Ok(value=UpdateOutcome_Available())
             return _install(dfd, name, shown, repository, channel, expected, dev, ino, mode)
 
 
-def apply_update(request: UpdateRequest) -> Result[Unit, MediaError]:
+def _channel_name(repository: str) -> str:
+    if repository == _REPO_STABLE:
+        return "stable"
+    if repository == _REPO_NIGHTLY:
+        return "nightly"
+    if repository == _REPO_MASTER:
+        return "master"
+    return ""
+
+
+def apply_update(request: UpdateRequest) -> Result[UpdateOutcome, MediaError]:
     policy = request.policy
+    install: bool
     match policy:
         case UpdatePolicy_Never():
-            return Ok(value=UNIT)
+            return Ok(value=UpdateOutcome_Disabled())
         case UpdatePolicy_Check():
             install = False
         case UpdatePolicy_Apply() | UpdatePolicy_Nightly() | UpdatePolicy_Master():
             install = True
-    resolved = resolve_update_repository(policy, request.channel)
+    resolved: Result[str, MediaError] = resolve_update_repository(policy, request.channel)
     match resolved:
         case Err(error=resolve_error):
             return Err(error=resolve_error)
         case Ok(value=repository):
-            channel = {"yt-dlp/yt-dlp": "stable", "yt-dlp/yt-dlp-nightly-builds": "nightly", "yt-dlp/yt-dlp-master-builds": "master"}.get(repository, "")
+            channel: str = _channel_name(repository)
     if channel == "":
-        return _unavailable("no official update repository selected")
-    target = Path(request.target)
-    shown = str(target)
-    opened = _open_parent(target)
+        return Err(error=MediaError_UpdateUnavailable(message="no official update repository selected"))
+    target: Path = Path(request.target)
+    shown: str = str(target)
+    opened: Result[tuple[int, str], MediaError] = _open_parent(target)
     match opened:
         case Err(error=open_error):
             return Err(error=open_error)
         case Ok(value=(dfd, name)):
-            try:
-                return _run(dfd, name, shown, repository, channel, install)
-            finally:
-                os.close(dfd)
+            ran: Result[UpdateOutcome, MediaError] = _run(dfd, name, shown, repository, channel, install)
+            if not _close(dfd):
+                return Err(error=MediaError_OutputFailure(message=f"cannot close directory of {shown}"))
+            return ran

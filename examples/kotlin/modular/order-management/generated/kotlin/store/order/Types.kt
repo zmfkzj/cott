@@ -17,6 +17,7 @@ public data class OrderLine(
     init {
         cott_runtime.CottRuntime.abi(sku, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.sku")
         cott_runtime.CottRuntime.abi(quantity, cott_runtime.CottTypes.U32, cott_runtime.RuntimeValidation.BOUNDARY, "\$.quantity")
+        cott_runtime.CottRuntime.invariant((cott_runtime.CottRuntime.canonicalCompare(cott_runtime.CottRuntime.length((this).sku), java.math.BigInteger("0").toString().toULong()) > 0), "store.order.OrderLine", clause = "invariant:0", span = cott_runtime.CottSpan(startByte = 123, endByte = 149, startLine = 9, startColumn = 5, endLine = 9, endColumn = 31), expected = "true", actual = "false")
     }
 }
 

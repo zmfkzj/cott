@@ -356,9 +356,9 @@ fn wire_identities_are_closed_and_cross_shape_records_are_rejected() {
     );
     assert_eq!(
         strategy_schema["$id"],
-        "https://cott.dev/schema/contract-test/v5"
+        "https://cott.dev/schema/contract-test/v6"
     );
-    assert_eq!(strategy_schema["properties"]["schema_version"]["const"], 5);
+    assert_eq!(strategy_schema["properties"]["schema_version"]["const"], 6);
 
     let generation_view = json!({
         "schema_version": 8,
@@ -409,7 +409,7 @@ fn wire_identities_are_closed_and_cross_shape_records_are_rejected() {
     }
 
     let strategy = json!({
-        "schema_version": 5,
+        "schema_version": 6,
         "symbol": "app.check",
         "seed": format!("sha256:{}", "0".repeat(64)),
         "proof_node_limit": 1,
@@ -445,7 +445,7 @@ fn wire_identities_are_closed_and_cross_shape_records_are_rejected() {
         jsonschema::validator_for(&strategy_schema).expect("strategy validator");
     assert!(strategy_validator.is_valid(&strategy));
     let mut legacy_strategy = strategy.clone();
-    legacy_strategy["schema_version"] = json!(4);
+    legacy_strategy["schema_version"] = json!(5);
     assert!(!strategy_validator.is_valid(&legacy_strategy));
     let mut incomplete_strategy = strategy.clone();
     incomplete_strategy
@@ -461,6 +461,65 @@ fn wire_identities_are_closed_and_cross_shape_records_are_rejected() {
     assert!(!strategy_validator.is_valid(&fixtureless_strategy));
 }
 
+#[test]
+fn scenario_schema_closes_initializer_receiver_method_and_nested_dyn() {
+    let ir_schema: Value =
+        serde_json::from_str(include_str!("../schemas/canonical-ir.schema.json"))
+            .expect("IR schema");
+    let strategy_schema: Value =
+        serde_json::from_str(include_str!("../schemas/contract-test.schema.json"))
+            .expect("strategy schema");
+    let span = json!({
+        "start_byte": 0, "end_byte": 1, "start_line": 1, "start_column": 1,
+        "end_line": 1, "end_column": 2
+    });
+    let trait_ref = json!({"kind": "named", "name": "app.TaskView", "args": []});
+    let instance_type = json!({"kind": "factory", "instance": {
+        "kind": "named", "name": "app.SimpleTask", "args": []
+    }});
+    let receiver = json!({
+        "kind": "binding_ref", "symbol": "app.task",
+        "reference": {"kind": "binding", "symbol": "app.task"},
+        "span": span, "type": instance_type
+    });
+    let dyn_value = json!({
+        "kind": "dyn", "trait_ref": trait_ref, "value": receiver,
+        "type": {"kind": "dyn", "trait": trait_ref}, "span": span
+    });
+    let init = json!({
+        "kind": "init", "step_id": 0, "span": span, "target": "app.SimpleTask",
+        "binding": "app.task", "arguments": [], "parameters": [], "return_type": instance_type
+    });
+    let method = json!({
+        "kind": "method_call", "step_id": 1, "span": span,
+        "target": "app.SimpleTask.summary", "binding": "app.label",
+        "callable_kind": "sync", "arguments": [dyn_value],
+        "parameters": [{"kind": "dyn", "trait": trait_ref}],
+        "return_type": {"kind": "primitive", "name": "str"},
+        "receiver": receiver
+    });
+
+    for (schema, step_definition) in [(&ir_schema, "scenario_step"), (&strategy_schema, "step")] {
+        let step_schema = json!({
+            "$defs": schema["$defs"], "$ref": format!("#/$defs/{step_definition}")
+        });
+        let step_validator = jsonschema::validator_for(&step_schema).expect("step schema");
+        assert!(step_validator.is_valid(&init));
+        assert!(step_validator.is_valid(&method));
+
+        let mut invalid = init.clone();
+        invalid["callable_kind"] = json!("sync");
+        assert!(!step_validator.is_valid(&invalid));
+        let mut invalid = method.clone();
+        let non_receiver = invalid["arguments"][0].clone();
+        invalid["receiver"] = non_receiver;
+        assert!(!step_validator.is_valid(&invalid));
+        let mut invalid = method.clone();
+        invalid["arguments"][0]["reference"] = Value::Null;
+        assert!(!step_validator.is_valid(&invalid));
+    }
+}
+
 fn generation_snapshot() -> Value {
     json!({
         "generation_id": format!("sha256:{}", "0".repeat(64)),
@@ -468,9 +527,9 @@ fn generation_snapshot() -> Value {
         "project_version": "0.1.0",
         "compatibility": {
             "generation_schema": 8,
-            "canonical_ir_schema": 8,
+            "canonical_ir_schema": 9,
             "runtime_abi": 7,
-            "contract_strategy_schema": 5,
+            "contract_strategy_schema": 6,
         },
         "inputs": {},
         "tools": {},

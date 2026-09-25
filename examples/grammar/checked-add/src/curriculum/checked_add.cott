@@ -9,3 +9,9 @@ fn checked_add(left: I32, right: I32) -> I64:
 
     ensures result >= -4294967296
     ensures result <= 4294967294
+
+scenario signed_limits_do_not_wrap:
+    call low = checked_add(-2147483648, -2147483648)
+    assert low == -4294967296
+    call high = checked_add(2147483647, 2147483647)
+    assert high == 4294967294

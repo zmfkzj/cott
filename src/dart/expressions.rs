@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use serde_json::{Map, Value};
 
 use super::types::{
@@ -6,6 +8,72 @@ use super::types::{
     render_named_arguments, render_type_contextual, render_type_witness_values,
     render_value_contextual,
 };
+
+/// Scenario Dyn values need the trait's closed existential projection, including
+/// associated slots. Lower them before the ordinary expression renderer so
+/// nested constructor fields and container items use the same public facade.
+pub(crate) fn render_scenario_expression(
+    expression: &Value,
+    plan: &super::DartPlan,
+    aliases: &std::collections::BTreeMap<String, String>,
+) -> Result<String, String> {
+    let lowered = lower_scenario_dyn(expression, plan, aliases)?;
+    super::emit::render_consumer_expression(lowered.as_ref(), aliases, plan.enum_projection())
+}
+
+fn lower_scenario_dyn<'a>(
+    expression: &'a Value,
+    plan: &super::DartPlan,
+    aliases: &std::collections::BTreeMap<String, String>,
+) -> Result<Cow<'a, Value>, String> {
+    match expression {
+        Value::Array(items) => {
+            let mut lowered = None;
+            for (index, item) in items.iter().enumerate() {
+                if let Cow::Owned(value) = lower_scenario_dyn(item, plan, aliases)? {
+                    lowered.get_or_insert_with(|| items.clone())[index] = value;
+                }
+            }
+            Ok(lowered.map_or(Cow::Borrowed(expression), |items| {
+                Cow::Owned(Value::Array(items))
+            }))
+        }
+        Value::Object(object) => {
+            if object.get("kind").and_then(Value::as_str) == Some("dyn")
+                && object.contains_key("trait_ref")
+            {
+                let trait_ref = object
+                    .get("trait_ref")
+                    .ok_or("scenario Dyn expression has no trait reference")?;
+                let value = render_scenario_expression(
+                    object
+                        .get("value")
+                        .ok_or("scenario Dyn expression has no value")?,
+                    plan,
+                    aliases,
+                )?;
+                let code = super::emit::render_consumer_dyn(plan, trait_ref, &value, aliases)?;
+                return Ok(Cow::Owned(serde_json::json!({
+                    "kind": "dart_synthetic", "code": code
+                })));
+            }
+            let mut lowered = None;
+            for (name, value) in object {
+                if !matches!(name.as_str(), "type" | "trait_ref" | "span") {
+                    if let Cow::Owned(value) = lower_scenario_dyn(value, plan, aliases)? {
+                        lowered
+                            .get_or_insert_with(|| object.clone())
+                            .insert(name.clone(), value);
+                    }
+                }
+            }
+            Ok(lowered.map_or(Cow::Borrowed(expression), |object| {
+                Cow::Owned(Value::Object(object))
+            }))
+        }
+        _ => Ok(Cow::Borrowed(expression)),
+    }
+}
 
 pub(crate) fn render_expression_contextual(
     expression: &Value,
@@ -123,6 +191,9 @@ pub(crate) fn render_expression_contextual(
                     "fixtureUrl"
                 }
             ))
+        }
+        "unary" | "binary" if integer_type(object.get("type")) => {
+            render_exact_integer(expression, object.get("type"), module, projection)
         }
         "unary" => render_unary(expression, object, module, projection),
         "binary" => render_binary(expression, object, module, projection),
@@ -387,7 +458,7 @@ fn render_intrinsic(
 ) -> Result<String, String> {
     let arguments = required_array(object.get("arguments"), "intrinsic expression.arguments")?
         .iter()
-        .map(|expression| render_expression_contextual(expression, module, projection))
+        .map(|expression| render_operand(expression, module, projection))
         .collect::<Result<Vec<_>, _>>()?;
     let first = arguments
         .first()
@@ -484,6 +555,120 @@ fn intrinsic_selector<'a>(
     Ok((owner, local))
 }
 
+/// An integer-typed arithmetic result in a value position (scenario call
+/// argument, data, constructor field, container item, payload) takes the
+/// exact Dart ABI type of its canonical integer type: `int` for widths up to
+/// 32 bits and `BigInt` for I64/U64. The mathematical result is range-checked.
+fn render_exact_integer(
+    expression: &Value,
+    ty: Option<&Value>,
+    module: Option<&str>,
+    projection: &DartEnumProjection,
+) -> Result<String, String> {
+    let ty = required(ty, "integer expression.type")?;
+    let kind = match primitive_type(Some(ty)) {
+        Some(kind @ ("i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64")) => kind,
+        _ => return Err("exact integer expression requires an integer primitive type".to_owned()),
+    };
+    Ok(format!(
+        "(cott_runtime.CottRuntime.intValue({}, cott_runtime.CottIntKind.{kind}) as {})",
+        render_math_integer(expression, module, projection)?,
+        render_type_contextual(ty, module, None)?
+    ))
+}
+
+/// Operands whose value is only observed by the runtime's canonical
+/// comparison and intrinsic helpers keep integer arithmetic as unbounded
+/// mathematical integers.
+fn render_operand(
+    expression: &Value,
+    module: Option<&str>,
+    projection: &DartEnumProjection,
+) -> Result<String, String> {
+    if is_integer_arithmetic(expression) {
+        render_math_integer(expression, module, projection)
+    } else {
+        render_expression_contextual(expression, module, projection)
+    }
+}
+
+fn is_integer_arithmetic(expression: &Value) -> bool {
+    matches!(
+        expression.get("kind").and_then(Value::as_str),
+        Some("unary" | "binary")
+    ) && integer_type(expression.get("type"))
+}
+
+/// Contract integer arithmetic is exact: every operand is a `BigInt`. An
+/// integer literal operand is its exact decimal, never the width-checked
+/// literal, because a negated minimum such as `-2147483648` has an operand
+/// outside its own type's range.
+fn render_math_integer(
+    expression: &Value,
+    module: Option<&str>,
+    projection: &DartEnumProjection,
+) -> Result<String, String> {
+    let object = expression
+        .as_object()
+        .ok_or_else(|| "canonical contract expression must be an object".to_owned())?;
+    match object.get("kind").and_then(Value::as_str) {
+        Some("literal")
+            if object
+                .get("value")
+                .and_then(|value| value.get("kind"))
+                .and_then(Value::as_str)
+                == Some("integer") =>
+        {
+            let value = required(object.get("value"), "literal expression.value")?;
+            Ok(format!(
+                "cott_runtime.CottRuntime.int({})",
+                dart_string(required_string(value.get("value"), "integer value.value")?)
+            ))
+        }
+        Some("unary") if is_integer_arithmetic(expression) => {
+            let operand = render_math_integer(
+                required(object.get("operand"), "unary expression.operand")?,
+                module,
+                projection,
+            )?;
+            match required_string(object.get("op"), "unary expression.op")? {
+                "plus" => Ok(operand),
+                "minus" => Ok(format!(
+                    "(cott_runtime.CottRuntime.intNegate({operand}) as BigInt)"
+                )),
+                other => Err(format!("unsupported integer unary operator `{other}`")),
+            }
+        }
+        Some("binary") if is_integer_arithmetic(expression) => {
+            let method = match required_string(object.get("op"), "binary expression.op")? {
+                "add" => "intAdd",
+                "subtract" => "intSubtract",
+                "multiply" => "intMultiply",
+                "divide" => "euclideanDivide",
+                "remainder" => "euclideanRemainder",
+                other => return Err(format!("unsupported integer binary operator `{other}`")),
+            };
+            Ok(format!(
+                "(cott_runtime.CottRuntime.{method}({}, {}) as BigInt)",
+                render_math_integer(
+                    required(object.get("left"), "binary expression.left")?,
+                    module,
+                    projection
+                )?,
+                render_math_integer(
+                    required(object.get("right"), "binary expression.right")?,
+                    module,
+                    projection
+                )?
+            ))
+        }
+        _ => Ok(format!(
+            "cott_runtime.CottRuntime.mathInt({})",
+            render_expression_contextual(expression, module, projection)?
+        )),
+    }
+}
+
 fn render_unary(
     expression: &Value,
     object: &Map<String, Value>,
@@ -496,15 +681,6 @@ fn render_unary(
         projection,
     )?;
     let op = required_string(object.get("op"), "unary expression.op")?;
-    if integer_type(expression.get("type")) {
-        return match op {
-            "plus" => Ok(format!("cott_runtime.CottRuntime.mathInt({operand})")),
-            "minus" => Ok(format!(
-                "cott_runtime.CottRuntime.intNegate(cott_runtime.CottRuntime.mathInt({operand}))"
-            )),
-            other => Err(format!("unsupported integer unary operator `{other}`")),
-        };
-    }
     match op {
         "not" => Ok(format!("!({operand})")),
         "plus" => Ok(operand),
@@ -525,39 +701,22 @@ fn render_binary(
     module: Option<&str>,
     projection: &DartEnumProjection,
 ) -> Result<String, String> {
-    let left = render_expression_contextual(
-        required(object.get("left"), "binary expression.left")?,
-        module,
-        projection,
-    )?;
-    let right = render_expression_contextual(
-        required(object.get("right"), "binary expression.right")?,
-        module,
-        projection,
-    )?;
+    let left = required(object.get("left"), "binary expression.left")?;
+    let right = required(object.get("right"), "binary expression.right")?;
     let op = required_string(object.get("op"), "binary expression.op")?;
+    if op == "remainder" {
+        return Ok(format!(
+            "cott_runtime.CottRuntime.euclideanRemainder({}, {})",
+            render_math_integer(left, module, projection)?,
+            render_math_integer(right, module, projection)?
+        ));
+    }
+    let left = render_expression_contextual(left, module, projection)?;
+    let right = render_expression_contextual(right, module, projection)?;
     if matches!(op, "or" | "and") {
         return Ok(format!(
             "(({left}) {} ({right}))",
             if op == "or" { "||" } else { "&&" }
-        ));
-    }
-    if integer_type(expression.get("type")) {
-        let method = match op {
-            "add" => "intAdd",
-            "subtract" => "intSubtract",
-            "multiply" => "intMultiply",
-            "divide" => "euclideanDivide",
-            "remainder" => "euclideanRemainder",
-            other => return Err(format!("unsupported integer binary operator `{other}`")),
-        };
-        return Ok(format!(
-            "cott_runtime.CottRuntime.{method}(cott_runtime.CottRuntime.mathInt({left}), cott_runtime.CottRuntime.mathInt({right}))"
-        ));
-    }
-    if op == "remainder" {
-        return Ok(format!(
-            "cott_runtime.CottRuntime.euclideanRemainder(cott_runtime.CottRuntime.mathInt({left}), cott_runtime.CottRuntime.mathInt({right}))"
         ));
     }
     if let Some(prefix) = match primitive_type(expression.get("type")) {
@@ -593,7 +752,7 @@ fn render_comparison_chain(
 ) -> Result<String, String> {
     let operands = required_array(object.get("operands"), "comparison expression.operands")?
         .iter()
-        .map(|expression| render_expression_contextual(expression, module, projection))
+        .map(|expression| render_operand(expression, module, projection))
         .collect::<Result<Vec<_>, _>>()?;
     let operators = required_array(object.get("operators"), "comparison expression.operators")?;
     if operands.len() != operators.len() + 1 {

@@ -2,11 +2,18 @@
 
 ## Purpose
 
-Demonstrates a multi-module contract that separates the `store.catalog` and `store.order` modules, connecting catalog lookup results to order calculation.
+Demonstrates a multi-module contract: `store.catalog` owns catalog types and lookup, and `store.order` composes that lookup with line validation through public facades.
 
 ## Key points
 
-- `store.catalog` provides `Item`, `Catalog`, `CatalogError`, and `find_item`; it requires a non-empty SKU and returns the item for the requested SKU on success.
-- `store.order` imports the catalog module's `Catalog` and `CatalogError`, and defines `OrderLine`, `Order`, `OrderReceipt`, `validate_line`, and `calculate_order`.
-- `calculate_order` calls `validate_line` through the `store.order` public facade, then `store.catalog.find_item` through its public facade; it propagates the first validation error and wraps catalog `ItemNotFound` as `OrderError.ItemUnavailable`.
-- It returns `OrderError.EmptyOrder` for an empty order, and a successful receipt preserves the original order's `order_id` while calculating quantities and the total in cents.
+- `store.catalog` owns `Item`, `Catalog`, `CatalogError` and `find_item`. A `Catalog` invariant (`unique_by(self.items, Item.sku)`) makes SKUs unique, so a lookup has one answer. `find_item` requires a non-empty SKU, returns an item with that SKU, and names the requested SKU in `ItemNotFound`.
+- `store.order` owns `OrderLine` (invariant: non-empty SKU), `Order`, `OrderReceipt`, `OrderError`, `validate_line` and `calculate_order`, and imports `Catalog` and `CatalogError` from the catalog module.
+- `validate_line` uses `errors complete`: it returns the line unchanged unless its quantity is zero, and then reports `InvalidQuantity` with the line's SKU.
+- `calculate_order` is the composition root. Its formal clauses cover `EmptyOrder` for an empty order and the receipt's `order_id`. Requirements state the rest: validation and pricing go through the `validate_line` and `find_item` facades; lines are processed in order, validating each line before its lookup; the first failure wins, a validation error propagates unchanged and a catalog error becomes `ItemUnavailable(cause)`; the totals count every line at its catalog price. The `doc` defines the totals in cents and leaves totals beyond `U32` items or `U64` cents outside the contract.
+
+## Evidence
+
+- `store.catalog` scenario `lookup_by_sku` checks a found item's name and price and a missing SKU; it backs `RETURNS_CATALOG_ITEM`.
+- End-to-end scenarios live in `store.order` and run the real catalog lookup: `receipt_counts_every_line` checks the totals of an order that repeats a SKU (`RECEIPT_COUNTS_EVERY_LINE`), and `first_failing_line_decides` checks the error priority and the wrapped cause (`FIRST_FAILING_LINE_DECIDES`).
+- `COMPOSES_THROUGH_FACADES` stays `unverified`: no scenario can tell a facade call from duplicated logic that returns the same result.
+- `python/app.py` prints a catalog lookup and a two-line order receipt; the repository test `tests/examples.rs` checks that output. It is a program regression, not Cott evidence.

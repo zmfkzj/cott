@@ -17,11 +17,11 @@ def _field_value(item: MediaItem, name: str, conversion: str, missing_placeholde
 
 
 def render_output_path(item: MediaItem, template: str, missing_placeholder: str) -> Result[str, MediaError]:
-    if len(template) == 0:
+    size: int = len(template)
+    if size == 0:
         return Err(error=MediaError_InvalidTemplate())
     pieces: list[str] = []
     index: int = 0
-    size: int = len(template)
     while index < size:
         ch: str = template[index]
         if ch != "%":
@@ -39,15 +39,11 @@ def render_output_path(item: MediaItem, template: str, missing_placeholder: str)
             return Err(error=MediaError_InvalidTemplate())
         name: str = template[index + 2 : close]
         conversion: str = template[close + 1]
-        if conversion not in ("s", "d") or "%" in name or "(" in name:
+        if len(name) == 0 or "%" in name or "(" in name or conversion not in ("s", "d"):
             return Err(error=MediaError_InvalidTemplate())
         value: str | None = _field_value(item, name, conversion, missing_placeholder)
         if value is None:
             return Err(error=MediaError_InvalidTemplate())
         pieces.append(value)
         index = close + 2
-    path: str = "".join(pieces)
-    bound: int = len(template) * (len(item.id) + len(item.title) + len(item.ext) + len(missing_placeholder) + 20)
-    if len(path) > bound:
-        return Err(error=MediaError_InvalidTemplate())
-    return Ok(value=path)
+    return Ok(value="".join(pieces))

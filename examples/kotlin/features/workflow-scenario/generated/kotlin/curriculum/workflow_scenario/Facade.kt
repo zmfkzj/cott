@@ -4,7 +4,10 @@
 package curriculum.workflow_scenario
 
 /**
- * Apply a result only when it still belongs to the snapshot's newest request.
+ * Apply a resolved result only when it belongs to the snapshot's request.
+ * A matching candidate makes the snapshot Ready with the candidate's result;
+ * a candidate for any other request is stale and leaves the snapshot
+ * unchanged, so an older result can never overwrite a newer request.
  */
 
 public fun  apply_search(snapshot: curriculum.workflow_scenario.SearchSnapshot, candidate: curriculum.workflow_scenario.SearchResult): curriculum.workflow_scenario.SearchSnapshot {
@@ -22,11 +25,17 @@ public fun  apply_search(snapshot: curriculum.workflow_scenario.SearchSnapshot, 
         cott_runtime.CottRuntime.violation("implementation raised an undeclared exception", symbol = "curriculum.workflow_scenario.apply_search", phase = "implementation-call", expected = "declared Result error or ordinary return", actual = error::class.java.name, cause = error)
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, curriculum.workflow_scenario.CottDescriptors_67896165e35eb4706311ede7.type_25d5f866b7e51670e97df5e9(), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
+    if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((_cottResult).request_id, (_cottArg_snapshot).request_id)), "curriculum.workflow_scenario.apply_search", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 2201, endByte = 2281, startLine = 81, startColumn = 5, endLine = 81, endColumn = 85), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((_cottResult).query, (_cottArg_snapshot).query)), "curriculum.workflow_scenario.apply_search", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 2201, endByte = 2281, startLine = 81, startColumn = 5, endLine = 81, endColumn = 85), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract(((!((cott_runtime.CottRuntime.canonicalEqual((_cottArg_candidate).request_id, (_cottArg_snapshot).request_id)))) || ((((cott_runtime.CottRuntime.canonicalEqual((_cottResult).status, curriculum.workflow_scenario.SearchStatus.Ready))) && ((cott_runtime.CottRuntime.canonicalEqual((_cottResult).result, (_cottArg_candidate).result)))))), "curriculum.workflow_scenario.apply_search", "ensures", clause = "ensures:3", span = cott_runtime.CottSpan(startByte = 2286, endByte = 2416, startLine = 82, startColumn = 5, endLine = 82, endColumn = 135), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract(((!((!cott_runtime.CottRuntime.canonicalEqual((_cottArg_candidate).request_id, (_cottArg_snapshot).request_id)))) || ((cott_runtime.CottRuntime.canonicalEqual(_cottResult, _cottArg_snapshot)))), "curriculum.workflow_scenario.apply_search", "ensures", clause = "ensures:4", span = cott_runtime.CottSpan(startByte = 2421, endByte = 2496, startLine = 83, startColumn = 5, endLine = 83, endColumn = 80), expected = "true", actual = "false")
+    }
     return _cottResult
 }
 
 /**
- * Queue the first immutable save request.
+ * Queue the first save request for revision.
  */
 
 public fun  begin_save(revision: kotlin.ULong, text: kotlin.String): curriculum.workflow_scenario.SaveSnapshot {
@@ -34,7 +43,7 @@ public fun  begin_save(revision: kotlin.ULong, text: kotlin.String): curriculum.
     val _cottArg_revision = cott_runtime.CottRuntime.abi(revision, cott_runtime.CottTypes.U64, cott_runtime.RuntimeValidation.BOUNDARY, "\$.revision")
     val _cottArg_text = cott_runtime.CottRuntime.abi(text, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.text")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottArg_revision, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.workflow_scenario.begin_save", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 1404, endByte = 1425, startLine = 72, startColumn = 5, endLine = 72, endColumn = 26), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottArg_revision, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.workflow_scenario.begin_save", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 2643, endByte = 2664, startLine = 92, startColumn = 5, endLine = 92, endColumn = 26), expected = "true", actual = "false")
     }
     val _cottRawResult = try {
         cott_impl.curriculum.workflow_scenario.begin_save(_cottArg_revision, _cottArg_text)
@@ -47,11 +56,17 @@ public fun  begin_save(revision: kotlin.ULong, text: kotlin.String): curriculum.
         cott_runtime.CottRuntime.violation("implementation raised an undeclared exception", symbol = "curriculum.workflow_scenario.begin_save", phase = "implementation-call", expected = "declared Result error or ordinary return", actual = error::class.java.name, cause = error)
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, curriculum.workflow_scenario.CottDescriptors_67896165e35eb4706311ede7.type_d29c10a7708869cfa1e6f247(), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
+    if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((_cottResult).revision, _cottArg_revision)), "curriculum.workflow_scenario.begin_save", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 2670, endByte = 2705, startLine = 94, startColumn = 5, endLine = 94, endColumn = 40), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((_cottResult).text, _cottArg_text)), "curriculum.workflow_scenario.begin_save", "ensures", clause = "ensures:3", span = cott_runtime.CottSpan(startByte = 2710, endByte = 2737, startLine = 95, startColumn = 5, endLine = 95, endColumn = 32), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((_cottResult).status, curriculum.workflow_scenario.SaveStatus.Queued)), "curriculum.workflow_scenario.begin_save", "ensures", clause = "ensures:4", span = cott_runtime.CottSpan(startByte = 2742, endByte = 2784, startLine = 96, startColumn = 5, endLine = 96, endColumn = 47), expected = "true", actual = "false")
+    }
     return _cottResult
 }
 
 /**
- * Start an immutable public search snapshot for the supplied request.
+ * Start the snapshot of a new search request. Nothing is applied yet, so the
+ * snapshot is Loading with applied_request_id 0 and an empty result.
  */
 
 public fun  begin_search(request_id: kotlin.ULong, query: kotlin.String): curriculum.workflow_scenario.SearchSnapshot {
@@ -59,7 +74,7 @@ public fun  begin_search(request_id: kotlin.ULong, query: kotlin.String): curric
     val _cottArg_request_id = cott_runtime.CottRuntime.abi(request_id, cott_runtime.CottTypes.U64, cott_runtime.RuntimeValidation.BOUNDARY, "\$.request_id")
     val _cottArg_query = cott_runtime.CottRuntime.abi(query, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.query")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottArg_request_id, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.workflow_scenario.begin_search", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 828, endByte = 851, startLine = 47, startColumn = 5, endLine = 47, endColumn = 28), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottArg_request_id, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.workflow_scenario.begin_search", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 1059, endByte = 1082, startLine = 49, startColumn = 5, endLine = 49, endColumn = 28), expected = "true", actual = "false")
     }
     val _cottRawResult = try {
         cott_impl.curriculum.workflow_scenario.begin_search(_cottArg_request_id, _cottArg_query)
@@ -72,11 +87,16 @@ public fun  begin_search(request_id: kotlin.ULong, query: kotlin.String): curric
         cott_runtime.CottRuntime.violation("implementation raised an undeclared exception", symbol = "curriculum.workflow_scenario.begin_search", phase = "implementation-call", expected = "declared Result error or ordinary return", actual = error::class.java.name, cause = error)
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, curriculum.workflow_scenario.CottDescriptors_67896165e35eb4706311ede7.type_25d5f866b7e51670e97df5e9(), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
+    if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((_cottResult).request_id, _cottArg_request_id)), "curriculum.workflow_scenario.begin_search", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 1088, endByte = 1127, startLine = 51, startColumn = 5, endLine = 51, endColumn = 44), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((_cottResult).query, _cottArg_query)), "curriculum.workflow_scenario.begin_search", "ensures", clause = "ensures:3", span = cott_runtime.CottSpan(startByte = 1132, endByte = 1161, startLine = 52, startColumn = 5, endLine = 52, endColumn = 34), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((_cottResult).status, curriculum.workflow_scenario.SearchStatus.Loading)), "curriculum.workflow_scenario.begin_search", "ensures", clause = "ensures:4", span = cott_runtime.CottSpan(startByte = 1166, endByte = 1211, startLine = 53, startColumn = 5, endLine = 53, endColumn = 50), expected = "true", actual = "false")
+    }
     return _cottResult
 }
 
 /**
- * Return the public receipt for the currently coalesced save request.
+ * Flush the coalesced save request and return its Flushed receipt.
  */
 
 public fun  flush_save(snapshot: curriculum.workflow_scenario.SaveSnapshot): curriculum.workflow_scenario.SaveReceipt {
@@ -93,11 +113,18 @@ public fun  flush_save(snapshot: curriculum.workflow_scenario.SaveSnapshot): cur
         cott_runtime.CottRuntime.violation("implementation raised an undeclared exception", symbol = "curriculum.workflow_scenario.flush_save", phase = "implementation-call", expected = "declared Result error or ordinary return", actual = error::class.java.name, cause = error)
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, curriculum.workflow_scenario.CottDescriptors_67896165e35eb4706311ede7.type_a36d5c0747f38f15ccf3b3b1(), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
+    if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((_cottResult).revision, (_cottArg_snapshot).revision)), "curriculum.workflow_scenario.flush_save", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 3517, endByte = 3561, startLine = 119, startColumn = 5, endLine = 119, endColumn = 49), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((_cottResult).text, (_cottArg_snapshot).text)), "curriculum.workflow_scenario.flush_save", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 3566, endByte = 3602, startLine = 120, startColumn = 5, endLine = 120, endColumn = 41), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((_cottResult).status, curriculum.workflow_scenario.SaveStatus.Flushed)), "curriculum.workflow_scenario.flush_save", "ensures", clause = "ensures:3", span = cott_runtime.CottSpan(startByte = 3607, endByte = 3650, startLine = 121, startColumn = 5, endLine = 121, endColumn = 48), expected = "true", actual = "false")
+    }
     return _cottResult
 }
 
 /**
- * Coalesce a newer save request into the public queued snapshot.
+ * Coalesce a save request into the pending snapshot. Only a strictly newer
+ * revision replaces the pending request and queues it; an equal or older
+ * revision is ignored and the snapshot is returned unchanged.
  */
 
 public fun  request_save(snapshot: curriculum.workflow_scenario.SaveSnapshot, revision: kotlin.ULong, text: kotlin.String): curriculum.workflow_scenario.SaveSnapshot {
@@ -106,7 +133,7 @@ public fun  request_save(snapshot: curriculum.workflow_scenario.SaveSnapshot, re
     val _cottArg_revision = cott_runtime.CottRuntime.abi(revision, cott_runtime.CottTypes.U64, cott_runtime.RuntimeValidation.BOUNDARY, "\$.revision")
     val _cottArg_text = cott_runtime.CottRuntime.abi(text, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.text")
     if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottArg_revision, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.workflow_scenario.request_save", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 1618, endByte = 1639, startLine = 81, startColumn = 5, endLine = 81, endColumn = 26), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottArg_revision, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.workflow_scenario.request_save", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 3126, endByte = 3147, startLine = 107, startColumn = 5, endLine = 107, endColumn = 26), expected = "true", actual = "false")
     }
     val _cottRawResult = try {
         cott_impl.curriculum.workflow_scenario.request_save(_cottArg_snapshot, _cottArg_revision, _cottArg_text)
@@ -119,11 +146,17 @@ public fun  request_save(snapshot: curriculum.workflow_scenario.SaveSnapshot, re
         cott_runtime.CottRuntime.violation("implementation raised an undeclared exception", symbol = "curriculum.workflow_scenario.request_save", phase = "implementation-call", expected = "declared Result error or ordinary return", actual = error::class.java.name, cause = error)
     }
     val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, curriculum.workflow_scenario.CottDescriptors_67896165e35eb4706311ede7.type_d29c10a7708869cfa1e6f247(), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
+    if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
+        cott_runtime.CottRuntime.checkContract(((!((cott_runtime.CottRuntime.canonicalCompare(_cottArg_revision, (_cottArg_snapshot).revision) > 0))) || ((((((cott_runtime.CottRuntime.canonicalEqual((_cottResult).revision, _cottArg_revision))) && ((cott_runtime.CottRuntime.canonicalEqual((_cottResult).text, _cottArg_text))))) && ((cott_runtime.CottRuntime.canonicalEqual((_cottResult).status, curriculum.workflow_scenario.SaveStatus.Queued)))))), "curriculum.workflow_scenario.request_save", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 3153, endByte = 3285, startLine = 109, startColumn = 5, endLine = 109, endColumn = 137), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract(((!((cott_runtime.CottRuntime.canonicalCompare(_cottArg_revision, (_cottArg_snapshot).revision) <= 0))) || ((cott_runtime.CottRuntime.canonicalEqual(_cottResult, _cottArg_snapshot)))), "curriculum.workflow_scenario.request_save", "ensures", clause = "ensures:3", span = cott_runtime.CottSpan(startByte = 3290, endByte = 3351, startLine = 110, startColumn = 5, endLine = 110, endColumn = 66), expected = "true", actual = "false")
+    }
     return _cottResult
 }
 
 /**
- * Resolve one immutable search result without observing host state.
+ * Resolve one search request without observing host state. This lesson's
+ * resolver is a deterministic stand-in: the result text is the query followed
+ * by " result", so query "new" resolves to "new result".
  */
 
 public suspend fun  resolve_search(request_id: kotlin.ULong, query: kotlin.String): curriculum.workflow_scenario.SearchResult {
@@ -131,7 +164,7 @@ public suspend fun  resolve_search(request_id: kotlin.ULong, query: kotlin.Strin
     val _cottArg_request_id = cott_runtime.CottRuntime.abiSuspend(request_id, cott_runtime.CottTypes.U64, cott_runtime.RuntimeValidation.BOUNDARY, "\$.request_id")
     val _cottArg_query = cott_runtime.CottRuntime.abiSuspend(query, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.query")
     if (cott_runtime.CottRuntime.contractsEnabledSuspend(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        cott_runtime.CottRuntime.checkContractSuspend((cott_runtime.CottRuntime.canonicalCompare(_cottArg_request_id, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.workflow_scenario.resolve_search", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 1034, endByte = 1057, startLine = 56, startColumn = 5, endLine = 56, endColumn = 28), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContractSuspend((cott_runtime.CottRuntime.canonicalCompare(_cottArg_request_id, java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.workflow_scenario.resolve_search", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 1538, endByte = 1561, startLine = 64, startColumn = 5, endLine = 64, endColumn = 28), expected = "true", actual = "false")
     }
     val _cottRawResult = try {
         cott_impl.curriculum.workflow_scenario.resolve_search(_cottArg_request_id, _cottArg_query)
@@ -144,5 +177,11 @@ public suspend fun  resolve_search(request_id: kotlin.ULong, query: kotlin.Strin
         cott_runtime.CottRuntime.violation("implementation raised an undeclared exception", symbol = "curriculum.workflow_scenario.resolve_search", phase = "implementation-call", expected = "declared Result error or ordinary return", actual = error::class.java.name, cause = error)
     }
     val _cottResult = cott_runtime.CottRuntime.returnValueSuspend(_cottRawResult, curriculum.workflow_scenario.CottDescriptors_67896165e35eb4706311ede7.type_d59a5c7d86c4d460f13a54b8(), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
+    if (cott_runtime.CottRuntime.contractsEnabledSuspend(cott_runtime.RuntimeValidation.BOUNDARY)) {
+        cott_runtime.CottRuntime.checkContractSuspend((cott_runtime.CottRuntime.canonicalEqual((_cottResult).request_id, _cottArg_request_id)), "curriculum.workflow_scenario.resolve_search", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 1567, endByte = 1606, startLine = 66, startColumn = 5, endLine = 66, endColumn = 44), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContractSuspend((cott_runtime.CottRuntime.canonicalEqual((_cottResult).query, _cottArg_query)), "curriculum.workflow_scenario.resolve_search", "ensures", clause = "ensures:3", span = cott_runtime.CottSpan(startByte = 1611, endByte = 1640, startLine = 67, startColumn = 5, endLine = 67, endColumn = 34), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContractSuspend(((cott_runtime.CottRuntime.startsWith((_cottResult).result, _cottArg_query)) && (cott_runtime.CottRuntime.endsWith((_cottResult).result, " result"))), "curriculum.workflow_scenario.resolve_search", "ensures", clause = "ensures:4", span = cott_runtime.CottSpan(startByte = 1645, endByte = 1728, startLine = 68, startColumn = 5, endLine = 68, endColumn = 88), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContractSuspend((cott_runtime.CottRuntime.canonicalEqual(cott_runtime.CottRuntime.length((_cottResult).result), cott_runtime.CottRuntime.intAdd(cott_runtime.CottRuntime.mathInt(cott_runtime.CottRuntime.length(_cottArg_query)), cott_runtime.CottRuntime.int("7")))), "curriculum.workflow_scenario.resolve_search", "ensures", clause = "ensures:5", span = cott_runtime.CottSpan(startByte = 1733, endByte = 1775, startLine = 69, startColumn = 5, endLine = 69, endColumn = 47), expected = "true", actual = "false")
+    }
     return _cottResult
 }

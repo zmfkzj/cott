@@ -1,5 +1,4 @@
 import json
-from typing import assert_never
 
 from cott_runtime import CottList
 from real.yt_dlp_types import JsonMode, JsonMode_Lines, JsonMode_Single, MediaItem
@@ -16,5 +15,3 @@ def render_items(items: CottList[MediaItem], mode: JsonMode) -> str:
             return "\n".join(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) for obj in objects)
         case JsonMode_Single():
             return json.dumps(objects, ensure_ascii=False, separators=(",", ":"))
-        case _:
-            assert_never(mode)

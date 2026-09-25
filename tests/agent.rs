@@ -347,6 +347,12 @@ fn prompt_scopes_intent_against_unrelated_input() {
     assert!(!output.contains("Factory["));
     assert!(!output.contains("Dyn["));
     assert!(output.contains("_cott_fixture_"));
+    // The exact runtime message lets agents select host I/O without project rules restating it.
+    assert!(output.contains("`.message` is exactly `\"fixture adapters are inactive\"`"));
+    assert!(output.contains(
+        "host standard-library I/O only when that call raises the inactive-adapter violation"
+    ));
+    assert!(output.contains("__cause__` is the original `OSError`"));
     assert!(!output.contains("CottArray(values="));
 }
 

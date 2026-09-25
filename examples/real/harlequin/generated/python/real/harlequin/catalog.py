@@ -9,138 +9,159 @@ from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 from cott_runtime import _cott_contract_condition
+from cott_runtime import _cott_ends_with, _cott_unique_by
 
 from real.harlequin.catalog_types import CatalogColumn, CatalogError, CatalogError_ConnectionMissing, CatalogError_Failed, CatalogError_LimitExceeded, CatalogError_NamespaceMissing, CatalogMatch, CatalogMatchKind, CatalogMatchKind_Column, CatalogMatchKind_Relation, CatalogRelation, CatalogScope, CatalogSnapshot, CompletionRequest, CompletionResult, RelationKind, RelationKind_Table, RelationKind_View
 from real.harlequin.core_types import Connection, DatabaseTarget, SqlClientError
 
 def catalog_relations(database: DatabaseTarget) -> Result[CottList[CatalogRelation], SqlClientError]:
+    """List the tables and views of a standalone SQLite database's main schema with
+sqlite3, independent of any live connection. Memory is a fresh empty in-memory
+database for this call, so it lists nothing; File(path) opens that existing file
+with mode=ro and never creates it. Rows come from sqlite_schema entries of type
+table or view whose name does not start with "sqlite_", ordered by name in
+Python string order. sql is the stored CREATE text, Nothing when it is SQL NULL.
+Any SQLite failure, including a missing file, is SqliteFailure with SQLite's
+message."""
     database = _cott_validate_abi(database, DatabaseTarget, path="$.database")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/catalog/catalog_relations.py", "90b7f10239c14389d9b615f85c14891a749605b5ff005cbe0242efa9208e1519", "catalog_relations", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.catalog.catalog_relations")
+        _implementation = _cott_load("_cott_impl/real/harlequin/catalog/catalog_relations.py", "e6e32fca774692887f0e3f5e924b25e0c7c8eed2590be6e26828b5d0ad326d3f", "catalog_relations", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.catalog.catalog_relations")
         _result = _implementation(database)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.catalog.catalog_relations"
         if _error.span is None:
-            _error.span = {"end_byte":1310,"end_column":1,"end_line":66,"start_byte":1083,"start_column":1,"start_line":59}
+            _error.span = {"end_byte":2478,"end_column":1,"end_line":91,"start_byte":1620,"start_column":1,"start_line":73}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.catalog.catalog_relations", phase="implementation-call", span={"end_byte":1310,"end_column":1,"end_line":66,"start_byte":1083,"start_column":1,"start_line":59}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.catalog.catalog_relations", phase="implementation-call", span={"end_byte":2478,"end_column":1,"end_line":91,"start_byte":1620,"start_column":1,"start_line":73}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.catalog.catalog_relations", phase="implementation-call", span={"end_byte":1310,"end_column":1,"end_line":66,"start_byte":1083,"start_column":1,"start_line":59}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.catalog.catalog_relations", phase="implementation-call", span={"end_byte":2478,"end_column":1,"end_line":91,"start_byte":1620,"start_column":1,"start_line":73}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[CatalogRelation], SqlClientError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.catalog.catalog_relations", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (SqlClientError_SqliteFailure,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.catalog.catalog_relations", phase="error", span={"end_byte":1310,"end_column":1,"end_line":66,"start_byte":1083,"start_column":1,"start_line":59}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.catalog.catalog_relations", phase="error", span={"end_byte":2478,"end_column":1,"end_line":91,"start_byte":1620,"start_column":1,"start_line":73}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.catalog.catalog_relations", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
         _cott_contract_condition(True, "real.harlequin.catalog.catalog_relations", _expected_error_clause)
     if type(_result) is Err and type(_result.error) is SqlClientError_SqliteFailure:
-        _cott_contract_condition(True, "real.harlequin.catalog.catalog_relations", "error:1")
-    def _cott_match_ensures_0() -> bool:
+        _cott_contract_condition(True, "real.harlequin.catalog.catalog_relations", "error:2")
+    def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             relations = _cott_match_value.value
-            return (_cott_contract_condition(((len(relations) <= 100000)), "real.harlequin.catalog.catalog_relations", "ensures:0"))
-        _cott_contract_condition((False), "real.harlequin.catalog.catalog_relations", "ensures:0:applicable")
+            return (_cott_contract_condition((_cott_unique_by(relations, "name")), "real.harlequin.catalog.catalog_relations", "ensures:1"))
+        _cott_contract_condition((False), "real.harlequin.catalog.catalog_relations", "ensures:1:applicable")
         return True
-    if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.catalog_relations", clause="ensures:0", phase="ensures", span={"end_byte":1239,"end_column":60,"end_line":60,"start_byte":1184,"start_column":5,"start_line":60}, expected="true", actual="false")
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.catalog_relations", clause="ensures:1", phase="ensures", span={"end_byte":2407,"end_column":79,"end_line":85,"start_byte":2333,"start_column":5,"start_line":85}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[CatalogRelation], SqlClientError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def catalog_columns(database: DatabaseTarget, relation: str) -> Result[CottList[CatalogColumn], SqlClientError]:
+    """Describe one relation of the same standalone main schema from PRAGMA table_info,
+in declaration order. Every column's relation is the requested name; not_null
+reflects NOT NULL and default_sql is Nothing when there is no default. A
+relation that does not exist, which includes every relation of a Memory
+database, is SqliteFailure("no such relation"). Other SQLite failures are
+SqliteFailure with SQLite's message."""
     database = _cott_validate_abi(database, DatabaseTarget, path="$.database")
     relation = _cott_validate_abi(relation, str, path="$.relation")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/catalog/catalog_columns.py", "5589396eaffa7c7472e52c8eab8128ebfaaa235363dc3dcac3a9fccee8c36224", "catalog_columns", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.catalog.catalog_columns")
+        _implementation = _cott_load("_cott_impl/real/harlequin/catalog/catalog_columns.py", "3f09c3785f389c452a184fe9796ebdfa3b82136a7ab3cdd719d70153e10b225a", "catalog_columns", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.catalog.catalog_columns")
         _result = _implementation(database, relation)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.catalog.catalog_columns"
         if _error.span is None:
-            _error.span = {"end_byte":1554,"end_column":1,"end_line":76,"start_byte":1310,"start_column":1,"start_line":66}
+            _error.span = {"end_byte":3400,"end_column":1,"end_line":113,"start_byte":2655,"start_column":1,"start_line":94}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.catalog.catalog_columns", phase="implementation-call", span={"end_byte":1554,"end_column":1,"end_line":76,"start_byte":1310,"start_column":1,"start_line":66}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.catalog.catalog_columns", phase="implementation-call", span={"end_byte":3400,"end_column":1,"end_line":113,"start_byte":2655,"start_column":1,"start_line":94}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.catalog.catalog_columns", phase="implementation-call", span={"end_byte":1554,"end_column":1,"end_line":76,"start_byte":1310,"start_column":1,"start_line":66}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.catalog.catalog_columns", phase="implementation-call", span={"end_byte":3400,"end_column":1,"end_line":113,"start_byte":2655,"start_column":1,"start_line":94}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[CatalogColumn], SqlClientError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.catalog.catalog_columns", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (SqlClientError_SqliteFailure,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.catalog.catalog_columns", phase="error", span={"end_byte":1554,"end_column":1,"end_line":76,"start_byte":1310,"start_column":1,"start_line":66}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.catalog.catalog_columns", phase="error", span={"end_byte":3400,"end_column":1,"end_line":113,"start_byte":2655,"start_column":1,"start_line":94}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.catalog.catalog_columns", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
         _cott_contract_condition(True, "real.harlequin.catalog.catalog_columns", _expected_error_clause)
     if type(_result) is Err and type(_result.error) is SqlClientError_SqliteFailure:
-        _cott_contract_condition(True, "real.harlequin.catalog.catalog_columns", "error:1")
-    def _cott_match_ensures_0() -> bool:
+        _cott_contract_condition(True, "real.harlequin.catalog.catalog_columns", "error:2")
+    def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             columns = _cott_match_value.value
-            return (_cott_contract_condition(((len(columns) <= 65535)), "real.harlequin.catalog.catalog_columns", "ensures:0"))
-        _cott_contract_condition((False), "real.harlequin.catalog.catalog_columns", "ensures:0:applicable")
+            return (_cott_contract_condition((((len(columns) > 0) and _cott_unique_by(columns, "ordinal"))), "real.harlequin.catalog.catalog_columns", "ensures:1"))
+        _cott_contract_condition((False), "real.harlequin.catalog.catalog_columns", "ensures:1:applicable")
         return True
-    if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.catalog_columns", clause="ensures:0", phase="ensures", span={"end_byte":1483,"end_column":55,"end_line":70,"start_byte":1433,"start_column":5,"start_line":70}, expected="true", actual="false")
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.catalog_columns", clause="ensures:1", phase="ensures", span={"end_byte":3329,"end_column":96,"end_line":107,"start_byte":3238,"start_column":5,"start_line":107}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[CatalogColumn], SqlClientError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def search_catalog(database: DatabaseTarget, term: str) -> Result[CottList[CatalogMatch], SqlClientError]:
+    """Search the same standalone main schema for relations and columns whose name
+contains term after Unicode case folding (Python str.casefold); an empty term
+matches everything. Relations are visited in catalog_relations order; each
+relation contributes its own match first and then its matching columns in
+column order. The result stops after the first 1000 matches without error.
+SQLite failures are SqliteFailure with SQLite's message."""
     database = _cott_validate_abi(database, DatabaseTarget, path="$.database")
     term = _cott_validate_abi(term, str, path="$.term")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/catalog/search_catalog.py", "6f53c42dbe2454afc7c3c20b17717b91682098a74941a12e250aed3a09e3ce51", "search_catalog", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.catalog.search_catalog")
+        _implementation = _cott_load("_cott_impl/real/harlequin/catalog/search_catalog.py", "c411beb3fcc34e8f2d35d0df8c4bb8330d99e3473891464e0dbd82306ce9aa4b", "search_catalog", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.catalog.search_catalog")
         _result = _implementation(database, term)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.catalog.search_catalog"
         if _error.span is None:
-            _error.span = {"end_byte":1807,"end_column":1,"end_line":86,"start_byte":1554,"start_column":1,"start_line":76}
+            _error.span = {"end_byte":4291,"end_column":1,"end_line":135,"start_byte":3558,"start_column":1,"start_line":116}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.catalog.search_catalog", phase="implementation-call", span={"end_byte":1807,"end_column":1,"end_line":86,"start_byte":1554,"start_column":1,"start_line":76}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.catalog.search_catalog", phase="implementation-call", span={"end_byte":4291,"end_column":1,"end_line":135,"start_byte":3558,"start_column":1,"start_line":116}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.catalog.search_catalog", phase="implementation-call", span={"end_byte":1807,"end_column":1,"end_line":86,"start_byte":1554,"start_column":1,"start_line":76}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.catalog.search_catalog", phase="implementation-call", span={"end_byte":4291,"end_column":1,"end_line":135,"start_byte":3558,"start_column":1,"start_line":116}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[CatalogMatch], SqlClientError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.catalog.search_catalog", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (SqlClientError_SqliteFailure,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.catalog.search_catalog", phase="error", span={"end_byte":1807,"end_column":1,"end_line":86,"start_byte":1554,"start_column":1,"start_line":76}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.catalog.search_catalog", phase="error", span={"end_byte":4291,"end_column":1,"end_line":135,"start_byte":3558,"start_column":1,"start_line":116}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.catalog.search_catalog", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
         _cott_contract_condition(True, "real.harlequin.catalog.search_catalog", _expected_error_clause)
     if type(_result) is Err and type(_result.error) is SqlClientError_SqliteFailure:
-        _cott_contract_condition(True, "real.harlequin.catalog.search_catalog", "error:1")
-    def _cott_match_ensures_0() -> bool:
+        _cott_contract_condition(True, "real.harlequin.catalog.search_catalog", "error:2")
+    def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             catalog_matches = _cott_match_value.value
-            return (_cott_contract_condition(((len(catalog_matches) <= 1000)), "real.harlequin.catalog.search_catalog", "ensures:0"))
-        _cott_contract_condition((False), "real.harlequin.catalog.search_catalog", "ensures:0:applicable")
+            return (_cott_contract_condition(((len(catalog_matches) <= 1000)), "real.harlequin.catalog.search_catalog", "ensures:1"))
+        _cott_contract_condition((False), "real.harlequin.catalog.search_catalog", "ensures:1:applicable")
         return True
-    if not (_cott_match_ensures_0()):
-        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.search_catalog", clause="ensures:0", phase="ensures", span={"end_byte":1736,"end_column":70,"end_line":80,"start_byte":1671,"start_column":5,"start_line":80}, expected="true", actual="false")
+    if not (_cott_match_ensures_1()):
+        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.search_catalog", clause="ensures:1", phase="ensures", span={"end_byte":4220,"end_column":70,"end_line":129,"start_byte":4155,"start_column":5,"start_line":129}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[CatalogMatch], SqlClientError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -256,16 +277,16 @@ Malformed endpoint data, missing drivers, authentication, transport, permission
 and metadata API failures return Failed with a fixed nonsecret category message.
 Never include endpoint values, credentials, or raw driver exception text.
 On success read the real clock after enumeration and set refreshed_at to UTC
-ISO-8601 with six fractional digits and a trailing Z. No empty/stub timestamp."""
+ISO-8601 in the form YYYY-MM-DDTHH:MM:SS.ffffffZ (six fractional digits)."""
     connection = _cott_validate_abi(connection, Connection, path="$.connection")
     scope = _cott_validate_abi(scope, CatalogScope, path="$.scope")
     _expected_error = None
     _expected_error_span = None
     _expected_error_clause = None
-    if _expected_error is None and (_cott_contract_condition(((((connection).id == "") or ((scope).connection_id != (connection).id))), "real.harlequin.catalog.refresh_catalog", "error:7:condition")):
+    if _expected_error is None and (_cott_contract_condition(((((connection).id == "") or ((scope).connection_id != (connection).id))), "real.harlequin.catalog.refresh_catalog", "error:5:condition")):
         _expected_error = CatalogError_ConnectionMissing
-        _expected_error_span = {"end_byte":10879,"end_column":108,"end_line":212,"start_byte":10776,"start_column":5,"start_line":212}
-        _expected_error_clause = "error:7"
+        _expected_error_span = {"end_byte":13451,"end_column":108,"end_line":262,"start_byte":13348,"start_column":5,"start_line":262}
+        _expected_error_clause = "error:5"
     try:
         _implementation = _cott_load("_cott_impl/real/harlequin/catalog/refresh_catalog.py", "3acd0c87612dadd5c79e38f65b9f913fb2a1c2785ac1bfc89e76143de7413e16", "refresh_catalog", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.catalog.refresh_catalog")
         _result = _implementation(connection, scope)
@@ -273,105 +294,103 @@ ISO-8601 with six fractional digits and a trailing Z. No empty/stub timestamp.""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.catalog.refresh_catalog"
         if _error.span is None:
-            _error.span = {"end_byte":11033,"end_column":1,"end_line":219,"start_byte":1807,"start_column":1,"start_line":86}
+            _error.span = {"end_byte":13605,"end_column":1,"end_line":269,"start_byte":4467,"start_column":1,"start_line":138}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.catalog.refresh_catalog", phase="implementation-call", span={"end_byte":11033,"end_column":1,"end_line":219,"start_byte":1807,"start_column":1,"start_line":86}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.catalog.refresh_catalog", phase="implementation-call", span={"end_byte":13605,"end_column":1,"end_line":269,"start_byte":4467,"start_column":1,"start_line":138}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.catalog.refresh_catalog", phase="implementation-call", span={"end_byte":11033,"end_column":1,"end_line":219,"start_byte":1807,"start_column":1,"start_line":86}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.catalog.refresh_catalog", phase="implementation-call", span={"end_byte":13605,"end_column":1,"end_line":269,"start_byte":4467,"start_column":1,"start_line":138}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CatalogSnapshot, CatalogError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.catalog.refresh_catalog", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (CatalogError_NamespaceMissing, CatalogError_Failed, CatalogError_LimitExceeded,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.catalog.refresh_catalog", phase="error", span={"end_byte":11033,"end_column":1,"end_line":219,"start_byte":1807,"start_column":1,"start_line":86}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.catalog.refresh_catalog", phase="error", span={"end_byte":13605,"end_column":1,"end_line":269,"start_byte":4467,"start_column":1,"start_line":138}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.catalog.refresh_catalog", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
         _cott_contract_condition(True, "real.harlequin.catalog.refresh_catalog", _expected_error_clause)
     if type(_result) is Err and type(_result.error) is CatalogError_NamespaceMissing:
-        _cott_contract_condition(True, "real.harlequin.catalog.refresh_catalog", "error:8")
+        _cott_contract_condition(True, "real.harlequin.catalog.refresh_catalog", "error:6")
     if type(_result) is Err and type(_result.error) is CatalogError_Failed:
-        _cott_contract_condition(True, "real.harlequin.catalog.refresh_catalog", "error:9")
+        _cott_contract_condition(True, "real.harlequin.catalog.refresh_catalog", "error:7")
     if type(_result) is Err and type(_result.error) is CatalogError_LimitExceeded:
-        _cott_contract_condition(True, "real.harlequin.catalog.refresh_catalog", "error:10")
+        _cott_contract_condition(True, "real.harlequin.catalog.refresh_catalog", "error:8")
     def _cott_match_ensures_1() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             snapshot = _cott_match_value.value
-            return (_cott_contract_condition(((len((snapshot).relations) <= 100000)), "real.harlequin.catalog.refresh_catalog", "ensures:1"))
+            return (_cott_contract_condition(((((snapshot).scope == scope) and (len((snapshot).relations) <= 100000))), "real.harlequin.catalog.refresh_catalog", "ensures:1"))
         _cott_contract_condition((False), "real.harlequin.catalog.refresh_catalog", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.refresh_catalog", clause="ensures:1", phase="ensures", span={"end_byte":10373,"end_column":68,"end_line":205,"start_byte":10310,"start_column":5,"start_line":205}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.refresh_catalog", clause="ensures:1", phase="ensures", span={"end_byte":13056,"end_column":96,"end_line":257,"start_byte":12965,"start_column":5,"start_line":257}, expected="true", actual="false")
     def _cott_match_ensures_2() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Ok and True:
             snapshot = _cott_match_value.value
-            return (_cott_contract_condition((((snapshot).scope == scope)), "real.harlequin.catalog.refresh_catalog", "ensures:2"))
+            return (_cott_contract_condition((((len((snapshot).refreshed_at) == 27) and _cott_ends_with((snapshot).refreshed_at, "Z"))), "real.harlequin.catalog.refresh_catalog", "ensures:2"))
         _cott_contract_condition((False), "real.harlequin.catalog.refresh_catalog", "ensures:2:applicable")
         return True
     if not (_cott_match_ensures_2()):
-        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.refresh_catalog", clause="ensures:2", phase="ensures", span={"end_byte":10432,"end_column":59,"end_line":206,"start_byte":10378,"start_column":5,"start_line":206}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.refresh_catalog", clause="ensures:2", phase="ensures", span={"end_byte":13167,"end_column":111,"end_line":258,"start_byte":13061,"start_column":5,"start_line":258}, expected="true", actual="false")
     def _cott_match_ensures_3() -> bool:
-        _cott_match_value = _result
-        if type(_cott_match_value) is Ok and True:
-            snapshot = _cott_match_value.value
-            return (_cott_contract_condition(((len((snapshot).refreshed_at) > 0)), "real.harlequin.catalog.refresh_catalog", "ensures:3"))
-        _cott_contract_condition((False), "real.harlequin.catalog.refresh_catalog", "ensures:3:applicable")
-        return True
-    if not (_cott_match_ensures_3()):
-        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.refresh_catalog", clause="ensures:3", phase="ensures", span={"end_byte":10497,"end_column":65,"end_line":207,"start_byte":10437,"start_column":5,"start_line":207}, expected="true", actual="false")
-    def _cott_match_ensures_4() -> bool:
-        _cott_match_value = _result
-        if type(_cott_match_value) is Ok and True:
-            snapshot = _cott_match_value.value
-            return (_cott_contract_condition((((len((connection).id) > 0) and ((scope).connection_id == (connection).id))), "real.harlequin.catalog.refresh_catalog", "ensures:4"))
-        _cott_contract_condition((False), "real.harlequin.catalog.refresh_catalog", "ensures:4:applicable")
-        return True
-    if not (_cott_match_ensures_4()):
-        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.refresh_catalog", clause="ensures:4", phase="ensures", span={"end_byte":10595,"end_column":98,"end_line":208,"start_byte":10502,"start_column":5,"start_line":208}, expected="true", actual="false")
-    def _cott_match_ensures_5() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Err and type(_cott_match_value.error) is CatalogError_ConnectionMissing and True:
             missing = getattr(_cott_match_value.error, _dataclasses.fields(type(_cott_match_value.error))[0].name)
-            return (_cott_contract_condition(((missing == (scope).connection_id)), "real.harlequin.catalog.refresh_catalog", "ensures:5"))
-        _cott_contract_condition((False), "real.harlequin.catalog.refresh_catalog", "ensures:5:applicable")
+            return (_cott_contract_condition(((missing == (scope).connection_id)), "real.harlequin.catalog.refresh_catalog", "ensures:3"))
+        _cott_contract_condition((False), "real.harlequin.catalog.refresh_catalog", "ensures:3:applicable")
         return True
-    if not (_cott_match_ensures_5()):
-        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.refresh_catalog", clause="ensures:5", phase="ensures", span={"end_byte":10693,"end_column":98,"end_line":209,"start_byte":10600,"start_column":5,"start_line":209}, expected="true", actual="false")
-    def _cott_match_ensures_6() -> bool:
+    if not (_cott_match_ensures_3()):
+        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.refresh_catalog", clause="ensures:3", phase="ensures", span={"end_byte":13265,"end_column":98,"end_line":259,"start_byte":13172,"start_column":5,"start_line":259}, expected="true", actual="false")
+    def _cott_match_ensures_4() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Err and type(_cott_match_value.error) is CatalogError_LimitExceeded and True:
             limit = getattr(_cott_match_value.error, _dataclasses.fields(type(_cott_match_value.error))[0].name)
-            return (_cott_contract_condition(((limit == 100000)), "real.harlequin.catalog.refresh_catalog", "ensures:6"))
-        _cott_contract_condition((False), "real.harlequin.catalog.refresh_catalog", "ensures:6:applicable")
+            return (_cott_contract_condition(((limit == 100000)), "real.harlequin.catalog.refresh_catalog", "ensures:4"))
+        _cott_contract_condition((False), "real.harlequin.catalog.refresh_catalog", "ensures:4:applicable")
         return True
-    if not (_cott_match_ensures_6()):
-        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.refresh_catalog", clause="ensures:6", phase="ensures", span={"end_byte":10770,"end_column":77,"end_line":210,"start_byte":10698,"start_column":5,"start_line":210}, expected="true", actual="false")
+    if not (_cott_match_ensures_4()):
+        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.refresh_catalog", clause="ensures:4", phase="ensures", span={"end_byte":13342,"end_column":77,"end_line":260,"start_byte":13270,"start_column":5,"start_line":260}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CatalogSnapshot, CatalogError], path="$.return", validator=_cott_validate_abi)
     return _result
 
 def complete_sql(request: CompletionRequest, snapshot: CatalogSnapshot) -> CompletionResult:
+    """Offer completions for the identifier being typed at request.cursor. The typed
+prefix is the longest run of ASCII letters, ASCII digits and "_" ending at the
+cursor; replace_start is where it begins and replace_end is the cursor. An empty
+prefix offers no candidates. A candidate matches when it starts with the prefix
+ignoring ASCII case. Relation names come first, in snapshot order, and only when
+request.scope equals snapshot.scope; then these keywords in this order: SELECT,
+FROM, WHERE, GROUP, BY, ORDER, HAVING, LIMIT, JOIN, LEFT, INNER, ON, AS, AND, OR,
+NOT, NULL, INSERT, INTO, VALUES, UPDATE, SET, DELETE, CREATE, TABLE, VIEW, DROP,
+WITH, DISTINCT, UNION. A candidate equal to an earlier one is skipped, spelling is
+kept, and at most maximum_candidates are returned."""
     request = _cott_validate_abi(request, CompletionRequest, path="$.request")
     snapshot = _cott_validate_abi(snapshot, CatalogSnapshot, path="$.snapshot")
+    if not (_cott_contract_condition((((request).cursor <= len((request).source))), "real.harlequin.catalog.complete_sql", "requires:1")):
+        raise CottContractViolation("requires clause failed", symbol="real.harlequin.catalog.complete_sql", clause="requires:1", phase="requires", span={"end_byte":15293,"end_column":50,"end_line":299,"start_byte":15248,"start_column":5,"start_line":299}, expected="true", actual="false")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/catalog/complete_sql.py", "db485122aee380d8d90fb1b8cd58faf42e4f51c3f8299af86e069d48152524b4", "complete_sql", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.catalog.complete_sql")
+        _implementation = _cott_load("_cott_impl/real/harlequin/catalog/complete_sql.py", "c0f2476c3a2618ea62f7f5bb9ca6f89c0092a076f61a295c96846f8032e87ed9", "complete_sql", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.catalog.complete_sql")
         _result = _implementation(request, snapshot)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.catalog.complete_sql"
         if _error.span is None:
-            _error.span = {"end_byte":11206,"end_column":1,"end_line":224,"start_byte":11033,"start_column":1,"start_line":219}
+            _error.span = {"end_byte":15480,"end_column":1,"end_line":307,"start_byte":14315,"start_column":1,"start_line":285}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.catalog.complete_sql", phase="implementation-call", span={"end_byte":11206,"end_column":1,"end_line":224,"start_byte":11033,"start_column":1,"start_line":219}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.catalog.complete_sql", phase="implementation-call", span={"end_byte":15480,"end_column":1,"end_line":307,"start_byte":14315,"start_column":1,"start_line":285}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.catalog.complete_sql", phase="implementation-call", span={"end_byte":11206,"end_column":1,"end_line":224,"start_byte":11033,"start_column":1,"start_line":219}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.catalog.complete_sql", phase="implementation-call", span={"end_byte":15480,"end_column":1,"end_line":307,"start_byte":14315,"start_column":1,"start_line":285}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, CompletionResult, path="$.return")
-    if not (_cott_contract_condition(((len((_result).candidates) <= (request).maximum_candidates)), "real.harlequin.catalog.complete_sql", "ensures:0")):
-        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.complete_sql", clause="ensures:0", phase="ensures", span={"end_byte":11188,"end_column":64,"end_line":220,"start_byte":11129,"start_column":5,"start_line":220}, expected="true", actual="false")
+    if not (_cott_contract_condition((((_result).replace_end == (request).cursor)), "real.harlequin.catalog.complete_sql", "ensures:2")):
+        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.complete_sql", clause="ensures:2", phase="ensures", span={"end_byte":15343,"end_column":49,"end_line":301,"start_byte":15299,"start_column":5,"start_line":301}, expected="true", actual="false")
+    if not (_cott_contract_condition((((_result).replace_start <= (_result).replace_end)), "real.harlequin.catalog.complete_sql", "ensures:3")):
+        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.complete_sql", clause="ensures:3", phase="ensures", span={"end_byte":15398,"end_column":55,"end_line":302,"start_byte":15348,"start_column":5,"start_line":302}, expected="true", actual="false")
+    if not (_cott_contract_condition(((len((_result).candidates) <= (request).maximum_candidates)), "real.harlequin.catalog.complete_sql", "ensures:4")):
+        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.complete_sql", clause="ensures:4", phase="ensures", span={"end_byte":15462,"end_column":64,"end_line":303,"start_byte":15403,"start_column":5,"start_line":303}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, CompletionResult, path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -395,28 +414,28 @@ because CatalogSnapshot contains no column metadata."""
     _expected_error_clause = None
     if _expected_error is None and (_cott_contract_condition(((maximum_matches > 1000)), "real.harlequin.catalog.find_catalog", "error:4:condition")):
         _expected_error = CatalogError_LimitExceeded
-        _expected_error_span = {"end_byte":12439,"end_column":65,"end_line":247,"start_byte":12379,"start_column":5,"start_line":247}
+        _expected_error_span = {"end_byte":16677,"end_column":65,"end_line":330,"start_byte":16617,"start_column":5,"start_line":330}
         _expected_error_clause = "error:4"
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/catalog/find_catalog.py", "ce24a4f9799bb3e2f0eb2dec940f88fe1b5206cca4fd582ab58a47d104f9ee1d", "find_catalog", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.catalog.find_catalog")
+        _implementation = _cott_load("_cott_impl/real/harlequin/catalog/find_catalog.py", "4b102ec351d20fc4fc67366a10ecc754dc86d39f772043d1625940c2d2d9ae08", "find_catalog", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.catalog.find_catalog")
         _result = _implementation(snapshot, term, maximum_matches)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.catalog.find_catalog"
         if _error.span is None:
-            _error.span = {"end_byte":12456,"end_column":1,"end_line":250,"start_byte":11206,"start_column":1,"start_line":224}
+            _error.span = {"end_byte":16695,"end_column":1,"end_line":334,"start_byte":15480,"start_column":1,"start_line":307}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.catalog.find_catalog", phase="implementation-call", span={"end_byte":12456,"end_column":1,"end_line":250,"start_byte":11206,"start_column":1,"start_line":224}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.catalog.find_catalog", phase="implementation-call", span={"end_byte":16695,"end_column":1,"end_line":334,"start_byte":15480,"start_column":1,"start_line":307}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.catalog.find_catalog", phase="implementation-call", span={"end_byte":12456,"end_column":1,"end_line":250,"start_byte":11206,"start_column":1,"start_line":224}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.catalog.find_catalog", phase="implementation-call", span={"end_byte":16695,"end_column":1,"end_line":334,"start_byte":15480,"start_column":1,"start_line":307}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CottList[CatalogMatch], CatalogError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.catalog.find_catalog", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in ():
-            raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.catalog.find_catalog", phase="error", span={"end_byte":12456,"end_column":1,"end_line":250,"start_byte":11206,"start_column":1,"start_line":224}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.catalog.find_catalog", phase="error", span={"end_byte":16695,"end_column":1,"end_line":334,"start_byte":15480,"start_column":1,"start_line":307}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.catalog.find_catalog", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -429,25 +448,16 @@ because CatalogSnapshot contains no column metadata."""
         _cott_contract_condition((False), "real.harlequin.catalog.find_catalog", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.find_catalog", clause="ensures:1", phase="ensures", span={"end_byte":12242,"end_column":61,"end_line":243,"start_byte":12186,"start_column":5,"start_line":243}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.find_catalog", clause="ensures:1", phase="ensures", span={"end_byte":16516,"end_column":61,"end_line":326,"start_byte":16460,"start_column":5,"start_line":326}, expected="true", actual="false")
     def _cott_match_ensures_2() -> bool:
-        _cott_match_value = _result
-        if type(_cott_match_value) is Ok and True:
-            found = _cott_match_value.value
-            return (_cott_contract_condition(((maximum_matches <= 1000)), "real.harlequin.catalog.find_catalog", "ensures:2"))
-        _cott_contract_condition((False), "real.harlequin.catalog.find_catalog", "ensures:2:applicable")
-        return True
-    if not (_cott_match_ensures_2()):
-        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.find_catalog", clause="ensures:2", phase="ensures", span={"end_byte":12298,"end_column":56,"end_line":244,"start_byte":12247,"start_column":5,"start_line":244}, expected="true", actual="false")
-    def _cott_match_ensures_3() -> bool:
         _cott_match_value = _result
         if type(_cott_match_value) is Err and type(_cott_match_value.error) is CatalogError_LimitExceeded and True:
             limit = getattr(_cott_match_value.error, _dataclasses.fields(type(_cott_match_value.error))[0].name)
-            return (_cott_contract_condition(((limit == 1000)), "real.harlequin.catalog.find_catalog", "ensures:3"))
-        _cott_contract_condition((False), "real.harlequin.catalog.find_catalog", "ensures:3:applicable")
+            return (_cott_contract_condition(((limit == 1000)), "real.harlequin.catalog.find_catalog", "ensures:2"))
+        _cott_contract_condition((False), "real.harlequin.catalog.find_catalog", "ensures:2:applicable")
         return True
-    if not (_cott_match_ensures_3()):
-        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.find_catalog", clause="ensures:3", phase="ensures", span={"end_byte":12373,"end_column":75,"end_line":245,"start_byte":12303,"start_column":5,"start_line":245}, expected="true", actual="false")
+    if not (_cott_match_ensures_2()):
+        raise CottContractViolation("ensures clause failed", symbol="real.harlequin.catalog.find_catalog", clause="ensures:2", phase="ensures", span={"end_byte":16591,"end_column":75,"end_line":327,"start_byte":16521,"start_column":5,"start_line":327}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[CatalogMatch], CatalogError], path="$.return", validator=_cott_validate_abi)
     return _result
 

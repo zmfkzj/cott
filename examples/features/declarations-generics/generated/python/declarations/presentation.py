@@ -9,15 +9,14 @@ from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonArray, JsonBoolean, JsonFloat, JsonInteger, JsonNull, JsonObject, JsonString, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _CottAsyncRLock, _cott_euclidean_mod, _cott_load, _cott_normalize_f32, _cott_normalize_f32_abi, _cott_validate_abi, _cott_wrap_async_protocol
 from cott_runtime import _cott_contract_condition
-from declarations.core_types import ByteBlock, LABEL_BYTES, LabelFrame, NonEmptyLabel
+from declarations.core_types import ByteBlock, LabelFrame, NonEmptyLabel
 
 def package_label(label: NonEmptyLabel, values: CottArray[U8, Literal[4]], raw: CottBuffer[Literal[4]]) -> tuple[str, LabelFrame[CottArray[U8, Literal[4]]], ByteBlock[Literal[4]]]:
-    """Return a named fixed-width label, its covariant array-payload frame, and matching raw bytes."""
+    """Package a label with its fixed-width payload for display. The tuple holds, in order, the
+label's plain text, a frame pairing `label` with `values`, and a block holding `raw`."""
     label = _cott_validate_abi(label, NonEmptyLabel, path="$.label")
     values = _cott_validate_abi(values, CottArray[U8, Literal[4]], path="$.values")
     raw = _cott_validate_abi(raw, CottBuffer[Literal[4]], path="$.raw")
-    if not (_cott_contract_condition(((len(values) == LABEL_BYTES)), "declarations.presentation.package_label", "requires:1")):
-        raise CottContractViolation("requires clause failed", symbol="declarations.presentation.package_label", clause="requires:1", phase="requires", span={"end_byte":421,"end_column":39,"end_line":14,"start_byte":387,"start_column":5,"start_line":14}, expected="true", actual="false")
     try:
         _implementation = _cott_load("_cott_impl/declarations/presentation/package_label.py", "f0b20121eeec3c0bb246f30402ebe76bf958a17bade71524281958df4e533bba", "package_label", expected_project_name="declarations-generics", expected_cott_symbol="declarations.presentation.package_label")
         _result = _implementation(label, values, raw)
@@ -25,12 +24,12 @@ def package_label(label: NonEmptyLabel, values: CottArray[U8, Literal[4]], raw: 
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "declarations.presentation.package_label"
         if _error.span is None:
-            _error.span = {"end_byte":438,"end_column":1,"end_line":17,"start_byte":116,"start_column":1,"start_line":5}
+            _error.span = {"end_byte":525,"end_column":1,"end_line":17,"start_byte":116,"start_column":1,"start_line":5}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="declarations.presentation.package_label", phase="implementation-call", span={"end_byte":438,"end_column":1,"end_line":17,"start_byte":116,"start_column":1,"start_line":5}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="declarations.presentation.package_label", phase="implementation-call", span={"end_byte":525,"end_column":1,"end_line":17,"start_byte":116,"start_column":1,"start_line":5}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="declarations.presentation.package_label", phase="implementation-call", span={"end_byte":438,"end_column":1,"end_line":17,"start_byte":116,"start_column":1,"start_line":5}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="declarations.presentation.package_label", phase="implementation-call", span={"end_byte":525,"end_column":1,"end_line":17,"start_byte":116,"start_column":1,"start_line":5}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, tuple[str, LabelFrame[CottArray[U8, Literal[4]]], ByteBlock[Literal[4]]], path="$.return")
     _result = _cott_wrap_async_protocol(_result, tuple[str, LabelFrame[CottArray[U8, Literal[4]]], ByteBlock[Literal[4]]], path="$.return", validator=_cott_validate_abi)
     return _result

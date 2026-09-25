@@ -432,9 +432,9 @@ fn assert_generation_identity(generation: &serde_json::Value) {
         generation["current"]["compatibility"],
         serde_json::json!({
             "generation_schema": 8,
-            "canonical_ir_schema": 8,
+            "canonical_ir_schema": 9,
             "runtime_abi": 7,
-            "contract_strategy_schema": 5,
+            "contract_strategy_schema": 6,
         })
     );
 }
@@ -971,7 +971,7 @@ fn feature_examples_are_formatted_checked_emitted_verified_and_run() {
         ("features/workflow-scenario", "new result\npublished\n"),
         (
             "features/effects-selection",
-            "Compiler-owned fixture scenarios exercise: copy_text, fetch_local, clock_ns, copy_result_is_ok, text_result_is_ok, text_result_text\n",
+            "Compiler-owned fixture scenarios exercise: read_text, copy_text, fetch_local, clock_ns\n",
         ),
         (
             "features/json-transform",
@@ -1112,7 +1112,7 @@ fn feature_examples_are_formatted_checked_emitted_verified_and_run() {
             assert_eq!(
                 generation["current"]["semantic_coverage"]["summary"],
                 serde_json::json!({
-                    "observed": 4,
+                    "observed": 23,
                     "unobserved": 0,
                     "trust_declaration": 0,
                     "unknown": 0,

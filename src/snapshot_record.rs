@@ -196,6 +196,17 @@ pub fn decode(wire: &Value, expected_schema: u32) -> Result<(Value, Option<Value
         .transpose()?;
     Ok((current.clone(), last_verified))
 }
+/// The only legacy entry point is the explicit emit transaction cutover.
+/// This authenticates the old self-contained envelope exactly as the normal
+/// decoder authenticates a current one; target-specific callers must also
+/// check the former generation identity and exact compatibility versions.
+/// Normal deserialization must continue to call `decode` instead.
+pub(crate) fn decode_legacy(
+    wire: &Value,
+    expected_schema: u32,
+) -> Result<(Value, Option<Value>), String> {
+    decode(wire, expected_schema)
+}
 
 fn require_snapshot(value: &Value) -> Result<(), String> {
     if value.is_object() {

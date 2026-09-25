@@ -4,13 +4,23 @@
 package curriculum.json_transform
 
 /**
- * Extract a string field value from a JSON object payload.
+ * Read the top-level member of a JSON object whose key equals `field` exactly
+ * (no case folding, normalization or nested lookup). A payload that is not a
+ * JSON object fails with `NotAnObject`, checked first. An object without that
+ * member, or whose member is not a JSON string, fails with
+ * `MissingField(field_name: field)`. Otherwise the result's `name` is `field`
+ * and its `text` is the member's string value. Contract clauses cannot inspect
+ * `JsonValue` structure, so both failures are declared without conditions.
  */
 
-public fun  extract_string_field(payload: cott_runtime.JsonValue, `field`: kotlin.String): cott_runtime.CottResult<kotlin.String, curriculum.json_transform.JsonTransformError> {
+public fun  extract_string_field(payload: cott_runtime.JsonValue, `field`: kotlin.String): cott_runtime.CottResult<curriculum.json_transform.StringField, curriculum.json_transform.JsonTransformError> {
     cott_runtime.CottRuntime.requireIdentity("json-transform", "0.1.0", 1)
     val _cottArg_payload = cott_runtime.CottRuntime.abi(payload, cott_runtime.CottTypes.JSON, cott_runtime.RuntimeValidation.BOUNDARY, "\$.payload")
     val _cottArg_field = cott_runtime.CottRuntime.abi(`field`, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.field")
+    var _cottExpectedError: kotlin.String? = null
+    var _cottExpectedErrorClause: kotlin.String? = null
+    if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
+    }
     val _cottRawResult = try {
         cott_impl.curriculum.json_transform.extract_string_field(_cottArg_payload, _cottArg_field)
     } catch (error: cott_runtime.CottContractViolation) {
@@ -21,12 +31,21 @@ public fun  extract_string_field(payload: cott_runtime.JsonValue, `field`: kotli
     } catch (error: kotlin.Throwable) {
         cott_runtime.CottRuntime.violation("implementation raised an undeclared exception", symbol = "curriculum.json_transform.extract_string_field", phase = "implementation-call", expected = "declared Result error or ordinary return", actual = error::class.java.name, cause = error)
     }
-    val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(cott_runtime.CottTypes.STRING, curriculum.json_transform.CottDescriptors_d359bf8c455e8d84d987cdc1.type_b73cc09666303e17047f28ee()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
+    val _cottResult = cott_runtime.CottRuntime.returnValue(_cottRawResult, cott_runtime.CottTypes.result(curriculum.json_transform.CottDescriptors_d359bf8c455e8d84d987cdc1.type_7356557d900491b95337cce5(), curriculum.json_transform.CottDescriptors_d359bf8c455e8d84d987cdc1.type_b73cc09666303e17047f28ee()), cott_runtime.RuntimeValidation.BOUNDARY, "$.return")
+    if (cott_runtime.CottRuntime.contractsEnabled(cott_runtime.RuntimeValidation.BOUNDARY)) {
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) is cott_runtime.Some<*> && true)) { val found = ((cott_runtime.CottRuntime.resultOk(_cottMatchValue) as cott_runtime.Some<*>).value as curriculum.json_transform.StringField); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual((found).name, _cottArg_field)), "curriculum.json_transform.extract_string_field", "ensures", clause = "ensures:1", span = cott_runtime.CottSpan(startByte = 1065, endByte = 1112, startLine = 35, startColumn = 5, endLine = 35, endColumn = 52), expected = "true", actual = "false"); true } } else true }
+        run { val _cottMatchValue = _cottResult; if ((cott_runtime.CottRuntime.resultErr(_cottMatchValue) is cott_runtime.Some<*> && (cott_runtime.CottRuntime.variant((cott_runtime.CottRuntime.resultErr(_cottMatchValue) as cott_runtime.Some<*>).value, "curriculum.json_transform.JsonTransformError.MissingField") is cott_runtime.Some<*> && true))) { val name = ((cott_runtime.CottRuntime.variant((cott_runtime.CottRuntime.resultErr(_cottMatchValue) as cott_runtime.Some<*>).value, "curriculum.json_transform.JsonTransformError.MissingField") as cott_runtime.Some<cott_runtime.CottList<kotlin.Any?>>).value[0] as kotlin.String); run { cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalEqual(name, _cottArg_field)), "curriculum.json_transform.extract_string_field", "ensures", clause = "ensures:2", span = cott_runtime.CottSpan(startByte = 1117, endByte = 1191, startLine = 36, startColumn = 5, endLine = 36, endColumn = 79), expected = "true", actual = "false"); true } } else true }
+        val _cottActualError = (_cottResult as? cott_runtime.Err<*>)?.error
+        val _cottActualErrorVariant = (_cottActualError as? cott_runtime.CottVariant)?.cottVariant
+        cott_runtime.CottRuntime.checkContract(if (_cottExpectedError != null) _cottActualErrorVariant == _cottExpectedError else _cottActualError == null || _cottActualErrorVariant in setOf<kotlin.String>("curriculum.json_transform.JsonTransformError.NotAnObject", "curriculum.json_transform.JsonTransformError.MissingField"), "curriculum.json_transform.extract_string_field", "error", clause = "error-return", expected = _cottExpectedError ?: setOf<kotlin.String>("curriculum.json_transform.JsonTransformError.NotAnObject", "curriculum.json_transform.JsonTransformError.MissingField").toString(), actual = _cottActualErrorVariant ?: _cottActualError?.javaClass?.name)
+        if (_cottActualErrorVariant == "curriculum.json_transform.JsonTransformError.NotAnObject") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.json_transform.JsonTransformError.NotAnObject", "curriculum.json_transform.extract_string_field", "error", clause = "error:3", span = cott_runtime.CottSpan(startByte = 1197, endByte = 1233, startLine = 38, startColumn = 5, endLine = 38, endColumn = 41))
+        if (_cottActualErrorVariant == "curriculum.json_transform.JsonTransformError.MissingField") cott_runtime.CottRuntime.checkContract(_cottActualErrorVariant == "curriculum.json_transform.JsonTransformError.MissingField", "curriculum.json_transform.extract_string_field", "error", clause = "error:4", span = cott_runtime.CottSpan(startByte = 1238, endByte = 1275, startLine = 39, startColumn = 5, endLine = 39, endColumn = 42))
+    }
     return _cottResult
 }
 
 /**
- * Wrap a string key-value pair into a structured JsonValue object.
+ * Wrap one string member into a JSON object.
  */
 
 public suspend fun  wrap_scalar_json(key: kotlin.String, `value`: kotlin.String): cott_runtime.JsonValue {
@@ -34,7 +53,7 @@ public suspend fun  wrap_scalar_json(key: kotlin.String, `value`: kotlin.String)
     val _cottArg_key = cott_runtime.CottRuntime.abiSuspend(key, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.key")
     val _cottArg_value = cott_runtime.CottRuntime.abiSuspend(`value`, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.value")
     if (cott_runtime.CottRuntime.contractsEnabledSuspend(cott_runtime.RuntimeValidation.BOUNDARY)) {
-        cott_runtime.CottRuntime.checkContractSuspend((cott_runtime.CottRuntime.canonicalCompare(cott_runtime.CottRuntime.length(_cottArg_key), java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.json_transform.wrap_scalar_json", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 337, endByte = 357, startLine = 16, startColumn = 5, endLine = 16, endColumn = 25), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContractSuspend((cott_runtime.CottRuntime.canonicalCompare(cott_runtime.CottRuntime.length(_cottArg_key), java.math.BigInteger("0").toString().toULong()) > 0), "curriculum.json_transform.wrap_scalar_json", "requires", clause = "requires:1", span = cott_runtime.CottSpan(startByte = 364, endByte = 384, startLine = 20, startColumn = 5, endLine = 20, endColumn = 25), expected = "true", actual = "false")
     }
     val _cottRawResult = try {
         cott_impl.curriculum.json_transform.wrap_scalar_json(_cottArg_key, _cottArg_value)

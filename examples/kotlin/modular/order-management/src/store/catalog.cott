@@ -8,16 +8,39 @@ struct Item:
 struct Catalog:
     items: List[Item]
 
+    invariant unique_by(self.items, Item.sku)
+
 enum CatalogError:
     ItemNotFound(sku: Str)
 
 fn find_item(catalog: Catalog, sku: Str) -> Result[Item, CatalogError]:
     doc """
-    Look up an item in the catalog by its SKU.
+    Look up the catalog item whose SKU is `sku`. SKUs are unique within a catalog, so at most
+    one item matches.
     """
 
     requires sku.len > 0
 
     ensures Result.Ok(item) => item.sku == sku
+    ensures Result.Err(CatalogError.ItemNotFound(missing)) => missing == sku
 
     error CatalogError.ItemNotFound
+
+    effects []
+
+data shelf: Catalog = Catalog(
+    items: List(
+        Item(sku: "SKU-APPLE", name: "Honeycrisp Apple", price_cents: 150),
+        Item(sku: "SKU-COFFEE", name: "Dark Roast Coffee", price_cents: 1200),
+    ),
+)
+
+scenario lookup_by_sku:
+    call found = find_item(shelf, "SKU-COFFEE")
+    assert found matches Result.Ok(item) => item.name == "Dark Roast Coffee" and item.price_cents == 1200
+    call missing = find_item(shelf, "SKU-TEA")
+    assert missing matches Result.Err(CatalogError.ItemNotFound(_))
+
+requirement RETURNS_CATALOG_ITEM for find_item:
+    text "Returns the catalog's own item for sku, and reports ItemNotFound only when no catalog item has that SKU."
+    checked_by lookup_by_sku

@@ -74,6 +74,19 @@ enum UpdatePolicy:
     Nightly
     Master
 
+doc """
+UpdateOutcome reports what apply_update established. Disabled: the policy is
+Never and nothing was inspected. Current: the target already matches the
+selected release's official checksum. Available: Check found a missing or
+different target and left it untouched. Installed: the verified release asset
+atomically replaced or created the target.
+"""
+enum UpdateOutcome:
+    Disabled
+    Current
+    Available
+    Installed
+
 enum LogLevel:
     Quiet
     Warning
@@ -379,6 +392,19 @@ struct ExecutionReport:
     simulated: Bool
 
 fn parse_arguments(arguments: List[Str]) -> Result[List[CliInput], MediaError]:
+    doc """
+    arguments excludes the program name. Scan them left to right and return one
+    CliInput per input, in argument order. `--batch-file VALUE`, `-a VALUE` and
+    `--batch-file=VALUE` yield BatchFile(VALUE). `--config-locations VALUE` and
+    `--config-locations=VALUE` yield ConfigFile(VALUE). A separate VALUE is the
+    next argument taken verbatim, even when it starts with "-". Every argument
+    that does not start with "-" yields Argument(argument) unchanged. There are no
+    other options: an argument starting with "-" that is not one of these forms
+    (including "-" and "--"), an option without a following value, and an empty
+    VALUE return InvalidInput with a fixed descriptive message. Values are not
+    stripped, validated as URLs or read.
+    """
+
     ensures Result.Ok(inputs) => inputs.len <= arguments.len
 
     error MediaError.InvalidInput
@@ -396,36 +422,87 @@ fn build_shortcut_url(request: ShortcutRequest) -> Result[Str, MediaError]:
     zero Search limit, or an invalid Url.
     """
 
-    ensures Result.Ok(url) => url.len > 0
+    ensures Result.Ok(url) => (request.kind == ShortcutKind.Search => (starts_with(url, "ytsearch") and not starts_with(url, "ytsearchall:") and ends_with(url, request.query) and url.len > request.query.len + 9))
+    ensures Result.Ok(url) => (request.kind == ShortcutKind.SearchAll => (starts_with(url, "ytsearchall:") and ends_with(url, request.query) and url.len == request.query.len + 12))
+    ensures Result.Ok(url) => (request.kind == ShortcutKind.Url => (url.len > 0 and contains(request.query, url)))
+    ensures Result.Err(MediaError.InvalidShortcut(value)) => value == request.query
+    ensures Result.Err(_) => (request.kind == ShortcutKind.Url or request.query.len == 0 or (request.kind == ShortcutKind.Search and request.limit == 0))
 
     error MediaError.InvalidShortcut when request.query.len == 0
+    error MediaError.InvalidShortcut when request.kind == ShortcutKind.Search and request.limit == 0
     error MediaError.InvalidShortcut
 
     effects []
 
 fn validate_workarounds(policy: WorkaroundPolicy) -> Result[WorkaroundPolicy, MediaError]:
-    ensures Result.Ok(valid) => valid.certificate == policy.certificate
+    doc """
+    Accept only workarounds this client honors and return the policy unchanged.
+    Transfers always verify TLS certificates and hostnames, so Insecure returns
+    CertificateFailure. Legacy TLS server connect is unsupported, and the single
+    generic extractor takes no extractor arguments, so either request returns
+    WorkaroundRejected. force_generic_extractor is accepted because the generic
+    extractor is the only one. Error messages are fixed descriptive text.
+    """
 
-    error MediaError.CertificateFailure
-    error MediaError.WorkaroundRejected
+    ensures Result.Ok(valid) => valid == policy
+
+    errors complete
+    error MediaError.CertificateFailure when policy.certificate == CertificatePolicy.Insecure
+    error MediaError.WorkaroundRejected when (policy.legacy_server_connect or policy.extractor_args.len > 0)
 
     effects []
 
 fn configure_presentation(request: PresentationRequest) -> Result[Unit, MediaError]:
+    doc """
+    Prepare the log destination named by request.log_file. Open it for appending
+    without following a symlink, create a missing file with mode 0600, never
+    truncate existing content, write nothing and close it. An empty, "." or ".."
+    leaf, a missing parent directory, a symlink, a nonregular file, and any
+    open, inspect or close failure return LogFailure(path=request.log_file,
+    message=a fixed descriptive category). level, progress, newline_progress,
+    color, dump_pages and write_pages are accepted as given: this client prints
+    only the rendered report, so they select no other output.
+    """
+
+    # Structural: the success value is Unit; PRESENTATION_LOG_IS_APPENDABLE carries the file duty.
     ensures Result.Ok(configured) => configured == ()
+    ensures Result.Err(MediaError.LogFailure(path, _)) => path == request.log_file
 
     error MediaError.LogFailure
 
     effects [file.write]
 
 fn load_config(path: Path) -> Result[List[CliInput], MediaError]:
+    doc """
+    Read path, a regular file of at most 1 MiB, as UTF-8 text; ignore one leading
+    UTF-8 byte order mark. Split the text into arguments with POSIX shell-like
+    rules: whitespace separates arguments, single quotes, double quotes and
+    backslash escapes group them, and an unquoted "#" that starts an argument
+    comments out the rest of its line. Pass the arguments, in file order, to
+    real.yt_dlp.parse_arguments and return its inputs unchanged. A missing,
+    unreadable, nonregular or oversized file, invalid UTF-8, unbalanced quoting,
+    more than 100000 arguments and a parse_arguments error all return
+    InvalidConfig(path=path, message=a fixed descriptive category) without file
+    content.
+    """
+
     ensures Result.Ok(inputs) => inputs.len <= 100000
+    ensures Result.Err(MediaError.InvalidConfig(config, _)) => config == path
 
     error MediaError.InvalidConfig
 
     effects [file.read]
 
 fn parse_batch_urls(batch: Str, comment_prefixes: List[Str]) -> Result[List[Str], MediaError]:
+    doc """
+    Parse batch-file text into URLs. Ignore one leading U+FEFF, split the rest
+    into lines at LF, CRLF or CR, strip surrounding whitespace from each line,
+    and drop empty lines and lines starting with any comment prefix. Return the
+    remaining stripped lines in order, keeping duplicates; they are not validated
+    as URLs. An empty comment prefix and a result of more than 100000 URLs return
+    InvalidInput with a fixed descriptive message.
+    """
+
     ensures Result.Ok(urls) => urls.len <= batch.len
 
     error MediaError.InvalidInput
@@ -433,7 +510,16 @@ fn parse_batch_urls(batch: Str, comment_prefixes: List[Str]) -> Result[List[Str]
     effects []
 
 fn load_batch_urls(path: Path, comment_prefixes: List[Str]) -> Result[List[Str], MediaError]:
+    doc """
+    Read path, a regular file of at most 16 MiB, decode it as UTF-8 and return
+    real.yt_dlp.parse_batch_urls(text, comment_prefixes) unchanged, including its
+    InvalidInput. A missing, unreadable, nonregular or oversized file and invalid
+    UTF-8 return BatchReadFailed(path=path, message=a fixed descriptive category)
+    without file content.
+    """
+
     ensures Result.Ok(urls) => urls.len <= 100000
+    ensures Result.Err(MediaError.BatchReadFailed(batch, _)) => batch == path
 
     error MediaError.BatchReadFailed
     error MediaError.InvalidInput
@@ -441,33 +527,86 @@ fn load_batch_urls(path: Path, comment_prefixes: List[Str]) -> Result[List[Str],
     effects [file.read]
 
 fn resolve_inputs(inputs: List[CliInput], config: List[CliInput]) -> Result[List[Str], MediaError]:
-    ensures Result.Ok(urls) => urls.len <= inputs.len + config.len
+    doc """
+    Return the values of inputs followed by the values of config, in order and
+    unchanged, one URL per entry. Callers expand ConfigFile and BatchFile entries
+    first, so an entry of any other kind than Argument returns InvalidInput, as
+    does a blank value (empty or only whitespace). Messages are fixed text.
+    """
 
+    ensures Result.Ok(urls) => urls.len == inputs.len + config.len
+
+    error MediaError.InvalidInput when (any_blank_by(inputs, CliInput.value) or any_blank_by(config, CliInput.value))
     error MediaError.InvalidInput
 
     effects []
 
 fn validate_network(policy: NetworkPolicy) -> Result[NetworkPolicy, MediaError]:
-    ensures Result.Ok(valid) => valid.socket_timeout_ms > 0
+    doc """
+    Validate network settings and return the policy unchanged. Each of these
+    returns InvalidInput with a fixed descriptive message: socket_timeout_ms is
+    zero; force_ipv4 and force_ipv6 are both set; Direct has a nonempty proxy;
+    Http or Socks has an empty proxy, or a proxy that is not an absolute URL
+    without whitespace whose scheme is http or https (Http) or socks4, socks4a,
+    socks5 or socks5h (Socks), with a nonempty host and a valid port;
+    source_address is nonempty and not a literal IPv4 or IPv6 address, or is of
+    the other family than a forced one; Disabled or Default has a nonempty
+    geo_country or geo_ip_block; Country has a geo_ip_block or a geo_country that
+    is not two ASCII letters; IpBlock has a geo_country, or a geo_ip_block that is
+    not an IPv4 or IPv6 address with an optional decimal prefix length of at most
+    32 or 128.
+    """
 
+    ensures Result.Ok(valid) => valid == policy
+
+    error MediaError.InvalidInput when policy.socket_timeout_ms == 0
+    error MediaError.InvalidInput when policy.force_ipv4 and policy.force_ipv6
+    error MediaError.InvalidInput when (policy.proxy_mode == ProxyMode.Direct and policy.proxy.len > 0)
+    error MediaError.InvalidInput when (policy.proxy_mode != ProxyMode.Direct and policy.proxy.len == 0)
+    error MediaError.InvalidInput when ((policy.geo_mode == GeoBypassMode.Disabled or policy.geo_mode == GeoBypassMode.Default) and (policy.geo_country.len > 0 or policy.geo_ip_block.len > 0))
+    error MediaError.InvalidInput when (policy.geo_mode == GeoBypassMode.Country and (policy.geo_ip_block.len > 0 or policy.geo_country.len != 2))
+    error MediaError.InvalidInput when (policy.geo_mode == GeoBypassMode.IpBlock and (policy.geo_country.len > 0 or policy.geo_ip_block.len == 0))
     error MediaError.InvalidInput
 
     effects []
 
 fn resolve_authentication(request: Authentication) -> Result[Authentication, MediaError]:
-    ensures Result.Ok(authenticated) => authenticated.kind == request.kind
+    doc """
+    Check that the requested authentication is one this direct-media client can
+    send and return it unchanged. Anonymous is accepted. Credentials needs a
+    nonempty username and password, which extract_media sends as HTTP Basic
+    authorization. Netrc is unsupported and returns AuthenticationFailed;
+    Cookies and BrowserCookies are unsupported and return CookieFailure. Fields
+    the selected kind does not use are ignored. Messages are fixed text and never
+    contain the username, password or file paths.
+    """
 
-    error MediaError.AuthenticationFailed
-    error MediaError.CookieFailure
+    ensures Result.Ok(authenticated) => authenticated == request
 
-    effects [file.read]
+    errors complete
+    error MediaError.AuthenticationFailed when (request.kind == AuthenticationKind.Credentials and (request.username.len == 0 or request.password.len == 0))
+    error MediaError.AuthenticationFailed when request.kind == AuthenticationKind.Netrc
+    error MediaError.CookieFailure when (request.kind == AuthenticationKind.Cookies or request.kind == AuthenticationKind.BrowserCookies)
+
+    effects []
 
 fn select_geo_route(policy: NetworkPolicy) -> Result[NetworkPolicy, MediaError]:
-    ensures Result.Ok(route) => route.proxy_mode == policy.proxy_mode
+    doc """
+    Choose the geo-bypass route used for extraction and return the policy
+    unchanged. Disabled and Default send no geo header. IpBlock is routed by
+    extract_media, which sends the block's network address as X-Forwarded-For;
+    a geo_ip_block that is not an IPv4 or IPv6 address with an optional decimal
+    prefix length of at most 32 or 128 returns GeoRestricted. Country bypass
+    needs a country-to-address table this client does not have, so Country
+    returns GeoRestricted. Messages are fixed text.
+    """
 
+    ensures Result.Ok(route) => route == policy
+
+    error MediaError.GeoRestricted when policy.geo_mode == GeoBypassMode.Country
     error MediaError.GeoRestricted
 
-    effects [network]
+    effects []
 
 fn discover_extractors() -> List[ExtractorDescriptor]:
     doc """
@@ -498,8 +637,9 @@ fn load_plugins(paths: List[Path]) -> Result[List[PluginDescriptor], MediaError]
     fixed descriptive category), with no partial result and no content in errors.
     """
 
-    ensures Result.Ok(plugins) => plugins.len <= 100000
+    ensures Result.Ok(plugins) => plugins.len == paths.len
 
+    error MediaError.PluginRejected when paths.len > 100000
     error MediaError.PluginRejected
 
     effects [file.read]
@@ -508,8 +648,17 @@ fn choose_extractor(
     url: Str,
     extractors: List[ExtractorDescriptor],
 ) -> Result[ExtractorDescriptor, MediaError]:
+    doc """
+    An extractor matches url when one of its nonempty urls entries is a
+    case-sensitive prefix of url. Return the first enabled matching extractor in
+    list order, unchanged. When only disabled extractors match, return
+    ExtractorMissing(name=the first matching disabled extractor's name). When
+    nothing matches, return UnsupportedUrl.
+    """
+
     ensures Result.Ok(extractor) => extractor.enabled
 
+    error MediaError.UnsupportedUrl when extractors.len == 0
     error MediaError.UnsupportedUrl
     error MediaError.ExtractorMissing
 
@@ -522,11 +671,35 @@ fn extract_media(
     network: NetworkPolicy,
 ) -> Result[List[MediaItem], MediaError]:
     doc """
-    Handle every auth kind; HEAD via Request and urlopen; derive one item from final URL.
+    Discover one direct media item without downloading it. url must be an
+    absolute URL with lowercase scheme http or https, a nonempty host and no
+    whitespace or control characters, accepted by the enabled extractor through
+    one of its nonempty urls prefixes; otherwise return UnsupportedUrl before
+    any request.
+    Authentication: Anonymous sends none, but an extractor with requires_login
+    returns AuthenticationFailed. Credentials sends HTTP Basic authorization and
+    needs a nonempty username and password, else AuthenticationFailed. Netrc,
+    Cookies and BrowserCookies are unsupported and return AuthenticationFailed.
+    Network: socket_timeout_ms is the request timeout. Http sends the request
+    through proxy; Socks is unsupported and returns NetworkFailure. IpBlock sends
+    the block's network address as X-Forwarded-For; Country returns GeoRestricted.
+    Send exactly one HTTP HEAD request with certificate-verifying TLS, following
+    at most five redirects. Never send GET or read a response body.
+    On a 2xx response return exactly one MediaItem built from the final URL: url
+    is the final URL; title is its percent-decoded last path segment; id is title
+    without its last "." extension; ext is that extension without the dot,
+    lowercased. When the path has no last segment, title and id are the host.
+    When there is no extension, ext is the Content-Type subtype when it is
+    alphanumeric, otherwise "unknown_video". playlist_index is 1.
+    Map 401 or 403 after sending credentials to AuthenticationFailed, 451 to
+    GeoRestricted, any other non-2xx status to HttpStatus(status), and DNS,
+    connection, TLS, timeout and redirect-limit failures to NetworkFailure with a
+    fixed message that contains no credentials or query strings.
     """
 
-    ensures Result.Ok(items) => items.len <= 100000
+    ensures Result.Ok(items) => items.len == 1
 
+    error MediaError.UnsupportedUrl when (not extractor.enabled or not (starts_with(url, "http://") or starts_with(url, "https://")))
     error MediaError.AuthenticationFailed
     error MediaError.GeoRestricted
     error MediaError.HttpStatus
@@ -582,7 +755,9 @@ fn select_playlist(
     """
 
     ensures Result.Ok(selected) => selected.len <= items.len
+    ensures Result.Ok(selected) => (request.mode == PlaylistMode.Single => selected.len <= 1)
 
+    error MediaError.InvalidRange when (request.start > 0 and request.end > 0 and request.start > request.end)
     error MediaError.InvalidRange
     error MediaError.InvalidInput
 
@@ -594,33 +769,43 @@ fn resolve_live_media(
 ) -> Result[List[MediaItem], MediaError]:
     doc """
     This stage validates a snapshot of already-discovered live-media candidates;
-    it is not a downloader, live-status probe or polling loop. MediaItem contains
-    no start-time or live-state field, so do not infer such state from its text.
-    concurrent_fragments zero returns InvalidInput. Otherwise Default and
-    FromStart retain every supplied item unchanged and in order: retrieval from
-    the beginning is a downstream transfer choice, not a change to these descriptors.
-    Wait additionally requires wait_for_video_ms greater than zero; zero is
-    InvalidInput. With a positive wait budget, a nonempty snapshot succeeds
-    unchanged; an empty snapshot returns RetryExhausted(attempts=1), referring to
-    this one completed discovery snapshot. This function does not sleep, repeat
-    discovery or claim a network observation; clock/network are permitted effects,
-    not a requirement to invent a request endpoint.
+    it is not a downloader, live-status probe or polling loop, and it neither
+    sleeps nor repeats discovery. MediaItem contains no start-time or live-state
+    field, so do not infer such state from its text. Default, FromStart and Wait
+    keep every supplied item unchanged and in order: retrieval from the
+    beginning is a downstream transfer choice, not a change to these descriptors.
+    Under Wait with a positive wait budget, an empty snapshot returns
+    RetryExhausted(attempts=1), referring to the one completed discovery
+    snapshot. InvalidInput messages are fixed text.
     """
 
-    ensures Result.Ok(selected) => selected.len <= items.len
+    ensures Result.Ok(selected) => selected == items
+    ensures Result.Err(MediaError.RetryExhausted(attempts)) => attempts == 1
 
-    error MediaError.InvalidInput
-    error MediaError.RetryExhausted
+    errors complete
+    error MediaError.InvalidInput when request.concurrent_fragments == 0
+    error MediaError.InvalidInput when (request.mode == LiveMode.Wait and request.wait_for_video_ms == 0)
+    error MediaError.RetryExhausted when request.mode == LiveMode.Wait and items.len == 0
 
-    effects [clock, network]
+    effects []
 
 fn filter_video(
     items: List[MediaItem],
     request: VideoFilterRequest,
 ) -> Result[List[MediaItem], MediaError]:
-    ensures Result.Ok(selected) => selected.len <= items.len
+    doc """
+    MediaItem carries no upload date, view count, age limit or live state, so
+    this client cannot evaluate those filters and rejects them instead of
+    silently ignoring them: a nonempty date_after, date_before or match_filter, a
+    nonzero min_views, max_views or age_limit, or reject_live returns InvalidInput
+    with a fixed message. include_ads has no effect because no item is marked as
+    an advertisement. Otherwise return items unchanged.
+    """
 
-    error MediaError.InvalidInput
+    ensures Result.Ok(selected) => selected == items
+
+    errors complete
+    error MediaError.InvalidInput when (request.date_after.len > 0 or request.date_before.len > 0 or request.match_filter.len > 0 or request.min_views > 0 or request.max_views > 0 or request.age_limit > 0 or request.reject_live)
 
     effects []
 
@@ -628,28 +813,58 @@ fn filter_formats(
     formats: List[FormatDescriptor],
     request: FormatRequest,
 ) -> Result[List[FormatDescriptor], MediaError]:
-    ensures Result.Ok(selected) => selected.len <= formats.len
+    doc """
+    Keep, unchanged and in input order, each format whose file_size is at least
+    min_file_size and, when max_file_size is nonzero, at most max_file_size, and
+    that matches containers. An empty containers list matches every format;
+    otherwise a format matches when any listed container matches it: Any always,
+    Video when has_video, Audio when has_audio, and Best or Worst when the
+    format's own container is that value. selector, sort_fields,
+    merge_output_format and prefer_free_formats do not filter. A nonzero
+    max_file_size below min_file_size returns InvalidInput with a fixed message;
+    an empty result returns FormatUnavailable(selector=request.selector).
+    """
 
+    ensures Result.Ok(selected) => selected.len > 0 and selected.len <= formats.len
+    ensures Result.Err(MediaError.FormatUnavailable(selector)) => selector == request.selector
+
+    error MediaError.InvalidInput when (request.max_file_size > 0 and request.min_file_size > request.max_file_size)
+    error MediaError.FormatUnavailable when formats.len == 0
     error MediaError.FormatUnavailable
-    error MediaError.InvalidInput
 
     effects []
 
 fn sort_formats(formats: List[FormatDescriptor], fields: List[Str]) -> List[FormatDescriptor]:
+    doc """
+    Stable sort, best first. fields names sort keys in priority order: "res"
+    (video_height), "abr" (audio_bitrate) and "size" (file_size), each compared
+    in descending order. Unknown and repeated names are ignored. Formats equal on
+    every recognized key keep their input order, so without a recognized key the
+    input order is returned unchanged.
+    """
+
     ensures result.len == formats.len
+    ensures (fields.len == 0 => result == formats)
 
     effects []
 
 fn select_subtitles(item: MediaItem, request: SubtitleRequest) -> Result[List[Str], MediaError]:
     doc """
-    None returns typed List[Str]; otherwise preserve requested language order.
+    Plan subtitle languages. This does not fetch or verify tracks: MediaItem
+    carries no subtitle information, so item does not affect the plan. None
+    returns an empty plan. Manual, Automatic and All return request.languages in
+    request order, keeping duplicates; an empty languages list or an empty
+    language code returns SubtitleUnavailable(language="").
     """
 
-    ensures Result.Ok(subtitles) => subtitles.len <= 100000
+    ensures Result.Ok(subtitles) => (request.mode == SubtitleMode.None => subtitles.len == 0)
+    ensures Result.Ok(subtitles) => (request.mode != SubtitleMode.None => subtitles == request.languages)
+    ensures Result.Err(MediaError.SubtitleUnavailable(language)) => language == ""
 
+    error MediaError.SubtitleUnavailable when (request.mode != SubtitleMode.None and request.languages.len == 0)
     error MediaError.SubtitleUnavailable
 
-    effects [network]
+    effects []
 
 fn plan_thumbnails(item: MediaItem, request: ThumbnailRequest) -> List[Str]:
     doc """
@@ -679,8 +894,21 @@ fn render_output_path(
     template: Str,
     missing_placeholder: Str,
 ) -> Result[Str, MediaError]:
-    ensures Result.Ok(path) => (path.len <= template.len * (item.id.len + item.title.len + item.ext.len + missing_placeholder.len + 20))
+    doc """
+    Render an output template in this subset of yt-dlp's syntax. "%%" renders
+    "%". "%(NAME)s" renders item.id, item.title or item.ext for NAME id, title or
+    ext, the decimal playlist_index for playlist_index, and missing_placeholder
+    for any other NAME. "%(playlist_index)d" also renders the decimal index.
+    Other text is copied unchanged, and values are inserted verbatim: path
+    sanitization belongs to resolve_output_path. An empty template, a "%" that
+    starts none of these forms, an empty or unterminated NAME, a NAME containing
+    "%" or "(", a conversion other than s or d, and d with a NAME other than
+    playlist_index return InvalidTemplate.
+    """
 
+    ensures Result.Ok(path) => (not contains(template, "%") => path == template)
+
+    error MediaError.InvalidTemplate when template.len == 0
     error MediaError.InvalidTemplate
 
     effects []
@@ -740,6 +968,20 @@ fn plan_downloads(
     archive: List[Str],
     break_on_existing: Bool,
 ) -> DownloadPlan:
+    doc """
+    archive holds plain media ids as returned by read_download_archive. An item
+    is already downloaded when its id equals an archive entry exactly. Without
+    break_on_existing, the plan keeps every other item unchanged, in order and
+    with duplicates, and stopped_on_archive is false. With break_on_existing, the
+    plan holds the items before the first already-downloaded item and
+    stopped_on_archive is true; when no item is already downloaded, the plan
+    holds every item and stopped_on_archive is false.
+    """
+
+    ensures result.items.len <= items.len
+    ensures (archive.len == 0 => (result.items == items and not result.stopped_on_archive))
+    ensures (result.stopped_on_archive => break_on_existing)
+
     effects []
 
 fn write_download_archive(path: Path, items: List[MediaItem]) -> Result[Unit, MediaError]:
@@ -760,7 +1002,9 @@ fn write_download_archive(path: Path, items: List[MediaItem]) -> Result[Unit, Me
     Never emit a partial archive or infer an extractor from the URL.
     """
 
+    # Structural: the success value is Unit; ARCHIVE_ROUND_TRIPS carries the file duty.
     ensures Result.Ok(saved) => saved == ()
+    ensures Result.Err(MediaError.ArchiveFailure(archive, _)) => archive == path
 
     error MediaError.ArchiveFailure
 
@@ -770,20 +1014,45 @@ fn plan_fragments(
     request: TransferRequest,
     policy: FragmentPolicy,
 ) -> Result[List[TransferRequest], MediaError]:
-    ensures Result.Ok(fragments) => fragments.len <= 100000
+    doc """
+    TransferRequest has no byte-range field, so this client transfers each media
+    item as a single fragment: return a list holding request unchanged. A zero
+    max_bytes, concurrent_fragments or buffer_size returns InvalidInput with a
+    fixed message. chunk_size, rate limit, retry, continue and part-file settings
+    apply in transfer_fragments, not here.
+    """
 
-    error MediaError.InvalidInput
-    error MediaError.SizeLimit
+    ensures Result.Ok(fragments) => fragments.len == 1
+
+    errors complete
+    error MediaError.InvalidInput when (request.max_bytes == 0 or policy.concurrent_fragments == 0 or policy.buffer_size == 0)
 
     effects []
 
 fn transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaError]:
+    doc """
+    Transfer one media resource. A simulate request performs no network or file
+    access and returns bytes_written 0. Otherwise send one HTTP GET with
+    certificate-verifying TLS, following at most five redirects, and stream the
+    body into an exclusive temporary file in destination's directory, creating
+    missing parent directories; on success atomically replace destination with
+    it. Reject a declared Content-Length above max_bytes, and stop at the first
+    byte beyond max_bytes, with SizeLimit. A non-2xx final status returns
+    HttpStatus(status); DNS, connection, TLS, timeout, redirect and read failures
+    return NetworkFailure; local directory, open, write and replace failures
+    return OutputFailure. Every failure removes the temporary file and leaves an
+    existing destination untouched. Messages are fixed descriptive text without
+    response bodies or query strings.
+    """
+
     ensures Result.Ok(receipt) => receipt.url == request.url
     ensures Result.Ok(receipt) => receipt.destination == request.destination
     ensures Result.Ok(receipt) => receipt.bytes_written <= request.max_bytes
     ensures Result.Ok(receipt) => receipt.simulated == request.simulate
+    ensures Result.Ok(receipt) => (request.simulate => receipt.bytes_written == 0)
 
     error MediaError.InvalidInput when request.max_bytes == 0
+    error MediaError.UnsupportedUrl when not (starts_with(request.url, "http://") or starts_with(request.url, "https://"))
     error MediaError.UnsupportedUrl
     error MediaError.HttpStatus
     error MediaError.NetworkFailure
@@ -796,8 +1065,39 @@ fn transfer_fragments(
     fragments: List[TransferRequest],
     policy: FragmentPolicy,
 ) -> Result[List[TransferReceipt], MediaError]:
+    doc """
+    Download each fragment in order and return one receipt per fragment, in
+    order. Before any transfer, a zero concurrent_fragments or buffer_size, a
+    fragment URL that is not an absolute http or https URL with a host, a
+    destination without a file name, and two fragments with the same destination
+    return InvalidInput. A simulate fragment performs no I/O and yields a receipt
+    with bytes_written 0 and simulated true.
+    Otherwise send one HTTP GET with certificate-verifying TLS, following at most
+    five redirects, and stream the body in reads of at most buffer_size bytes
+    (and at most chunk_size when nonzero), sleeping as needed to stay under a
+    nonzero rate_limit_bytes_per_second. With part_files the body goes to
+    destination + ".part", which is renamed over destination after the whole body
+    arrived; otherwise it goes to destination directly. With continue_download an
+    existing work file is resumed with a Range request, and a 416 reply means it
+    is already complete; otherwise the work file is truncated. Open files without
+    following symlinks and fsync them before the rename.
+    A declared Content-Length or received byte count above max_bytes is
+    SizeLimit. A non-2xx final status other than 206 for a resumed transfer is
+    HttpStatus(status); a short body and transport failures are NetworkFailure.
+    NetworkFailure and 429 or 5xx statuses are retried with exponential backoff
+    up to retries times for a single fragment and fragment_retries times for
+    several; when retries run out the result is RetryExhausted(attempts=attempts
+    made), except that zero allowed retries return the original error. Local
+    open and rename failures are retried up to file_access_retries times, then
+    OutputFailure, as are write and fsync failures. A successful receipt holds
+    the fragment's url and destination, the destination's final byte size as
+    bytes_written, and simulated false. Messages are fixed descriptive text
+    without response bodies or query strings.
+    """
+
     ensures Result.Ok(receipts) => receipts.len == fragments.len
 
+    error MediaError.InvalidInput when policy.concurrent_fragments == 0 or policy.buffer_size == 0
     error MediaError.InvalidInput
     error MediaError.HttpStatus
     error MediaError.NetworkFailure
@@ -846,14 +1146,30 @@ fn plan_post_processing(
     the explicit external tool request already supplies the input and output.
     """
 
-    ensures Result.Ok(planned) => planned.len <= request.kinds.len
+    ensures Result.Ok(planned) => planned.len == request.kinds.len
+    ensures Result.Err(MediaError.ExternalToolMissing(name)) => name == "ffmpeg" or name == ""
 
-    error MediaError.ExternalToolMissing
+    error MediaError.ExternalToolMissing with request.external_tool matches Option.Nothing when (request.kinds.len > 0)
+    error MediaError.ExternalToolMissing with request.external_tool matches Option.Some(tool) when (request.kinds.len > 0 and tool.executable.len == 0)
+    error MediaError.InvalidInput with request.external_tool matches Option.Some(tool) when (request.kinds.len > 0 and tool.timeout_ms == 0)
     error MediaError.InvalidInput
 
     effects []
 
 fn run_post_processing(requests: List[ExternalToolRequest]) -> Result[Unit, MediaError]:
+    doc """
+    Run each request in order, one at a time, and stop at the first failure.
+    An executable containing a path separator is used as given; otherwise it is
+    looked up on PATH. An empty, missing or non-executable executable returns
+    ExternalToolMissing(name=executable). Start the tool directly, never through
+    a shell, with its arguments verbatim, stdin closed and output discarded, and
+    wait at most timeout_ms milliseconds (zero means no limit). A missing or
+    nonregular input before starting, a timeout, a nonzero exit status and a
+    missing output afterwards return PostProcessFailed(name=executable,
+    message=a fixed descriptive category).
+    """
+
+    # Structural: the success value is Unit; POST_PROCESSING_RUNS_IN_ORDER carries the process duty.
     ensures Result.Ok(completed) => completed == ()
 
     error MediaError.ExternalToolMissing
@@ -873,16 +1189,20 @@ fn resolve_update_repository(policy: UpdatePolicy, channel: Str) -> Result[Str, 
     """
 
     ensures Result.Ok(repository) => (repository == "" or repository == "yt-dlp/yt-dlp" or repository == "yt-dlp/yt-dlp-nightly-builds" or repository == "yt-dlp/yt-dlp-master-builds")
+    ensures Result.Ok(repository) => (policy == UpdatePolicy.Never => repository == "")
+    ensures Result.Ok(repository) => (policy == UpdatePolicy.Nightly => repository == "yt-dlp/yt-dlp-nightly-builds")
+    ensures Result.Ok(repository) => (policy == UpdatePolicy.Master => repository == "yt-dlp/yt-dlp-master-builds")
+    ensures Result.Err(_) => policy == UpdatePolicy.Check or policy == UpdatePolicy.Apply
 
     error MediaError.UpdateUnavailable
 
     effects []
 
-fn apply_update(request: UpdateRequest) -> Result[Unit, MediaError]:
+fn apply_update(request: UpdateRequest) -> Result[UpdateOutcome, MediaError]:
     doc """
-    Never returns Ok immediately without validating channel or target and without
-    network or filesystem access: success means updates are disabled, not that an
-    update was installed. Otherwise call
+    Never returns Ok(Disabled) immediately without validating channel or target
+    and without network or filesystem access: updates are disabled, not
+    installed. Otherwise call
     real.yt_dlp.resolve_update_repository(request.policy, request.channel).
     
     Use only the selected official repository's latest release assets at fixed
@@ -893,6 +1213,8 @@ fn apply_update(request: UpdateRequest) -> Result[Unit, MediaError]:
     URL from input. Use certificate- and hostname-verifying TLS, a finite timeout,
     at most five redirects, and permit redirects only to github.com or
     release-assets.githubusercontent.com over HTTPS. Send no credentials.
+    Perform HTTPS, SHA-256 and filesystem work in-process; never run a
+    subprocess, shell, package manager or other executable.
     
     Read each response incrementally. Cap SHA2-256SUMS at 1 MiB and the yt-dlp
     asset at 64 MiB, rejecting an excessive Content-Length or a cap-plus-one
@@ -905,27 +1227,26 @@ fn apply_update(request: UpdateRequest) -> Result[Unit, MediaError]:
     The target is an explicit leaf. Refuse an empty/root/dot leaf, every symlink
     in its path, and an existing non-regular target. Use no-follow, directory-fd
     filesystem operations so validation and use are not separated by a symlink
-    race; if the platform cannot provide those guarantees, fail closed. A missing
-    target represents an available update. For an existing target, hash it
-    incrementally without following links; a digest equal to the release checksum
-    means it is current.
+    race; if the platform cannot provide those guarantees, including fsync and
+    same-directory atomic replacement, fail closed. A missing target represents
+    an available update. For an existing target, hash it incrementally without
+    following links; a digest equal to the release checksum means it is current.
     
     Check performs the authenticated manifest fetch and target comparison above,
-    then returns Ok whether the target is current or an update is available. It
-    never downloads the executable, creates a temporary file, changes metadata,
-    or replaces target; Unit intentionally reports only successful completion of
-    the read-only check.
+    then returns Ok(Current) or Ok(Available). It never downloads the executable,
+    creates a temporary file, changes metadata, or replaces target.
     
-    Apply, Nightly, and Master return Ok without writing when target already
-    matches. Otherwise create an unpredictable exclusive no-follow temporary
-    regular file in target's directory, stream the bounded asset into it while
-    hashing, verify the digest, flush and fsync it, set its mode, then atomically
-    replace target within that same directory and fsync the directory. Preserve
-    an existing target's ordinary rwx permission bits while dropping special
-    bits; use 0755 for a new target. Recheck the target identity before commit,
-    clean up the temporary leaf on every pre-commit failure, and never move or
-    truncate the old target before verified replacement. Do not leave a partial
-    target or follow a target swapped to a symlink.
+    Apply, Nightly, and Master return Ok(Current) without writing when target
+    already matches. Otherwise create an unpredictable exclusive no-follow
+    temporary regular file in target's directory, stream the bounded asset into
+    it while hashing, verify the digest, flush and fsync it, set its mode, then
+    atomically replace target within that same directory, fsync the directory
+    and return Ok(Installed). Preserve an existing target's ordinary rwx
+    permission bits while dropping special bits; use 0755 for a new target.
+    Recheck the target identity before commit, clean up the temporary leaf on
+    every pre-commit failure, and never move or truncate the old target before
+    verified replacement. Do not leave a partial target or follow a target
+    swapped to a symlink.
     
     Map unknown channels, missing releases/assets or checksum entries, malformed
     metadata, forbidden redirects, oversized/HTML payloads, and integrity
@@ -938,7 +1259,10 @@ fn apply_update(request: UpdateRequest) -> Result[Unit, MediaError]:
     raw exception text that may contain secrets.
     """
 
-    ensures Result.Ok(updated) => updated == ()
+    ensures Result.Ok(outcome) => (request.policy == UpdatePolicy.Never => outcome == UpdateOutcome.Disabled)
+    ensures Result.Ok(outcome) => (request.policy == UpdatePolicy.Check => (outcome == UpdateOutcome.Current or outcome == UpdateOutcome.Available))
+    ensures Result.Ok(outcome) => ((request.policy == UpdatePolicy.Apply or request.policy == UpdatePolicy.Nightly or request.policy == UpdatePolicy.Master) => (outcome == UpdateOutcome.Current or outcome == UpdateOutcome.Installed))
+    ensures Result.Err(_) => request.policy != UpdatePolicy.Never
 
     error MediaError.UpdateUnavailable
     error MediaError.NetworkFailure
@@ -953,8 +1277,9 @@ fn execute(request: ExecutionRequest) -> Result[ExecutionReport, MediaError]:
     Propagate each failing stage's declared MediaError unchanged and stop before
     later stages. Do not perform effects outside these stages.
     
-    First call real.yt_dlp.apply_update(request.update), then validate_network,
-    select_geo_route, resolve_authentication and validate_workarounds on their
+    First call real.yt_dlp.apply_update(request.update); its UpdateOutcome is not
+    part of the report. Then call validate_network, select_geo_route on the
+    validated network, resolve_authentication and validate_workarounds on their
     corresponding request values. Use the returned network and authentication
     for extraction. Path(".") in presentation.log_file disables logging;
     otherwise call configure_presentation.
@@ -1001,6 +1326,7 @@ fn execute(request: ExecutionRequest) -> Result[ExecutionReport, MediaError]:
     """
 
     ensures Result.Ok(report) => report.simulated == (request.simulation != SimulationMode.Download)
+    ensures Result.Ok(report) => report.downloads.items.len <= report.selected.len
 
     error MediaError.InvalidConfig
     error MediaError.InvalidInput
@@ -1014,10 +1340,7 @@ fn execute(request: ExecutionRequest) -> Result[ExecutionReport, MediaError]:
     error MediaError.CookieFailure
     error MediaError.GeoRestricted
     error MediaError.ExtractorMissing
-    error MediaError.PluginRejected
     error MediaError.UnsupportedUrl
-    error MediaError.FormatUnavailable
-    error MediaError.SubtitleUnavailable
     error MediaError.InvalidTemplate
     error MediaError.ArchiveFailure
     error MediaError.PathFailure
@@ -1058,16 +1381,106 @@ fn run(arguments: List[Str]) -> Never:
 
     effects [file.read, file.write, network, clock, random, process.exit]
 
+requirement PRESENTATION_LOG_IS_APPENDABLE for configure_presentation:
+    text "After success the log file exists as a regular file, and existing log content is neither truncated nor replaced."
+
+requirement CONFIG_USES_ARGUMENT_GRAMMAR for load_config:
+    text "A readable config file yields exactly parse_arguments of its shell-split arguments, so ConfigFile and BatchFile options keep their kinds."
+
+requirement BATCH_FILE_USES_BATCH_PARSER for load_batch_urls:
+    text "A readable batch file yields exactly parse_batch_urls of its decoded text with the same comment prefixes."
+
+requirement PLUGINS_ARE_DECLARATIVE for load_plugins:
+    text "Plugin manifests are read as text only; no named module is imported, executed or searched for."
+
+requirement DISCOVERY_DOES_NOT_DOWNLOAD for extract_media:
+    text "Discovery sends one HEAD request, plus followed redirects, and derives the item from the final URL without transferring the media body."
+
+requirement ARCHIVE_ROUND_TRIPS for write_download_archive:
+    text "After a successful write, read_download_archive of the same path returns the written ids in order, and a failed write leaves the previous archive bytes unchanged."
+
+requirement TRANSFER_WRITES_EXACT_BODY for transfer_media:
+    text "After a successful non-simulated transfer, destination holds exactly the response body, bytes_written is its length, and no temporary file remains."
+
+requirement FRAGMENTS_WRITE_EXACT_BODIES for transfer_fragments:
+    text "After success each non-simulated destination holds exactly its response body, bytes_written is its size, and no .part file remains."
+
+requirement POST_PROCESSING_RUNS_IN_ORDER for run_post_processing:
+    text "Tools run one at a time in request order without a shell, and the first failing tool stops the remaining ones."
+
+requirement UPDATE_INSTALLS_ONLY_VERIFIED_ASSETS for apply_update:
+    text "The target changes only on Apply, Nightly or Master, only to an official asset whose SHA-256 matches the authenticated checksum manifest, and only by atomic replacement."
+
 requirement EXECUTE_REPORTS_ACTUAL_MEDIA for execute:
     text "The report contains the actual discovered and selected media, and Download transfers the selected plan before returning success."
 
 requirement EXECUTE_STOPS_ON_FAILURE for execute:
     text "A failed stage returns its declared error without executing subsequent transfer or archive publication stages."
 
+requirement EXECUTE_ONLY_DOWNLOAD_TRANSFERS for execute:
+    text "Simulate, SkipDownload and PrintOnly still discover, select and plan, but perform no media transfer, post-processing or archive write."
+
 requirement RUN_EXECUTES_REQUEST for run:
     text "The CLI executes the parsed request, prints the actual rendered report on success, and exits nonzero on a declared operation failure."
 
-# Reusable test data, not a public request-builder API.
+# Reusable test data, not public request-builder APIs.
+data clip_one: MediaItem = MediaItem(
+    url: "https://example.invalid/one.mp4",
+    id: "one",
+    title: "one.mp4",
+    ext: "mp4",
+    playlist_index: 1,
+)
+
+data clip_two: MediaItem = MediaItem(
+    url: "https://example.invalid/two.webm",
+    id: "two",
+    title: "Two: Live?",
+    ext: "webm",
+    playlist_index: 2,
+)
+
+data clip_three: MediaItem = MediaItem(
+    url: "https://example.invalid/three.mp4",
+    id: "three",
+    title: "three.mp4",
+    ext: "mp4",
+    playlist_index: 3,
+)
+
+data low_video: FormatDescriptor = FormatDescriptor(
+    id: "low",
+    extension: "mp4",
+    container: FormatContainer.Video,
+    video_height: 480,
+    audio_bitrate: 128,
+    file_size: 10,
+    has_video: true,
+    has_audio: true,
+)
+
+data high_video: FormatDescriptor = FormatDescriptor(
+    id: "high",
+    extension: "mp4",
+    container: FormatContainer.Video,
+    video_height: 1080,
+    audio_bitrate: 64,
+    file_size: 300,
+    has_video: true,
+    has_audio: true,
+)
+
+data high_audio: FormatDescriptor = FormatDescriptor(
+    id: "high-audio",
+    extension: "m4a",
+    container: FormatContainer.Audio,
+    video_height: 1080,
+    audio_bitrate: 256,
+    file_size: 20,
+    has_video: false,
+    has_audio: true,
+)
+
 data direct_media_request: ExecutionRequest = ExecutionRequest(
     inputs: List(CliInput(kind: InputKind.Argument, value: "https://example.invalid/clip.mp4")),
     network: NetworkPolicy(
@@ -1194,7 +1607,7 @@ scenario nested_request_values:
             file "archive.txt" text("")
     data request: ExecutionRequest = direct_media_request
     call network = validate_network(request.network)
-    assert network matches Result.Ok(value) => value == request.network
+    assert network matches Result.Ok(_)
     call urls = resolve_inputs(request.inputs, List())
     assert urls matches Result.Ok(values) => values == List("https://example.invalid/clip.mp4")
     call rendered = render_items(
@@ -1209,7 +1622,554 @@ scenario nested_request_values:
         ),
         request.json_mode,
     )
-    assert (
-        rendered
-        == "[{\"url\":\"https://example.invalid/clip.mp4\",\"id\":\"clip\",\"title\":\"clip.mp4\",\"ext\":\"mp4\",\"playlist_index\":1}]"
+    assert (rendered == "[{\"url\":\"https://example.invalid/clip.mp4\",\"id\":\"clip\",\"title\":\"clip.mp4\",\"ext\":\"mp4\",\"playlist_index\":1}]")
+
+scenario cli_arguments_map_to_typed_inputs:
+    call parsed = parse_arguments(
+        List(
+            "https://example.invalid/a.mp4",
+            "-a",
+            "urls.txt",
+            "--config-locations=site.conf",
+            "--batch-file",
+            "-more.txt",
+        ),
     )
+    assert parsed == Result.Ok(
+        value: List(
+            CliInput(kind: InputKind.Argument, value: "https://example.invalid/a.mp4"),
+            CliInput(kind: InputKind.BatchFile, value: "urls.txt"),
+            CliInput(kind: InputKind.ConfigFile, value: "site.conf"),
+            CliInput(kind: InputKind.BatchFile, value: "-more.txt"),
+        ),
+    )
+    call missing_value = parse_arguments(List("https://example.invalid/a.mp4", "-a"))
+    assert missing_value matches Result.Err(MediaError.InvalidInput(_))
+    call unknown_option = parse_arguments(List("--format", "best"))
+    assert unknown_option matches Result.Err(MediaError.InvalidInput(_))
+
+scenario inputs_resolve_in_order:
+    call batch = parse_batch_urls(
+        "https://example.invalid/1.mp4\r\n  # note\n\n  https://example.invalid/2.mp4  \n;skip\nhttps://example.invalid/1.mp4",
+        List("#", ";"),
+    )
+    assert batch == Result.Ok(
+        value: List(
+            "https://example.invalid/1.mp4",
+            "https://example.invalid/2.mp4",
+            "https://example.invalid/1.mp4",
+        ),
+    )
+    call empty_prefix = parse_batch_urls("https://example.invalid/1.mp4", List(""))
+    assert empty_prefix matches Result.Err(MediaError.InvalidInput(_))
+    call merged = resolve_inputs(
+        List(CliInput(kind: InputKind.Argument, value: "a")),
+        List(CliInput(kind: InputKind.Argument, value: "b")),
+    )
+    assert merged == Result.Ok(value: List("a", "b"))
+    call unexpanded = resolve_inputs(
+        List(CliInput(kind: InputKind.BatchFile, value: "urls.txt")),
+        List(),
+    )
+    assert unexpanded matches Result.Err(MediaError.InvalidInput(_))
+
+scenario shortcut_urls_follow_yt_dlp_prefixes:
+    call search = build_shortcut_url(
+        ShortcutRequest(kind: ShortcutKind.Search, query: " cats ", limit: 12),
+    )
+    assert search == Result.Ok(value: "ytsearch12: cats ")
+    call search_all = build_shortcut_url(
+        ShortcutRequest(kind: ShortcutKind.SearchAll, query: "cats", limit: 0),
+    )
+    assert search_all == Result.Ok(value: "ytsearchall:cats")
+    call url = build_shortcut_url(
+        ShortcutRequest(
+            kind: ShortcutKind.Url,
+            query: "  https://Example.invalid/A?q=1  ",
+            limit: 0,
+        ),
+    )
+    assert url == Result.Ok(value: "https://Example.invalid/A?q=1")
+    call invalid = build_shortcut_url(
+        ShortcutRequest(kind: ShortcutKind.Url, query: "not a url", limit: 1),
+    )
+    assert invalid == Result.Err(error: MediaError.InvalidShortcut(value: "not a url"))
+
+scenario extractor_choice_uses_prefixes_and_enablement:
+    call discovered = discover_extractors()
+    assert discovered == List(
+        ExtractorDescriptor(
+            name: "generic",
+            urls: List("http://", "https://"),
+            enabled: true,
+            requires_login: false,
+        ),
+    )
+    data extractors: List[ExtractorDescriptor] = List(
+        ExtractorDescriptor(
+            name: "archive",
+            urls: List("https://archive.invalid/"),
+            enabled: false,
+            requires_login: false,
+        ),
+        ExtractorDescriptor(
+            name: "generic",
+            urls: List("http://", "https://"),
+            enabled: true,
+            requires_login: false,
+        ),
+    )
+    call chosen = choose_extractor("https://archive.invalid/a.mp4", extractors)
+    assert chosen matches Result.Ok(extractor) => extractor.name == "generic"
+    call disabled = choose_extractor(
+        "ftp://archive.invalid/a.mp4",
+        List(
+            ExtractorDescriptor(
+                name: "ftp",
+                urls: List("ftp://"),
+                enabled: false,
+                requires_login: false,
+            ),
+        ),
+    )
+    assert disabled == Result.Err(error: MediaError.ExtractorMissing(name: "ftp"))
+    call unsupported = choose_extractor("not a url", extractors)
+    assert unsupported == Result.Err(error: MediaError.UnsupportedUrl)
+
+scenario unsupported_settings_fail_closed:
+    fixtures:
+        fs files:
+            file "netrc" text("")
+    call insecure = validate_workarounds(
+        WorkaroundPolicy(
+            certificate: CertificatePolicy.Insecure,
+            force_generic_extractor: true,
+            legacy_server_connect: false,
+            extractor_args: List(),
+        ),
+    )
+    assert insecure matches Result.Err(MediaError.CertificateFailure(_))
+    call netrc = resolve_authentication(
+        Authentication(
+            kind: AuthenticationKind.Netrc,
+            username: "",
+            password: "",
+            netrc_location: files.path("netrc"),
+            cookie_file: files.path("netrc"),
+            browser: "",
+            profile: "",
+        ),
+    )
+    assert netrc matches Result.Err(MediaError.AuthenticationFailed(_))
+    call country = select_geo_route(
+        NetworkPolicy(
+            proxy_mode: ProxyMode.Direct,
+            proxy: "",
+            socket_timeout_ms: 1000,
+            source_address: "",
+            force_ipv4: false,
+            force_ipv6: false,
+            geo_mode: GeoBypassMode.Country,
+            geo_country: "US",
+            geo_ip_block: "",
+        ),
+    )
+    assert country matches Result.Err(MediaError.GeoRestricted(_))
+    call views = filter_video(
+        List(clip_one),
+        VideoFilterRequest(
+            date_after: "",
+            date_before: "",
+            min_views: 1,
+            max_views: 0,
+            age_limit: 0,
+            match_filter: "",
+            reject_live: false,
+            include_ads: true,
+        ),
+    )
+    assert views matches Result.Err(MediaError.InvalidInput(_))
+    call waiting = resolve_live_media(
+        List(),
+        LiveRequest(mode: LiveMode.Wait, wait_for_video_ms: 1000, concurrent_fragments: 1),
+    )
+    assert waiting == Result.Err(error: MediaError.RetryExhausted(attempts: 1))
+
+scenario each_rejection_condition_is_observed:
+    fixtures:
+        fs files:
+            file "in.mp4" text("")
+    call direct_with_proxy = validate_network(
+        NetworkPolicy(
+            proxy_mode: ProxyMode.Direct,
+            proxy: "http://proxy.invalid:8080",
+            socket_timeout_ms: 1000,
+            source_address: "",
+            force_ipv4: false,
+            force_ipv6: false,
+            geo_mode: GeoBypassMode.Default,
+            geo_country: "",
+            geo_ip_block: "",
+        ),
+    )
+    assert direct_with_proxy matches Result.Err(MediaError.InvalidInput(_))
+    call proxy_missing = validate_network(
+        NetworkPolicy(
+            proxy_mode: ProxyMode.Http,
+            proxy: "",
+            socket_timeout_ms: 1000,
+            source_address: "",
+            force_ipv4: false,
+            force_ipv6: false,
+            geo_mode: GeoBypassMode.Default,
+            geo_country: "",
+            geo_ip_block: "",
+        ),
+    )
+    assert proxy_missing matches Result.Err(MediaError.InvalidInput(_))
+    call stray_country = validate_network(
+        NetworkPolicy(
+            proxy_mode: ProxyMode.Direct,
+            proxy: "",
+            socket_timeout_ms: 1000,
+            source_address: "",
+            force_ipv4: false,
+            force_ipv6: false,
+            geo_mode: GeoBypassMode.Default,
+            geo_country: "US",
+            geo_ip_block: "",
+        ),
+    )
+    assert stray_country matches Result.Err(MediaError.InvalidInput(_))
+    call long_country = validate_network(
+        NetworkPolicy(
+            proxy_mode: ProxyMode.Direct,
+            proxy: "",
+            socket_timeout_ms: 1000,
+            source_address: "",
+            force_ipv4: false,
+            force_ipv6: false,
+            geo_mode: GeoBypassMode.Country,
+            geo_country: "USA",
+            geo_ip_block: "",
+        ),
+    )
+    assert long_country matches Result.Err(MediaError.InvalidInput(_))
+    call missing_block = validate_network(
+        NetworkPolicy(
+            proxy_mode: ProxyMode.Direct,
+            proxy: "",
+            socket_timeout_ms: 1000,
+            source_address: "",
+            force_ipv4: false,
+            force_ipv6: false,
+            geo_mode: GeoBypassMode.IpBlock,
+            geo_country: "",
+            geo_ip_block: "",
+        ),
+    )
+    assert missing_block matches Result.Err(MediaError.InvalidInput(_))
+    call no_password = resolve_authentication(
+        Authentication(
+            kind: AuthenticationKind.Credentials,
+            username: "user",
+            password: "",
+            netrc_location: files.path("in.mp4"),
+            cookie_file: files.path("in.mp4"),
+            browser: "",
+            profile: "",
+        ),
+    )
+    assert no_password matches Result.Err(MediaError.AuthenticationFailed(_))
+    call cookies = resolve_authentication(
+        Authentication(
+            kind: AuthenticationKind.Cookies,
+            username: "",
+            password: "",
+            netrc_location: files.path("in.mp4"),
+            cookie_file: files.path("in.mp4"),
+            browser: "",
+            profile: "",
+        ),
+    )
+    assert cookies matches Result.Err(MediaError.CookieFailure(_))
+    call no_wait_budget = resolve_live_media(
+        List(clip_one),
+        LiveRequest(mode: LiveMode.Wait, wait_for_video_ms: 0, concurrent_fragments: 1),
+    )
+    assert no_wait_budget matches Result.Err(MediaError.InvalidInput(_))
+    call no_tool = plan_post_processing(
+        clip_one,
+        PostProcessRequest(
+            kinds: List(PostProcessorKind.Fixup),
+            audio_format: "",
+            video_format: "",
+            sponsorblock_categories: List(),
+            external_tool: Option.Nothing,
+        ),
+    )
+    assert no_tool == Result.Err(error: MediaError.ExternalToolMissing(name: "ffmpeg"))
+    call empty_tool = plan_post_processing(
+        clip_one,
+        PostProcessRequest(
+            kinds: List(PostProcessorKind.Fixup),
+            audio_format: "",
+            video_format: "",
+            sponsorblock_categories: List(),
+            external_tool: Option.Some(
+                value: ExternalToolRequest(
+                    executable: "",
+                    arguments: List(),
+                    input: files.path("in.mp4"),
+                    output: files.path("out.mp4"),
+                    timeout_ms: 1000,
+                ),
+            ),
+        ),
+    )
+    assert empty_tool == Result.Err(error: MediaError.ExternalToolMissing(name: ""))
+    call no_languages = select_subtitles(
+        clip_one,
+        SubtitleRequest(
+            mode: SubtitleMode.Manual,
+            languages: List(),
+            formats: List(),
+            convert_format: "",
+            embed: false,
+        ),
+    )
+    assert no_languages == Result.Err(error: MediaError.SubtitleUnavailable(language: ""))
+
+scenario playlist_ranges_repeat_overlaps_in_request_order:
+    data items: List[MediaItem] = List(clip_one, clip_two, clip_three)
+    call expanded = expand_playlist_ranges(
+        items,
+        List(PlaylistRange(first: 2, last: 3), PlaylistRange(first: 1, last: 2)),
+    )
+    assert expanded == Result.Ok(value: List(clip_two, clip_three, clip_one, clip_two))
+    call inverted = expand_playlist_ranges(items, List(PlaylistRange(first: 3, last: 1)))
+    assert inverted == Result.Err(error: MediaError.InvalidRange)
+
+scenario formats_filter_and_sort_best_first:
+    data formats: List[FormatDescriptor] = List(low_video, high_video, high_audio)
+    call audio = filter_formats(
+        formats,
+        FormatRequest(
+            selector: "bestaudio",
+            containers: List(FormatContainer.Audio),
+            sort_fields: List(),
+            merge_output_format: "",
+            min_file_size: 15,
+            max_file_size: 100,
+            prefer_free_formats: false,
+        ),
+    )
+    assert audio == Result.Ok(value: List(high_audio))
+    call none = filter_formats(
+        formats,
+        FormatRequest(
+            selector: "tiny",
+            containers: List(),
+            sort_fields: List(),
+            merge_output_format: "",
+            min_file_size: 1000,
+            max_file_size: 0,
+            prefer_free_formats: false,
+        ),
+    )
+    assert none == Result.Err(error: MediaError.FormatUnavailable(selector: "tiny"))
+    call by_resolution = sort_formats(formats, List("res", "abr"))
+    assert by_resolution == List(high_audio, high_video, low_video)
+    call by_size = sort_formats(formats, List("size"))
+    assert by_size == List(high_video, high_audio, low_video)
+    call unknown_key = sort_formats(formats, List("fps"))
+    assert unknown_key == formats
+
+scenario side_output_plans_use_item_ids:
+    call thumbnails = plan_thumbnails(
+        clip_two,
+        ThumbnailRequest(
+            write: true,
+            formats: List("jpg", "", "png"),
+            convert_format: "webp",
+            embed: true,
+        ),
+    )
+    assert thumbnails == List("two.jpg", "two.png", "two.webp", "embed:two")
+    call metadata = plan_metadata(
+        clip_two,
+        MetadataRequest(
+            write_info_json: true,
+            write_description: false,
+            write_comments: true,
+            write_playlist_metadata: false,
+            embed: true,
+        ),
+    )
+    assert metadata == List("two.info.json", "two.comments.json", "embed:two")
+    call subtitles = select_subtitles(
+        clip_two,
+        SubtitleRequest(
+            mode: SubtitleMode.Manual,
+            languages: List("en", ""),
+            formats: List(),
+            convert_format: "",
+            embed: false,
+        ),
+    )
+    assert subtitles == Result.Err(error: MediaError.SubtitleUnavailable(language: ""))
+
+scenario output_paths_render_and_sanitize:
+    fixtures:
+        fs files:
+            file "out/keep.txt" text("")
+    call rendered = render_output_path(clip_two, "%(playlist_index)d-%(title)s [%(id)s].%(ext)s %% %(uploader)s", "NA")
+    assert rendered == Result.Ok(value: "2-Two: Live? [two].webm % NA")
+    call bad_conversion = render_output_path(clip_two, "%(title)d", "NA")
+    assert bad_conversion == Result.Err(error: MediaError.InvalidTemplate)
+    call sanitized = resolve_output_path(
+        clip_two,
+        OutputRequest(
+            template: "%(title)s.%(ext)s",
+            home: files.path("home"),
+            temp: files.path("tmp"),
+            output: files.path("out"),
+            missing_placeholder: "NA",
+            restrict_filenames: false,
+            windows_filenames: true,
+            trim_filename_bytes: 0,
+        ),
+    )
+    assert sanitized == Result.Ok(value: files.path("out/Two_ Live_.webm"))
+
+scenario archive_plan_skips_or_stops:
+    data items: List[MediaItem] = List(clip_one, clip_two, clip_three)
+    call skipped = plan_downloads(items, List("two"), false)
+    assert skipped == DownloadPlan(items: List(clip_one, clip_three), stopped_on_archive: false)
+    call stopped = plan_downloads(items, List("two"), true)
+    assert stopped == DownloadPlan(items: List(clip_one), stopped_on_archive: true)
+
+scenario single_fragment_and_tool_plans:
+    fixtures:
+        fs files:
+            file "in.mp4" text("")
+    data transfer: TransferRequest = TransferRequest(
+        url: "https://example.invalid/one.mp4",
+        destination: files.path("one.mp4"),
+        simulate: false,
+        max_bytes: 1000,
+    )
+    call fragments = plan_fragments(
+        transfer,
+        FragmentPolicy(
+            concurrent_fragments: 1,
+            buffer_size: 65536,
+            chunk_size: 0,
+            rate_limit_bytes_per_second: 0,
+            retries: 0,
+            fragment_retries: 0,
+            file_access_retries: 0,
+            continue_download: false,
+            part_files: true,
+        ),
+    )
+    assert fragments == Result.Ok(value: List(transfer))
+    data tool: ExternalToolRequest = ExternalToolRequest(
+        executable: "cott-media-tool",
+        arguments: List("--quiet"),
+        input: files.path("in.mp4"),
+        output: files.path("out.m4a"),
+        timeout_ms: 1000,
+    )
+    call planned = plan_post_processing(
+        clip_one,
+        PostProcessRequest(
+            kinds: List(
+                PostProcessorKind.ExtractAudio,
+                PostProcessorKind.EmbedThumbnail,
+                PostProcessorKind.SponsorBlock,
+            ),
+            audio_format: "m4a",
+            video_format: "",
+            sponsorblock_categories: List("sponsor", "intro"),
+            external_tool: Option.Some(value: tool),
+        ),
+    )
+    assert planned == Result.Ok(
+        value: List(
+            ExternalToolRequest(
+                executable: "cott-media-tool",
+                arguments: List("--quiet", "extract-audio", "m4a"),
+                input: files.path("in.mp4"),
+                output: files.path("out.m4a"),
+                timeout_ms: 1000,
+            ),
+            ExternalToolRequest(
+                executable: "cott-media-tool",
+                arguments: List("--quiet", "embed-thumbnail"),
+                input: files.path("in.mp4"),
+                output: files.path("out.m4a"),
+                timeout_ms: 1000,
+            ),
+            ExternalToolRequest(
+                executable: "cott-media-tool",
+                arguments: List("--quiet", "sponsorblock", "sponsor,intro"),
+                input: files.path("in.mp4"),
+                output: files.path("out.m4a"),
+                timeout_ms: 1000,
+            ),
+        ),
+    )
+    call missing_format = plan_post_processing(
+        clip_one,
+        PostProcessRequest(
+            kinds: List(PostProcessorKind.RemuxVideo),
+            audio_format: "",
+            video_format: "",
+            sponsorblock_categories: List(),
+            external_tool: Option.Some(value: tool),
+        ),
+    )
+    assert missing_format matches Result.Err(MediaError.InvalidInput(_))
+
+scenario tool_without_timeout_is_rejected:
+    fixtures:
+        fs files:
+            file "in.mp4" text("")
+    call unbounded = plan_post_processing(
+        clip_one,
+        PostProcessRequest(
+            kinds: List(PostProcessorKind.Fixup),
+            audio_format: "",
+            video_format: "",
+            sponsorblock_categories: List(),
+            external_tool: Option.Some(
+                value: ExternalToolRequest(
+                    executable: "cott-media-tool",
+                    arguments: List(),
+                    input: files.path("in.mp4"),
+                    output: files.path("out.mp4"),
+                    timeout_ms: 0,
+                ),
+            ),
+        ),
+    )
+    assert unbounded matches Result.Err(MediaError.InvalidInput(_))
+
+scenario json_lines_rendering:
+    call lines = render_items(List(clip_one, clip_two), JsonMode.Lines)
+    assert (lines == "{\"url\":\"https://example.invalid/one.mp4\",\"id\":\"one\",\"title\":\"one.mp4\",\"ext\":\"mp4\",\"playlist_index\":1}\n{\"url\":\"https://example.invalid/two.webm\",\"id\":\"two\",\"title\":\"Two: Live?\",\"ext\":\"webm\",\"playlist_index\":2}")
+    call empty_lines = render_items(List(), JsonMode.Lines)
+    assert empty_lines == ""
+    call empty_array = render_items(List(), JsonMode.Single)
+    assert empty_array == "[]"
+
+scenario update_channels_map_to_official_repositories:
+    call padded = resolve_update_repository(UpdatePolicy.Check, " nightly ")
+    assert padded == Result.Ok(value: "yt-dlp/yt-dlp-nightly-builds")
+    call stable = resolve_update_repository(UpdatePolicy.Apply, "")
+    assert stable == Result.Ok(value: "yt-dlp/yt-dlp")
+    call wrong_case = resolve_update_repository(UpdatePolicy.Apply, "Nightly")
+    assert wrong_case matches Result.Err(MediaError.UpdateUnavailable(_))
+    call forced = resolve_update_repository(UpdatePolicy.Master, "not-a-channel")
+    assert forced == Result.Ok(value: "yt-dlp/yt-dlp-master-builds")

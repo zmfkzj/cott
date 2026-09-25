@@ -43,8 +43,22 @@ class SearchSnapshot:
             object.__setattr__(self, "status", _cott_validate_abi(self.status, SearchStatus, path="$.status"))
         if not (_cott_contract_condition((((self).request_id > 0)), "curriculum.workflow_scenario.SearchSnapshot", "invariant:0")):
             raise CottContractViolation("invariant failed", symbol="curriculum.workflow_scenario.SearchSnapshot", clause="invariant:0", phase="invariant", span={"end_byte":240,"end_column":34,"end_line":14,"start_byte":211,"start_column":5,"start_line":14}, expected="true", actual="false")
-        if not (_cott_contract_condition((((self).applied_request_id <= (self).request_id)), "curriculum.workflow_scenario.SearchSnapshot", "invariant:1")):
-            raise CottContractViolation("invariant failed", symbol="curriculum.workflow_scenario.SearchSnapshot", clause="invariant:1", phase="invariant", span={"end_byte":297,"end_column":57,"end_line":15,"start_byte":245,"start_column":5,"start_line":15}, expected="true", actual="false")
+        def _cott_match_invariant_1() -> bool:
+            _cott_match_value = (self).status
+            if type(_cott_match_value) is SearchStatus_Loading:
+                return (_cott_contract_condition(((((self).applied_request_id == 0) and ((self).result == ""))), "curriculum.workflow_scenario.SearchSnapshot", "invariant:1"))
+            _cott_contract_condition((False), "curriculum.workflow_scenario.SearchSnapshot", "invariant:1:applicable")
+            return True
+        if not (_cott_match_invariant_1()):
+            raise CottContractViolation("invariant failed", symbol="curriculum.workflow_scenario.SearchSnapshot", clause="invariant:1", phase="invariant", span={"end_byte":351,"end_column":111,"end_line":15,"start_byte":245,"start_column":5,"start_line":15}, expected="true", actual="false")
+        def _cott_match_invariant_2() -> bool:
+            _cott_match_value = (self).status
+            if type(_cott_match_value) is SearchStatus_Ready:
+                return (_cott_contract_condition((((self).applied_request_id == (self).request_id)), "curriculum.workflow_scenario.SearchSnapshot", "invariant:2"))
+            _cott_contract_condition((False), "curriculum.workflow_scenario.SearchSnapshot", "invariant:2:applicable")
+            return True
+        if not (_cott_match_invariant_2()):
+            raise CottContractViolation("invariant failed", symbol="curriculum.workflow_scenario.SearchSnapshot", clause="invariant:2", phase="invariant", span={"end_byte":450,"end_column":99,"end_line":16,"start_byte":356,"start_column":5,"start_line":16}, expected="true", actual="false")
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -62,7 +76,7 @@ class SearchResult:
         if not _cott_validated_construction():
             object.__setattr__(self, "result", _cott_validate_abi(self.result, str, path="$.result"))
         if not (_cott_contract_condition((((self).request_id > 0)), "curriculum.workflow_scenario.SearchResult", "invariant:0")):
-            raise CottContractViolation("invariant failed", symbol="curriculum.workflow_scenario.SearchResult", clause="invariant:0", phase="invariant", span={"end_byte":405,"end_column":34,"end_line":22,"start_byte":376,"start_column":5,"start_line":22}, expected="true", actual="false")
+            raise CottContractViolation("invariant failed", symbol="curriculum.workflow_scenario.SearchResult", clause="invariant:0", phase="invariant", span={"end_byte":558,"end_column":34,"end_line":23,"start_byte":529,"start_column":5,"start_line":23}, expected="true", actual="false")
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -92,7 +106,7 @@ class SaveSnapshot:
         if not _cott_validated_construction():
             object.__setattr__(self, "status", _cott_validate_abi(self.status, SaveStatus, path="$.status"))
         if not (_cott_contract_condition((((self).revision > 0)), "curriculum.workflow_scenario.SaveSnapshot", "invariant:0")):
-            raise CottContractViolation("invariant failed", symbol="curriculum.workflow_scenario.SaveSnapshot", clause="invariant:0", phase="invariant", span={"end_byte":556,"end_column":32,"end_line":33,"start_byte":529,"start_column":5,"start_line":33}, expected="true", actual="false")
+            raise CottContractViolation("invariant failed", symbol="curriculum.workflow_scenario.SaveSnapshot", clause="invariant:0", phase="invariant", span={"end_byte":709,"end_column":32,"end_line":34,"start_byte":682,"start_column":5,"start_line":34}, expected="true", actual="false")
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -110,14 +124,22 @@ class SaveReceipt:
         if not _cott_validated_construction():
             object.__setattr__(self, "status", _cott_validate_abi(self.status, SaveStatus, path="$.status"))
         if not (_cott_contract_condition((((self).revision > 0)), "curriculum.workflow_scenario.SaveReceipt", "invariant:0")):
-            raise CottContractViolation("invariant failed", symbol="curriculum.workflow_scenario.SaveReceipt", clause="invariant:0", phase="invariant", span={"end_byte":665,"end_column":32,"end_line":40,"start_byte":638,"start_column":5,"start_line":40}, expected="true", actual="false")
+            raise CottContractViolation("invariant failed", symbol="curriculum.workflow_scenario.SaveReceipt", clause="invariant:0", phase="invariant", span={"end_byte":818,"end_column":32,"end_line":41,"start_byte":791,"start_column":5,"start_line":41}, expected="true", actual="false")
 
-"""Start an immutable public search snapshot for the supplied request."""
-"""Resolve one immutable search result without observing host state."""
-"""Apply a result only when it still belongs to the snapshot's newest request."""
-"""Queue the first immutable save request."""
-"""Coalesce a newer save request into the public queued snapshot."""
-"""Return the public receipt for the currently coalesced save request."""
+"""Start the snapshot of a new search request. Nothing is applied yet, so the
+snapshot is Loading with applied_request_id 0 and an empty result."""
+"""Resolve one search request without observing host state. This lesson's
+resolver is a deterministic stand-in: the result text is the query followed
+by " result", so query "new" resolves to "new result"."""
+"""Apply a resolved result only when it belongs to the snapshot's request.
+A matching candidate makes the snapshot Ready with the candidate's result;
+a candidate for any other request is stale and leaves the snapshot
+unchanged, so an older result can never overwrite a newer request."""
+"""Queue the first save request for revision."""
+"""Coalesce a save request into the pending snapshot. Only a strictly newer
+revision replaces the pending request and queues it; an equal or older
+revision is ignored and the snapshot is returned unchanged."""
+"""Flush the coalesced save request and return its Flushed receipt."""
 OLD_REQUEST_ID: Final[U64] = 1
 
 NEW_REQUEST_ID: Final[U64] = 2

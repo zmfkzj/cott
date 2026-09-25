@@ -1,2 +1,2 @@
-Implement declared contracts directly and deterministically.
-Use only declared effects and standard-library facilities.
+Use only standard-library facilities for file and network access.
+cott-domain frogmouth.document.load_document return: The scenario HTTP fixture is a real loopback server that urllib.request reaches directly.

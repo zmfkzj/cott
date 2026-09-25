@@ -3,6 +3,8 @@
 
 package curriculum.fractional_range_values
 
+public val MAX_F64: kotlin.Double = kotlin.Double.fromBits(9218868437227405311)
+
 public data class PositiveStep(public val value: kotlin.Double) : cott_runtime.CottFieldValue {
     override val cottTypeIdentity: kotlin.String get() = "curriculum.fractional_range_values.PositiveStep"
     override val cottFieldNames: cott_runtime.CottList<kotlin.String> get() = cott_runtime.CottList(listOf("value"))
@@ -13,11 +15,11 @@ public data class PositiveStep(public val value: kotlin.Double) : cott_runtime.C
     init {
         cott_runtime.CottRuntime.abi(value, cott_runtime.CottTypes.F64, cott_runtime.RuntimeValidation.BOUNDARY, "$.value")
         val _cottResult = value
-        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottResult, kotlin.Double.fromBits(0)) > 0), "curriculum.fractional_range_values.PositiveStep", "refinement", clause = "refinement", span = cott_runtime.CottSpan(startByte = 79, endByte = 89, startLine = 4, startColumn = 11, endLine = 4, endColumn = 21), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(_cottResult, kotlin.Double.fromBits(0)) > 0), "curriculum.fractional_range_values.PositiveStep", "refinement", clause = "refinement", span = cott_runtime.CottSpan(startByte = 124, endByte = 134, startLine = 6, startColumn = 11, endLine = 6, endColumn = 21), expected = "true", actual = "false")
     }
 }
 
-public data class OutputLimit(public val value: kotlin.UInt) : cott_runtime.CottFieldValue {
+public data class OutputLimit(public val value: kotlin.ULong) : cott_runtime.CottFieldValue {
     override val cottTypeIdentity: kotlin.String get() = "curriculum.fractional_range_values.OutputLimit"
     override val cottFieldNames: cott_runtime.CottList<kotlin.String> get() = cott_runtime.CottList(listOf("value"))
     override fun cottField(name: kotlin.String): kotlin.Any? = when (name) {
@@ -25,9 +27,9 @@ public data class OutputLimit(public val value: kotlin.UInt) : cott_runtime.Cott
         else -> cott_runtime.CottRuntime.violation("unknown canonical field", symbol = cottTypeIdentity, phase = "field", actual = name)
     }
     init {
-        cott_runtime.CottRuntime.abi(value, cott_runtime.CottTypes.U32, cott_runtime.RuntimeValidation.BOUNDARY, "$.value")
+        cott_runtime.CottRuntime.abi(value, cott_runtime.CottTypes.U64, cott_runtime.RuntimeValidation.BOUNDARY, "$.value")
         val _cottResult = value
-        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(java.math.BigInteger("1").toLong().toUInt(), _cottResult) <= 0 && cott_runtime.CottRuntime.canonicalCompare(_cottResult, java.math.BigInteger("10000").toLong().toUInt()) <= 0), "curriculum.fractional_range_values.OutputLimit", "refinement", clause = "refinement", span = cott_runtime.CottSpan(startByte = 126, endByte = 144, startLine = 7, startColumn = 11, endLine = 7, endColumn = 29), expected = "true", actual = "false")
+        cott_runtime.CottRuntime.checkContract((cott_runtime.CottRuntime.canonicalCompare(java.math.BigInteger("1").toString().toULong(), _cottResult) <= 0 && cott_runtime.CottRuntime.canonicalCompare(_cottResult, java.math.BigInteger("10000").toString().toULong()) <= 0), "curriculum.fractional_range_values.OutputLimit", "refinement", clause = "refinement", span = cott_runtime.CottSpan(startByte = 171, endByte = 189, startLine = 9, startColumn = 11, endLine = 9, endColumn = 29), expected = "true", actual = "false")
     }
 }
 
@@ -95,7 +97,7 @@ internal object CottDescriptors_82be1279693347f6697a6f1a {
                 }
             }
             descriptors[key] = deferred
-            val resolved: cott_runtime.CottType<curriculum.fractional_range_values.OutputLimit> = cott_runtime.CottTypes.nominal(_cottDisplayName, curriculum.fractional_range_values.OutputLimit::class.java as java.lang.Class<curriculum.fractional_range_values.OutputLimit>, listOf(cott_runtime.CottNominalField<curriculum.fractional_range_values.OutputLimit>("value", cott_runtime.CottTypes.U32, { value -> value.`value` })), { values -> curriculum.fractional_range_values.OutputLimit(values[0] as kotlin.UInt) })
+            val resolved: cott_runtime.CottType<curriculum.fractional_range_values.OutputLimit> = cott_runtime.CottTypes.nominal(_cottDisplayName, curriculum.fractional_range_values.OutputLimit::class.java as java.lang.Class<curriculum.fractional_range_values.OutputLimit>, listOf(cott_runtime.CottNominalField<curriculum.fractional_range_values.OutputLimit>("value", cott_runtime.CottTypes.U64, { value -> value.`value` })), { values -> curriculum.fractional_range_values.OutputLimit(values[0] as kotlin.ULong) })
             descriptors[key] = resolved
             resolved
         }

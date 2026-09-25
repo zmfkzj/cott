@@ -34,6 +34,7 @@ public data class Catalog(
     }
     init {
         cott_runtime.CottRuntime.abi(items, cott_runtime.CottTypes.list(store.catalog.CottDescriptors_eb0aacb2da8f689e55fcdc1e.type_87a046c4c3d17ab9812d0d8c()), cott_runtime.RuntimeValidation.BOUNDARY, "\$.items")
+        cott_runtime.CottRuntime.invariant(cott_runtime.CottRuntime.uniqueBy((this).items, "store.catalog.Item", "sku"), "store.catalog.Catalog", clause = "invariant:0", span = cott_runtime.CottSpan(startByte = 127, endByte = 168, startLine = 11, startColumn = 5, endLine = 11, endColumn = 46), expected = "true", actual = "false")
     }
 }
 

@@ -1,33 +1,20 @@
 import pathlib
 
 from cott_runtime import CottList, Err, Nothing, Ok, Result, Some
-from real.harlequin.core_types import AdapterKind, AdapterKind_Adbc, AdapterKind_BigQuery, AdapterKind_Cassandra, AdapterKind_Databricks, AdapterKind_DuckDb, AdapterKind_MySql, AdapterKind_NebulaGraph, AdapterKind_Odbc, AdapterKind_PostgreSql, AdapterKind_Sqlite, AdapterKind_Trino, CliError, CliError_ConflictingConnectionInputs, CliError_InvalidAdapter, CliError_MissingOptionValue, CliError_UnknownOption, CliOptions
+from real.harlequin.core import adapter_descriptors
+from real.harlequin.core_types import AdapterKind, CliError, CliError_ConflictingConnectionInputs, CliError_InvalidAdapter, CliError_MissingOptionValue, CliError_UnknownOption, CliOptions
+
+
+def _ascii_lower(text: str) -> str:
+    return "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in text)
 
 
 def _adapter(value: str) -> AdapterKind | None:
-    name = value.strip().lower().replace("-", "").replace("_", "")
-    if name == "duckdb":
-        return AdapterKind_DuckDb()
-    if name in ("sqlite", "sqlite3"):
-        return AdapterKind_Sqlite()
-    if name in ("postgres", "postgresql", "psql"):
-        return AdapterKind_PostgreSql()
-    if name == "mysql":
-        return AdapterKind_MySql()
-    if name == "odbc":
-        return AdapterKind_Odbc()
-    if name == "bigquery":
-        return AdapterKind_BigQuery()
-    if name == "trino":
-        return AdapterKind_Trino()
-    if name == "databricks":
-        return AdapterKind_Databricks()
-    if name == "adbc":
-        return AdapterKind_Adbc()
-    if name == "cassandra":
-        return AdapterKind_Cassandra()
-    if name in ("nebulagraph", "nebula"):
-        return AdapterKind_NebulaGraph()
+    name = _ascii_lower(value)
+    for descriptor in adapter_descriptors():
+        for scheme in descriptor.uri_schemes:
+            if scheme == name:
+                return descriptor.kind
     return None
 
 
@@ -36,8 +23,6 @@ def _canonical(option: str) -> str | None:
         return "--profile"
     if option in ("--adapter", "-a"):
         return "--adapter"
-    if option in ("--connection", "-c"):
-        return "--connection"
     if option in ("--query-file", "-f"):
         return "--query-file"
     if option in ("--read-only", "-r"):
@@ -55,7 +40,6 @@ def parse_cli(arguments: CottList[str]) -> Result[CliOptions, CliError]:
     query_file: pathlib.Path | None = None
     read_only = False
     no_config = False
-    sources = 0
     only_positional = False
     i = 0
     n = len(args)
@@ -63,7 +47,9 @@ def parse_cli(arguments: CottList[str]) -> Result[CliOptions, CliError]:
         arg = args[i]
         i += 1
         if only_positional or arg == "-" or not arg.startswith("-"):
-            sources += 1
+            if connection is not None:
+                return Err(error=CliError_ConflictingConnectionInputs())
+            connection = arg
             continue
         if arg == "--":
             only_positional = True
@@ -75,7 +61,7 @@ def parse_cli(arguments: CottList[str]) -> Result[CliOptions, CliError]:
         option = _canonical(name)
         if option is None:
             return Err(error=CliError_UnknownOption(argument=arg))
-        if option in ("--read-only", "--no-config"):
+        if option == "--read-only" or option == "--no-config":
             if inline is not None:
                 return Err(error=CliError_UnknownOption(argument=arg))
             if option == "--read-only":
@@ -95,12 +81,8 @@ def parse_cli(arguments: CottList[str]) -> Result[CliOptions, CliError]:
             if kind is None:
                 return Err(error=CliError_InvalidAdapter(value=inline))
             adapter = kind
-        elif option == "--connection":
-            connection = inline
         else:
             query_file = pathlib.Path(inline)
-    if connection is not None and sources > 0:
-        return Err(error=CliError_ConflictingConnectionInputs())
     if no_config and profile is not None:
         return Err(error=CliError_ConflictingConnectionInputs())
     return Ok(value=CliOptions(
@@ -110,5 +92,4 @@ def parse_cli(arguments: CottList[str]) -> Result[CliOptions, CliError]:
         query_file=Some(value=query_file) if query_file is not None else Nothing(),
         read_only=read_only,
         no_config=no_config,
-        source_argument_count=sources,
     ))

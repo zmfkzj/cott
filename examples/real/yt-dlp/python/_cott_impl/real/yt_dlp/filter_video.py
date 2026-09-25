@@ -1,19 +1,12 @@
+from typing import Final
+
 from cott_runtime import CottList, Err, Ok, Result
 from real.yt_dlp_types import MediaError, MediaError_InvalidInput, MediaItem, VideoFilterRequest
 
-
-def _valid_date(value: str) -> bool:
-    return value == "" or (len(value) == 8 and value.isascii() and value.isdigit())
+_UNSUPPORTED: Final[str] = "unsupported video filter: media items carry no date, view, age or live metadata"
 
 
 def filter_video(items: CottList[MediaItem], request: VideoFilterRequest) -> Result[CottList[MediaItem], MediaError]:
-    if not _valid_date(request.date_after):
-        return Err(error=MediaError_InvalidInput(message="invalid date_after"))
-    if not _valid_date(request.date_before):
-        return Err(error=MediaError_InvalidInput(message="invalid date_before"))
-    if request.date_after != "" and request.date_before != "" and request.date_after > request.date_before:
-        return Err(error=MediaError_InvalidInput(message="date_after is later than date_before"))
-    if request.max_views != 0 and request.min_views > request.max_views:
-        return Err(error=MediaError_InvalidInput(message="min_views exceeds max_views"))
-    selected: list[MediaItem] = [item for item in items]
-    return Ok(value=CottList(values=selected))
+    if len(request.date_after) > 0 or len(request.date_before) > 0 or len(request.match_filter) > 0 or request.min_views > 0 or request.max_views > 0 or request.age_limit > 0 or request.reject_live:
+        return Err(error=MediaError_InvalidInput(message=_UNSUPPORTED))
+    return Ok(value=items)

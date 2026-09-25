@@ -11,5 +11,5 @@ def execute(arguments: CottList[str]) -> Result[str, ToolongError]:
     loaded: Result[CottList[LogEntry], ToolongError] = load_entries(options.sources)
     if isinstance(loaded, Err):
         return loaded
-    matches: CottList[LogEntry] = filter_entries(loaded.value, options.contains)
-    return Ok(value=render_entries(matches))
+    kept: CottList[LogEntry] = filter_entries(loaded.value, options.contains)
+    return Ok(value=render_entries(kept))

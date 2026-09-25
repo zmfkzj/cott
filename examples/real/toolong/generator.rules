@@ -1,2 +1,1 @@
-Implement direct deterministic Python from declared contracts.
 Iterate CottList directly; Option via isinstance, with a direct final else.

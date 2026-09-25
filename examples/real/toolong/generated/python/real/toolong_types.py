@@ -36,6 +36,8 @@ class LogEntry:
             object.__setattr__(self, "line", _cott_validate_abi(self.line, U64, path="$.line"))
         if not _cott_validated_construction():
             object.__setattr__(self, "text", _cott_validate_abi(self.text, str, path="$.text"))
+        if not (_cott_contract_condition((((self).line > 0)), "real.toolong.LogEntry", "invariant:0")):
+            raise CottContractViolation("invariant failed", symbol="real.toolong.LogEntry", clause="invariant:0", phase="invariant", span={"end_byte":184,"end_column":28,"end_line":12,"start_byte":161,"start_column":5,"start_line":12}, expected="true", actual="false")
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -52,13 +54,43 @@ class ToolongError_ReadFailed:
 
 ToolongError: TypeAlias = Union[ToolongError_InvalidArguments, ToolongError_ReadFailed]
 
-"""Parse [--contains TEXT] followed by one or more log paths."""
-"""Read UTF-8 log lines in source order and number each source from one."""
-"""Keep all entries without a filter; otherwise keep case-insensitive substring matches."""
-"""Render path:line and text for each entry, separated by newlines."""
-"""Call real.toolong.parse_arguments, then real.toolong.load_entries on its
-sources. Pass the entries and parsed contains option to real.toolong.filter_entries
-and return real.toolong.render_entries of those matches.
-Return an error from parsing or loading unchanged; do not load files after
-argument parsing fails."""
+"""Parse the command line [--contains TEXT] PATH... . Only the first argument
+can be the option: when it is exactly "--contains", the second argument is
+TEXT (any string, including an empty one or one starting with "--") and
+contains is Option.Some(TEXT); every later argument is a path. Otherwise
+contains is Option.Nothing and every argument, including a later
+"--contains", is a path. Each path argument becomes one source, in argument
+order. InvalidArguments: no arguments, "--contains" without TEXT, or no path."""
+"""Split the text of one log file into entries. Split text at every LF; drop the
+last piece when it is empty (text ending in LF, or empty text); then remove
+one trailing CR from each remaining piece. Empty lines in the middle are
+kept. No other character (CR alone, VT, FF, NEL, U+2028, U+2029) separates
+lines. Entry i, counted from one in piece order, has this source, line i and
+the piece as text."""
+"""Read each source completely, in list order, and decode its bytes as strict
+UTF-8. Each source path is read from the file system the program runs
+against: the fs fixture root while a Cott scenario with an fs fixture is
+active, otherwise the host file system, where a relative path is relative to
+the process working directory. The result is the concatenation of
+real.toolong.parse_log(source, text) for every source, so numbering restarts
+at one for each source. The first source that is missing, cannot be opened
+or read, or is not strict UTF-8 stops loading with ToolongError.ReadFailed
+whose path is that source; no entries are returned then. While a scenario fs
+fixture is active, a path the fixture does not permit (absolute, or outside
+the fixture root) is a contract violation raised by the fixture, not a read
+failure."""
+"""Without a filter return entries unchanged. With a filter keep, in their
+original order and multiplicity, exactly the entries whose text contains the
+filter as a substring after mapping the ASCII letters A-Z to a-z in both
+strings. Every other code point compares exactly: there is no Unicode case
+folding or normalization. An empty filter keeps every entry."""
+"""Render one line per entry in order: the source path text, ":", the decimal
+line number, one space and the text. Lines are joined with LF and there is no
+trailing LF, so no entries render as the empty string."""
+"""The toolong composition root. Call real.toolong.parse_arguments with
+arguments, then real.toolong.load_entries with its sources, then
+real.toolong.filter_entries with the loaded entries and its contains value,
+and return real.toolong.render_entries of the kept entries. An error from
+parse_arguments is returned unchanged before any file is read; an error from
+load_entries is returned unchanged and nothing is filtered or rendered."""
 __all__ = ["LogEntry", "ToolongError", "ToolongError_InvalidArguments", "ToolongError_ReadFailed", "ViewerOptions"]

@@ -5,7 +5,7 @@ from curriculum.stock_record_types import StockRecord, StockRecordError, StockRe
 
 
 def value_record(record: StockRecord) -> Result[F64, StockRecordError]:
-    value = record.shares * record.price
+    value = float(record.shares) * record.price
     if not isfinite(value):
         return Err(error=StockRecordError_ValuationOverflow())
     return Ok(value=value)

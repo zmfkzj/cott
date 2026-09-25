@@ -2297,6 +2297,149 @@ public object CottRuntime {
         return true
     }
 
+    // Unicode White_Space, pinned identically in every Cott target. Every
+    // member is a BMP scalar, so a UTF-16 surrogate is never whitespace.
+    private val cottWhiteSpace: Set<Int> = setOf(
+        0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680,
+        0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A,
+        0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
+    )
+
+    private fun stringField(value: Any?, expectedOwner: String, name: String): String =
+        field(value, expectedOwner, name) as? String ?: violation(
+            "selected field is not a Str",
+            phase = "contract-expression",
+            expected = "Str",
+            actual = field(value, expectedOwner, name)?.javaClass?.name ?: "null",
+        )
+
+    private fun stringDependencies(value: Any?, expectedOwner: String, name: String): List<String> {
+        val dependencies = field(value, expectedOwner, name) as? Iterable<*> ?: violation(
+            "selected dependency field is not a Str collection",
+            phase = "contract-expression",
+            expected = "Set[Str] or List[Str]",
+            actual = field(value, expectedOwner, name)?.javaClass?.name ?: "null",
+        )
+        return dependencies.map { dependency ->
+            dependency as? String ?: violation(
+                "dependency is not a Str",
+                phase = "contract-expression",
+                expected = "Str",
+                actual = dependency?.javaClass?.name ?: "null",
+            )
+        }
+    }
+
+    private fun orderedStrings(order: Iterable<*>): List<String> = order.map { item ->
+        item as? String ?: violation(
+            "order item is not a Str",
+            phase = "contract-expression",
+            expected = "Str",
+            actual = item?.javaClass?.name ?: "null",
+        )
+    }
+
+    public fun anyBlankBy(values: Iterable<*>, expectedOwner: String, field: String): Boolean =
+        values.any { value -> stringField(value, expectedOwner, field).all { it.code in cottWhiteSpace } }
+
+    public fun unknownDependencyBy(
+        values: Iterable<*>,
+        expectedOwner: String,
+        key: String,
+        dependencies: String,
+    ): Boolean {
+        val elements = values.toList()
+        val keys = elements.mapTo(HashSet()) { stringField(it, expectedOwner, key) }
+        return elements.any { value ->
+            stringDependencies(value, expectedOwner, dependencies).any { it !in keys }
+        }
+    }
+
+    public fun selfDependencyBy(
+        values: Iterable<*>,
+        expectedOwner: String,
+        key: String,
+        dependencies: String,
+    ): Boolean = values.any { value ->
+        stringField(value, expectedOwner, key) in stringDependencies(value, expectedOwner, dependencies)
+    }
+
+    public fun cyclicBy(
+        values: Iterable<*>,
+        expectedOwner: String,
+        key: String,
+        dependencies: String,
+    ): Boolean {
+        val elements = values.toList()
+        val dependents = LinkedHashMap<String, MutableSet<String>>()
+        for (value in elements) dependents.getOrPut(stringField(value, expectedOwner, key)) { LinkedHashSet() }
+        for (value in elements) {
+            val dependent = stringField(value, expectedOwner, key)
+            for (dependency in stringDependencies(value, expectedOwner, dependencies)) {
+                dependents[dependency]?.add(dependent)
+            }
+        }
+        val incoming = LinkedHashMap<String, Int>()
+        for (node in dependents.keys) incoming[node] = 0
+        for (targets in dependents.values) {
+            for (target in targets) incoming[target] = incoming.getValue(target) + 1
+        }
+        val ready = ArrayDeque(incoming.filterValues { it == 0 }.keys)
+        var ordered = 0
+        while (ready.isNotEmpty()) {
+            val node = ready.removeLast()
+            ordered += 1
+            for (target in dependents.getValue(node)) {
+                val remaining = incoming.getValue(target) - 1
+                incoming[target] = remaining
+                if (remaining == 0) ready.addLast(target)
+            }
+        }
+        return ordered != dependents.size
+    }
+
+    public fun permutationBy(
+        order: Iterable<*>,
+        values: Iterable<*>,
+        expectedOwner: String,
+        key: String,
+    ): Boolean {
+        val remaining = HashMap<String, Int>()
+        for (value in values) {
+            val selected = stringField(value, expectedOwner, key)
+            remaining[selected] = (remaining[selected] ?: 0) + 1
+        }
+        for (item in orderedStrings(order)) {
+            val count = remaining[item] ?: 0
+            if (count == 0) return false
+            remaining[item] = count - 1
+        }
+        return remaining.values.all { it == 0 }
+    }
+
+    public fun dependencyOrderedBy(
+        order: Iterable<*>,
+        values: Iterable<*>,
+        expectedOwner: String,
+        key: String,
+        dependencies: String,
+    ): Boolean {
+        val first = HashMap<String, Int>()
+        val last = HashMap<String, Int>()
+        orderedStrings(order).forEachIndexed { position, item ->
+            first.putIfAbsent(item, position)
+            last[item] = position
+        }
+        for (value in values) {
+            val dependentPosition = first[stringField(value, expectedOwner, key)] ?: continue
+            for (dependency in stringDependencies(value, expectedOwner, dependencies)) {
+                val dependencyPosition = last[dependency] ?: continue
+                if (dependencyPosition >= dependentPosition) return false
+            }
+        }
+        return true
+    }
+
     public fun field(value: Any?, name: String): Any? {
         if (name.isEmpty()) violation("field name must be non-empty", phase = "contract-expression")
         val nominal = value as? CottFieldValue ?: violation(

@@ -8,17 +8,35 @@ enum NavigationError:
 
 fn resolve_location(value: Str, working_directory: Path) -> Result[Location, NavigationError]:
     doc """
-    Return LocationKind.Http for HTTP(S); otherwise return an absolute LocationKind.Local path.
+    Classify address-bar input exactly as typed; it is not trimmed. A value
+    starting with "http://" or "https://" is an Http location whose target is the
+    value. Any other value containing "://" is UnsupportedScheme whose scheme is
+    the text before the first "://". Every other non-empty value is a Local
+    location: a value starting with "/" is the target unchanged; otherwise the
+    target is the text of working_directory, one "/" (omitted when that text
+    already ends with "/") and the value. Local targets are not normalized,
+    "~"-expanded or checked for existence. The browser passes the process's
+    absolute working directory.
     """
 
-    ensures Result.Ok(location) => location.target.len > 0
+    ensures Result.Ok(location) => (starts_with(value, "http://") or starts_with(value, "https://") => location.kind == LocationKind.Http)
+    ensures Result.Ok(location) => (location.kind == LocationKind.Http => location.target == value)
+    ensures Result.Ok(location) => (location.kind == LocationKind.Local => ends_with(location.target, value))
+    ensures Result.Ok(location) => (starts_with(value, "/") => location.target == value)
+    ensures Result.Err(NavigationError.UnsupportedScheme(scheme)) => starts_with(value, scheme)
 
-    error NavigationError.EmptyInput
-    error NavigationError.UnsupportedScheme
+    errors complete
+    error NavigationError.EmptyInput when value == ""
+    error NavigationError.UnsupportedScheme when (contains(value, "://") and not (starts_with(value, "http://") or starts_with(value, "https://")))
 
     effects []
 
 fn display_location(location: Location) -> Str:
-    ensures result.len > 0
+    doc """
+    Address-bar text for a loaded location; reload passes it back to
+    frogmouth.navigation.resolve_location.
+    """
+
+    ensures result == location.target
 
     effects []

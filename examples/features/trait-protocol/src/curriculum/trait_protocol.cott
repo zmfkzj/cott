@@ -28,6 +28,10 @@ async fn specialized_display(receiver: SimpleTask) -> Str:
     Return the text "specialized: " immediately followed by receiver.title.
     """
 
+    ensures (starts_with(result, "specialized: "))
+    ensures (ends_with(result, receiver.title))
+    ensures result.len == receiver.title.len + 13
+
     effects []
 
 fn task_factory() -> Factory[SimpleTask]:
@@ -74,7 +78,7 @@ impl SimpleTask for TaskView[Str] + Completable:
         ensures self.urgency == urgency
 
     async fn summary(self) -> Str:
-        ensures result.len > 0
+        ensures result == self.title
 
         effects []
 
@@ -92,3 +96,15 @@ impl SimpleTask for TaskView[Str] + Completable:
         ensures old(self.completion_count) + 1 == self.completion_count
 
         effects []
+
+scenario dyn_view_dispatches_summary:
+    call task = SimpleTask(title: "Launch", urgency: 1)
+    call summary = task.summary()
+    assert summary == "Launch"
+    data view: Dyn[TaskView[Str]] = Dyn(value: task)
+    call dyn_summary = inspect_dyn(view)
+    assert dyn_summary == "Launch"
+
+requirement DYN_VIEW_RETURNS_SUMMARY for inspect_dyn:
+    text "The result is the awaited `summary()` of the viewed task, not its `display()` or `category()` text."
+    checked_by dyn_view_dispatches_summary assert 2

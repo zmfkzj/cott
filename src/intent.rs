@@ -606,7 +606,7 @@ fn walk_nominals(value: &Value, names: &mut Vec<String>) -> Result<(), String> {
                         names.push(symbol.to_owned());
                     }
                 }
-                Some("call" | "spawn") => {
+                Some("call" | "init" | "method_call" | "spawn") => {
                     if let Some(target) = object.get("target").and_then(Value::as_str) {
                         names.push(target.to_owned());
                     }

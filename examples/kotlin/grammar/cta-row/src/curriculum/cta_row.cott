@@ -30,9 +30,40 @@ fn decode_row(route: Str, date: Str, day_type: Str, rides: I64) -> Result[RideRo
     Success returns a RideRow containing nominal RouteCode, ServiceDate, and RideCount values and the mapped DayType variant. The function has no external effects.
     """
 
-    ensures Result.Ok(row) => (row.route.value == route and row.date.value == date and row.rides.value <= 9223372036854775807)
+    ensures Result.Ok(row) => (row.route.value == route and row.date.value == date)
+    ensures Result.Ok(row) => (day_type == "U" => row.day_type == DayType.SundayHoliday)
+    ensures Result.Ok(row) => (day_type == "A" => row.day_type == DayType.Saturday)
+    ensures Result.Ok(row) => (day_type == "W" => row.day_type == DayType.Weekday)
 
     error RideRowError.InvalidDayType when not (day_type == "U" or day_type == "A" or day_type == "W")
     error RideRowError.InvalidRidership when rides < 0
     error RideRowError.InvalidRoute
     error RideRowError.InvalidDate
+
+scenario errors_follow_validation_priority:
+    call day = decode_row("", "02/30/2024", "X", -1)
+    assert day matches Result.Err(RideRowError.InvalidDayType)
+    call count = decode_row("", "02/30/2024", "U", -1)
+    assert count matches Result.Err(RideRowError.InvalidRidership)
+    call route_code = decode_row("abc", "02/30/2024", "U", 0)
+    assert route_code matches Result.Err(RideRowError.InvalidRoute)
+    call service_date = decode_row("A1", "02/30/2024", "U", 0)
+    assert service_date matches Result.Err(RideRowError.InvalidDate)
+
+scenario valid_days_preserve_rides_and_inputs:
+    call holiday = decode_row("A1", "02/29/2024", "U", 42)
+    assert holiday matches Result.Ok(row) => row.rides.value == 42
+    call saturday = decode_row("9", "01/01/0001", "A", 0)
+    assert saturday matches Result.Ok(row) => row.rides.value == 0
+    call weekday = decode_row("Z999", "12/31/9999", "W", 9223372036854775807)
+    assert weekday matches Result.Ok(row) => row.rides.value == 9223372036854775807
+
+scenario route_and_calendar_boundaries_reject_bad_values:
+    call missing_digit = decode_row("AB", "01/01/2024", "W", 1)
+    assert missing_digit matches Result.Err(RideRowError.InvalidRoute)
+    call overlong = decode_row("AB123", "01/01/2024", "W", 1)
+    assert overlong matches Result.Err(RideRowError.InvalidRoute)
+    call non_leap = decode_row("A1", "02/29/1900", "W", 1)
+    assert non_leap matches Result.Err(RideRowError.InvalidDate)
+    call year_zero = decode_row("A1", "01/01/0000", "W", 1)
+    assert year_zero matches Result.Err(RideRowError.InvalidDate)

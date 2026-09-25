@@ -59,7 +59,7 @@ fn derived_strategy_serializes_verification_limits() {
     assert_eq!(
         serde_json::to_value(&strategy).expect("strategy JSON"),
         json!({
-            "schema_version": 5,
+            "schema_version": 6,
             "symbol": "configured.run",
             "seed": format!("sha256:{}", sha256_hex(&ir.modules[0].bytes)),
             "proof_node_limit": 17,
@@ -328,7 +328,7 @@ fn module(name: &str, declarations: Vec<Value>) -> CanonicalModule {
         "declarations": declarations,
         "imports": [],
         "module": name,
-        "schema_version": 8,
+        "schema_version": 9,
         "source": format!("{name}.cott")
     });
     CanonicalModule {
@@ -1114,7 +1114,7 @@ fn runner_strategy(symbol: &str, clause_ids: Vec<String>) -> Value {
         "return_kind": "value",
         "classification": "pure",
         "clause_ids": clause_ids,
-        "schema_version": 5,
+        "schema_version": 6,
         "seed": "sha256:test",
         "symbol": symbol,
         "proof_node_limit": 1024,
@@ -1261,7 +1261,7 @@ fn runner_request(declaration: Value, strategies: Vec<Value>) -> Value {
             "declarations": [declaration],
             "imports": [],
             "module": "demo",
-            "schema_version": 8,
+            "schema_version": 9,
             "source": "demo.cott"
         }],
         "runtime_validation": "boundary",
@@ -2828,4 +2828,167 @@ fn scenario_values_construct_and_compare_error_payloads() {
             .map(Vec::len),
         Some(2)
     );
+}
+
+const INTRINSIC_ASSERTIONS: &str = r#"module demo
+
+struct Step:
+    name: Str
+    needs: Set[Str]
+
+fn names(steps: List[Step]) -> List[Str]:
+    effects []
+
+fn label(name: Str) -> Str:
+    effects []
+
+scenario properties:
+    data steps: List[Step] = List(
+        Step(name: "b", needs: Set()),
+        Step(name: "a", needs: Set("b")),
+    )
+    call listed = names(steps)
+    assert permutation_by(listed, steps, Step.name) and dependency_ordered_by(listed, steps, Step.name, Step.needs)
+    call tagged = label("x")
+    assert starts_with(tagged, "cott-") and contains(tagged, "x")
+"#;
+
+fn intrinsic_assertion_implementations(names: &str, label: &str) -> [(&'static str, String); 2] {
+    [
+        (
+            "demo.names",
+            format!(
+                "from cott_runtime import CottList\nfrom demo_types import Step\n\ndef names(steps: CottList[Step]) -> CottList[str]:\n    return CottList(values={names})\n"
+            ),
+        ),
+        (
+            "demo.label",
+            format!("def label(name: str) -> str:\n    return {label}\n"),
+        ),
+    ]
+}
+
+#[test]
+fn scenario_assertions_evaluate_closed_intrinsics_like_facade_contracts() {
+    let run = |names: &str, label: &str| {
+        let implementations = intrinsic_assertion_implementations(names, label);
+        let implementations = implementations
+            .iter()
+            .map(|(symbol, source)| (*symbol, source.as_str()))
+            .collect::<Vec<_>>();
+        run_emitted_contract_runner(
+            INTRINSIC_ASSERTIONS,
+            &implementations,
+            &["demo.scenario.properties"],
+        )
+    };
+    let Some(output) = run("[step.name for step in steps]", "\"cott-\" + name") else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("runner JSON");
+    assert_eq!(report["scenarios"][0]["grade"], "test observation");
+
+    for (names, label, failed_step) in [
+        // A lost element violates the multiset predicate.
+        ("[step.name for step in steps][:1]", "\"cott-\" + name", 2),
+        // The right multiset in the wrong dependency order.
+        (
+            "[step.name for step in reversed(steps)]",
+            "\"cott-\" + name",
+            2,
+        ),
+        // String predicates use Cott semantics, not truthiness.
+        ("[step.name for step in steps]", "name", 4),
+    ] {
+        let Some(output) = run(names, label) else {
+            return;
+        };
+        assert!(!output.status.success(), "{names} / {label} passed");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("assertion step:{failed_step} failed")),
+            "{stderr}"
+        );
+    }
+}
+
+const SCENARIO_IMPL_DYN: &str = r#"module demo
+trait TaskView[+T]:
+    fn summary(self) -> T
+impl SimpleTask for TaskView[Str]:
+    state:
+        title: Str
+        urgency: I32
+    init(title: Str, urgency: I32):
+        ensures self.title == title
+        ensures self.urgency == urgency
+    fn summary(self) -> Str:
+        ensures result == self.title
+        effects []
+fn inspect(view: Dyn[TaskView[Str]]) -> Str:
+    effects []
+scenario dispatches:
+    call task = SimpleTask(title: "Launch", urgency: 1)
+    call summary = task.summary()
+    assert summary == "Launch"
+    data view: Dyn[TaskView[Str]] = Dyn(value: task)
+    call observed = inspect(view)
+    assert observed == "Launch"
+    call nested = inspect(Dyn(value: task))
+    assert nested == "Launch"
+"#;
+
+fn scenario_impl_dyn_bindings(summary: &str, inspect: &str) -> [(&'static str, String); 2] {
+    [
+        (
+            "demo.SimpleTask.summary",
+            format!(
+                "from __future__ import annotations\n\ndef _cott_impl_SimpleTask_summary(self: SimpleTask) -> str:\n    return {summary}\n"
+            ),
+        ),
+        (
+            "demo.inspect",
+            format!(
+                "from cott_runtime import Dyn\nfrom demo import TaskView\n\ndef inspect(view: Dyn[TaskView[str]]) -> str:\n    return {inspect}\n"
+            ),
+        ),
+    ]
+}
+
+#[test]
+fn emitted_python_scenarios_execute_impl_init_receiver_method_and_nested_dyn() {
+    let run = |summary: &str, inspect: &str| {
+        let implementations = scenario_impl_dyn_bindings(summary, inspect);
+        let borrowed = implementations
+            .iter()
+            .map(|(symbol, source)| (*symbol, source.as_str()))
+            .collect::<Vec<_>>();
+        run_emitted_contract_runner(SCENARIO_IMPL_DYN, &borrowed, &["demo.scenario.dispatches"])
+    };
+    let Some(output) = run("self.title", "view.value.summary()") else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("runner JSON");
+    assert_eq!(report["scenarios"][0]["grade"], "test observation");
+    for (summary, inspect, expected) in [
+        ("self.title", "\"wrong\"", "assertion step:5 failed"),
+        ("\"wrong\"", "view.value.summary()", "ensures clause failed"),
+    ] {
+        let Some(output) = run(summary, inspect) else {
+            return;
+        };
+        assert!(!output.status.success(), "{summary} / {inspect} passed");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(expected), "{stderr}");
+    }
 }

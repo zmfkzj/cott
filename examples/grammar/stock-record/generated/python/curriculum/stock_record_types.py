@@ -8,6 +8,8 @@ from typing import Annotated, Any, Final, ForwardRef, Generic, Literal, Never, P
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottContractViolation, CottExternal, CottList, CottSet, Dyn, Err, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Nothing, Ok, Opaque, Option, Result, Some, U8, U16, U32, U64, UNIT, Unit, _cott_descending_by, _cott_ends_with, _cott_euclidean_mod, _cott_normalize_f32, _cott_starts_with, _cott_unique_by, _cott_validate_abi, _cott_validated_construction
 from cott_runtime import _cott_contract_condition
+MAX_F64: Final[F64] = 179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
 class StockRecord:
@@ -51,12 +53,12 @@ class StockRecordError_ValuationOverflow:
 
 StockRecordError: TypeAlias = Union[StockRecordError_EmptyName, StockRecordError_NegativeShares, StockRecordError_NonFinitePrice, StockRecordError_NegativePrice, StockRecordError_ValuationOverflow]
 
-"""Computes the value of a validated stock record.
-
-The caller supplies non-negative shares and a non-negative price.
-ValuationOverflow is returned when the binary64 product is not finite."""
-"""Validates and values one raw stock record.
-
-Validation reports EmptyName, NegativeShares, NonFinitePrice, then
-NegativePrice in source order. A valid record is valued by value_record."""
-__all__ = ["StockRecord", "StockRecordError", "StockRecordError_EmptyName", "StockRecordError_NegativePrice", "StockRecordError_NegativeShares", "StockRecordError_NonFinitePrice", "StockRecordError_ValuationOverflow"]
+"""Computes the value of a validated stock record: the share count converted
+to the nearest binary64 value, multiplied by the price with binary64
+round-to-nearest, ties-to-even. The name does not affect the value.
+ValuationOverflow is returned when the product is not finite."""
+"""Validates one raw stock record and values it. For a record that passes
+every validation clause, it calls the public
+curriculum.stock_record.value_record facade and returns that result,
+including ValuationOverflow, unchanged."""
+__all__ = ["MAX_F64", "StockRecord", "StockRecordError", "StockRecordError_EmptyName", "StockRecordError_NegativePrice", "StockRecordError_NegativeShares", "StockRecordError_NonFinitePrice", "StockRecordError_ValuationOverflow"]

@@ -119,30 +119,6 @@ public sealed interface BarError {
             cott_runtime.CottRuntime.abi(reason, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.reason")
         }
     }
-    public data object ServiceUnavailable : BarError, cott_runtime.CottVariant {
-        override val cottVariant: kotlin.String get() = "foo.bar.BarError.ServiceUnavailable"
-        override val cottTypeIdentity: kotlin.String get() = "foo.bar.BarError.ServiceUnavailable"
-        override val cottFieldNames: cott_runtime.CottList<kotlin.String> get() = cott_runtime.CottList(listOf())
-        override val cottPayload: cott_runtime.CottList<kotlin.Any?> get() = cott_runtime.CottList(listOf())
-        override fun cottField(name: kotlin.String): kotlin.Any? = when (name) {
-            else -> cott_runtime.CottRuntime.violation("unknown canonical field", symbol = cottVariant, phase = "field", actual = name)
-        }
-    }
-    public data class ProcessingFailed(
-        public val message: kotlin.String,
-    ) : BarError, cott_runtime.CottVariant {
-        override val cottVariant: kotlin.String get() = "foo.bar.BarError.ProcessingFailed"
-        override val cottTypeIdentity: kotlin.String get() = "foo.bar.BarError.ProcessingFailed"
-        override val cottFieldNames: cott_runtime.CottList<kotlin.String> get() = cott_runtime.CottList(listOf("message"))
-        override val cottPayload: cott_runtime.CottList<kotlin.Any?> get() = cott_runtime.CottList(listOf(message))
-        override fun cottField(name: kotlin.String): kotlin.Any? = when (name) {
-            "message" -> this.message
-            else -> cott_runtime.CottRuntime.violation("unknown canonical field", symbol = cottVariant, phase = "field", actual = name)
-        }
-        init {
-            cott_runtime.CottRuntime.abi(message, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.message")
-        }
-    }
 }
 
 public data class BarOptions(
@@ -268,7 +244,7 @@ internal object CottDescriptors_2595d08ad22c733f7a1ce713 {
                 }
             }
             descriptors[key] = deferred
-            val resolved: cott_runtime.CottType<foo.bar.BarError> = (cott_runtime.CottTypes.oneOf(listOf(cott_runtime.CottTypes.nominal(_cottDisplayName + "#InvalidPayload", foo.bar.BarError.InvalidPayload::class.java as java.lang.Class<foo.bar.BarError.InvalidPayload>, listOf(cott_runtime.CottNominalField<foo.bar.BarError.InvalidPayload>("reason", cott_runtime.CottTypes.STRING, { value -> value.reason })), { values -> foo.bar.BarError.InvalidPayload(values[0] as kotlin.String) }), cott_runtime.CottTypes.nominal(_cottDisplayName + "#ServiceUnavailable", foo.bar.BarError.ServiceUnavailable::class.java as java.lang.Class<foo.bar.BarError.ServiceUnavailable>, listOf(), { values -> foo.bar.BarError.ServiceUnavailable }), cott_runtime.CottTypes.nominal(_cottDisplayName + "#ProcessingFailed", foo.bar.BarError.ProcessingFailed::class.java as java.lang.Class<foo.bar.BarError.ProcessingFailed>, listOf(cott_runtime.CottNominalField<foo.bar.BarError.ProcessingFailed>("message", cott_runtime.CottTypes.STRING, { value -> value.message })), { values -> foo.bar.BarError.ProcessingFailed(values[0] as kotlin.String) }))) as cott_runtime.CottType<foo.bar.BarError>)
+            val resolved: cott_runtime.CottType<foo.bar.BarError> = (cott_runtime.CottTypes.oneOf(listOf(cott_runtime.CottTypes.nominal(_cottDisplayName + "#InvalidPayload", foo.bar.BarError.InvalidPayload::class.java as java.lang.Class<foo.bar.BarError.InvalidPayload>, listOf(cott_runtime.CottNominalField<foo.bar.BarError.InvalidPayload>("reason", cott_runtime.CottTypes.STRING, { value -> value.reason })), { values -> foo.bar.BarError.InvalidPayload(values[0] as kotlin.String) }))) as cott_runtime.CottType<foo.bar.BarError>)
             descriptors[key] = resolved
             resolved
         }

@@ -6,7 +6,7 @@ from pathlib import Path
 import duckdb
 from cott_runtime import CottList, Err, Ok
 from real.harlequin.core import connect, disconnect, begin_transaction, commit_transaction, rollback_transaction, execute_statements
-from real.harlequin.core_types import AdapterKind_Sqlite, AdapterKind_DuckDb, AdapterKind_Adbc, ConnectionRequest, Transaction, Cell_Integer
+from real.harlequin.core_types import AdapterKind_Sqlite, AdapterKind_DuckDb, AdapterKind_Adbc, ConnectionRequest, Transaction, TransactionStatus_Active, TransactionStatus_Committed, TransactionStatus_RolledBack, Cell_Integer
 
 
 def open_session(adapter, endpoint):
@@ -33,24 +33,24 @@ def exercise(adapter, endpoint, label):
     try:
         execute(connection, 'CREATE TABLE ledger(value INTEGER)')
         first = begin_transaction(connection)
-        assert isinstance(first, Ok) and first.value.active, first
+        assert isinstance(first, Ok) and isinstance(first.value.status, TransactionStatus_Active), first
         assert isinstance(begin_transaction(connection), Err), 'nested lease accepted'
         execute(connection, 'INSERT INTO ledger VALUES (1)')
         assert count(connection) == 1
         rolled = rollback_transaction(first.value)
-        assert isinstance(rolled, Ok) and not rolled.value.active, rolled
+        assert isinstance(rolled, Ok) and isinstance(rolled.value.status, TransactionStatus_RolledBack), rolled
         assert rolled.value.lease.unwrap() is first.value.lease.unwrap()
         assert count(connection) == 0, 'rollback did not affect the retained driver'
         second = begin_transaction(connection)
-        assert isinstance(second, Ok) and second.value.active, second
+        assert isinstance(second, Ok) and isinstance(second.value.status, TransactionStatus_Active), second
         assert isinstance(commit_transaction(first.value), Err), 'stale lease accepted'
         execute(connection, 'INSERT INTO ledger VALUES (2)')
         committed = commit_transaction(second.value)
-        assert isinstance(committed, Ok) and not committed.value.active, committed
+        assert isinstance(committed, Ok) and isinstance(committed.value.status, TransactionStatus_Committed), committed
         assert count(connection) == 1
         assert isinstance(rollback_transaction(second.value), Err), 'finished lease accepted'
         third = begin_transaction(connection)
-        assert isinstance(third, Ok) and third.value.active, third
+        assert isinstance(third, Ok) and isinstance(third.value.status, TransactionStatus_Active), third
         execute(connection, 'INSERT INTO ledger VALUES (3)')
         assert count(connection) == 2
     finally:
@@ -64,7 +64,7 @@ def exercise(adapter, endpoint, label):
         assert count(reopened) == 1, 'disconnect committed instead of rolling back'
         current = begin_transaction(reopened)
         assert isinstance(current, Ok), current
-        foreign = Transaction(connection=reopened, lease=third.value.lease, active=True)
+        foreign = Transaction(connection=reopened, lease=third.value.lease, status=TransactionStatus_Active())
         assert isinstance(commit_transaction(foreign), Err), 'wrong-owner lease accepted'
         assert isinstance(rollback_transaction(current.value), Ok)
     finally:

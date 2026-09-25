@@ -36,6 +36,57 @@ public sealed interface EffectError {
     }
 }
 
+public data class FileText(
+    public val path: java.nio.file.Path,
+    public val text: kotlin.String,
+) : cott_runtime.CottFieldValue {
+    override val cottTypeIdentity: kotlin.String get() = "curriculum.effects_selection.FileText"
+    override val cottFieldNames: cott_runtime.CottList<kotlin.String> get() = cott_runtime.CottList(listOf("path", "text"))
+    override fun cottField(name: kotlin.String): kotlin.Any? = when (name) {
+        "path" -> this.path
+        "text" -> this.text
+        else -> cott_runtime.CottRuntime.violation("unknown canonical field", symbol = cottTypeIdentity, phase = "field", actual = name)
+    }
+    init {
+        cott_runtime.CottRuntime.abi(path, cott_runtime.CottTypes.PATH, cott_runtime.RuntimeValidation.BOUNDARY, "\$.path")
+        cott_runtime.CottRuntime.abi(text, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.text")
+    }
+}
+
+public data class CopyReceipt(
+    public val destination: java.nio.file.Path,
+    public val bytes_written: kotlin.ULong,
+) : cott_runtime.CottFieldValue {
+    override val cottTypeIdentity: kotlin.String get() = "curriculum.effects_selection.CopyReceipt"
+    override val cottFieldNames: cott_runtime.CottList<kotlin.String> get() = cott_runtime.CottList(listOf("destination", "bytes_written"))
+    override fun cottField(name: kotlin.String): kotlin.Any? = when (name) {
+        "destination" -> this.destination
+        "bytes_written" -> this.bytes_written
+        else -> cott_runtime.CottRuntime.violation("unknown canonical field", symbol = cottTypeIdentity, phase = "field", actual = name)
+    }
+    init {
+        cott_runtime.CottRuntime.abi(destination, cott_runtime.CottTypes.PATH, cott_runtime.RuntimeValidation.BOUNDARY, "\$.destination")
+        cott_runtime.CottRuntime.abi(bytes_written, cott_runtime.CottTypes.U64, cott_runtime.RuntimeValidation.BOUNDARY, "\$.bytes_written")
+    }
+}
+
+public data class PageText(
+    public val url: kotlin.String,
+    public val text: kotlin.String,
+) : cott_runtime.CottFieldValue {
+    override val cottTypeIdentity: kotlin.String get() = "curriculum.effects_selection.PageText"
+    override val cottFieldNames: cott_runtime.CottList<kotlin.String> get() = cott_runtime.CottList(listOf("url", "text"))
+    override fun cottField(name: kotlin.String): kotlin.Any? = when (name) {
+        "url" -> this.url
+        "text" -> this.text
+        else -> cott_runtime.CottRuntime.violation("unknown canonical field", symbol = cottTypeIdentity, phase = "field", actual = name)
+    }
+    init {
+        cott_runtime.CottRuntime.abi(url, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.url")
+        cott_runtime.CottRuntime.abi(text, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.text")
+    }
+}
+
 internal object CottDescriptors_e0ed559648b287a5e596b5e2 {
     private val descriptors: kotlin.collections.MutableMap<kotlin.collections.List<kotlin.Any>, cott_runtime.CottType<*>> = java.util.HashMap()
 
@@ -53,6 +104,60 @@ internal object CottDescriptors_e0ed559648b287a5e596b5e2 {
             }
             descriptors[key] = deferred
             val resolved: cott_runtime.CottType<curriculum.effects_selection.EffectError> = (cott_runtime.CottTypes.oneOf(listOf(cott_runtime.CottTypes.nominal(_cottDisplayName + "#InputMissing", curriculum.effects_selection.EffectError.InputMissing::class.java as java.lang.Class<curriculum.effects_selection.EffectError.InputMissing>, listOf(cott_runtime.CottNominalField<curriculum.effects_selection.EffectError.InputMissing>("path", cott_runtime.CottTypes.PATH, { value -> value.path })), { values -> curriculum.effects_selection.EffectError.InputMissing(values[0] as java.nio.file.Path) }), cott_runtime.CottTypes.nominal(_cottDisplayName + "#OperationFailed", curriculum.effects_selection.EffectError.OperationFailed::class.java as java.lang.Class<curriculum.effects_selection.EffectError.OperationFailed>, listOf(cott_runtime.CottNominalField<curriculum.effects_selection.EffectError.OperationFailed>("message", cott_runtime.CottTypes.STRING, { value -> value.message })), { values -> curriculum.effects_selection.EffectError.OperationFailed(values[0] as kotlin.String) }))) as cott_runtime.CottType<curriculum.effects_selection.EffectError>)
+            descriptors[key] = resolved
+            resolved
+        }
+
+    internal fun  type_db30bc346770d42244a541cf(): cott_runtime.CottType<curriculum.effects_selection.FileText> =
+        kotlin.synchronized(cott_runtime.CottTypes) {
+            val key: kotlin.collections.List<kotlin.Any> = listOf("curriculum.effects_selection.FileText")
+            val existing = descriptors[key]
+            if (existing != null) return@synchronized existing as cott_runtime.CottType<curriculum.effects_selection.FileText>
+            val _cottDisplayName: kotlin.String = key.joinToString(separator = "|")
+            val deferred: cott_runtime.CottType<curriculum.effects_selection.FileText> = cott_runtime.CottTypes.deferred(_cottDisplayName) {
+                kotlin.synchronized(cott_runtime.CottTypes) {
+                    descriptors[key] as? cott_runtime.CottType<curriculum.effects_selection.FileText>
+                        ?: cott_runtime.CottRuntime.violation("recursive descriptor was resolved before initialization", symbol = "curriculum.effects_selection.FileText", phase = "validation")
+                }
+            }
+            descriptors[key] = deferred
+            val resolved: cott_runtime.CottType<curriculum.effects_selection.FileText> = cott_runtime.CottTypes.nominal(_cottDisplayName, curriculum.effects_selection.FileText::class.java as java.lang.Class<curriculum.effects_selection.FileText>, listOf(cott_runtime.CottNominalField<curriculum.effects_selection.FileText>("path", cott_runtime.CottTypes.PATH, { value -> value.path }), cott_runtime.CottNominalField<curriculum.effects_selection.FileText>("text", cott_runtime.CottTypes.STRING, { value -> value.text })), { values -> curriculum.effects_selection.FileText(values[0] as java.nio.file.Path, values[1] as kotlin.String) })
+            descriptors[key] = resolved
+            resolved
+        }
+
+    internal fun  type_78326246ef43de6e040e33d1(): cott_runtime.CottType<curriculum.effects_selection.CopyReceipt> =
+        kotlin.synchronized(cott_runtime.CottTypes) {
+            val key: kotlin.collections.List<kotlin.Any> = listOf("curriculum.effects_selection.CopyReceipt")
+            val existing = descriptors[key]
+            if (existing != null) return@synchronized existing as cott_runtime.CottType<curriculum.effects_selection.CopyReceipt>
+            val _cottDisplayName: kotlin.String = key.joinToString(separator = "|")
+            val deferred: cott_runtime.CottType<curriculum.effects_selection.CopyReceipt> = cott_runtime.CottTypes.deferred(_cottDisplayName) {
+                kotlin.synchronized(cott_runtime.CottTypes) {
+                    descriptors[key] as? cott_runtime.CottType<curriculum.effects_selection.CopyReceipt>
+                        ?: cott_runtime.CottRuntime.violation("recursive descriptor was resolved before initialization", symbol = "curriculum.effects_selection.CopyReceipt", phase = "validation")
+                }
+            }
+            descriptors[key] = deferred
+            val resolved: cott_runtime.CottType<curriculum.effects_selection.CopyReceipt> = cott_runtime.CottTypes.nominal(_cottDisplayName, curriculum.effects_selection.CopyReceipt::class.java as java.lang.Class<curriculum.effects_selection.CopyReceipt>, listOf(cott_runtime.CottNominalField<curriculum.effects_selection.CopyReceipt>("destination", cott_runtime.CottTypes.PATH, { value -> value.destination }), cott_runtime.CottNominalField<curriculum.effects_selection.CopyReceipt>("bytes_written", cott_runtime.CottTypes.U64, { value -> value.bytes_written })), { values -> curriculum.effects_selection.CopyReceipt(values[0] as java.nio.file.Path, values[1] as kotlin.ULong) })
+            descriptors[key] = resolved
+            resolved
+        }
+
+    internal fun  type_77ddce7defc9e95e7956c9f6(): cott_runtime.CottType<curriculum.effects_selection.PageText> =
+        kotlin.synchronized(cott_runtime.CottTypes) {
+            val key: kotlin.collections.List<kotlin.Any> = listOf("curriculum.effects_selection.PageText")
+            val existing = descriptors[key]
+            if (existing != null) return@synchronized existing as cott_runtime.CottType<curriculum.effects_selection.PageText>
+            val _cottDisplayName: kotlin.String = key.joinToString(separator = "|")
+            val deferred: cott_runtime.CottType<curriculum.effects_selection.PageText> = cott_runtime.CottTypes.deferred(_cottDisplayName) {
+                kotlin.synchronized(cott_runtime.CottTypes) {
+                    descriptors[key] as? cott_runtime.CottType<curriculum.effects_selection.PageText>
+                        ?: cott_runtime.CottRuntime.violation("recursive descriptor was resolved before initialization", symbol = "curriculum.effects_selection.PageText", phase = "validation")
+                }
+            }
+            descriptors[key] = deferred
+            val resolved: cott_runtime.CottType<curriculum.effects_selection.PageText> = cott_runtime.CottTypes.nominal(_cottDisplayName, curriculum.effects_selection.PageText::class.java as java.lang.Class<curriculum.effects_selection.PageText>, listOf(cott_runtime.CottNominalField<curriculum.effects_selection.PageText>("url", cott_runtime.CottTypes.STRING, { value -> value.url }), cott_runtime.CottNominalField<curriculum.effects_selection.PageText>("text", cott_runtime.CottTypes.STRING, { value -> value.text })), { values -> curriculum.effects_selection.PageText(values[0] as kotlin.String, values[1] as kotlin.String) })
             descriptors[key] = resolved
             resolved
         }

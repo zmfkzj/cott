@@ -1563,16 +1563,20 @@ def _cott_validate_dependencies(dependencies: object, source: bytes, public_pyth
     required = _cott_required_distributions(source, public_python_symbols)
     if type(dependencies) is not list:
         raise _cott_violation("generation dependencies must be an array")
-    recorded_names = {
+    # Entries without installed evidence are production lock identities that no implementation
+    # imports; they authorize no import, so every required distribution needs observed evidence.
+    evidenced_names = {
         dependency.get("name")
         for dependency in dependencies
-        if type(dependency) is dict and type(dependency.get("name")) is str
+        if type(dependency) is dict and type(dependency.get("name")) is str and "installed" in dependency
     }
-    if not set(required).issubset(recorded_names):
+    if not set(required).issubset(evidenced_names):
         raise _cott_violation("implementation external dependencies lack provenance")
     for dependency in dependencies:
         if type(dependency) is not dict:
             raise _cott_violation("generation dependency is not an object")
+        if "installed" not in dependency:
+            continue
         name = dependency.get("name")
         version = dependency.get("version")
         installed = dependency.get("installed")
@@ -1656,7 +1660,7 @@ def _cott_is_verification(value: object) -> bool:
         or status == "compared" and not _cott_is_digest(baseline)
     ):
         return False
-    allowed_fields = {"content_hash", "concrete", "kind", "method", "owner", "python_symbol", "runtime_origin", "source_origin"}
+    allowed_fields = {"callable_kind", "content_hash", "concrete", "kind", "method", "owner", "python_symbol", "runtime_origin", "selection", "source_origin"}
     for entry in entries:
         if type(entry) is not dict or set(entry) != {"cott_symbol", "status", "changed_fields"}:
             return False
@@ -1670,14 +1674,23 @@ def _cott_is_verification(value: object) -> bool:
             or entry["status"] != "unchanged" and not changed_fields
         ):
             return False
-        for change in changed_fields.values():
-            if (
-                type(change) is not dict
-                or set(change) != {"before", "after"}
-                or change["before"] is not None and type(change["before"]) is not str
-                or change["after"] is not None and type(change["after"]) is not str
-            ):
+        for field, change in changed_fields.items():
+            if type(change) is not dict or set(change) != {"before", "after"}:
                 return False
+            for value in (change["before"], change["after"]):
+                if value is None:
+                    continue
+                if field == "selection":
+                    if (
+                        type(value) is not dict
+                        or set(value) != {"kind", "trait_method"}
+                        or value["kind"] != "explicit"
+                        or type(value["trait_method"]) is not str
+                        or not value["trait_method"]
+                    ):
+                        return False
+                elif type(value) is not str:
+                    return False
     return True
 
 def _cott_is_agent_run(value: object) -> bool:
@@ -1989,9 +2002,9 @@ def _cott_validate_generation_snapshot(snapshot: object, label: str) -> dict[obj
         or any(type(compatibility[key]) is not int for key in compatibility)
         or compatibility != {
             "generation_schema": 8,
-            "canonical_ir_schema": 8,
+            "canonical_ir_schema": 9,
             "runtime_abi": 7,
-            "contract_strategy_schema": 5,
+            "contract_strategy_schema": 6,
         }
     ):
         raise _cott_violation(f"{label} generation compatibility is incompatible")

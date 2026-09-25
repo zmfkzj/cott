@@ -3,6 +3,8 @@
 
 package curriculum.stock_record
 
+public val MAX_F64: kotlin.Double = kotlin.Double.fromBits(9218868437227405311)
+
 public data class StockRecord(
     public val name: kotlin.String,
     public val shares: kotlin.Long,

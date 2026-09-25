@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const GENERATION_SCHEMA_VERSION: u32 = 8;
-pub const CANONICAL_IR_SCHEMA_VERSION: u32 = 8;
+pub const CANONICAL_IR_SCHEMA_VERSION: u32 = 9;
 pub const RUNTIME_ABI_VERSION: u32 = 7;
-pub const CONTRACT_STRATEGY_SCHEMA_VERSION: u32 = 5;
+pub const CONTRACT_STRATEGY_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -462,6 +462,78 @@ impl GenerationRecord {
         Ok(record)
     }
 
+    /// Only explicit Python emit may turn a complete IR-8/strategy-5 record
+    /// into an unverified current-schema record. This is not a normal reader.
+    pub(crate) fn legacy_for_emit(bytes: &[u8]) -> Result<Option<Self>, String> {
+        let wire = crate::snapshot_record::parse_json(bytes)?;
+        let (current, last_verified) =
+            crate::snapshot_record::decode_legacy(&wire, GENERATION_SCHEMA_VERSION)?;
+        let mut record = Self {
+            schema_version: GENERATION_SCHEMA_VERSION,
+            current: serde_json::from_value(current).map_err(|error| error.to_string())?,
+            last_verified: last_verified
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|error| error.to_string())?,
+        };
+        if record.current.compatibility.is_current() {
+            Self::parse(bytes)?;
+            return Ok(None);
+        }
+        validate_legacy_snapshot_identity(&record.current)?;
+        if let Some(last) = &record.last_verified {
+            if !last.verified {
+                return Err("legacy last_verified snapshot is not verified".to_owned());
+            }
+            validate_legacy_snapshot_identity(last)?;
+        }
+        record.current.compatibility = GenerationCompatibility::current();
+        record.current.verified = false;
+        record.current.verification = Value::Null;
+        record.current.semantic_coverage = SemanticCoverage::default();
+        record.current.compute_generation_id()?;
+        record.last_verified = None;
+        record.canonical_bytes()?;
+        Ok(Some(record))
+    }
+}
+
+fn validate_legacy_snapshot_identity(snapshot: &GenerationSnapshot) -> Result<(), String> {
+    if snapshot.compatibility
+        != (GenerationCompatibility {
+            generation_schema: GENERATION_SCHEMA_VERSION,
+            canonical_ir_schema: 8,
+            runtime_abi: RUNTIME_ABI_VERSION,
+            contract_strategy_schema: 5,
+        })
+    {
+        return Err("legacy Python generation compatibility must be exactly 8/8/7/5".to_owned());
+    }
+    if crate::manifest::parse_api_version(&snapshot.project_version).is_none() {
+        return Err(
+            "legacy generation project_version must be a restricted x.y.z version".to_owned(),
+        );
+    }
+    if snapshot.verified != snapshot.verification.is_object() {
+        return Err(
+            "legacy verification evidence must be present exactly when verified".to_owned(),
+        );
+    }
+    validate_unresolved_records(&snapshot.unresolved)?;
+    validate_implementation_records(&snapshot.implementations)?;
+    validate_semantic_coverage(&snapshot.semantic_coverage)?;
+    crate::intent::recorded_fingerprints(&snapshot.tools)?;
+    let expected = crate::snapshot_record::digest(&normalized_generation_identity(snapshot)?)?;
+    if snapshot.generation_id != expected {
+        return Err(format!(
+            "legacy generation identity mismatch: expected {expected}, got {}",
+            snapshot.generation_id
+        ));
+    }
+    Ok(())
+}
+
+impl GenerationRecord {
     fn validate_identities(&self) -> Result<(), String> {
         if self.schema_version != GENERATION_SCHEMA_VERSION {
             return Err(format!(

@@ -23,6 +23,16 @@ pub fn render_type(plan: &KotlinPlan, ty: &Value) -> Result<String, String> {
     render_contextual_type(ty, None, &declarations)
 }
 
+/// Run `render` with the plan's emission type context, the same context `render_type` uses,
+/// so scenario values spell trait types with their generated associated-type slots.
+pub(crate) fn with_type_context<R>(
+    plan: &KotlinPlan,
+    render: impl FnOnce(&dyn KotlinTypeContext) -> R,
+) -> Result<R, String> {
+    let declarations = declaration_index(plan)?;
+    Ok(render(&EmissionTypeContext::new(&declarations)))
+}
+
 const KOTLIN_RUNTIME_ABI: i32 = 1;
 
 pub fn emit(
@@ -1139,7 +1149,11 @@ fn collect_markers(
                     opaques.insert(required_string(object, "tag", "opaque type")?.to_owned());
                 }
                 Some("dyn") => {
-                    let trait_ref = required(object, "trait", "Dyn type")?;
+                    let trait_ref = if object.contains_key("trait_ref") {
+                        required(object, "trait_ref", "Dyn expression")?
+                    } else {
+                        required(object, "trait", "Dyn type")?
+                    };
                     trait_tokens.insert(trait_marker(trait_ref)?, trait_ref.clone());
                 }
                 Some("tuple") => {

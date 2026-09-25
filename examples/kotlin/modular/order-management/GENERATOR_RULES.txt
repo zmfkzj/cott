@@ -1,3 +1,1 @@
-`cott_runtime.CottList` fields such as `Catalog.items` and `Order.lines` implement Kotlin's read-only `List`; iterate them directly and never assume mutable backing storage. Preserve exact `UInt` quantities and `ULong` cent values without signed narrowing or wraparound.
-
-In `calculate_order`, call the public facades `store.order.validate_line` and `store.catalog.find_item`, propagate the first validation error, and wrap catalog errors as the declared `OrderError.ItemUnavailable`. Never duplicate validation or lookup logic and never import or call implementation packages.
+`cott_runtime.CottList` fields such as `Catalog.items` and `Order.lines` implement Kotlin's read-only `List`; iterate them directly and never assume mutable backing storage.

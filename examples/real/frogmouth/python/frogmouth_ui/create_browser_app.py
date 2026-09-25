@@ -2,9 +2,9 @@ from pathlib import Path
 from typing import ClassVar, final
 
 from cott_runtime import Err, Option, Some
-from frogmouth.document import load_document
+from frogmouth.document import open_location
 from frogmouth.model import Document
-from frogmouth.navigation import display_location, resolve_location
+from frogmouth.navigation import display_location
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.widgets import Footer, Input, MarkdownViewer
@@ -41,17 +41,13 @@ def create_browser_app(initial_location: Option[str], working_directory: Path) -
             self._open(event.value)
 
         def _open(self, value: str) -> None:
-            resolved = resolve_location(value, self._cwd)
-            if isinstance(resolved, Err):
-                self.notify(str(resolved.error), severity="error")
+            opened = open_location(value, self._cwd)
+            if isinstance(opened, Err):
+                self.notify(str(opened.error), severity="error")
                 return
-            loaded = load_document(resolved.value)
-            if isinstance(loaded, Err):
-                self.notify(str(loaded.error), severity="error")
-                return
-            self._document = loaded.value
-            self.title = f"{loaded.value.title} — Frogmouth"
-            self.query_one("#address", Input).value = display_location(loaded.value.location)
+            self._document = opened.value
+            self.title = f"{opened.value.title} — Frogmouth"
+            self.query_one("#address", Input).value = display_location(opened.value.location)
             self.call_later(self._render)
 
         async def _render(self) -> None:

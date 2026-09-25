@@ -11,7 +11,7 @@ import kotlinx.coroutines.runBlocking
 public fun main(): Unit = runBlocking {
     val payload = wrap_scalar_json("greeting", "Hello Cott")
     when (val extracted = extract_string_field(payload, "greeting")) {
-        is Ok -> println("Extracted JSON field: ${extracted.value}")
+        is Ok -> println("Extracted JSON field: ${extracted.value.text}")
         is Err -> error("unexpected JSON extraction error: ${extracted.error}")
     }
 

@@ -2,64 +2,94 @@ module curriculum.boundary_protocols
 
 external type TextBuffer
 
+newtype ConnectionId(U64)
+    where self > 0
+
 struct HandleBundle:
     handle: Opaque["client_session"]
-    raw_id: U64
+    raw_id: ConnectionId
 
-enum HandleError:
-    InvalidHandle
-
-fn wrap_handle(raw_id: U64) -> Result[HandleBundle, HandleError]:
+fn wrap_handle(raw_id: ConnectionId) -> HandleBundle:
     doc """
-    Wrap a nonzero connection ID in a client-session opaque handle.
+    Wrap a connection ID in a client-session opaque handle.
+    
+    The handle's opaque payload is the U64 value carried by `raw_id`, not the `ConnectionId`
+    wrapper and not a target object derived from it. `HandleBundle.raw_id` repeats the same ID
+    as plain data.
     """
 
-    ensures Result.Ok(bundle) => bundle.raw_id == raw_id and bundle.raw_id > 0
-
-    error HandleError.InvalidHandle when raw_id == 0
+    ensures result.raw_id == raw_id
 
     effects []
 
-fn extract_handle_id(bundle: HandleBundle) -> U64:
+fn extract_handle_id(bundle: HandleBundle) -> ConnectionId:
     doc """
-    Explicitly adapt a client-session opaque handle to its Python ID.
+    Explicitly adapt a client-session opaque handle back to its connection ID by reading the
+    handle's opaque payload. `bundle` comes from `wrap_handle`; a handle carrying any other
+    payload is outside this contract.
     """
-
-    ensures result > 0
 
     effects []
 
 fn adapt_unknown(value: Any) -> Unknown:
     doc """
-    Deliberately adapt an unconstrained value to an explicitly narrowed boundary value.
+    Retype an unconstrained `Any` value as `Unknown`, so that callers must narrow it explicitly
+    before use.
     """
 
     effects []
 
 fn iter_lines(buffer: TextBuffer) -> Iterator[Str]:
     doc """
-    Lazily yield buffer lines without trailing line endings.
+    Iterate the lines of a caller-owned text buffer. A line ends at LF, CR or CRLF, and the
+    terminator is not part of the yielded line. A final line without a terminator is still
+    yielded; an empty buffer yields nothing.
     """
 
     effects []
 
 fn echo_values(values: Iterator[Any]) -> Generator[Any, Unknown, U64]:
     doc """
-    Yield each value, discard sent unknown values, and return the yield count.
+    Re-yield the values of an iterator from a generator. Values sent into the generator are
+    ignored; its return value is the number of values it yielded.
     """
 
     effects []
 
 async fn async_lines(values: AsyncIterator[Str]) -> AsyncIterator[Str]:
     doc """
-    Return the supplied async iterator.
+    Pass an async line iterator across the boundary.
     """
 
     effects []
 
 async fn echo_async(values: AsyncGenerator[Any, Unknown]) -> AsyncGenerator[Any, Unknown]:
     doc """
-    Return the supplied async generator.
+    Pass an async generator across the boundary.
     """
 
     effects []
+
+scenario handle_round_trips_id:
+    call bundle = wrap_handle(ConnectionId(42))
+    call extracted = extract_handle_id(bundle)
+    assert extracted == ConnectionId(42)
+
+requirement HANDLE_ROUND_TRIPS_ID for extract_handle_id:
+    text "For a bundle returned by wrap_handle(raw_id), returns raw_id."
+    checked_by handle_round_trips_id
+
+requirement RETURNS_SAME_VALUE for adapt_unknown:
+    text "Returns value itself, without copying or converting it."
+
+requirement YIELDS_LINES_LAZILY for iter_lines:
+    text "Yields every line of buffer in order, reads the buffer only as items are requested, and never closes it."
+
+requirement ECHOES_EACH_VALUE_ONCE for echo_values:
+    text "Yields each value of values exactly once, in order, pulling one value per step, and returns the yield count once values is exhausted."
+
+requirement RETURNS_SUPPLIED_ITERATOR for async_lines:
+    text "Returns values itself without consuming any item."
+
+requirement RETURNS_SUPPLIED_GENERATOR for echo_async:
+    text "Returns values itself without starting, consuming or closing it."

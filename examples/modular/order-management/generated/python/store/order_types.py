@@ -22,6 +22,8 @@ class OrderLine:
             object.__setattr__(self, "sku", _cott_validate_abi(self.sku, str, path="$.sku"))
         if not _cott_validated_construction():
             object.__setattr__(self, "quantity", _cott_validate_abi(self.quantity, U32, path="$.quantity"))
+        if not (_cott_contract_condition(((len((self).sku) > 0)), "store.order.OrderLine", "invariant:0")):
+            raise CottContractViolation("invariant failed", symbol="store.order.OrderLine", clause="invariant:0", phase="invariant", span={"end_byte":149,"end_column":31,"end_line":9,"start_byte":123,"start_column":5,"start_line":9}, expected="true", actual="false")
 
 @final
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -71,6 +73,11 @@ class OrderError_ItemUnavailable:
 
 OrderError: TypeAlias = Union[OrderError_EmptyOrder, OrderError_InvalidQuantity, OrderError_ItemUnavailable]
 
-"""Ensure an order line has positive quantity."""
-"""Validate all order lines, lookup item prices, and produce a receipt."""
+"""Accept an order line with a positive quantity and return it unchanged."""
+"""Price an order against a catalog and summarize it as a receipt.
+
+`total_items` is the sum of the line quantities, and `total_cents` is the sum over lines of
+the quantity times the matching catalog item's `price_cents`; a SKU on several lines counts
+once per line. Callers keep both totals within U32 and U64; larger orders are outside this
+contract."""
 __all__ = ["Order", "OrderError", "OrderError_EmptyOrder", "OrderError_InvalidQuantity", "OrderError_ItemUnavailable", "OrderLine", "OrderReceipt"]

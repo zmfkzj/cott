@@ -1,9 +1,10 @@
 # decimal-binary
 
 ## Purpose
-Convert between non-negative I64 decimal numbers and binary strings.
+Convert between nonnegative I64 decimal values and binary strings through two leaves and a tagged composition.
 
 ## Key points
-- The `Conversion` and `ConversionResult` tagged enums distinguish decimal-to-binary and binary-to-decimal requests and results through one entry point.
-- Decimal conversion returns `"0"` for 0 and the shortest binary representation without leading zeros for other values; negatives produce `NegativeDecimal`.
-- The Python implementation first validates the entire binary string as ASCII `0`/`1`, so invalid characters take precedence over overflow; if more than 63 effective digits remain after removing leading zeros, it returns `Overflow`.
+- `decimal_to_binary` specifies `NegativeDecimal` for negative inputs and relates zero to `"0"`; its doc specifies shortest ASCII binary text for every other nonnegative value.
+- `binary_to_decimal` documents nonempty ASCII input, leading zeros, and invalid-character priority over the 63-significant-digit overflow limit. Those input-wide decisions cannot be expressed as conditional errors here and remain declared errors with scenario evidence.
+- `convert_binary_decimal` specifies the selected public conversion facade, the matching result variant, and unchanged error propagation in its doc and linked requirement.
+- Scenarios observe concrete zero, six, leading zeros, I64 maximum, overflow, invalid-before-overflow, and both composed routes with their errors. All three requirements are observed in this verified snapshot, not proved; untested inputs and the internal facade-call duty are not exhaustively established.

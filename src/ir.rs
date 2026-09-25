@@ -73,6 +73,8 @@ fn validate(bytes: &[u8]) -> Result<(), String> {
             errors.join("; ")
         ));
     }
+    validate_json_values(&value)
+        .map_err(|error| format!("canonical IR schema violation: {error}"))?;
     for declaration in value
         .get("declarations")
         .and_then(Value::as_array)
@@ -84,6 +86,32 @@ fn validate(bytes: &[u8]) -> Result<(), String> {
             .map_err(|error| format!("canonical IR schema violation: {error}"))?;
     }
     Ok(())
+}
+
+/// Every canonical `json` value holds a §12.5 `JsonValue`: JSON numbers are
+/// I64 integers or finite binary64 floats. Payload objects are user data and
+/// are not searched for further IR nodes.
+fn validate_json_values(value: &Value) -> Result<(), String> {
+    fn payload(value: &Value) -> Result<(), String> {
+        match value {
+            Value::Number(number) if !(number.is_i64() || number.is_f64()) => Err(format!(
+                "JsonValue integer {number} is outside the I64 range"
+            )),
+            Value::Array(items) => items.iter().try_for_each(payload),
+            Value::Object(members) => members.values().try_for_each(payload),
+            _ => Ok(()),
+        }
+    }
+    match value {
+        Value::Array(items) => items.iter().try_for_each(validate_json_values),
+        Value::Object(object) => match (object.get("kind"), object.get("value")) {
+            (Some(Value::String(kind)), Some(json)) if kind == "json" && object.len() == 2 => {
+                payload(json)
+            }
+            _ => object.values().try_for_each(validate_json_values),
+        },
+        _ => Ok(()),
+    }
 }
 
 /// Read the compiler-owned `cott.complete_errors` marker of one canonical
@@ -907,6 +935,80 @@ fn render_scenario_step(json: &mut Json, step: &HirScenarioStep) {
             json.comma();
             json.key("parameters");
             render_scenario_types(json, parameters);
+            json.comma();
+            json.key("return_type");
+            render_type(json, return_type);
+            json.comma();
+            json.key("step_id");
+            json.number_u32(*step_id);
+            json.comma();
+            json.key("span");
+            render_span(json, span);
+            json.comma();
+            json.key("target");
+            json.string(&target.as_string());
+        }
+        HirScenarioStep::Init {
+            step_id,
+            span,
+            binding,
+            target,
+            parameters,
+            return_type,
+            arguments,
+        } => {
+            json.key("arguments");
+            render_scenario_arguments(json, arguments);
+            json.comma();
+            json.key("binding");
+            json.string(&binding.as_string());
+            json.comma();
+            json.key("kind");
+            json.string("init");
+            json.comma();
+            json.key("parameters");
+            render_scenario_types(json, parameters);
+            json.comma();
+            json.key("return_type");
+            render_type(json, return_type);
+            json.comma();
+            json.key("step_id");
+            json.number_u32(*step_id);
+            json.comma();
+            json.key("span");
+            render_span(json, span);
+            json.comma();
+            json.key("target");
+            json.string(&target.as_string());
+        }
+        HirScenarioStep::MethodCall {
+            step_id,
+            span,
+            binding,
+            target,
+            receiver,
+            callable_kind: scenario_callable_kind,
+            parameters,
+            return_type,
+            arguments,
+        } => {
+            json.key("arguments");
+            render_scenario_arguments(json, arguments);
+            json.comma();
+            json.key("binding");
+            json.string(&binding.as_string());
+            json.comma();
+            json.key("callable_kind");
+            json.string(callable_kind(*scenario_callable_kind));
+            json.comma();
+            json.key("kind");
+            json.string("method_call");
+            json.comma();
+            json.key("parameters");
+            render_scenario_types(json, parameters);
+            json.comma();
+            json.key("receiver");
+            render_expr(json, receiver);
             json.comma();
             json.key("return_type");
             render_type(json, return_type);
@@ -2335,6 +2437,15 @@ fn render_expr(json: &mut Json, expression: &HirExpr) {
             json.key("symbol");
             json.string(&symbol.as_string());
         }
+        HirExprKind::Dyn { trait_ref, value } => {
+            json.string("dyn");
+            json.comma();
+            json.key("trait_ref");
+            render_type(json, trait_ref);
+            json.comma();
+            json.key("value");
+            render_expr(json, value);
+        }
         HirExprKind::Variant { symbol, fields } => {
             json.string("variant");
             json.comma();
@@ -2406,12 +2517,14 @@ fn render_expr(json: &mut Json, expression: &HirExpr) {
             render_expr(json, scrutinee);
         }
     }
-    json.comma();
-    json.key("reference");
-    match &expression.reference {
-        Some(value) => render_reference(json, value),
-        None => json.null(),
-    };
+    if !matches!(expression.kind, HirExprKind::Dyn { .. }) {
+        json.comma();
+        json.key("reference");
+        match &expression.reference {
+            Some(value) => render_reference(json, value),
+            None => json.null(),
+        };
+    }
     json.comma();
     json.key("span");
     render_span(json, &expression.span);

@@ -10,12 +10,12 @@ import pymysql.connections
 import pyodbc
 from cott_runtime import Err, Ok, Result
 
-from real.harlequin.core_types import AdapterKind, AdapterKind_Adbc, AdapterKind_DuckDb, AdapterKind_MySql, AdapterKind_Odbc, AdapterKind_PostgreSql, AdapterKind_Sqlite, Connection, ConnectionError, ConnectionError_Failed, Transaction
+from real.harlequin.core_types import AdapterKind, AdapterKind_Adbc, AdapterKind_DuckDb, AdapterKind_MySql, AdapterKind_Odbc, AdapterKind_PostgreSql, AdapterKind_Sqlite, Connection, ConnectionError, ConnectionError_Failed, ConnectionError_LeaseRejected, Transaction, TransactionStatus_Active, TransactionStatus_RolledBack
 
 _SESSION_TAG: Final[str] = "harlequin.session"
 _LEASE_TAG: Final[str] = "harlequin.transaction"
-_INVALID_MESSAGE: Final[str] = "transaction is not active on an open session"
 _ROLLBACK_FAILED_MESSAGE: Final[str] = "transaction rollback failed; session closed"
+_MALFORMED_MESSAGE: Final[str] = "session handle is malformed"
 
 
 def _driver_supported(adapter: AdapterKind, driver: object) -> bool:
@@ -51,12 +51,11 @@ def _driver_rollback(driver: object) -> None:
         raise RuntimeError("driver has no transactional rollback")
 
 
-def _attempt_cleanup(cleanup: contextlib.ExitStack[bool | None]) -> bool:
+def _attempt_cleanup(cleanup: contextlib.ExitStack[bool | None]) -> None:
     try:
         cleanup.close()
     except Exception:
-        return False
-    return True
+        return
 
 
 def _session_state(connection: Connection) -> dict[str, object] | None:
@@ -70,31 +69,29 @@ def _session_state(connection: Connection) -> dict[str, object] | None:
     expected: set[str] = {"id", "adapter", "endpoint", "read_only", "driver", "cleanup", "lock", "closed", "transaction"}
     if set(state.keys()) != expected:
         return None
-    if state["id"] != connection.id or state["adapter"] != connection.adapter or state["endpoint"] != connection.endpoint or state["read_only"] != connection.read_only:
-        return None
-    if not isinstance(state["cleanup"], contextlib.ExitStack) or not isinstance(state["lock"], threading.Lock) or not isinstance(state["closed"], bool):
-        return None
     return state
 
 
 def rollback_transaction(transaction: Transaction) -> Result[Transaction, ConnectionError]:
-    if not transaction.active or transaction.lease.tag != _LEASE_TAG:
-        return Err(error=ConnectionError_Failed(message=_INVALID_MESSAGE))
+    if not isinstance(transaction.status, TransactionStatus_Active) or transaction.lease.tag != _LEASE_TAG:
+        return Err(error=ConnectionError_LeaseRejected())
     lease_object = transaction.lease.unwrap()
     connection = transaction.connection
     state = _session_state(connection)
     if state is None:
-        return Err(error=ConnectionError_Failed(message=_INVALID_MESSAGE))
+        return Err(error=ConnectionError_Failed(message=_MALFORMED_MESSAGE))
     lock = state["lock"]
     raw_cleanup = state["cleanup"]
     if not isinstance(lock, threading.Lock) or not isinstance(raw_cleanup, contextlib.ExitStack):
-        return Err(error=ConnectionError_Failed(message=_INVALID_MESSAGE))
+        return Err(error=ConnectionError_Failed(message=_MALFORMED_MESSAGE))
     cleanup = cast(contextlib.ExitStack[bool | None], raw_cleanup)
     with lock:
+        if state["id"] != connection.id or state["adapter"] != connection.adapter or state["endpoint"] != connection.endpoint or state["read_only"] != connection.read_only:
+            return Err(error=ConnectionError_LeaseRejected())
         driver = state["driver"]
         current = state["transaction"]
         if state["closed"] is not False or current is None or current is not lease_object or not _driver_supported(connection.adapter, driver):
-            return Err(error=ConnectionError_Failed(message=_INVALID_MESSAGE))
+            return Err(error=ConnectionError_LeaseRejected())
         try:
             _driver_rollback(driver)
         except Exception:
@@ -103,4 +100,4 @@ def rollback_transaction(transaction: Transaction) -> Result[Transaction, Connec
             _attempt_cleanup(cleanup)
             return Err(error=ConnectionError_Failed(message=_ROLLBACK_FAILED_MESSAGE))
         state["transaction"] = None
-    return Ok(value=Transaction(connection=connection, lease=transaction.lease, active=False))
+    return Ok(value=Transaction(connection=connection, lease=transaction.lease, status=TransactionStatus_RolledBack()))

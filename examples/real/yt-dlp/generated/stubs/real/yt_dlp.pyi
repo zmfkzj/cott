@@ -6,7 +6,17 @@ from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottList, CottSet, Dyn, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
-from real.yt_dlp_types import ArchiveRequest as ArchiveRequest, Authentication as Authentication, AuthenticationKind as AuthenticationKind, AuthenticationKind_Anonymous as AuthenticationKind_Anonymous, AuthenticationKind_BrowserCookies as AuthenticationKind_BrowserCookies, AuthenticationKind_Cookies as AuthenticationKind_Cookies, AuthenticationKind_Credentials as AuthenticationKind_Credentials, AuthenticationKind_Netrc as AuthenticationKind_Netrc, CertificatePolicy as CertificatePolicy, CertificatePolicy_Insecure as CertificatePolicy_Insecure, CertificatePolicy_Verify as CertificatePolicy_Verify, CliInput as CliInput, DownloadPlan as DownloadPlan, ExecutionReport as ExecutionReport, ExecutionRequest as ExecutionRequest, ExternalToolRequest as ExternalToolRequest, ExtractorDescriptor as ExtractorDescriptor, ExtractorWorkaround as ExtractorWorkaround, ExtractorWorkaround_ForceGeneric as ExtractorWorkaround_ForceGeneric, ExtractorWorkaround_LegacyServerConnect as ExtractorWorkaround_LegacyServerConnect, ExtractorWorkaround_NoCheckCertificates as ExtractorWorkaround_NoCheckCertificates, ExtractorWorkaround_NoPlaylist as ExtractorWorkaround_NoPlaylist, FormatContainer as FormatContainer, FormatContainer_Any as FormatContainer_Any, FormatContainer_Audio as FormatContainer_Audio, FormatContainer_Best as FormatContainer_Best, FormatContainer_Video as FormatContainer_Video, FormatContainer_Worst as FormatContainer_Worst, FormatDescriptor as FormatDescriptor, FormatRequest as FormatRequest, FragmentPolicy as FragmentPolicy, GeoBypassMode as GeoBypassMode, GeoBypassMode_Country as GeoBypassMode_Country, GeoBypassMode_Default as GeoBypassMode_Default, GeoBypassMode_Disabled as GeoBypassMode_Disabled, GeoBypassMode_IpBlock as GeoBypassMode_IpBlock, InputKind as InputKind, InputKind_Argument as InputKind_Argument, InputKind_BatchFile as InputKind_BatchFile, InputKind_ConfigFile as InputKind_ConfigFile, JsonMode as JsonMode, JsonMode_Lines as JsonMode_Lines, JsonMode_Single as JsonMode_Single, LiveMode as LiveMode, LiveMode_Default as LiveMode_Default, LiveMode_FromStart as LiveMode_FromStart, LiveMode_Wait as LiveMode_Wait, LiveRequest as LiveRequest, LogLevel as LogLevel, LogLevel_Debug as LogLevel_Debug, LogLevel_Info as LogLevel_Info, LogLevel_Quiet as LogLevel_Quiet, LogLevel_Warning as LogLevel_Warning, MediaError as MediaError, MediaError_ArchiveFailure as MediaError_ArchiveFailure, MediaError_AuthenticationFailed as MediaError_AuthenticationFailed, MediaError_BatchReadFailed as MediaError_BatchReadFailed, MediaError_CertificateFailure as MediaError_CertificateFailure, MediaError_CookieFailure as MediaError_CookieFailure, MediaError_ExternalToolMissing as MediaError_ExternalToolMissing, MediaError_ExtractorMissing as MediaError_ExtractorMissing, MediaError_FormatUnavailable as MediaError_FormatUnavailable, MediaError_GeoRestricted as MediaError_GeoRestricted, MediaError_HttpStatus as MediaError_HttpStatus, MediaError_InvalidConfig as MediaError_InvalidConfig, MediaError_InvalidInput as MediaError_InvalidInput, MediaError_InvalidRange as MediaError_InvalidRange, MediaError_InvalidShortcut as MediaError_InvalidShortcut, MediaError_InvalidTemplate as MediaError_InvalidTemplate, MediaError_LogFailure as MediaError_LogFailure, MediaError_NetworkFailure as MediaError_NetworkFailure, MediaError_OutputFailure as MediaError_OutputFailure, MediaError_PathFailure as MediaError_PathFailure, MediaError_PluginRejected as MediaError_PluginRejected, MediaError_PostProcessFailed as MediaError_PostProcessFailed, MediaError_RetryExhausted as MediaError_RetryExhausted, MediaError_SizeLimit as MediaError_SizeLimit, MediaError_SubtitleUnavailable as MediaError_SubtitleUnavailable, MediaError_UnsupportedUrl as MediaError_UnsupportedUrl, MediaError_UpdateUnavailable as MediaError_UpdateUnavailable, MediaError_WorkaroundRejected as MediaError_WorkaroundRejected, MediaItem as MediaItem, MetadataRequest as MetadataRequest, NetworkPolicy as NetworkPolicy, OutputRequest as OutputRequest, PlaylistMode as PlaylistMode, PlaylistMode_Flat as PlaylistMode_Flat, PlaylistMode_Playlist as PlaylistMode_Playlist, PlaylistMode_Random as PlaylistMode_Random, PlaylistMode_Reverse as PlaylistMode_Reverse, PlaylistMode_Single as PlaylistMode_Single, PlaylistRange as PlaylistRange, PlaylistRequest as PlaylistRequest, PluginDescriptor as PluginDescriptor, PostProcessRequest as PostProcessRequest, PostProcessorKind as PostProcessorKind, PostProcessorKind_ConvertThumbnails as PostProcessorKind_ConvertThumbnails, PostProcessorKind_EmbedMetadata as PostProcessorKind_EmbedMetadata, PostProcessorKind_EmbedSubtitle as PostProcessorKind_EmbedSubtitle, PostProcessorKind_EmbedThumbnail as PostProcessorKind_EmbedThumbnail, PostProcessorKind_ExtractAudio as PostProcessorKind_ExtractAudio, PostProcessorKind_Fixup as PostProcessorKind_Fixup, PostProcessorKind_RecodeVideo as PostProcessorKind_RecodeVideo, PostProcessorKind_RemuxVideo as PostProcessorKind_RemuxVideo, PostProcessorKind_SplitChapters as PostProcessorKind_SplitChapters, PostProcessorKind_SponsorBlock as PostProcessorKind_SponsorBlock, PresentationRequest as PresentationRequest, ProxyMode as ProxyMode, ProxyMode_Direct as ProxyMode_Direct, ProxyMode_Http as ProxyMode_Http, ProxyMode_Socks as ProxyMode_Socks, ShortcutKind as ShortcutKind, ShortcutKind_Search as ShortcutKind_Search, ShortcutKind_SearchAll as ShortcutKind_SearchAll, ShortcutKind_Url as ShortcutKind_Url, ShortcutRequest as ShortcutRequest, SimulationMode as SimulationMode, SimulationMode_Download as SimulationMode_Download, SimulationMode_PrintOnly as SimulationMode_PrintOnly, SimulationMode_Simulate as SimulationMode_Simulate, SimulationMode_SkipDownload as SimulationMode_SkipDownload, SubtitleMode as SubtitleMode, SubtitleMode_All as SubtitleMode_All, SubtitleMode_Automatic as SubtitleMode_Automatic, SubtitleMode_Manual as SubtitleMode_Manual, SubtitleMode_None as SubtitleMode_None, SubtitleRequest as SubtitleRequest, ThumbnailRequest as ThumbnailRequest, TransferReceipt as TransferReceipt, TransferRequest as TransferRequest, UpdatePolicy as UpdatePolicy, UpdatePolicy_Apply as UpdatePolicy_Apply, UpdatePolicy_Check as UpdatePolicy_Check, UpdatePolicy_Master as UpdatePolicy_Master, UpdatePolicy_Never as UpdatePolicy_Never, UpdatePolicy_Nightly as UpdatePolicy_Nightly, UpdateRequest as UpdateRequest, VideoFilterRequest as VideoFilterRequest, WorkaroundPolicy as WorkaroundPolicy
+from real.yt_dlp_types import ArchiveRequest as ArchiveRequest, Authentication as Authentication, AuthenticationKind as AuthenticationKind, AuthenticationKind_Anonymous as AuthenticationKind_Anonymous, AuthenticationKind_BrowserCookies as AuthenticationKind_BrowserCookies, AuthenticationKind_Cookies as AuthenticationKind_Cookies, AuthenticationKind_Credentials as AuthenticationKind_Credentials, AuthenticationKind_Netrc as AuthenticationKind_Netrc, CertificatePolicy as CertificatePolicy, CertificatePolicy_Insecure as CertificatePolicy_Insecure, CertificatePolicy_Verify as CertificatePolicy_Verify, CliInput as CliInput, DownloadPlan as DownloadPlan, ExecutionReport as ExecutionReport, ExecutionRequest as ExecutionRequest, ExternalToolRequest as ExternalToolRequest, ExtractorDescriptor as ExtractorDescriptor, ExtractorWorkaround as ExtractorWorkaround, ExtractorWorkaround_ForceGeneric as ExtractorWorkaround_ForceGeneric, ExtractorWorkaround_LegacyServerConnect as ExtractorWorkaround_LegacyServerConnect, ExtractorWorkaround_NoCheckCertificates as ExtractorWorkaround_NoCheckCertificates, ExtractorWorkaround_NoPlaylist as ExtractorWorkaround_NoPlaylist, FormatContainer as FormatContainer, FormatContainer_Any as FormatContainer_Any, FormatContainer_Audio as FormatContainer_Audio, FormatContainer_Best as FormatContainer_Best, FormatContainer_Video as FormatContainer_Video, FormatContainer_Worst as FormatContainer_Worst, FormatDescriptor as FormatDescriptor, FormatRequest as FormatRequest, FragmentPolicy as FragmentPolicy, GeoBypassMode as GeoBypassMode, GeoBypassMode_Country as GeoBypassMode_Country, GeoBypassMode_Default as GeoBypassMode_Default, GeoBypassMode_Disabled as GeoBypassMode_Disabled, GeoBypassMode_IpBlock as GeoBypassMode_IpBlock, InputKind as InputKind, InputKind_Argument as InputKind_Argument, InputKind_BatchFile as InputKind_BatchFile, InputKind_ConfigFile as InputKind_ConfigFile, JsonMode as JsonMode, JsonMode_Lines as JsonMode_Lines, JsonMode_Single as JsonMode_Single, LiveMode as LiveMode, LiveMode_Default as LiveMode_Default, LiveMode_FromStart as LiveMode_FromStart, LiveMode_Wait as LiveMode_Wait, LiveRequest as LiveRequest, LogLevel as LogLevel, LogLevel_Debug as LogLevel_Debug, LogLevel_Info as LogLevel_Info, LogLevel_Quiet as LogLevel_Quiet, LogLevel_Warning as LogLevel_Warning, MediaError as MediaError, MediaError_ArchiveFailure as MediaError_ArchiveFailure, MediaError_AuthenticationFailed as MediaError_AuthenticationFailed, MediaError_BatchReadFailed as MediaError_BatchReadFailed, MediaError_CertificateFailure as MediaError_CertificateFailure, MediaError_CookieFailure as MediaError_CookieFailure, MediaError_ExternalToolMissing as MediaError_ExternalToolMissing, MediaError_ExtractorMissing as MediaError_ExtractorMissing, MediaError_FormatUnavailable as MediaError_FormatUnavailable, MediaError_GeoRestricted as MediaError_GeoRestricted, MediaError_HttpStatus as MediaError_HttpStatus, MediaError_InvalidConfig as MediaError_InvalidConfig, MediaError_InvalidInput as MediaError_InvalidInput, MediaError_InvalidRange as MediaError_InvalidRange, MediaError_InvalidShortcut as MediaError_InvalidShortcut, MediaError_InvalidTemplate as MediaError_InvalidTemplate, MediaError_LogFailure as MediaError_LogFailure, MediaError_NetworkFailure as MediaError_NetworkFailure, MediaError_OutputFailure as MediaError_OutputFailure, MediaError_PathFailure as MediaError_PathFailure, MediaError_PluginRejected as MediaError_PluginRejected, MediaError_PostProcessFailed as MediaError_PostProcessFailed, MediaError_RetryExhausted as MediaError_RetryExhausted, MediaError_SizeLimit as MediaError_SizeLimit, MediaError_SubtitleUnavailable as MediaError_SubtitleUnavailable, MediaError_UnsupportedUrl as MediaError_UnsupportedUrl, MediaError_UpdateUnavailable as MediaError_UpdateUnavailable, MediaError_WorkaroundRejected as MediaError_WorkaroundRejected, MediaItem as MediaItem, MetadataRequest as MetadataRequest, NetworkPolicy as NetworkPolicy, OutputRequest as OutputRequest, PlaylistMode as PlaylistMode, PlaylistMode_Flat as PlaylistMode_Flat, PlaylistMode_Playlist as PlaylistMode_Playlist, PlaylistMode_Random as PlaylistMode_Random, PlaylistMode_Reverse as PlaylistMode_Reverse, PlaylistMode_Single as PlaylistMode_Single, PlaylistRange as PlaylistRange, PlaylistRequest as PlaylistRequest, PluginDescriptor as PluginDescriptor, PostProcessRequest as PostProcessRequest, PostProcessorKind as PostProcessorKind, PostProcessorKind_ConvertThumbnails as PostProcessorKind_ConvertThumbnails, PostProcessorKind_EmbedMetadata as PostProcessorKind_EmbedMetadata, PostProcessorKind_EmbedSubtitle as PostProcessorKind_EmbedSubtitle, PostProcessorKind_EmbedThumbnail as PostProcessorKind_EmbedThumbnail, PostProcessorKind_ExtractAudio as PostProcessorKind_ExtractAudio, PostProcessorKind_Fixup as PostProcessorKind_Fixup, PostProcessorKind_RecodeVideo as PostProcessorKind_RecodeVideo, PostProcessorKind_RemuxVideo as PostProcessorKind_RemuxVideo, PostProcessorKind_SplitChapters as PostProcessorKind_SplitChapters, PostProcessorKind_SponsorBlock as PostProcessorKind_SponsorBlock, PresentationRequest as PresentationRequest, ProxyMode as ProxyMode, ProxyMode_Direct as ProxyMode_Direct, ProxyMode_Http as ProxyMode_Http, ProxyMode_Socks as ProxyMode_Socks, ShortcutKind as ShortcutKind, ShortcutKind_Search as ShortcutKind_Search, ShortcutKind_SearchAll as ShortcutKind_SearchAll, ShortcutKind_Url as ShortcutKind_Url, ShortcutRequest as ShortcutRequest, SimulationMode as SimulationMode, SimulationMode_Download as SimulationMode_Download, SimulationMode_PrintOnly as SimulationMode_PrintOnly, SimulationMode_Simulate as SimulationMode_Simulate, SimulationMode_SkipDownload as SimulationMode_SkipDownload, SubtitleMode as SubtitleMode, SubtitleMode_All as SubtitleMode_All, SubtitleMode_Automatic as SubtitleMode_Automatic, SubtitleMode_Manual as SubtitleMode_Manual, SubtitleMode_None as SubtitleMode_None, SubtitleRequest as SubtitleRequest, ThumbnailRequest as ThumbnailRequest, TransferReceipt as TransferReceipt, TransferRequest as TransferRequest, UpdateOutcome as UpdateOutcome, UpdateOutcome_Available as UpdateOutcome_Available, UpdateOutcome_Current as UpdateOutcome_Current, UpdateOutcome_Disabled as UpdateOutcome_Disabled, UpdateOutcome_Installed as UpdateOutcome_Installed, UpdatePolicy as UpdatePolicy, UpdatePolicy_Apply as UpdatePolicy_Apply, UpdatePolicy_Check as UpdatePolicy_Check, UpdatePolicy_Master as UpdatePolicy_Master, UpdatePolicy_Never as UpdatePolicy_Never, UpdatePolicy_Nightly as UpdatePolicy_Nightly, UpdateRequest as UpdateRequest, VideoFilterRequest as VideoFilterRequest, WorkaroundPolicy as WorkaroundPolicy
+"""arguments excludes the program name. Scan them left to right and return one
+CliInput per input, in argument order. `--batch-file VALUE`, `-a VALUE` and
+`--batch-file=VALUE` yield BatchFile(VALUE). `--config-locations VALUE` and
+`--config-locations=VALUE` yield ConfigFile(VALUE). A separate VALUE is the
+next argument taken verbatim, even when it starts with "-". Every argument
+that does not start with "-" yields Argument(argument) unchanged. There are no
+other options: an argument starting with "-" that is not one of these forms
+(including "-" and "--"), an option without a following value, and an empty
+VALUE return InvalidInput with a fixed descriptive message. Values are not
+stripped, validated as URLs or read."""
 def parse_arguments(arguments: CottList[str]) -> Result[CottList[CliInput], MediaError]: ...
 
 """Search returns `ytsearch{limit}:{query}` using the positive base-10 limit.
@@ -18,22 +28,87 @@ Return InvalidShortcut(value=request.query) for an empty search query, a
 zero Search limit, or an invalid Url."""
 def build_shortcut_url(request: ShortcutRequest) -> Result[str, MediaError]: ...
 
+"""Accept only workarounds this client honors and return the policy unchanged.
+Transfers always verify TLS certificates and hostnames, so Insecure returns
+CertificateFailure. Legacy TLS server connect is unsupported, and the single
+generic extractor takes no extractor arguments, so either request returns
+WorkaroundRejected. force_generic_extractor is accepted because the generic
+extractor is the only one. Error messages are fixed descriptive text."""
 def validate_workarounds(policy: WorkaroundPolicy) -> Result[WorkaroundPolicy, MediaError]: ...
 
+"""Prepare the log destination named by request.log_file. Open it for appending
+without following a symlink, create a missing file with mode 0600, never
+truncate existing content, write nothing and close it. An empty, "." or ".."
+leaf, a missing parent directory, a symlink, a nonregular file, and any
+open, inspect or close failure return LogFailure(path=request.log_file,
+message=a fixed descriptive category). level, progress, newline_progress,
+color, dump_pages and write_pages are accepted as given: this client prints
+only the rendered report, so they select no other output."""
 def configure_presentation(request: PresentationRequest) -> Result[Unit, MediaError]: ...
 
+"""Read path, a regular file of at most 1 MiB, as UTF-8 text; ignore one leading
+UTF-8 byte order mark. Split the text into arguments with POSIX shell-like
+rules: whitespace separates arguments, single quotes, double quotes and
+backslash escapes group them, and an unquoted "#" that starts an argument
+comments out the rest of its line. Pass the arguments, in file order, to
+real.yt_dlp.parse_arguments and return its inputs unchanged. A missing,
+unreadable, nonregular or oversized file, invalid UTF-8, unbalanced quoting,
+more than 100000 arguments and a parse_arguments error all return
+InvalidConfig(path=path, message=a fixed descriptive category) without file
+content."""
 def load_config(path: Path) -> Result[CottList[CliInput], MediaError]: ...
 
+"""Parse batch-file text into URLs. Ignore one leading U+FEFF, split the rest
+into lines at LF, CRLF or CR, strip surrounding whitespace from each line,
+and drop empty lines and lines starting with any comment prefix. Return the
+remaining stripped lines in order, keeping duplicates; they are not validated
+as URLs. An empty comment prefix and a result of more than 100000 URLs return
+InvalidInput with a fixed descriptive message."""
 def parse_batch_urls(batch: str, comment_prefixes: CottList[str]) -> Result[CottList[str], MediaError]: ...
 
+"""Read path, a regular file of at most 16 MiB, decode it as UTF-8 and return
+real.yt_dlp.parse_batch_urls(text, comment_prefixes) unchanged, including its
+InvalidInput. A missing, unreadable, nonregular or oversized file and invalid
+UTF-8 return BatchReadFailed(path=path, message=a fixed descriptive category)
+without file content."""
 def load_batch_urls(path: Path, comment_prefixes: CottList[str]) -> Result[CottList[str], MediaError]: ...
 
+"""Return the values of inputs followed by the values of config, in order and
+unchanged, one URL per entry. Callers expand ConfigFile and BatchFile entries
+first, so an entry of any other kind than Argument returns InvalidInput, as
+does a blank value (empty or only whitespace). Messages are fixed text."""
 def resolve_inputs(inputs: CottList[CliInput], config: CottList[CliInput]) -> Result[CottList[str], MediaError]: ...
 
+"""Validate network settings and return the policy unchanged. Each of these
+returns InvalidInput with a fixed descriptive message: socket_timeout_ms is
+zero; force_ipv4 and force_ipv6 are both set; Direct has a nonempty proxy;
+Http or Socks has an empty proxy, or a proxy that is not an absolute URL
+without whitespace whose scheme is http or https (Http) or socks4, socks4a,
+socks5 or socks5h (Socks), with a nonempty host and a valid port;
+source_address is nonempty and not a literal IPv4 or IPv6 address, or is of
+the other family than a forced one; Disabled or Default has a nonempty
+geo_country or geo_ip_block; Country has a geo_ip_block or a geo_country that
+is not two ASCII letters; IpBlock has a geo_country, or a geo_ip_block that is
+not an IPv4 or IPv6 address with an optional decimal prefix length of at most
+32 or 128."""
 def validate_network(policy: NetworkPolicy) -> Result[NetworkPolicy, MediaError]: ...
 
+"""Check that the requested authentication is one this direct-media client can
+send and return it unchanged. Anonymous is accepted. Credentials needs a
+nonempty username and password, which extract_media sends as HTTP Basic
+authorization. Netrc is unsupported and returns AuthenticationFailed;
+Cookies and BrowserCookies are unsupported and return CookieFailure. Fields
+the selected kind does not use are ignored. Messages are fixed text and never
+contain the username, password or file paths."""
 def resolve_authentication(request: Authentication) -> Result[Authentication, MediaError]: ...
 
+"""Choose the geo-bypass route used for extraction and return the policy
+unchanged. Disabled and Default send no geo header. IpBlock is routed by
+extract_media, which sends the block's network address as X-Forwarded-For;
+a geo_ip_block that is not an IPv4 or IPv6 address with an optional decimal
+prefix length of at most 32 or 128 returns GeoRestricted. Country bypass
+needs a country-to-address table this client does not have, so Country
+returns GeoRestricted. Messages are fixed text."""
 def select_geo_route(policy: NetworkPolicy) -> Result[NetworkPolicy, MediaError]: ...
 
 """Return one enabled generic HTTP extractor named "generic", accepting the
@@ -59,9 +134,37 @@ fails the entire call as PluginRejected(path=the offending path, message=a
 fixed descriptive category), with no partial result and no content in errors."""
 def load_plugins(paths: CottList[Path]) -> Result[CottList[PluginDescriptor], MediaError]: ...
 
+"""An extractor matches url when one of its nonempty urls entries is a
+case-sensitive prefix of url. Return the first enabled matching extractor in
+list order, unchanged. When only disabled extractors match, return
+ExtractorMissing(name=the first matching disabled extractor's name). When
+nothing matches, return UnsupportedUrl."""
 def choose_extractor(url: str, extractors: CottList[ExtractorDescriptor]) -> Result[ExtractorDescriptor, MediaError]: ...
 
-"""Handle every auth kind; HEAD via Request and urlopen; derive one item from final URL."""
+"""Discover one direct media item without downloading it. url must be an
+absolute URL with lowercase scheme http or https, a nonempty host and no
+whitespace or control characters, accepted by the enabled extractor through
+one of its nonempty urls prefixes; otherwise return UnsupportedUrl before
+any request.
+Authentication: Anonymous sends none, but an extractor with requires_login
+returns AuthenticationFailed. Credentials sends HTTP Basic authorization and
+needs a nonempty username and password, else AuthenticationFailed. Netrc,
+Cookies and BrowserCookies are unsupported and return AuthenticationFailed.
+Network: socket_timeout_ms is the request timeout. Http sends the request
+through proxy; Socks is unsupported and returns NetworkFailure. IpBlock sends
+the block's network address as X-Forwarded-For; Country returns GeoRestricted.
+Send exactly one HTTP HEAD request with certificate-verifying TLS, following
+at most five redirects. Never send GET or read a response body.
+On a 2xx response return exactly one MediaItem built from the final URL: url
+is the final URL; title is its percent-decoded last path segment; id is title
+without its last "." extension; ext is that extension without the dot,
+lowercased. When the path has no last segment, title and id are the host.
+When there is no extension, ext is the Content-Type subtype when it is
+alphanumeric, otherwise "unknown_video". playlist_index is 1.
+Map 401 or 403 after sending credentials to AuthenticationFailed, 451 to
+GeoRestricted, any other non-2xx status to HttpStatus(status), and DNS,
+connection, TLS, timeout and redirect-limit failures to NetworkFailure with a
+fixed message that contains no credentials or query strings."""
 def extract_media(url: str, extractor: ExtractorDescriptor, authentication: Authentication, network: NetworkPolicy) -> Result[CottList[MediaItem], MediaError]: ...
 
 """Empty ranges returns items unchanged. Otherwise validate every range: first
@@ -95,26 +198,47 @@ their original multiplicity and keep item fields unchanged."""
 def select_playlist(items: CottList[MediaItem], request: PlaylistRequest) -> Result[CottList[MediaItem], MediaError]: ...
 
 """This stage validates a snapshot of already-discovered live-media candidates;
-it is not a downloader, live-status probe or polling loop. MediaItem contains
-no start-time or live-state field, so do not infer such state from its text.
-concurrent_fragments zero returns InvalidInput. Otherwise Default and
-FromStart retain every supplied item unchanged and in order: retrieval from
-the beginning is a downstream transfer choice, not a change to these descriptors.
-Wait additionally requires wait_for_video_ms greater than zero; zero is
-InvalidInput. With a positive wait budget, a nonempty snapshot succeeds
-unchanged; an empty snapshot returns RetryExhausted(attempts=1), referring to
-this one completed discovery snapshot. This function does not sleep, repeat
-discovery or claim a network observation; clock/network are permitted effects,
-not a requirement to invent a request endpoint."""
+it is not a downloader, live-status probe or polling loop, and it neither
+sleeps nor repeats discovery. MediaItem contains no start-time or live-state
+field, so do not infer such state from its text. Default, FromStart and Wait
+keep every supplied item unchanged and in order: retrieval from the
+beginning is a downstream transfer choice, not a change to these descriptors.
+Under Wait with a positive wait budget, an empty snapshot returns
+RetryExhausted(attempts=1), referring to the one completed discovery
+snapshot. InvalidInput messages are fixed text."""
 def resolve_live_media(items: CottList[MediaItem], request: LiveRequest) -> Result[CottList[MediaItem], MediaError]: ...
 
+"""MediaItem carries no upload date, view count, age limit or live state, so
+this client cannot evaluate those filters and rejects them instead of
+silently ignoring them: a nonempty date_after, date_before or match_filter, a
+nonzero min_views, max_views or age_limit, or reject_live returns InvalidInput
+with a fixed message. include_ads has no effect because no item is marked as
+an advertisement. Otherwise return items unchanged."""
 def filter_video(items: CottList[MediaItem], request: VideoFilterRequest) -> Result[CottList[MediaItem], MediaError]: ...
 
+"""Keep, unchanged and in input order, each format whose file_size is at least
+min_file_size and, when max_file_size is nonzero, at most max_file_size, and
+that matches containers. An empty containers list matches every format;
+otherwise a format matches when any listed container matches it: Any always,
+Video when has_video, Audio when has_audio, and Best or Worst when the
+format's own container is that value. selector, sort_fields,
+merge_output_format and prefer_free_formats do not filter. A nonzero
+max_file_size below min_file_size returns InvalidInput with a fixed message;
+an empty result returns FormatUnavailable(selector=request.selector)."""
 def filter_formats(formats: CottList[FormatDescriptor], request: FormatRequest) -> Result[CottList[FormatDescriptor], MediaError]: ...
 
+"""Stable sort, best first. fields names sort keys in priority order: "res"
+(video_height), "abr" (audio_bitrate) and "size" (file_size), each compared
+in descending order. Unknown and repeated names are ignored. Formats equal on
+every recognized key keep their input order, so without a recognized key the
+input order is returned unchanged."""
 def sort_formats(formats: CottList[FormatDescriptor], fields: CottList[str]) -> CottList[FormatDescriptor]: ...
 
-"""None returns typed List[Str]; otherwise preserve requested language order."""
+"""Plan subtitle languages. This does not fetch or verify tracks: MediaItem
+carries no subtitle information, so item does not affect the plan. None
+returns an empty plan. Manual, Automatic and All return request.languages in
+request order, keeping duplicates; an empty languages list or an empty
+language code returns SubtitleUnavailable(language="")."""
 def select_subtitles(item: MediaItem, request: SubtitleRequest) -> Result[CottList[str], MediaError]: ...
 
 """Return symbolic output names, not URLs or CLI options. When write is true and
@@ -132,6 +256,15 @@ appends item.id + ".playlist.json"; embed appends "embed:" + item.id.
 False flags add nothing. No other MediaItem field changes this pure plan."""
 def plan_metadata(item: MediaItem, request: MetadataRequest) -> CottList[str]: ...
 
+"""Render an output template in this subset of yt-dlp's syntax. "%%" renders
+"%". "%(NAME)s" renders item.id, item.title or item.ext for NAME id, title or
+ext, the decimal playlist_index for playlist_index, and missing_placeholder
+for any other NAME. "%(playlist_index)d" also renders the decimal index.
+Other text is copied unchanged, and values are inserted verbatim: path
+sanitization belongs to resolve_output_path. An empty template, a "%" that
+starts none of these forms, an empty or unterminated NAME, a NAME containing
+"%" or "(", a conversion other than s or d, and d with a NAME other than
+playlist_index return InvalidTemplate."""
 def render_output_path(item: MediaItem, template: str, missing_placeholder: str) -> Result[str, MediaError]: ...
 
 """Call real.yt_dlp.render_output_path(item, request.template,
@@ -167,6 +300,13 @@ break_on_existing and force_write_archive affect the caller's execution policy,
 not this reader. No extractor key is invented and no content is executed."""
 def read_download_archive(request: ArchiveRequest) -> Result[CottList[str], MediaError]: ...
 
+"""archive holds plain media ids as returned by read_download_archive. An item
+is already downloaded when its id equals an archive entry exactly. Without
+break_on_existing, the plan keeps every other item unchanged, in order and
+with duplicates, and stopped_on_archive is false. With break_on_existing, the
+plan holds the items before the first already-downloaded item and
+stopped_on_archive is true; when no item is already downloaded, the plan
+holds every item and stopped_on_archive is false."""
 def plan_downloads(items: CottList[MediaItem], archive: CottList[str], break_on_existing: bool) -> DownloadPlan: ...
 
 """Atomically replace the complete archive with plain MediaItem.id values, not
@@ -185,10 +325,54 @@ failures to ArchiveFailure(path=path, message=a fixed descriptive category).
 Never emit a partial archive or infer an extractor from the URL."""
 def write_download_archive(path: Path, items: CottList[MediaItem]) -> Result[Unit, MediaError]: ...
 
+"""TransferRequest has no byte-range field, so this client transfers each media
+item as a single fragment: return a list holding request unchanged. A zero
+max_bytes, concurrent_fragments or buffer_size returns InvalidInput with a
+fixed message. chunk_size, rate limit, retry, continue and part-file settings
+apply in transfer_fragments, not here."""
 def plan_fragments(request: TransferRequest, policy: FragmentPolicy) -> Result[CottList[TransferRequest], MediaError]: ...
 
+"""Transfer one media resource. A simulate request performs no network or file
+access and returns bytes_written 0. Otherwise send one HTTP GET with
+certificate-verifying TLS, following at most five redirects, and stream the
+body into an exclusive temporary file in destination's directory, creating
+missing parent directories; on success atomically replace destination with
+it. Reject a declared Content-Length above max_bytes, and stop at the first
+byte beyond max_bytes, with SizeLimit. A non-2xx final status returns
+HttpStatus(status); DNS, connection, TLS, timeout, redirect and read failures
+return NetworkFailure; local directory, open, write and replace failures
+return OutputFailure. Every failure removes the temporary file and leaves an
+existing destination untouched. Messages are fixed descriptive text without
+response bodies or query strings."""
 def transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaError]: ...
 
+"""Download each fragment in order and return one receipt per fragment, in
+order. Before any transfer, a zero concurrent_fragments or buffer_size, a
+fragment URL that is not an absolute http or https URL with a host, a
+destination without a file name, and two fragments with the same destination
+return InvalidInput. A simulate fragment performs no I/O and yields a receipt
+with bytes_written 0 and simulated true.
+Otherwise send one HTTP GET with certificate-verifying TLS, following at most
+five redirects, and stream the body in reads of at most buffer_size bytes
+(and at most chunk_size when nonzero), sleeping as needed to stay under a
+nonzero rate_limit_bytes_per_second. With part_files the body goes to
+destination + ".part", which is renamed over destination after the whole body
+arrived; otherwise it goes to destination directly. With continue_download an
+existing work file is resumed with a Range request, and a 416 reply means it
+is already complete; otherwise the work file is truncated. Open files without
+following symlinks and fsync them before the rename.
+A declared Content-Length or received byte count above max_bytes is
+SizeLimit. A non-2xx final status other than 206 for a resumed transfer is
+HttpStatus(status); a short body and transport failures are NetworkFailure.
+NetworkFailure and 429 or 5xx statuses are retried with exponential backoff
+up to retries times for a single fragment and fragment_retries times for
+several; when retries run out the result is RetryExhausted(attempts=attempts
+made), except that zero allowed retries return the original error. Local
+open and rename failures are retried up to file_access_retries times, then
+OutputFailure, as are write and fsync failures. A successful receipt holds
+the fragment's url and destination, the destination's final byte size as
+bytes_written, and simulated false. Messages are fixed descriptive text
+without response bodies or query strings."""
 def transfer_fragments(fragments: CottList[TransferRequest], policy: FragmentPolicy) -> Result[CottList[TransferReceipt], MediaError]: ...
 
 """Serialize each MediaItem as a JSON object whose keys occur in exactly this
@@ -221,6 +405,15 @@ fixed message and no partial plan. item does not affect this protocol plan:
 the explicit external tool request already supplies the input and output."""
 def plan_post_processing(item: MediaItem, request: PostProcessRequest) -> Result[CottList[ExternalToolRequest], MediaError]: ...
 
+"""Run each request in order, one at a time, and stop at the first failure.
+An executable containing a path separator is used as given; otherwise it is
+looked up on PATH. An empty, missing or non-executable executable returns
+ExternalToolMissing(name=executable). Start the tool directly, never through
+a shell, with its arguments verbatim, stdin closed and output discarded, and
+wait at most timeout_ms milliseconds (zero means no limit). A missing or
+nonregular input before starting, a timeout, a nonzero exit status and a
+missing output afterwards return PostProcessFailed(name=executable,
+message=a fixed descriptive category)."""
 def run_post_processing(requests: CottList[ExternalToolRequest]) -> Result[Unit, MediaError]: ...
 
 """Return the empty string for Never without inspecting channel. Nightly returns
@@ -232,9 +425,9 @@ outer whitespace from channel: empty or `stable` maps to `yt-dlp/yt-dlp`,
 value as UpdateUnavailable; never interpret channel as a repository or URL."""
 def resolve_update_repository(policy: UpdatePolicy, channel: str) -> Result[str, MediaError]: ...
 
-"""Never returns Ok immediately without validating channel or target and without
-network or filesystem access: success means updates are disabled, not that an
-update was installed. Otherwise call
+"""Never returns Ok(Disabled) immediately without validating channel or target
+and without network or filesystem access: updates are disabled, not
+installed. Otherwise call
 real.yt_dlp.resolve_update_repository(request.policy, request.channel).
 
 Use only the selected official repository's latest release assets at fixed
@@ -245,6 +438,8 @@ yt-dlp/yt-dlp-master-builds. Do not accept a repository, asset name, tag, or
 URL from input. Use certificate- and hostname-verifying TLS, a finite timeout,
 at most five redirects, and permit redirects only to github.com or
 release-assets.githubusercontent.com over HTTPS. Send no credentials.
+Perform HTTPS, SHA-256 and filesystem work in-process; never run a
+subprocess, shell, package manager or other executable.
 
 Read each response incrementally. Cap SHA2-256SUMS at 1 MiB and the yt-dlp
 asset at 64 MiB, rejecting an excessive Content-Length or a cap-plus-one
@@ -257,27 +452,26 @@ until their streaming SHA-256 digest matches that entry.
 The target is an explicit leaf. Refuse an empty/root/dot leaf, every symlink
 in its path, and an existing non-regular target. Use no-follow, directory-fd
 filesystem operations so validation and use are not separated by a symlink
-race; if the platform cannot provide those guarantees, fail closed. A missing
-target represents an available update. For an existing target, hash it
-incrementally without following links; a digest equal to the release checksum
-means it is current.
+race; if the platform cannot provide those guarantees, including fsync and
+same-directory atomic replacement, fail closed. A missing target represents
+an available update. For an existing target, hash it incrementally without
+following links; a digest equal to the release checksum means it is current.
 
 Check performs the authenticated manifest fetch and target comparison above,
-then returns Ok whether the target is current or an update is available. It
-never downloads the executable, creates a temporary file, changes metadata,
-or replaces target; Unit intentionally reports only successful completion of
-the read-only check.
+then returns Ok(Current) or Ok(Available). It never downloads the executable,
+creates a temporary file, changes metadata, or replaces target.
 
-Apply, Nightly, and Master return Ok without writing when target already
-matches. Otherwise create an unpredictable exclusive no-follow temporary
-regular file in target's directory, stream the bounded asset into it while
-hashing, verify the digest, flush and fsync it, set its mode, then atomically
-replace target within that same directory and fsync the directory. Preserve
-an existing target's ordinary rwx permission bits while dropping special
-bits; use 0755 for a new target. Recheck the target identity before commit,
-clean up the temporary leaf on every pre-commit failure, and never move or
-truncate the old target before verified replacement. Do not leave a partial
-target or follow a target swapped to a symlink.
+Apply, Nightly, and Master return Ok(Current) without writing when target
+already matches. Otherwise create an unpredictable exclusive no-follow
+temporary regular file in target's directory, stream the bounded asset into
+it while hashing, verify the digest, flush and fsync it, set its mode, then
+atomically replace target within that same directory, fsync the directory
+and return Ok(Installed). Preserve an existing target's ordinary rwx
+permission bits while dropping special bits; use 0755 for a new target.
+Recheck the target identity before commit, clean up the temporary leaf on
+every pre-commit failure, and never move or truncate the old target before
+verified replacement. Do not leave a partial target or follow a target
+swapped to a symlink.
 
 Map unknown channels, missing releases/assets or checksum entries, malformed
 metadata, forbidden redirects, oversized/HTML payloads, and integrity
@@ -288,15 +482,16 @@ replacement failures to OutputFailure. Error messages may identify the
 operation, selected channel, HTTP status, and target path, but must never
 include response bodies, redirect query strings, authorization material, or
 raw exception text that may contain secrets."""
-def apply_update(request: UpdateRequest) -> Result[Unit, MediaError]: ...
+def apply_update(request: UpdateRequest) -> Result[UpdateOutcome, MediaError]: ...
 
 """Execute the direct-media pipeline and return its actual selected items,
 download plan and rendered output, never an invented empty success.
 Propagate each failing stage's declared MediaError unchanged and stop before
 later stages. Do not perform effects outside these stages.
 
-First call real.yt_dlp.apply_update(request.update), then validate_network,
-select_geo_route, resolve_authentication and validate_workarounds on their
+First call real.yt_dlp.apply_update(request.update); its UpdateOutcome is not
+part of the report. Then call validate_network, select_geo_route on the
+validated network, resolve_authentication and validate_workarounds on their
 corresponding request values. Use the returned network and authentication
 for extraction. Path(".") in presentation.log_file disables logging;
 otherwise call configure_presentation.
@@ -364,4 +559,4 @@ Do not run updater or download code outside the declared execute pipeline, and
 do not expand the argument grammar beyond the parse_arguments contract."""
 def run(arguments: CottList[str]) -> Never: ...
 
-__all__ = ["ArchiveRequest", "Authentication", "AuthenticationKind", "AuthenticationKind_Anonymous", "AuthenticationKind_BrowserCookies", "AuthenticationKind_Cookies", "AuthenticationKind_Credentials", "AuthenticationKind_Netrc", "CertificatePolicy", "CertificatePolicy_Insecure", "CertificatePolicy_Verify", "CliInput", "DownloadPlan", "ExecutionReport", "ExecutionRequest", "ExternalToolRequest", "ExtractorDescriptor", "ExtractorWorkaround", "ExtractorWorkaround_ForceGeneric", "ExtractorWorkaround_LegacyServerConnect", "ExtractorWorkaround_NoCheckCertificates", "ExtractorWorkaround_NoPlaylist", "FormatContainer", "FormatContainer_Any", "FormatContainer_Audio", "FormatContainer_Best", "FormatContainer_Video", "FormatContainer_Worst", "FormatDescriptor", "FormatRequest", "FragmentPolicy", "GeoBypassMode", "GeoBypassMode_Country", "GeoBypassMode_Default", "GeoBypassMode_Disabled", "GeoBypassMode_IpBlock", "InputKind", "InputKind_Argument", "InputKind_BatchFile", "InputKind_ConfigFile", "JsonMode", "JsonMode_Lines", "JsonMode_Single", "LiveMode", "LiveMode_Default", "LiveMode_FromStart", "LiveMode_Wait", "LiveRequest", "LogLevel", "LogLevel_Debug", "LogLevel_Info", "LogLevel_Quiet", "LogLevel_Warning", "MediaError", "MediaError_ArchiveFailure", "MediaError_AuthenticationFailed", "MediaError_BatchReadFailed", "MediaError_CertificateFailure", "MediaError_CookieFailure", "MediaError_ExternalToolMissing", "MediaError_ExtractorMissing", "MediaError_FormatUnavailable", "MediaError_GeoRestricted", "MediaError_HttpStatus", "MediaError_InvalidConfig", "MediaError_InvalidInput", "MediaError_InvalidRange", "MediaError_InvalidShortcut", "MediaError_InvalidTemplate", "MediaError_LogFailure", "MediaError_NetworkFailure", "MediaError_OutputFailure", "MediaError_PathFailure", "MediaError_PluginRejected", "MediaError_PostProcessFailed", "MediaError_RetryExhausted", "MediaError_SizeLimit", "MediaError_SubtitleUnavailable", "MediaError_UnsupportedUrl", "MediaError_UpdateUnavailable", "MediaError_WorkaroundRejected", "MediaItem", "MetadataRequest", "NetworkPolicy", "OutputRequest", "PlaylistMode", "PlaylistMode_Flat", "PlaylistMode_Playlist", "PlaylistMode_Random", "PlaylistMode_Reverse", "PlaylistMode_Single", "PlaylistRange", "PlaylistRequest", "PluginDescriptor", "PostProcessRequest", "PostProcessorKind", "PostProcessorKind_ConvertThumbnails", "PostProcessorKind_EmbedMetadata", "PostProcessorKind_EmbedSubtitle", "PostProcessorKind_EmbedThumbnail", "PostProcessorKind_ExtractAudio", "PostProcessorKind_Fixup", "PostProcessorKind_RecodeVideo", "PostProcessorKind_RemuxVideo", "PostProcessorKind_SplitChapters", "PostProcessorKind_SponsorBlock", "PresentationRequest", "ProxyMode", "ProxyMode_Direct", "ProxyMode_Http", "ProxyMode_Socks", "ShortcutKind", "ShortcutKind_Search", "ShortcutKind_SearchAll", "ShortcutKind_Url", "ShortcutRequest", "SimulationMode", "SimulationMode_Download", "SimulationMode_PrintOnly", "SimulationMode_Simulate", "SimulationMode_SkipDownload", "SubtitleMode", "SubtitleMode_All", "SubtitleMode_Automatic", "SubtitleMode_Manual", "SubtitleMode_None", "SubtitleRequest", "ThumbnailRequest", "TransferReceipt", "TransferRequest", "UpdatePolicy", "UpdatePolicy_Apply", "UpdatePolicy_Check", "UpdatePolicy_Master", "UpdatePolicy_Never", "UpdatePolicy_Nightly", "UpdateRequest", "VideoFilterRequest", "WorkaroundPolicy", "apply_update", "build_shortcut_url", "choose_extractor", "configure_presentation", "discover_extractors", "execute", "expand_playlist_ranges", "extract_media", "filter_formats", "filter_video", "load_batch_urls", "load_config", "load_plugins", "parse_arguments", "parse_batch_urls", "plan_downloads", "plan_fragments", "plan_metadata", "plan_post_processing", "plan_thumbnails", "read_download_archive", "render_items", "render_output_path", "resolve_authentication", "resolve_inputs", "resolve_live_media", "resolve_output_path", "resolve_update_repository", "run", "run_post_processing", "select_geo_route", "select_playlist", "select_subtitles", "sort_formats", "transfer_fragments", "transfer_media", "validate_network", "validate_workarounds", "write_download_archive"]
+__all__ = ["ArchiveRequest", "Authentication", "AuthenticationKind", "AuthenticationKind_Anonymous", "AuthenticationKind_BrowserCookies", "AuthenticationKind_Cookies", "AuthenticationKind_Credentials", "AuthenticationKind_Netrc", "CertificatePolicy", "CertificatePolicy_Insecure", "CertificatePolicy_Verify", "CliInput", "DownloadPlan", "ExecutionReport", "ExecutionRequest", "ExternalToolRequest", "ExtractorDescriptor", "ExtractorWorkaround", "ExtractorWorkaround_ForceGeneric", "ExtractorWorkaround_LegacyServerConnect", "ExtractorWorkaround_NoCheckCertificates", "ExtractorWorkaround_NoPlaylist", "FormatContainer", "FormatContainer_Any", "FormatContainer_Audio", "FormatContainer_Best", "FormatContainer_Video", "FormatContainer_Worst", "FormatDescriptor", "FormatRequest", "FragmentPolicy", "GeoBypassMode", "GeoBypassMode_Country", "GeoBypassMode_Default", "GeoBypassMode_Disabled", "GeoBypassMode_IpBlock", "InputKind", "InputKind_Argument", "InputKind_BatchFile", "InputKind_ConfigFile", "JsonMode", "JsonMode_Lines", "JsonMode_Single", "LiveMode", "LiveMode_Default", "LiveMode_FromStart", "LiveMode_Wait", "LiveRequest", "LogLevel", "LogLevel_Debug", "LogLevel_Info", "LogLevel_Quiet", "LogLevel_Warning", "MediaError", "MediaError_ArchiveFailure", "MediaError_AuthenticationFailed", "MediaError_BatchReadFailed", "MediaError_CertificateFailure", "MediaError_CookieFailure", "MediaError_ExternalToolMissing", "MediaError_ExtractorMissing", "MediaError_FormatUnavailable", "MediaError_GeoRestricted", "MediaError_HttpStatus", "MediaError_InvalidConfig", "MediaError_InvalidInput", "MediaError_InvalidRange", "MediaError_InvalidShortcut", "MediaError_InvalidTemplate", "MediaError_LogFailure", "MediaError_NetworkFailure", "MediaError_OutputFailure", "MediaError_PathFailure", "MediaError_PluginRejected", "MediaError_PostProcessFailed", "MediaError_RetryExhausted", "MediaError_SizeLimit", "MediaError_SubtitleUnavailable", "MediaError_UnsupportedUrl", "MediaError_UpdateUnavailable", "MediaError_WorkaroundRejected", "MediaItem", "MetadataRequest", "NetworkPolicy", "OutputRequest", "PlaylistMode", "PlaylistMode_Flat", "PlaylistMode_Playlist", "PlaylistMode_Random", "PlaylistMode_Reverse", "PlaylistMode_Single", "PlaylistRange", "PlaylistRequest", "PluginDescriptor", "PostProcessRequest", "PostProcessorKind", "PostProcessorKind_ConvertThumbnails", "PostProcessorKind_EmbedMetadata", "PostProcessorKind_EmbedSubtitle", "PostProcessorKind_EmbedThumbnail", "PostProcessorKind_ExtractAudio", "PostProcessorKind_Fixup", "PostProcessorKind_RecodeVideo", "PostProcessorKind_RemuxVideo", "PostProcessorKind_SplitChapters", "PostProcessorKind_SponsorBlock", "PresentationRequest", "ProxyMode", "ProxyMode_Direct", "ProxyMode_Http", "ProxyMode_Socks", "ShortcutKind", "ShortcutKind_Search", "ShortcutKind_SearchAll", "ShortcutKind_Url", "ShortcutRequest", "SimulationMode", "SimulationMode_Download", "SimulationMode_PrintOnly", "SimulationMode_Simulate", "SimulationMode_SkipDownload", "SubtitleMode", "SubtitleMode_All", "SubtitleMode_Automatic", "SubtitleMode_Manual", "SubtitleMode_None", "SubtitleRequest", "ThumbnailRequest", "TransferReceipt", "TransferRequest", "UpdateOutcome", "UpdateOutcome_Available", "UpdateOutcome_Current", "UpdateOutcome_Disabled", "UpdateOutcome_Installed", "UpdatePolicy", "UpdatePolicy_Apply", "UpdatePolicy_Check", "UpdatePolicy_Master", "UpdatePolicy_Never", "UpdatePolicy_Nightly", "UpdateRequest", "VideoFilterRequest", "WorkaroundPolicy", "apply_update", "build_shortcut_url", "choose_extractor", "configure_presentation", "discover_extractors", "execute", "expand_playlist_ranges", "extract_media", "filter_formats", "filter_video", "load_batch_urls", "load_config", "load_plugins", "parse_arguments", "parse_batch_urls", "plan_downloads", "plan_fragments", "plan_metadata", "plan_post_processing", "plan_thumbnails", "read_download_archive", "render_items", "render_output_path", "resolve_authentication", "resolve_inputs", "resolve_live_media", "resolve_output_path", "resolve_update_repository", "run", "run_post_processing", "select_geo_route", "select_playlist", "select_subtitles", "sort_formats", "transfer_fragments", "transfer_media", "validate_network", "validate_workarounds", "write_download_archive"]

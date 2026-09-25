@@ -86,18 +86,7 @@ class BarError_InvalidPayload:
     __hash__ = None
     reason: str
 
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class BarError_ServiceUnavailable:
-    pass
-
-@final
-@dataclass(frozen=True, slots=True, kw_only=True)
-class BarError_ProcessingFailed:
-    __hash__ = None
-    message: str
-
-BarError: TypeAlias = Union[BarError_InvalidPayload, BarError_ServiceUnavailable, BarError_ProcessingFailed]
+BarError: TypeAlias = Union[BarError_InvalidPayload]
 
 _cott_default_BarOptions_threshold: Final[Probability] = Probability(value=0.5)
 @final
@@ -113,9 +102,12 @@ class BarOptions:
         if not _cott_validated_construction():
             object.__setattr__(self, "use_cache", _cott_validate_abi(self.use_cache, bool, path="$.use_cache"))
 
-"""Reject empty payload bytes before pure processing."""
-"""Perform the pure byte-processing step without changing payload bytes."""
+"""Reject a payload without bytes. declared_size is caller-supplied metadata
+carried to the output; it is not compared with the byte count."""
+"""The byte-processing stage of this fixture is the identity: it always
+succeeds with the input bytes, whatever the options."""
 """Construct output from processed bytes and the original payload metadata."""
-"""Compose validate_payload, process_payload_bytes, and build_output in that
-order, propagating validation and processing errors unchanged."""
-__all__ = ["BarError", "BarError_InvalidPayload", "BarError_ProcessingFailed", "BarError_ServiceUnavailable", "BarOptions", "InputPayload", "MAX_PAYLOAD_SIZE", "OutputPayload", "PayloadFormat", "PayloadFormat_Raw", "PayloadFormat_Structured", "PayloadFormat_Text", "PayloadSize", "Probability"]
+"""Domain-named operation of the fixture: validate the payload, process its
+bytes, then build the output from the processed bytes and the validated
+metadata."""
+__all__ = ["BarError", "BarError_InvalidPayload", "BarOptions", "InputPayload", "MAX_PAYLOAD_SIZE", "OutputPayload", "PayloadFormat", "PayloadFormat_Raw", "PayloadFormat_Structured", "PayloadFormat_Text", "PayloadSize", "Probability"]

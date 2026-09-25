@@ -13,8 +13,7 @@ def _port_valid(port: str) -> bool:
         return True
     if not (port.isascii() and port.isdigit()):
         return False
-    value = int(port)
-    return 1 <= value <= 65535
+    return 1 <= int(port) <= 65535
 
 
 def resolve_connection(inputs: ConnectionInputs, environment: EnvironmentInputs) -> Result[ConnectionSettings, ConnectionError]:

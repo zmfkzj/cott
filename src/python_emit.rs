@@ -32,6 +32,11 @@ pub fn emit(
     ir: &CanonicalIr,
     bindings: &[ResolvedBinding],
 ) -> Result<Emission, Vec<EmitDiagnostic>> {
+    // Python annotations spell fixed lengths as `Literal[N]`, so named and
+    // arithmetic const arguments render through their closed values; the
+    // canonical IR and contract surface keep the symbolic form.
+    let evaluated = evaluated_const_arguments(plan);
+    let typed = evaluated.as_ref().unwrap_or(plan);
     let (target_machine, target_platform) = target_python_identity();
     let mut diagnostics = Vec::new();
     if target_machine == "unknown" {
@@ -41,7 +46,7 @@ pub fn emit(
         )]);
     }
     let mut modules = BTreeMap::<String, _>::new();
-    for module in plan.modules() {
+    for module in typed.modules() {
         if modules.insert(module.module.clone(), module).is_some() {
             diagnostics.push(diag(
                 module_path(&module.module),
@@ -203,7 +208,7 @@ pub fn emit(
         }
     }
     validate_impl_selections(&modules, &mut diagnostics);
-    let callables = plan
+    let callables = typed
         .callables()
         .into_iter()
         .map(|callable| (callable.cott_symbol.clone(), callable))
@@ -1798,6 +1803,130 @@ fn render_fixed_length(value: &Value, typevar_names: &BTreeMap<String, String>) 
         }
         _ => unreachable!("validated fixed length kind"),
     }
+}
+
+/// A copy of `plan` whose closed named and arithmetic const arguments
+/// (`Buffer[SIZE]`, `Array[T, SIZE + 1]`) take their `value` form, or `None`
+/// when no declaration uses one. Arguments over const parameters stay symbolic
+/// and `validate_const_argument` rejects them as before.
+fn evaluated_const_arguments(plan: &PythonArtifactPlan) -> Option<PythonArtifactPlan> {
+    if !plan
+        .modules()
+        .iter()
+        .flat_map(|module| &module.declarations)
+        .any(contains_symbolic_const_argument)
+    {
+        return None;
+    }
+    let constants = plan
+        .modules()
+        .iter()
+        .flat_map(|module| &module.declarations)
+        .filter(|declaration| declaration.get("kind").and_then(Value::as_str) == Some("const"))
+        .filter_map(|declaration| {
+            let value = declaration.get("value")?;
+            if value.get("kind")?.as_str()? != "integer" {
+                return None;
+            }
+            Some((
+                declaration.get("name")?.as_str()?.to_owned(),
+                value
+                    .get("value")?
+                    .as_str()?
+                    .replace('_', "")
+                    .parse::<u64>()
+                    .ok()?,
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut evaluated = plan.clone();
+    for module in &mut evaluated.modules {
+        for declaration in &mut module.declarations {
+            evaluate_const_arguments(declaration, &constants);
+        }
+    }
+    Some(evaluated)
+}
+
+/// A canonical `reference` or `binary` const argument; its `type` is a const
+/// domain name, unlike the typed `binary` contract expression.
+fn is_symbolic_const_argument(object: &serde_json::Map<String, Value>) -> bool {
+    matches!(
+        object.get("kind").and_then(Value::as_str),
+        Some("reference" | "binary")
+    ) && matches!(
+        object.get("type").and_then(Value::as_str),
+        Some("U8" | "U16" | "U32" | "U64")
+    )
+}
+
+fn contains_symbolic_const_argument(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => items.iter().any(contains_symbolic_const_argument),
+        Value::Object(object) => {
+            is_symbolic_const_argument(object)
+                || object.values().any(contains_symbolic_const_argument)
+        }
+        _ => false,
+    }
+}
+
+fn evaluate_const_arguments(value: &mut Value, constants: &BTreeMap<String, u64>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                evaluate_const_arguments(item, constants);
+            }
+        }
+        Value::Object(object) => {
+            let replacement = is_symbolic_const_argument(object)
+                .then(|| const_argument_value(object, constants))
+                .flatten()
+                .map(|closed| json!({"kind": "value", "type": object["type"], "value": closed}));
+            match replacement {
+                Some(replacement) => *value = replacement,
+                None => {
+                    for child in object.values_mut() {
+                        evaluate_const_arguments(child, constants);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The closed value of one const argument within its domain, as HIR evaluates
+/// it: checked unsigned arithmetic over literals and integer constants.
+fn const_argument_value(
+    argument: &serde_json::Map<String, Value>,
+    constants: &BTreeMap<String, u64>,
+) -> Option<u64> {
+    let value = match argument.get("kind")?.as_str()? {
+        "value" => argument.get("value")?.as_u64()?,
+        "reference" => *constants.get(argument.get("symbol")?.as_str()?)?,
+        "binary" => {
+            let left = const_argument_value(argument.get("left")?.as_object()?, constants)?;
+            let right = const_argument_value(argument.get("right")?.as_object()?, constants)?;
+            match argument.get("op")?.as_str()? {
+                "add" => left.checked_add(right),
+                "subtract" => left.checked_sub(right),
+                "multiply" => left.checked_mul(right),
+                "divide" => left.checked_div(right),
+                "remainder" => left.checked_rem(right),
+                _ => None,
+            }?
+        }
+        _ => return None,
+    };
+    let maximum = match argument.get("type")?.as_str()? {
+        "U8" => u64::from(u8::MAX),
+        "U16" => u64::from(u16::MAX),
+        "U32" => u64::from(u32::MAX),
+        "U64" => u64::MAX,
+        _ => return None,
+    };
+    (value <= maximum).then_some(value)
 }
 
 fn validate_value(value: &Value, module: &str, diagnostics: &mut Vec<EmitDiagnostic>) {

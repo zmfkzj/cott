@@ -60,6 +60,23 @@ public sealed interface JsonTransformError {
     }
 }
 
+public data class StringField(
+    public val name: kotlin.String,
+    public val text: kotlin.String,
+) : cott_runtime.CottFieldValue {
+    override val cottTypeIdentity: kotlin.String get() = "curriculum.json_transform.StringField"
+    override val cottFieldNames: cott_runtime.CottList<kotlin.String> get() = cott_runtime.CottList(listOf("name", "text"))
+    override fun cottField(name: kotlin.String): kotlin.Any? = when (name) {
+        "name" -> this.name
+        "text" -> this.text
+        else -> cott_runtime.CottRuntime.violation("unknown canonical field", symbol = cottTypeIdentity, phase = "field", actual = name)
+    }
+    init {
+        cott_runtime.CottRuntime.abi(name, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.name")
+        cott_runtime.CottRuntime.abi(text, cott_runtime.CottTypes.STRING, cott_runtime.RuntimeValidation.BOUNDARY, "\$.text")
+    }
+}
+
 internal object CottDescriptors_d359bf8c455e8d84d987cdc1 {
     private val descriptors: kotlin.collections.MutableMap<kotlin.collections.List<kotlin.Any>, cott_runtime.CottType<*>> = java.util.HashMap()
 
@@ -95,6 +112,24 @@ internal object CottDescriptors_d359bf8c455e8d84d987cdc1 {
             }
             descriptors[key] = deferred
             val resolved: cott_runtime.CottType<curriculum.json_transform.JsonTransformError> = (cott_runtime.CottTypes.oneOf(listOf(cott_runtime.CottTypes.nominal(_cottDisplayName + "#NotAnObject", curriculum.json_transform.JsonTransformError.NotAnObject::class.java as java.lang.Class<curriculum.json_transform.JsonTransformError.NotAnObject>, listOf(), { values -> curriculum.json_transform.JsonTransformError.NotAnObject }), cott_runtime.CottTypes.nominal(_cottDisplayName + "#MissingField", curriculum.json_transform.JsonTransformError.MissingField::class.java as java.lang.Class<curriculum.json_transform.JsonTransformError.MissingField>, listOf(cott_runtime.CottNominalField<curriculum.json_transform.JsonTransformError.MissingField>("field_name", cott_runtime.CottTypes.STRING, { value -> value.field_name })), { values -> curriculum.json_transform.JsonTransformError.MissingField(values[0] as kotlin.String) }))) as cott_runtime.CottType<curriculum.json_transform.JsonTransformError>)
+            descriptors[key] = resolved
+            resolved
+        }
+
+    internal fun  type_7356557d900491b95337cce5(): cott_runtime.CottType<curriculum.json_transform.StringField> =
+        kotlin.synchronized(cott_runtime.CottTypes) {
+            val key: kotlin.collections.List<kotlin.Any> = listOf("curriculum.json_transform.StringField")
+            val existing = descriptors[key]
+            if (existing != null) return@synchronized existing as cott_runtime.CottType<curriculum.json_transform.StringField>
+            val _cottDisplayName: kotlin.String = key.joinToString(separator = "|")
+            val deferred: cott_runtime.CottType<curriculum.json_transform.StringField> = cott_runtime.CottTypes.deferred(_cottDisplayName) {
+                kotlin.synchronized(cott_runtime.CottTypes) {
+                    descriptors[key] as? cott_runtime.CottType<curriculum.json_transform.StringField>
+                        ?: cott_runtime.CottRuntime.violation("recursive descriptor was resolved before initialization", symbol = "curriculum.json_transform.StringField", phase = "validation")
+                }
+            }
+            descriptors[key] = deferred
+            val resolved: cott_runtime.CottType<curriculum.json_transform.StringField> = cott_runtime.CottTypes.nominal(_cottDisplayName, curriculum.json_transform.StringField::class.java as java.lang.Class<curriculum.json_transform.StringField>, listOf(cott_runtime.CottNominalField<curriculum.json_transform.StringField>("name", cott_runtime.CottTypes.STRING, { value -> value.name }), cott_runtime.CottNominalField<curriculum.json_transform.StringField>("text", cott_runtime.CottTypes.STRING, { value -> value.text })), { values -> curriculum.json_transform.StringField(values[0] as kotlin.String, values[1] as kotlin.String) })
             descriptors[key] = resolved
             resolved
         }

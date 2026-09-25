@@ -1,21 +1,29 @@
 from pathlib import Path
 
-from cott_runtime import CottList, Err, Ok, Result
-from real.toolong_types import LogEntry, ToolongError, ToolongError_InvalidArguments, ToolongError_ReadFailed
+import cott_runtime
+from cott_runtime import CottContractViolation, CottList, Result
+from real.toolong import parse_log
+from real.toolong_types import LogEntry, ToolongError, ToolongError_ReadFailed
+
+
+def _read_source(source: Path) -> bytes:
+    try:
+        return cott_runtime._cott_fixture_read(source)
+    except CottContractViolation as exc:
+        if exc.message == "fixture adapters are inactive":
+            return source.read_bytes()
+        if isinstance(exc.__cause__, OSError):
+            raise exc.__cause__ from exc
+        raise
 
 
 def load_entries(sources: CottList[Path]) -> Result[CottList[LogEntry], ToolongError]:
-    if len(sources) == 0:
-        return Err(error=ToolongError_InvalidArguments(message="at least one source is required"))
     entries: list[LogEntry] = []
     for source in sources:
         try:
-            with open(source, "r", encoding="utf-8", newline="") as handle:
-                text = handle.read()
+            text = _read_source(source).decode("utf-8", errors="strict")
         except (OSError, UnicodeDecodeError) as exc:
-            return Err(error=ToolongError_ReadFailed(path=source, message=str(exc)))
-        line = 1
-        for raw in text.splitlines():
-            entries.append(LogEntry(source=source, line=line, text=raw))
-            line += 1
-    return Ok(value=CottList(values=entries))
+            return cott_runtime.Err(error=ToolongError_ReadFailed(path=source, message=str(exc)))
+        for entry in parse_log(source, text):
+            entries.append(entry)
+    return cott_runtime.Ok(value=CottList(values=entries))
