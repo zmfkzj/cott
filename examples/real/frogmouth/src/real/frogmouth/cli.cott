@@ -1,0 +1,81 @@
+module frogmouth.cli
+
+doc """
+The usage line of the command-line interface.
+"""
+const COMMAND_LINE_USAGE: Str = "usage: frogmouth [-h] [-v] [file ...]"
+
+doc """
+The complete --help text, without a trailing newline.
+"""
+const COMMAND_LINE_HELP: Str = "usage: frogmouth [-h] [-v] [file ...]\n\nFrogmouth -- A Markdown viewer for the terminal.\n\npositional arguments:\n  file           The Markdown file to view\n\noptions:\n  -h, --help     show this help message and exit\n  -v, --version  Show version information.\n\nv0.9.1"
+
+doc """
+What the command line asks for. Browse starts the browser at the joined
+positional arguments, if any; ShowHelp and ShowVersion print text to
+standard output and exit with status 0; Invalid prints message to standard
+error and exits with status 2.
+"""
+enum CommandLine:
+    Browse(address: Option[Str])
+    ShowHelp(text: Str)
+    ShowVersion(text: Str)
+    Invalid(message: Str)
+
+fn parse_command_line(arguments: List[Str], textual_version: Str) -> CommandLine:
+    doc """
+    Interpret the command-line arguments, program name excluded, like
+    upstream Frogmouth's argparse parser with the options -h/--help and
+    -v/--version and the positional "file" arguments.
+    
+    Every argument after the first argument that is exactly "--" is
+    positional, and that "--" itself is dropped. Before it, an argument is an
+    option when it starts with "-", is longer than one character, contains
+    no space and is not a negative number (matching ^-\d+$ or ^-\d*\.\d+$);
+    every other argument is positional.
+    
+    The first option, from left to right, that asks for help or the version
+    decides the result. Help is "-h", "--" followed by a non-empty prefix of
+    "help", or a single-dash option whose first letter is "h"; it gives
+    ShowHelp(COMMAND_LINE_HELP). Version is "-v", "--" followed by a
+    non-empty prefix of "version", or a single-dash option whose first letter
+    is "v"; it gives ShowVersion of "frogmouth 0.9.1 (Textual vVERSION)"
+    where VERSION is textual_version.
+    
+    Otherwise, when there are other options, the result is Invalid of
+    COMMAND_LINE_USAGE, "\n", "frogmouth: error: unrecognized arguments: "
+    and those options in order separated by one space. Otherwise it is
+    Browse of the positional arguments joined with single spaces, or Browse
+    of Nothing when there are none.
+    """
+
+    ensures CommandLine.ShowHelp(text) => text == COMMAND_LINE_HELP
+    ensures CommandLine.ShowHelp(_) => arguments.len > 0
+    ensures CommandLine.ShowVersion(text) => (starts_with(text, "frogmouth 0.9.1 (Textual v") and ends_with(text, ")") and contains(text, textual_version))
+    ensures CommandLine.ShowVersion(_) => arguments.len > 0
+    ensures CommandLine.Invalid(message) => starts_with(message, "usage: frogmouth [-h] [-v] [file ...]\nfrogmouth: error: unrecognized arguments: -")
+    ensures CommandLine.Browse(Option.Some(_)) => arguments.len > 0
+
+    effects []
+
+scenario command_lines_are_parsed:
+    call nothing = parse_command_line(List(), "6.6.0")
+    assert nothing == CommandLine.Browse(address: Option.Nothing)
+    call file = parse_command_line(List("README.md"), "6.6.0")
+    assert file == CommandLine.Browse(address: Option.Some(value: "README.md"))
+    call joined = parse_command_line(List("gh", "textualize/textual"), "6.6.0")
+    assert joined == CommandLine.Browse(address: Option.Some(value: "gh textualize/textual"))
+    call separated = parse_command_line(List("--", "-x", "--help"), "6.6.0")
+    assert separated == CommandLine.Browse(address: Option.Some(value: "-x --help"))
+    call negative = parse_command_line(List("-1", "-.5", "- a", "-"), "6.6.0")
+    assert negative == CommandLine.Browse(address: Option.Some(value: "-1 -.5 - a -"))
+    call help = parse_command_line(List("README.md", "--bogus", "--he"), "6.6.0")
+    assert help == CommandLine.ShowHelp(text: COMMAND_LINE_HELP)
+    call version = parse_command_line(List("-vh"), "6.6.0")
+    assert version == CommandLine.ShowVersion(text: "frogmouth 0.9.1 (Textual v6.6.0)")
+    call long_version = parse_command_line(List("--vers", "-h"), "1.2.3")
+    assert long_version == CommandLine.ShowVersion(text: "frogmouth 0.9.1 (Textual v1.2.3)")
+    call invalid = parse_command_line(List("a", "-x", "--y=1", "b"), "6.6.0")
+    assert invalid == CommandLine.Invalid(
+        message: "usage: frogmouth [-h] [-v] [file ...]\nfrogmouth: error: unrecognized arguments: -x --y=1",
+    )

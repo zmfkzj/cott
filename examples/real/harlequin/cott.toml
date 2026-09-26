@@ -10,7 +10,14 @@ generated = "generated/python"
 stubs = "generated/stubs"
 interpreter = ".venv/bin/python"
 type_checker = ".venv/bin/basedpyright"
-runtime_validation = "boundary"
+runtime_validation = "test-only"
+
+[effects]
+"clipboard" = true
+"locale" = true
+"subprocess" = true
+"tty" = true
 
 [generator]
 rules = "generator.rules"
+timeout_seconds = 3600

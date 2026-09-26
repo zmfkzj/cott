@@ -113,6 +113,40 @@ path = root / "cott_test_namespace/sdk/client.py"
 path.write_text("value = 43\n")
 rejected([sdk], source)
 path.write_text("value = 42\n")
+# Rewriting an existing RECORD does not change the sys.path directory's stamp. A cached
+# ownership inventory must still detect that this already-installed distribution now also
+# claims the selected client's module.
+record_path = root / "unselected_driver-1.0.0.dist-info/RECORD"
+original_record = record_path.read_text()
+record_path.write_text(original_record + "cott_test_namespace/sdk/client.py,,\n")
+try:
+    _cott_validate_dependencies([sdk], source, {})
+except CottContractViolation as error:
+    assert "belongs to 2 installed distributions" in str(error), error
+else:
+    raise AssertionError("changed RECORD ownership bypassed dependency authentication")
+record_path.write_text(original_record)
+_cott_validate_dependencies([sdk], source, {})
+# A second installation may already claim a missing module. Materializing that file must
+# change the live ownership set even when RECORD and both sys.path entries are unchanged.
+second_site = root / "second-site"
+second_info = second_site / "latent_driver-1.0.0.dist-info"
+second_info.mkdir(parents=True)
+(second_info / "METADATA").write_text("Metadata-Version: 2.4\nName: latent-driver\nVersion: 1.0.0\n\n")
+(second_info / "RECORD").write_text("cott_test_namespace/sdk/client.py,,\n")
+latent_module = second_site / "cott_test_namespace/sdk/client.py"
+latent_module.parent.mkdir(parents=True)
+sys.path.append(str(second_site))
+_cott_validate_dependencies([sdk], source, {})
+latent_module.write_text("value = 42\n")
+try:
+    _cott_validate_dependencies([sdk], source, {})
+except CottContractViolation as error:
+    assert "belongs to 2 installed distributions" in str(error), error
+else:
+    raise AssertionError("newly materialized RECORD member bypassed ownership authentication")
+latent_module.unlink()
+_cott_validate_dependencies([sdk], source, {})
 conflict = install("conflicting-driver", {"cott_test_namespace/sdk/client.py": "value = 42\n"})
 rejected([sdk, conflict], source)
 "#;
@@ -887,6 +921,19 @@ except CottContractViolation as error:
     assert error.phase == "facade-import"
 else:
     raise AssertionError("project mismatch was accepted")
+# A byte-identical record cannot certify a changed interpreter identity on a new load.
+_original_executable = _runtime._sys.executable
+_replacement_executable = Path("different-interpreter").resolve()
+_replacement_executable.write_bytes(b"not the configured interpreter")
+_runtime._sys.executable = str(_replacement_executable)
+try:
+    _cott_load("_cott_impl/demo/bad.py", "{bad_hash}", "bad", "demo")
+except CottContractViolation as error:
+    assert error.phase == "provenance" and "Python executable path mismatch" in str(error), error
+else:
+    raise AssertionError("cached record skipped live interpreter authentication")
+finally:
+    _runtime._sys.executable = _original_executable
 def _reject_wire_text(text: str, label: str, expected: str | None = None) -> None:
     Path("generation.json").write_text(text)
     try:

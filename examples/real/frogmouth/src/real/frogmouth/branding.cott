@@ -1,0 +1,74 @@
+module frogmouth.branding
+
+doc """
+The application's display name.
+"""
+const APPLICATION_TITLE: Str = "Frogmouth"
+
+doc """
+The command and package name.
+"""
+const PACKAGE_NAME: Str = "frogmouth"
+
+doc """
+The organisation name used for namespaced configuration and data directories.
+"""
+const ORGANISATION_NAME: Str = "textualize"
+
+doc """
+The upstream Frogmouth release whose behavior this program reproduces.
+"""
+const VERSION: Str = "0.9.1"
+
+doc """
+The User-Agent header value of every HTTP request.
+"""
+const USER_AGENT: Str = "frogmouth v0.9.1"
+
+doc """
+The Textualize Discord server opened by the discord command.
+"""
+const DISCORD_URL: Str = "https://discord.gg/Enf6Z3qhVr"
+
+doc """
+Address bar placeholder while no location is being viewed.
+"""
+const ADDRESS_PLACEHOLDER: Str = "Enter a location or command"
+
+doc """
+Markdown shown before any location has been viewed.
+"""
+const PLACEHOLDER_MARKDOWN: Str = "# Frogmouth 0.9.1\n\nWelcome to Frogmouth!\n"
+
+doc """
+The Markdown document of the help dialog (F1, the help command).
+"""
+const HELP_MARKDOWN: Str = "# Frogmouth v0.9.1 Help\n\nWelcome to Frogmouth Help!\n\nFrogmouth was built with [Textual](https://github.com/Textualize/textual).\n\n\n## Navigation keys\n\n| Key | Command |\n| -- | -- |\n| `/` | Focus the address bar (`ctrl+u` to clear address bar) |\n| `Escape` | Return to address bar / clear address bar / quit |\n| `Ctrl+n` | Show/hide the navigation |\n| `Ctrl+b` | Show the bookmarks |\n| `Ctrl+l` | Show the local file browser |\n| `Ctrl+t` | Show the table of contents |\n| `Ctrl+y` | Show the history |\n| `Ctrl+left` | Go backward in history |\n| `Ctrl+right` | Go forward in history |\n\n## General keys\n\n| Key | Command |\n| -- | -- |\n| `Ctrl+d` | Add the current document to the bookmarks |\n| `Ctrl+r` | Reload the current document |\n| `Ctrl+q` | Quit the application |\n| `F1` | This help |\n| `F2` | Details about Frogmouth |\n| `F10` | Toggle dark/light theme |\n\n## Commands\n\nPress `/` or click the address bar, then enter any of the following commands:\n\n| Command | Aliases | Arguments | Command |\n| -- | -- | -- | -- |\n| `about` | `a` | | Show details about the application |\n| `bookmarks` | `b`, `bm` | | Show the bookmarks list |\n| `bitbucket` | `bb` | `<repo-info>` | View a file on BitBucket (see below) |\n| `codeberg` | `cb` | `<repo-info>` | View a file on Codeberg (see below) |\n| `changelog` | `cl` | | View the Frogmouth ChangeLog |\n| `chdir` | `cd` | `<dir>` | Switch the local file browser to a new directory |\n| `contents` | `c`, `toc` | | Show the table of contents for the document |\n| `discord` | | | Visit the Textualize Discord server |\n| `github` | `gh` | `<repo-info>` | View a file on GitHub (see below) |\n| `gitlab` | `gl` | `<repo-info>` | View a file on GitLab (see below) |\n| `help` | `?` | | Show this document |\n| `history` | `h` | | Show the history |\n| `local` | `l` | | Show the local file browser |\n| `quit` | `q` | | Quit the viewer |\n\n## Git forge quick view\n\nThe git forge quick view command can be used to quickly view a file on a git\nforge such as GitHub or GitLab. Various forms of specifying the repository,\nbranch and file are supported. For example:\n\n- `<owner>`/`<repo>`\n- `<owner>`/`<repo>` `<file>`\n- `<owner>` `<repo>`\n- `<owner>` `<repo>` `<file>`\n- `<owner>`/`<repo>`:`<branch>`\n- `<owner>`/`<repo>`:`<branch>` `<file>`\n- `<owner>` `<repo>`:`<branch>`\n- `<owner>` `<repo>`:`<branch>` `<file>`\n\nAnywhere where `<file>` is omitted it is assumed `README.md` is desired.\n\nAnywhere where `<branch>` is omitted a test is made for the desired file on\nfirst a `main` and then a `master` branch.\n"
+
+doc """
+Rich markup title of the about dialog (F2, the about command).
+"""
+const ABOUT_TITLE: Str = "Frogmouth [b dim]v0.9.1"
+
+doc """
+Rich markup body of the about dialog. Each @click action asks the application
+to open the quoted URL externally.
+"""
+const ABOUT_MESSAGE: Str = "Built with [@click=app.visit('https://textual.textualize.io/')]Textual[/] by [@click=app.visit('https://www.textualize.io/')]Textualize[/].\n\n[@click=app.visit('https://github.com/textualize/frogmouth')]https://github.com/textualize/frogmouth[/]"
+
+doc """
+Prompt of the bookmark title input dialog.
+"""
+const BOOKMARK_TITLE_PROMPT: Str = "Bookmark title:"
+
+const DELETE_BOOKMARK_TITLE: Str = "Delete bookmark"
+
+const DELETE_BOOKMARK_QUESTION: Str = "Are you sure you want to delete the bookmark?"
+
+const DELETE_HISTORY_TITLE: Str = "Delete history entry?"
+
+const DELETE_HISTORY_QUESTION: Str = "Are you sure you want to delete the history entry?"
+
+const CLEAR_HISTORY_TITLE: Str = "Clear history?"
+
+const CLEAR_HISTORY_QUESTION: Str = "Are you sure you want to clear everything out of history?"

@@ -1882,6 +1882,54 @@ fn effect_verification_leaves_factories_and_stdlib_constructors_unexecuted() {
         &stdlib.paths,
         &stdlib.plan,
         "api.service.run",
+        b"from email.utils import parsedate_tz\n\ndef run() -> object:\n    return parsedate_tz(\"Thu, 21 Dec 2000 16:01:07 +0200\")\n",
+    )
+    .expect("the email.utils date parser is a standard-library effect leaf");
+    validate_candidate(
+        &stdlib.config,
+        &stdlib.paths,
+        &stdlib.plan,
+        "api.service.run",
+        b"import zlib\n\ndef run() -> object:\n    return zlib.decompressobj()\n",
+    )
+    .expect("zlib is a standard-library effect leaf for deflate decoding");
+    validate_candidate(
+        &stdlib.config,
+        &stdlib.paths,
+        &stdlib.plan,
+        "api.service.run",
+        b"import locale\n\ndef run() -> object:\n    return locale.getpreferredencoding(False)\n",
+    )
+    .expect("locale is a standard-library effect leaf for CLI encoding reports");
+    validate_candidate(
+        &stdlib.config,
+        &stdlib.paths,
+        &stdlib.plan,
+        "api.service.run",
+        b"from compression import zstd\n\ndef run() -> object:\n    return zstd.decompress(b\"\\x28\\xb5\\x2f\\xfd\")\n",
+    )
+    .expect("CPython 3.14 compression.zstd is a standard-library effect leaf");
+    validate_candidate(
+        &stdlib.config,
+        &stdlib.paths,
+        &stdlib.plan,
+        "api.service.run",
+        b"import queue\n\ndef run() -> object:\n    return queue.Queue()\n",
+    )
+    .expect("queue is a standard-library effect leaf for fragment streaming");
+    validate_candidate(
+        &stdlib.config,
+        &stdlib.paths,
+        &stdlib.plan,
+        "api.service.run",
+        b"from concurrent.futures import Future\n\ndef run() -> object:\n    future: Future[int] = Future()\n    future.set_result(7)\n    return future.result()\n",
+    )
+    .expect("concurrent.futures is a standard-library effect leaf");
+    validate_candidate(
+        &stdlib.config,
+        &stdlib.paths,
+        &stdlib.plan,
+        "api.service.run",
         b"def run() -> object:\n    SystemExit(0)\n    return isinstance(1, int)\n",
     )
     .expect("permitted Python builtins are non-Cott effect leaves");
@@ -2308,6 +2356,18 @@ fn retains_unsafe_source_rejections() {
         (
             b"def run() -> object:\n    return __import__(\"pathlib\")\n",
             "dynamic imports are not allowed",
+        ),
+        (
+            b"import ctypes as foreign\n\ndef run() -> object:\n    return foreign.py_object(None)\n",
+            "runtime introspection",
+        ),
+        (
+            b"from ctypes import pythonapi as native\n\ndef run() -> object:\n    return native\n",
+            "runtime introspection",
+        ),
+        (
+            b"from _ctypes import PyObj_FromPtr as from_pointer\n\ndef run() -> object:\n    return from_pointer(0)\n",
+            "runtime introspection",
         ),
         (
             b"def run() -> object:\n    return __file__\n",

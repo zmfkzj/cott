@@ -1,0 +1,276 @@
+module real.toolong.model
+
+doc """
+A terminal color. Default is the color the surrounding widget would use
+(the base foreground or background of the text being drawn). Indexed is an
+xterm 256-color palette entry (0-15 are the ANSI colors: 0 black, 1 red,
+2 green, 3 yellow, 4 blue, 5 magenta, 6 cyan, 7 white, 8-15 their bright
+variants). Rgb is a 24-bit color.
+"""
+enum TermColor:
+    Default
+    Indexed(index: U8)
+    Rgb(red: U8, green: U8, blue: U8)
+
+doc """
+A style applied to the code points [start, end) of a StyledText. Offsets
+count Unicode code points (Python str indexes), not bytes or cells.
+
+style is a style code: the canonical text form of one rich-style layer, kept
+as a single string so that densely highlighted lines stay far below the
+1024-node ABI traversal limit. It is the space-separated sequence of these
+optional tokens, in this order: "fg:" + COLOR (foreground set), "bg:" +
+COLOR (background set), then for each attribute in the order bold, dim,
+italic, underline, reverse either the attribute name (set true) or "no" +
+the name (explicitly cleared, e.g. "noitalic"); an attribute not mentioned
+is not set by this layer and inherits from the layers below. The empty code
+sets nothing. COLOR is "default" for TermColor.Default, for TermColor.Indexed
+0-15 the prompt_toolkit ANSI name "ansiblack", "ansired", "ansigreen",
+"ansiyellow", "ansiblue", "ansimagenta", "ansicyan", "ansigray",
+"ansibrightblack", "ansibrightred", "ansibrightgreen", "ansibrightyellow",
+"ansibrightblue", "ansibrightmagenta", "ansibrightcyan", "ansiwhite" (in
+index order), and otherwise "#" + the lowercase two-digit hex of red, green
+and blue: Rgb as given, Indexed 16-231 from the xterm 6x6x6 cube with
+channel levels 0, 95, 135, 175, 215, 255 (index 16 + 36r + 6g + b) and
+Indexed 232-255 as gray 8 + 10 * (index - 232). Example: foreground
+Indexed(6), bold true, italic false is "fg:ansicyan bold noitalic".
+"""
+struct StyledSpan:
+    start: U32
+    end: U32
+    style: Str
+
+    invariant self.start <= self.end
+
+doc """
+Styled text in the rich 13.7.0 Text model: plain text plus style spans. When
+the text is drawn, the spans are layered over the base style in list order,
+so a later span's set attributes and colors override earlier ones for the
+code points it covers.
+"""
+struct StyledText:
+    text: Str
+    spans: List[StyledSpan]
+
+doc """
+Consecutive terminal cells sharing one style. text is the characters drawn
+left to right; a double-width character occupies two cells. style is a cell
+code: the style code (see StyledSpan) of a fully resolved cell, which always
+has "fg:" and "bg:" tokens and lists only the attributes that are on (never a
+"no" token), in the StyledSpan token order. A cell code is exactly a
+prompt_toolkit style string, e.g. "fg:#e1e1e1 bg:#1e1e1e bold". "default"
+colors mean the terminal's own default color.
+"""
+struct StyledRun:
+    text: Str
+    style: Str
+
+doc """
+One terminal row as runs drawn left to right from column 0. Adjacent runs
+always have different styles and the runs cover exactly the frame width in
+cells.
+"""
+struct ScreenRow:
+    runs: List[StyledRun]
+
+doc """
+A rectangle of terminal cells: columns [x, x + width), rows [y, y + height).
+"""
+struct Rect:
+    x: U16
+    y: U16
+    width: U16
+    height: U16
+
+doc """
+A timestamp found in a log line, holding exactly the fields of the CPython
+datetime it was parsed into. utc_offset_seconds is Nothing for a naive
+datetime and the whole-second UTC offset for an aware one.
+"""
+struct LogTimestamp:
+    year: U16
+    month: U8
+    day: U8
+    hour: U8
+    minute: U8
+    second: U8
+    microsecond: U32
+    utc_offset_seconds: Option[I32]
+
+    invariant self.year >= 1 and self.year <= 9999
+    invariant self.month >= 1 and self.month <= 12
+    invariant self.day >= 1 and self.day <= 31
+    invariant self.hour <= 23
+    invariant self.minute <= 59
+    invariant self.second <= 59
+    invariant self.microsecond <= 999999
+
+doc """
+The result of one timestamp scan: the timestamp found, if any, and the
+scanner's format order after the scan (most recently matched format first).
+"""
+struct TimestampScan:
+    timestamp: Option[LogTimestamp]
+    order: List[U8]
+
+enum TimeUnit:
+    Minute
+    Hour
+    Day
+
+doc """
+The log line formats of Toolong's format parser.
+"""
+enum LineFormat:
+    Json
+    CommonLog
+    CombinedLog
+    Plain
+
+doc """
+One parsed log line: the format that accepted it, the line text that format
+kept, its highlighted text, and the parser's format order after parsing
+(most recently matched format first).
+"""
+struct ParsedLine:
+    format: LineFormat
+    line: Str
+    text: StyledText
+    order: List[LineFormat]
+
+doc """
+The find dialog query: the text typed, whether the Regex checkbox is on and
+whether the Case sensitive checkbox is on.
+"""
+struct FindQuery:
+    text: Str
+    regex: Bool
+    case_sensitive: Bool
+
+enum Compression:
+    Uncompressed
+    Gzip
+    Bzip2
+
+doc """
+An opened log source. descriptor is the OS file descriptor holding the
+(decompressed) content outside Cott scenarios; it is Nothing while a scenario
+file-system fixture supplies the content, in which case readers re-read path
+through the fixture and decompress it again when compression is not
+Uncompressed. size is the content size in bytes when it was opened. name is
+the final path component.
+"""
+struct LogSource:
+    path: Path
+    name: Str
+    compression: Compression
+    descriptor: Option[I32]
+    size: U64
+    can_tail: Bool
+
+doc """
+Byte offsets [start, end) into a log source's content.
+"""
+struct ByteSpan:
+    start: U64
+    end: U64
+
+doc """
+Toolong's line index for one file. breaks is Opaque(tag="file_breaks",
+value=tuple of U64 byte offsets); recursively validating a large log index
+would exceed the bounded ABI traversal budget. Build it with
+cott_runtime.Opaque(tag="file_breaks", value=tuple(offsets)) and read it as
+typing.cast(tuple[int, ...], index.breaks.unwrap()) (unwrap() is typed
+object): no per-element checks and no copy of the whole tuple per lookup.
+Lines before scan_start are not indexed yet; scanned_size is the largest
+content size reported by a finished scan or tail read.
+"""
+struct FileIndex:
+    breaks: Opaque["file_breaks"]
+    scan_start: U64
+    scanned_size: U64
+
+doc """
+One line of a merged view: the POSIX seconds of its timestamp (0.0 when none
+was found), its zero-based line number within its own file, and the index of
+that file in the merged view's file list.
+"""
+struct MergedLine:
+    seconds: F64
+    line: U64
+    file: U32
+
+doc """
+A merged view's index: lines is Opaque(tag="merged_lines", value=tuple of
+MergedLine values in display order); breaks is Opaque(tag="merged_breaks",
+value=tuple of per-file tuples of U64 line-end offsets), where breaks[i]
+belongs to file i. scanned_size is the total file size. These handles keep
+arbitrary-sized log indexes out of recursive ABI walks. Read them as
+typing.cast(tuple[MergedLine, ...], index.lines.unwrap()) and
+typing.cast(tuple[tuple[int, ...], ...], index.breaks.unwrap()), without
+per-element checks or per-lookup copies.
+"""
+struct MergedIndex:
+    lines: Opaque["merged_lines"]
+    breaks: Opaque["merged_breaks"]
+    scanned_size: U64
+
+enum TabIndex:
+    Single(index: FileIndex)
+    Merged(index: MergedIndex)
+
+doc """
+Where a displayed line lives: the index of its file in the view's file list
+and the byte span to read.
+"""
+struct LineLocation:
+    file: U32
+    span: ByteSpan
+
+doc """
+One timestamp-scan entry of a file: its zero-based line number, the byte
+offset just after the line (after its LF when it has one) and the POSIX
+seconds of the timestamp found on it, or 0.0 when none was found.
+"""
+struct TimestampEntry:
+    line: U64
+    end: U64
+    seconds: F64
+
+doc """
+The timestamp scan of one file of a merged view. entries is
+Opaque(tag="timestamp_entries", value=tuple of TimestampEntry values), read
+as typing.cast(tuple[TimestampEntry, ...], entries.unwrap()) without
+per-element checks. When opened is false the tuple is empty and size is 0.
+The opaque handle bounds ABI validation independently of file length.
+"""
+struct FileTimestamps:
+    opened: Bool
+    size: U64
+    entries: Opaque["timestamp_entries"]
+
+doc """
+One tab of the viewer: its title, the files it shows and whether they are
+merged into a single timestamp-ordered view.
+"""
+struct TabPlan:
+    title: Str
+    paths: List[Path]
+    merged: Bool
+
+doc """
+Piped standard input being copied into the file the viewer shows: the
+descriptor to read the pipe from and the path of the file to append to.
+"""
+struct PipeFeed:
+    descriptor: I32
+    path: Path
+
+doc """
+Everything the interactive viewer needs: its tabs, where to save the merged
+lines (only used by a merged tab) and an optional piped input to copy.
+"""
+struct ViewerSetup:
+    tabs: List[TabPlan]
+    save_merge: Option[Path]
+    pipe: Option[PipeFeed]

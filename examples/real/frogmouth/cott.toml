@@ -12,6 +12,9 @@ type_checker = ".venv/bin/basedpyright"
 lockfile = "python/uv.lock"
 runtime_validation = "boundary"
 
+[effects]
+"desktop.open" = true
+
 [generator]
 rules = "generator.rules"
 timeout_seconds = 1800

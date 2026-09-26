@@ -1,3 +1,6 @@
+import csv as _csv
+
+
 def _cott_import_module_name(path):
     if path.startswith("/") or "\\" in path:
         return None
@@ -12,11 +15,32 @@ def _cott_import_module_name(path):
     return module if module and all(part.isidentifier() for part in module.split(".")) else None
 
 
-def _cott_installed_import_owners():
+def _cott_installed_import_owners(modules=None):
     owners = {}
     for distribution in _metadata.distributions():
         by_module = {}
-        for relative in distribution.files or ():
+        record = distribution.read_text("RECORD") if modules is not None else None
+        if record:
+            # Only requested modules can be owners of this import. Avoid constructing and
+            # stat-ing unrelated distribution files, but re-read ownership and existence.
+            files = []
+            for row in _csv.reader(record.splitlines()):
+                if not 1 <= len(row) <= 3:
+                    raise ValueError("installed distribution RECORD row is malformed")
+                if len(row) > 1 and row[1]:
+                    _metadata.FileHash(row[1])
+                if len(row) > 2 and row[2]:
+                    int(row[2])
+                if not row[0].endswith((".py", ".so", ".pyd")):
+                    continue
+                relative = _Path(row[0])
+                module = _cott_import_module_name(relative.as_posix())
+                if module in modules and _Path(distribution.locate_file(relative)).exists():
+                    files.append(relative)
+        else:
+            # Let CPython resolve the legacy installed-files/SOURCES inventory semantics.
+            files = distribution.files or ()
+        for relative in files:
             module = _cott_import_module_name(relative.as_posix())
             if module is not None:
                 by_module.setdefault(module, []).append(relative)
@@ -103,7 +127,11 @@ def _cott_owned_external_imports(source, project_modules, owners=None):
     if not imports:
         return []
     if owners is None:
-        owners = _cott_installed_import_owners()
+        modules = set()
+        for imported in imports:
+            parts = imported.split(".")
+            modules.update(".".join(parts[:end]) for end in range(1, len(parts) + 1))
+        owners = _cott_installed_import_owners(modules)
     resolved = []
     seen = set()
     for imported in sorted(imports):

@@ -1,7 +1,5 @@
-"""External isolated-process regression of the deployed Harlequin CLI and live session."""
+"""External isolated-process regression of deployed Harlequin's headless CLI."""
 import argparse
-import contextlib
-import io
 import json
 import os
 import sqlite3
@@ -11,8 +9,8 @@ from pathlib import Path
 
 KIND = "external_program_regression"
 CHECKS = (
-    "cli.batch_sqlite_format", "cli.interactive_sqlite", "cli.exit_statuses",
-    "run.disconnect_rolls_back", "cli.batch_duckdb_format",
+    "hsql.sqlite_csv", "hsql.duckdb_csv", "hsql.stdin_sql",
+    "hsql.error_statuses", "hsql.machine_spec",
 )
 
 
@@ -30,6 +28,11 @@ def expect(actual, expected, reason):
     if actual != expected:
         raise Failure(reason, expected, actual)
 
+def expect_success(result):
+    if result.returncode:
+        stderr = result.stderr.decode(errors="replace")[-480:]
+        raise Failure("exit_status", 0, (result.returncode, stderr))
+
 
 def certified(root):
     try:
@@ -43,8 +46,8 @@ def certified(root):
 
 
 class Program:
-    def __init__(self, root, app, work):
-        self.root, self.app, self.work = root, app, work
+    def __init__(self, app, work):
+        self.app, self.work = app, work
         self.number = 0
 
     def directory(self):
@@ -54,101 +57,66 @@ class Program:
         return path
 
     def cli(self, cwd, *args, input=b""):
-        return subprocess.run([sys.executable, str(self.app), "--no-config", *map(str, args)], cwd=cwd,
+        return subprocess.run([sys.executable, str(self.app), *map(str, args)], cwd=cwd,
                               env=dict(os.environ), input=input, capture_output=True, timeout=60, check=False)
 
-    def batch_sqlite_format(self):
+    def sqlite_csv(self):
         work = self.directory()
         database = work / "data.db"
         with sqlite3.connect(database) as connection:
-            connection.execute("CREATE TABLE samples (id INTEGER, name TEXT, raw BLOB)")
-            connection.execute("INSERT INTO samples VALUES (7, 'line\tbreak', x'00FF')")
-        query = work / "query.sql"
-        query.write_text("SELECT id, name, raw FROM samples;\n", encoding="utf-8")
-        result = self.cli(work, "--adapter", "sqlite", "--query-file", query, database)
-        expect(result.returncode, 0, "exit_status")
-        expect(result.stdout, b"id\tname\traw\n7\tline\\tbreak\t0x00ff\n", "stdout_mismatch")
+            connection.execute("CREATE TABLE samples (id INTEGER, name TEXT)")
+            connection.execute("INSERT INTO samples VALUES (7, 'Ada')")
+            connection.execute("INSERT INTO samples VALUES (8, 'comma,name')")
+        result = self.cli(work, "--adapter", "sqlite", database, "--csv",
+                          "--command", "SELECT id, name FROM samples ORDER BY id")
+        expect_success(result)
+        expect(result.stdout, b'id,name\n7,Ada\n8,"comma,name"\n', "stdout_mismatch")
         expect(result.stderr, b"", "stderr_mismatch")
 
-    def interactive_sqlite(self):
-        work = self.directory()
-        result = self.cli(work, "--adapter", "sqlite", ":memory:", input=b"CREATE TABLE t (v INTEGER);\nINSERT INTO t VALUES (42);\nSELECT v FROM t;\n.quit\n")
-        expect(result.returncode, 0, "exit_status")
-        expect(result.stdout, b"sql> OK\nsql> OK, 1 rows affected\nsql> v\n42\nsql> ", "stdout_mismatch")
-        expect(result.stderr, b"", "stderr_mismatch")
-
-    def exit_statuses(self):
-        work = self.directory()
-        invalid = self.cli(work, "--bad-option")
-        expect(invalid.returncode, 2, "argument_exit_status")
-        expect(invalid.stdout, b"", "argument_stdout")
-        missing = self.cli(work, "--adapter", "sqlite", "--query-file", work / "missing.sql", ":memory:")
-        expect(missing.returncode, 1, "batch_exit_status")
-        expect(missing.stdout, b"", "batch_stdout")
-        failed = self.cli(work, "--adapter", "sqlite", work / "missing-dir" / "db.sqlite")
-        expect(failed.returncode, 1, "connection_exit_status")
-        for result in (invalid, missing, failed):
-            if not result.stderr.startswith(b"harlequin: "):
-                raise Failure("error_prefix", b"harlequin: ...", result.stderr)
-
-    def disconnect_rolls_back(self):
-        from cott_runtime import CottList, Err, Ok
-        import real.harlequin.core as api
-
-        work = self.directory()
-        database = work / "rollback.db"
-        with sqlite3.connect(database) as connection:
-            connection.execute("CREATE TABLE t (value INTEGER)")
-        query = work / "insert.sql"
-        query.write_text("INSERT INTO t VALUES (19)", encoding="utf-8")
-        genuine_connect, genuine_disconnect = api.connect, api.disconnect
-        opened, closed = [], []
-
-        def connect(request):
-            result = genuine_connect(request)
-            if type(result) is Ok:
-                opened.append(result.value)
-                lease = api.begin_transaction(result.value)
-                if type(lease) is not Ok:
-                    raise Failure("lease_begin", "Ok", repr(lease))
-            return result
-
-        def disconnect(connection):
-            closed.append(connection)
-            return genuine_disconnect(connection)
-
-        api.connect, api.disconnect = connect, disconnect
-        stdout, stderr = io.StringIO(), io.StringIO()
-        try:
-            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                try:
-                    api.run(CottList(values=["--no-config", "--adapter", "sqlite",
-                                              "--query-file", str(query), str(database)]))
-                except SystemExit as error:
-                    status = error.code
-                else:
-                    raise Failure("missing_exit", "SystemExit(0)", "ordinary return")
-        finally:
-            api.connect, api.disconnect = genuine_connect, genuine_disconnect
-        expect(status, 0, "exit_status")
-        expect(len(opened), 1, "connect_count")
-        expect(closed, opened, "disconnect_count")
-        with sqlite3.connect(database) as connection:
-            expect(connection.execute("SELECT value FROM t").fetchall(), [], "uncommitted_rollback")
-        if type(api.execute_statements(opened[0], "SELECT 1", 1)) is not Err:
-            raise Failure("closed_session", "Err on disconnected session", "live session")
-
-    def batch_duckdb_format(self):
+    def duckdb_csv(self):
         import duckdb
         work = self.directory()
         database = work / "data.duckdb"
         with duckdb.connect(str(database)) as connection:
-            connection.execute("CREATE TABLE t AS SELECT 17 AS n")
-        query = work / "query.sql"
-        query.write_text("SELECT n FROM t;", encoding="utf-8")
-        result = self.cli(work, "--adapter", "duckdb", "--query-file", query, database)
-        expect(result.returncode, 0, "exit_status")
+            connection.execute("CREATE TABLE samples AS SELECT 17 AS n")
+        result = self.cli(work, "--adapter", "duckdb", database, "--csv",
+                          "--command", "SELECT n FROM samples")
+        expect_success(result)
         expect(result.stdout, b"n\n17\n", "stdout_mismatch")
+        expect(result.stderr, b"", "stderr_mismatch")
+
+    def stdin_sql(self):
+        work = self.directory()
+        result = self.cli(work, "--adapter", "sqlite", ":memory:", "--csv", "--file", "-",
+                          input=b"SELECT 42 AS answer;")
+        expect_success(result)
+        expect(result.stdout, b"answer\n42\n", "stdout_mismatch")
+
+    def error_statuses(self):
+        work = self.directory()
+        invalid = self.cli(work, "--bad-option")
+        expect(invalid.returncode, 2, "argument_exit_status")
+        expect(invalid.stdout, b"", "argument_stdout")
+        query = self.cli(work, "--adapter", "sqlite", ":memory:",
+                         "--command", "SELECT * FROM missing_table")
+        expect(query.returncode, 1, "query_exit_status")
+        expect(query.stdout, b"", "query_stdout")
+
+    def machine_spec(self):
+        work = self.directory()
+        info = self.cli(work, "--info")
+        expect(info.returncode, 0, "info_exit_status")
+        info_json = json.loads(info.stdout)
+        expect(info_json["version"], "0.1.0", "info_version")
+        if "sqlite" not in info_json["adapters"] or "duckdb" not in info_json["adapters"]:
+            raise Failure("info_adapters", "sqlite and duckdb", info_json["adapters"])
+        expect(info_json["adapters"]["sqlite"]["read_only"], True, "sqlite_read_only")
+        expect(info_json["adapters"]["odbc"]["read_only"], False, "odbc_read_only")
+        spec = self.cli(work, "--spec")
+        expect(spec.returncode, 0, "spec_exit_status")
+        schema = json.loads(spec.stdout)
+        if "hsql" not in schema or "sqlite" not in schema["adapters"]:
+            raise Failure("spec_adapters", "hsql and sqlite", schema)
 
 
 def main():
@@ -162,17 +130,13 @@ def main():
                   subject_description=None, verdict="refused", refusal=None, checks=[])
     try:
         if args.subject == "verified-deployment":
-            report["subject_description"] = "cott deploy output of verified examples/real/harlequin"
+            report["subject_description"] = "cott deploy output of a verified Harlequin project"
             certified(args.python_root)
-        elif args.subject.startswith("defect-fixture:"):
-            report["subject_description"] = "compiler-bound defect in a throwaway copy; never certified"
         else:
             raise Refusal("unknown subject")
-        sys.path.insert(0, str(args.python_root))
-        import real.harlequin.core  # noqa: F401; require public facade import
-        program = Program(args.python_root, args.app, args.work)
-        methods = (program.batch_sqlite_format, program.interactive_sqlite, program.exit_statuses,
-                   program.disconnect_rolls_back, program.batch_duckdb_format)
+        program = Program(args.app, args.work)
+        methods = (program.sqlite_csv, program.duckdb_csv, program.stdin_sql,
+                   program.error_statuses, program.machine_spec)
         for name, method in zip(CHECKS, methods):
             try:
                 method()

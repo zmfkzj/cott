@@ -1,16 +1,12 @@
+import os
 import sys
 
-from cott_runtime import CottList, Err
-from real.toolong import execute
+from cott_runtime import CottList
+from real.toolong.cli import run_command_line
 
 
 def main() -> int:
-    result = execute(CottList(values=tuple(sys.argv[1:])))
-    if isinstance(result, Err):
-        print(result.error, file=sys.stderr)
-        return 2
-    print(result.value)
-    return 0
+    return run_command_line(CottList(values=tuple(sys.argv[1:])), os.path.basename(sys.argv[0]))
 
 
 if __name__ == "__main__":

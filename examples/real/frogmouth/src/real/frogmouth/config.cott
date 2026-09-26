@@ -1,0 +1,121 @@
+module frogmouth.config
+
+enum Theme:
+    Dark
+    Light
+
+enum Dock:
+    Left
+    Right
+
+doc """
+The viewer configuration: the colour theme, the file suffixes treated as
+Markdown, and the screen side the navigation sidebar docks to.
+"""
+struct Config:
+    theme: Theme
+    markdown_extensions: List[Str]
+    navigation_dock: Dock
+
+doc """
+Where configuration and application data live. Both are absolute directory
+paths in production.
+"""
+struct AppDirectories:
+    config_directory: Str
+    data_directory: Str
+
+fn default_config() -> Config:
+    doc """
+    The configuration used when none is stored: the Dark theme, the Markdown
+    extensions ".md" then ".markdown", and the sidebar docked Left.
+    """
+
+    ensures result.theme == Theme.Dark
+    ensures result.navigation_dock == Dock.Left
+    ensures result.markdown_extensions.len == 2
+
+    effects []
+
+fn application_directories(
+    home: Str,
+    xdg_config_home: Option[Str],
+    xdg_data_home: Option[Str],
+) -> AppDirectories:
+    doc """
+    The XDG base directories namespaced as "textualize/frogmouth". The
+    configuration base is xdg_config_home when it is present and starts with
+    "/", otherwise home followed by "/.config"; the data base is xdg_data_home
+    under the same rule, otherwise home followed by "/.local/share". Trailing
+    "/" characters are removed from a base (keeping a lone "/") before
+    "/textualize/frogmouth" is appended. No directory is created here.
+    """
+
+    requires home.len > 0
+
+    ensures (ends_with(result.config_directory, "/textualize/frogmouth"))
+    ensures (ends_with(result.data_directory, "/textualize/frogmouth"))
+    ensures xdg_config_home matches Option.Nothing => starts_with(result.config_directory, home)
+    ensures xdg_data_home matches Option.Nothing => starts_with(result.data_directory, home)
+    ensures xdg_config_home matches Option.Some(base) => ((starts_with(base, "/") and not ends_with(base, "/")) => starts_with(result.config_directory, base))
+    ensures xdg_data_home matches Option.Some(base) => ((starts_with(base, "/") and not ends_with(base, "/")) => starts_with(result.data_directory, base))
+    ensures xdg_config_home matches Option.Some(base) => (not starts_with(base, "/") => starts_with(result.config_directory, home))
+    ensures xdg_data_home matches Option.Some(base) => (not starts_with(base, "/") => starts_with(result.data_directory, home))
+
+    effects []
+
+fn toggle_theme(config: Config) -> Config:
+    doc """
+    Switch between the Dark and Light themes (F10).
+    """
+
+    ensures preserves result from config except theme
+    ensures result.theme != config.theme
+
+    effects []
+
+fn toggle_dock(config: Config) -> Config:
+    doc """
+    Move the navigation sidebar to the other side of the screen.
+    """
+
+    ensures preserves result from config except navigation_dock
+    ensures result.navigation_dock != config.navigation_dock
+
+    effects []
+
+scenario defaults_and_directories:
+    call defaults = default_config()
+    assert defaults == Config(
+        theme: Theme.Dark,
+        markdown_extensions: List(".md", ".markdown"),
+        navigation_dock: Dock.Left,
+    )
+    call fallback = application_directories("/home/user", Option.Nothing, Option.Nothing)
+    assert fallback == AppDirectories(
+        config_directory: "/home/user/.config/textualize/frogmouth",
+        data_directory: "/home/user/.local/share/textualize/frogmouth",
+    )
+    call explicit = application_directories(
+        "/home/user",
+        Option.Some(value: "/xdg/config/"),
+        Option.Some(value: "/xdg/data"),
+    )
+    assert explicit == AppDirectories(
+        config_directory: "/xdg/config/textualize/frogmouth",
+        data_directory: "/xdg/data/textualize/frogmouth",
+    )
+    call relative = application_directories(
+        "/home/user",
+        Option.Some(value: "config"),
+        Option.Some(value: ""),
+    )
+    assert relative == fallback
+    call light = toggle_theme(defaults)
+    assert light.theme == Theme.Light
+    call right = toggle_dock(light)
+    assert right == Config(
+        theme: Theme.Light,
+        markdown_extensions: List(".md", ".markdown"),
+        navigation_dock: Dock.Right,
+    )

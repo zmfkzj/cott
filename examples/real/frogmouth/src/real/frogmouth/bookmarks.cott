@@ -1,0 +1,138 @@
+module frogmouth.bookmarks
+
+use frogmouth.model.{Location, LocationKind}
+
+struct Bookmark:
+    title: Str
+    location: Location
+
+    invariant self.title.len > 0
+
+fn add_bookmark(bookmarks: List[Bookmark], title: Str, location: Location) -> List[Bookmark]:
+    doc """
+    Append Bookmark(title, location) and return all bookmarks stably sorted
+    by title, comparing titles by Unicode code point like Python sorted();
+    bookmarks with equal titles keep their relative order, the new one last.
+    """
+
+    requires title.len > 0
+
+    ensures result.len == bookmarks.len + 1
+
+    effects []
+
+fn rename_bookmark(bookmarks: List[Bookmark], index: U64, title: Str) -> List[Bookmark]:
+    doc """
+    Give the bookmark at index the new title, keeping its location and the
+    order of all bookmarks (the list is not re-sorted).
+    """
+
+    requires index < bookmarks.len
+    requires title.len > 0
+
+    ensures result.len == bookmarks.len
+
+    effects []
+
+fn delete_bookmark(bookmarks: List[Bookmark], index: U64) -> List[Bookmark]:
+    doc """
+    Remove the bookmark at index, keeping the order of the others.
+    """
+
+    requires index < bookmarks.len
+
+    ensures result.len + 1 == bookmarks.len
+
+    effects []
+
+fn suggest_bookmark_title(location: Location) -> Str:
+    doc """
+    The initial title offered when bookmarking location: the last
+    "/"-separated segment, ignoring trailing "/" characters, of the Local
+    target or of the Remote URL's path (the text after the authority up to
+    the first "?" or "#"). It is empty for a URL without a path.
+    """
+
+    ensures (contains(location.target, result))
+    ensures (not contains(result, "/"))
+
+    effects []
+
+fn accept_dialog_text(value: Str) -> Option[Str]:
+    doc """
+    The value an input dialog accepts: value without leading and trailing
+    whitespace as Python str.strip() removes it, or Nothing when that is
+    empty, in which case the dialog stays open.
+    """
+
+    ensures Option.Some(text) => text.len > 0
+    ensures Option.Some(text) => contains(value, text)
+
+    effects []
+
+fn bookmark_entries(bookmarks: List[Bookmark]) -> List[Str]:
+    doc """
+    The Rich console markup prompt of each bookmark, in list order:
+    ":page_facing_up: [bold]TITLE[/]\n[dim]TARGET[/]" for a Local location
+    and ":globe_with_meridians: [bold]TITLE[/]\n[dim]TARGET[/]" for a Remote
+    one. TITLE and TARGET are escaped like rich.markup.escape, so their text
+    is shown literally.
+    """
+
+    ensures result.len == bookmarks.len
+
+    effects []
+
+data readme: Bookmark = Bookmark(
+    title: "readme",
+    location: Location(kind: LocationKind.Local, target: "/src/README.md"),
+)
+
+data textual: Bookmark = Bookmark(
+    title: "Textual",
+    location: Location(
+        kind: LocationKind.Remote,
+        target: "https://raw.githubusercontent.com/textualize/textual/main/README.md",
+    ),
+)
+
+scenario bookmarks_are_edited:
+    call one = add_bookmark(List(), "readme", readme.location)
+    assert one == List(readme)
+    call two = add_bookmark(one, "Textual", textual.location)
+    assert two == List(textual, readme)
+    call three = add_bookmark(two, "Textual", readme.location)
+    assert three == List(textual, Bookmark(title: "Textual", location: readme.location), readme)
+    call renamed = rename_bookmark(two, 1, "zzz")
+    assert renamed == List(textual, Bookmark(title: "zzz", location: readme.location))
+    call kept_order = rename_bookmark(two, 0, "zzz")
+    assert kept_order == List(Bookmark(title: "zzz", location: textual.location), readme)
+    call deleted = delete_bookmark(three, 1)
+    assert deleted == List(textual, readme)
+    call rows = bookmark_entries(List(textual, Bookmark(title: "[b]x", location: readme.location)))
+    assert rows == List(
+        ":globe_with_meridians: [bold]Textual[/]\n[dim]https://raw.githubusercontent.com/textualize/textual/main/README.md[/]",
+        ":page_facing_up: [bold]\\[b]x[/]\n[dim]/src/README.md[/]",
+    )
+
+scenario bookmark_titles_are_suggested_and_accepted:
+    call local = suggest_bookmark_title(
+        Location(kind: LocationKind.Local, target: "/notes/todo.md"),
+    )
+    assert local == "todo.md"
+    call remote = suggest_bookmark_title(
+        Location(kind: LocationKind.Remote, target: "https://example.com/a/b.md?x=1#top"),
+    )
+    assert remote == "b.md"
+    call directory = suggest_bookmark_title(
+        Location(kind: LocationKind.Remote, target: "https://example.com/docs/"),
+    )
+    assert directory == "docs"
+    call bare = suggest_bookmark_title(
+        Location(kind: LocationKind.Remote, target: "https://example.com"),
+    )
+    assert bare == ""
+    call trimmed = accept_dialog_text("  My notes \t\n")
+    assert trimmed == Option.Some(value: "My notes")
+    call blank = accept_dialog_text(" \t ")
+    assert blank == Option.Nothing

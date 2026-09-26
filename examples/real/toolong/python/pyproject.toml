@@ -2,10 +2,10 @@
 name = "toolong"
 version = "0.1.0"
 requires-python = ">=3.14.6,<3.15"
-dependencies = ["textual==6.6.0"]
+dependencies = ["click==8.1.7", "prompt-toolkit==3.0.52", "rich==13.7.0"]
 
 [project.scripts]
-toolong = "toolong:main"
+tl = "toolong:main"
 
 [dependency-groups]
 dev = ["basedpyright==1.39.9"]

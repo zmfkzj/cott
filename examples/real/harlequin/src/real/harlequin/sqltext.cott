@@ -1,0 +1,253 @@
+module real.harlequin.sqltext
+
+doc """
+A character range [start, end) into a text, counted in Unicode scalar values
+(Python str indices). start <= end.
+"""
+struct TextRange:
+    start: U64
+    end: U64
+
+    invariant self.start <= self.end
+
+doc """
+The result of an editor text transformation: the new text and the new
+selection, as character offsets. anchor is where the selection started and
+cursor where it ends; they are equal for a bare cursor.
+"""
+struct TextEdit:
+    text: Str
+    anchor: U64
+    cursor: U64
+
+enum FormatError:
+    Unformattable(message: Str)
+
+fn split_statements(text: Str) -> List[Str]:
+    doc """
+    Split a SQL script into its statements, in order, the way Harlequin's editor
+    and hsql both split one. A separator is a ";" that is not inside:
+    a single-quoted string '...' (a doubled '' continues it; a backslash does not
+    escape), a double-quoted identifier "..." (doubled "" continues it), a
+    backtick identifier `...`, a line comment from -- to the end of the line, a
+    block comment /* ... */ (not nested: the first */ closes it), or a dollar-quoted body
+    $tag$ ... $tag$, where tag is empty or an identifier ([A-Za-z_][A-Za-z0-9_]*)
+    and the body ends only at the same $tag$ spelling (a different $other$ is
+    body content). An unterminated quote, comment or dollar body runs to the end
+    of the text and hides every later ";".
+    Each statement is the text from just after the previous separator (or the
+    start) through its own ";" inclusive, or to the end of the text for the last
+    piece, with surrounding whitespace (str.strip()) removed. It keeps its
+    trailing ";". Pieces that are empty after stripping are dropped, so blank
+    lines produce no statement; a piece that is only ";" (from repeated
+    separators) is kept as the statement ";", as in Harlequin. Text without any
+    nonblank piece returns an empty list. Comments are statement content: a
+    piece holding only a comment is a statement.
+    """
+
+    effects []
+
+fn separator_offsets(text: Str) -> List[U64]:
+    doc """
+    The character offsets just past each separator ";" of text, in ascending
+    order, using exactly the separator rules of split_statements.
+    """
+
+    ensures result.len <= text.len
+
+    effects []
+
+fn selected_queries(text: Str, selection: TextRange) -> List[Str]:
+    doc """
+    The queries the Run Query action submits, exactly as Harlequin's code editor
+    chooses them. selection is the editor selection normalized so start <= end
+    (a bare cursor has start == end).
+    1. If text.strip() is empty, return [].
+    2. If text contains no ";" at all, or separator_offsets(text) is empty,
+       return [text] (the whole buffer, unstripped).
+    3. Otherwise build the query list: boundaries are 0, every separator offset
+       and len(text); for each consecutive pair (query_start, query_end) the
+       query is text[query_start:query_end].strip(); keep only nonempty ones,
+       remembering each kept query's (query_start, query_end).
+    4. If no query was kept, return [].
+    5. The queries whose range overlaps the selection, meaning
+       query_start < selection.end and query_end > selection.start, in order,
+       when there is at least one (a bare cursor overlaps only a query it sits
+       strictly inside).
+    6. Otherwise the first kept query whose query_end >= selection.start.
+    7. Otherwise (the cursor is in trailing whitespace after the last query) the
+       last kept query.
+    Queries keep their trailing ";".
+    """
+
+    ensures text.len == 0 => result.len == 0
+
+    effects []
+
+fn toggle_comment(text: Str, selection: TextRange) -> TextEdit:
+    doc """
+    Toggle SQL line comments on the lines the selection touches (Ctrl+/ in
+    Harlequin's editor). Lines are split on "\n". The touched lines run from the
+    line holding selection.start to the line holding selection.end; when the
+    selection is nonempty and selection.end is exactly at the start of a line,
+    that last line is not touched. Blank lines (only spaces and tabs) are
+    ignored when deciding and are never changed.
+    If every touched nonblank line, after its leading spaces and tabs, starts
+    with "--", uncomment: remove "-- " when the text after the indentation starts
+    with "-- ", otherwise remove "--". Otherwise comment: let indent be the
+    smallest leading-whitespace width among the touched nonblank lines and insert
+    "-- " at that column of each touched nonblank line. If there is no touched
+    nonblank line, the text is unchanged.
+    The returned anchor and cursor are selection.start and selection.end moved
+    by the net number of characters inserted at or before them and removed
+    before them (an offset inside a removed marker moves to the marker's start).
+    text is otherwise unchanged, including the presence or absence of a final
+    newline. A TextRange is an editor selection into text, so its end must not
+    exceed the number of Unicode scalar values in text.
+    """
+
+    requires selection.end <= text.len
+
+    effects []
+
+fn format_sql(text: Str) -> Result[Str, FormatError]:
+    doc """
+    Format text with shandy-sqlfmt exactly like Harlequin's Format Query action:
+    sqlfmt.api.format_string(text, sqlfmt.mode.Mode()) with the default mode
+    (line length 88, lowercase keywords). Text that is already formatted comes
+    back unchanged. Any sqlfmt error (for example unbalanced brackets or an
+    unterminated string) is Unformattable(message) with the error's message.
+    """
+
+    ensures Result.Ok(formatted) => formatted.len >= 0
+
+    error FormatError.Unformattable
+
+    effects []
+
+fn word_at_cursor(text: Str, cursor: U64) -> TextRange:
+    doc """
+    The range of the completion prefix ending at cursor: the longest run of
+    characters immediately before cursor that are letters, digits, "_", "$", ".",
+    or double quotes. The range ends at cursor (clamped to len(text)).
+    """
+
+    ensures result.end <= text.len
+
+    effects []
+
+const REDACTED: Str = "********"
+
+fn redact_connection_string(connection: Str) -> Str:
+    doc """
+    Mask the credentials in one connection string, leaving the rest readable:
+    1. URI passwords: the password in scheme://user:password@host, matched by
+       the regular expression ://[^/?#@\s]*?:([^/?#@\s]+)@ (group 1).
+    2. DSN pairs: a key containing (case-insensitively) one of password, passwd,
+       pwd, secret, token, api[_-]?key, access[_-]?key, private[_-]?key, possibly
+       with surrounding [\w.\-] characters, then "=" with optional spaces, then a
+       value in single quotes, double quotes, or bare up to "&", ";" or
+       whitespace; the value (without its quotes) is the secret.
+    Each secret span is replaced, by position, with REDACTED; a span that
+    overlaps one already replaced (scanning from the end of the text) is skipped
+    so quotes are never eaten.
+    """
+
+    effects []
+
+fn redact_sql(sql: Str, secrets: List[Str]) -> Str:
+    doc """
+    Mask credentials inside one SQL statement before it is logged or shown in the
+    query history: first replace every element of secrets that is at least 4
+    characters long with REDACTED (longest first), then mask, by position, the
+    spans redact_connection_string masks and every quoted literal that follows a
+    credential-like name: [\w.]*(<secret name alternatives>|key[_-]?id)[\w.]*
+    then an optional "=" with optional spaces, then '...'; the text between the
+    quotes is masked.
+    """
+
+    effects []
+
+fn redact_text(text: Str, secrets: List[Str]) -> Str:
+    doc """
+    Replace every element of secrets that is at least 4 characters long, longest
+    first, with REDACTED wherever it appears in text. Shorter secrets are left
+    alone so short values do not mangle prose.
+    """
+
+    effects []
+
+fn close_matches(word: Str, candidates: List[Str], limit: U64) -> List[Str]:
+    doc """
+    The "did you mean" suggestions Harlequin draws from difflib.get_close_matches
+    (cutoff 0.6), computed here without difflib. The similarity of word and a
+    candidate is 2*M/(len(word)+len(candidate)) (1.0 when both are empty),
+    where M is the total length of the matching blocks: find the longest common
+    contiguous substring (on ties the one starting earliest in word, then
+    earliest in candidate), add its length, and repeat on the parts left of it
+    and right of it. Candidates with similarity >= 0.6 are returned best first,
+    equal similarities ordered by the candidate string descending, at most
+    limit of them.
+    """
+
+    ensures result.len <= limit
+
+    effects []
+
+scenario close_matches_suggest_similar_names:
+    call near = close_matches("databse", List("database", "schema", "host"), 3)
+    assert near == List("database")
+    call none = close_matches("zzz", List("database", "schema"), 3)
+    assert none == List()
+    call capped = close_matches("ab", List("abc", "abd", "abe"), 2)
+    assert capped == List("abe", "abd")
+
+scenario scripts_split_at_top_level_semicolons:
+    call split = split_statements(" select 'a;b' ; -- skip; this\n/* c; d; */ select \"x;\" ;; select $f$ a; b $f$; select 2 ")
+    assert split == List(
+        "select 'a;b' ;",
+        "-- skip; this\n/* c; d; */ select \"x;\" ;",
+        ";",
+        "select $f$ a; b $f$;",
+        "select 2",
+    )
+    call blank = split_statements("  \n ")
+    assert blank == List()
+    call unterminated = split_statements("select 'a; select 2")
+    assert unterminated == List("select 'a; select 2")
+    call offsets = separator_offsets("select 1; select 2;")
+    assert offsets == List(9, 19)
+
+scenario run_query_uses_the_selection_or_the_statement_under_the_cursor:
+    call whole = selected_queries("select 1", TextRange(start: 0, end: 0))
+    assert whole == List("select 1")
+    call first = selected_queries("select 1;\nselect 2;\n", TextRange(start: 3, end: 3))
+    assert first == List("select 1;")
+    call boundary = selected_queries("select 1;\nselect 2;\n", TextRange(start: 9, end: 9))
+    assert boundary == List("select 1;")
+    call between = selected_queries("select 1;\nselect 2;\n", TextRange(start: 10, end: 10))
+    assert between == List("select 2;")
+    call spanning = selected_queries("select 1;\nselect 2;\nselect 3", TextRange(start: 5, end: 12))
+    assert spanning == List("select 1;", "select 2;")
+    call trailing = selected_queries("select 1;\nselect 2;\n\n", TextRange(start: 21, end: 21))
+    assert trailing == List("select 2;")
+    call empty = selected_queries("  \n", TextRange(start: 0, end: 0))
+    assert empty == List()
+
+scenario comments_toggle_on_touched_lines:
+    call commented = toggle_comment("select 1\n  from t\n", TextRange(start: 0, end: 12))
+    assert commented == TextEdit(text: "-- select 1\n--   from t\n", anchor: 3, cursor: 18)
+    call uncommented = toggle_comment("-- select 1\n--   from t\n", TextRange(start: 0, end: 14))
+    assert uncommented.text == "select 1\n  from t\n"
+    call single = toggle_comment("    select 1", TextRange(start: 6, end: 6))
+    assert single == TextEdit(text: "    -- select 1", anchor: 9, cursor: 9)
+
+scenario credentials_are_masked:
+    call uri = redact_connection_string("postgres://reporting:hunter22@warehouse:5432/analytics")
+    assert uri == "postgres://reporting:********@warehouse:5432/analytics"
+    call dsn = redact_connection_string("host=db password='s3cret pw' user=me")
+    assert dsn == "host=db password='********' user=me"
+    call sql = redact_sql("create secret (type s3, key_id 'AKIA1', secret 'abcd')", List())
+    assert sql == "create secret (type s3, key_id '********', secret '********')"
+    call prose = redact_text("could not use hunter22 or pw", List("hunter22", "pw"))
+    assert prose == "could not use ******** or pw"

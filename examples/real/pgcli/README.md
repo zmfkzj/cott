@@ -1,96 +1,51 @@
 # https://github.com/dbcli/pgcli
 
-A clean-room Cott reimplementation of a line-oriented PostgreSQL client in the spirit of pgcli, with no upstream dependency.
+Cott reimplementation of upstream pgcli **v4.7.1**, pinned to [`101e523eb2987ada87231c4533f0ab701c4c3124`](https://github.com/dbcli/pgcli/tree/101e523eb2987ada87231c4533f0ab701c4c3124). The contracts cover pgcli's CLI, PostgreSQL session, interactive prompt, configuration, completion, and output. The only authored Python adapter, `python/pgcli_cli.py`, passes `sys.argv` to the generated `real.pgcli.cli.run` facade. `pgcli` itself is **not** a dependency; the locked distributions include psycopg, pgspecial, prompt_toolkit, cli_helpers, tabulate, pygments, click, configobj, keyring, sshtunnel, sqlparse, tzlocal, and setproctitle.
 
-It does not reimplement pgcli's prompt_toolkit interface (completion and highlighting while typing, key
-bindings, toolbars), its configuration file, sessions through SSH tunnels, or these meta commands, which
-parse as unknown and are rejected: `\!`, `\log-file`, `\o`, `\set`, `\v`, `\password`, `\listen` and
-`\watch`.
+## Modules
 
-## Program
+| Contract | Upstream counterpart |
+| --- | --- |
+| `real.pgcli.cli` | `main.cli`, `PGCli.__init__`, option parsing and launch |
+| `real.pgcli.config` | `config.py`, pgclirc defaults/merge, logging |
+| `real.pgcli.connection` | `PGExecute.connect/copy`, URI/service resolution, SSH tunnel, keyring, timezone |
+| `real.pgcli.parseutils` | SQL tables, CTEs, keywords, quotes, destructive-command parsing |
+| `real.pgcli.completion` | `pgcompleter`, `sqlcompletion`, prioritization and catalog refresh |
+| `real.pgcli.output` | table/vertical/CSV/SQL/explain renderers, colours and timing |
+| `real.pgcli.session` | SQL and pgspecial execution, named queries, special commands, routing, reconnect, watch |
+| `real.pgcli.repl` | prompt_toolkit history, toolbar, key bindings, highlighting, vi and multiline modes |
 
-`src/real/pgcli.cott` is the whole specification.
+`source_files`: `src/real/pgcli/cli.cott`, `completion.cott`, `config.cott`, `connection.cott`, `output.cott`, `parseutils.cott`, `repl.cott`, `session.cott` (each in `src/real/pgcli/`). `adapter_files`: `python/pgcli_cli.py`. All 85 callable implementations under `python/_cott_impl` and the facades under `generated/` were produced by `cott generate`, not hand-edited. Opaque connection/catalog/row handles keep large PostgreSQL results out of the facade's bounded ABI traversal.
 
-- `run` is the CLI. It parses arguments with `parse_arguments` (`[DSN]`, `-h/--host`, `-p/--port`,
-  `-U/--username`, `-d/--dbname`, `-c/--command`, `--help`; no password argument), resolves the connection
-  with `resolve_connection_plan` over the `PG*` environment values, and runs `run_interactive`. The CLI
-  disables history and favorites persistence.
-- `run_interactive` is the session. `ExecuteOnce` (`-c`) submits one text without reading the terminal;
-  `Interactive` refreshes the catalog and reads standard input line by line. Every submission goes through
-  `run_meta_command`, SQL through its `ExecuteBuffer` command, which calls `plan_query`,
-  `execute_planned_query` and `format_query`. Output goes through `page_output`, and SQL submissions are
-  recorded with `remember_history` and `save_history` when a history policy is set. The session reports how
-  many submissions ran and failed; `run` exits 0 only when none failed.
-- `run_meta_command` executes one parsed backslash command and returns the updated buffer, session options
-  and catalog. Its contract names the facade behind each command (`connect`, `refresh_catalog`,
-  `execute_planned_query`, `import_delimited`, `export_query`, `edit_in_editor`, `load_history`,
-  `load_favorites`, `save_favorites`).
-- Every database operation opens its own connection, so a `Manual` transaction spans one submission, not the
-  session. Only the `connect` probe reaches PostgreSQL through an SSH jump host; the other database
-  operations reject SSH plans with `TunnelUnsupported`.
-- The line REPL does not use these library facades: `complete_catalog_sql`, `complete_sql`, `highlight_sql`,
-  `resolve_credential` (supplied, environment, keyring, then one hidden prompt that never falls back to echoed
-  input), `prompt_policy`, the pure transaction-state functions, `execute_query`, `watch_query` and
-  `receive_notifications`.
-- History and favorites use this client's own UTF-8 JSON formats, not upstream pgcli's files.
+## Parity evidence
 
-## Run
+| Feature family | Implemented / observation |
+| --- | --- |
+| CLI options, help, version, config and DSN | `--help`, `--version`, invalid options, `--list-dsn`, missing aliases, ping and `-l` matched upstream in 35-case side-by-side comparison; configuration and option scenarios passed `cott verify`. |
+| Connection, transactions, metadata | External regression against scratch PostgreSQL 16.15 passed independent connection, reconnection, transaction, catalog and completion refresh checks. URI/service/local-timezone paths have contracts. |
+| SSH tunnel | `database.ssh_tunnel` starts the host's own OpenSSH `sshd` (unprivileged, freshly generated host and user keys) on the sandbox's private loopback and runs `pgcli --ssh-tunnel user@127.0.0.1:22022 -h 127.0.0.1 …`: the query succeeds, sshd logs the accepted public key and the `direct-tcpip` channel to the database port, and an unreachable gateway exits 1 with `Could not establish session to SSH gateway`. Password-authenticated gateways, `~/.ssh/config`, `[ssh tunnels]`/`[dsn ssh tunnels]` matching and remote gateways are contract-only. |
+| Keyring | `cli.keyring_without_backend` observes the no-backend path (keyring enabled, no Secret Service or KWallet inside the sandbox): upstream's exact red "Load your password from keyring returned: …" text on stderr, the query still runs, and `keyring = False` silences it. Loading and storing a password through a genuine keyring backend was **not** exercised (no backend or credentials exist for the test) and remains unobserved. |
+| SQL and special commands | `-c`/`-f`, row limits, query errors, `\dt`, `\d`, `\h`, `\?`, `\copy`, `\T`, `\conninfo`, `\echo`, `\qecho`, `\v`, `\x`, `\timing`, named-query save/run/delete, `\o`, `\log-file`, includes, LISTEN/NOTIFY and quit were exercised by regression and/or comparison. |
+| Watch, external editor, pager | Real PTY sessions: `cli.watch` repeats `SELECT 42 AS w \watch 1` until Ctrl-C, and a bare `\watch 1` repeats the last query; `cli.external_editor` runs `$EDITOR` for `\e` (last query) and `\ev view` and executes the edited text, the editor's input files being byte-identical to upstream's; `cli.pager` sends a 60-row result through `$PAGER` with `LESS=-SRXF` (byte-identical to upstream) while a short result stays on screen. |
+| Output and completion | ASCII/grid/CSV/SQL-insert, vertical records, colours, explain formatting, completion and prioritization are generated from contracts and covered by representative Cott scenarios. Comparison matched upstream for output formats, NULL/numeric data, errors and row limits; the database regression checked actual metadata. |
+| Interactive UI | Regression passed both piped interactive SQL/history and a real PTY completion/multiline session. A wide pyte-rendered PTY smoke additionally observed F2/F3/F4/F5 toolbar toggles, SQL result `SELECT 1`, and `Goodbye!`. |
 
-Install the locked dependencies, generate the public facades, and verify them:
+The side-by-side comparison was **34/35 byte-identical cases** after normalizing elapsed times and notification PIDs. The sole deliberate difference: upstream pgcli crashes with `'NoneType' object has no attribute 'output'` for `-c '\\x on' -c 'select …'` because no prompt application exists in script mode. This implementation uses the real terminal width and displays the expanded result instead. Upstream does **not** register `\set`, `\password` or `\listen` as special commands: they are passed to PostgreSQL and yield its syntax errors, as observed in the comparison. Upstream packaging files are not reimplemented.
+
+The IPython extension (`%load_ext pgcli.magic`, upstream `magic.py`) is part of upstream's user-visible surface but is **not implemented in this verified snapshot**: generating its line magic with the default OMP agent failed twice with the provider's `usage_limit_reached`, so neither its contracts nor its extension shell were published here. Upstream's extension was exercised for reference in a PTY against scratch PostgreSQL with IPython 9.17.1, ipython-sql 0.5.0, SQLAlchemy 2.1.1 and prettytable 3.11.0: it needs a `postgresql+psycopg://` URL (SQLAlchemy 2 rejects the documented `postgres://`) and prettytable below 3.12 (ipython-sql 0.5.0 reads `prettytable.__dict__["DEFAULT"]`, which 3.12+ removed).
+
+## Build and verification
 
 ```sh
 project=examples/real/pgcli
 UV_PROJECT_ENVIRONMENT="$(pwd)/$project/.venv" uv sync --locked --project "$project/python"
-cott generate --agent omp --model anthropic/claude-opus-5-5 --target python --project "$project"
+cott check --project "$project"
+cott fmt --check --project "$project"
+cott emit python --project "$project"
+cott generate --agent omp --model anthropic/claude-opus-5-5 --target python -j 4 --project "$project"
 cott verify --project "$project"
+cott requirements --project "$project"
 PYTHONPATH="$project/generated/python:$project/python" "$project/.venv/bin/python" "$project/python/pgcli_cli.py" --help
 ```
 
-`python/pgcli_cli.py` forwards its arguments to the generated `run` facade.
-
-## Evidence
-
-`cott verify` certified the current snapshot for Python. It passed the BasedPyright check, the runtime checks
-and all 19 scenarios. Semantic coverage records 71 observed clauses, 49 `trust_declaration`, 31 `unknown` and
-2 `unobserved`, with no clause policy-gated. That is evidence for this snapshot, not a claim that the client
-is correct.
-
-- Formally specified: result relations for the pure leaves (field precedence in `resolve_connection` and
-  `resolve_connection_plan`, credential precedence, completion and truncation bounds, transaction-state
-  transitions), conditional errors for failures decidable from inputs (missing database, invalid SSH hop,
-  disabled prompt, blank, duplicate or excess favorites, delimiter and format checks, SSH plans on database
-  operations, unknown meta commands), `errors complete` on `prompt_policy` and the transaction functions,
-  and invariants on `InputBuffer`, `CompletionRequest` and `SessionReport`.
-- 19 scenarios observe the pure leaves and the file leaves: connection-string parsing, profile lookup,
-  connection layering, argument parsing, credential precedence without keyring or terminal access,
-  completion, highlighting, statement planning, buffer editing, meta-command parsing, exact table, CSV and
-  auto-expanded output, history normalization, history and favorites round trips, validation, and a failed
-  replace that keeps the previous file. The file scenarios run through the compiler's fixture file adapters,
-  not host file I/O.
-- Four requirements are linked to those scenarios, and both `cott verify` and `cott requirements` report them
-  `observed`: error messages omit connection-string secrets and argument values, and a failed history or
-  favorites save keeps the previous file. The other 19 requirements are `unverified`.
-- Unverified: database, terminal, editor and pager effects have no fixture backend, so their clauses stay
-  `trust_declaration` or `unknown`, and these requirements stay `unverified`: `CONNECT_RELEASES_RESOURCES`,
-  `CONNECT_KEEPS_PEER_CHECKS`, `CONNECT_ERRORS_OMIT_SECRETS`, `EXECUTE_QUERY_RETURNS_SERVER_ROWS`,
-  `PLANNED_QUERY_HONORS_TRANSACTION_MODE`, `WATCH_REPEATS_THROUGH_EXECUTE`, `CATALOG_REFLECTS_SERVER`,
-  `IMPORT_IS_ALL_OR_NOTHING`, `EXPORT_REPLACES_ATOMICALLY`, `NOTIFICATIONS_ARE_DELIVERED`,
-  `EDITOR_RETURNS_EDITED_TEXT`, `PAGER_SHOWS_TEXT`, `CREDENTIAL_INPUT_STAYS_HIDDEN`,
-  `META_COMMANDS_USE_FACADES`, `META_OUTPUT_OMITS_PASSWORD`, `SESSION_COMPOSES_STAGES`,
-  `SESSION_EXECUTE_ONCE_SKIPS_TERMINAL`, `SESSION_REPORT_COUNTS_SUBMISSIONS` and `RUN_IS_THIN`.
-- `tests/pgcli_program.rs` is a labeled `external_program_regression`, not Cott evidence, and it does not change
-  any requirement status. The test is `#[ignore]`d and needs `COTT_POSTGRES_BIN` pointing at PostgreSQL
-  binaries. It deploys the verified project and starts a scratch PostgreSQL server on a Unix socket inside
-  the Linux sandbox. It checks, using the real generated facades:
-  - the `connect` receipt (database, user, server version 16.x);
-  - `Manual` commit and `ReadOnly` rollback through `execute_planned_query`;
-  - a created table appearing in `refresh_catalog`;
-  - `import_delimited` and `export_query` receipts, their row limits, and that a refused export leaves the
-    previous file;
-  - `receive_notifications` delivery;
-  - the CLI exit codes for `--help`, an invalid option, a successful query and a failing query;
-  - an interactive session running SQL and `\refresh`.
-
-  A companion test binds a type-valid `run` that exits 0 without doing anything, in a throwaway copy, and the
-  regression rejects it. The regression passed against PostgreSQL 16.15. It does not cover the SSH, editor,
-  pager or keyring paths.
+The current `generated/generation.json` snapshot is verified with `current == last_verified`, 85 bound implementations and zero unresolved symbols. `cott verify` reports **35 observed, 36 trust_declaration, 2 unknown and 3 unobserved** semantic clauses. The three requirements remain `unverified` because they have no `checked_by` links; the external regression is separate evidence, not Cott scenario evidence. The external program regression in `tests/pgcli_program.rs` and `tests/support/pgcli_program.py` passed **13/13** checks against a scratch PostgreSQL 16 server using a verified deployment. Prerequisites of the ignored Rust regression test: `COTT_POSTGRES_BIN=/tmp/cott-pg/root/usr/lib/postgresql/16/bin` (or another PostgreSQL 16 binary directory), OpenSSH's `/usr/sbin/sshd` and `/usr/bin/ssh-keygen`, the locked `.venv`, and the compiler's Linux sandbox, whose private network namespace supplies the loopback for PostgreSQL's TCP listener and sshd (nothing binds a host port). A missing sshd fails `database.ssh_tunnel` (`openssh_missing`) instead of skipping it. The upstream comparison and pyte PTY drivers used for this verification are retained in the durable drafts under `/home/arthur/.cache/cott-real-drafts/pgcli/scripts/`.

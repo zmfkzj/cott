@@ -244,6 +244,202 @@ fn imports_cross_module_parameter_and_struct_field_types() {
 }
 
 #[test]
+fn wide_enum_lists_count_only_accepted_union_branches() {
+    let variants = (0..63)
+        .map(|index| format!("    V{index}(value: I32)\n"))
+        .collect::<String>();
+    let files = emit_sources(&[(
+        "app.cott",
+        &format!(
+            "module app\n\nenum Action:\n{variants}\nstruct Bindings:\n    actions: List[Action]\n"
+        ),
+    )]);
+    execute_emitted_python(
+        &files,
+        &[],
+        r#"from app import Action_V62, Bindings
+from cott_runtime import CottContractViolation, CottList
+
+def reject(values):
+    try:
+        Bindings(actions=CottList(values=values))
+    except CottContractViolation as error:
+        assert error.phase == "validation", vars(error)
+        return error
+    raise AssertionError("an invalid action list was accepted")
+
+# Forty last-variant values fit the traversal node limit only while rejected union probes are free.
+late = [Action_V62(value=index) for index in range(40)]
+bindings = Bindings(actions=CottList(values=late))
+assert type(bindings.actions) is CottList and list(bindings.actions) == late, bindings
+wrong = reject(late[:39] + [39])
+assert wrong.message.startswith("$.actions[39] "), vars(wrong)
+# Each accepted element costs at least one node, so more elements than the 1024-node limit never fit.
+reject([Action_V62(value=index) for index in range(1025)])
+"#,
+    );
+}
+
+#[test]
+fn integral_float_defaults_construct_as_floats() {
+    let files = emit_sources(&[(
+        "app.cott",
+        "module app\n\nstruct Options:\n    timeout: F64 = 5.0\n    ratio: F32 = 2.0\n    huge: F64 = 1e300\n",
+    )]);
+    execute_emitted_python(
+        &files,
+        &[],
+        r#"from app_types import Options
+options = Options()
+assert type(options.timeout) is float and options.timeout == 5.0, options
+assert type(options.ratio) is float and options.ratio == 2.0, options
+assert type(options.huge) is float and options.huge == 1e300, options
+"#,
+    );
+}
+
+#[test]
+fn imports_cross_module_enum_variants_named_by_contracts() {
+    let temp = TempDir::new();
+    let manifest = MANIFEST
+        .split("[target.python.implementations]")
+        .next()
+        .expect("manifest prefix");
+    fs::write(temp.path.join("cott.toml"), manifest).expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    fs::write(
+        temp.path.join("src/errors.cott"),
+        "module errors\n\nenum Failure:\n    Invalid(message: Str)\n    Missing\n    Busy\n",
+    )
+    .expect("errors source should be writable");
+    fs::write(
+        temp.path.join("src/api.cott"),
+        r#"module api
+use errors.{Failure}
+
+struct Draft:
+    failure: Failure = Failure.Missing
+
+fn load(name: Str) -> Result[I32, Failure]:
+    ensures Result.Ok(value) => value >= 0
+    error Failure.Missing when name == ""
+    error Failure.Invalid
+
+fn busy(failure: Failure) -> Bool:
+    ensures failure matches Failure.Busy => result
+"#,
+    )
+    .expect("api source should be writable");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources")).expect("parse");
+    let ir = render(&lower(&paths.source_dir, parsed).expect("lower")).expect("render");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
+    // Implementations import the variants into their own modules, so each variant the facade or
+    // types module evaluates resolves only through that generated module's imports.
+    let emit_with = |load: &str, busy: &str| {
+        let binding = |function: &str, parameter: &str, body: &str| {
+            let source = format!(
+                "from cott_runtime import Err, Ok\nfrom errors_types import Failure_Busy, Failure_Invalid, Failure_Missing\n\ndef {function}({parameter}: object) -> object:\n{body}"
+            )
+            .into_bytes();
+            ResolvedBinding {
+                module: "api".to_owned(),
+                function: function.to_owned(),
+                cott_symbol: format!("api.{function}"),
+                kind: PythonCallableKind::Function,
+                implementation_module: format!("_cott_impl.api.{function}"),
+                implementation_function: function.to_owned(),
+                owner: BindingOwner::Agent,
+                source: temp
+                    .path
+                    .join(format!("python/_cott_impl/api/{function}.py")),
+                generated_relative: PathBuf::from(format!("_cott_impl/api/{function}.py")),
+                sha256: sha256_hex(&source),
+                bytes: source,
+            }
+        };
+        emit(
+            &config,
+            &plan,
+            &ir,
+            &[
+                binding("busy", "failure", busy),
+                binding("load", "name", load),
+            ],
+        )
+        .expect("bound contracts should emit")
+        .files
+    };
+    let reject = r#"from cott_runtime import CottContractViolation, Err, Ok
+
+def reject(operation, phase, symbol, **fields):
+    try:
+        operation()
+    except CottContractViolation as error:
+        observed = (error.phase, error.symbol, *(getattr(error, name) for name in fields))
+        assert observed == (phase, symbol, *fields.values()), vars(error)
+    else:
+        raise AssertionError(symbol + " accepted a " + phase + " contract breach")
+
+"#;
+    let sound_load = r#"    if name in ("", "missing"):
+        return Err(error=Failure_Missing())
+    if name == "invalid":
+        return Err(error=Failure_Invalid(message=name))
+    if name == "busy":
+        return Err(error=Failure_Busy())
+    return Ok(value=len(name))
+"#;
+    let sound_busy = "    return type(failure) is Failure_Busy\n";
+    execute_emitted_python(
+        &emit_with(sound_load, sound_busy),
+        &[],
+        &format!(
+            r#"{reject}from api import Draft, busy, load
+from errors import Failure_Busy, Failure_Invalid, Failure_Missing
+
+assert Draft().failure == Failure_Missing()
+assert Draft(failure=Failure_Busy()).failure == Failure_Busy()
+assert load("value") == Ok(value=5)
+assert load("") == Err(error=Failure_Missing())
+assert load("invalid") == Err(error=Failure_Invalid(message="invalid"))
+reject(lambda: load("missing"), "error", "api.load", actual="Failure_Missing")
+reject(lambda: load("busy"), "error", "api.load", actual="Failure_Busy")
+assert busy(Failure_Busy()) is True
+assert busy(Failure_Invalid(message="busy")) is False
+"#
+        ),
+    );
+    for (load, busy, check) in [
+        (
+            "    if name == \"\":\n        return Ok(value=0)\n    return Ok(value=len(name))\n",
+            sound_busy,
+            r#"reject(lambda: load(""), "error", "api.load", expected="Failure_Missing", actual="Ok")"#,
+        ),
+        (
+            "    if name == \"\":\n        return Err(error=Failure_Invalid(message=name))\n    return Ok(value=len(name))\n",
+            sound_busy,
+            r#"reject(lambda: load(""), "error", "api.load", expected="Failure_Missing", actual="Failure_Invalid")"#,
+        ),
+        (
+            sound_load,
+            "    return False\n",
+            "assert busy(Failure_Missing()) is False\nreject(lambda: busy(Failure_Busy()), \"ensures\", \"api.busy\")",
+        ),
+    ] {
+        execute_emitted_python(
+            &emit_with(load, busy),
+            &[],
+            &format!(
+                "{reject}from api import busy, load\nfrom errors import Failure_Busy, Failure_Missing\n\n{check}\n"
+            ),
+        );
+    }
+}
+
+#[test]
 fn imports_cross_module_contract_constants() {
     let files = emit_sources(&[
         ("limits.cott", "module limits\n\nconst MAX: I32 = 3\n"),
@@ -1005,6 +1201,83 @@ else:
             ),
         );
     }
+}
+
+#[test]
+fn implementation_loads_revalidate_a_changed_generation_record() {
+    let temp = TempDir::new();
+    let manifest = MANIFEST
+        .split("[target.python.implementations]")
+        .next()
+        .expect("manifest prefix");
+    fs::write(temp.path.join("cott.toml"), manifest).expect("manifest should be writable");
+    fs::create_dir_all(temp.path.join("src")).expect("source directory should be writable");
+    fs::write(
+        temp.path.join("src/app.cott"),
+        "module app\n\nfn first() -> I32\n",
+    )
+    .expect("first source should be writable");
+    fs::write(
+        temp.path.join("src/other.cott"),
+        "module other\n\nfn second() -> I32\n",
+    )
+    .expect("second source should be writable");
+    write_target_metadata(&temp.path);
+    let (config, paths) = load_config_with_paths(&temp.path).expect("manifest should load");
+    let parsed =
+        parse_project(discover_sources_from_paths(&paths).expect("sources")).expect("parse");
+    let ir = render(&lower(&paths.source_dir, parsed).expect("lower")).expect("render");
+    let plan = PythonArtifactPlan::from_ir(&ir).expect("canonical plan should load");
+    let binding = |module: &str, function: &str, value: u8| {
+        let source = format!("def {function}() -> int:\n    return {value}\n").into_bytes();
+        ResolvedBinding {
+            module: module.to_owned(),
+            function: function.to_owned(),
+            cott_symbol: format!("{module}.{function}"),
+            kind: PythonCallableKind::Function,
+            implementation_module: format!("_cott_impl.{module}.{function}"),
+            implementation_function: function.to_owned(),
+            owner: BindingOwner::Agent,
+            source: temp
+                .path
+                .join(format!("python/_cott_impl/{module}/{function}.py")),
+            generated_relative: PathBuf::from(format!("_cott_impl/{module}/{function}.py")),
+            sha256: sha256_hex(&source),
+            bytes: source,
+        }
+    };
+    let emission = emit(
+        &config,
+        &plan,
+        &ir,
+        &[binding("app", "first", 1), binding("other", "second", 2)],
+    )
+    .expect("implementations should emit");
+    // The first load validates and caches the record; a later load must not reuse that result
+    // once the record bytes change, and identical bytes are accepted again.
+    execute_emitted_python(
+        &emission.files,
+        &[],
+        r#"from pathlib import Path
+from cott_runtime import CottContractViolation
+from app import first
+
+assert first() == 1
+record = Path("../generation.json")
+original = record.read_bytes()
+record.write_bytes(b"{")
+try:
+    from other import second
+    second()
+except CottContractViolation as error:
+    assert "generation record is malformed" in str(error), vars(error)
+else:
+    raise AssertionError("a changed generation record was not revalidated")
+record.write_bytes(original)
+from other import second
+assert second() == 2
+"#,
+    );
 }
 
 #[test]

@@ -14,3 +14,4 @@ runtime_validation = "boundary"
 
 [generator]
 rules = "generator.rules"
+timeout_seconds = 3600

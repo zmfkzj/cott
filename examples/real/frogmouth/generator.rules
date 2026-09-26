@@ -1,2 +1,7 @@
-Use only standard-library facilities for file and network access.
-cott-domain frogmouth.document.load_document return: The scenario HTTP fixture is a real loopback server that urllib.request reaches directly.
+Store host files atomically: create missing parent directories, write a temporary file in the target directory, flush it, then os.replace it over the target.
+Classify a path under active fixtures with _cott_fixture_read: success is a regular file, an IsADirectoryError cause a directory, and a FileNotFoundError or NotADirectoryError cause a missing path.
+Use urllib.request and urllib.parse from the standard library for HTTP and URL handling. Scenario HTTP fixtures are real loopback servers that urllib reaches directly; they answer HEAD requests with status 501.
+Escape Rich markup with rich.markup.escape from the locked rich distribution.
+cott-domain frogmouth.storage.save_bookmarks atomicity: name the target directory variable "directory"; the implementation audit rejects identifiers spelled like reflective builtins (dir, vars, getattr, globals, locals), even local variables.
+cott-domain frogmouth.storage.save_config atomicity: name the target directory variable "directory"; the implementation audit rejects identifiers spelled like reflective builtins (dir, vars, getattr, globals, locals), even local variables.
+cott-domain frogmouth.storage.save_history atomicity: name the target directory variable "directory"; the implementation audit rejects identifiers spelled like reflective builtins (dir, vars, getattr, globals, locals), even local variables.

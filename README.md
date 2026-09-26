@@ -562,11 +562,11 @@ actual accepted compiler output.
 | Project | Distinct contract |
 | --- | --- |
 | `real/yt-dlp` | Playlist selection, archive-aware download planning, output templates, JSON rendering, and bounded media transfer. |
-| `real/harlequin` | SQLite statement execution, schema catalog search, and deterministic query and catalog rendering. |
-| `real/pgcli` | Connection precedence, SQL completion, query rendering, backslash commands, and database execution. |
+| `real/harlequin` | Harlequin 2.15 SQL IDE: generated prompt_toolkit editor/catalog/results/history TUI, `hsql`, config/keymaps/themes, exports, and twelve statically shipped database adapters. |
+| `real/pgcli` | pgcli 4.7.1 client: click CLI and pgclirc config, stateful connections and transactions, special commands and named queries, output formats, and a generated prompt_toolkit REPL with completion, highlighting, toolbar and vi/multiline modes. |
 | `real/posting` | YAML HTTP-request collections, variable resolution, curl export, persistence, and bounded network requests. |
-| `real/toolong` | Bounded log paging, JSONL rendering, merging, searching, and appended-file reads. |
-| `real/frogmouth` | Markdown document navigation, loading, state persistence, and sidebar application behavior. |
+| `real/toolong` | Toolong full-screen log viewer: tabs and timestamp merge, lazy huge-file index, tailing, find/goto/time navigation, log/JSON/ANSI highlighting, gzip/bzip2 and piped stdin, driven by a generated prompt_toolkit TUI. |
+| `real/frogmouth` | Frogmouth terminal Markdown browser: address/forge navigation, local/HTTP links and anchors, persisted XDG history/bookmarks/config, and Textual TOC/sidebar/help/theme. |
 
 ### Focused features — 7
 

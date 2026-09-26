@@ -1,0 +1,356 @@
+module frogmouth.browser
+
+use frogmouth.model.{BrowserContext, Document, Location, LocationKind}
+use frogmouth.document.{BrowserFailure, LoadError}
+use frogmouth.history.{History}
+use frogmouth.layout.{Pane}
+
+enum ViewState:
+    Placeholder
+    Viewing
+
+doc """
+The browser session: the browsing history and whether the viewer shows the
+history's current location (Viewing) or the welcome placeholder.
+"""
+struct BrowserState:
+    history: History
+    view: ViewState
+
+doc """
+One user navigation. Startup carries the command-line location; Address is
+submitted address-bar text; Link is a clicked, percent-decoded link target;
+Paste is pasted text; Open is a location chosen in the local file browser or
+the bookmarks; HistoryEntry is the index of a location chosen in the history
+pane.
+"""
+enum NavigationRequest:
+    Startup(address: Option[Str])
+    Address(value: Str)
+    Link(href: Str)
+    Paste(text: Str)
+    Open(location: Location)
+    HistoryEntry(history_id: U64)
+    Back
+    Forward
+    Reload
+
+doc """
+What the screen must do after a navigation. Display shows a loaded document
+from its top, then scrolls to the heading anchor if one is given;
+ChangeDirectory shows the local file browser rooted at path; ShowPane toggles
+that sidebar pane; Idle does nothing.
+"""
+enum NavigationEffect:
+    Display(document: Document, anchor: Option[Str])
+    ScrollToAnchor(anchor: Str)
+    OpenExternally(target: Str)
+    ChangeDirectory(path: Str)
+    ShowPane(pane: Pane)
+    ShowHelp
+    ShowAbout
+    Quit
+    Failed(failure: BrowserFailure)
+    Idle
+
+doc """
+The outcome of a navigation: the new session state, the screen effect, and
+the text the address bar must show (Nothing leaves it unchanged).
+"""
+struct NavigationResult:
+    session: BrowserState
+    effect: NavigationEffect
+    address: Option[Str]
+
+fn viewed_location(session: BrowserState) -> Option[Location]:
+    doc """
+    The location being viewed: frogmouth.history.current_location of the
+    history while the view is Viewing, Nothing while the placeholder is
+    shown.
+    """
+
+    ensures Option.Some(_) => session.view == ViewState.Viewing
+    ensures Option.Some(_) => session.history.locations.len > 0
+
+    effects []
+
+fn navigate(
+    session: BrowserState,
+    request: NavigationRequest,
+    context: BrowserContext,
+) -> NavigationResult:
+    doc """
+    The browser's navigation root: one request becomes the new session, one
+    screen effect and the address-bar text.
+    
+    VISIT(location, anchor, remember) calls
+    frogmouth.document.visit_location(location, context). Loaded(document)
+    is Display(document, anchor) with the view Viewing, the history
+    frogmouth.history.remember_location(history, document.location) when
+    remember holds (unchanged otherwise), and the address
+    document.location.target. OpenExternally(target) and Failed(failure)
+    become the effects of the same name and keep the session the visit started
+    from.
+    
+    Address(value): frogmouth.omnibox.interpret_address(value, context.home,
+    context.working_directory) decides. Visit(location, address) is
+    VISIT(location, Nothing, remember). ResolveForge(forge, candidates)
+    calls frogmouth.forge.locate_forge_file(forge, candidates) and VISITs
+    the found location with remember; its error Unresolved(forge) is
+    Failed(ForgeUnresolved(forge)).
+    ChangeDirectory, OpenExternally, ShowPane, ShowHelp, ShowAbout, Quit and
+    Failed become the effect of the same name; Ignore is Idle. Unless a
+    document was displayed, the address is the Visit's address, or "" for
+    every other action.
+    
+    Startup(address): a present address is handled exactly as
+    Address(address). Without one, a non-empty history VISITs its newest
+    location with Nothing and without remember, and the address is that
+    location's target whatever the outcome; an empty history is Idle.
+    
+    Link(href): frogmouth.document.resolve_link(href,
+    frogmouth.browser.viewed_location(session), context) decides.
+    Visit(location, anchor) is VISIT(location, anchor, remember);
+    Anchor(anchor) is ScrollToAnchor(anchor); OpenExternally and Failed are
+    the effects of the same name.
+    
+    Paste(text): for non-empty text whose path
+    frogmouth.locations.normalize_local_path(context.working_directory,
+    text) is not Missing according to
+    frogmouth.locations.inspect_local_path, VISIT the Local location of that
+    path with Nothing and remember; any other text is Idle.
+    
+    Open(location) is VISIT(location, Nothing, remember).
+    
+    HistoryEntry(history_id): the history location at that index is VISITed
+    with Nothing, remembering it exactly when it differs from
+    viewed_location(session); an index outside the history is Idle.
+    
+    Back and Forward: frogmouth.history.step_back or step_forward. Nothing
+    is Idle. Otherwise the moved history replaces the session's history even
+    when the visit fails, and its current location is VISITed with Nothing
+    and without remember.
+    
+    Reload: viewed_location(session) is VISITed with Nothing and without
+    remember; without a viewed location it is Idle.
+    
+    Except where stated above, the address is Nothing, and Idle keeps session.
+    """
+
+    ensures result.effect matches NavigationEffect.Display(_, _) => (result.session.view == ViewState.Viewing)
+    ensures result.effect matches NavigationEffect.Idle => result.session == session
+    ensures result.effect matches NavigationEffect.ScrollToAnchor(_) => result.session == session
+    ensures result.effect matches NavigationEffect.Failed(_) => result.session.view == session.view
+    ensures request matches NavigationRequest.Reload => result.session.history == session.history
+    ensures request matches NavigationRequest.Link(_) => ((result.session.history.locations.len == session.history.locations.len) or result.session.history.current + 1 == result.session.history.locations.len)
+
+    effects [file.read, network]
+
+requirement VISITS_ARE_REMEMBERED_ONCE for navigate:
+    text "A displayed document is added to the history exactly when the request was an address, startup location, link, paste, local-file or bookmark choice, or a history entry other than the viewed location; back, forward, reload and the startup revisit never add one."
+    checked_by browsing_session
+
+requirement BACK_MOVES_EVEN_WHEN_LOAD_FAILS for navigate:
+    text "Back and Forward move the history position before loading, so a failed load still leaves the history at the new position."
+    checked_by browsing_session assert 20
+
+data empty_state: BrowserState = BrowserState(
+    history: History(locations: List(), current: 0),
+    view: ViewState.Placeholder,
+)
+
+data guide: Location = Location(kind: LocationKind.Local, target: "docs/guide.md")
+
+data setup: Location = Location(kind: LocationKind.Local, target: "docs/setup.md")
+
+data guide_document: Document = Document(
+    location: Location(kind: LocationKind.Local, target: "docs/guide.md"),
+    markdown: "# Guide\n[Setup](setup.md#install)\n",
+)
+
+data setup_document: Document = Document(
+    location: Location(kind: LocationKind.Local, target: "docs/setup.md"),
+    markdown: "# Setup\n## Install\n",
+)
+
+scenario viewed_location_follows_view:
+    call placeholder = viewed_location(
+        BrowserState(
+            history: History(locations: List(guide), current: 0),
+            view: ViewState.Placeholder,
+        ),
+    )
+    assert placeholder == Option.Nothing
+    call viewing = viewed_location(
+        BrowserState(
+            history: History(locations: List(guide, setup), current: 0),
+            view: ViewState.Viewing,
+        ),
+    )
+    assert viewing == Option.Some(value: guide)
+
+scenario browsing_session:
+    fixtures:
+        fs files:
+            file "docs/guide.md" text("# Guide\n[Setup](setup.md#install)\n")
+            file "docs/setup.md" text("# Setup\n## Install\n")
+            file "docs/notes.txt" text("plain\n")
+        http service:
+            route "/remote/readme.md" -> response(status: 200, body: text("# Remote\n[Next](next.md)\n"), encoding: "utf-8")
+            route "/remote/next.md" -> response(status: 200, body: text("# Next\n"), encoding: "utf-8")
+    data context: BrowserContext = BrowserContext(
+        home: "home",
+        working_directory: ".",
+        markdown_extensions: List(".md", ".markdown"),
+    )
+    call first = navigate(
+        empty_state,
+        NavigationRequest.Startup(address: Option.Some(value: "docs/guide.md")),
+        context,
+    )
+    assert first == NavigationResult(
+        session: BrowserState(
+            history: History(locations: List(guide), current: 0),
+            view: ViewState.Viewing,
+        ),
+        effect: NavigationEffect.Display(document: guide_document, anchor: Option.Nothing),
+        address: Option.Some(value: "docs/guide.md"),
+    )
+    call linked = navigate(first.session, NavigationRequest.Link(href: "setup.md#install"), context)
+    assert linked == NavigationResult(
+        session: BrowserState(
+            history: History(locations: List(guide, setup), current: 1),
+            view: ViewState.Viewing,
+        ),
+        effect: NavigationEffect.Display(
+            document: setup_document,
+            anchor: Option.Some(value: "install"),
+        ),
+        address: Option.Some(value: "docs/setup.md"),
+    )
+    call anchored = navigate(linked.session, NavigationRequest.Link(href: "#install"), context)
+    assert anchored == NavigationResult(
+        session: linked.session,
+        effect: NavigationEffect.ScrollToAnchor(anchor: "install"),
+        address: Option.Nothing,
+    )
+    call back = navigate(linked.session, NavigationRequest.Back, context)
+    assert back == NavigationResult(
+        session: BrowserState(
+            history: History(locations: List(guide, setup), current: 0),
+            view: ViewState.Viewing,
+        ),
+        effect: NavigationEffect.Display(document: guide_document, anchor: Option.Nothing),
+        address: Option.Some(value: "docs/guide.md"),
+    )
+    call no_back = navigate(back.session, NavigationRequest.Back, context)
+    assert no_back == NavigationResult(
+        session: back.session,
+        effect: NavigationEffect.Idle,
+        address: Option.Nothing,
+    )
+    call forward = navigate(back.session, NavigationRequest.Forward, context)
+    assert forward.session == linked.session
+    call chosen = navigate(back.session, NavigationRequest.HistoryEntry(history_id: 1), context)
+    assert chosen.session == BrowserState(
+        history: History(locations: List(guide, setup, setup), current: 2),
+        view: ViewState.Viewing,
+    )
+    call same = navigate(back.session, NavigationRequest.HistoryEntry(history_id: 0), context)
+    assert same.session == back.session
+    call reload = navigate(back.session, NavigationRequest.Reload, context)
+    assert reload == back
+    call remote = navigate(
+        back.session,
+        NavigationRequest.Address(value: service.url("/remote/readme.md")),
+        context,
+    )
+    assert remote.session.history.locations.len == 3
+    assert remote.effect matches NavigationEffect.Display(document, _) => document.markdown == "# Remote\n[Next](next.md)\n"
+    call next = navigate(remote.session, NavigationRequest.Link(href: "next.md"), context)
+    assert next.effect matches NavigationEffect.Display(document, _) => document.location == Location(kind: LocationKind.Remote, target: service.url("/remote/next.md"))
+    assert next.address == Option.Some(value: service.url("/remote/next.md"))
+    call gone = navigate(next.session, NavigationRequest.Link(href: "gone.md"), context)
+    assert gone.effect matches NavigationEffect.Failed(BrowserFailure.Load(LoadError.RemoteFailed(url, _))) => url == service.url("/remote/gone.md")
+    assert gone.session == next.session and gone.address == Option.Nothing
+    call help = navigate(next.session, NavigationRequest.Address(value: "help"), context)
+    assert help == NavigationResult(
+        session: next.session,
+        effect: NavigationEffect.ShowHelp,
+        address: Option.Some(value: ""),
+    )
+    call directory = navigate(next.session, NavigationRequest.Address(value: "docs"), context)
+    assert directory == NavigationResult(
+        session: next.session,
+        effect: NavigationEffect.ChangeDirectory(path: "docs"),
+        address: Option.Some(value: ""),
+    )
+    call typo = navigate(next.session, NavigationRequest.Address(value: "gude.md"), context)
+    assert typo.effect matches NavigationEffect.Failed(BrowserFailure.Load(LoadError.LocalFailed(path, _))) => path == "gude.md"
+    assert typo.session == next.session and typo.address == Option.Some(value: "gude.md")
+    call failed_back = navigate(
+        BrowserState(
+            history: History(
+                locations: List(
+                    Location(kind: LocationKind.Local, target: "docs/removed.md"),
+                    guide,
+                ),
+                current: 1,
+            ),
+            view: ViewState.Viewing,
+        ),
+        NavigationRequest.Back,
+        context,
+    )
+    assert failed_back.session.history.current == 0
+    call text = navigate(
+        next.session,
+        NavigationRequest.Open(
+            location: Location(kind: LocationKind.Local, target: "docs/notes.txt"),
+        ),
+        context,
+    )
+    assert text == NavigationResult(
+        session: next.session,
+        effect: NavigationEffect.OpenExternally(target: "file://docs/notes.txt"),
+        address: Option.Nothing,
+    )
+    call pasted = navigate(empty_state, NavigationRequest.Paste(text: "docs/setup.md"), context)
+    assert pasted.session == BrowserState(
+        history: History(locations: List(setup), current: 0),
+        view: ViewState.Viewing,
+    )
+    call pasted_nothing = navigate(
+        empty_state,
+        NavigationRequest.Paste(text: "not a path"),
+        context,
+    )
+    assert pasted_nothing == NavigationResult(
+        session: empty_state,
+        effect: NavigationEffect.Idle,
+        address: Option.Nothing,
+    )
+    call revisit = navigate(
+        BrowserState(
+            history: History(locations: List(guide, setup), current: 1),
+            view: ViewState.Placeholder,
+        ),
+        NavigationRequest.Startup(address: Option.Nothing),
+        context,
+    )
+    assert revisit == NavigationResult(
+        session: BrowserState(
+            history: History(locations: List(guide, setup), current: 1),
+            view: ViewState.Viewing,
+        ),
+        effect: NavigationEffect.Display(document: setup_document, anchor: Option.Nothing),
+        address: Option.Some(value: "docs/setup.md"),
+    )
+    call fresh = navigate(empty_state, NavigationRequest.Startup(address: Option.Nothing), context)
+    assert fresh == NavigationResult(
+        session: empty_state,
+        effect: NavigationEffect.Idle,
+        address: Option.Nothing,
+    )
+    call orphan_reload = navigate(empty_state, NavigationRequest.Reload, context)
+    assert orphan_reload == fresh

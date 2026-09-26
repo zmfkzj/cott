@@ -1,0 +1,402 @@
+module frogmouth.storage
+
+use frogmouth.model.{Dialog, Location, LocationKind}
+use frogmouth.config.{Config, Dock, Theme}
+use frogmouth.history.{History}
+use frogmouth.bookmarks.{Bookmark}
+
+enum StoreError:
+    ReadFailed(path: Str, message: Str)
+    Malformed(path: Str, message: Str)
+    WriteFailed(path: Str, message: Str)
+
+doc """
+Proof of a completed application-data write: the file that now holds the data
+and the number of UTF-8 bytes written to it.
+"""
+struct StoredFile:
+    path: Str
+    bytes_written: U64
+
+    invariant self.path.len > 0
+    invariant self.bytes_written > 0
+
+doc """
+A configuration read by load_config and the configuration file it came from.
+"""
+struct LoadedConfig:
+    path: Str
+    config: Config
+
+    invariant ends_with(self.path, "/configuration.json")
+
+doc """
+Bookmarks read by load_bookmarks, in stored order, and the bookmarks file
+they came from.
+"""
+struct LoadedBookmarks:
+    path: Str
+    bookmarks: List[Bookmark]
+
+    invariant ends_with(self.path, "/bookmarks.json")
+
+fn load_config(config_directory: Str) -> Result[LoadedConfig, StoreError]:
+    doc """
+    Load the configuration file named configuration.json in config_directory
+    (joined with one "/"). The file is strict UTF-8 JSON holding an object;
+    its "light_mode" boolean selects Light (true) or Dark (false), its
+    "markdown_extensions" array of strings becomes markdown_extensions in
+    order, and its "navigation_left" boolean selects Left (true) or Right
+    (false). A missing key takes the value of
+    frogmouth.config.default_config(); other keys are ignored. When the file
+    does not exist, frogmouth.storage.save_config(config_directory,
+    default_config()) stores the defaults and they are returned. path is the
+    configuration file path.
+    
+    Every StoreError carries the configuration file path. Bytes that are not
+    UTF-8 JSON, a non-object document or a value of the wrong JSON type is
+    Malformed; any other read failure is ReadFailed; a failed default save is
+    returned unchanged.
+    
+    Files are read from the file system the program runs against: the fs
+    fixture root while a Cott scenario with an fs fixture is active,
+    otherwise the host file system.
+    """
+
+    requires config_directory.len > 0
+
+    ensures Result.Ok(loaded) => starts_with(loaded.path, config_directory)
+    ensures Result.Err(StoreError.Malformed(path, _)) => (starts_with(path, config_directory) and ends_with(path, "/configuration.json"))
+    ensures Result.Err(StoreError.ReadFailed(path, _)) => (starts_with(path, config_directory) and ends_with(path, "/configuration.json"))
+
+    error StoreError.Malformed
+    error StoreError.ReadFailed
+    error StoreError.WriteFailed
+
+    effects [file.read, file.write]
+
+fn save_config(config_directory: Str, config: Config) -> Result[StoredFile, StoreError]:
+    doc """
+    Store config as configuration.json in config_directory, creating missing
+    directories. The content is the JSON object with the keys "light_mode"
+    (true for Light), "markdown_extensions" and "navigation_left" (true for
+    Left) in that order, serialized like Python json.dumps with indent=4 and
+    the default ASCII escaping, without a trailing newline. The file is
+    replaced atomically, so a failed save leaves the previous file intact,
+    and every failure is WriteFailed carrying the file path.
+    """
+
+    requires config_directory.len > 0
+
+    ensures Result.Ok(stored) => (starts_with(stored.path, config_directory) and ends_with(stored.path, "/configuration.json"))
+    ensures Result.Err(StoreError.WriteFailed(path, _)) => ends_with(path, "/configuration.json")
+
+    error StoreError.WriteFailed
+
+    effects [file.write]
+
+fn load_history(data_directory: Str) -> Result[History, StoreError]:
+    doc """
+    Load the saved history from history.json in data_directory (joined with
+    one "/") and return frogmouth.history.start_history of its locations. An
+    absent file is an empty history. The file is strict UTF-8 JSON holding
+    an array of non-empty strings, oldest first; a string for which
+    frogmouth.locations.remote_location returns a location becomes that
+    Remote location, any other string a Local location with that target.
+    
+    Every StoreError carries the history file path. Bytes that are not UTF-8
+    JSON, a non-array document, or an element that is not a non-empty string
+    is Malformed; any other read failure is ReadFailed.
+    
+    Files are read from the file system the program runs against: the fs
+    fixture root while a Cott scenario with an fs fixture is active,
+    otherwise the host file system.
+    """
+
+    requires data_directory.len > 0
+
+    ensures Result.Ok(loaded) => ((loaded.locations.len > 0) => loaded.current + 1 == loaded.locations.len)
+    ensures Result.Err(StoreError.Malformed(path, _)) => (starts_with(path, data_directory) and ends_with(path, "/history.json"))
+    ensures Result.Err(StoreError.ReadFailed(path, _)) => (starts_with(path, data_directory) and ends_with(path, "/history.json"))
+
+    error StoreError.Malformed
+    error StoreError.ReadFailed
+
+    effects [file.read]
+
+fn save_history(data_directory: Str, locations: List[Location]) -> Result[StoredFile, StoreError]:
+    doc """
+    Store locations as history.json in data_directory, creating missing
+    directories: a JSON array of the location targets in order, serialized
+    like Python json.dumps with indent=4 and the default ASCII escaping,
+    without a trailing newline. The file is replaced atomically, so a failed
+    save leaves the previous file intact, and every failure is WriteFailed
+    carrying the file path.
+    """
+
+    requires data_directory.len > 0
+
+    ensures Result.Ok(stored) => (starts_with(stored.path, data_directory) and ends_with(stored.path, "/history.json"))
+    ensures Result.Err(StoreError.WriteFailed(path, _)) => ends_with(path, "/history.json")
+
+    error StoreError.WriteFailed
+
+    effects [file.write]
+
+fn load_bookmarks(data_directory: Str) -> Result[LoadedBookmarks, StoreError]:
+    doc """
+    Load bookmarks.json from data_directory (joined with one "/"); an absent
+    file holds no bookmarks. The file is strict UTF-8 JSON holding an array
+    of two-element arrays [title, location] of non-empty strings, kept in
+    file order. A location for which frogmouth.locations.remote_location
+    returns a location becomes that Remote location, any other a Local
+    location with that target. path is the bookmarks file path.
+    
+    Every StoreError carries the bookmarks file path. Bytes that are not
+    UTF-8 JSON, a non-array document or an element of another shape is
+    Malformed; any other read failure is ReadFailed.
+    
+    Files are read from the file system the program runs against: the fs
+    fixture root while a Cott scenario with an fs fixture is active,
+    otherwise the host file system.
+    """
+
+    requires data_directory.len > 0
+
+    ensures Result.Ok(loaded) => starts_with(loaded.path, data_directory)
+    ensures Result.Err(StoreError.Malformed(path, _)) => (starts_with(path, data_directory) and ends_with(path, "/bookmarks.json"))
+    ensures Result.Err(StoreError.ReadFailed(path, _)) => (starts_with(path, data_directory) and ends_with(path, "/bookmarks.json"))
+
+    error StoreError.Malformed
+    error StoreError.ReadFailed
+
+    effects [file.read]
+
+fn save_bookmarks(data_directory: Str, bookmarks: List[Bookmark]) -> Result[StoredFile, StoreError]:
+    doc """
+    Store bookmarks as bookmarks.json in data_directory, creating missing
+    directories: a JSON array holding [title, target] for each bookmark in
+    order, serialized like Python json.dumps with indent=4 and the default
+    ASCII escaping, without a trailing newline. The file is replaced
+    atomically, so a failed save leaves the previous file intact, and every
+    failure is WriteFailed carrying the file path.
+    """
+
+    requires data_directory.len > 0
+
+    ensures Result.Ok(stored) => (starts_with(stored.path, data_directory) and ends_with(stored.path, "/bookmarks.json"))
+    ensures Result.Err(StoreError.WriteFailed(path, _)) => ends_with(path, "/bookmarks.json")
+
+    error StoreError.WriteFailed
+
+    effects [file.write]
+
+fn storage_failure_dialog(failure: StoreError) -> Dialog:
+    doc """
+    The error dialog reporting a failed application-data read or write.
+    PATH and MESSAGE are the fields of failure, escaped like rich.markup.escape
+    so they are shown literally. ReadFailed and Malformed have the title
+    "Unable to load application data"; WriteFailed has the title "Unable to
+    save application data". The message is PATH, two line feeds, MESSAGE and
+    a full stop.
+    """
+
+    ensures failure matches StoreError.ReadFailed(_, _) => (result.title == "Unable to load application data")
+    ensures failure matches StoreError.Malformed(_, _) => (result.title == "Unable to load application data")
+    ensures failure matches StoreError.WriteFailed(_, _) => (result.title == "Unable to save application data")
+    ensures failure matches StoreError.WriteFailed(path, _) => ((not contains(path, "[") and not contains(path, "\\")) => starts_with(result.message, path))
+    ensures (ends_with(result.message, "."))
+
+    effects []
+
+requirement MISSING_CONFIGURATION_IS_CREATED for load_config:
+    text "When configuration.json is absent, load_config stores the defaults through save_config before returning them, so a later load reads the stored file."
+    checked_by configuration_round_trips assert 1
+    checked_by configuration_round_trips assert 2
+
+data guide: Location = Location(kind: LocationKind.Local, target: "/notes/guide.md")
+
+data setup: Location = Location(kind: LocationKind.Local, target: "/notes/setup.md")
+
+data remote: Location = Location(
+    kind: LocationKind.Remote,
+    target: "https://Example.com:8443/docs/intro.md",
+)
+
+data readme: Bookmark = Bookmark(
+    title: "readme",
+    location: Location(kind: LocationKind.Local, target: "/src/README.md"),
+)
+
+data textual: Bookmark = Bookmark(
+    title: "Textual",
+    location: Location(
+        kind: LocationKind.Remote,
+        target: "https://raw.githubusercontent.com/textualize/textual/main/README.md",
+    ),
+)
+
+scenario configuration_round_trips:
+    fixtures:
+        fs files:
+            file "legacy/configuration.json" text("{\"light_mode\": true, \"navigation_left\": false, \"theme\": \"ignored\"}")
+            file "broken/configuration.json" text("{\"light_mode\": \"yes\"}")
+            file "list/configuration.json" text("[]")
+    call created = load_config("fresh")
+    assert created == Result.Ok(
+        value: LoadedConfig(
+            path: "fresh/configuration.json",
+            config: Config(
+                theme: Theme.Dark,
+                markdown_extensions: List(".md", ".markdown"),
+                navigation_dock: Dock.Left,
+            ),
+        ),
+    )
+    call reread = load_config("fresh")
+    assert reread == created
+    call legacy = load_config("legacy")
+    assert legacy matches Result.Ok(loaded) => loaded.config == Config(theme: Theme.Light, markdown_extensions: List(".md", ".markdown"), navigation_dock: Dock.Right)
+    call saved = save_config(
+        "legacy",
+        Config(theme: Theme.Dark, markdown_extensions: List(".txt"), navigation_dock: Dock.Right),
+    )
+    assert saved == Result.Ok(
+        value: StoredFile(path: "legacy/configuration.json", bytes_written: 108),
+    )
+    call changed = load_config("legacy")
+    assert changed matches Result.Ok(loaded) => loaded.config == Config(theme: Theme.Dark, markdown_extensions: List(".txt"), navigation_dock: Dock.Right)
+    call broken = load_config("broken")
+    assert broken matches Result.Err(StoreError.Malformed(path, _)) => path == "broken/configuration.json"
+    call list = load_config("list")
+    assert list matches Result.Err(StoreError.Malformed(path, _)) => path == "list/configuration.json"
+
+scenario failed_configuration_save_keeps_file:
+    fixtures:
+        fs files:
+            file "config/configuration.json" text("{\"light_mode\": true}")
+        failure disk_full:
+            point: file.replace
+            occurrence: 1
+            error: disk_full
+    call failed = save_config(
+        "config",
+        Config(theme: Theme.Dark, markdown_extensions: List(".md"), navigation_dock: Dock.Left),
+    )
+    assert failed matches Result.Err(StoreError.WriteFailed(path, _)) => path == "config/configuration.json"
+    call kept = load_config("config")
+    assert kept matches Result.Ok(loaded) => loaded.config.theme == Theme.Light
+
+scenario history_round_trips:
+    fixtures:
+        fs files:
+            file "data/history.json" text("[\n    \"/notes/guide.md\",\n    \"HTTPS://example.com/a.md\",\n    \"notes.md\"\n]")
+            file "bad/history.json" text("[\"/a.md\", 3]")
+    call loaded = load_history("data")
+    assert loaded == Result.Ok(
+        value: History(
+            locations: List(
+                guide,
+                Location(kind: LocationKind.Remote, target: "https://example.com/a.md"),
+                Location(kind: LocationKind.Local, target: "notes.md"),
+            ),
+            current: 2,
+        ),
+    )
+    call absent = load_history("fresh")
+    assert absent == Result.Ok(value: History(locations: List(), current: 0))
+    call malformed = load_history("bad")
+    assert malformed matches Result.Err(StoreError.Malformed(path, _)) => path == "bad/history.json"
+    call saved = save_history(
+        "fresh/nested",
+        List(guide, Location(kind: LocationKind.Local, target: "/notes/café.md")),
+    )
+    assert saved == Result.Ok(
+        value: StoredFile(path: "fresh/nested/history.json", bytes_written: 52),
+    )
+    call reloaded = load_history("fresh/nested")
+    assert reloaded == Result.Ok(
+        value: History(
+            locations: List(guide, Location(kind: LocationKind.Local, target: "/notes/café.md")),
+            current: 1,
+        ),
+    )
+
+scenario failed_history_save_keeps_file:
+    fixtures:
+        fs files:
+            file "data/history.json" text("[\"/notes/guide.md\"]")
+        failure disk_full:
+            point: file.replace
+            occurrence: 1
+            error: disk_full
+    call failed = save_history("data", List(setup))
+    assert failed matches Result.Err(StoreError.WriteFailed(path, _)) => path == "data/history.json"
+    call kept = load_history("data")
+    assert kept == Result.Ok(value: History(locations: List(guide), current: 0))
+
+scenario bookmarks_round_trip:
+    fixtures:
+        fs files:
+            file "data/bookmarks.json" text("[\n    [\"zeta\", \"/z.md\"],\n    [\"alpha\", \"https://example.com/a.md\"]\n]")
+            file "bad/bookmarks.json" text("[[\"only title\"]]")
+    call loaded = load_bookmarks("data")
+    assert loaded == Result.Ok(
+        value: LoadedBookmarks(
+            path: "data/bookmarks.json",
+            bookmarks: List(
+                Bookmark(
+                    title: "zeta",
+                    location: Location(kind: LocationKind.Local, target: "/z.md"),
+                ),
+                Bookmark(
+                    title: "alpha",
+                    location: Location(
+                        kind: LocationKind.Remote,
+                        target: "https://example.com/a.md",
+                    ),
+                ),
+            ),
+        ),
+    )
+    call absent = load_bookmarks("fresh")
+    assert absent == Result.Ok(
+        value: LoadedBookmarks(path: "fresh/bookmarks.json", bookmarks: List()),
+    )
+    call malformed = load_bookmarks("bad")
+    assert malformed matches Result.Err(StoreError.Malformed(path, _)) => path == "bad/bookmarks.json"
+    call saved = save_bookmarks("fresh", List(textual, readme))
+    assert saved == Result.Ok(value: StoredFile(path: "fresh/bookmarks.json", bytes_written: 168))
+    call reloaded = load_bookmarks("fresh")
+    assert reloaded == Result.Ok(
+        value: LoadedBookmarks(path: "fresh/bookmarks.json", bookmarks: List(textual, readme)),
+    )
+
+scenario failed_bookmark_save_keeps_file:
+    fixtures:
+        fs files:
+            file "data/bookmarks.json" text("[[\"readme\", \"/src/README.md\"]]")
+        failure disk_full:
+            point: file.replace
+            occurrence: 1
+            error: disk_full
+    call failed = save_bookmarks("data", List(textual))
+    assert failed matches Result.Err(StoreError.WriteFailed(path, _)) => path == "data/bookmarks.json"
+    call kept = load_bookmarks("data")
+    assert kept matches Result.Ok(loaded) => loaded.bookmarks == List(readme)
+
+scenario storage_failures_become_dialogs:
+    call corrupt = storage_failure_dialog(
+        StoreError.Malformed(path: "/data/history.json", message: "not an array"),
+    )
+    assert corrupt == Dialog(
+        title: "Unable to load application data",
+        message: "/data/history.json\n\nnot an array.",
+    )
+    call unwritable = storage_failure_dialog(
+        StoreError.WriteFailed(path: "/data/[x]/bookmarks.json", message: "disk full"),
+    )
+    assert unwritable == Dialog(
+        title: "Unable to save application data",
+        message: "/data/\\[x]/bookmarks.json\n\ndisk full.",
+    )

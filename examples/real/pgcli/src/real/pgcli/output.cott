@@ -1,0 +1,945 @@
+module real.pgcli.output
+
+use real.pgcli.completion.{CompletionCatalog}
+
+doc """
+The row values of one statement result, kept as the Python objects the executor obtained:
+a Python list with one tuple per row, each holding the Python values of that row in column
+order, exactly as psycopg returned them after pgcli's text loaders (date, time, timestamp,
+timestamptz, bytea, json and jsonb arrive as str) or as a pgspecial command listed them:
+None, bool, int, float, decimal.Decimal, str, list (arrays, possibly nested), bytes or any
+other object (for example datetime.timedelta or uuid.UUID). Opaque so that large results
+are not validated value by value.
+"""
+alias ResultRows = Opaque["pgcli.result-rows"]
+
+doc """
+A scenario-friendly spelling of one Python row value, converted by result_rows_from_cells.
+"""
+enum Cell:
+    Null
+    Text(value: Str)
+    Integer(value: I64)
+    Float(value: F64)
+    Decimal(value: Str)
+    Boolean(value: Bool)
+    Array(items: List[Cell])
+    Other(value: Str)
+
+doc """
+The rows of one statement result. columns are the column names (cursor.description
+names) and rows the row values in order. type_names are the psycopg type names per column
+("" when unknown); they do not influence formatting (upstream derives column types from
+cursor.description but that value never reaches the formatter). rowcount says where the
+rows came from: >= 0 is the cursor.rowcount of a psycopg cursor (including pgspecial
+commands that return a cursor), -1 means the rows came from a plain Python list (pgspecial
+list results) or from a row-limited slice of a cursor.
+"""
+struct ResultSet:
+    columns: List[Str]
+    type_names: List[Str]
+    rows: ResultRows
+    rowcount: I64
+
+doc """
+What format_output produced: text is the output items joined with "\n" ("" when there
+are no items) and items is how many items there were. An item may itself contain line
+feeds (a vertical record, a CSV field with a newline, a whole explain plan).
+"""
+struct FormattedOutput:
+    text: Str
+    items: U64
+
+doc """
+pgcli's colored-table output style (pgstyle.style_factory_output), as pygments style
+definition strings. header, odd_row, even_row and null are the [colors] values of
+output.header, output.odd-row, output.even-row and output.null ("" when absent; the
+default pgclirc has "#00ff5f bold", "", "" and "#808080"). table_separator is the [colors]
+value of "Token.Output.TableSeparator" ("" when absent). base is the definition of the root
+pygments Token in the syntax style named by [main] syntax_style
+(pygments.styles.get_style_by_name(name).styles.get(Token, ""), the "native" style when
+the name is unknown): "" for "default", "#d0d0d0" for "native". Every output token
+inherits base. true_color is whether the COLORTERM environment variable, lower-cased,
+contains "truecolor" (cli_helpers then uses TerminalTrueColorFormatter instead of
+Terminal256Formatter). The defaults are pgcli's default [colors] with syntax_style default.
+"""
+struct OutputStyle:
+    base: Str = ""
+    header: Str = "#00ff5f bold"
+    odd_row: Str = ""
+    even_row: Str = ""
+    null: Str = "#808080"
+    table_separator: Str = ""
+    true_color: Bool = false
+
+doc """
+pgcli's OutputSettings for one format_output call. table_format is the current table
+format name ([main] table_format or the \T choice). decimal_format and float_format are
+[data_formats] decimal and float ("" = unset). column_date_formats maps a column header to
+a strftime format ([column_date_formats]). missing_value is the NULL display string
+([main] null_string, default "<null>"). expanded is \x or [main] expand. max_width is the
+terminal width in columns when auto-expand (\x auto or [main] auto_expand) is on, Nothing
+otherwise. header_casing is Some(the completer's catalog) when [main]
+case_column_headers is on, Nothing otherwise. style is the colored-output style (the REPL
+always passes one). max_field_width is [main] max_field_width (Nothing = no truncation).
+tuples_only is -t/--tuples-only. query is the whole command text being executed (used to
+find the table name of the sql-insert and sql-update formats). The defaults are those of
+upstream's OutputSettings namedtuple (whose max_field_width default is Some(500) and
+column_date_formats default is empty).
+"""
+struct OutputSettings:
+    table_format: Str
+    column_date_formats: Map[Str, Str]
+    max_field_width: Option[U32]
+    decimal_format: Str = ""
+    float_format: Str = ""
+    missing_value: Str = "<null>"
+    expanded: Bool = false
+    max_width: Option[U32] = Option.Nothing
+    header_casing: Option[CompletionCatalog] = Option.Nothing
+    style: Option[OutputStyle] = Option.Nothing
+    tuples_only: Bool = false
+    query: Str = ""
+
+doc """
+Why formatting a result failed. message is str() of the exception upstream pgcli raised
+while formatting; the REPL prints it in red on stderr and discards every output item of
+the command (an empty message prints an empty line).
+"""
+enum OutputError:
+    Failed(message: Str)
+
+doc """
+JSON object text mapping EXPLAIN plan node types to the description line pgcli's explain
+visualizer prints under each node (pgcli/pyev.py DESCRIPTIONS, verbatim).
+"""
+const EXPLAIN_NODE_DESCRIPTIONS: Str = "{\"Append\": \"Used in a UNION to merge multiple record sets by appending them together.\", \"Limit\": \"Returns a specified number of rows from a record set.\", \"Sort\": \"Sorts a record set based on the specified sort key.\", \"Nested Loop\": \"Merges two record sets by looping through every record in the first set and trying to find a match in the second set. All matching records are returned.\", \"Merge Join\": \"Merges two record sets by first sorting them on a join key.\", \"Hash\": \"Generates a hash table from the records in the input recordset. Hash is used by Hash Join.\", \"Hash Join\": \"Joins to record sets by hashing one of them (using a Hash Scan).\", \"Aggregate\": \"Groups records together based on a GROUP BY or aggregate function (e.g. sum()).\", \"Hashaggregate\": \"Groups records together based on a GROUP BY or aggregate function (e.g. sum()). Hash Aggregate uses a hash to first organize the records by a key.\", \"Sequence Scan\": \"Finds relevant records by sequentially scanning the input record set. When reading from a table, Seq Scans (unlike Index Scans) perform a single read operation (only the table is read).\", \"Seq Scan\": \"Finds relevant records by sequentially scanning the input record set. When reading from a table, Seq Scans (unlike Index Scans) perform a single read operation (only the table is read).\", \"Index Scan\": \"Finds relevant records based on an Index. Index Scans perform 2 read operations: one to read the index and another to read the actual value from the table.\", \"Index Only Scan\": \"Finds relevant records based on an Index. Index Only Scans perform a single read operation from the index and do not read from the corresponding table.\", \"Bitmap Heap Scan\": \"Searches through the pages returned by the Bitmap Index Scan for relevant rows.\", \"Bitmap Index Scan\": \"Uses a Bitmap Index (index which uses 1 bit per page) to find all relevant pages. Results of this node are fed to the Bitmap Heap Scan.\", \"CTEScan\": \"Performs a sequential scan of Common Table Expression (CTE) query results. Note that results of a CTE are materialized (calculated and temporarily stored).\", \"ProjectSet\": \"ProjectSet appears when the SELECT or ORDER BY clause of the query.  They basically just execute the set-returning function(s) for each tuple until none of the functions return any more records.\", \"Result\": \"Returns result\"}"
+
+fn result_rows_from_cells(rows: List[List[Cell]]) -> ResultRows:
+    doc """
+    Build the Python row list of a ResultRows from Cell rows: a list with one tuple per row,
+    each cell converted as Null -> None, Text -> str, Integer -> int, Float -> float, Decimal
+    -> decimal.Decimal(value), Boolean -> bool, Array -> list of the converted items
+    (recursive), Other -> str.
+    """
+
+fn format_output(
+    title: Option[Str],
+    result_set: Option[ResultSet],
+    status: Option[Str],
+    settings: OutputSettings,
+    explain_mode: Bool,
+) -> Result[FormattedOutput, OutputError]:
+    doc """
+    Format one statement result exactly like pgcli 4.7.1 main.format_output with the
+    lock-selected cli_helpers 2.15.1, tabulate 0.10.0, pygments and click. The output items
+    below are produced in order and returned as FormattedOutput(text="\n".join(items),
+    items=len(items)). Any exception raised while producing the items, by the steps below or
+    by the library functions they call, yields Err(OutputError.Failed(message:
+    str(exception))) and no output.
+    
+    1. Format name and validation. The format name is "plain" when settings.tuples_only,
+    else "vertical" when settings.expanded, else settings.table_format. expanded_view is
+    settings.expanded or settings.table_format == "vertical". When not explain_mode, a
+    non-empty format name that is not in table_format_names() fails before anything else,
+    even without a result, with message 'unrecognized format_name "<name>"' (an empty name
+    fails only when a table is rendered, with 'unrecognized format "None"').
+    
+    2. Items. First the title when title is Some, non-empty and not tuples_only. Then the
+    table section (3) when result_set is Some and (rowcount >= 0 or rows is non-empty): a
+    cursor result prints its header even with zero rows, an empty list result prints nothing.
+    Last the footer when status is Some, non-empty and not tuples_only: status + " " +
+    str(rowcount) when result_set is Some, its rowcount >= 0, settings.max_width is Nothing
+    and status does not end with str(rowcount) (so "SHOW" becomes "SHOW 1"), otherwise
+    status unchanged.
+    
+    3. Table section. headers is [] when tuples_only, else result_set.columns each mapped
+    through real.pgcli.completion.apply_identifier_casing(catalog, name) when
+    settings.header_casing is Some(catalog), unchanged when Nothing. The Python rows are the
+    Python list wrapped by result_set.rows (one tuple of Python values per row), used as is
+    and never mutated. When explain_mode the section is (6). Otherwise render
+    (4) with the format name; if that yields no item fail with message "" (upstream's
+    StopIteration). When not expanded_view, settings.max_width is Some(w) with w > 0, headers
+    is non-empty and len(cli_helpers.utils.strip_ansi(first item)) > w (code points), the
+    section is every item of rendering "vertical" (4) from the same Python rows and headers
+    (possibly none); otherwise it is every item of the first rendering.
+    
+    4. Rendering a format F from Python rows and headers; this is cli_helpers
+    TabularOutputFormatter.format_output spelled out step by step, because the style cannot
+    be handed to cli_helpers without defining a pygments Style class.
+    (a) Column types, computed from the Python rows before any step (zero rows give []): per
+    column the highest rank of its values, None 0, int 2 (type(v) is int, bool excluded),
+    float or decimal.Decimal 3, bytes 4, anything else (str, bool, list) 5; rank 0 -> type(None),
+    2 -> int, 3 -> decimal.Decimal, 4 -> bytes, 5 -> str. Rank 3 maps to decimal.Decimal and
+    never to float (cli_helpers' inverse type table), which is exactly
+    TabularOutputFormatter()._get_column_types(rows).
+    (b) pgcli steps, each called as step(data, headers, column_types=types, **K) returning
+    (data, headers), with K = {"sep_title": "RECORD {n}", "sep_character": "-", "sep_length":
+    (1, 25), "missing_value": settings.missing_value, "integer_format":
+    settings.decimal_format, "float_format": settings.float_format, "column_date_formats":
+    dict of settings.column_date_formats, "disable_numparse": True, "preserve_whitespace":
+    True, "max_field_width": the max_field_width value or None}. When float_format is "",
+    cli_helpers.tabular_output.preprocessors.align_decimals (it changes nothing because no
+    column type is float; lists stay Python lists and print as reprs such as "[1, None]").
+    Otherwise preprocessors.format_numbers (it formats int values of int-typed columns with
+    format(v, decimal_format) when decimal_format is non-empty; float_format never applies
+    since no column type is float), then the array step: every row becomes
+    [format_array(v) if v is a list else v for v in row], where
+    format_array(None) = settings.missing_value, a non-list value stays itself and a list
+    becomes "{" + ",".join(str(format_array(e)) for e in items) + "}". Then, when
+    column_date_formats is non-empty, preprocessors.format_timestamps (a value whose column
+    header headers[i] is a key becomes datetime.fromisoformat(v).strftime(format); values
+    that fail stay; with tuples_only's empty headers any row raises IndexError "list index
+    out of range").
+    (c) The format's own steps and adapter, from cli_helpers.tabular_output, with data
+    passed as list(data) to the adapter:
+    - "vertical": null step, preprocessors.convert_to_string, header and row styling, then
+      vertical_table_adapter.adapter(data, headers, sep_title="RECORD {n}", sep_character="-",
+      sep_length=(1, 25)): one item per row, "-[ RECORD n ]-------------------------\n"
+      followed by "header.ljust(longest header length) | value" lines joined by "\n".
+    - "csv", "csv-tab", "csv-noheader", "csv-tab-noheader": null step,
+      preprocessors.bytes_to_string, then delimited_output_adapter.adapter(data, headers,
+      table_format=F), passing dialect="unix" only when F is exactly "csv" (every field
+      quoted); the other three keep the csv module's default excel dialect (a field is quoted
+      only when it contains the delimiter, a quote or a line break); quotes are doubled, there
+      is no line terminator, and a header item comes first unless the name contains
+      "noheader".
+    - "tsv", "tsv_noheader": null step, bytes_to_string, convert_to_string, then
+      tsv_output_adapter.adapter(data, headers, table_format=F).
+    - "jsonl", "jsonl_escaped": bytes_to_string, then json_output_adapter.adapter(data,
+      headers, table_format=F).
+    - "sql-insert", "sql-update", "sql-update-1", "sql-update-2": (5).
+    - every other name (the tabulate formats): null step, convert_to_string,
+      preprocessors.truncate_string(data, headers, max_field_width=K["max_field_width"]),
+      header and row styling, preprocessors.escape_newlines unless
+      tabulate.multiline_formats.get(F) is truthy (cli_helpers.tabular_output registers its
+      extra formats there on import), then separator styling around
+      tabulate_adapter.adapter(data, headers, table_format=F, preserve_whitespace=True,
+      disable_numparse=True); one item per line.
+    Null step: every value that is None becomes style_text(settings.missing_value,
+    style.null, style.base, style.true_color) when settings.style is Some(style), else
+    settings.missing_value (csv and tsv included). Header and row styling, only when
+    settings.style is Some(style): when style.header != "" every header h becomes
+    style_text(h, style.header, style.base, style.true_color); when style.odd_row or
+    style.even_row is non-empty every field of the i-th row (i counted from 1) becomes
+    style_text(field, style.odd_row when i is odd else style.even_row, style.base,
+    style.true_color). Separator styling, only when settings.style is Some(style) and F is in
+    tabulate_adapter.supported_table_formats: for the duration of the adapter call
+    tabulate._table_formats[F] is replaced by a tabulate.TableFormat whose fields of exact
+    class tabulate.Line or tabulate.DataRow have each element s replaced by style_text(s,
+    style.table_separator, style.base, style.true_color), other fields kept; restore the
+    original entry afterwards (try/finally).
+    
+    5. sql formats (pgcli packages/formatter/sqlformatter.py), with no own steps: values are
+    the Python values after (b) with None kept. Table name: when
+    real.pgcli.parseutils.extract_tables(settings.query) is non-empty and its first entry t
+    has t.schema = Some(s) with s non-empty, s + "." + t.name; with no or empty schema,
+    t.name; with no entry, "DUAL". Literal of a value v: None -> "NULL", bytes -> "X'" +
+    v.hex() + "'", anything else -> "'" + str(v) + "'" (no escaping). "sql-insert" items:
+    'INSERT INTO "<table>" ("' + '", "'.join(headers) + '") VALUES', then per row prefix +
+    "(" + ", ".join(literals) + ")" with prefix "  " for the first row and ", " after, then
+    ";". "sql-update" (keys 1), "sql-update-1" (keys 1), "sql-update-2" (keys 2), per row:
+    'UPDATE "<table>" SET', then for each column i from keys on prefix + '"' + headers[i] +
+    '" = ' + literal(row[i]) with prefix "  " for the first and ", " after, then "WHERE " +
+    " AND ".join('"' + headers[i] + '" = ' + literal(row[i]) for i in range(keys)) + ";"
+    (headers[i] beyond the columns raises IndexError "list index out of range"). Write the
+    adapter as a top-level private generator function adapter(data, headers,
+    table_format, query) that receives the query as an argument.
+    
+    6. Explain mode. The Python rows are unpacked as in Python's [(value,)] = rows, which
+    accepts exactly one row holding exactly one value: zero rows or a row without values fail
+    "not enough values to unpack (expected 1, got 0)", n > 1 rows or values fail "too many
+    values to unpack (expected 1, got n)". A value that is not a str fails with str() of the
+    TypeError that json.loads(value) raises for it (its text ends with the offending type
+    name, e.g. "..., not int"). The section is the items
+    of visualize_explain_plans(value, w) with w = the max_width value when it is Some and
+    non-zero, else 100 (its text holds its items joined by "\n"; its error is returned as
+    is); zero items fails with message "". There is no auto-vertical fallback in explain
+    mode.
+    """
+
+fn style_text(text: Str, definition: Str, base: Str, true_color: Bool) -> Str:
+    doc """
+    Wrap text in the ANSI SGR sequences pygments 2.21 emits for a token whose style
+    definition is `definition` and whose root Token style is `base`, the way cli_helpers
+    utils.style_field does with pgcli's output style class: Terminal256Formatter when
+    true_color is false, TerminalTrueColorFormatter when it is true.
+    
+    Attributes start as color "", bgcolor "", bold, italic and underline false; apply the
+    whitespace-separated words of base, then those of definition, left to right: "bold",
+    "italic", "underline" set their flag and "nobold", "noitalic", "nounderline" clear it;
+    "bg:X" sets bgcolor to colorformat(X); "noinherit", "roman", "sans", "mono" and
+    "border:X" change nothing; any other word sets color to colorformat(word).
+    colorformat(X) is X when X is one of the 16 pygments ANSI color names
+    (pygments.style.ansicolors: ansiblack, ansired, ansigreen, ansiyellow, ansiblue,
+    ansimagenta, ansicyan, ansigray, ansibrightblack, ansibrightred, ansibrightgreen,
+    ansibrightyellow, ansibrightblue, ansibrightmagenta, ansibrightcyan, ansiwhite); the 6
+    characters after "#" when X is "#" plus 6 characters; the 3 characters after "#" each
+    doubled when X is "#" plus 3 characters ("#eee" -> "eeeeee"); X unchanged for
+    "transparent" and words starting with "var" or "calc"; any other word is ignored
+    (pygments rejects such a style when pgcli builds it).
+    
+    Sequences: construct pygments.formatters.terminal256.EscapeSequence(fg=fg, bg=bg,
+    bold=bold, underline=underline, italic=italic). 256 colors: fg is the ANSI name itself
+    when color is an ANSI name, Terminal256Formatter()._color_index(color) (the nearest
+    xterm-256 index, 0 for a non-hex value) when color is another non-empty value, else
+    None; bg likewise from bgcolor; on = color_string(), off = reset_string(). True color:
+    an ANSI name is first replaced by its hex digits from pygments.style._ansimap (ansigreen
+    -> "007f00"); fg is TerminalTrueColorFormatter()._color_tuple(color) (None for a non-hex
+    value) when color is non-empty, else None; bg likewise; on = true_color_string(), off =
+    reset_string(). Examples (ESC written \e): "#00ff5f bold" gives \e[38;5;47;01m and
+    \e[39;00m (true color \e[38;2;0;255;95;01m), "#808080" gives \e[38;5;244m and \e[39m,
+    "bold ansibrightred" gives \e[91;01m and \e[39;00m, "bg:#eee #111" gives
+    \e[38;5;233;48;5;255m and \e[39;49m, "italic" gives \e[03m and \e[00m, empty attributes
+    give no sequences.
+    
+    Result: text split on "\n"; each non-empty piece becomes on + piece + off, empty pieces
+    stay empty, and the pieces are joined again with "\n".
+    """
+
+    ensures ((definition == "" and base == "") => result == text)
+
+fn visualize_explain_plans(
+    plan_json: Str,
+    terminal_width: U32,
+) -> Result[FormattedOutput, OutputError]:
+    doc """
+    Render EXPLAIN (ANALYZE, COSTS, VERBOSE, BUFFERS, FORMAT JSON) output the way pgcli's
+    explain visualizer does (pgcli/pyev.py Visualizer with color on, used by
+    explain_output_formatter.py). Any exception (invalid JSON, a missing key, a division by
+    zero, textwrap's invalid width) yields Err(OutputError.Failed(message: str(exception))),
+    e.g. a missing key gives the quoted key such as "'Execution Time'".
+    
+    Decode plan_json with json.loads and iterate the decoded value (a list's elements; a
+    dict iterates its keys). The result is FormattedOutput(text="\n".join(items),
+    items=len(items)). For each element E produce one item: plan = E.pop("Plan") and
+    explain = E (the rest of E); process the plan, mark outliers, generate the lines and
+    join them with "\n". Node values are read as node["Key"] where the text says so (a
+    missing key raises KeyError) and with .get where it says "if present".
+    
+    Colors come from click.style: bb(s) = click.style(s, fg="bright_black"), white(s) =
+    click.style(s, fg="white"), tag(s) = click.style(s, fg="white", bg="red"), green,
+    yellow, red and cyan likewise with that fg (click.style styles "" too, giving
+    "\x1b[90m\x1b[0m").
+    
+    Processing, pre-order (a node before its children, children in order), per node N:
+    estimate: factor = 0, direction = "Under"; unless N["Plan Rows"] == N["Actual Rows"]: if
+    Plan Rows != 0, factor = Actual Rows / Plan Rows; then if factor < 10: factor = 0,
+    direction = "Over", and if Actual Rows != 0, factor = Plan Rows / Actual Rows. Actuals:
+    duration = N["Actual Total Time"], cost = N["Total Cost"]; for each child C in
+    N.get("Plans", []) whose C["Node Type"] != "CTEScan": duration -= C["Actual Total Time"],
+    cost -= C["Total Cost"] (the children's raw values); cost = 0 if cost < 0; duration =
+    duration * N["Actual Loops"]. Maximums: for (key, value) in ("Max Rows", Actual Rows),
+    ("Max Cost", cost), ("Max Duration", duration), ("Total Cost", cost): explain[key] =
+    value when explain.get(key) is missing or falsy, or when explain[key] < value. After all
+    nodes: outliers per node, costliest = cost == explain["Max Cost"], largest = Actual Rows
+    == explain["Max Rows"], slowest = duration == explain["Max Duration"].
+    
+    Formatting helpers. dur(v): v < 1 -> green("<1 ms"); v < 100 -> green("%.2f ms" % v); v <
+    1000 -> yellow("%.2f ms" % v); v < 60000 -> red("%.2f s" % (v / 1000.0)); else red("%.2f
+    m" % (v / 60000.0)). intcomma(v): int(v) unless v is a str, then str, then insert ","
+    thousands separators by repeating re.sub(r"^(-?\d+)(\d{3})", r"\g<1>,\g<2>", s) until it
+    stops changing ("123448.48" as a number -> "123,448"). wrap(text, cols) is [text] when
+    cols == 0, else textwrap.wrap(text, cols). desc(type) is the entry for the node type in
+    EXPLAIN_NODE_DESCRIPTIONS (a JSON object) or "Not found : " + type.
+    
+    Lines: "○ Total Cost: " + intcomma(explain["Total Cost"]), "○ Planning Time: " +
+    dur(explain["Planning Time"]), "○ Execution Time: " + dur(explain["Execution Time"]),
+    bb("┬"), then node_lines(plan, prefix "", width terminal_width, last = the root has
+    exactly one child in "Plans").
+    
+    node_lines(N, prefix, width, last), where out(p, s) appends bb(p) + s:
+    out(prefix, bb("│")); out(prefix, bb(("└" if last else "├") + "─⌠") + " " +
+    white(N["Node Type"]) + details + " " + tags), where details = bb(" [" + ", ".join(parts) +
+    "]") for the truthy values among N.get("Scan Direction") and N.get("Strategy") in that
+    order ("" when none) and tags = " ".join of tag("slowest") if slowest, tag("costliest") if
+    costliest, tag("largest") if largest, tag("bad estimate") if factor >= 100 (so a node
+    without tags keeps a trailing space). Then prefix2 = prefix + ("  " if last else "│ "),
+    p = prefix2 + "│ ", cols = width - len(p). For each line of wrap(desc(N["Node Type"]),
+    cols): out(p, bb(line)). If duration is truthy: out(p, "○ Duration: " + dur(duration) +
+    " (%.0f%%)" % (duration / explain["Execution Time"] * 100)). out(p, "○ Cost: " +
+    intcomma(cost) + " (%.0f%%)" % (cost / explain["Total Cost"] * 100)). out(p, "○ Rows: "
+    + intcomma(N["Actual Rows"])). Then with q = p + "  ", each if present and truthy, in this
+    order: "Join Type" -> out(q, join_type + " " + bb("join")); "Relation Name" -> out(q,
+    bb("on") + " " + str(N.get("Schema", "unknown")) + "." + relation); "Index Name" ->
+    out(q, bb("using") + " " + index); "Index Condition" -> out(q, bb("condition") + " " +
+    condition); "Filter" -> out(q, bb("filter") + " " + filter + " " + bb("[-" +
+    intcomma(N["Rows Removed by Filter"]) + " rows]")); "Hash Condition" -> out(q, bb("on") +
+    " " + condition); "CTE Name" -> out(q, "CTE " + name). If factor != 0: out(q, bb("rows")
+    + " " + direction + "estimated " + bb("by") + " " + "%.2f" % factor + "x"). If
+    N.get("Output", []) is non-empty: for index, line in enumerate(wrap(" + ".join(outputs),
+    cols)): out(prefix2, bb(terminator) + cyan(line)) where terminator is, for index 0, "⌡► "
+    when N has no children and "├►  " otherwise, for later indexes "   " without children and
+    "│  " with children. Finally node_lines(child, prefix2, width, last = it is the last
+    child) for each child in order. Values are inserted with str() ("%s").
+    """
+
+fn table_format_names() -> List[Str]:
+    doc """
+    The table format names pgcli accepts, in the order \T lists them:
+    TabularOutputFormatter().supported_formats of cli_helpers 2.15.1 after pgcli registered
+    its four sql formats. Exactly: vertical, csv, csv-tab, csv-noheader, csv-tab-noheader,
+    mediawiki, html, latex, latex_booktabs, textile, moinmoin, jira, ascii, ascii_escaped,
+    plain, simple, minimal, grid, fancy_grid, pipe, orgtbl, psql, psql_unicode, rst, github,
+    double, mysql, mysql_unicode, mysql_heavy, tsv, tsv_noheader, jsonl, jsonl_escaped,
+    sql-insert, sql-update, sql-update-1, sql-update-2.
+    """
+
+    ensures result.len == 37
+
+fn duration_in_words(seconds: F64) -> Str:
+    doc """
+    pgcli main.duration_in_words. When seconds is 0 the result is "0 seconds". Otherwise
+    hours, rest = divmod(seconds, 3600) and minutes, secs = divmod(rest, 60) (Python float
+    divmod); the parts, joined by " ", are: f"{int(hours)} hours" when hours > 1, "1 hour"
+    when hours == 1; f"{int(minutes)} minutes" when minutes > 1, "1 minute" when minutes ==
+    1; f"{int(secs)} seconds" when secs >= 2, "1 second" when secs >= 1, otherwise when secs
+    is non-zero f"{round(secs, 3)} second" (0.2 -> "0.2 second", 0.0004 -> "0.0 second").
+    """
+
+fn timing_report(total_seconds: F64, execution_seconds: F64) -> Str:
+    doc """
+    The timing line pgcli prints after a command when \timing is on. When total_seconds > 1:
+    "Time: %0.03fs (%s), executed in: %0.03fs (%s)" % (total_seconds,
+    duration_in_words(total_seconds), execution_seconds,
+    duration_in_words(execution_seconds)); otherwise "Time: %0.03fs" % total_seconds.
+    """
+
+    ensures (starts_with(result, "Time: "))
+
+scenario format_output_mirrors_test_main:
+    call rows1 = result_rows_from_cells(
+        List(List(Cell.Text(value: "abc"), Cell.Text(value: "def"))),
+    )
+    call out1 = format_output(
+        Option.Some(value: "Title"),
+        Option.Some(
+            value: ResultSet(
+                columns: List("head1", "head2"),
+                type_names: List("", ""),
+                rows: rows1,
+                rowcount: -1,
+            ),
+        ),
+        Option.Some(value: "test status"),
+        OutputSettings(
+            table_format: "psql",
+            decimal_format: "d",
+            float_format: "g",
+            column_date_formats: Map(),
+            max_field_width: Option.Some(value: 500),
+        ),
+        false,
+    )
+    assert out1 == Result.Ok(
+        value: FormattedOutput(
+            text: "Title\n+-------+-------+\n| head1 | head2 |\n|-------+-------|\n| abc   | def   |\n+-------+-------+\ntest status",
+            items: 7,
+        ),
+    )
+    call rows2 = result_rows_from_cells(
+        List(
+            List(
+                Cell.Text(value: "name1"),
+                Cell.Text(value: "2024-12-13T18:32:22"),
+                Cell.Text(value: "2024-12-13T19:32:22"),
+                Cell.Text(value: "2024-12-13T20:32:22"),
+            ),
+            List(
+                Cell.Text(value: "name2"),
+                Cell.Text(value: "2025-02-13T02:32:22"),
+                Cell.Text(value: "2025-02-13T02:32:22"),
+                Cell.Text(value: "2025-02-13T02:32:22"),
+            ),
+        ),
+    )
+    call out2 = format_output(
+        Option.Some(value: "Title"),
+        Option.Some(
+            value: ResultSet(
+                columns: List("name", "date_col", "datetime_col", "unchanged_col"),
+                type_names: List("", "", "", ""),
+                rows: rows2,
+                rowcount: -1,
+            ),
+        ),
+        Option.Some(value: "test status"),
+        OutputSettings(
+            table_format: "psql",
+            column_date_formats: Map("date_col": "%Y-%m-%d", "datetime_col": "%I:%M:%S %m/%d/%y"),
+            max_field_width: Option.Some(value: 500),
+        ),
+        false,
+    )
+    assert out2 == Result.Ok(
+        value: FormattedOutput(
+            text: "Title\n+-------+------------+-------------------+---------------------+\n| name  | date_col   | datetime_col      | unchanged_col       |\n|-------+------------+-------------------+---------------------|\n| name1 | 2024-12-13 | 07:32:22 12/13/24 | 2024-12-13T20:32:22 |\n| name2 | 2025-02-13 | 02:32:22 02/13/25 | 2025-02-13T02:32:22 |\n+-------+------------+-------------------+---------------------+\ntest status",
+            items: 8,
+        ),
+    )
+
+scenario format_output_arrays:
+    call rows1 = result_rows_from_cells(
+        List(
+            List(
+                Cell.Array(
+                    items: List(
+                        Cell.Integer(value: 1),
+                        Cell.Integer(value: 2),
+                        Cell.Integer(value: 3),
+                    ),
+                ),
+                Cell.Array(
+                    items: List(
+                        Cell.Array(items: List(Cell.Decimal(value: "1"), Cell.Decimal(value: "2"))),
+                        Cell.Array(items: List(Cell.Decimal(value: "3"), Cell.Decimal(value: "4"))),
+                    ),
+                ),
+                Cell.Array(
+                    items: List(
+                        Cell.Text(value: "å"),
+                        Cell.Text(value: "魚"),
+                        Cell.Text(value: "текст"),
+                    ),
+                ),
+            ),
+            List(Cell.Array(items: List()), Cell.Null, Cell.Array(items: List(Cell.Null))),
+        ),
+    )
+    call out1 = format_output(
+        Option.Some(value: ""),
+        Option.Some(
+            value: ResultSet(
+                columns: List("bigint_array", "nested_numeric_array", "配列"),
+                type_names: List("", "", ""),
+                rows: rows1,
+                rowcount: 2,
+            ),
+        ),
+        Option.Some(value: "SELECT 2"),
+        OutputSettings(
+            table_format: "psql",
+            decimal_format: "d",
+            float_format: "g",
+            column_date_formats: Map(),
+            max_field_width: Option.Some(value: 500),
+        ),
+        false,
+    )
+    assert out1 == Result.Ok(
+        value: FormattedOutput(
+            text: "+--------------+----------------------+--------------+\n| bigint_array | nested_numeric_array | 配列         |\n|--------------+----------------------+--------------|\n| {1,2,3}      | {{1,2},{3,4}}        | {å,魚,текст} |\n| {}           | <null>               | {<null>}     |\n+--------------+----------------------+--------------+\nSELECT 2",
+            items: 7,
+        ),
+    )
+
+scenario format_output_tuples_only:
+    call rows1 = result_rows_from_cells(
+        List(
+            List(Cell.Integer(value: 1), Cell.Text(value: "one")),
+            List(Cell.Integer(value: 2), Cell.Text(value: "two")),
+        ),
+    )
+    call out1 = format_output(
+        Option.Some(value: "Title"),
+        Option.Some(
+            value: ResultSet(
+                columns: List("a", "b"),
+                type_names: List("", ""),
+                rows: rows1,
+                rowcount: -1,
+            ),
+        ),
+        Option.Some(value: "SELECT 2"),
+        OutputSettings(
+            table_format: "psql",
+            column_date_formats: Map(),
+            max_field_width: Option.Some(value: 500),
+            tuples_only: true,
+        ),
+        false,
+    )
+    assert out1 == Result.Ok(value: FormattedOutput(text: "1  one\n2  two", items: 2))
+
+scenario format_output_number_formats:
+    call rows1 = result_rows_from_cells(
+        List(
+            List(
+                Cell.Integer(value: 1),
+                Cell.Float(value: 1.5),
+                Cell.Decimal(value: "2.50"),
+                Cell.Array(items: List(Cell.Integer(value: 1), Cell.Null)),
+                Cell.Boolean(value: true),
+            ),
+            List(
+                Cell.Integer(value: 1234567),
+                Cell.Float(value: 10.125),
+                Cell.Decimal(value: "10"),
+                Cell.Array(items: List()),
+                Cell.Null,
+            ),
+        ),
+    )
+    call out1 = format_output(
+        Option.Some(value: ""),
+        Option.Some(
+            value: ResultSet(
+                columns: List("i", "f", "d", "arr", "b"),
+                type_names: List("", "", "", "", ""),
+                rows: rows1,
+                rowcount: 2,
+            ),
+        ),
+        Option.Some(value: "SELECT 2"),
+        OutputSettings(
+            table_format: "psql",
+            decimal_format: ",",
+            column_date_formats: Map(),
+            max_field_width: Option.Some(value: 500),
+        ),
+        false,
+    )
+    assert out1 == Result.Ok(
+        value: FormattedOutput(
+            text: "+---------+--------+------+-----------+--------+\n| i       | f      | d    | arr       | b      |\n|---------+--------+------+-----------+--------|\n| 1       | 1.5    | 2.50 | [1, None] | True   |\n| 1234567 | 10.125 | 10   | []        | <null> |\n+---------+--------+------+-----------+--------+\nSELECT 2",
+            items: 7,
+        ),
+    )
+
+scenario format_output_other_formats:
+    call rows1 = result_rows_from_cells(
+        List(
+            List(
+                Cell.Integer(value: 1),
+                Cell.Null,
+                Cell.Text(value: "say \"hi\"\nbye"),
+                Cell.Text(value: "a\tb"),
+            ),
+        ),
+    )
+    call out1 = format_output(
+        Option.Some(value: ""),
+        Option.Some(
+            value: ResultSet(
+                columns: List("id", "n", "note", "tab"),
+                type_names: List("", "", "", ""),
+                rows: rows1,
+                rowcount: 1,
+            ),
+        ),
+        Option.Some(value: "SELECT 1"),
+        OutputSettings(
+            table_format: "csv",
+            column_date_formats: Map(),
+            max_field_width: Option.Some(value: 500),
+        ),
+        false,
+    )
+    assert out1 == Result.Ok(
+        value: FormattedOutput(
+            text: "\"id\",\"n\",\"note\",\"tab\"\n\"1\",\"<null>\",\"say \"\"hi\"\"\nbye\",\"a\tb\"\nSELECT 1",
+            items: 3,
+        ),
+    )
+    call out2 = format_output(
+        Option.Some(value: ""),
+        Option.Some(
+            value: ResultSet(
+                columns: List("id", "n", "note", "tab"),
+                type_names: List("", "", "", ""),
+                rows: rows1,
+                rowcount: 1,
+            ),
+        ),
+        Option.Some(value: "SELECT 1"),
+        OutputSettings(
+            table_format: "csv-noheader",
+            column_date_formats: Map(),
+            max_field_width: Option.Some(value: 500),
+        ),
+        false,
+    )
+    assert out2 == Result.Ok(
+        value: FormattedOutput(text: "1,<null>,\"say \"\"hi\"\"\nbye\",a\tb\nSELECT 1", items: 2),
+    )
+
+scenario format_output_status_and_failures:
+    call rows1 = result_rows_from_cells(List(List(Cell.Text(value: "public"))))
+    call out1 = format_output(
+        Option.Some(value: ""),
+        Option.Some(
+            value: ResultSet(
+                columns: List("search_path"),
+                type_names: List(""),
+                rows: rows1,
+                rowcount: 1,
+            ),
+        ),
+        Option.Some(value: "SHOW"),
+        OutputSettings(
+            table_format: "psql",
+            column_date_formats: Map(),
+            max_field_width: Option.Some(value: 500),
+        ),
+        false,
+    )
+    assert out1 == Result.Ok(
+        value: FormattedOutput(
+            text: "+-------------+\n| search_path |\n|-------------|\n| public      |\n+-------------+\nSHOW 1",
+            items: 6,
+        ),
+    )
+    call rows2 = result_rows_from_cells(List())
+    call out2 = format_output(
+        Option.Some(value: ""),
+        Option.Some(
+            value: ResultSet(columns: List("a"), type_names: List(""), rows: rows2, rowcount: -1),
+        ),
+        Option.Some(value: "SELECT 0"),
+        OutputSettings(
+            table_format: "psql",
+            column_date_formats: Map(),
+            max_field_width: Option.Some(value: 500),
+        ),
+        false,
+    )
+    assert out2 == Result.Ok(value: FormattedOutput(text: "SELECT 0", items: 1))
+
+scenario format_output_sql_formats:
+    call rows1 = result_rows_from_cells(
+        List(
+            List(
+                Cell.Integer(value: 1),
+                Cell.Text(value: "Jackson"),
+                Cell.Text(value: "jackson_test@gmail.com"),
+                Cell.Text(value: "132454789"),
+                Cell.Null,
+                Cell.Text(value: "2022-09-09 19:44:32.712343+08"),
+                Cell.Text(value: "2022-09-09 19:44:32.712343+08"),
+            ),
+        ),
+    )
+    call out1 = format_output(
+        Option.Some(value: ""),
+        Option.Some(
+            value: ResultSet(
+                columns: List(
+                    "id",
+                    "name",
+                    "email",
+                    "phone",
+                    "description",
+                    "created_at",
+                    "updated_at",
+                ),
+                type_names: List("", "", "", "", "", "", ""),
+                rows: rows1,
+                rowcount: 1,
+            ),
+        ),
+        Option.Some(value: "SELECT 1"),
+        OutputSettings(
+            table_format: "sql-insert",
+            column_date_formats: Map(),
+            max_field_width: Option.Some(value: 500),
+            query: "SELECT * FROM \"user\";",
+        ),
+        false,
+    )
+    assert out1 == Result.Ok(
+        value: FormattedOutput(
+            text: "INSERT INTO \"user\" (\"id\", \"name\", \"email\", \"phone\", \"description\", \"created_at\", \"updated_at\") VALUES\n  ('1', 'Jackson', 'jackson_test@gmail.com', '132454789', NULL, '2022-09-09 19:44:32.712343+08', '2022-09-09 19:44:32.712343+08')\n;\nSELECT 1",
+            items: 4,
+        ),
+    )
+
+scenario format_output_colored:
+    call rows1 = result_rows_from_cells(
+        List(
+            List(Cell.Integer(value: 1), Cell.Null, Cell.Text(value: "x\ny")),
+            List(Cell.Integer(value: 22), Cell.Text(value: "b"), Cell.Text(value: "z")),
+        ),
+    )
+    call out1 = format_output(
+        Option.Some(value: "T"),
+        Option.Some(
+            value: ResultSet(
+                columns: List("a", "b", "c"),
+                type_names: List("", "", ""),
+                rows: rows1,
+                rowcount: 2,
+            ),
+        ),
+        Option.Some(value: "SELECT 2"),
+        OutputSettings(
+            table_format: "psql",
+            column_date_formats: Map(),
+            max_field_width: Option.Some(value: 500),
+            style: Option.Some(value: OutputStyle()),
+        ),
+        false,
+    )
+    assert out1 == Result.Ok(
+        value: FormattedOutput(
+            text: "T\n+----+--------+---+\n| \u001b[38;5;47;01ma\u001b[39;00m  | \u001b[38;5;47;01mb\u001b[39;00m      | \u001b[38;5;47;01mc\u001b[39;00m |\n|----+--------+---|\n| 1  | \u001b[38;5;244m<null>\u001b[39m | x |\n|    |        | y |\n| 22 | b      | z |\n+----+--------+---+\nSELECT 2",
+            items: 9,
+        ),
+    )
+    call out2 = format_output(
+        Option.Some(value: "T"),
+        Option.Some(
+            value: ResultSet(
+                columns: List("a", "b", "c"),
+                type_names: List("", "", ""),
+                rows: rows1,
+                rowcount: 2,
+            ),
+        ),
+        Option.Some(value: "SELECT 2"),
+        OutputSettings(
+            table_format: "psql",
+            column_date_formats: Map(),
+            max_field_width: Option.Some(value: 500),
+            style: Option.Some(
+                value: OutputStyle(
+                    header: "bold ansibrightred",
+                    odd_row: "bg:#eee #111",
+                    even_row: "ansigreen underline",
+                    null: "italic",
+                ),
+            ),
+        ),
+        false,
+    )
+    assert out2 == Result.Ok(
+        value: FormattedOutput(
+            text: "T\n+----+--------+---+\n| \u001b[91;01ma\u001b[39;00m  | \u001b[91;01mb\u001b[39;00m      | \u001b[91;01mc\u001b[39;00m |\n|----+--------+---|\n| \u001b[38;5;233;48;5;255m1\u001b[39;49m  | \u001b[38;5;233;48;5;255m\u001b[03m<null>\u001b[00m\u001b[39;49m | \u001b[38;5;233;48;5;255mx\u001b[39;49m |\n|    |        | \u001b[38;5;233;48;5;255my\u001b[39;49m |\n| \u001b[32;04m22\u001b[39;00m | \u001b[32;04mb\u001b[39;00m      | \u001b[32;04mz\u001b[39;00m |\n+----+--------+---+\nSELECT 2",
+            items: 9,
+        ),
+    )
+
+scenario format_output_explain_mode:
+    call rows1 = result_rows_from_cells(
+        List(
+            List(
+                Cell.Text(
+                    value: "[{\"Plan\":{\"Node Type\":\"Result\",\"Total Cost\":0.01,\"Plan Rows\":1,\"Actual Total Time\":0.001,\"Actual Rows\":1,\"Actual Loops\":1,\"Output\":[\"1\"]},\"Planning Time\":0.046,\"Execution Time\":0.027}]",
+                ),
+            ),
+        ),
+    )
+    call out1 = format_output(
+        Option.Some(value: ""),
+        Option.Some(
+            value: ResultSet(
+                columns: List("QUERY PLAN"),
+                type_names: List(""),
+                rows: rows1,
+                rowcount: 1,
+            ),
+        ),
+        Option.Some(value: "EXPLAIN"),
+        OutputSettings(
+            table_format: "psql",
+            column_date_formats: Map(),
+            max_field_width: Option.Some(value: 500),
+        ),
+        true,
+    )
+    assert out1 == Result.Ok(
+        value: FormattedOutput(
+            text: "○ Total Cost: 0\n○ Planning Time: \u001b[32m<1 ms\u001b[0m\n○ Execution Time: \u001b[32m<1 ms\u001b[0m\n\u001b[90m┬\u001b[0m\n\u001b[90m\u001b[0m\u001b[90m│\u001b[0m\n\u001b[90m\u001b[0m\u001b[90m├─⌠\u001b[0m \u001b[37mResult\u001b[0m \u001b[37m\u001b[41mslowest\u001b[0m \u001b[37m\u001b[41mcostliest\u001b[0m \u001b[37m\u001b[41mlargest\u001b[0m\n\u001b[90m│ │ \u001b[0m\u001b[90mReturns result\u001b[0m\n\u001b[90m│ │ \u001b[0m○ Duration: \u001b[32m<1 ms\u001b[0m (4%)\n\u001b[90m│ │ \u001b[0m○ Cost: 0 (100%)\n\u001b[90m│ │ \u001b[0m○ Rows: 1\n\u001b[90m│ \u001b[0m\u001b[90m⌡► \u001b[0m\u001b[36m1\u001b[0m\nEXPLAIN 1",
+            items: 2,
+        ),
+    )
+
+scenario explain_plan_visualizer:
+    call plan1 = visualize_explain_plans("[{\"Plan\":{\"Node Type\":\"Nested Loop\",\"Join Type\":\"Left\",\"Total Cost\":123456.78,\"Plan Rows\":10,\"Actual Total Time\":2500.5,\"Actual Rows\":5000,\"Actual Loops\":1,\"Output\":[\"x.alpha_column_1\",\"x.alpha_column_2\",\"x.alpha_column_3\",\"x.alpha_column_4\",\"x.alpha_column_5\",\"x.alpha_column_6\",\"x.alpha_column_7\",\"y.b\"],\"Plans\":[{\"Node Type\":\"Index Scan\",\"Scan Direction\":\"Forward\",\"Index Name\":\"x_pkey\",\"Index Condition\":\"(x.a = 1)\",\"Relation Name\":\"x\",\"Total Cost\":8.3,\"Plan Rows\":1,\"Actual Total Time\":150.25,\"Actual Rows\":1,\"Actual Loops\":3,\"Plans\":[{\"Node Type\":\"Materialize\",\"Total Cost\":0,\"Plan Rows\":0,\"Actual Total Time\":0,\"Actual Rows\":0,\"Actual Loops\":1}]},{\"Node Type\":\"CTEScan\",\"CTE Name\":\"w\",\"Hash Condition\":\"(y.b = w.b)\",\"Total Cost\":20,\"Plan Rows\":1000,\"Actual Total Time\":70000,\"Actual Rows\":50,\"Actual Loops\":1,\"Filter\":\"(y.b > 0)\",\"Rows Removed by Filter\":12345,\"Output\":[\"w.beta_column_1\",\"w.beta_column_2\",\"w.beta_column_3\",\"w.beta_column_4\",\"w.beta_column_5\",\"w.beta_column_6\",\"w.beta_column_7\"]}]},\"Planning Time\":0.5,\"Execution Time\":75000}]", 100)
+    assert plan1 == Result.Ok(
+        value: FormattedOutput(
+            text: "○ Total Cost: 123,448\n○ Planning Time: \u001b[32m<1 ms\u001b[0m\n○ Execution Time: \u001b[31m1.25 m\u001b[0m\n\u001b[90m┬\u001b[0m\n\u001b[90m\u001b[0m\u001b[90m│\u001b[0m\n\u001b[90m\u001b[0m\u001b[90m├─⌠\u001b[0m \u001b[37mNested Loop\u001b[0m \u001b[37m\u001b[41mcostliest\u001b[0m \u001b[37m\u001b[41mlargest\u001b[0m \u001b[37m\u001b[41mbad estimate\u001b[0m\n\u001b[90m│ │ \u001b[0m\u001b[90mMerges two record sets by looping through every record in the first set and trying to find a\u001b[0m\n\u001b[90m│ │ \u001b[0m\u001b[90mmatch in the second set. All matching records are returned.\u001b[0m\n\u001b[90m│ │ \u001b[0m○ Duration: \u001b[31m2.35 s\u001b[0m (3%)\n\u001b[90m│ │ \u001b[0m○ Cost: 123,448 (100%)\n\u001b[90m│ │ \u001b[0m○ Rows: 5,000\n\u001b[90m│ │   \u001b[0mLeft \u001b[90mjoin\u001b[0m\n\u001b[90m│ │   \u001b[0m\u001b[90mrows\u001b[0m Underestimated \u001b[90mby\u001b[0m 500.00x\n\u001b[90m│ \u001b[0m\u001b[90m├►  \u001b[0m\u001b[36mx.alpha_column_1 + x.alpha_column_2 + x.alpha_column_3 + x.alpha_column_4 + x.alpha_column_5 +\u001b[0m\n\u001b[90m│ \u001b[0m\u001b[90m│  \u001b[0m\u001b[36mx.alpha_column_6 + x.alpha_column_7 + y.b\u001b[0m\n\u001b[90m│ \u001b[0m\u001b[90m│\u001b[0m\n\u001b[90m│ \u001b[0m\u001b[90m├─⌠\u001b[0m \u001b[37mIndex Scan\u001b[0m\u001b[90m [Forward]\u001b[0m \n\u001b[90m│ │ │ \u001b[0m\u001b[90mFinds relevant records based on an Index. Index Scans perform 2 read operations: one to read\u001b[0m\n\u001b[90m│ │ │ \u001b[0m\u001b[90mthe index and another to read the actual value from the table.\u001b[0m\n\u001b[90m│ │ │ \u001b[0m○ Duration: \u001b[33m450.75 ms\u001b[0m (1%)\n\u001b[90m│ │ │ \u001b[0m○ Cost: 8 (0%)\n\u001b[90m│ │ │ \u001b[0m○ Rows: 1\n\u001b[90m│ │ │   \u001b[0m\u001b[90mon\u001b[0m unknown.x\n\u001b[90m│ │ │   \u001b[0m\u001b[90musing\u001b[0m x_pkey\n\u001b[90m│ │ │   \u001b[0m\u001b[90mcondition\u001b[0m (x.a = 1)\n\u001b[90m│ │ \u001b[0m\u001b[90m│\u001b[0m\n\u001b[90m│ │ \u001b[0m\u001b[90m└─⌠\u001b[0m \u001b[37mMaterialize\u001b[0m \n\u001b[90m│ │   │ \u001b[0m\u001b[90mNot found : Materialize\u001b[0m\n\u001b[90m│ │   │ \u001b[0m○ Cost: 0 (0%)\n\u001b[90m│ │   │ \u001b[0m○ Rows: 0\n\u001b[90m│ \u001b[0m\u001b[90m│\u001b[0m\n\u001b[90m│ \u001b[0m\u001b[90m└─⌠\u001b[0m \u001b[37mCTEScan\u001b[0m \u001b[37m\u001b[41mslowest\u001b[0m\n\u001b[90m│   │ \u001b[0m\u001b[90mPerforms a sequential scan of Common Table Expression (CTE) query results. Note that results\u001b[0m\n\u001b[90m│   │ \u001b[0m\u001b[90mof a CTE are materialized (calculated and temporarily stored).\u001b[0m\n\u001b[90m│   │ \u001b[0m○ Duration: \u001b[31m1.17 m\u001b[0m (93%)\n\u001b[90m│   │ \u001b[0m○ Cost: 20 (0%)\n\u001b[90m│   │ \u001b[0m○ Rows: 50\n\u001b[90m│   │   \u001b[0m\u001b[90mfilter\u001b[0m (y.b > 0) \u001b[90m[-12,345 rows]\u001b[0m\n\u001b[90m│   │   \u001b[0m\u001b[90mon\u001b[0m (y.b = w.b)\n\u001b[90m│   │   \u001b[0mCTE w\n\u001b[90m│   │   \u001b[0m\u001b[90mrows\u001b[0m Overestimated \u001b[90mby\u001b[0m 20.00x\n\u001b[90m│   \u001b[0m\u001b[90m⌡► \u001b[0m\u001b[36mw.beta_column_1 + w.beta_column_2 + w.beta_column_3 + w.beta_column_4 + w.beta_column_5 +\u001b[0m\n\u001b[90m│   \u001b[0m\u001b[90m   \u001b[0m\u001b[36mw.beta_column_6 + w.beta_column_7\u001b[0m",
+            items: 1,
+        ),
+    )
+    call plan2 = visualize_explain_plans("[{\"Plan\":{\"Node Type\":\"Result\",\"Total Cost\":1,\"Plan Rows\":1,\"Actual Rows\":1,\"Actual Total Time\":0.5,\"Actual Loops\":1}}]", 100)
+    assert plan2 == Result.Err(error: OutputError.Failed(message: "'Planning Time'"))
+
+scenario style_text_sequences:
+    call styled1 = style_text("a", "#00ff5f bold", "", false)
+    assert styled1 == "\u001b[38;5;47;01ma\u001b[39;00m"
+    call styled2 = style_text("a", "#00ff5f bold", "", true)
+    assert styled2 == "\u001b[38;2;0;255;95;01ma\u001b[39;00m"
+    call styled3 = style_text("x\n\ny", "bg:#eee #111", "", false)
+    assert (styled3 == "\u001b[38;5;233;48;5;255mx\u001b[39;49m\n\n\u001b[38;5;233;48;5;255my\u001b[39;49m")
+    call styled4 = style_text("+", "noinherit italic", "#d0d0d0 bold", false)
+    assert styled4 == "\u001b[38;5;252;01;03m+\u001b[39;00m"
+    call styled5 = style_text("q", "ansiwhite bg:ansiwhite underline", "", false)
+    assert styled5 == "\u001b[01;11;04mq\u001b[39;49;00m"
+    call styled6 = style_text("q", "transparent", "", true)
+    assert styled6 == "q"
+    call styled7 = style_text("q", "nobold ansigreen #abc", "bold", true)
+    assert styled7 == "\u001b[38;2;170;187;204mq\u001b[39m"
+
+scenario duration_words_mirror_test_main:
+    call words1 = duration_in_words(0.0)
+    assert words1 == "0 seconds"
+    call words2 = duration_in_words(0.0009)
+    assert words2 == "0.001 second"
+    call words3 = duration_in_words(0.0005)
+    assert words3 == "0.001 second"
+    call words4 = duration_in_words(0.0004)
+    assert words4 == "0.0 second"
+    call words5 = duration_in_words(0.2)
+    assert words5 == "0.2 second"
+
+scenario timing_reports:
+    call timing1 = timing_report(0.0123, 0.01)
+    assert timing1 == "Time: 0.012s"
+    call timing2 = timing_report(1.0, 0.5)
+    assert timing2 == "Time: 1.000s"
+    call timing3 = timing_report(75.25, 74.5)
+    assert (timing3 == "Time: 75.250s (1 minute 15 seconds), executed in: 74.500s (1 minute 14 seconds)")
+    call timing4 = timing_report(3725.0, 0.9996)
+    assert (timing4 == "Time: 3725.000s (1 hour 2 minutes 5 seconds), executed in: 1.000s (1.0 second)")
+
+scenario table_format_name_list:
+    call names = table_format_names()
+    assert names == List(
+        "vertical",
+        "csv",
+        "csv-tab",
+        "csv-noheader",
+        "csv-tab-noheader",
+        "mediawiki",
+        "html",
+        "latex",
+        "latex_booktabs",
+        "textile",
+        "moinmoin",
+        "jira",
+        "ascii",
+        "ascii_escaped",
+        "plain",
+        "simple",
+        "minimal",
+        "grid",
+        "fancy_grid",
+        "pipe",
+        "orgtbl",
+        "psql",
+        "psql_unicode",
+        "rst",
+        "github",
+        "double",
+        "mysql",
+        "mysql_unicode",
+        "mysql_heavy",
+        "tsv",
+        "tsv_noheader",
+        "jsonl",
+        "jsonl_escaped",
+        "sql-insert",
+        "sql-update",
+        "sql-update-1",
+        "sql-update-2",
+    )

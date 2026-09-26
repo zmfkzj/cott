@@ -1,0 +1,225 @@
+module real.pgcli.config
+
+const PGCLI_DEFAULT_CONFIG: Str = "# vi: ft=dosini\n[main]\n\n# Enables context sensitive auto-completion. If this is disabled, all\n# possible completions will be listed.\nsmart_completion = True\n\n# Enable auto suggestions (like Fish shell).\nauto_suggest = True\n\n# Display the completions in several columns. (More completions will be\n# visible.)\nwider_completion_menu = False\n\n# Do not create new connections for refreshing completions; Equivalent to\n# always running with the --single-connection flag.\nalways_use_single_connection = False\n\n# Multi-line mode allows breaking up the sql statements into multiple lines. If\n# this is set to True, then the end of the statements must have a semi-colon.\n# If this is set to False then sql statements can't be split into multiple\n# lines. End of line (return) is considered as the end of the statement.\nmulti_line = False\n\n# If multi_line_mode is set to \"psql\", in multi-line mode, [Enter] will execute\n# the current input if the input ends in a semicolon.\n# If multi_line_mode is set to \"safe\", in multi-line mode, [Enter] will always\n# insert a newline, and [Esc] [Enter] or [Alt]-[Enter] must be used to execute\n# a command.\nmulti_line_mode = psql\n\n# Destructive warning will alert you before executing a sql statement\n# that may cause harm to the database such as \"drop table\", \"drop database\",\n# \"shutdown\", \"delete\", or \"update\".\n# You can pass a list of destructive commands or leave it empty if you want to skip all warnings.\n# \"unconditional_update\" will warn you of update statements that don't have a where clause\ndestructive_warning = drop, shutdown, delete, truncate, alter, update, unconditional_update\n\n# When `destructive_warning` is on and the user declines to proceed with a\n# destructive statement, the current transaction (if any) is left untouched,\n# by default. When setting `destructive_warning_restarts_connection` to\n# \"True\", the connection to the server is restarted. In that case, the\n# transaction (if any) is rolled back.\ndestructive_warning_restarts_connection = False\n\n# When this option is on (and if `destructive_warning` is not empty),\n# destructive statements are not executed when outside of a transaction.\ndestructive_statements_require_transaction = False\n\n# Enables expand mode, which is similar to `\\x` in psql.\nexpand = False\n\n# Enables auto expand mode, which is similar to `\\x auto` in psql.\nauto_expand = False\n\n# Auto-retry queries on connection failures and other operational errors. If\n# False, will prompt to rerun the failed query instead of auto-retrying.\nauto_retry_closed_connection = True\n\n# If set to True, table suggestions will include a table alias\ngenerate_aliases = False\n\n# Path to a json file that specifies specific table aliases to use when generate_aliases is set to True\n# the format for this file should be:\n# {\n#     \"some_table_name\": \"desired_alias\",\n#     \"some_other_table_name\": \"another_alias\"\n# }\nalias_map_file =\n\n# log_file location.\n# In Unix/Linux: ~/.config/pgcli/log\n# In Windows: %USERPROFILE%\\AppData\\Local\\dbcli\\pgcli\\log\n# %USERPROFILE% is typically C:\\Users\\{username}\nlog_file = default\n\n# keyword casing preference. Possible values: \"lower\", \"upper\", \"auto\"\nkeyword_casing = auto\n\n# casing_file location.\n# In Unix/Linux: ~/.config/pgcli/casing\n# In Windows: %USERPROFILE%\\AppData\\Local\\dbcli\\pgcli\\casing\n# %USERPROFILE% is typically C:\\Users\\{username}\ncasing_file = default\n\n# If generate_casing_file is set to True and there is no file in the above\n# location, one will be generated based on usage in SQL/PLPGSQL functions.\ngenerate_casing_file = False\n\n# Casing of column headers based on the casing_file described above\ncase_column_headers = True\n\n# history_file location.\n# In Unix/Linux: ~/.config/pgcli/history\n# In Windows: %USERPROFILE%\\AppData\\Local\\dbcli\\pgcli\\history\n# %USERPROFILE% is typically C:\\Users\\{username}\nhistory_file = default\n\n# Default log level. Possible values: \"CRITICAL\", \"ERROR\", \"WARNING\", \"INFO\"\n# and \"DEBUG\". \"NONE\" disables logging.\nlog_level = INFO\n\n# Order of columns when expanding * to column list\n# Possible values: \"table_order\" and \"alphabetic\"\nasterisk_column_order = table_order\n\n# Whether to qualify with table alias/name when suggesting columns\n# Possible values: \"always\", \"never\" and \"if_more_than_one_table\"\nqualify_columns = if_more_than_one_table\n\n# When no schema is entered, only suggest objects in search_path\nsearch_path_filter = False\n\n# Default pager. See https://www.pgcli.com/pager for more information on settings.\n# By default 'PAGER' environment variable is used. If the pager is less, and the 'LESS'\n# environment variable is not set, then LESS='-SRXF' will be automatically set.\n# pager = less\n\n# Timing of sql statements and table rendering.\ntiming = True\n\n# Hide the query text when executing named queries (\\n <name>).\n# Only the query results will be displayed.\n# Can be toggled at runtime with \\nq command.\nhide_named_query_text = False\n\n# Show/hide the informational toolbar with function keymap at the footer.\nshow_bottom_toolbar = True\n\n# Table format. Possible values: psql, plain, simple, grid, fancy_grid, pipe,\n# ascii, double, github, orgtbl, rst, mediawiki, html, latex, latex_booktabs,\n# textile, moinmoin, jira, vertical, tsv, csv, sql-insert, sql-update,\n# sql-update-1, sql-update-2 (formatter with sql-* prefix can format query\n# output to executable insertion or updating sql).\n# Recommended: psql, fancy_grid and grid.\ntable_format = psql\n\n# Syntax Style. Possible values: manni, igor, xcode, vim, autumn, vs, rrt,\n# native, perldoc, borland, tango, emacs, friendly, monokai, paraiso-dark,\n# colorful, murphy, bw, pastie, paraiso-light, trac, default, fruity\nsyntax_style = default\n\n# Keybindings:\n# When Vi mode is enabled you can use modal editing features offered by Vi in the REPL.\n# When Vi mode is disabled emacs keybindings such as Ctrl-A for home and Ctrl-E\n# for end are available in the REPL.\nvi = False\n\n# Seconds to wait for a connection before giving up. Only applies when nothing\n# else specifies a timeout: an explicit --timeout on the command line wins, then\n# a connect_timeout in the connection string, then $PGCONNECT_TIMEOUT. Use 0 to\n# wait forever, which is libpq's own default (the OS then gives up on the TCP\n# connection after a few minutes).\nconnect_timeout = 30\n\n# Error handling\n# When one of multiple SQL statements causes an error, choose to either\n# continue executing the remaining statements, or stopping\n# Possible values \"STOP\" or \"RESUME\"\non_error = STOP\n\n# Set threshold for row limit. Use 0 to disable limiting.\nrow_limit = 1000\n\n# Truncate long text fields to this value for tabular display (does not apply to csv).\n# Leave unset to disable truncation. Example: \"max_field_width = \"\n# Be aware that formatting might get slow with values larger than 500 and tables with\n# lots of records.\nmax_field_width = 500\n\n# Skip intro on startup and goodbye on exit\nless_chatty = False\n\n# Show all Postgres error fields (as listed in\n# https://www.postgresql.org/docs/current/protocol-error-fields.html).\n# Can be toggled with \\v.\nverbose_errors = False\n\n# Postgres prompt\n# \\t - Current date and time\n# \\u - Username\n# \\h - Short hostname of the server (up to first '.')\n# \\H - Hostname of the server\n# \\d - Database name\n# \\p - Database port\n# \\i - Postgres PID\n# \\# - \"@\" sign if logged in as superuser, '>' in other case\n# \\n - Newline\n# \\T - Transaction status: '*' if in a valid transaction, '!' if in a failed transaction, '?' if disconnected, empty otherwise\n# \\dsn_alias - name of dsn connection string alias if -D option is used (empty otherwise)\n# \\x1b[...m - insert ANSI escape sequence\n# eg: prompt = '\\x1b[35m\\u@\\x1b[32m\\h:\\x1b[36m\\d>'\nprompt = '\\u@\\h:\\d> '\n\n# Number of lines to reserve for the suggestion menu\nmin_num_menu_lines = 4\n\n# Character used to left pad multi-line queries to match the prompt size.\nmultiline_continuation_char = ''\n\n# The string used in place of a null value.\nnull_string = '<null>'\n\n# manage pager on startup\nenable_pager = True\n\n# Use keyring to automatically save and load password in a secure manner\nkeyring = True\n\n# Automatically set the session time zone to the local time zone\n# If unset, uses the server's time zone, which is the Postgres default\nuse_local_timezone = True\n\n# Custom colors for the completion menu, toolbar, etc.\n[colors]\ncompletion-menu.completion.current = 'bg:#ffffff #000000'\ncompletion-menu.completion = 'bg:#008888 #ffffff'\ncompletion-menu.meta.completion.current = 'bg:#44aaaa #000000'\ncompletion-menu.meta.completion = 'bg:#448888 #ffffff'\ncompletion-menu.multi-column-meta = 'bg:#aaffff #000000'\nscrollbar.arrow = 'bg:#003333'\nscrollbar = 'bg:#00aaaa'\nselected = '#ffffff bg:#6666aa'\nsearch = '#ffffff bg:#4444aa'\nsearch.current = '#ffffff bg:#44aa44'\nbottom-toolbar = 'bg:#222222 #aaaaaa'\nbottom-toolbar.off = 'bg:#222222 #888888'\nbottom-toolbar.on = 'bg:#222222 #ffffff'\nsearch-toolbar = 'noinherit bold'\nsearch-toolbar.text = 'nobold'\nsystem-toolbar = 'noinherit bold'\narg-toolbar = 'noinherit bold'\narg-toolbar.text = 'nobold'\nbottom-toolbar.transaction.valid = 'bg:#222222 #00ff5f bold'\nbottom-toolbar.transaction.failed = 'bg:#222222 #ff005f bold'\n# These three values can be used to further refine the syntax highlighting.\n# They are commented out by default, since they have priority over the theme set\n# with the `syntax_style` setting and overriding its behavior can be confusing.\n# literal.string = '#ba2121'\n# literal.number = '#666666'\n# keyword = 'bold #008000'\n\n# style classes for colored table output\noutput.header = \"#00ff5f bold\"\noutput.odd-row = \"\"\noutput.even-row = \"\"\noutput.null = \"#808080\"\n\n# Named queries are queries you can execute by name.\n[named queries]\n# ver = \"SELECT version()\"\n\n# Here's where you can provide a list of connection string aliases.\n# You can use it by passing the -D option. `pgcli -D example_dsn`\n[alias_dsn]\n# example_dsn = postgresql://[user[:password]@][netloc][:port][/dbname]\n\n# Initial commands to execute when connecting to any database.\n[init-commands]\n# example = \"SET search_path TO myschema\"\n\n# Initial commands to execute when connecting to a DSN alias.\n[alias_dsn.init-commands]\n# example_dsn = \"SET search_path TO otherschema; SET timezone TO 'UTC'\"\n\n# Format for number representation\n# for decimal \"d\" - 12345678, \",d\" - 12,345,678\n# for float \"g\" - 123456.78, \",g\" - 123,456.78\n[data_formats]\ndecimal = \"\"\nfloat = \"\"\n\n# Per column formats for date/timestamp columns\n[column_date_formats]\n# use strftime format, e.g.\n# created = \"%Y-%m-%d\"\n\n# Per host ssh tunnel configuration\n[ssh tunnels]\n# ^example.*\\.host$ = myuser:mypasswd@my.tunnel.com:4000\n# .*\\.net = another.tunnel.com\n\n# Per dsn_alias ssh tunnel configuration\n[dsn ssh tunnels]\n# ^example_dsn$  = myuser:mypasswd@my.tunnel.com:4000\n"
+
+doc """
+Configuration failures. message is the text of the underlying error: the
+configobj parse error message (for example "Invalid line ('abc') (matched as
+neither section nor keyword) at line 3."), the configobj conversion message
+(for example 'Value "maybe" is neither True nor False'), Python's int()
+message (for example "invalid literal for int() with base 10: 'x'"), or the
+str() of an OSError.
+"""
+enum ConfigError:
+    Unreadable(path: Str, message: Str)
+    Invalid(message: Str)
+
+doc """
+One key of a configobj section, in file order. value is the configobj value
+with surrounding quotes removed; a configobj list value (comma separated,
+unquoted) is joined back with ", " only where a field says so.
+"""
+struct ConfigEntry:
+    name: Str
+    value: Str
+
+doc """
+One key of an init-commands section. commands holds the configobj value: a
+list value keeps its items in order, a single value is one item, an empty
+value is no item.
+"""
+struct CommandEntry:
+    name: Str
+    commands: List[Str]
+
+doc """
+The typed [main] section of the merged configuration, converted exactly as
+upstream pgcli reads each key. Booleans use configobj as_bool (case-insensitive
+true/false, yes/no, on/off, 1/0); integers use configobj as_int (Python int()).
+Strings are the raw values. destructive_warning is configobj as_list (a list
+value keeps its items, a single string becomes a one-item list).
+max_field_width is Nothing when the key is absent-and-empty, empty, or "none"
+(ignoring ASCII case), otherwise Some(max(3, abs(int(value)))); absent means
+the default 500. pager is "" when the key is absent (the default file keeps it
+commented out). hide_named_query_text and verbose_errors are false when absent.
+use_local_timezone is true when absent. prompt defaults to "\\u@\\h:\\d> ",
+multi_line_mode to "psql" and null_string to "<null>" when absent.
+on_error is the raw value upper-cased.
+"""
+struct MainSettings:
+    smart_completion: Bool
+    auto_suggest: Bool
+    wider_completion_menu: Bool
+    always_use_single_connection: Bool
+    multi_line: Bool
+    multi_line_mode: Str
+    destructive_warning: List[Str]
+    destructive_warning_restarts_connection: Bool
+    destructive_statements_require_transaction: Bool
+    expand: Bool
+    auto_expand: Bool
+    auto_retry_closed_connection: Bool
+    generate_aliases: Bool
+    alias_map_file: Str
+    log_file: Str
+    keyword_casing: Str
+    casing_file: Str
+    generate_casing_file: Bool
+    case_column_headers: Bool
+    history_file: Str
+    log_level: Str
+    asterisk_column_order: Str
+    qualify_columns: Str
+    search_path_filter: Bool
+    pager: Str
+    timing: Bool
+    hide_named_query_text: Bool
+    show_bottom_toolbar: Bool
+    table_format: Str
+    syntax_style: Str
+    vi: Bool
+    connect_timeout: I64
+    on_error: Str
+    row_limit: I64
+    max_field_width: Option[U32]
+    less_chatty: Bool
+    verbose_errors: Bool
+    prompt: Str
+    min_num_menu_lines: I64
+    multiline_continuation_char: Str
+    null_string: Str
+    enable_pager: Bool
+    keyring: Bool
+    use_local_timezone: Bool
+
+doc """
+The merged pgcli configuration: the built-in PGCLI_DEFAULT_CONFIG merged with
+the user's file (user keys override default keys, sections merge key by key,
+extra user keys and sections are kept). Section lists keep merged configobj key
+order (default keys first in default order, then keys only the user file has).
+colors is [colors]; named_queries is [named queries]; alias_dsn is [alias_dsn];
+init_commands is [init-commands]; alias_dsn_init_commands is
+[alias_dsn.init-commands]; decimal_format and float_format are [data_formats]
+decimal and float; column_date_formats is [column_date_formats]; ssh_tunnels is
+[ssh tunnels] and dsn_ssh_tunnels is [dsn ssh tunnels]. A missing optional
+section is an empty list. A list value in a ConfigEntry section is joined with
+", ".
+"""
+struct PgcliConfig:
+    main: MainSettings
+    colors: List[ConfigEntry]
+    named_queries: List[ConfigEntry]
+    alias_dsn: List[ConfigEntry]
+    init_commands: List[CommandEntry]
+    alias_dsn_init_commands: List[CommandEntry]
+    decimal_format: Str
+    float_format: Str
+    column_date_formats: List[ConfigEntry]
+    ssh_tunnels: List[ConfigEntry]
+    dsn_ssh_tunnels: List[ConfigEntry]
+
+fn pgcli_config_directory(xdg_config_home: Option[Str], home: Str) -> Str:
+    doc """
+    config_location() on a POSIX host. With xdg_config_home Some(value) (the
+    XDG_CONFIG_HOME variable is set, even to ""), return value with a leading
+    "~" expanded to home (os.path.expanduser semantics with HOME = home)
+    followed by "/pgcli/". Otherwise return home + "/.config/pgcli/". The result
+    always ends with "/"; files inside are named by appending "config",
+    "history", "log" or "casing".
+    """
+
+    ensures (ends_with(result, "/pgcli/"))
+
+    effects []
+
+fn parse_pgcli_config(user_text: Str) -> Result[PgcliConfig, ConfigError]:
+    doc """
+    load_config(user, default) without file access: parse PGCLI_DEFAULT_CONFIG
+    and user_text with the lock-selected configobj (ConfigObj(text.splitlines(),
+    interpolation=False) for each, then cfg = ConfigObj(), cfg.merge(default),
+    cfg.merge(user)) and convert the merged tree into PgcliConfig as the field
+    docs describe. A configobj ParseError (including DuplicateError) or a failed
+    as_bool/as_int/int() conversion is Invalid(message: str(error)).
+    Conversions happen in MainSettings field order, and the first failure is
+    returned.
+    """
+
+    ensures Result.Ok(config) => (not contains(config.main.on_error, "stop") and not contains(config.main.on_error, "resume"))
+
+    error ConfigError.Invalid
+
+    effects []
+
+fn load_pgcli_config(path: Path) -> Result[PgcliConfig, ConfigError]:
+    doc """
+    get_config(pgclirc_file) on the host file system: path is the pgclirc
+    location (it may start with "~", expanded with os.path.expanduser). When the expanded path does not
+    exist, create its parent directories (os.makedirs, exist_ok) and write
+    PGCLI_DEFAULT_CONFIG to it byte for byte (UTF-8). Then read the file as
+    UTF-8 and return parse_pgcli_config(its text). An OSError while creating,
+    writing or reading is Unreadable(path: the expanded path, message: str(error)).
+    """
+
+    ensures Result.Ok(config) => (not contains(config.main.on_error, "stop") and not contains(config.main.on_error, "resume"))
+
+    error ConfigError.Unreadable
+    error ConfigError.Invalid
+
+    effects [file.read, file.write]
+
+fn configure_pgcli_logging(
+    log_file: Str,
+    log_level: Str,
+    config_directory: Str,
+) -> Result[Str, ConfigError]:
+    doc """
+    initialize_logging: the log path is config_directory + "log" when log_file
+    is "default", otherwise log_file with "~" expanded. Create its parent
+    directories (exist_ok). log_level (compared upper-cased) must be one of
+    CRITICAL, ERROR, WARNING, INFO, DEBUG, NONE, else Invalid(message:
+    "Unknown log level: " + log_level). NONE installs a logging.NullHandler and
+    level CRITICAL; any other level installs a logging.FileHandler on the log
+    path (append mode, UTF-8) with the formatter "%(asctime)s (%(process)d/%(threadName)s)
+    __omp_magic("", "(name)s %(levelname)s - %(message)s\" and that level. The same handler and")
+    level are attached to both the "pgcli" and the "pgspecial" loggers. Then log
+    at DEBUG on "pgcli" the messages "Initializing pgcli logging." and
+    "Log file %r." with the log path. Returns the log path. An OSError is
+    Unreadable(path: the log path, message: str(error)).
+    """
+
+    ensures Result.Ok(log_path) => (log_file != "default" or (starts_with(log_path, config_directory) and ends_with(log_path, "log")))
+
+    error ConfigError.Invalid
+    error ConfigError.Unreadable
+
+    effects [file.read, file.write]
+
+data sample_user_config: Str = "[main]\nmulti_line = True\ntiming = off\nrow_limit = 50\nmax_field_width =\ntable_format = grid\ndestructive_warning = all\nprompt = '\\d> '\n[named queries]\nver = \"SELECT version()\"\n[alias_dsn]\nlocal = postgresql://localhost/postgres\n[init-commands]\npath = \"SET search_path TO app\"\ntwo = \"SET a TO 1\", \"SET b TO 2\"\n"
+
+scenario config_directory_follows_xdg:
+    call xdg = pgcli_config_directory(Option.Some(value: "~/xdg"), "/home/ann")
+    assert xdg == "/home/ann/xdg/pgcli/"
+    call plain = pgcli_config_directory(Option.Nothing, "/home/ann")
+    assert plain == "/home/ann/.config/pgcli/"
+
+scenario default_config_settings:
+    call defaults = parse_pgcli_config("")
+    assert defaults matches Result.Ok(config) => config.main.smart_completion and config.main.auto_suggest and not config.main.multi_line and config.main.multi_line_mode == "psql" and config.main.destructive_warning == List("drop", "shutdown", "delete", "truncate", "alter", "update", "unconditional_update") and config.main.row_limit == 1000 and config.main.max_field_width == Option.Some(value: 500) and config.main.table_format == "psql" and config.main.prompt == "\\u@\\h:\\d> " and config.main.null_string == "<null>" and config.main.pager == "" and config.main.timing and config.main.keyring and config.main.use_local_timezone and config.main.on_error == "STOP" and config.main.connect_timeout == 30 and config.main.multiline_continuation_char == "" and config.main.log_file == "default" and config.main.history_file == "default"
+    assert defaults matches Result.Ok(config) => config.named_queries == List() and config.alias_dsn == List() and config.decimal_format == "" and config.float_format == ""
+    assert defaults matches Result.Ok(config) => config.colors.len == 24
+
+scenario user_config_overrides_defaults:
+    call merged = parse_pgcli_config(sample_user_config)
+    assert merged matches Result.Ok(config) => config.main.multi_line and not config.main.timing and config.main.row_limit == 50 and config.main.max_field_width == Option.Nothing and config.main.table_format == "grid" and config.main.destructive_warning == List("all") and config.main.prompt == "\\d> "
+    assert merged matches Result.Ok(config) => config.named_queries == List(ConfigEntry(name: "ver", value: "SELECT version()")) and config.alias_dsn == List(ConfigEntry(name: "local", value: "postgresql://localhost/postgres"))
+    assert merged matches Result.Ok(config) => config.init_commands == List(CommandEntry(name: "path", commands: List("SET search_path TO app")), CommandEntry(name: "two", commands: List("SET a TO 1", "SET b TO 2")))
+
+scenario invalid_config_is_reported:
+    call broken = parse_pgcli_config("[main]\nabc\n")
+    assert broken matches Result.Err(ConfigError.Invalid(message)) => contains(message, "Invalid line")
+    call bad_bool = parse_pgcli_config("[main]\ntiming = maybe\n")
+    assert bad_bool == Result.Err(
+        error: ConfigError.Invalid(message: "Value \"maybe\" is neither True nor False"),
+    )
+    call small_width = parse_pgcli_config("[main]\nmax_field_width = -2\n")
+    assert small_width matches Result.Ok(config) => config.main.max_field_width == Option.Some(value: 3)

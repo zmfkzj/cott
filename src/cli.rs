@@ -3718,12 +3718,23 @@ fn implicated_agent_candidates(
     }
 }
 
-fn materialize_candidate_artifacts(emission: &Emission) -> Result<PathBuf, String> {
+/// A per-process unique temporary name. Parallel generation waves create these concurrently, and
+/// the clock alone can repeat within one tick.
+fn unique_temp_name(prefix: &str) -> Result<PathBuf, String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("cott-candidate-{}-{nonce}", std::process::id()));
+    Ok(std::env::temp_dir().join(format!(
+        "{prefix}-{}-{nonce}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )))
+}
+
+fn materialize_candidate_artifacts(emission: &Emission) -> Result<PathBuf, String> {
+    let root = unique_temp_name("cott-candidate")?;
     fs::create_dir(&root)
         .map_err(|error| format!("create candidate staging {}: {error}", root.display()))?;
     for (relative, bytes) in &emission.files {
@@ -3757,11 +3768,7 @@ struct AgentWorkspace {
 }
 
 fn agent_workspace() -> Result<AgentWorkspace, String> {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| error.to_string())?
-        .as_nanos();
-    let root = std::env::temp_dir().join(format!("cott-agent-{}-{nonce}", std::process::id()));
+    let root = unique_temp_name("cott-agent")?;
     fs::create_dir(&root).map_err(|error| format!("create agent workspace: {error}"))?;
     let workspace = root.join("workspace");
     let scratch = root.join("scratch");

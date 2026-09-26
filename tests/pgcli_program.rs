@@ -1,4 +1,6 @@
-//! External-process regressions of verified pgcli against scratch PostgreSQL on a Unix socket.
+//! External-process regressions of verified pgcli against scratch PostgreSQL on a Unix socket and the sandbox's
+//! private loopback, including watch/editor/pager PTY sessions and a tunnel through the host's unprivileged
+//! OpenSSH sshd.
 //! Run with COTT_POSTGRES_BIN=/path/to/16/bin /tmp/cott-ex/cargox test --test pgcli_program -- --ignored --nocapture
 use cott::hash::sha256_hex;
 use cott::sandbox::{BindMounts, NetworkAccess, ResourceLimits, SandboxSpec, run};
@@ -15,14 +17,20 @@ use std::time::Duration;
 
 const PROGRAM: &str = include_str!("support/pgcli_program.py");
 const KIND: &str = "external_program_regression";
-const CHECKS: [&str; 7] = [
+const CHECKS: [&str; 13] = [
     "database.connect",
-    "database.query_transactions",
-    "database.catalog_refresh",
-    "database.import_export",
+    "database.transactions",
+    "database.completion_metadata",
+    "cli.special_commands",
     "database.notifications",
     "cli.run_exit_codes",
     "cli.interactive",
+    "cli.pty_interactive",
+    "cli.watch",
+    "cli.external_editor",
+    "cli.pager",
+    "cli.keyring_without_backend",
+    "database.ssh_tunnel",
 ];
 const DEFECT: &str = "from typing import Never\nfrom cott_runtime import CottList\n\ndef run(arguments: CottList[str]) -> Never:\n    raise SystemExit(0)\n";
 static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
@@ -178,12 +186,12 @@ fn program(
         },
         network: NetworkAccess::Disabled,
         limits: ResourceLimits {
-            cpu_time: Duration::from_secs(180),
+            cpu_time: Duration::from_secs(600),
             address_space_bytes: 2 * 1024 * 1024 * 1024,
             process_count: 64,
             open_files: 256,
             file_size_bytes: 16 * 1024 * 1024,
-            wall_time: Duration::from_secs(360),
+            wall_time: Duration::from_secs(900),
             stream_limit_bytes: 1024 * 1024,
             writable_bytes: 256 * 1024 * 1024,
         },
@@ -261,7 +269,7 @@ fn copy_tree(source: &Path, destination: &Path) {
     }
 }
 #[test]
-#[ignore = "external_program_regression: needs generated+verified examples/real/pgcli, locked Python dependencies, COTT_POSTGRES_BIN and Linux sandbox"]
+#[ignore = "external_program_regression: needs generated+verified examples/real/pgcli, locked Python dependencies, COTT_POSTGRES_BIN, /usr/sbin/sshd and Linux sandbox"]
 fn verified_pgcli_program_passes() {
     let bin = postgres();
     let before = fs::read(example().join("generated/generation.json")).unwrap();
@@ -286,7 +294,7 @@ fn verified_pgcli_program_passes() {
     );
 }
 #[test]
-#[ignore = "external_program_regression: needs generated+verified examples/real/pgcli, locked Python dependencies, COTT_POSTGRES_BIN and Linux sandbox"]
+#[ignore = "external_program_regression: needs generated+verified examples/real/pgcli, locked Python dependencies, COTT_POSTGRES_BIN, /usr/sbin/sshd and Linux sandbox"]
 fn external_regression_rejects_bound_skipped_run() {
     let bin = postgres();
     let temp = Scratch::new("defect");
@@ -297,7 +305,7 @@ fn external_regression_rejects_bound_skipped_run() {
     let manifest = fixture.join("cott.toml");
     let original = fs::read_to_string(&manifest).unwrap();
     assert!(!original.contains("[target.python.implementations]"));
-    fs::write(&manifest, format!("{original}\n[target.python.implementations]\n\"real.pgcli.run\" = \"cott_bindings.real.pgcli_defect:run\"\n")).unwrap();
+    fs::write(&manifest, format!("{original}\n[target.python.implementations]\n\"real.pgcli.cli.run\" = \"cott_bindings.real.pgcli_defect:run\"\n")).unwrap();
     let bindings = fixture.join("python/cott_bindings/real");
     fs::create_dir_all(&bindings).unwrap();
     fs::write(fixture.join("python/cott_bindings/__init__.py"), "").unwrap();
@@ -331,7 +339,7 @@ fn external_regression_rejects_bound_skipped_run() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|v| v["cott_symbol"] == "real.pgcli.run")
+        .find(|v| v["cott_symbol"] == "real.pgcli.cli.run")
         .unwrap();
     assert_eq!(binding["owner"], "manifest");
     assert_eq!(

@@ -1,0 +1,562 @@
+module real.harlequin.ide
+
+use real.harlequin.adapters.{TransactionMode}
+use real.harlequin.catalog.{CatalogEntry}
+use real.harlequin.keymap.{FooterHint}
+use real.harlequin.style.{StyledLine, StyledSpan}
+
+doc """
+The focusable regions of the IDE, in Tab order: the Data Catalog sidebar, the
+Query Editor, the Run Query Bar's limit input, and the Results Viewer.
+"""
+enum Pane:
+    Catalog
+    Editor
+    RunBar
+    Results
+
+doc """
+Which pane has focus and how the screen is divided. sidebar_hidden hides the
+Data Catalog (Ctrl+B / F9); full_screen shows only the focused Editor or
+Results Viewer (F10) without changing sidebar_hidden.
+"""
+struct LayoutState:
+    focus: Pane
+    sidebar_hidden: Bool
+    full_screen: Bool
+
+doc """
+The Run Query Bar: the Limit checkbox and its integer input (limit_text,
+caret limit_cursor), and whether a query is running.
+"""
+struct RunBar:
+    limit_enabled: Bool
+    limit_text: Str
+    limit_cursor: U64
+    running: Bool
+
+struct RunBarStep:
+    bar: RunBar
+    submit: Bool
+
+enum Severity:
+    Information
+    Warning
+    Error
+
+doc """
+A toast notification. expires_at_ms is the monotonic time (ms) after which it
+disappears.
+"""
+struct Notification:
+    title: Option[Str]
+    message: Str
+    severity: Severity
+    expires_at_ms: U64
+
+doc """
+A scrollable read-only text dialog: the View Cell dialog, error dialogs
+(Query Error, Export Data Error, ...), the help screen and the debug screen.
+lines is the full body; scroll is the first body line shown; copyable says
+whether "c" copies copy_text; copy_notice is the notification text after a
+copy; close_on_any_key says whether keys other than scroll keys (and "c" when
+copyable) close it.
+"""
+struct TextModal:
+    title: Str
+    header: Str
+    lines: List[Str]
+    footer: Str
+    scroll: U64
+    copyable: Bool
+    copy_text: Str
+    copy_notice: Str
+    close_on_any_key: Bool
+
+enum TextModalOutcome:
+    Stay
+    Close
+    Copy(text: Str, notice: Str)
+
+struct TextModalStep:
+    modal: TextModal
+    outcome: TextModalOutcome
+
+doc """
+A Yes/No confirmation (for example before a catalog interaction drops a
+table). yes_selected is the highlighted button.
+"""
+struct ConfirmModal:
+    prompt: Str
+    yes_selected: Bool
+
+enum ConfirmOutcome:
+    Stay
+    Yes
+    No
+
+struct ConfirmStep:
+    modal: ConfirmModal
+    outcome: ConfirmOutcome
+
+enum InputPurpose:
+    Find
+    GoToLine
+    OpenFile
+    SaveFile
+
+doc """
+A one-line input dialog used for Find (Ctrl+F), Go To Line (Ctrl+G), Open
+Query (Ctrl+O) and Save Query (Ctrl+S). completions are the candidates offered
+by the last Tab (path purposes), shown under the input.
+"""
+struct InputModal:
+    purpose: InputPurpose
+    title: Str
+    placeholder: Str
+    value: Str
+    cursor: U64
+    message: Str
+    completions: List[Str]
+
+enum InputOutcome:
+    Stay
+    Cancel
+    Submit(value: Str)
+    Complete(value: Str)
+
+struct InputStep:
+    modal: InputModal
+    outcome: InputOutcome
+
+doc """
+The Data Catalog context menu (".") for one entry: Insert Name at Cursor
+followed by the adapter's interactions for the entry.
+"""
+struct ContextMenu:
+    entry: CatalogEntry
+    items: List[Str]
+    selected: U64
+
+enum ContextMenuOutcome:
+    Stay
+    Close
+    Choose(label: Str)
+
+struct ContextMenuStep:
+    menu: ContextMenu
+    outcome: ContextMenuOutcome
+
+doc """
+One line of the debug screen's content: a section heading (level 1 or 2) or
+a body line.
+"""
+struct DebugSection:
+    title: Str
+    body: List[Str]
+
+fn initial_layout() -> LayoutState:
+    doc """
+    The layout at startup: focus Editor, sidebar shown, not full screen.
+    """
+
+    ensures result.focus == Pane.Editor
+    ensures not result.sidebar_hidden and not result.full_screen
+
+    effects []
+
+fn layout_action(layout: LayoutState, action: Str) -> LayoutState:
+    doc """
+    Apply a layout action, as Harlequin's app actions do:
+    "toggle_sidebar": flip sidebar_hidden; hiding it while the catalog has focus
+    moves focus to Editor. "toggle_full_screen": flip full_screen; entering full
+    screen while the catalog or run bar has focus moves focus to Editor.
+    "focus_query_editor", "focus_results_viewer": focus that pane (leaving full
+    screen when full screen shows the other pane). "focus_data_catalog": show the
+    sidebar, leave full screen and focus Catalog. "focus_next" /
+    "focus_previous": move to the next/previous pane in Tab order among the
+    visible ones (Catalog only when the sidebar is shown and not full screen;
+    in full screen only the full-screen pane, plus RunBar when that pane is the
+    Editor), wrapping. Any other action returns layout unchanged.
+    """
+
+    effects []
+
+fn visible_panes(layout: LayoutState) -> List[Pane]:
+    doc """
+    The panes shown, in Tab order. Normally Catalog (unless sidebar_hidden),
+    Editor, RunBar, Results. In full screen: Editor and RunBar when focus is
+    Editor or RunBar, else Results only.
+    """
+
+    ensures result.len >= 1
+
+    effects []
+
+fn new_run_bar(limit: Option[U64]) -> RunBar:
+    doc """
+    The Run Query Bar at startup: with a configured limit the checkbox is checked
+    and limit_text is its decimal text; otherwise unchecked with limit_text
+    "500". limit_cursor is at the end of limit_text; not running.
+    """
+
+    ensures not result.running
+
+    effects []
+
+fn run_bar_key(bar: RunBar, key: Str, text: Str) -> RunBarStep:
+    doc """
+    A key while the Run Query Bar has focus. "space" toggles the Limit checkbox
+    (a checked box requires a valid limit_text, otherwise it stays unchecked).
+    Digits insert at limit_cursor; "backspace"/"delete" edit; "left"/"right"/
+    "home"/"end" move the caret; after an edit the checkbox becomes checked when
+    limit_text is a nonempty whole number >= 0 and unchecked otherwise. "enter"
+    submits (submit true) when limit_text is valid and nonempty. Other keys do
+    nothing. submit is false unless stated.
+    """
+
+    effects []
+
+fn effective_limit(bar: RunBar) -> Option[U64]:
+    doc """
+    The hard row limit a run uses: Some(int(limit_text)) when the checkbox is
+    checked and limit_text is a whole number >= 0, else Nothing.
+    """
+
+    effects []
+
+fn render_run_bar(bar: RunBar, transaction: Option[TransactionMode], can_cancel: Bool, run_label: Str, runnable: Bool, focused: Bool, width: U16) -> StyledLine:
+    doc """
+    The one-line Run Query Bar. Left: when transaction is Some, "[Tx: {label}]"
+    then " [🡅]" when can_commit and " [⮌]" when can_rollback, then a space. Then
+    "[x] Limit " or "[ ] Limit " followed by the limit_text padded to 7 cells
+    (style "class:hq.input", with " class:hq.cursor" when focused), right-aligned
+    at the end: "[ Cancel Query ]" (class:hq.button.focused) when bar.running
+    and can_cancel, "[ Running... ]" (class:hq.loading) when running otherwise,
+    else "[ {run_label} ]" (class:hq.button, or class:hq.muted when not
+    runnable). Other text uses class:hq.status. width is the terminal's
+    16-bit column count (POSIX winsize.ws_col); the line is exactly width cells
+    (padded with spaces, or cut).
+    """
+
+    effects []
+
+fn run_label(selection: Str, valid: Bool) -> Str:
+    doc """
+    The Run button caption: "Run Selection" when selection (the selected editor
+    text) is not blank and valid (the adapter accepted it, or cannot validate),
+    else "Run Query".
+    """
+
+    effects []
+
+fn render_tab_bar(labels: List[Str], active: U64, width: U16) -> StyledLine:
+    doc """
+    A tab strip: each label as " {label} " styled "class:hq.tab.active" for the
+    active index and "class:hq.tab" otherwise, separated by nothing, cut at
+    the terminal's 16-bit column width and padded with spaces to that width.
+    """
+
+    effects []
+
+fn render_footer(hints: List[FooterHint], width: U16) -> StyledLine:
+    doc """
+    The footer: for each hint " {key}" styled "class:hq.footer.key" followed by
+    " {description} " styled "class:hq.footer.description", cut at the terminal's
+    16-bit column width and padded with spaces styled "class:hq.footer".
+    """
+
+    effects []
+
+fn notify(title: Option[Str], message: Str, severity: Severity, now_ms: U64) -> Notification:
+    doc """
+    A notification shown for 5 seconds (10 seconds for Error), as Harlequin's
+    toasts: expires_at_ms is now_ms + 5000 or + 10000, saturated at the U64
+    maximum 18446744073709551615. Saturation preserves the timestamp's ABI
+    when the caller supplies a monotonic clock reading near its upper bound.
+    """
+
+    ensures result.message == message
+    ensures result.expires_at_ms >= now_ms
+
+    effects []
+
+fn render_notifications(notifications: List[Notification], now_ms: U64, width: U64) -> List[StyledLine]:
+    doc """
+    The unexpired notifications (expires_at_ms > now_ms), newest last, each as
+    its title line (when Some, bold via class:hq.dialog.title) and its message
+    lines, every line prefixed with "▌ " and styled "class:hq.notification" (or
+    "class:hq.notification.error" for Error, "class:hq.warning" prefix for
+    Warning), wrapped at width - 2 cells, with a blank line between
+    notifications. At most the last 3 notifications are shown.
+    """
+
+    effects []
+
+fn text_modal(title: Str, header: Str, body: Str, footer: Str, copy_notice: Str) -> TextModal:
+    doc """
+    A copyable text dialog showing body (split into lines on LF), scrolled to
+    the top, whose copy_text is body. It closes on any key other than scroll
+    keys and "c".
+    """
+
+    ensures result.scroll == 0 and result.copyable
+
+    effects []
+
+fn cell_modal(column: Str, value: Str) -> TextModal:
+    doc """
+    The View Cell dialog: title column (or "Cell Contents" when column is ""),
+    header "", body value, footer "Arrows/PgUp/PgDn scroll. Click text or press c
+    to copy. Any other key closes.", copy notice "Cell value copied to
+    clipboard.".
+    """
+
+    ensures result.copyable
+
+    effects []
+
+fn error_modal(title: Str, header: Str, message: Str) -> TextModal:
+    doc """
+    An error dialog (Query Error, Export Data Error, Catalog Error, ...): the
+    given title and header, body message, footer "Arrows/PgUp/PgDn scroll. Click
+    text or press c to copy. Any other key closes.", copy notice "Error copied to
+    clipboard.".
+    """
+
+    ensures result.title == title and result.header == header
+
+    effects []
+
+fn help_modal(key_lines: List[Str]) -> TextModal:
+    doc """
+    The help screen (F1): title "Harlequin Help", header "Welcome to Harlequin!
+    This screen contains a small subset of the online docs, available at
+    https://harlequin.sh/docs/getting-started", body = the key reference lines
+    (key_lines, from real.harlequin.keymap.help_lines), a blank line, then the
+    lines of help_markdown(); footer "Scroll with arrows. Press any other key to
+    continue."; not copyable; closes on any non-scroll key.
+    """
+
+    ensures not result.copyable
+
+    effects []
+
+fn help_markdown() -> Str:
+    doc """
+    Harlequin's bundled help text (help_screen.md of Harlequin 2.15.0), exactly
+    these sections in order, as Markdown: "### Using Harlequin with DuckDB"
+    (default adapter; `harlequin "path/to/duck.db" "another_duck.db"`; no
+    arguments for in-memory; see the Troubleshooting page
+    https://harlequin.sh/docs/troubleshooting/duckdb-version-mismatch to control
+    the DuckDB version), "### Using Harlequin with SQLite and Other Adapters"
+    (`harlequin -a sqlite "path/to/sqlite.db" "another_sqlite.db"`, `harlequin -a
+    sqlite` for in-memory, other adapters listed at
+    https://harlequin.sh/docs/adapters), "### Getting Help" (`harlequin --help`,
+    https://harlequin.sh/docs/troubleshooting/index, GitHub Issues
+    https://github.com/tconbeer/harlequin/issues for bugs, GitHub Discussions
+    https://github.com/tconbeer/harlequin/discussions for other issues), "###
+    Viewing Files" (`--show-files`/`-f` with an absolute path example
+    `harlequin --show-files /path/to/my/data` and `harlequin -f .`; remote
+    objects: https://harlequin.sh/docs/files/remote), "### Using Config Files"
+    (https://harlequin.sh/docs/config-file), "### Changing Key Bindings"
+    (keymaps from plug-ins or TOML config files,
+    https://harlequin.sh/docs/keymaps) and "### Managing Transactions"
+    (transaction modes, https://harlequin.sh/docs/transactions), each with the
+    upstream paragraphs and fenced bash examples.
+    """
+
+    ensures (starts_with(result, "### Using Harlequin with DuckDB"))
+
+    effects []
+
+fn debug_modal(sections: List[DebugSection]) -> TextModal:
+    doc """
+    The debug screen (F12): title "Debug Information", header "Details about the
+    current Harlequin session, environment, and adapter.", body: for each section
+    a line "## {title}", its body lines and a blank line; footer "Tab/Shift Tab to
+    move focus, Enter to expand/collapse, Esc to close."; copyable (copy_text is
+    the body, notice "Copied to clipboard."); closes only on "escape".
+    """
+
+    ensures result.copyable
+
+    effects []
+
+fn text_modal_key(modal: TextModal, key: Str, visible_lines: U64) -> TextModalStep:
+    doc """
+    A key in a text dialog: "up"/"down" scroll one line, "pageup"/"pagedown" by
+    max(visible_lines - 1, 1), "home"/"end" to the top/bottom, clamped so the
+    last page stays full (scroll <= max(lines.len - visible_lines, 0)); these
+    Stay. "c" when copyable is Copy(copy_text, copy_notice). "escape" is Close.
+    Any other key is Close when close_on_any_key, else Stay.
+    """
+
+    effects []
+
+fn render_text_modal(modal: TextModal, width: U64, height: U64) -> List[StyledLine]:
+    doc """
+    Draw a text dialog of width x height cells: line 1 the title
+    (class:hq.dialog.title), then the header wrapped at width
+    (class:hq.dialog) when not "", then available body lines from scroll
+    (class:hq.text, cut at width), then the footer (class:hq.muted). Return
+    at most height actual-content lines; never pad the body with blank rows
+    to reach height. The terminal widget paints unused space. In particular,
+    when no header is present the result has at most the title, the existing
+    body lines and the footer, independent of height.
+    """
+
+    ensures result.len <= height
+    ensures modal.header == "" => result.len <= modal.lines.len + 2
+
+    effects []
+
+fn confirm_key(modal: ConfirmModal, key: Str) -> ConfirmStep:
+    doc """
+    A key in a Yes/No dialog: "left"/"right"/"tab"/"shift+tab" toggle
+    yes_selected (Stay); "enter" answers the highlighted button; "y" is Yes; "n"
+    and "escape" are No; other keys Stay.
+    """
+
+    effects []
+
+fn render_confirm(modal: ConfirmModal, width: U64) -> List[StyledLine]:
+    doc """
+    The prompt wrapped at width (class:hq.dialog), a blank line, then the buttons
+    "[ No ]" and "[ Yes ]" separated by two spaces, the highlighted one styled
+    class:hq.button.focused and the other class:hq.button.
+    """
+
+    effects []
+
+fn input_modal(purpose: InputPurpose, value: Str) -> InputModal:
+    doc """
+    An input dialog: Find has title "Find" and placeholder "Search text";
+    GoToLine "Go To Line" and "Line number"; OpenFile "Open Query" and
+    "/path/to/file.sql (tab autocompletes, enter opens, esc cancels)"; SaveFile
+    "Save Query" and "/path/to/file.sql (tab autocompletes, enter saves, esc
+    cancels)". value is the initial text with the caret at its end; message ""
+    and no completions.
+    """
+
+    ensures result.purpose == purpose and result.value == value
+
+    effects []
+
+fn input_key(modal: InputModal, key: Str, text: Str) -> InputStep:
+    doc """
+    A key in an input dialog. Printable text inserts at cursor;
+    "backspace"/"delete" edit; "left"/"right"/"home"/"end" move the caret (all
+    clear message and completions, Stay). "escape" is Cancel. "tab" for OpenFile
+    and SaveFile is Complete(value) (the caller supplies completions with
+    apply_completions); for other purposes Stay. "enter": an empty value sets
+    message "Please enter a value." (Stay); for GoToLine a value that is not a
+    whole number >= 1 sets message "Please enter a line number." (Stay);
+    otherwise Submit(value).
+    """
+
+    effects []
+
+fn apply_completions(modal: InputModal, completions: List[Str]) -> InputModal:
+    doc """
+    After a Tab in a path input: with exactly one completion, value becomes it
+    and the caret moves to its end; with several, value becomes their longest
+    common prefix when that is longer than value, and completions lists them;
+    with none, message becomes "No matching files." .
+    """
+
+    effects []
+
+fn render_input_modal(modal: InputModal, width: U64) -> List[StyledLine]:
+    doc """
+    The title (class:hq.dialog.title), the input line showing value (or the
+    placeholder in class:hq.muted when empty) with the caret cell styled
+    class:hq.cursor, the message (class:hq.error) when not "", then up to 8
+    completions (class:hq.muted), cut at width.
+    """
+
+    effects []
+
+fn context_menu(entry: CatalogEntry, interactions: List[Str]) -> ContextMenu:
+    doc """
+    The context menu for entry: items "Insert Name at Cursor" followed by
+    interactions (from real.harlequin.adapters.catalog_interactions), selected 0.
+    """
+
+    ensures result.items.len == interactions.len + 1
+    ensures result.selected == 0
+
+    effects []
+
+fn context_menu_key(menu: ContextMenu, key: Str) -> ContextMenuStep:
+    doc """
+    "up"/"down" move the highlight (clamped); "enter" is Choose(items[selected]);
+    "escape" (and "full_stop") is Close; other keys Stay.
+    """
+
+    effects []
+
+fn render_context_menu(menu: ContextMenu, width: U16) -> List[StyledLine]:
+    doc """
+    At most 10 item lines, scrolled so selected is visible, each " {item} " padded
+    to the terminal's 16-bit column width (class:hq.dialog, plus
+    " class:hq.cursor" on the highlighted item).
+    """
+
+    ensures result.len <= 10
+
+    effects []
+
+scenario the_layout_follows_harlequin_focus_rules:
+    call start = initial_layout()
+    call hidden = layout_action(start, "toggle_sidebar")
+    assert hidden == LayoutState(focus: Pane.Editor, sidebar_hidden: true, full_screen: false)
+    call catalog = layout_action(hidden, "focus_data_catalog")
+    assert catalog == LayoutState(focus: Pane.Catalog, sidebar_hidden: false, full_screen: false)
+    call hide_again = layout_action(catalog, "toggle_sidebar")
+    assert hide_again.focus == Pane.Editor
+    call full = layout_action(start, "toggle_full_screen")
+    call panes = visible_panes(full)
+    assert panes == List(Pane.Editor, Pane.RunBar)
+    call next = layout_action(start, "focus_next")
+    assert next.focus == Pane.RunBar
+    call previous = layout_action(start, "focus_previous")
+    assert previous.focus == Pane.Catalog
+
+scenario the_run_bar_limit_checks_itself:
+    call unconfigured = new_run_bar(Option.Nothing)
+    assert unconfigured == RunBar(limit_enabled: false, limit_text: "500", limit_cursor: 3, running: false)
+    call none = effective_limit(unconfigured)
+    assert none == Option.Nothing
+    call configured = new_run_bar(Option.Some(value: 20))
+    call twenty = effective_limit(configured)
+    assert twenty == Option.Some(value: 20)
+    call typed = run_bar_key(unconfigured, "0", "0")
+    assert typed.bar.limit_text == "5000" and typed.bar.limit_enabled and not typed.submit
+    call erased = run_bar_key(RunBar(limit_enabled: true, limit_text: "5", limit_cursor: 1, running: false), "backspace", "")
+    assert erased.bar.limit_text == "" and not erased.bar.limit_enabled
+    call submitted = run_bar_key(configured, "enter", "")
+    assert submitted.submit
+    call label = run_label("select 1", true)
+    assert label == "Run Selection"
+    call plain = run_label("  ", true)
+    assert plain == "Run Query"
+
+scenario dialogs_scroll_copy_and_answer:
+    call cell = cell_modal("", "a\nb")
+    assert cell.title == "Cell Contents" and cell.lines == List("a", "b")
+    call copied = text_modal_key(cell, "c", 5)
+    assert copied.outcome == TextModalOutcome.Copy(text: "a\nb", notice: "Cell value copied to clipboard.")
+    call closed = text_modal_key(cell, "x", 5)
+    assert closed.outcome == TextModalOutcome.Close
+    call yes = confirm_key(ConfirmModal(prompt: "Really drop table \"t\"?", yes_selected: false), "y")
+    assert yes.outcome == ConfirmOutcome.Yes
+    call toggled = confirm_key(ConfirmModal(prompt: "p", yes_selected: false), "right")
+    assert toggled.modal.yes_selected and toggled.outcome == ConfirmOutcome.Stay
+    call goto = input_modal(InputPurpose.GoToLine, "")
+    call bad_line = input_key(InputModal(purpose: InputPurpose.GoToLine, title: "Go To Line", placeholder: "Line number", value: "x", cursor: 1, message: "", completions: List()), "enter", "")
+    assert bad_line.modal.message == "Please enter a line number." and bad_line.outcome == InputOutcome.Stay
+    call empty = input_key(goto, "enter", "")
+    assert empty.modal.message == "Please enter a value."
+    call completed = apply_completions(InputModal(purpose: InputPurpose.OpenFile, title: "Open Query", placeholder: "", value: "q", cursor: 1, message: "", completions: List()), List("queries/", "query.sql"))
+    assert completed.value == "quer" and completed.completions == List("queries/", "query.sql")

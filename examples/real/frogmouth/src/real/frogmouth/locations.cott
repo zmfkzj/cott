@@ -1,0 +1,214 @@
+module frogmouth.locations
+
+use frogmouth.model.{Location, LocationKind, PathKind}
+
+fn remote_location(candidate: Str) -> Option[Location]:
+    doc """
+    Recognize text that is likely a web URL, the way the address bar, links
+    and stored locations are classified. candidate is not trimmed. It is a URL
+    when its scheme, the text before the first "://", is "http" or "https"
+    compared ASCII case-insensitively, and its authority, the text after that
+    "://" up to the first "/", "?" or "#", still names a non-empty host once a
+    leading "userinfo@" part and a trailing ":port" part are removed. Nothing
+    else is validated. The Remote target is candidate with its scheme
+    lower-cased and every other character unchanged. Any other candidate,
+    including "http://", "ftp://host/a.md" and "example.com/a.md", is Nothing.
+    """
+
+    ensures Option.Some(location) => location.kind == LocationKind.Remote
+    ensures Option.Some(location) => location.target.len == candidate.len
+    ensures Option.Some(location) => ((starts_with(candidate, "http://") or starts_with(candidate, "https://")) => location.target == candidate)
+    ensures Option.Some(location) => contains(candidate, "://")
+
+    effects []
+
+fn normalize_local_path(directory: Str, path: Str) -> Str:
+    doc """
+    Lexically resolve path against directory without consulting the file
+    system. A path starting with "/" stands alone; an empty path names
+    directory; any other path is appended to directory after one "/". The
+    combined text is split at "/": empty and "." segments are dropped, and a
+    ".." segment removes the nearest preceding kept segment, or is dropped
+    when there is none. The kept segments are joined with "/", with a leading
+    "/" when the combined text started with one. An absolute result without
+    segments is "/"; a relative result without segments is ".". Symbolic links
+    are not resolved and "~" has no special meaning.
+    """
+
+    requires directory.len > 0
+
+    ensures result.len > 0
+    ensures ((starts_with(path, "/") or starts_with(directory, "/")) => starts_with(result, "/"))
+    ensures ((not starts_with(path, "/") and not starts_with(directory, "/")) => not starts_with(result, "/"))
+    ensures (not contains(result, "//"))
+    ensures (not contains(result, "/./") and not ends_with(result, "/."))
+    ensures (not contains(result, "/../") and not ends_with(result, "/..") and not starts_with(result, "../"))
+    ensures (result != "/" => not ends_with(result, "/"))
+    ensures ((starts_with(path, "/") and not contains(path, "//") and not contains(path, "/.") and not ends_with(path, "/")) => result == path)
+
+    effects []
+
+fn resolve_local_path(text: Str, home: Str, working_directory: Str) -> Str:
+    doc """
+    The local path that address-bar or command text names: pathlib's
+    expanduser() followed by lexical absolutization. Text that is exactly "~"
+    becomes home and a leading "~/" becomes home followed by "/"; text starting
+    with "~" otherwise (such as "~user/a.md") is kept literally. The result is
+    frogmouth.locations.normalize_local_path(working_directory, expanded text).
+    """
+
+    requires home.len > 0
+    requires working_directory.len > 0
+
+    ensures result.len > 0
+    ensures ((starts_with(home, "/") and starts_with(working_directory, "/")) => starts_with(result, "/"))
+    ensures ((starts_with(text, "~/") and starts_with(home, "/")) => starts_with(result, "/"))
+
+    effects []
+
+fn inspect_local_path(path: Str) -> PathKind:
+    doc """
+    Classify path in the file system the program runs against, following
+    symbolic links: the fs fixture root while a Cott scenario with an fs
+    fixture is active, otherwise the host file system, where a relative path
+    is relative to the process working directory. File is a regular file, Directory a directory, Other any other
+    existing kind (FIFO, socket, device). Missing means the path does not
+    exist or cannot be examined: an absent entry, a non-directory component,
+    a symbolic-link loop or denied permission.
+    """
+
+    requires path.len > 0
+
+    effects [file.read]
+
+fn is_markdown_location(location: Location, extensions: List[Str]) -> Bool:
+    doc """
+    Whether location looks like a Markdown document by its suffix. The name is
+    the last "/"-separated segment, ignoring trailing "/" characters, of the
+    Local target or of the Remote URL's path (the text after the authority up
+    to the first "?" or "#"). With the name's leading "." characters removed,
+    the suffix is the text from its last "." to the end, or empty when there
+    is none; so ".md" has no suffix, "a." has the suffix "." and
+    "archive.tar.gz" has ".gz". The result is true exactly when the ASCII
+    lower-cased suffix is one of extensions, compared exactly.
+    """
+
+    ensures ((extensions.len == 0) => not result)
+    ensures (result => contains(location.target, "."))
+
+    effects []
+
+requirement RESOLVE_COMPOSES_NORMALIZE for resolve_local_path:
+    text "resolve_local_path expands only a leading \"~\" or \"~/\" and delegates every other step to the normalize_local_path facade with working_directory."
+    checked_by local_paths_are_expanded_and_normalized
+
+scenario remote_locations_are_recognized:
+    call plain = remote_location("https://example.com/docs/README.md")
+    assert plain == Option.Some(
+        value: Location(kind: LocationKind.Remote, target: "https://example.com/docs/README.md"),
+    )
+    call shouted = remote_location("HTTP://Example.com/A.md")
+    assert shouted == Option.Some(
+        value: Location(kind: LocationKind.Remote, target: "http://Example.com/A.md"),
+    )
+    call credentials = remote_location("https://user@host.test:8080/a.md?x=1#top")
+    assert credentials == Option.Some(
+        value: Location(
+            kind: LocationKind.Remote,
+            target: "https://user@host.test:8080/a.md?x=1#top",
+        ),
+    )
+    call bare = remote_location("http://")
+    assert bare == Option.Nothing
+    call hostless = remote_location("https:///README.md")
+    assert hostless == Option.Nothing
+    call port_only = remote_location("https://:8080/README.md")
+    assert port_only == Option.Nothing
+    call other_scheme = remote_location("ftp://example.com/README.md")
+    assert other_scheme == Option.Nothing
+    call schemeless = remote_location("example.com/README.md")
+    assert schemeless == Option.Nothing
+    call padded = remote_location(" https://example.com/README.md")
+    assert padded == Option.Nothing
+
+scenario local_paths_are_expanded_and_normalized:
+    call joined = normalize_local_path("/work/docs/", "../notes/./a.md")
+    assert joined == "/work/notes/a.md"
+    call absolute = normalize_local_path("/work", "/../etc//x/")
+    assert absolute == "/etc/x"
+    call empty = normalize_local_path("/work/docs/", "")
+    assert empty == "/work/docs"
+    call relative = normalize_local_path("docs", "../../x.md")
+    assert relative == "x.md"
+    call nothing = normalize_local_path("docs", "..")
+    assert nothing == "."
+    call home = resolve_local_path("~", "/home/user", "/work")
+    assert home == "/home/user"
+    call under_home = resolve_local_path("~/notes/../todo.md", "/home/user", "/work")
+    assert under_home == "/home/user/todo.md"
+    call other_user = resolve_local_path("~bob/a.md", "/home/user", "/work")
+    assert other_user == "/work/~bob/a.md"
+    call cwd = resolve_local_path("", "/home/user", "/work/")
+    assert cwd == "/work"
+
+scenario markdown_suffixes_are_matched:
+    data extensions: List[Str] = List(".md", ".markdown")
+    call upper = is_markdown_location(
+        Location(kind: LocationKind.Local, target: "/notes/README.MD"),
+        extensions,
+    )
+    assert upper == true
+    call long = is_markdown_location(
+        Location(kind: LocationKind.Local, target: "guide.markdown"),
+        extensions,
+    )
+    assert long == true
+    call hidden = is_markdown_location(
+        Location(kind: LocationKind.Local, target: "/notes/.md"),
+        extensions,
+    )
+    assert hidden == false
+    call dotted = is_markdown_location(
+        Location(kind: LocationKind.Local, target: "/notes/.draft.md"),
+        extensions,
+    )
+    assert dotted == true
+    call text = is_markdown_location(
+        Location(kind: LocationKind.Local, target: "/notes/todo.txt"),
+        extensions,
+    )
+    assert text == false
+    call query = is_markdown_location(
+        Location(kind: LocationKind.Remote, target: "https://example.com/a/b.md?raw=1#top"),
+        extensions,
+    )
+    assert query == true
+    call slash = is_markdown_location(
+        Location(kind: LocationKind.Remote, target: "https://example.com/a/b.md/"),
+        extensions,
+    )
+    assert slash == true
+    call host_only = is_markdown_location(
+        Location(kind: LocationKind.Remote, target: "https://example.md"),
+        extensions,
+    )
+    assert host_only == false
+    call page = is_markdown_location(
+        Location(kind: LocationKind.Remote, target: "https://example.com/index.html"),
+        extensions,
+    )
+    assert page == false
+
+scenario paths_are_classified:
+    fixtures:
+        fs files:
+            file "docs/guide.md" text("# Guide\n")
+            file "docs/sub/notes.md" text("notes\n")
+    call file = inspect_local_path("docs/guide.md")
+    assert file == PathKind.File
+    call directory = inspect_local_path("docs/sub")
+    assert directory == PathKind.Directory
+    call absent = inspect_local_path("docs/absent.md")
+    assert absent == PathKind.Missing
+    call below_file = inspect_local_path("docs/guide.md/child.md")
+    assert below_file == PathKind.Missing

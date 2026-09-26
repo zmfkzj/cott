@@ -3,23 +3,39 @@ name = "harlequin"
 version = "0.1.0"
 requires-python = ">=3.14.6,<3.15"
 dependencies = [
+    "adbc-driver-flightsql",
     "adbc-driver-manager",
+    "adbc-driver-postgresql",
+    "adbc-driver-snowflake",
+    "adbc-driver-sqlite",
+    "babel",
     "boto3",
     "cassandra-driver",
+    "chdb[adbc]",
     "databricks-sql-connector",
     "duckdb",
+    "filelock",
     "google-cloud-bigquery",
+    "mysql-connector-python>=9.1,<10",
     "nebula3-python",
+    "platformdirs",
+    "prompt-toolkit",
     "psycopg[binary]",
     "pyarrow>=25.0.1",
-    "pymysql",
+    "pygments",
     "pyodbc",
-    "textual",
+    "pyperclip",
+    "questionary",
+    "rich",
+    "shandy-sqlfmt",
+    "tomlkit",
     "trino",
+    "wcwidth",
 ]
 
 [project.scripts]
 harlequin-cott = "harlequin_cli:main"
+hsql-cott = "hsql_cli:main"
 
 [dependency-groups]
 dev = ["basedpyright==1.39.9"]

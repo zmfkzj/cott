@@ -1,0 +1,169 @@
+module frogmouth.forge
+
+use frogmouth.model.{Forge, ForgeRequest, Location, LocationKind}
+
+enum ForgeError:
+    Unresolved(forge: Forge)
+
+fn parse_forge_request(arguments: Str) -> Option[ForgeRequest]:
+    doc """
+    Parse the arguments of a forge quick-view command. Leading and trailing
+    whitespace is removed as Python str.strip() does, then two Python regular
+    expressions are tried in order and the first that matches decides:
+    
+    ^(?P<owner>[^/ ]+)[/ ](?P<repo>[^ :]+)(?: +(?P<file>[^ ]+))?$
+    ^(?P<owner>[^/ ]+)[/ ](?P<repo>[^ :]+):(?P<branch>[^ ]+)(?: +(?P<file>[^ ]+))?$
+    
+    owner and repository are the owner and repo groups; branch and file are
+    the groups of those names, Nothing when they did not participate (the
+    first expression has no branch). Text neither expression matches is
+    Nothing.
+    """
+
+    ensures Option.Some(request) => contains(arguments, request.owner)
+    ensures Option.Some(request) => contains(arguments, request.repository)
+    ensures Option.Some(request) => (not contains(request.owner, "/") and not contains(request.owner, " "))
+    ensures Option.Some(request) => (not contains(request.repository, ":") and not contains(request.repository, " "))
+
+    effects []
+
+fn forge_candidate_urls(forge: Forge, request: ForgeRequest) -> List[Str]:
+    doc """
+    The raw-file URLs to probe, one per branch in probing order: request's
+    branch alone when it has one, otherwise "main" then "master". FILE is
+    request.file, or "README.md" when it has none. OWNER, REPOSITORY, BRANCH
+    and FILE are substituted verbatim into the forge's pattern:
+    
+    GitHub:    https://raw.githubusercontent.com/OWNER/REPOSITORY/BRANCH/FILE
+    GitLab:    https://gitlab.com/OWNER/REPOSITORY/-/raw/BRANCH/FILE
+    BitBucket: https://bitbucket.org/OWNER/REPOSITORY/raw/BRANCH/FILE
+    Codeberg:  https://codeberg.org/OWNER/REPOSITORY/raw//branch/BRANCH/FILE
+    """
+
+    ensures request.branch matches Option.Some(_) => result.len == 1
+    ensures request.branch matches Option.Nothing => result.len == 2
+
+    effects []
+
+fn locate_forge_file(forge: Forge, candidates: List[Str]) -> Result[Location, ForgeError]:
+    doc """
+    Find the first candidate URL that exists. Every candidate is an http or
+    https URL. Candidates are probed in order with an HTTP HEAD request
+    carrying the header "User-Agent: frogmouth v0.9.1", following redirects,
+    with a 5 second timeout for connecting and for each read; a server that
+    answers the HEAD request with status 405 or 501 is asked once more for
+    the same candidate with GET. The first candidate whose final status is
+    200-299 is returned as a Remote location whose target is that candidate
+    (not the redirect target). Any other final status moves on to the next
+    candidate. A transport failure (name resolution, connection, timeout or
+    a malformed response) ends probing at once. When probing ends without a
+    found candidate the result is Unresolved(forge).
+    """
+
+    requires candidates.len > 0
+
+    ensures Result.Ok(location) => location.kind == LocationKind.Remote
+    ensures Result.Err(ForgeError.Unresolved(failed)) => failed == forge
+
+    error ForgeError.Unresolved
+
+    effects [network]
+
+requirement PROBING_STOPS_AT_TRANSPORT_FAILURE for locate_forge_file:
+    text "A transport failure while probing a candidate ends the search with Unresolved; later candidates are not probed."
+    checked_by forge_files_are_probed assert 4
+
+scenario forge_requests_are_parsed:
+    call guessed = parse_forge_request("textualize/frogmouth")
+    assert guessed == Option.Some(
+        value: ForgeRequest(
+            owner: "textualize",
+            repository: "frogmouth",
+            branch: Option.Nothing,
+            file: Option.Nothing,
+        ),
+    )
+    call spaced = parse_forge_request("  textualize frogmouth ChangeLog.md  ")
+    assert spaced == Option.Some(
+        value: ForgeRequest(
+            owner: "textualize",
+            repository: "frogmouth",
+            branch: Option.Nothing,
+            file: Option.Some(value: "ChangeLog.md"),
+        ),
+    )
+    call branched = parse_forge_request("textualize/textual:main docs/index.md")
+    assert branched == Option.Some(
+        value: ForgeRequest(
+            owner: "textualize",
+            repository: "textual",
+            branch: Option.Some(value: "main"),
+            file: Option.Some(value: "docs/index.md"),
+        ),
+    )
+    call nested = parse_forge_request("a/b/c")
+    assert nested == Option.Some(
+        value: ForgeRequest(
+            owner: "a",
+            repository: "b/c",
+            branch: Option.Nothing,
+            file: Option.Nothing,
+        ),
+    )
+    call lone = parse_forge_request("textualize")
+    assert lone == Option.Nothing
+    call extra = parse_forge_request("owner/repo two words")
+    assert extra == Option.Nothing
+    call empty_branch = parse_forge_request("owner/repo:")
+    assert empty_branch == Option.Nothing
+
+scenario forge_urls_are_built:
+    data guessed: ForgeRequest = ForgeRequest(
+        owner: "textualize",
+        repository: "frogmouth",
+        branch: Option.Nothing,
+        file: Option.Nothing,
+    )
+    data exact: ForgeRequest = ForgeRequest(
+        owner: "o",
+        repository: "r",
+        branch: Option.Some(value: "dev"),
+        file: Option.Some(value: "docs/a.md"),
+    )
+    call github = forge_candidate_urls(Forge.GitHub, guessed)
+    assert github == List(
+        "https://raw.githubusercontent.com/textualize/frogmouth/main/README.md",
+        "https://raw.githubusercontent.com/textualize/frogmouth/master/README.md",
+    )
+    call gitlab = forge_candidate_urls(Forge.GitLab, exact)
+    assert gitlab == List("https://gitlab.com/o/r/-/raw/dev/docs/a.md")
+    call bitbucket = forge_candidate_urls(Forge.BitBucket, exact)
+    assert bitbucket == List("https://bitbucket.org/o/r/raw/dev/docs/a.md")
+    call codeberg = forge_candidate_urls(Forge.Codeberg, exact)
+    assert codeberg == List("https://codeberg.org/o/r/raw//branch/dev/docs/a.md")
+
+scenario forge_files_are_probed:
+    fixtures:
+        http service:
+            route "/o/r/main/README.md" -> response(status: 404, body: text("missing"), encoding: "utf-8")
+            route "/o/r/master/README.md" -> response(status: 200, body: text("# Readme"), encoding: "utf-8")
+            route "/moved/README.md" -> redirect(status: 302, location: "/o/r/master/README.md")
+            route "/down/README.md" -> disconnect()
+    call found = locate_forge_file(
+        Forge.GitHub,
+        List(service.url("/o/r/main/README.md"), service.url("/o/r/master/README.md")),
+    )
+    assert found == Result.Ok(
+        value: Location(kind: LocationKind.Remote, target: service.url("/o/r/master/README.md")),
+    )
+    call redirected = locate_forge_file(Forge.GitLab, List(service.url("/moved/README.md")))
+    assert redirected == Result.Ok(
+        value: Location(kind: LocationKind.Remote, target: service.url("/moved/README.md")),
+    )
+    call missing = locate_forge_file(Forge.Codeberg, List(service.url("/o/r/main/README.md")))
+    assert missing == Result.Err(error: ForgeError.Unresolved(forge: Forge.Codeberg))
+    call stopped = locate_forge_file(
+        Forge.BitBucket,
+        List(service.url("/down/README.md"), service.url("/o/r/master/README.md")),
+    )
+    assert stopped == Result.Err(error: ForgeError.Unresolved(forge: Forge.BitBucket))

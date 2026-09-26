@@ -394,6 +394,9 @@ const SCOPE_GATE: &str = "IFS= read -r cott_scope_gate || exit 126; \
 const SCOPE_GATE_TOKEN: &[u8] = b"cott-scope-ready\n";
 const SCOPE_ACK_TOKEN: u8 = b'1';
 const SCOPE_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
+/// `systemctl kill` is a D-Bus round trip to the user manager, which can stall under heavy
+/// concurrent sandbox load. Success is still decided only by the observed cgroup drain.
+const SCOPE_KILL_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn run(spec: &SandboxSpec) -> Result<CompletedProcess, SandboxError> {
     let bwrap = PathBuf::from("/usr/bin/bwrap");
@@ -974,22 +977,12 @@ impl TransientScope {
             return Ok(());
         }
         let status = self.request_kill()?;
-        if !status.success() && cgroup_populated(cgroup)? {
-            return Err(io::Error::other(format!(
-                "systemctl could not kill sandbox scope {} (status {status})",
-                self.unit
-            )));
-        }
-        let started = Instant::now();
-        while cgroup_populated(cgroup)? {
-            if started.elapsed() >= SCOPE_CLEANUP_TIMEOUT {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!("sandbox scope {} remained populated", self.unit),
-                ));
-            }
-            thread::sleep(Duration::from_millis(5));
-        }
+        wait_for_scope_empty(
+            || cgroup_populated(cgroup),
+            SCOPE_CLEANUP_TIMEOUT,
+            &self.unit,
+            status,
+        )?;
         self.cleaned = true;
         Ok(())
     }
@@ -1020,7 +1013,7 @@ impl TransientScope {
             if let Some(status) = child.try_wait()? {
                 return Ok(status);
             }
-            if started.elapsed() >= SCOPE_CLEANUP_TIMEOUT {
+            if started.elapsed() >= SCOPE_KILL_REQUEST_TIMEOUT {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(io::Error::new(
@@ -1031,6 +1024,27 @@ impl TransientScope {
             thread::sleep(Duration::from_millis(5));
         }
     }
+}
+
+fn wait_for_scope_empty(
+    mut populated: impl FnMut() -> io::Result<bool>,
+    timeout: Duration,
+    unit: &str,
+    signal_status: std::process::ExitStatus,
+) -> io::Result<()> {
+    let started = Instant::now();
+    while populated()? {
+        if started.elapsed() >= timeout {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "sandbox scope {unit} remained populated after systemctl kill (status {signal_status})"
+                ),
+            ));
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    Ok(())
 }
 
 impl Drop for TransientScope {
@@ -1257,6 +1271,35 @@ mod tests {
             io::ErrorKind::PermissionDenied
         );
         assert!(cgroup_events_populated(Ok("frozen 0\n".to_owned())).is_err());
+    }
+
+    #[test]
+    fn failed_signal_request_accepts_only_observed_scope_drain() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let failed_signal = std::process::ExitStatus::from_raw(1 << 8);
+        let mut observations = [true, true, false].into_iter();
+        wait_for_scope_empty(
+            || Ok(observations.next().expect("scope observation")),
+            Duration::from_secs(1),
+            "cott-sandbox-test.scope",
+            failed_signal,
+        )
+        .expect("nonzero systemctl status must not reject a drained cgroup");
+        assert_eq!(observations.next(), None);
+
+        let error = wait_for_scope_empty(
+            || Ok(true),
+            Duration::ZERO,
+            "cott-sandbox-test.scope",
+            failed_signal,
+        )
+        .expect_err("populated cgroup must still fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            error.to_string().contains("status exit status: 1"),
+            "{error}"
+        );
     }
 }
 

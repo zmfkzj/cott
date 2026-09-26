@@ -10,7 +10,12 @@ generated = "generated/python"
 stubs = "generated/stubs"
 interpreter = ".venv/bin/python"
 type_checker = ".venv/bin/basedpyright"
-runtime_validation = "boundary"
+runtime_validation = "test-only"
+
+[effects]
+"process.run" = true
+"tui.io" = true
 
 [generator]
 rules = "generator.rules"
+timeout_seconds = 2400

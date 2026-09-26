@@ -1,0 +1,100 @@
+module real.harlequin.files
+
+enum FileError:
+    NotFound(path: Path)
+    IsADirectory(path: Path)
+    PermissionDenied(path: Path)
+    InvalidEncoding(path: Path)
+    Failed(path: Path, message: Str)
+
+fn load_text_file(path: Path) -> Result[Str, FileError]:
+    doc """
+    Read the file at path as UTF-8 text (universal newlines are NOT translated:
+    bytes are decoded as they are). A missing file is NotFound(path); a
+    directory is IsADirectory(path); an access refusal is PermissionDenied(path);
+    bytes that are not UTF-8 are InvalidEncoding(path); any other OS error is
+    Failed(path, message) with the OS error text.
+    """
+
+    ensures Result.Ok(text) => text.len >= 0
+    ensures Result.Err(FileError.NotFound(missing)) => missing == path
+    ensures Result.Err(FileError.InvalidEncoding(undecodable)) => undecodable == path
+
+    error FileError.NotFound
+    error FileError.IsADirectory
+    error FileError.PermissionDenied
+    error FileError.InvalidEncoding
+    error FileError.Failed
+
+    effects [file.read]
+
+fn save_text_file(path: Path, text: Str) -> Result[U64, FileError]:
+    doc """
+    Write text to path as UTF-8, creating missing parent directories, through a
+    temporary file in the same directory that is flushed, fsynced and then
+    atomically renamed over path (os.replace), so a failed save leaves any
+    previous file unchanged; the temporary file is removed on failure. Returns
+    the number of bytes written. An existing directory at path is
+    IsADirectory(path); an access refusal is PermissionDenied(path); any other
+    failure is Failed(path, message).
+    """
+
+    ensures Result.Ok(written) => written >= text.len
+    ensures Result.Err(FileError.IsADirectory(directory)) => directory == path
+
+    error FileError.IsADirectory
+    error FileError.PermissionDenied
+    error FileError.Failed
+
+    effects [file.read, file.write]
+
+fn expand_path(text: Str, home: Path, cwd: Path) -> Path:
+    doc """
+    Turn what a user typed into a path: surrounding whitespace removed; a
+    leading "~" or "~/" is replaced by home; a relative path is joined to cwd;
+    the result is normalized lexically (os.path.normpath) without resolving
+    symlinks. An empty text is cwd.
+    """
+
+    effects []
+
+fn complete_path(text: Str, home: Path, cwd: Path) -> List[Str]:
+    doc """
+    Tab completion for a path input: the directory part of text (up to and
+    including its last "/", or "" for none) is expanded like expand_path and
+    listed; entries whose name starts with the remaining text (hidden entries
+    only when that text starts with ".") are returned as the original directory
+    part followed by the entry name, with "/" appended for directories, sorted
+    by name. A directory that cannot be listed yields [].
+    """
+
+    effects [file.read]
+
+scenario text_files_round_trip_and_fail_cleanly:
+    fixtures:
+        fs work:
+            file "query.sql" text("select 1;")
+            file "latin1.sql" hex("e9")
+    call loaded = load_text_file(work.path("query.sql"))
+    assert loaded == Result.Ok(value: "select 1;")
+    call saved = save_text_file(work.path("sub/new.sql"), "select 'é';")
+    assert saved == Result.Ok(value: 12)
+    call reloaded = load_text_file(work.path("sub/new.sql"))
+    assert reloaded == Result.Ok(value: "select 'é';")
+    call undecodable = load_text_file(work.path("latin1.sql"))
+    assert undecodable == Result.Err(error: FileError.InvalidEncoding(path: work.path("latin1.sql")))
+    call missing = load_text_file(work.path("absent.sql"))
+    assert missing == Result.Err(error: FileError.NotFound(path: work.path("absent.sql")))
+
+scenario a_failed_save_keeps_the_previous_file:
+    fixtures:
+        fs work:
+            file "query.sql" text("select 1;")
+        failure full:
+            point: file.replace
+            occurrence: 1
+            error: disk_full
+    call failed = save_text_file(work.path("query.sql"), "select 2;")
+    assert failed matches Result.Err(FileError.Failed(_, _))
+    call kept = load_text_file(work.path("query.sql"))
+    assert kept == Result.Ok(value: "select 1;")

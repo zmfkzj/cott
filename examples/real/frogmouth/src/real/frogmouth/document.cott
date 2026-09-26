@@ -1,149 +1,451 @@
 module frogmouth.document
 
-use frogmouth.model.{Document, Location, LocationKind}
-use frogmouth.navigation.{NavigationError}
+use frogmouth.model.{BrowserContext, Dialog, Document, Forge, Location, LocationKind, PathKind}
 
 enum LoadError:
-    NotFound(source: Str)
-    InvalidEncoding(source: Str)
-    TooLarge(source: Str)
-    NetworkFailed(source: Str, message: Str)
-    ReadFailed(source: Str, message: Str)
+    LocalFailed(path: Str, message: Str)
+    RemoteFailed(url: Str, message: Str)
 
-enum OpenError:
-    Navigation(cause: NavigationError)
+enum BrowserFailure:
+    DoesNotExist(path: Str)
+    NoSuchDirectory(path: Str)
+    NotADirectory(path: Str)
+    ForgeUnresolved(forge: Forge)
+    UnhandledLink(href: Str)
+    NotBookmarkable
     Load(cause: LoadError)
 
-fn derive_title(location: Location, markdown: Str) -> Str:
+enum RemoteDocument:
+    Markdown(document: Document)
+    NotMarkdown(content_type: Str)
+
+doc """
+The result of visiting a location: a loaded document, a location handed to
+the desktop's default application, or a failure to report.
+"""
+enum VisitOutcome:
+    Loaded(document: Document)
+    OpenExternally(target: Str)
+    Failed(failure: BrowserFailure)
+
+doc """
+Where a clicked link leads: a location to visit, optionally scrolled to a
+heading anchor after loading; an anchor in the current document; a
+non-web URL for the desktop; or a failure to report.
+"""
+enum LinkAction:
+    Visit(location: Location, anchor: Option[Str])
+    Anchor(anchor: Str)
+    OpenExternally(target: Str)
+    Failed(failure: BrowserFailure)
+
+fn load_local_document(path: Str) -> Result[Document, LoadError]:
     doc """
-    Choose a document title. Split markdown into lines at LF and remove one
-    trailing CR from each. A heading line starts with a run of one to six "#"
-    characters (the whole leading run) followed by a space; its text is the rest
-    of the line with leading and trailing spaces and tabs removed. The title is
-    the text of the first heading line whose text is non-empty. Without one, the
-    title is the last non-empty "/"-separated segment of location.target, or
-    location.target itself when it has no non-empty segment. Only this line rule
-    applies: code blocks, setext headings and inline markup are not interpreted.
+    Read the Markdown file at path from the file system the program runs
+    against: the fs fixture root while a Cott scenario with an fs fixture is
+    active, otherwise the host file system, where a relative path is relative
+    to the process working directory. The bytes are decoded as strict UTF-8
+    and each "\r\n" or lone "\r" line ending becomes "\n", as Python's
+    universal-newline text reading does; nothing else changes. The document's
+    location is the Local location path. A failure to open or read the file,
+    a directory included, is LocalFailed(path, the error text as Python's
+    str() renders the OSError); bytes that are not UTF-8 are LocalFailed(path,
+    a description of the decoding error).
     """
 
-    ensures result.len > 0
-    ensures (contains(markdown, result) or contains(location.target, result))
-    ensures (not contains(markdown, "# ") => contains(location.target, result))
+    requires path.len > 0
+
+    ensures Result.Ok(document) => (document.location.kind == LocationKind.Local and document.location.target == path)
+    ensures Result.Ok(document) => not contains(document.markdown, "\r")
+    ensures Result.Err(LoadError.LocalFailed(failed, _)) => failed == path
+
+    error LoadError.LocalFailed
+
+    effects [file.read]
+
+fn fetch_remote_document(url: Str) -> Result[RemoteDocument, LoadError]:
+    doc """
+    GET url with the header "User-Agent: frogmouth v0.9.1", following
+    redirects, with a 5 second timeout for connecting and for each read. A
+    transport failure (name resolution, connection, timeout, redirect loop or
+    malformed response) is RemoteFailed(url, a description of the failure).
+    A final status outside 200-299 is RemoteFailed(url, MESSAGE), where
+    MESSAGE is "KIND 'STATUS REASON' for url 'FINAL'\nFor more information
+    check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/STATUS"
+    with KIND "Informational response" (1xx), "Redirect response" (3xx),
+    "Client error" (4xx), "Server error" (5xx) or "Invalid status code",
+    REASON the response's reason phrase and FINAL the URL of the final
+    request.
+    
+    On success the Content-Type header, empty when absent, decides. A value
+    starting with "text/plain", "text/markdown" or "text/x-markdown" gives
+    Markdown of the document at the Remote location url, whose markdown is
+    the body decoded with the Content-Type charset parameter when it names a
+    known codec and UTF-8 otherwise, replacing undecodable bytes with U+FFFD.
+    Any other value gives NotMarkdown of that value.
+    """
+
+    requires (starts_with(url, "http://") or starts_with(url, "https://"))
+
+    ensures Result.Ok(RemoteDocument.Markdown(document)) => (document.location.kind == LocationKind.Remote and document.location.target == url)
+    ensures Result.Ok(RemoteDocument.NotMarkdown(content_type)) => not (starts_with(content_type, "text/plain") or starts_with(content_type, "text/markdown") or starts_with(content_type, "text/x-markdown"))
+    ensures Result.Err(LoadError.RemoteFailed(failed, _)) => failed == url
+
+    error LoadError.RemoteFailed
+
+    effects [network]
+
+fn visit_location(location: Location, context: BrowserContext) -> VisitOutcome:
+    doc """
+    Visit location the way the viewer does.
+    
+    When frogmouth.locations.is_markdown_location(location,
+    context.markdown_extensions) holds, a Local location is loaded with
+    frogmouth.document.load_local_document of PATH, where PATH is
+    frogmouth.locations.resolve_local_path(location.target, context.home,
+    context.working_directory); a Remote location is fetched with
+    frogmouth.document.fetch_remote_document(location.target). A loaded
+    Markdown document is Loaded; NotMarkdown is OpenExternally of
+    location.target; a LoadError is Failed(Load(error)).
+    
+    Any other Remote location is OpenExternally of its target without a
+    request. Any other Local location is classified with
+    frogmouth.locations.inspect_local_path(PATH): Missing is
+    Failed(DoesNotExist(location.target)), any other kind is OpenExternally
+    of "file://" followed by PATH.
+    """
+
+    ensures VisitOutcome.Loaded(document) => document.location.kind == location.kind
+    ensures VisitOutcome.Loaded(document) => ((location.kind == LocationKind.Remote) => document.location.target == location.target)
+    ensures VisitOutcome.OpenExternally(target) => ((location.kind == LocationKind.Remote) => target == location.target)
+    ensures VisitOutcome.OpenExternally(target) => ((location.kind == LocationKind.Local) => starts_with(target, "file://"))
+    ensures VisitOutcome.Failed(BrowserFailure.DoesNotExist(path)) => path == location.target
+
+    effects [file.read, network]
+
+fn resolve_link(href: Str, current: Option[Location], context: BrowserContext) -> LinkAction:
+    doc """
+    Decide where a clicked Markdown link leads. href is already
+    percent-decoded; current is the location being viewed, if any.
+    
+    1. An href starting with "#" is Anchor of the rest of href.
+    2. Otherwise split href at its first "#" into BASE and FRAGMENT. ANCHOR
+       is FRAGMENT when href has a "#" and FRAGMENT is not empty, otherwise
+       Nothing.
+    3. When frogmouth.locations.remote_location(BASE) is a location, Visit
+       it with ANCHOR.
+    4. When current is a Remote location, resolve BASE against its target
+       as an RFC 3986 reference, as Python urllib.parse.urljoin does. A
+       result that remote_location recognizes is Visit of that location with
+       ANCHOR; any other result is OpenExternally of it.
+    5. Otherwise, when frogmouth.locations.normalize_local_path(
+       context.working_directory, BASE) is not Missing according to
+       frogmouth.locations.inspect_local_path, Visit that Local path with
+       ANCHOR.
+    6. Otherwise, when current is a Local location, let DIR be
+       normalize_local_path(context.working_directory, current.target)
+       without its last segment and separating "/" ("/" when only the root
+       remains, "." when nothing remains). When normalize_local_path(DIR,
+       BASE) is not Missing, Visit that Local path with ANCHOR.
+    7. Otherwise the result is Failed(UnhandledLink(href)).
+    """
+
+    ensures LinkAction.Anchor(anchor) => ends_with(href, anchor)
+    ensures LinkAction.Visit(_, Option.Some(anchor)) => ends_with(href, anchor)
+    ensures LinkAction.Failed(BrowserFailure.UnhandledLink(link)) => link == href
+
+    effects [file.read]
+
+fn select_browsable_entries(paths: List[Str], extensions: List[Str]) -> List[Str]:
+    doc """
+    Filter a directory listing of non-empty paths for the local file
+    browser, keeping the given order. A path is kept when its name (last
+    "/"-separated segment) does not start with "." and
+    frogmouth.locations.inspect_local_path says Directory, or when
+    inspect_local_path says File and frogmouth.locations.is_markdown_location
+    of the Local location path holds for extensions, so Markdown files are
+    kept even when hidden.
+    """
+
+    ensures result.len <= paths.len
+
+    effects [file.read]
+
+fn open_external(target: Str) -> Bool:
+    doc """
+    Ask the desktop to open target, a web, mail or file URL, with its default
+    application: start the opener program ("open" on macOS, "xdg-open"
+    elsewhere) with target as its only argument, standard input, output and
+    error on the null device, in a new session, without waiting for it. The
+    result is true when the opener process started and false when it could
+    not be started (for example because the program is not installed).
+    """
+
+    requires target.len > 0
+
+    effects [desktop.open]
+
+fn failure_dialog(failure: BrowserFailure) -> Dialog:
+    doc """
+    The error dialog that reports failure. Every interpolated value (PATH,
+    HREF, URL, MESSAGE) is escaped like rich.markup.escape so it is shown
+    literally; FORGE is "GitHub", "GitLab", "BitBucket" or "Codeberg".
+    
+    DoesNotExist(PATH): "Does not exist" / "Unable to open PATH because it
+    does not exist."
+    NoSuchDirectory(PATH): "No such directory" / "PATH does not exist."
+    NotADirectory(PATH): "Not a directory" / "PATH is not a directory."
+    ForgeUnresolved(FORGE): "Unable to work out a FORGE URL" / "After trying
+    a few options it hasn't been possible to work out the FORGE URL.\n\n
+    Perhaps the file you're after is on an unusual branch, or the spelling is
+    wrong?" (the two paragraphs are separated by exactly "\n\n").
+    UnhandledLink(HREF): "Unable to handle link" / "Unable to work out how to
+    handle this link:\n\nHREF"
+    NotBookmarkable: "Not a bookmarkable location" / "The current view can't
+    be bookmarked."
+    Load(LocalFailed(PATH, MESSAGE)): "Error loading local document" /
+    "PATH\n\nMESSAGE."
+    Load(RemoteFailed(URL, MESSAGE)): "Error getting document" / "MESSAGE"
+    Titles and messages contain nothing else.
+    """
+
+    ensures failure matches BrowserFailure.DoesNotExist(_) => result.title == "Does not exist"
+    ensures failure matches BrowserFailure.NoSuchDirectory(_) => result.title == "No such directory"
+    ensures failure matches BrowserFailure.NotADirectory(_) => result.title == "Not a directory"
+    ensures failure matches BrowserFailure.ForgeUnresolved(forge) => ((forge == Forge.GitHub) => result.title == "Unable to work out a GitHub URL")
+    ensures failure matches BrowserFailure.ForgeUnresolved(forge) => ((forge == Forge.GitLab) => result.title == "Unable to work out a GitLab URL")
+    ensures failure matches BrowserFailure.ForgeUnresolved(forge) => ((forge == Forge.BitBucket) => result.title == "Unable to work out a BitBucket URL")
+    ensures failure matches BrowserFailure.ForgeUnresolved(forge) => ((forge == Forge.Codeberg) => result.title == "Unable to work out a Codeberg URL")
+    ensures failure matches BrowserFailure.UnhandledLink(_) => (result.title == "Unable to handle link")
+    ensures failure matches BrowserFailure.NotBookmarkable => (result.title == "Not a bookmarkable location" and result.message == "The current view can't be bookmarked.")
+    ensures failure matches BrowserFailure.Load(LoadError.LocalFailed(_, _)) => (result.title == "Error loading local document")
+    ensures failure matches BrowserFailure.Load(LoadError.RemoteFailed(_, _)) => (result.title == "Error getting document")
+    ensures failure matches BrowserFailure.UnhandledLink(href) => ((not contains(href, "[") and not contains(href, "\\")) => ends_with(result.message, href))
+    ensures failure matches BrowserFailure.Load(LoadError.RemoteFailed(_, message)) => ((not contains(message, "[") and not contains(message, "\\")) => result.message == message)
 
     effects []
 
-fn load_document(location: Location) -> Result[Document, LoadError]:
-    doc """
-    Load Markdown for location, reading at most 5242880 bytes (5 MiB) plus one
-    byte to detect a larger document.
-    
-    Local: read the file at location.target from the file system the program
-    runs against: the fs fixture root while a Cott scenario with an fs fixture
-    is active, otherwise the host file system, where a relative target is
-    relative to the process working directory. A missing file is NotFound; any
-    other open or read failure is ReadFailed. While a scenario fs fixture is
-    active, a target the fixture does not permit (absolute, or outside the
-    fixture root) is a contract violation raised by the fixture, not a read
-    failure.
-    
-    Http: send one GET to location.target, following redirects, with a 30000
-    millisecond timeout for the connection attempt and each blocking read. A
-    final status of 404 or 410 is NotFound. Any other final status outside
-    200-299 is NetworkFailed whose message contains the decimal status. Name
-    resolution, connection, timeout and incomplete-response failures are
-    NetworkFailed.
-    
-    More than 5242880 bytes is TooLarge. Bytes that are not strict UTF-8 are
-    InvalidEncoding. The markdown is the decoded text with one leading U+FEFF
-    removed, otherwise unchanged, and the title is
-    frogmouth.document.derive_title(location, markdown). Every LoadError's
-    source is location.target.
-    """
+requirement VISIT_DISPATCHES_BY_SUFFIX for visit_location:
+    text "visit_location loads a location only when is_markdown_location accepts it; other web locations go to the desktop without a request, and other local paths go to the desktop only when they exist."
+    checked_by locations_are_visited
 
-    ensures Result.Ok(document) => document.location == location
-    ensures Result.Ok(document) => document.markdown.len <= 5242880
-    ensures Result.Err(LoadError.NotFound(source)) => source == location.target
-    ensures Result.Err(LoadError.InvalidEncoding(source)) => source == location.target
-    ensures Result.Err(LoadError.TooLarge(source)) => source == location.target
-    ensures Result.Err(LoadError.NetworkFailed(source, _)) => source == location.target
-    ensures Result.Err(LoadError.ReadFailed(source, _)) => source == location.target
+requirement OPEN_EXTERNAL_USES_DESKTOP_HANDLER for open_external:
+    text "open_external hands target to the desktop opener and never downloads or renders it itself."
 
-    error LoadError.NotFound
-    error LoadError.InvalidEncoding
-    error LoadError.TooLarge
-    error LoadError.NetworkFailed
-    error LoadError.ReadFailed
-
-    effects [file.read, network]
-
-fn open_location(value: Str, working_directory: Path) -> Result[Document, OpenError]:
-    doc """
-    The frogmouth composition root, used by the address bar and by reload. Call
-    frogmouth.navigation.resolve_location(value, working_directory); its error is
-    returned as OpenError.Navigation and nothing is loaded. Otherwise return
-    frogmouth.document.load_document of the resolved location, with its error
-    returned as OpenError.Load.
-    """
-
-    ensures Result.Ok(document) => (document.location.kind == LocationKind.Http => document.location.target == value)
-    ensures Result.Ok(document) => (document.location.kind == LocationKind.Local => ends_with(document.location.target, value))
-
-    error OpenError.Navigation when (value == "" or (contains(value, "://") and not (starts_with(value, "http://") or starts_with(value, "https://"))))
-    error OpenError.Load
-
-    effects [file.read, network]
-
-requirement LOAD_TITLE_IS_DERIVED for load_document:
-    text "A loaded document's title is derive_title(location, markdown) of its own location and markdown."
-    checked_by open_location_loads_local_and_http_documents assert 1
-    checked_by open_location_loads_local_and_http_documents assert 2
-
-requirement OPEN_RESOLVES_THEN_LOADS for open_location:
-    text "open_location returns load_document of the Location that resolve_location produced; a navigation error is returned as OpenError.Navigation without loading, and a load error is returned unchanged inside OpenError.Load."
-    checked_by open_location_loads_local_and_http_documents
-
-scenario titles_come_from_first_heading_or_target:
-    call heading = derive_title(
-        Location(kind: LocationKind.Local, target: "/notes/todo.md"),
-        "#hashtag\n#   \n####### deep\n### Plan  \n# Later",
-    )
-    assert heading == "Plan"
-    call segment = derive_title(
-        Location(kind: LocationKind.Http, target: "https://example.com/docs/"),
-        "no headings",
-    )
-    assert segment == "docs"
-    call root = derive_title(Location(kind: LocationKind.Local, target: "/"), "")
-    assert root == "/"
-
-scenario open_location_loads_local_and_http_documents:
+scenario local_documents_are_loaded:
     fixtures:
         fs files:
-            file "docs/guide.md" text("intro\r\n## Setup Guide \nbody\n")
+            file "docs/guide.md" text("# Guide\r\nIntro\rEnd\n")
             file "docs/latin1.md" hex("636166e90a")
+    call loaded = load_local_document("docs/guide.md")
+    assert loaded == Result.Ok(
+        value: Document(
+            location: Location(kind: LocationKind.Local, target: "docs/guide.md"),
+            markdown: "# Guide\nIntro\nEnd\n",
+        ),
+    )
+    call undecodable = load_local_document("docs/latin1.md")
+    assert undecodable matches Result.Err(LoadError.LocalFailed(path, _)) => path == "docs/latin1.md"
+    call missing = load_local_document("docs/absent.md")
+    assert missing matches Result.Err(LoadError.LocalFailed(path, message)) => path == "docs/absent.md" and message.len > 0
+    call directory = load_local_document("docs")
+    assert directory matches Result.Err(LoadError.LocalFailed(path, _)) => path == "docs"
+
+scenario remote_documents_are_fetched:
+    fixtures:
         http service:
-            route "/readme.md" -> response(status: 200, body: text("# Remote\ntext"), encoding: "utf-8")
+            route "/doc.md" -> response(status: 200, body: text("# Remote\ncafé"), encoding: "utf-8")
+            route "/latin.md" -> response(status: 200, body: text("café"), encoding: "latin-1")
+            route "/moved.md" -> redirect(status: 301, location: "/doc.md")
             route "/gone.md" -> response(status: 404, body: text("missing"), encoding: "utf-8")
             route "/broken.md" -> response(status: 500, body: text("oops"), encoding: "utf-8")
-    call local = open_location("guide.md", files.path("docs"))
-    assert (local == Result.Ok(value: Document(location: Location(kind: LocationKind.Local, target: "docs/guide.md"), title: "Setup Guide", markdown: "intro\r\n## Setup Guide \nbody\n")))
-    call remote = open_location(service.url("/readme.md"), files.path("docs"))
-    assert remote matches Result.Ok(document) => document.title == "Remote" and document.markdown == "# Remote\ntext"
-    call missing = open_location("absent.md", files.path("docs"))
-    assert missing == Result.Err(
-        error: OpenError.Load(cause: LoadError.NotFound(source: "docs/absent.md")),
+    call remote = fetch_remote_document(service.url("/doc.md"))
+    assert remote == Result.Ok(
+        value: RemoteDocument.Markdown(
+            document: Document(
+                location: Location(kind: LocationKind.Remote, target: service.url("/doc.md")),
+                markdown: "# Remote\ncafé",
+            ),
+        ),
     )
-    call encoded = open_location("latin1.md", files.path("docs"))
-    assert encoded == Result.Err(
-        error: OpenError.Load(cause: LoadError.InvalidEncoding(source: "docs/latin1.md")),
+    call latin = fetch_remote_document(service.url("/latin.md"))
+    assert latin matches Result.Ok(RemoteDocument.Markdown(document)) => document.markdown == "café"
+    call moved = fetch_remote_document(service.url("/moved.md"))
+    assert moved matches Result.Ok(RemoteDocument.Markdown(document)) => document.markdown == "# Remote\ncafé"
+    call gone = fetch_remote_document(service.url("/gone.md"))
+    assert gone matches Result.Err(LoadError.RemoteFailed(_, message)) => starts_with(message, "Client error '404 Not Found' for url 'http://") and ends_with(message, "/gone.md'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404")
+    call broken = fetch_remote_document(service.url("/broken.md"))
+    assert broken matches Result.Err(LoadError.RemoteFailed(_, message)) => starts_with(message, "Server error '500 Internal Server Error' for url 'http://")
+
+scenario locations_are_visited:
+    fixtures:
+        fs files:
+            file "docs/guide.md" text("# Guide\n")
+            file "docs/notes.txt" text("plain\n")
+            file "home/todo.md" text("todo\n")
+        http service:
+            route "/readme.md" -> response(status: 200, body: text("# Readme"), encoding: "utf-8")
+            route "/gone.md" -> response(status: 404, body: text("missing"), encoding: "utf-8")
+    data context: BrowserContext = BrowserContext(
+        home: "home",
+        working_directory: ".",
+        markdown_extensions: List(".md", ".markdown"),
     )
-    call gone = open_location(service.url("/gone.md"), files.path("docs"))
-    assert gone matches Result.Err(OpenError.Load(LoadError.NotFound(source))) => source == service.url("/gone.md")
-    call broken = open_location(service.url("/broken.md"), files.path("docs"))
-    assert broken matches Result.Err(OpenError.Load(LoadError.NetworkFailed(source, message))) => contains(message, "500")
-    call unsupported = open_location("ftp://mirror/readme.md", files.path("docs"))
-    assert unsupported == Result.Err(
-        error: OpenError.Navigation(cause: NavigationError.UnsupportedScheme(scheme: "ftp")),
+    call local = visit_location(
+        Location(kind: LocationKind.Local, target: "docs/../docs/guide.md"),
+        context,
     )
-    call empty = open_location("", files.path("docs"))
-    assert empty == Result.Err(error: OpenError.Navigation(cause: NavigationError.EmptyInput))
+    assert local == VisitOutcome.Loaded(
+        document: Document(
+            location: Location(kind: LocationKind.Local, target: "docs/guide.md"),
+            markdown: "# Guide\n",
+        ),
+    )
+    call tilde = visit_location(Location(kind: LocationKind.Local, target: "~/todo.md"), context)
+    assert tilde matches VisitOutcome.Loaded(document) => document.location.target == "home/todo.md"
+    call missing = visit_location(
+        Location(kind: LocationKind.Local, target: "docs/absent.md"),
+        context,
+    )
+    assert missing matches VisitOutcome.Failed(BrowserFailure.Load(LoadError.LocalFailed(path, _))) => path == "docs/absent.md"
+    call text = visit_location(
+        Location(kind: LocationKind.Local, target: "docs/notes.txt"),
+        context,
+    )
+    assert text == VisitOutcome.OpenExternally(target: "file://docs/notes.txt")
+    call absent_text = visit_location(
+        Location(kind: LocationKind.Local, target: "docs/absent.txt"),
+        context,
+    )
+    assert absent_text == VisitOutcome.Failed(
+        failure: BrowserFailure.DoesNotExist(path: "docs/absent.txt"),
+    )
+    call remote = visit_location(
+        Location(kind: LocationKind.Remote, target: service.url("/readme.md")),
+        context,
+    )
+    assert remote matches VisitOutcome.Loaded(document) => document.markdown == "# Readme"
+    call page = visit_location(
+        Location(kind: LocationKind.Remote, target: service.url("/index.html")),
+        context,
+    )
+    assert page matches VisitOutcome.OpenExternally(target) => ends_with(target, "/index.html")
+    call gone = visit_location(
+        Location(kind: LocationKind.Remote, target: service.url("/gone.md")),
+        context,
+    )
+    assert gone matches VisitOutcome.Failed(BrowserFailure.Load(LoadError.RemoteFailed(_, message))) => contains(message, "404")
+
+scenario links_are_resolved:
+    fixtures:
+        fs files:
+            file "docs/guide.md" text("# Guide\n")
+            file "docs/setup.md" text("# Setup\n")
+            file "top.md" text("# Top\n")
+    data context: BrowserContext = BrowserContext(
+        home: "home",
+        working_directory: ".",
+        markdown_extensions: List(".md"),
+    )
+    data guide: Location = Location(kind: LocationKind.Local, target: "docs/guide.md")
+    data web: Location = Location(
+        kind: LocationKind.Remote,
+        target: "https://example.com/docs/guide.md?raw=1",
+    )
+    call anchor = resolve_link("#install", Option.Some(value: guide), context)
+    assert anchor == LinkAction.Anchor(anchor: "install")
+    call sibling = resolve_link("setup.md#usage", Option.Some(value: guide), context)
+    assert sibling == LinkAction.Visit(
+        location: Location(kind: LocationKind.Local, target: "docs/setup.md"),
+        anchor: Option.Some(value: "usage"),
+    )
+    call cwd_first = resolve_link("top.md", Option.Some(value: guide), context)
+    assert cwd_first == LinkAction.Visit(
+        location: Location(kind: LocationKind.Local, target: "top.md"),
+        anchor: Option.Nothing,
+    )
+    call absolute = resolve_link("HTTPS://example.org/a.md#", Option.Some(value: guide), context)
+    assert absolute == LinkAction.Visit(
+        location: Location(kind: LocationKind.Remote, target: "https://example.org/a.md"),
+        anchor: Option.Nothing,
+    )
+    call relative_web = resolve_link("../api/index.md#top", Option.Some(value: web), context)
+    assert relative_web == LinkAction.Visit(
+        location: Location(kind: LocationKind.Remote, target: "https://example.com/api/index.md"),
+        anchor: Option.Some(value: "top"),
+    )
+    call mail = resolve_link("mailto:team@example.com", Option.Some(value: web), context)
+    assert mail == LinkAction.OpenExternally(target: "mailto:team@example.com")
+    call unknown = resolve_link("nowhere.md", Option.Some(value: guide), context)
+    assert unknown == LinkAction.Failed(failure: BrowserFailure.UnhandledLink(href: "nowhere.md"))
+    call orphan = resolve_link("setup.md", Option.Nothing, context)
+    assert orphan == LinkAction.Failed(failure: BrowserFailure.UnhandledLink(href: "setup.md"))
+
+scenario local_listing_is_filtered:
+    fixtures:
+        fs files:
+            file "tree/README.md" text("# Readme\n")
+            file "tree/.hidden.md" text("# Hidden\n")
+            file "tree/notes.txt" text("plain\n")
+            file "tree/docs/index.markdown" text("# Index\n")
+            file "tree/.git/config" text("[core]\n")
+    call entries = select_browsable_entries(
+        List(
+            "tree/.git",
+            "tree/.hidden.md",
+            "tree/README.md",
+            "tree/absent.md",
+            "tree/docs",
+            "tree/notes.txt",
+        ),
+        List(".md"),
+    )
+    assert entries == List("tree/.hidden.md", "tree/README.md", "tree/docs")
+
+scenario failures_become_dialogs:
+    call missing = failure_dialog(BrowserFailure.DoesNotExist(path: "/notes/todo.txt"))
+    assert missing == Dialog(
+        title: "Does not exist",
+        message: "Unable to open /notes/todo.txt because it does not exist.",
+    )
+    call no_directory = failure_dialog(BrowserFailure.NoSuchDirectory(path: "/nowhere"))
+    assert no_directory == Dialog(title: "No such directory", message: "/nowhere does not exist.")
+    call not_directory = failure_dialog(BrowserFailure.NotADirectory(path: "/notes/todo.md"))
+    assert not_directory == Dialog(
+        title: "Not a directory",
+        message: "/notes/todo.md is not a directory.",
+    )
+    call forge = failure_dialog(BrowserFailure.ForgeUnresolved(forge: Forge.Codeberg))
+    assert forge == Dialog(
+        title: "Unable to work out a Codeberg URL",
+        message: "After trying a few options it hasn't been possible to work out the Codeberg URL.\n\nPerhaps the file you're after is on an unusual branch, or the spelling is wrong?",
+    )
+    call link = failure_dialog(BrowserFailure.UnhandledLink(href: "[x](y)"))
+    assert link == Dialog(
+        title: "Unable to handle link",
+        message: "Unable to work out how to handle this link:\n\n\\[x](y)",
+    )
+    call local = failure_dialog(
+        BrowserFailure.Load(
+            cause: LoadError.LocalFailed(
+                path: "/a.md",
+                message: "[Errno 2] No such file or directory: '/a.md'",
+            ),
+        ),
+    )
+    assert local == Dialog(
+        title: "Error loading local document",
+        message: "/a.md\n\n[Errno 2] No such file or directory: '/a.md'.",
+    )
+    call remote = failure_dialog(
+        BrowserFailure.Load(
+            cause: LoadError.RemoteFailed(
+                url: "https://example.com/a.md",
+                message: "Server error '500 Internal Server Error'",
+            ),
+        ),
+    )
+    assert remote == Dialog(
+        title: "Error getting document",
+        message: "Server error '500 Internal Server Error'",
+    )

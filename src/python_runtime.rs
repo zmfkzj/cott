@@ -31,8 +31,17 @@ from dataclasses import dataclass
 from pathlib import Path as _Path
 from typing import Annotated, Any, Generic, Literal, Never, Protocol, TypeAlias, TypeVar, Union, get_args as _get_args, get_origin as _get_origin, get_type_hints as _get_type_hints, final as _final, overload
 _COTT_PATH_TYPE = type(_Path())
+# Resolved field annotations of a nominal class never change once they resolve; evaluating their
+# forward references per value dominates construction cost. Failures are not cached.
+_COTT_TYPE_HINTS: dict[type, dict[str, Any]] = {}
 
 
+def _cott_type_hints(nominal: type) -> dict[str, Any]:
+    hints = _COTT_TYPE_HINTS.get(nominal)
+    if hints is None:
+        hints = _get_type_hints(nominal, include_extras=True)
+        _COTT_TYPE_HINTS[nominal] = hints
+    return hints
 
 
 # The compiler embeds this value in every generated runtime.
@@ -778,6 +787,11 @@ def _cott_validate_abi_value(value: object, annotation: object, path: str, state
         return _cott_validate_abi(normalized, args[0], path=path, _state=state, _depth=depth + 1)
     if origin in (Union, _types.UnionType):
         for candidate in args:
+            nominal_candidate = _get_origin(candidate) or candidate
+            # Nominal dataclass branches accept exact types only. Dispatch mismatches without
+            # recursively probing them; do not refund work or memo entries from failed probes.
+            if isinstance(nominal_candidate, type) and _dataclasses.is_dataclass(nominal_candidate) and type(value) is not nominal_candidate:
+                continue
             try:
                 return _cott_validate_abi(value, candidate, path=path, _state=state, _depth=depth + 1)
             except _CottTraversalFailure:
@@ -883,7 +897,7 @@ def _cott_validate_abi_value(value: object, annotation: object, path: str, state
             return value
         if _dataclasses.is_dataclass(nominal):
             substitutions = dict(zip(getattr(nominal, "__parameters__", ()), args))
-            hints = _get_type_hints(nominal, include_extras=True)
+            hints = _cott_type_hints(nominal)
             fields = {
                 field.name: _cott_validate_abi(
                     getattr(value, field.name),
@@ -955,7 +969,7 @@ def _cott_normalize_f32_abi_value(value: object, annotation: object, path: str, 
     nominal = origin if isinstance(origin, type) and _dataclasses.is_dataclass(origin) else annotation
     if isinstance(nominal, type) and type(value) is nominal and _dataclasses.is_dataclass(nominal):
         substitutions = dict(zip(getattr(nominal, "__parameters__", ()), args))
-        hints = _get_type_hints(nominal, include_extras=True)
+        hints = _cott_type_hints(nominal)
         return nominal(**{
             field.name: _cott_normalize_f32_abi(getattr(value, field.name), _cott_substitute_type(hints.get(field.name, Any), substitutions), path=f"{path}.{field.name}", _state=state, _depth=depth + 1)
             for field in _dataclasses.fields(nominal)
@@ -1402,7 +1416,7 @@ def _cott_wrap_async_protocol(value: object, annotation: object, *, path: str = 
     nominal = origin if isinstance(origin, type) and _dataclasses.is_dataclass(origin) else annotation
     if isinstance(nominal, type) and type(value) is nominal and _dataclasses.is_dataclass(nominal):
         substitutions = dict(zip(getattr(nominal, "__parameters__", ()), args))
-        hints = _get_type_hints(nominal, include_extras=True)
+        hints = _cott_type_hints(nominal)
         return nominal(**{
             field.name: _cott_wrap_async_protocol(
                 getattr(value, field.name),
@@ -1431,6 +1445,9 @@ def _cott_check_project_identity(expected_project_name: str | None, *, phase: st
 _COTT_MODULE_CACHE: dict[str, tuple[_types.ModuleType, str, str]] = {}
 _COTT_LOAD_CACHE: dict[tuple[str, str, str, str | None, str | None], tuple[_types.ModuleType, object, tuple[int, int, int, int, int], tuple[int, int, int, int, int]]] = {}
 _COTT_LOAD_LOCK = _threading.RLock()
+# Record-level validation depends only on the exact generation.json bytes, so its result is
+# reused for identical bytes; every load still reads and hashes the current record.
+_COTT_GENERATION_CACHE: dict[str, tuple[dict[object, object], str]] = {}
 
 
 class _CottImplementationImportBlocker:
@@ -2105,25 +2122,32 @@ def _cott_validate_generation_identity(snapshot: dict[object, object]) -> str:
 def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symbol: str, project: str | None, cott_symbol: str | None, source: bytes) -> str:
     artifact_root = root.parent if root.name == "python" else root
     generation_path = artifact_root / "generation.json"
-    try:
-        current_record = _json.loads(
-            _cott_regular_file_bytes(generation_path, "generation record"),
-            object_pairs_hook=_cott_json_object,
-            parse_int=_cott_json_integer,
-            parse_constant=_cott_json_constant,
-        )
-    except (TypeError, ValueError) as error:
-        raise _cott_violation(f"generation record is malformed: {error}") from error
-    current, last_verified = _cott_resolve_generation_record(current_record)
-    current = _cott_validate_generation_snapshot(current, "current")
-    if last_verified is not None:
-        last_verified = _cott_validate_generation_snapshot(last_verified, "last verified")
-        if not last_verified["verified"]:
-            raise _cott_violation("last verified generation snapshot is not verified")
-        _cott_validate_generation_identity(last_verified)
-    generation_id = _cott_validate_generation_identity(current)
-    if current["project_version"] != PROJECT_VERSION:
-        raise _cott_violation("generation project version mismatch")
+    record_bytes = _cott_regular_file_bytes(generation_path, "generation record")
+    record_digest = _cott_sha256(record_bytes)
+    cached_generation = _COTT_GENERATION_CACHE.get(record_digest)
+    if cached_generation is None:
+        try:
+            current_record = _json.loads(
+                record_bytes,
+                object_pairs_hook=_cott_json_object,
+                parse_int=_cott_json_integer,
+                parse_constant=_cott_json_constant,
+            )
+        except (TypeError, ValueError) as error:
+            raise _cott_violation(f"generation record is malformed: {error}") from error
+        current, last_verified = _cott_resolve_generation_record(current_record)
+        current = _cott_validate_generation_snapshot(current, "current")
+        if last_verified is not None:
+            last_verified = _cott_validate_generation_snapshot(last_verified, "last verified")
+            if not last_verified["verified"]:
+                raise _cott_violation("last verified generation snapshot is not verified")
+            _cott_validate_generation_identity(last_verified)
+        generation_id = _cott_validate_generation_identity(current)
+        if current["project_version"] != PROJECT_VERSION:
+            raise _cott_violation("generation project version mismatch")
+        _COTT_GENERATION_CACHE[record_digest] = (current, generation_id)
+    else:
+        current, generation_id = cached_generation
     _cott_validate_python_tools(current["tools"])
     _cott_validate_dependencies(current["dependencies"], source, current["public_python_symbols"])
     implementations = current["implementations"]

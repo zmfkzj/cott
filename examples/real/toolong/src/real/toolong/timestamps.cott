@@ -1,0 +1,303 @@
+module real.toolong.timestamps
+
+use real.toolong.model.{LogTimestamp, TimeUnit, TimestampScan}
+
+fn default_timestamp_order() -> List[U8]:
+    doc """
+    The timestamp scanner's initial format order: List(0, 1, 2, ..., 16), the
+    indexes of the format table documented on
+    real.toolong.timestamps.scan_timestamp in table order.
+    """
+
+    ensures result.len == 17
+
+    effects []
+
+fn scan_timestamp(line: Str, order: List[U8]) -> TimestampScan:
+    doc """
+    Toolong's TimestampScanner.scan for one line. When line is longer than
+    10000 code points only its first 10000 code points are scanned. The format
+    table (index: Python regular expression -> parser) is:
+    
+    0: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}\s?(?:Z|[+-]\d{4}) -> datetime.fromisoformat
+    1: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} -> datetime.fromisoformat
+    2: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\s?(?:Z|[+-]\d{4}) -> datetime.fromisoformat
+    3: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} -> datetime.fromisoformat
+    4: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s?(?:Z|[+-]\d{4}) -> datetime.fromisoformat
+    5: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} -> datetime.fromisoformat
+    6: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2},\d{3}\s?(?:Z|[+-]\d{4}) -> datetime.fromisoformat
+    7: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2},\d{3} -> datetime.fromisoformat
+    8: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\s?(?:Z|[+-]\d{4}Z?) -> datetime.fromisoformat
+    9: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3} -> datetime.fromisoformat
+    10: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\s?(?:Z|[+-]\d{4}) -> datetime.fromisoformat
+    11: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2} -> datetime.fromisoformat
+    12: [JFMASOND][a-z]{2}\s(\s|\d)\d \d{2}:\d{2}:\d{2} -> datetime.strptime(text, "%b %d %H:%M:%S")
+    13: \d{2}\/\w+\/\d{4} \d{2}:\d{2}:\d{2} -> datetime.strptime(text, "%d/%b/%Y %H:%M:%S")
+    14: \d{2}\/\w+\/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4} -> datetime.strptime(text, "%d/%b/%Y:%H:%M:%S %z")
+    15: \d{10}\.\d+ -> datetime.fromtimestamp(float(text))
+    16: \d{13} -> datetime.fromtimestamp(int(text))
+    
+    Visit the formats in the given order (each element is a table index; an
+    element that is not a table index is skipped). For a format, find the
+    first match of its regular expression anywhere in the line (re.search) and
+    give the whole matched text to its parser, as CPython 3.14 does (the
+    fromtimestamp parsers use the host local time zone; strptime month names
+    follow the current LC_TIME locale and never emit a warning to the user). A
+    format with no match, or whose parser raises or returns nothing, is
+    skipped. For the first format that yields a datetime, return it as a
+    LogTimestamp (utc_offset_seconds is the whole seconds of its utcoffset()
+    when it is aware) together with the order changed so that this format's
+    element moves to the front (the order is unchanged when it is already
+    first). When no format yields a datetime, timestamp is Nothing and the
+    order is returned unchanged.
+    """
+
+    ensures result.order.len == order.len
+    ensures result.timestamp matches Option.Nothing => result.order == order
+
+    effects []
+
+fn shift_timestamp(timestamp: LogTimestamp, amount: I32, unit: TimeUnit) -> Option[LogTimestamp]:
+    doc """
+    Add amount minutes, hours or days (a day is 24 hours) to the timestamp as
+    CPython datetime + timedelta does, keeping utc_offset_seconds. amount may be
+    negative. Nothing when the result falls outside years 1-9999.
+    """
+
+    ensures Option.Some(shifted) => (amount == 0 => shifted == timestamp)
+
+    effects []
+
+fn compare_timestamps(left: LogTimestamp, right: LogTimestamp) -> Option[I8]:
+    doc """
+    Compare two timestamps like CPython datetimes. When both are naive, compare
+    their fields (year, month, day, hour, minute, second, microsecond)
+    lexicographically. When both are aware, compare the UTC instants they
+    denote. Return Some(-1), Some(0) or Some(1) when left is earlier than,
+    equal to or later than right. Mixing a naive and an aware timestamp is not
+    comparable and returns Nothing.
+    """
+
+    ensures Option.Some(ordering) => (left == right => ordering == 0)
+
+    effects []
+
+fn timestamp_seconds(timestamp: LogTimestamp) -> F64:
+    doc """
+    POSIX seconds of the timestamp, as CPython datetime.timestamp() returns
+    them: an aware timestamp denotes an exact instant; a naive timestamp is
+    interpreted in the host local time zone.
+    """
+
+    effects []
+
+fn format_local_timestamp(timestamp: LogTimestamp) -> Str:
+    doc """
+    The footer rendering of a timestamp: CPython strftime("%x %X") of the
+    datetime (with its UTC offset when aware), using the process's current
+    LC_TIME locale. In the C/POSIX locale this is "MM/DD/YY HH:MM:SS".
+    """
+
+    ensures result.len > 0
+
+    effects []
+
+scenario timestamp_formats_follow_the_scanner_table:
+    call order = default_timestamp_order()
+    assert order == List(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
+    call comma = scan_timestamp("2024-01-29 13:45:20,100 INFO boot", order)
+    assert (comma == TimestampScan(timestamp: Option.Some(value: LogTimestamp(year: 2024, month: 1, day: 29, hour: 13, minute: 45, second: 20, microsecond: 100000, utc_offset_seconds: Option.Nothing)), order: List(1, 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)))
+    call zulu = scan_timestamp("{\"ts\": \"2024-01-29T13:46:00.000Z\"}", order)
+    assert zulu.timestamp == Option.Some(
+        value: LogTimestamp(
+            year: 2024,
+            month: 1,
+            day: 29,
+            hour: 13,
+            minute: 46,
+            second: 0,
+            microsecond: 0,
+            utc_offset_seconds: Option.Some(value: 0),
+        ),
+    )
+    assert zulu.order == List(8, 0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16)
+    call access = scan_timestamp("1.2.3.4 - - [29/Jan/2024:13:45:19 +0100] \"GET / HTTP/1.1\" 200 5", order)
+    assert access.timestamp == Option.Some(
+        value: LogTimestamp(
+            year: 2024,
+            month: 1,
+            day: 29,
+            hour: 13,
+            minute: 45,
+            second: 19,
+            microsecond: 0,
+            utc_offset_seconds: Option.Some(value: 3600),
+        ),
+    )
+    assert access.order == List(14, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16)
+    call syslog = scan_timestamp("Feb  3 04:05:06 host sshd[1]: ok", order)
+    assert syslog.timestamp == Option.Some(
+        value: LogTimestamp(
+            year: 1900,
+            month: 2,
+            day: 3,
+            hour: 4,
+            minute: 5,
+            second: 6,
+            microsecond: 0,
+            utc_offset_seconds: Option.Nothing,
+        ),
+    )
+    call none = scan_timestamp("Traceback (most recent call last):", List(3, 1, 2))
+    assert none == TimestampScan(timestamp: Option.Nothing, order: List(3, 1, 2))
+    call milliseconds = scan_timestamp("event 1706536000000 done", order)
+    assert milliseconds.timestamp == Option.Nothing
+
+scenario spaced_offset_falls_back_to_a_naive_format:
+    call spaced = scan_timestamp("2024-01-29 13:45:20,100 +0000 x", List(0, 1, 5))
+    assert spaced.timestamp == Option.Some(
+        value: LogTimestamp(
+            year: 2024,
+            month: 1,
+            day: 29,
+            hour: 13,
+            minute: 45,
+            second: 20,
+            microsecond: 100000,
+            utc_offset_seconds: Option.Nothing,
+        ),
+    )
+    assert spaced.order == List(1, 0, 5)
+    call recent_first = scan_timestamp("2024-01-29 13:45:20,100+0000 x", List(1, 0))
+    assert recent_first.timestamp matches Option.Some(found) => found.utc_offset_seconds == Option.Nothing
+    assert recent_first.order == List(1, 0)
+
+scenario timestamps_shift_and_compare:
+    data base: LogTimestamp = LogTimestamp(
+        year: 2024,
+        month: 1,
+        day: 31,
+        hour: 23,
+        minute: 59,
+        second: 30,
+        microsecond: 0,
+        utc_offset_seconds: Option.Nothing,
+    )
+    call minute = shift_timestamp(base, 1, TimeUnit.Minute)
+    assert minute == Option.Some(
+        value: LogTimestamp(
+            year: 2024,
+            month: 2,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 30,
+            microsecond: 0,
+            utc_offset_seconds: Option.Nothing,
+        ),
+    )
+    call back = shift_timestamp(base, -2, TimeUnit.Day)
+    assert back == Option.Some(
+        value: LogTimestamp(
+            year: 2024,
+            month: 1,
+            day: 29,
+            hour: 23,
+            minute: 59,
+            second: 30,
+            microsecond: 0,
+            utc_offset_seconds: Option.Nothing,
+        ),
+    )
+    call overflow = shift_timestamp(
+        LogTimestamp(
+            year: 9999,
+            month: 12,
+            day: 31,
+            hour: 23,
+            minute: 0,
+            second: 0,
+            microsecond: 0,
+            utc_offset_seconds: Option.Nothing,
+        ),
+        1,
+        TimeUnit.Hour,
+    )
+    assert overflow == Option.Nothing
+    call earlier = compare_timestamps(
+        base,
+        LogTimestamp(
+            year: 2024,
+            month: 2,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            microsecond: 0,
+            utc_offset_seconds: Option.Nothing,
+        ),
+    )
+    assert earlier == Option.Some(value: -1)
+    call same_instant = compare_timestamps(
+        LogTimestamp(
+            year: 2024,
+            month: 1,
+            day: 1,
+            hour: 1,
+            minute: 0,
+            second: 0,
+            microsecond: 0,
+            utc_offset_seconds: Option.Some(value: 3600),
+        ),
+        LogTimestamp(
+            year: 2024,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            microsecond: 0,
+            utc_offset_seconds: Option.Some(value: 0),
+        ),
+    )
+    assert same_instant == Option.Some(value: 0)
+    call mixed = compare_timestamps(
+        base,
+        LogTimestamp(
+            year: 2024,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            microsecond: 0,
+            utc_offset_seconds: Option.Some(value: 0),
+        ),
+    )
+    assert mixed == Option.Nothing
+    call epoch = timestamp_seconds(
+        LogTimestamp(
+            year: 2024,
+            month: 1,
+            day: 29,
+            hour: 13,
+            minute: 45,
+            second: 19,
+            microsecond: 500000,
+            utc_offset_seconds: Option.Some(value: 0),
+        ),
+    )
+    assert epoch == 1706535919.5
+    call footer = format_local_timestamp(
+        LogTimestamp(
+            year: 2024,
+            month: 1,
+            day: 29,
+            hour: 13,
+            minute: 45,
+            second: 19,
+            microsecond: 0,
+            utc_offset_seconds: Option.Nothing,
+        ),
+    )
+    assert footer == "01/29/24 13:45:19"

@@ -1,0 +1,222 @@
+module real.toolong.keys
+
+doc """
+A key press, named as Textual names keys: "up", "down", "left", "right",
+"home", "end", "pageup", "pagedown", "insert", "delete", "backspace",
+"enter", "escape", "tab", "shift+tab", "f1" ... "f12", "ctrl+a" ...
+"ctrl+z", "ctrl+left", "ctrl+right", "ctrl+up", "ctrl+down", "ctrl+home",
+"ctrl+end", "shift+left", "shift+right", "ctrl+backslash", "space",
+"slash", and the character itself for every other printable character (so
+"m" and "M" differ). character is the printable character typed, Nothing for
+non-printable keys.
+"""
+struct KeyEvent:
+    key: Str
+    character: Option[Str]
+
+doc """
+Raw terminal input: one prompt_toolkit 3.0.52 key press, with name the
+value of its Keys member (for example "c-f", "escape", "s-tab") or the
+character itself for a character key, and data the text the terminal sent.
+"""
+enum TerminalInput:
+    KeyPress(name: Str, data: Str)
+
+doc """
+A Textual Input's editable state: its value and cursor position in code
+points.
+"""
+struct TextInput:
+    value: Str
+    cursor: U64
+
+    invariant self.cursor <= self.value.len
+
+doc """
+The outcome of offering a key to a Textual Input: the input after the key,
+whether the input consumed the key, whether its value changed, whether it
+was submitted (enter) and whether the bell rings (a restricted character).
+"""
+struct InputEdit:
+    input: TextInput
+    handled: Bool
+    changed: Bool
+    submitted: Bool
+    bell: Bool
+
+fn decode_key(input: TerminalInput) -> Option[KeyEvent]:
+    doc """
+    Name a prompt_toolkit key press in Textual's key naming.
+    
+    A name that is exactly one code point for which str.isprintable() is true
+    is a character key: " " gives key "space", "/" gives key "slash", any
+    other character gives key and character both that character; the
+    character of a character key is the name itself.
+    
+    Otherwise, by name: "escape" escape; "c-i" tab; "c-m" and "c-j" enter;
+    "c-h" backspace; "s-tab" shift+tab; "up", "down", "left", "right",
+    "home", "end", "pageup", "pagedown", "insert", "delete" unchanged;
+    "c-left", "c-right", "c-up", "c-down", "c-home", "c-end" become
+    "ctrl+left" and so on; "s-left" and "s-right" become "shift+left" and
+    "shift+right"; "f1" to "f12" unchanged; "c-" followed by one backslash (Keys.ControlBackslash)
+    ctrl+backslash; any other
+    "c-" followed by one lowercase letter becomes "ctrl+" and that letter
+    ("c-c" is "ctrl+c"). Every other name is Nothing. Keys that are not
+    character keys have no character; data is not used.
+    """
+
+    ensures Option.Some(event) => event.key != ""
+
+    effects []
+
+fn edit_input(input: TextInput, key: KeyEvent, suggestion: Str, integer_only: Bool) -> InputEdit:
+    doc """
+    Textual 0.52 Input key handling. The cursor is always kept within
+    [0, len(value)]. suggestion is the completion currently offered ("" for
+    none). The word-start pattern is re.compile(r"(?<=\W)\w").
+    
+    A key with a printable character (str.isprintable()) inserts it at the
+    cursor and moves the cursor after it; when integer_only and the new value
+    does not fully match [-+]?\d* the value is kept and the bell rings.
+    Otherwise by key:
+    left: cursor - 1. right: when the cursor is at the end and suggestion is
+    non-empty, the value becomes suggestion with the cursor at its end;
+    otherwise cursor + 1. ctrl+left: the start of the last word-start match in
+    value[:cursor], or 0. ctrl+right: cursor plus the start of the first
+    word-start match in value[cursor:], or the end. home and ctrl+a: 0. end and
+    ctrl+e: the end. backspace: delete the code point before the cursor (none
+    at 0) and move the cursor back. delete and ctrl+d: delete the code point at
+    the cursor. ctrl+w: when the cursor is not at 0, move it to the last
+    word-start match in value[:cursor] (0 when none) and delete what was
+    between. ctrl+u: delete everything before the cursor and move it to 0.
+    ctrl+f: with after = value[cursor:], delete up to the first word-start
+    match in after (keeping after from match end - 1), or everything after the
+    cursor when none matches. ctrl+k: delete everything after the cursor.
+    enter: submitted, nothing else changes.
+    handled is true for every key listed above and for printable characters;
+    any other key is not handled and leaves the input unchanged. changed is
+    true exactly when the value differs from input.value.
+    """
+
+    ensures (not result.handled => result.input == input)
+    ensures (result.changed == (result.input.value != input.value))
+
+    effects []
+
+scenario keys_decode_from_prompt_toolkit:
+    call ctrl_f = decode_key(TerminalInput.KeyPress(name: "c-f", data: "\u0006"))
+    assert ctrl_f == Option.Some(value: KeyEvent(key: "ctrl+f", character: Option.Nothing))
+    call escape = decode_key(TerminalInput.KeyPress(name: "escape", data: "\u001b"))
+    assert escape == Option.Some(value: KeyEvent(key: "escape", character: Option.Nothing))
+    call upper = decode_key(TerminalInput.KeyPress(name: "M", data: "M"))
+    assert upper == Option.Some(value: KeyEvent(key: "M", character: Option.Some(value: "M")))
+    call slash = decode_key(TerminalInput.KeyPress(name: "/", data: "/"))
+    assert slash == Option.Some(value: KeyEvent(key: "slash", character: Option.Some(value: "/")))
+    call space = decode_key(TerminalInput.KeyPress(name: " ", data: " "))
+    assert space == Option.Some(value: KeyEvent(key: "space", character: Option.Some(value: " ")))
+    call tab = decode_key(TerminalInput.KeyPress(name: "c-i", data: "\t"))
+    assert tab == Option.Some(value: KeyEvent(key: "tab", character: Option.Nothing))
+    call enter = decode_key(TerminalInput.KeyPress(name: "c-m", data: "\r"))
+    assert enter == Option.Some(value: KeyEvent(key: "enter", character: Option.Nothing))
+    call back = decode_key(TerminalInput.KeyPress(name: "s-tab", data: ""))
+    assert back == Option.Some(value: KeyEvent(key: "shift+tab", character: Option.Nothing))
+    call page = decode_key(TerminalInput.KeyPress(name: "pagedown", data: ""))
+    assert page == Option.Some(value: KeyEvent(key: "pagedown", character: Option.Nothing))
+    call help = decode_key(TerminalInput.KeyPress(name: "f1", data: ""))
+    assert help == Option.Some(value: KeyEvent(key: "f1", character: Option.Nothing))
+    call word = decode_key(TerminalInput.KeyPress(name: "c-left", data: ""))
+    assert word == Option.Some(value: KeyEvent(key: "ctrl+left", character: Option.Nothing))
+    call unknown = decode_key(TerminalInput.KeyPress(name: "<scroll-up>", data: ""))
+    assert unknown == Option.Nothing
+    call nul = decode_key(TerminalInput.KeyPress(name: "c-@", data: "\u0000"))
+    assert nul == Option.Nothing
+
+scenario input_edits_like_textual:
+    call typed = edit_input(
+        TextInput(value: "ERR", cursor: 3),
+        KeyEvent(key: "O", character: Option.Some(value: "O")),
+        "",
+        false,
+    )
+    assert typed == InputEdit(
+        input: TextInput(value: "ERRO", cursor: 4),
+        handled: true,
+        changed: true,
+        submitted: false,
+        bell: false,
+    )
+    call accepted = edit_input(
+        TextInput(value: "ser", cursor: 3),
+        KeyEvent(key: "right", character: Option.Nothing),
+        "server",
+        false,
+    )
+    assert accepted.input == TextInput(value: "server", cursor: 6)
+    call moved = edit_input(
+        TextInput(value: "ser", cursor: 1),
+        KeyEvent(key: "right", character: Option.Nothing),
+        "server",
+        false,
+    )
+    assert moved.input == TextInput(value: "ser", cursor: 2)
+    call word_left = edit_input(
+        TextInput(value: "disk full now", cursor: 9),
+        KeyEvent(key: "ctrl+left", character: Option.Nothing),
+        "",
+        false,
+    )
+    assert word_left.input.cursor == 5
+    call delete_word = edit_input(
+        TextInput(value: "disk full now", cursor: 9),
+        KeyEvent(key: "ctrl+w", character: Option.Nothing),
+        "",
+        false,
+    )
+    assert delete_word.input == TextInput(value: "disk  now", cursor: 5)
+    call delete_right_word = edit_input(
+        TextInput(value: "disk full now", cursor: 0),
+        KeyEvent(key: "ctrl+f", character: Option.Nothing),
+        "",
+        false,
+    )
+    assert delete_right_word.input == TextInput(value: "full now", cursor: 0)
+    call backspace = edit_input(
+        TextInput(value: "abc", cursor: 1),
+        KeyEvent(key: "backspace", character: Option.Nothing),
+        "",
+        false,
+    )
+    assert backspace.input == TextInput(value: "bc", cursor: 0)
+    call digits = edit_input(
+        TextInput(value: "12", cursor: 2),
+        KeyEvent(key: "x", character: Option.Some(value: "x")),
+        "",
+        true,
+    )
+    assert digits == InputEdit(
+        input: TextInput(value: "12", cursor: 2),
+        handled: true,
+        changed: false,
+        submitted: false,
+        bell: true,
+    )
+    call submit = edit_input(
+        TextInput(value: "12", cursor: 2),
+        KeyEvent(key: "enter", character: Option.Nothing),
+        "",
+        true,
+    )
+    assert submit.submitted
+    call ignored = edit_input(
+        TextInput(value: "12", cursor: 2),
+        KeyEvent(key: "down", character: Option.Nothing),
+        "",
+        true,
+    )
+    assert ignored == InputEdit(
+        input: TextInput(value: "12", cursor: 2),
+        handled: false,
+        changed: false,
+        submitted: false,
+        bell: false,
+    )

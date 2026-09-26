@@ -1,0 +1,439 @@
+module real.toolong.text
+
+use real.toolong.model.{FindQuery, LineFormat, ParsedLine, StyledSpan, StyledText}
+
+doc """
+Toolong's LogHighlighter pattern: the alternation of its named-group regular
+expressions, applied with style prefix "repr.".
+"""
+const LOG_HIGHLIGHT_PATTERN: Str = "(?P<ipv4>[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})|(?P<ipv6>([A-Fa-f0-9]{1,4}::?){1,7}[A-Fa-f0-9]{1,4})|(?P<eui64>(?:[0-9A-Fa-f]{1,2}-){7}[0-9A-Fa-f]{1,2}|(?:[0-9A-Fa-f]{1,2}:){7}[0-9A-Fa-f]{1,2}|(?:[0-9A-Fa-f]{4}\\.){3}[0-9A-Fa-f]{4})|(?P<eui48>(?:[0-9A-Fa-f]{1,2}-){5}[0-9A-Fa-f]{1,2}|(?:[0-9A-Fa-f]{1,2}:){5}[0-9A-Fa-f]{1,2}|(?:[0-9A-Fa-f]{4}\\.){2}[0-9A-Fa-f]{4})|(?P<uuid>[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12})|\\b(?P<bool_true>True)\\b|\\b(?P<bool_false>False)\\b|\\b(?P<none>None)\\b|(?P<number>(?<!\\w)\\-?[0-9]+\\.?[0-9]*(e[-+]?\\d+?)?\\b|0x[0-9a-fA-F]*)|(?<![\\\\\\w])(?P<str>b?'''.*?(?<!\\\\)'''|b?'.*?(?<!\\\\)'|b?\\\"\\\"\\\".*?(?<!\\\\)\\\"\\\"\\\"|b?\\\".*?(?<!\\\\)\\\")|(?P<path>\\[.*?\\])"
+
+doc """
+Toolong's CommonLogFormat regular expression (matched with re.fullmatch).
+"""
+const COMMON_LOG_PATTERN: Str = "(?P<ip>.*?) (?P<remote_log_name>.*?) (?P<userid>.*?) (?P<date>\\[.*?(?= ).*?\\]) \"(?P<request_method>.*?) (?P<path>.*?)(?P<request_version> HTTP\\/.*)?\" (?P<status>.*?) (?P<length>.*?) \"(?P<referrer>.*?)\""
+
+doc """
+Toolong's CombinedLogFormat regular expression (matched with re.fullmatch).
+"""
+const COMBINED_LOG_PATTERN: Str = "(?P<ip>.*?) (?P<remote_log_name>.*?) (?P<userid>.*?) \\[(?P<date>.*?)(?= ) (?P<timezone>.*?)\\] \"(?P<request_method>.*?) (?P<path>.*?)(?P<request_version> HTTP\\/.*)?\" (?P<status>.*?) (?P<length>.*?) \"(?P<referrer>.*?)\" \"(?P<user_agent>.*?)\" (?P<session_id>.*?) (?P<generation_time_micro>.*?) (?P<virtual_host>.*)"
+
+doc """
+The regular expression Toolong splits rendered lines and find input with to
+find words for find suggestions.
+"""
+const SEARCH_SPLIT_PATTERN: Str = "[\\s/\\[\\]\\(\\)\\\"\\/]"
+
+doc """
+A word seen in a rendered line and one of its prefixes, for find suggestions.
+"""
+struct SearchWord:
+    prefix: Str
+    word: Str
+
+doc """
+The part of a find input value that a suggestion completes: the text before
+the last word and the last word.
+"""
+struct CompletionTarget:
+    start: Str
+    word: Str
+
+doc """
+The outcome of testing one raw line against the find query.
+"""
+struct LineMatch:
+    matched: Bool
+    invalid_regex: Bool
+
+fn decode_ansi(line: Str) -> StyledText:
+    doc """
+    Exactly rich 13.7.0 Text.from_ansi(line) with its default arguments,
+    converted to a StyledText: text is the rich Text's plain text and spans are
+    its spans in order, each rich Style converted to a style code (see
+    real.toolong.model.StyledSpan). A rich color of type default converts to
+    the COLOR "default", a standard, 8-bit or Windows color to the COLOR of
+    TermColor.Indexed with its palette number, and a truecolor color to the
+    COLOR of TermColor.Rgb. bold, dim, italic, underline and reverse appear
+    (as the name, or "no" + the name) when the rich style sets them (true or
+    false); every other rich attribute (blink, strike, links, ...) is
+    dropped. A span whose converted code is empty is still kept.
+    
+    Consequences of rich's behavior that must hold: SGR escape sequences
+    (ESC [ ... m) style the text and are removed; other recognized escape
+    sequences are removed without styling; the line separators recognized by
+    str.splitlines (including a lone CR) split the text into lines that are
+    joined back with LF.
+    """
+
+    ensures (not contains(line, "\u001b") and not contains(line, "\r") => result.spans.len == 0)
+
+    effects []
+
+fn highlight_repr(text: StyledText) -> StyledText:
+    doc """
+    Toolong's LogHighlighter applied to a copy of text. When text.text is 10000
+    or more code points long the text is returned unchanged. Otherwise, for
+    every match of re.finditer(LOG_HIGHLIGHT_PATTERN, text.text), in match
+    order, and for every named group of the pattern in the order the groups
+    appear in the pattern, append a span over the group's match when the group
+    matched a non-empty string, with the rich 13.7.0 default theme style
+    "repr.<group name>" as a style code:
+    
+    ipv4, ipv6, eui48, eui64: "fg:ansibrightgreen bold"
+    uuid: "fg:ansibrightyellow nobold"
+    bool_true: "fg:ansibrightgreen italic"
+    bool_false: "fg:ansibrightred italic"
+    none: "fg:ansimagenta italic"
+    number: "fg:ansicyan bold noitalic"
+    str: "fg:ansigreen nobold noitalic"
+    path: "fg:ansimagenta"
+    
+    Existing spans are kept before the new ones.
+    """
+
+    ensures result.text == text.text
+    ensures result.spans.len >= text.spans.len
+
+    effects []
+
+fn highlight_json(text: StyledText) -> StyledText:
+    doc """
+    rich 13.7.0 JSONHighlighter applied to a copy of text: its combined brace,
+    boolean, null, number and string pattern with style prefix "json." (named
+    groups handled like real.toolong.text.highlight_repr), followed by its key
+    pass that appends a "json.key" span over every JSON string (matched by the
+    highlighter's JSON_STR pattern) whose next non-whitespace character (space,
+    LF, CR or TAB are skipped) is ":". The rich default theme styles as style
+    codes:
+    
+    brace: "bold"
+    bool_true: "fg:ansibrightgreen italic"
+    bool_false: "fg:ansibrightred italic"
+    null: "fg:ansimagenta italic"
+    number: "fg:ansicyan bold noitalic"
+    str: "fg:ansigreen nobold noitalic"
+    key: "fg:ansiblue bold"
+    
+    Existing spans are kept before the new ones; there is no length limit.
+    """
+
+    ensures result.text == text.text
+    ensures result.spans.len >= text.spans.len
+
+    effects []
+
+fn default_line_formats() -> List[LineFormat]:
+    doc """
+    The format parser's initial order: Json, CommonLog, CombinedLog, Plain.
+    """
+
+    ensures result.len == 4
+
+    effects []
+
+fn parse_line(line: Str, order: List[LineFormat]) -> ParsedLine:
+    doc """
+    Toolong's FormatParser.parse. When line is longer than 10000 code points
+    only its first 10000 code points are used. Try the formats in the given
+    order; the first format that accepts the line wins and moves to the front
+    of the returned order (the order is unchanged when it is already first).
+    
+    Json: the line with Python str.strip() applied; rejected when that is
+    empty or json.loads rejects it. Its text is decode_ansi(stripped line)
+    and, when that has no spans, highlight_json of it. The ParsedLine line is
+    the stripped line.
+    
+    CommonLog / CombinedLog: accepted when re.fullmatch(COMMON_LOG_PATTERN,
+    line) / re.fullmatch(COMBINED_LOG_PATTERN, line) matches. Its text is
+    decode_ansi(line) and, when that has no spans, highlight_repr of it. Then,
+    when the match's status group is non-empty, append a span over every
+    non-overlapping occurrence (re.finditer of re.escape) of " " + status + " "
+    in the text, styled "fg:ansired bold" when status starts with "4" and
+    "fg:ansimagenta" otherwise. Then append a span styled "fg:ansiyellow
+    bold" over every occurrence of the alternation
+    GET|POST|PUT|HEAD|POST|DELETE|OPTIONS|PATCH (case sensitive,
+    anywhere in the text). The ParsedLine line is the line.
+    
+    Plain: always accepts. Its text is decode_ansi(line) and, when that has no
+    spans, highlight_repr of it. The ParsedLine line is the line.
+    
+    When no format in order accepts the line (always the case when order is
+    empty) the result is format Plain, line "", an empty text and order
+    unchanged. Call real.toolong.text.decode_ansi,
+    real.toolong.text.highlight_repr and real.toolong.text.highlight_json for
+    those steps.
+    """
+
+    ensures result.order.len == order.len
+
+    effects []
+
+fn abbreviate_text(text: StyledText, limit: U64) -> StyledText:
+    doc """
+    When text.text has more than limit code points, keep its first limit code
+    points followed by "…" (U+2026): spans are clipped to [0, limit), spans
+    left empty are dropped and the ellipsis is unstyled. Otherwise return text
+    unchanged.
+    """
+
+    ensures (text.text.len <= limit => result == text)
+    ensures (text.text.len > limit => result.text.len == limit + 1)
+
+    effects []
+
+fn highlight_find(text: StyledText, query: FindQuery) -> StyledText:
+    doc """
+    Toolong's find highlighting of one displayed line. The match style code is
+    "fg:#000000 bg:#fea62b".
+    
+    Regex queries: when query.text is not a valid Python regular expression
+    the text is returned unchanged. Otherwise every match of
+    re.finditer(query.text, text.text) (flag re.IGNORECASE unless
+    case_sensitive) with a non-empty span gets an appended match-style span.
+    
+    Plain queries: every non-overlapping occurrence of query.text (re.escape;
+    re.IGNORECASE unless case_sensitive) gets an appended match-style span.
+    
+    When nothing matched, append instead one span styled "dim" over the whole
+    text (no span when the text is empty). Existing spans are kept
+    first. An empty query.text leaves the text unchanged.
+    """
+
+    ensures result.text == text.text
+    ensures (query.text == "" => result == text)
+
+    effects []
+
+fn line_matches(line: Str, query: FindQuery) -> LineMatch:
+    doc """
+    Toolong's check_match for find navigation over a raw line. An empty line
+    matches. Regex queries use re.match(query.text, line) (anchored at the
+    start of line; re.IGNORECASE unless case_sensitive); when query.text is not
+    a valid regular expression the line matches and invalid_regex is true.
+    Plain queries match when query.text is a substring of line, comparing
+    str.lower() of both unless case_sensitive. invalid_regex is false except
+    for the invalid-regex case.
+    """
+
+    ensures (line == "" => result.matched)
+    ensures (not query.regex => not result.invalid_regex)
+    ensures (not query.regex and query.case_sensitive and line != "" => result.matched == contains(line, query.text))
+
+    effects []
+
+fn pretty_json(line: Str) -> Option[StyledText]:
+    doc """
+    The line panel's JSON view. When json.loads(line) succeeds, return the
+    text of rich 13.7.0 JSON.from_data(value) with its defaults (indent 2,
+    ensure_ascii false, keys in document order): the json.dumps text,
+    highlighted as real.toolong.text.highlight_json does (call it). Lines of
+    the result are separated by LF. Nothing when json.loads fails.
+    """
+
+    effects []
+
+fn wrap_text(text: StyledText, width: U16) -> List[StyledText]:
+    doc """
+    Word-wrap styled text as a Textual label does: exactly rich 13.7.0
+    Text.wrap(console, width) with default justify and overflow ("fold") and
+    tab size 8. The text is split at LF; each line is broken before words that
+    would exceed width cells, words longer than width are folded, trailing
+    whitespace beyond width is removed, and an empty line stays one empty
+    line. Each resulting line keeps its styles with spans relative to the
+    line. A width of 0 is treated as 1.
+    """
+
+    ensures result.len >= 1
+
+    effects []
+
+fn search_words(plain: Str) -> List[SearchWord]:
+    doc """
+    The find-suggestion words of one rendered line, in Toolong's order: for
+    every piece of re.split(SEARCH_SPLIT_PATTERN, plain) that is longer than one
+    code point, and for every offset from 1 up to and excluding len(piece) - 1,
+    one SearchWord with prefix piece[:offset] and word piece.
+    """
+
+    effects []
+
+fn completion_target(value: Str) -> Option[CompletionTarget]:
+    doc """
+    What a find suggestion completes: word is the last piece of
+    re.split(SEARCH_SPLIT_PATTERN, value) and start is value without that last
+    word (value[:len(value) - len(word)]). Nothing when word is empty.
+    """
+
+    ensures Option.Some(target) => target.word != ""
+
+    effects []
+
+data bright_green_bold: Str = "fg:ansibrightgreen bold"
+
+data number_style: Str = "fg:ansicyan bold noitalic"
+
+data string_style: Str = "fg:ansigreen nobold noitalic"
+
+data match_style: Str = "fg:#000000 bg:#fea62b"
+
+data dim_style: Str = "dim"
+
+scenario ansi_sequences_become_styles:
+    call colored = decode_ansi("\u001b[1;31mERROR\u001b[0m disk")
+    assert colored == StyledText(
+        text: "ERROR disk",
+        spans: List(StyledSpan(start: 0, end: 5, style: "fg:ansired bold")),
+    )
+    call carriage = decode_ansi("progress 10%\rprogress 100%")
+    assert carriage == StyledText(text: "progress 10%\nprogress 100%", spans: List())
+    call rgb = decode_ansi("\u001b[38;2;10;20;30mx")
+    assert rgb.spans == List(StyledSpan(start: 0, end: 1, style: "fg:#0a141e"))
+
+scenario log_highlighter_marks_repr_groups:
+    call highlighted = highlight_repr(StyledText(text: "from 10.0.0.1 took 25 ms", spans: List()))
+    assert highlighted == StyledText(
+        text: "from 10.0.0.1 took 25 ms",
+        spans: List(
+            StyledSpan(start: 5, end: 13, style: bright_green_bold),
+            StyledSpan(start: 19, end: 21, style: number_style),
+        ),
+    )
+    call quoted = highlight_repr(StyledText(text: "said 'hi' None", spans: List()))
+    assert quoted.spans == List(
+        StyledSpan(start: 5, end: 9, style: string_style),
+        StyledSpan(start: 10, end: 14, style: "fg:ansimagenta italic"),
+    )
+
+scenario json_highlighter_marks_keys:
+    call json = highlight_json(StyledText(text: "{\"a\": 1}", spans: List()))
+    assert json == StyledText(
+        text: "{\"a\": 1}",
+        spans: List(
+            StyledSpan(start: 0, end: 1, style: "bold"),
+            StyledSpan(start: 1, end: 4, style: string_style),
+            StyledSpan(start: 6, end: 7, style: number_style),
+            StyledSpan(start: 7, end: 8, style: "bold"),
+            StyledSpan(start: 1, end: 4, style: "fg:ansiblue bold"),
+        ),
+    )
+
+scenario format_parser_prefers_the_last_matching_format:
+    call formats = default_line_formats()
+    call access = parse_line("1.2.3.4 - - [29/Jan/2024:13:45:19 +0000] \"GET /x HTTP/1.1\" 404 12 \"-\"", formats)
+    assert access.format == LineFormat.CommonLog
+    assert access.order == List(
+        LineFormat.CommonLog,
+        LineFormat.Json,
+        LineFormat.CombinedLog,
+        LineFormat.Plain,
+    )
+    assert (access.text.text == "1.2.3.4 - - [29/Jan/2024:13:45:19 +0000] \"GET /x HTTP/1.1\" 404 12 \"-\"")
+    assert (access.text.spans == List(StyledSpan(start: 0, end: 7, style: bright_green_bold), StyledSpan(start: 12, end: 40, style: "fg:ansimagenta"), StyledSpan(start: 41, end: 58, style: string_style), StyledSpan(start: 59, end: 62, style: number_style), StyledSpan(start: 63, end: 65, style: number_style), StyledSpan(start: 66, end: 69, style: string_style), StyledSpan(start: 58, end: 63, style: "fg:ansired bold"), StyledSpan(start: 42, end: 45, style: "fg:ansiyellow bold")))
+    call json = parse_line("  {\"n\": 1}  ", formats)
+    assert json.format == LineFormat.Json
+    assert json.line == "{\"n\": 1}"
+    assert json.order == formats
+    call plain = parse_line("boot ok", formats)
+    assert plain == ParsedLine(
+        format: LineFormat.Plain,
+        line: "boot ok",
+        text: StyledText(text: "boot ok", spans: List()),
+        order: List(
+            LineFormat.Plain,
+            LineFormat.Json,
+            LineFormat.CommonLog,
+            LineFormat.CombinedLog,
+        ),
+    )
+    call sticky = parse_line("{\"n\": 1}", List(LineFormat.Plain, LineFormat.Json))
+    assert sticky.format == LineFormat.Plain
+    assert sticky.order == List(LineFormat.Plain, LineFormat.Json)
+    call nothing = parse_line("x", List())
+    assert nothing == ParsedLine(
+        format: LineFormat.Plain,
+        line: "",
+        text: StyledText(text: "", spans: List()),
+        order: List(),
+    )
+
+scenario find_highlighting_and_matching:
+    call plain = highlight_find(
+        StyledText(text: "Error: error", spans: List()),
+        FindQuery(text: "error", regex: false, case_sensitive: false),
+    )
+    assert plain.spans == List(
+        StyledSpan(start: 0, end: 5, style: match_style),
+        StyledSpan(start: 7, end: 12, style: match_style),
+    )
+    call sensitive = highlight_find(
+        StyledText(text: "Error: error", spans: List()),
+        FindQuery(text: "ERROR", regex: false, case_sensitive: true),
+    )
+    assert sensitive.spans == List(StyledSpan(start: 0, end: 12, style: dim_style))
+    call pattern = highlight_find(
+        StyledText(text: "a1 b22", spans: List()),
+        FindQuery(text: "[0-9]+", regex: true, case_sensitive: false),
+    )
+    assert pattern.spans == List(
+        StyledSpan(start: 1, end: 2, style: match_style),
+        StyledSpan(start: 4, end: 6, style: match_style),
+    )
+    call broken = highlight_find(
+        StyledText(text: "a(", spans: List()),
+        FindQuery(text: "(", regex: true, case_sensitive: false),
+    )
+    assert broken.spans == List()
+    call anchored = line_matches(
+        "\nERROR x",
+        FindQuery(text: "ERROR", regex: true, case_sensitive: false),
+    )
+    assert anchored == LineMatch(matched: false, invalid_regex: false)
+    call start = line_matches(
+        "ERROR x",
+        FindQuery(text: "error", regex: true, case_sensitive: false),
+    )
+    assert start == LineMatch(matched: true, invalid_regex: false)
+    call invalid = line_matches("abc", FindQuery(text: "[", regex: true, case_sensitive: false))
+    assert invalid == LineMatch(matched: true, invalid_regex: true)
+    call empty = line_matches("", FindQuery(text: "zzz", regex: false, case_sensitive: true))
+    assert empty.matched
+
+scenario panel_text_helpers:
+    call short = abbreviate_text(
+        StyledText(
+            text: "abcdef",
+            spans: List(
+                StyledSpan(start: 1, end: 5, style: dim_style),
+                StyledSpan(start: 4, end: 6, style: dim_style),
+            ),
+        ),
+        4,
+    )
+    assert short == StyledText(
+        text: "abcd…",
+        spans: List(StyledSpan(start: 1, end: 4, style: dim_style)),
+    )
+    call json = pretty_json("{\"a\": [1, null]}")
+    assert json matches Option.Some(pretty) => pretty.text == "{\n  \"a\": [\n    1,\n    null\n  ]\n}"
+    call not_json = pretty_json("not json")
+    assert not_json == Option.Nothing
+    call wrapped = wrap_text(StyledText(text: "alpha beta gamma", spans: List()), 11)
+    assert wrapped == List(
+        StyledText(text: "alpha beta ", spans: List()),
+        StyledText(text: "gamma", spans: List()),
+    )
+    call folded = wrap_text(StyledText(text: "abcdefgh", spans: List()), 3)
+    assert folded == List(
+        StyledText(text: "abc", spans: List()),
+        StyledText(text: "def", spans: List()),
+        StyledText(text: "gh", spans: List()),
+    )
+
+scenario find_suggestion_words:
+    call words = search_words("GET /api [x]")
+    assert words == List(SearchWord(prefix: "G", word: "GET"), SearchWord(prefix: "a", word: "api"))
+    call target = completion_target("status 40")
+    assert target == Option.Some(value: CompletionTarget(start: "status ", word: "40"))
+    call trailing = completion_target("status ")
+    assert trailing == Option.Nothing

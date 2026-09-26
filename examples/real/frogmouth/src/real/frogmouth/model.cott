@@ -2,18 +2,71 @@ module frogmouth.model
 
 enum LocationKind:
     Local
-    Http
+    Remote
 
+doc """
+A place the viewer can show. A Local target is POSIX path text for the host
+file system; a Remote target is an absolute http or https URL whose scheme is
+lower case.
+"""
 struct Location:
     kind: LocationKind
     target: Str
 
     invariant self.target.len > 0
-    invariant (self.kind == LocationKind.Http => starts_with(self.target, "http://") or starts_with(self.target, "https://"))
+    invariant (self.kind == LocationKind.Remote => (starts_with(self.target, "http://") or starts_with(self.target, "https://")))
 
+doc """
+Markdown text loaded from location, exactly as decoded, without a title or
+other derived data.
+"""
 struct Document:
     location: Location
-    title: Str
     markdown: Str
 
+enum PathKind:
+    Missing
+    File
+    Directory
+    Other
+
+enum Forge:
+    GitHub
+    GitLab
+    BitBucket
+    Codeberg
+
+doc """
+A repository file request of the forge quick view. A missing branch means
+"try main, then master"; a missing file means README.md.
+"""
+struct ForgeRequest:
+    owner: Str
+    repository: Str
+    branch: Option[Str]
+    file: Option[Str]
+
+    invariant self.owner.len > 0
+    invariant self.repository.len > 0
+
+doc """
+Text for a modal dialog. Both fields are Rich console markup.
+"""
+struct Dialog:
+    title: Str
+    message: Str
+
     invariant self.title.len > 0
+
+doc """
+Process facts the browser resolves locations against: the user's home
+directory, the process working directory, and the configured Markdown file
+suffixes (for example ".md").
+"""
+struct BrowserContext:
+    home: Str
+    working_directory: Str
+    markdown_extensions: List[Str]
+
+    invariant self.home.len > 0
+    invariant self.working_directory.len > 0

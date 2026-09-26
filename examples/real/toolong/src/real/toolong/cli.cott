@@ -1,0 +1,209 @@
+module real.toolong.cli
+
+use real.toolong.model.{PipeFeed, TabPlan, ViewerSetup}
+use real.toolong.tui.{ViewerFailure, run_viewer}
+
+doc """
+What the tl command line asks for: print help or the version (exit 0), a
+usage error (exit 2), or run the viewer on the files with the merge options.
+"""
+enum CommandLine:
+    ShowHelp(output: Str)
+    ShowVersion(output: Str)
+    UsageError(output: Str)
+    Run(files: List[Str], merge: Bool, output_merge: Option[Str])
+
+fn help_text(program: Str) -> Str:
+    doc """
+    Exactly the help click 8.1.7 prints for Toolong 1.4.0's command on a
+    terminal at least 80 columns wide, without the final newline:
+    
+    Usage: PROGRAM [OPTIONS] FILE1 FILE2
+    (blank line)
+      View / tail / search log files.
+    (blank line)
+    Options:
+      --version                Show the version and exit.
+      -m, --merge              Merge files.
+      -o, --output-merge PATH  Path to save merged file (requires -m).
+      --help                   Show this message and exit.
+    
+    PROGRAM is program; the descriptions start at column 27.
+    """
+
+    ensures (starts_with(result, "Usage: "))
+    ensures (ends_with(result, "Show this message and exit."))
+
+    effects []
+
+fn parse_command_line(arguments: List[Str], program: Str) -> CommandLine:
+    doc """
+    Parse the tl arguments exactly as click 8.1.7 parses Toolong 1.4.0's
+    command: options --version (flag), -m/--merge (flag), -o/--output-merge
+    (one value), --help (flag), and any number of FILE arguments, options and
+    files interleaved in any order.
+    
+    Scan the arguments left to right. "--" makes every later argument a file.
+    "-" and arguments not starting with "-" are files. An argument starting
+    with "--" is a long option, split at its first "=" into name and value:
+    an unknown name is the error "No such option: NAME" followed, when the
+    close matches click finds among "--version", "--merge", "--output-merge"
+    and "--help" (difflib.get_close_matches with its defaults, as click's
+    parser computes them) are one match, by " Did you mean MATCH?", and when
+    they are several by " (Possible options: A, B)" with the matches sorted; a
+    flag
+    given a value is the bare error "Option 'NAME' does not take a value.";
+    --output-merge takes its "=" value or else the next argument (whatever it
+    is), and with none left is the bare error "Option 'NAME' requires an
+    argument.". Any other argument starting with "-" is a cluster of short
+    options read character by character: -m sets merge, -o takes the rest of
+    the argument when non-empty or else the next argument (bare error
+    "Option '-o' requires an argument." when none is left), and any other
+    character c is the error "No such option: -c". The first error stops
+    parsing.
+    
+    Results: an error is UsageError. For "No such option" errors the output is
+    "Usage: PROGRAM [OPTIONS] FILE1 FILE2", LF, "Try 'PROGRAM --help' for
+    help.", LF, LF, "Error: " + message; the bare errors are "Error: " +
+    message alone. Otherwise --version anywhere gives ShowVersion("PROGRAM,
+    version 1.4.0"); else --help anywhere gives
+    ShowHelp(real.toolong.cli.help_text(program)); else Run with the files in
+    order, merge, and the last -o/--output-merge value.
+    """
+
+    effects []
+
+fn sort_paths(paths: List[Str]) -> List[Str]:
+    doc """
+    Toolong's UI.sort_paths: CPython sorted() of the paths using only this
+    less-than relation. The tokens of a path are the pieces of its last "/"
+    component split at ".", each converted to int when str.isdigit() and to
+    str.lower() otherwise. a < b when, walking the token pairs of zip(a, b) in
+    order, some pair has token_a < token_b (a pair mixing int and str compares
+    str(token_a) < str(token_b) instead) before the walk ends; when no pair
+    does, a < b exactly when a has fewer tokens than b. (A pair where token_a
+    is greater does not stop the walk.) The sort is stable.
+    """
+
+    ensures result.len == paths.len
+
+    effects []
+
+fn plan_tabs(files: List[Str], merge: Bool) -> List[TabPlan]:
+    doc """
+    Toolong's LogScreen tabs for the files, after
+    real.toolong.cli.sort_paths: with merge and more than one file, one merged
+    tab titled with the final path components joined by " + ", holding every
+    path; otherwise one unmerged tab per file titled with the file argument as
+    given. Paths are Path(file).
+    """
+
+    ensures (not merge => result.len == files.len)
+
+    effects []
+
+fn run_command_line(arguments: List[Str], program: Str) -> I32:
+    doc """
+    The tl entry point; returns the process exit status.
+    
+    real.toolong.cli.parse_command_line(arguments, program): ShowHelp and
+    ShowVersion print their output and a newline to stdout and return 0;
+    UsageError prints its output and a newline to stderr and returns 2.
+    
+    Run: when standard input is a terminal (sys.stdin.isatty()) and there
+    are no files, print the help text and a newline to stdout and return 0.
+    When it is a terminal, run real.toolong.tui.run_viewer with
+    ViewerSetup(tabs: real.toolong.cli.plan_tabs(files, merge), save_merge:
+    Path(output_merge) when given, pipe: Nothing), ignoring its Err and any
+    exception, and return 0.
+    
+    Otherwise (piped input) the files and options are ignored, as upstream:
+    SIGINT and SIGTERM handlers write "^C" to stderr; the input is copied to a
+    tempfile.NamedTemporaryFile(mode="w+b", buffering=0, prefix="tl_") shown
+    as the only tab (title the temporary file name); the pipe descriptor is
+    duplicated with os.dup(0), "/dev/tty" is opened read-write and placed on
+    descriptor 0 with os.dup2 so the viewer reads the keyboard, and run_viewer
+    gets ViewerSetup(tabs: one unmerged TabPlan for the temporary file,
+    save_merge: Nothing, pipe: PipeFeed(duplicated descriptor, temporary
+    path)). Afterwards the duplicated descriptor and the temporary file are
+    closed (deleting it) and 0 is returned; errors and exceptions of the viewer
+    are ignored. When "/dev/tty" cannot be opened, "Error: " + str(exception)
+    is written to stderr and 1 is returned.
+    """
+
+    ensures result >= 0
+
+    effects [clock, file.read, file.write, process.run, tui.io]
+
+scenario command_line_matches_click:
+    call empty = parse_command_line(List(), "tl")
+    assert empty == CommandLine.Run(files: List(), merge: false, output_merge: Option.Nothing)
+    call merged = parse_command_line(List("b.log", "-mo", "out.log", "a.log"), "tl")
+    assert merged == CommandLine.Run(
+        files: List("b.log", "a.log"),
+        merge: true,
+        output_merge: Option.Some(value: "out.log"),
+    )
+    call attached = parse_command_line(
+        List("-oout.log", "--output-merge=final.log", "--", "--merge"),
+        "tl",
+    )
+    assert attached == CommandLine.Run(
+        files: List("--merge"),
+        merge: false,
+        output_merge: Option.Some(value: "final.log"),
+    )
+    call version = parse_command_line(List("--help", "--version"), "tl")
+    assert version == CommandLine.ShowVersion(output: "tl, version 1.4.0")
+    call consumed = parse_command_line(List("-o", "--version"), "tl")
+    assert consumed == CommandLine.Run(
+        files: List(),
+        merge: false,
+        output_merge: Option.Some(value: "--version"),
+    )
+    call unknown = parse_command_line(List("a.log", "-x"), "tl")
+    assert unknown == CommandLine.UsageError(
+        output: "Usage: tl [OPTIONS] FILE1 FILE2\nTry 'tl --help' for help.\n\nError: No such option: -x",
+    )
+    call close = parse_command_line(List("--mer"), "tl")
+    assert close == CommandLine.UsageError(
+        output: "Usage: tl [OPTIONS] FILE1 FILE2\nTry 'tl --help' for help.\n\nError: No such option: --mer Did you mean --merge?",
+    )
+    call several = parse_command_line(List("--merg"), "tl")
+    assert several == CommandLine.UsageError(
+        output: "Usage: tl [OPTIONS] FILE1 FILE2\nTry 'tl --help' for help.\n\nError: No such option: --merg (Possible options: --merge, --output-merge)",
+    )
+    call missing = parse_command_line(List("a.log", "-o"), "tl")
+    assert missing == CommandLine.UsageError(output: "Error: Option '-o' requires an argument.")
+    call flag_value = parse_command_line(List("--merge=1"), "tl")
+    assert flag_value == CommandLine.UsageError(
+        output: "Error: Option '--merge' does not take a value.",
+    )
+    call help = parse_command_line(List("x.log", "--help"), "tl")
+    assert help == CommandLine.ShowHelp(
+        output: "Usage: tl [OPTIONS] FILE1 FILE2\n\n  View / tail / search log files.\n\nOptions:\n  --version                Show the version and exit.\n  -m, --merge              Merge files.\n  -o, --output-merge PATH  Path to save merged file (requires -m).\n  --help                   Show this message and exit.",
+    )
+
+scenario tabs_are_sorted_like_toolong:
+    fixtures:
+        fs files:
+            file "logs/access.log.10" text("")
+    call sorted = sort_paths(List("logs/access.log.10", "access.log.2", "App.log", "access.log"))
+    assert sorted == List("access.log", "App.log", "access.log.2", "logs/access.log.10")
+    call tabs = plan_tabs(List("app.log", "access.log"), false)
+    assert tabs == List(
+        TabPlan(title: "access.log", paths: List(files.path("access.log")), merged: false),
+        TabPlan(title: "app.log", paths: List(files.path("app.log")), merged: false),
+    )
+    call merged = plan_tabs(List("logs/access.log.10", "app.log"), true)
+    assert merged == List(
+        TabPlan(
+            title: "app.log + access.log.10",
+            paths: List(files.path("app.log"), files.path("logs/access.log.10")),
+            merged: true,
+        ),
+    )
+    call single = plan_tabs(List("app.log"), true)
+    assert single == List(
+        TabPlan(title: "app.log", paths: List(files.path("app.log")), merged: false),
+    )

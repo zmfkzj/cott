@@ -6313,7 +6313,8 @@ fn float_bits(bits: &str, single: bool) -> String {
                 "float(\"inf\")".into()
             }
         } else {
-            value.to_string()
+            // Debug keeps a fraction or exponent ("5.0", "1e300"); Display ("5") is a Python int.
+            format!("{value:?}")
         }
     } else {
         let value = f64::from_bits(parsed);
@@ -6326,7 +6327,7 @@ fn float_bits(bits: &str, single: bool) -> String {
                 "float(\"inf\")".into()
             }
         } else {
-            value.to_string()
+            format!("{value:?}")
         }
     }
 }
@@ -6591,6 +6592,15 @@ fn collect_references(
         }
         return;
     };
+    // Error clauses and constant enum values name their variant by symbol under `variant`; the
+    // emitted code references that variant class.
+    if matches!(
+        object.get("kind").and_then(Value::as_str),
+        Some("error" | "enum")
+    ) && let Some(symbol) = object.get("variant").and_then(Value::as_str)
+    {
+        collect_symbol(symbol, module, declarations, imports, true);
+    }
     match object
         .get("kind")
         .and_then(Value::as_str)
@@ -6612,7 +6622,8 @@ fn collect_references(
                 collect_symbol(symbol, module, declarations, imports, true);
             }
         }
-        "variant" => {
+        // Enum patterns (`matches Enum.Variant`) name the variant class in `symbol`.
+        "variant" | "enum" => {
             if let Some(symbol) = object.get("symbol").and_then(Value::as_str) {
                 collect_symbol(symbol, module, declarations, imports, true);
             }

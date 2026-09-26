@@ -1,0 +1,111 @@
+module frogmouth.layout
+
+doc """
+The navigation sidebar's panes, in tab order.
+"""
+enum Pane:
+    Contents
+    Local
+    Bookmarks
+    History
+
+enum Visibility:
+    Shown
+    Hidden
+
+doc """
+Whether the navigation sidebar is shown and which of its panes is active;
+the active pane is remembered while the sidebar is hidden.
+"""
+struct Sidebar:
+    visibility: Visibility
+    active: Pane
+
+enum CycleDirection:
+    Previous
+    Next
+
+doc """
+Where keyboard focus is when Escape is pressed.
+"""
+enum Focus:
+    AddressBar
+    Sidebar
+    Document
+
+enum EscapeAction:
+    ClearAddress
+    Quit
+    FocusAddress
+    HideSidebarAndFocusAddress
+
+fn toggle_pane(sidebar: Sidebar, pane: Pane) -> Sidebar:
+    doc """
+    The pane shortcuts (Ctrl+T, Ctrl+L, Ctrl+B, Ctrl+Y and the contents,
+    local, bookmarks and history commands) toggle: requesting the pane that
+    is already shown hides the sidebar, any other request shows the sidebar
+    with pane active.
+    """
+
+    ensures result.active == pane
+    ensures (((sidebar.visibility == Visibility.Shown) and sidebar.active == pane) => result.visibility == Visibility.Hidden)
+    ensures ((not ((sidebar.visibility == Visibility.Shown) and sidebar.active == pane)) => result.visibility == Visibility.Shown)
+
+    effects []
+
+fn toggle_sidebar(sidebar: Sidebar) -> Sidebar:
+    doc """
+    Show or hide the sidebar (Ctrl+N), keeping the active pane.
+    """
+
+    ensures preserves result from sidebar except visibility
+    ensures result.visibility != sidebar.visibility
+
+    effects []
+
+fn cycle_pane(sidebar: Sidebar, direction: CycleDirection) -> Sidebar:
+    doc """
+    Activate the neighbouring pane in tab order, wrapping around at both
+    ends: Next after History is Contents and Previous before Contents is
+    History. Visibility is unchanged.
+    """
+
+    ensures preserves result from sidebar except active
+    ensures result.active != sidebar.active
+
+    effects []
+
+fn escape_action(focus: Focus, address: Str) -> EscapeAction:
+    doc """
+    Escape backs out of the application step by step: from the document it
+    focuses the address bar, from the sidebar it also hides the sidebar, in
+    the address bar it clears non-empty text and otherwise quits.
+    """
+
+    ensures focus matches Focus.AddressBar => ((address != "") => result == EscapeAction.ClearAddress)
+    ensures focus matches Focus.AddressBar => ((address == "") => result == EscapeAction.Quit)
+    ensures focus matches Focus.Sidebar => result == EscapeAction.HideSidebarAndFocusAddress
+    ensures focus matches Focus.Document => result == EscapeAction.FocusAddress
+
+    effects []
+
+scenario panes_cycle_and_toggle:
+    data hidden: Sidebar = Sidebar(visibility: Visibility.Hidden, active: Pane.Contents)
+    call shown = toggle_pane(hidden, Pane.Contents)
+    assert shown == Sidebar(visibility: Visibility.Shown, active: Pane.Contents)
+    call switched = toggle_pane(shown, Pane.History)
+    assert switched == Sidebar(visibility: Visibility.Shown, active: Pane.History)
+    call closed = toggle_pane(switched, Pane.History)
+    assert closed == Sidebar(visibility: Visibility.Hidden, active: Pane.History)
+    call next = cycle_pane(switched, CycleDirection.Next)
+    assert next.active == Pane.Contents
+    call previous = cycle_pane(shown, CycleDirection.Previous)
+    assert previous.active == Pane.History
+    call local = cycle_pane(shown, CycleDirection.Next)
+    assert local.active == Pane.Local
+    call bookmarks = cycle_pane(local, CycleDirection.Next)
+    assert bookmarks.active == Pane.Bookmarks
+    call back = cycle_pane(bookmarks, CycleDirection.Previous)
+    assert back.active == Pane.Local
+    call reopened = toggle_sidebar(closed)
+    assert reopened == switched

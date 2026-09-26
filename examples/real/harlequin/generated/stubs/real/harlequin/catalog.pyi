@@ -6,171 +6,174 @@ from typing import Any, Literal, Never, Protocol, TypeVar, final
 
 from cott_runtime import AsyncGenerator, AsyncIterator, CottArray, CottBuffer, CottList, CottSet, Dyn, F32, F64, FrozenMap, I8, I16, I32, I64, JsonValue, Opaque, Option, Result, U8, U16, U32, U64, Unit
 
-from real.harlequin.catalog_types import CatalogColumn as CatalogColumn, CatalogError as CatalogError, CatalogError_ConnectionMissing as CatalogError_ConnectionMissing, CatalogError_Failed as CatalogError_Failed, CatalogError_LimitExceeded as CatalogError_LimitExceeded, CatalogError_NamespaceMissing as CatalogError_NamespaceMissing, CatalogMatch as CatalogMatch, CatalogMatchKind as CatalogMatchKind, CatalogMatchKind_Column as CatalogMatchKind_Column, CatalogMatchKind_Relation as CatalogMatchKind_Relation, CatalogRelation as CatalogRelation, CatalogScope as CatalogScope, CatalogSnapshot as CatalogSnapshot, CompletionRequest as CompletionRequest, CompletionResult as CompletionResult, RelationKind as RelationKind, RelationKind_Table as RelationKind_Table, RelationKind_View as RelationKind_View
-from real.harlequin.core_types import Connection, DatabaseTarget, SqlClientError
-"""List the tables and views of a standalone SQLite database's main schema with
-sqlite3, independent of any live connection. Memory is a fresh empty in-memory
-database for this call, so it lists nothing; File(path) opens that existing file
-with mode=ro and never creates it. Rows come from sqlite_schema entries of type
-table or view whose name does not start with "sqlite_", ordered by name in
-Python string order. sql is the stored CREATE text, Nothing when it is SQL NULL.
-Any SQLite failure, including a missing file, is SqliteFailure with SQLite's
-message."""
-def catalog_relations(database: DatabaseTarget) -> Result[CottList[CatalogRelation], SqlClientError]: ...
+from real.harlequin.catalog_types import CatalogEntry as CatalogEntry, CatalogKind as CatalogKind, CatalogKind_Bucket as CatalogKind_Bucket, CatalogKind_Column as CatalogKind_Column, CatalogKind_Database as CatalogKind_Database, CatalogKind_Directory as CatalogKind_Directory, CatalogKind_File as CatalogKind_File, CatalogKind_Object as CatalogKind_Object, CatalogKind_Other as CatalogKind_Other, CatalogKind_Prefix as CatalogKind_Prefix, CatalogKind_Schema as CatalogKind_Schema, CatalogKind_Table as CatalogKind_Table, CatalogKind_TemporaryTable as CatalogKind_TemporaryTable, CatalogKind_View as CatalogKind_View, Completion as Completion, CompletionSet as CompletionSet, FileTreeError as FileTreeError, FileTreeError_NotADirectory as FileTreeError_NotADirectory, FileTreeError_Unreadable as FileTreeError_Unreadable, S3Error as S3Error, S3Error_AccessDenied as S3Error_AccessDenied, S3Error_Failed as S3Error_Failed, S3Error_Unavailable as S3Error_Unavailable, TreeFrame as TreeFrame, TreeMotion as TreeMotion, TreeMotion_Down as TreeMotion_Down, TreeMotion_First as TreeMotion_First, TreeMotion_Last as TreeMotion_Last, TreeMotion_PageDown as TreeMotion_PageDown, TreeMotion_PageUp as TreeMotion_PageUp, TreeMotion_Parent as TreeMotion_Parent, TreeMotion_Up as TreeMotion_Up, TreeState as TreeState, TreeToggle as TreeToggle
+from real.harlequin.style_types import StyledLine
+"""Put catalog entries into catalog order. A catalog is a List[CatalogEntry] in
+pre-order: every entry is followed by its whole subtree before its next
+sibling, ids unique. Input entries may come in any order where every parent
+appears before its children. Children keep their relative input order under
+their parent and roots keep theirs. An entry whose parent id is not an
+earlier kept entry, or whose id repeats an earlier kept entry, is dropped
+together with its descendants. depth is recomputed from the parent chain
+(roots 0), and every entry that has children is marked expandable and
+loaded. Catalogs may hold tens of thousands of entries; the list is passed
+as a whole, never embedded in another struct."""
+def normalize_catalog(entries: CottList[CatalogEntry]) -> CottList[CatalogEntry]: ...
 
-"""Describe one relation of the same standalone main schema from PRAGMA table_info,
-in declaration order. Every column's relation is the requested name; not_null
-reflects NOT NULL and default_sql is Nothing when there is no default. A
-relation that does not exist, which includes every relation of a Memory
-database, is SqliteFailure("no such relation"). Other SQLite failures are
-SqliteFailure with SQLite's message."""
-def catalog_columns(database: DatabaseTarget, relation: str) -> Result[CottList[CatalogColumn], SqlClientError]: ...
+"""The direct children of parent (or the roots for Nothing) in catalog, in
+catalog order. An unknown parent has no children."""
+def catalog_children(catalog: CottList[CatalogEntry], parent: Option[str]) -> CottList[CatalogEntry]: ...
 
-"""Search the same standalone main schema for relations and columns whose name
-contains term after Unicode case folding (Python str.casefold); an empty term
-matches everything. Relations are visited in catalog_relations order; each
-relation contributes its own match first and then its matching columns in
-column order. The result stops after the first 1000 matches without error.
-SQLite failures are SqliteFailure with SQLite's message."""
-def search_catalog(database: DatabaseTarget, term: str) -> Result[CottList[CatalogMatch], SqlClientError]: ...
+"""Replace the whole subtree below parent with children sorted by label
+(case-insensitive, then exact; Harlequin sorts loaded siblings
+alphabetically), keeping each child's own subtree order, and mark parent
+loaded and expandable. A child is kept only when its parent is parent or a
+kept child appearing earlier, and its id is new (not an id outside the
+replaced subtree and not repeated); depth is recomputed. An unknown parent
+returns catalog unchanged."""
+def replace_children(catalog: CottList[CatalogEntry], parent: str, children: CottList[CatalogEntry]) -> CottList[CatalogEntry]: ...
 
-"""Refresh one namespace through a real temporary driver client, using the
-endpoint formats documented by AdapterKind. This is an independent metadata
-connection, not a lookup of a hidden live-connection registry or a view of
-another connection's uncommitted transaction.
-Before any I/O, an empty connection.id or a scope.connection_id different from
-connection.id returns ConnectionMissing(connection_id=scope.connection_id).
-Preserve scope exactly in the successful snapshot.
-Validate the SessionHandle payload and its matching metadata, then hold its
-lock for this call. A closed or malformed owning session returns Failed before
-opening the independent metadata client. Never close the owner or complete its
-active transaction. A fresh :memory: metadata client still sees its own empty
-database; this API intentionally reports an independent committed snapshot,
-whereas execute_statements is the operation on the retained live session.
+"""The rows the tree shows: roots, and below each expanded node (whose id is in
+tree.expanded) its children, recursively, in pre-order. Children of a
+collapsed node are hidden however deep."""
+def visible_entries(catalog: CottList[CatalogEntry], tree: TreeState) -> CottList[CatalogEntry]: ...
 
-A supplied namespace selects one exact visible namespace. Return
-NamespaceMissing(namespace=the supplied value) only after successful metadata
-discovery establishes its absence. Without a supplied namespace, use the
-backend default described below; a missing or ambiguous default is Failed.
-Read tables and views only, order by the original name using Python string
-ordering (Table before View for equal names), and never merge namespaces.
-Probe for a 100001st relation and return LimitExceeded(limit=100000) rather
-than silently truncating. Empty success is valid only after a real successful
-query of an existing empty namespace.
+"""Move the cursor over visible_entries: Up/Down by one row, PageUp/PageDown by
+max(page_rows, 1) rows, First to row 0, Last to the last row, Parent to the
+row of the cursor entry's parent (unchanged for roots); always clamped to
+the visible rows (cursor 0 when there are none). expanded and first_row are
+unchanged."""
+def move_tree_cursor(catalog: CottList[CatalogEntry], tree: TreeState, motion: TreeMotion, page_rows: U64) -> TreeState: ...
 
-SQLite: open files with URI mode=ro, never create a missing database, and enable
-query_only. :memory: opens a fresh database for this call. The default is main;
-discover available namespaces with PRAGMA database_list. Quote a discovered
-schema identifier by doubling double quotes. Read its sqlite_schema rows of
-type table or view, excluding names whose literal prefix is sqlite_.
-Preserve nonnull stored SQL as Some; SQL NULL becomes Nothing.
-DuckDB: open an existing file read_only=True (:memory: uses a fresh in-memory
-connection). Use current_database() and default schema main; discover with
-duckdb_schemas(). Query duckdb_tables() and duckdb_views(), restricted to that
-database/schema and internal=false, retaining stored SQL when available.
-PostgreSQL: use psycopg and information_schema.schemata/tables with bound schema
-values; default to current_schema(). BASE TABLE maps to Table and VIEW to View.
-MySQL: use pymysql and INFORMATION_SCHEMA.SCHEMATA/TABLES with bound schema
-values; default to DATABASE(). BASE TABLE maps to Table and VIEW to View.
-Both return Nothing for SQL text rather than inventing CREATE statements.
-ODBC: use SQLTables namespace enumeration before listing relations, so an
-existing empty schema is distinguishable from an absent schema:
-cursor.tables(catalog="", schema="%", table="") lists schema names;
-cursor.tables(catalog="%", schema="", table="") lists catalogs.
-A driver without schema support (SQL_SCHEMA_USAGE == 0) uses the empty schema.
-Restrict to getinfo(SQL_DATABASE_NAME) when reported; otherwise require one
-unambiguous catalog. None namespace selects the unique visible schema.
-List cursor.tables(tableType="TABLE,VIEW") and exact-filter catalog/schema
-fields, treating SQL NULL names as empty strings (API filters may be patterns).
-Multiple possible defaults or unsupported discovery are Failed, not an empty
-success. TABLE/VIEW map directly; SQL is Nothing.
-ADBC: use adbc_driver_manager.dbapi.connect with driver/uri/entrypoint and
-db_kwargs/conn_kwargs from the documented endpoint. Call its public
-adbc_get_objects(depth="db_schemas") for namespace discovery and
-adbc_get_objects(depth="tables") for relations. Select endpoint.catalog when
-supplied, then an exact supplied schema or the unique visible catalog/schema
-pair. Null catalog/schema metadata names are represented as empty strings.
-The lock-selected pyarrow dependency supplies the returned RecordBatchReader.
-Feed that reader to a temporary in-memory duckdb connection's from_arrow,
-then SQL UNNEST catalog_db_schemas and db_schema_tables with bound filters and
-LIMIT 100001 before fetching flat rows. Keep the ADBC connection alive until
-its reader is consumed; close the DuckDB bridge and reader before ADBC.
-Use these public metadata APIs, never interpreter heap-introspection methods.
-Normalize driver table-type spelling case-insensitively: TABLE and BASE TABLE
-mean Table, VIEW means View; other kinds are outside this catalog. SQL is Nothing.
+"""Expand or collapse the node under the cursor (Space in the Data Catalog, and
+Enter on a node that can expand). A node that is not expandable does not
+change. Expanding adds its id to expanded; when the node is not loaded,
+load_children is Some(id) so the caller can fetch its children and call
+replace_children. Collapsing removes the id. The cursor stays on the same
+entry. With no visible rows nothing changes."""
+def toggle_tree_node(catalog: CottList[CatalogEntry], tree: TreeState) -> TreeToggle: ...
 
-BigQuery: construct google.cloud.bigquery.Client using project/location and
-ADC. A namespace is a dataset id within endpoint.project; default to
-endpoint.dataset. Use get_dataset to establish existence and list_tables with
-max_results=100001 to enumerate. VIEW/MATERIALIZED_VIEW map to View;
-TABLE/EXTERNAL/SNAPSHOT/CLONE map to Table. SQL is Nothing.
-Trino: use trino.dbapi and optional BasicAuthentication. A namespace is exactly
-catalog.schema (one dot, two nonempty components); otherwise use endpoint
-catalog/schema. Use SHOW CATALOGS and SHOW SCHEMAS FROM a safely double-quoted
-catalog to establish existence. Query that catalog's information_schema.tables,
-binding the schema value and limiting to 100001 rows. BASE TABLE maps to Table;
-VIEW/MATERIALIZED VIEW map to View. SQL is Nothing.
-Databricks: use databricks.sql.connect with the PAT, hostname and HTTP path.
-Namespace has the same catalog.schema form, defaulting to endpoint fields.
-Use cursor.catalogs() and cursor.schemas() with exact matching, then stream
-cursor.tables() results, exact-filtered to the selected catalog/schema. Stop
-after the 100001st matching supported relation; do not invent metadata paging.
-VIEW/MATERIALIZED_VIEW/METRIC_VIEW map to View; TABLE/BASE TABLE/MANAGED/EXTERNAL/
-FOREIGN/STREAMING_TABLE/MANAGED_SHALLOW_CLONE/EXTERNAL_SHALLOW_CLONE map to Table.
-SQL is Nothing.
-Cassandra: use Cluster and optional PlainTextAuthProvider; connect to establish
-real metadata, then read cluster.metadata.keyspaces. Namespace is the keyspace,
-defaulting to endpoint.keyspace. Its tables map to Table and materialized views
-to View; count both maps before materializing the bounded output. CQL is not
-SQL, so sql is Nothing. Always shutdown the cluster.
-NebulaGraph: initialize ConnectionPool, acquire a session, and execute
-SHOW SPACES. Namespace is the exact space name, defaulting to endpoint.space.
-After discovery, issue USE with a backtick-quoted name. Names containing a
-backtick, backslash or control character are Failed rather than interpolated.
-Execute SHOW TAGS and SHOW EDGES and check each ResultSet.is_succeeded().
-Consume actual as_primitive() rows: tags become Table named "tag:" plus the
-original tag name; edges become Table named "edge:" plus the original edge type.
-These SHOW APIs are unpaged: check their combined real result count before
-creating relations. nGQL is not SQL, so sql is Nothing. Release the session
-before closing the pool.
-Ignore backend object kinds outside the explicitly listed table/view kinds.
-A required endpoint namespace default that is absent is Failed. For an explicit
-requested namespace, a definitive not-found response is NamespaceMissing; do
-not reinterpret authentication, permission or transport failures as absence.
+"""The visible entry under the cursor, if any."""
+def tree_cursor_entry(catalog: CottList[CatalogEntry], tree: TreeState) -> Option[CatalogEntry]: ...
 
-Issue metadata reads only, regardless of connection.read_only; do not execute
-application SQL, initialize schemas, create files, or enable extensions.
-Close every cursor, stream, session and client on success and on all errors.
-Malformed endpoint data, missing drivers, authentication, transport, permission
-and metadata API failures return Failed with a fixed nonsecret category message.
-Never include endpoint values, credentials, or raw driver exception text.
-On success read the real clock after enumeration and set refreshed_at to UTC
-ISO-8601 in the form YYYY-MM-DDTHH:MM:SS.ffffffZ (six fractional digits)."""
-def refresh_catalog(connection: Connection, scope: CatalogScope) -> Result[CatalogSnapshot, CatalogError]: ...
+"""Draw the visible rows into width x height cells. first_row is tree.first_row
+moved minimally so the cursor row is within [first_row, first_row + height).
+Each drawn row is one line of three spans: an indent-and-expander span
+styled "class:hq.tree.guide" holding two spaces per depth level followed by
+"▼ " for an expanded node, "▶ " for an expandable collapsed node, or "  "
+for a leaf; a label span styled "class:hq.tree.label"; and, when type_label
+is not "", a type span " " + type_label styled "class:hq.tree.type". When
+focused, " class:hq.cursor" is appended to the label span's style of the
+cursor row. Each line is cut at width cells (wcwidth). An empty catalog draws
+no lines; width or height 0 draws no lines."""
+def render_tree(catalog: CottList[CatalogEntry], tree: TreeState, width: U64, height: U64, focused: bool) -> TreeFrame: ...
 
-"""Offer completions for the identifier being typed at request.cursor. The typed
-prefix is the longest run of ASCII letters, ASCII digits and "_" ending at the
-cursor; replace_start is where it begins and replace_end is the cursor. An empty
-prefix offers no candidates. A candidate matches when it starts with the prefix
-ignoring ASCII case. Relation names come first, in snapshot order, and only when
-request.scope equals snapshot.scope; then these keywords in this order: SELECT,
-FROM, WHERE, GROUP, BY, ORDER, HAVING, LIMIT, JOIN, LEFT, INNER, ON, AS, AND, OR,
-NOT, NULL, INSERT, INTO, VALUES, UPDATE, SET, DELETE, CREATE, TABLE, VIEW, DROP,
-WITH, DISTINCT, UNION. A candidate equal to an earlier one is skipped, spelling is
-kept, and at most maximum_candidates are returned."""
-def complete_sql(request: CompletionRequest, snapshot: CatalogSnapshot) -> CompletionResult: ...
+"""The Data Catalog's Files tree entries for the direct contents of directory
+path, read lazily one level at a time like Harlequin's directory tree.
+Entries are sorted directories first, then files, each group by name
+(case-insensitive, then exact). Hidden entries (name starting with ".") are
+included. For each: id and qualified_identifier are the absolute path,
+parent is the given parent, depth the given depth, label the file name,
+type_label "dir" for directories and "" for files, kind Directory or File,
+query_name the path quoted with single quotes (a ' inside doubled),
+expandable true only for directories, loaded false. A path that is not a
+directory is NotADirectory(path); an unreadable directory is
+Unreadable(path, message)."""
+def list_directory(path: Path, parent: Option[str], depth: U64) -> Result[CottList[CatalogEntry], FileTreeError]: ...
 
-"""Search only relation names already present in snapshot; this pure function does
-not query a database or infer columns from SQL. Preserve snapshot order and
-duplicates. A name matches when term.casefold() is a substring of its
-casefolded name; an empty term matches every relation.
-Each match has kind Relation, relation and name equal to the original relation
-name, and ordinal zero (not a ranking or column position).
-maximum_matches greater than 1000 returns LimitExceeded(limit=1000), including
-values above U32's range; do not narrow or clamp the caller's U64 value.
-Otherwise return the first maximum_matches matches, truncating without error.
-A zero limit returns an empty success. Column matches are never produced
-because CatalogSnapshot contains no column metadata."""
-def find_catalog(snapshot: CatalogSnapshot, term: str, maximum_matches: U64) -> Result[CottList[CatalogMatch], CatalogError]: ...
+"""The Data Catalog's S3 tree entries, listed lazily with boto3's default
+credential and region chain (client("s3")). target is what --show-s3 was
+given, or an "s3://bucket/prefix/" id being expanded:
+- "all": every bucket from list_buckets, as roots (kind Bucket, id
+  "s3://<bucket>", label the bucket name, type_label "bkt").
+- a bucket name, "s3://bucket" or "s3://bucket/prefix/": the objects and
+  common prefixes directly under that prefix (list_objects_v2 with
+  Delimiter "/" and all pages): prefixes first as kind Prefix, type_label
+  "dir", id "s3://bucket/<prefix>", label the last path segment with its
+  trailing "/"; then objects as kind Object, type_label "", id
+  "s3://bucket/<key>", label the last key segment. A bare bucket name given
+  at the root yields the bucket itself as the single root, expandable and
+  not loaded.
+query_name and qualified_identifier are the id quoted with single quotes
+and the plain id respectively. parent and depth are as given. Missing boto3
+credentials or an unimportable SDK is Unavailable(message); an access
+refusal is AccessDenied(target); other failures are Failed(target, message)
+without credentials in message."""
+def list_s3(target: str, parent: Option[str], depth: U64) -> Result[CottList[CatalogEntry], S3Error]: ...
 
-__all__ = ["CatalogColumn", "CatalogError", "CatalogError_ConnectionMissing", "CatalogError_Failed", "CatalogError_LimitExceeded", "CatalogError_NamespaceMissing", "CatalogMatch", "CatalogMatchKind", "CatalogMatchKind_Column", "CatalogMatchKind_Relation", "CatalogRelation", "CatalogScope", "CatalogSnapshot", "CompletionRequest", "CompletionResult", "RelationKind", "RelationKind_Table", "RelationKind_View", "catalog_columns", "catalog_relations", "complete_sql", "find_catalog", "refresh_catalog", "search_catalog"]
+"""Harlequin's adapter-independent completions, in this order, value equal to
+label and no context. Keywords (type_label "kw", priority 100): alter, and,
+as, between, by, cascade, case, column, copy, create, cross, current,
+database, delete, distinct, drop, end, except, exclude, exists, false,
+filter, following, from, full, function, grant, group, having, if, ilike,
+inner, insert, intersect, join, lateral, left, like, limit, merge, natural,
+not, offset, on, or, order, outer, over, owner, partition, preceding,
+qualify, range, rename, replace, restrict, revoke, right, row, rows, schema,
+select, sequence, set, similar, table, temp, temporary, then, to, top, true,
+truncate, unbounded, union, update, using, view, when, where, with. Scalar
+functions (type_label "fn", priority 200): abs, ceil, concat, floor, left,
+lower, ltrim, regexp_extract, regexp_replace, replace, right, round, rtrim,
+sqrt. Aggregates (type_label "agg", priority 200): avg, bool_and, bool_or,
+count, max, min, sum."""
+def builtin_completions() -> CottList[Completion]: ...
+
+"""One Completion per catalog entry of kind Database, Schema, Table, View,
+TemporaryTable or Column, in catalog order: label and value are the entry
+label (completing a catalog name inserts its label, not its query_name),
+type_label the entry's type_label, priority 500 + depth, and context the
+parent entry's label casefolded (Nothing for roots)."""
+def catalog_completions(catalog: CottList[CatalogEntry]) -> CottList[Completion]: ...
+
+"""The identifiers written in an editor buffer, for "buf" completions: every
+maximal run of letters, digits, "_" and "$" that does not start with a
+digit, and every double-quoted, backtick-quoted or bracketed name with its
+quotes removed, skipping text inside single-quoted strings and comments
+(-- to end of line, /* ... */). Unquoted words that are builtin_completions
+keywords (compared case-insensitively) are not identifiers. Names are
+deduplicated case-insensitively keeping the first spelling, in order of
+first appearance."""
+def buffer_identifiers(text: str) -> CottList[str]: ...
+
+"""The CompletionSet holding completions in order; its payload is a Python tuple of real.harlequin.catalog_types.Completion
+values in candidate order: build it with cott_runtime.Opaque(tag="harlequin.completions",
+value=tuple(...)) and read it with cast(tuple[Completion, ...], handle.unwrap())
+after checking handle.tag == "harlequin.completions"."""
+def completion_set(completions: CottList[Completion]) -> Opaque[Literal["harlequin.completions"]]: ...
+
+"""The CompletionSet holding the candidates of first followed by those of
+second; each set's its payload is a Python tuple of real.harlequin.catalog_types.Completion
+values in candidate order: build it with cott_runtime.Opaque(tag="harlequin.completions",
+value=tuple(...)) and read it with cast(tuple[Completion, ...], handle.unwrap())
+after checking handle.tag == "harlequin.completions"."""
+def join_completion_sets(first: Opaque[Literal["harlequin.completions"]], second: Opaque[Literal["harlequin.completions"]]) -> Opaque[Literal["harlequin.completions"]]: ...
+
+"""Harlequin's completion menu for the word before the cursor. candidates
+(a CompletionSet; its payload is a Python tuple of real.harlequin.catalog_types.Completion
+values in candidate order: build it with cott_runtime.Opaque(tag="harlequin.completions",
+value=tuple(...)) and read it with cast(tuple[Completion, ...], handle.unwrap())
+after checking handle.tag == "harlequin.completions") holds builtin_completions, then the adapter's
+completions, then catalog_completions; identifiers are buffer_identifiers of the active
+buffer, each a Completion(label, value = identifier, "buf", 400, Nothing).
+Matching is case-insensitive via casefold().
+Member completion: when prefix contains ".", ":" or "::", the context is
+the segment before the last separator with quote characters (', ", `)
+trimmed and casefolded, and the member text is the part after it; only
+candidates whose context equals that context are considered, and the
+returned label and value are the prefix up to and including the separator
+followed by the candidate label (a leading quote typed in the member text
+is kept). An unquoted member text starting with a digit returns [].
+Word completion otherwise: a prefix starting with a digit, or an empty
+prefix, returns [].
+Candidates are ranked: exact matches (label equals the text), then prefix
+matches (label starts with the text), each group ordered by priority then
+label casefolded; buffer identifiers equal to the typed prefix are dropped.
+When exact plus prefix matches are fewer than 20 and the text has at least
+two characters, fuzzy matches follow: the first character must match at the
+start of the label or after "_", and the remaining characters must appear in
+order; fuzzy matches are ordered by shortest matched span, then earliest
+start, then shortest label. Within the final list, candidates whose type_label
+is "buf" come first (stable), then duplicates of (label, type_label) are
+removed keeping the first, and at most limit are returned."""
+def complete(candidates: Opaque[Literal["harlequin.completions"]], identifiers: CottList[str], prefix: str, limit: U64) -> CottList[Completion]: ...
+
+__all__ = ["CatalogEntry", "CatalogKind", "CatalogKind_Bucket", "CatalogKind_Column", "CatalogKind_Database", "CatalogKind_Directory", "CatalogKind_File", "CatalogKind_Object", "CatalogKind_Other", "CatalogKind_Prefix", "CatalogKind_Schema", "CatalogKind_Table", "CatalogKind_TemporaryTable", "CatalogKind_View", "Completion", "CompletionSet", "FileTreeError", "FileTreeError_NotADirectory", "FileTreeError_Unreadable", "S3Error", "S3Error_AccessDenied", "S3Error_Failed", "S3Error_Unavailable", "TreeFrame", "TreeMotion", "TreeMotion_Down", "TreeMotion_First", "TreeMotion_Last", "TreeMotion_PageDown", "TreeMotion_PageUp", "TreeMotion_Parent", "TreeMotion_Up", "TreeState", "TreeToggle", "buffer_identifiers", "builtin_completions", "catalog_children", "catalog_completions", "complete", "completion_set", "join_completion_sets", "list_directory", "list_s3", "move_tree_cursor", "normalize_catalog", "render_tree", "replace_children", "toggle_tree_node", "tree_cursor_entry", "visible_entries"]

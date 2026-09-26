@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 
 from cott_runtime import CottList
-from real.pgcli import run
+from real.pgcli.cli import run
 
 
 if __name__ == "__main__":

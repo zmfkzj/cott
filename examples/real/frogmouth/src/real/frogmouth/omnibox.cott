@@ -1,0 +1,204 @@
+module frogmouth.omnibox
+
+use frogmouth.model.{Forge, Location, LocationKind, PathKind}
+use frogmouth.document.{BrowserFailure}
+use frogmouth.layout.{Pane}
+
+enum OmniboxCommand:
+    About
+    Bookmarks
+    Changelog
+    ChangeDirectory(target: Str)
+    Contents
+    Discord
+    Forge(forge: Forge, arguments: Str)
+    Help
+    History
+    Local
+    Obsidian(vault: Str)
+    Quit
+
+doc """
+What submitting the address bar asks the browser to do. address is the text
+the address bar shows right after a Visit; every other action empties it.
+"""
+enum AddressAction:
+    Visit(location: Location, address: Str)
+    ChangeDirectory(path: Str)
+    ResolveForge(forge: Forge, candidates: List[Str])
+    OpenExternally(target: Str)
+    ShowPane(pane: Pane)
+    ShowHelp
+    ShowAbout
+    Quit
+    Failed(failure: BrowserFailure)
+    Ignore
+
+fn parse_command(value: Str) -> Option[OmniboxCommand]:
+    doc """
+    Recognize an address-bar command. value is split like Python
+    str.split(None, 1) into a command word and the rest; the arguments are
+    the rest with surrounding whitespace removed (empty when there is none).
+    The word is compared after ASCII lower-casing, while the arguments keep
+    their case. Aliases name commands: "a" about, "b" and "bm" bookmarks,
+    "bb" bitbucket, "c" and "toc" contents, "cb" codeberg, "cd" chdir, "cl"
+    changelog, "gh" github, "gl" gitlab, "h" history, "l" local, "obs"
+    obsidian, "q" quit and "?" help. The commands are about, bookmarks,
+    changelog, contents, discord, help, history, local and quit, which ignore
+    arguments; chdir (ChangeDirectory with the arguments as target);
+    obsidian (Obsidian with the arguments as vault); and github, gitlab,
+    bitbucket and codeberg (Forge of GitHub, GitLab, BitBucket or Codeberg
+    with the arguments). Any other word, or a value without a word, is
+    Nothing.
+    """
+
+    ensures Option.Some(OmniboxCommand.ChangeDirectory(target)) => contains(value, target)
+    ensures Option.Some(OmniboxCommand.Obsidian(vault)) => contains(value, vault)
+    ensures Option.Some(OmniboxCommand.Forge(_, arguments)) => contains(value, arguments)
+
+    effects []
+
+fn interpret_address(value: Str, home: Str, working_directory: Str) -> AddressAction:
+    doc """
+    Decide what the submitted address-bar text asks for. Let TEXT be value
+    with surrounding whitespace removed as Python str.strip() does.
+    
+    1. When frogmouth.locations.remote_location(TEXT) is a location, Visit
+       it with address "".
+    2. Otherwise let PATH be frogmouth.locations.resolve_local_path(TEXT,
+       home, working_directory) and classify it with
+       frogmouth.locations.inspect_local_path. A File is Visit of the Local
+       location PATH with address PATH; a Directory is ChangeDirectory(PATH);
+       Other is Ignore.
+    3. When PATH is Missing and frogmouth.omnibox.parse_command(TEXT) is a
+       command: about is ShowAbout; help is ShowHelp; quit is Quit;
+       contents, local, bookmarks and history are ShowPane of the Contents,
+       Local, Bookmarks and History pane; discord is OpenExternally of
+       "https://discord.gg/Enf6Z3qhVr"; changelog is ResolveForge(GitHub,
+       frogmouth.forge.forge_candidate_urls of owner "textualize",
+       repository "frogmouth", no branch and file "ChangeLog.md"). A forge
+       command whose arguments frogmouth.forge.parse_forge_request parses is
+       ResolveForge(forge, forge_candidate_urls(forge, request)); otherwise
+       it is Ignore. chdir resolves its target, or "~" when the target is
+       empty, with resolve_local_path and classifies the result: a Directory
+       is ChangeDirectory of it, a Missing path is
+       Failed(NoSuchDirectory(it)) and any other kind
+       Failed(NotADirectory(it)). obsidian names the directory home followed
+       by "/Library/Mobile Documents/iCloud~md~obsidian/Documents" and, when
+       the vault is not empty, "/" and the vault; when that path is not
+       Missing it is handled as chdir of it, otherwise the result is Ignore.
+    4. Any other non-empty TEXT is Visit of the Local location TEXT, not
+       resolved, with address TEXT, so a mistyped name is reported by the
+       visit; an empty TEXT here is Ignore.
+    """
+
+    requires home.len > 0
+    requires working_directory.len > 0
+
+    ensures AddressAction.Visit(location, address) => ((location.kind == LocationKind.Local) => address == location.target)
+    ensures AddressAction.Visit(location, address) => ((location.kind == LocationKind.Remote) => address == "")
+    ensures AddressAction.ResolveForge(_, candidates) => candidates.len > 0
+
+    effects [file.read]
+
+requirement ADDRESS_PREFERS_URLS_THEN_FILES_THEN_COMMANDS for interpret_address:
+    text "A likely URL is always visited, an existing file or directory named by the text wins over a command of the same name, and only text that is neither falls back to a Local visit of the unresolved text."
+    checked_by address_bar_input_is_interpreted
+
+scenario commands_are_recognized:
+    call about = parse_command("A")
+    assert about == Option.Some(value: OmniboxCommand.About)
+    call toc = parse_command("toc extra words")
+    assert toc == Option.Some(value: OmniboxCommand.Contents)
+    call chdir = parse_command("CD   ~/Notes/Work  ")
+    assert chdir == Option.Some(value: OmniboxCommand.ChangeDirectory(target: "~/Notes/Work"))
+    call bare_chdir = parse_command("chdir")
+    assert bare_chdir == Option.Some(value: OmniboxCommand.ChangeDirectory(target: ""))
+    call github = parse_command("gh Textualize/Frogmouth ChangeLog.md")
+    assert github == Option.Some(
+        value: OmniboxCommand.Forge(
+            forge: Forge.GitHub,
+            arguments: "Textualize/Frogmouth ChangeLog.md",
+        ),
+    )
+    call codeberg = parse_command("codeberg forgejo/forgejo")
+    assert codeberg == Option.Some(
+        value: OmniboxCommand.Forge(forge: Forge.Codeberg, arguments: "forgejo/forgejo"),
+    )
+    call help = parse_command("?")
+    assert help == Option.Some(value: OmniboxCommand.Help)
+    call obsidian = parse_command("obs Personal")
+    assert obsidian == Option.Some(value: OmniboxCommand.Obsidian(vault: "Personal"))
+    call unknown = parse_command("readme.md")
+    assert unknown == Option.Nothing
+    call blank = parse_command("   ")
+    assert blank == Option.Nothing
+
+scenario address_bar_input_is_interpreted:
+    fixtures:
+        fs files:
+            file "docs/guide.md" text("# Guide\n")
+            file "help" text("a file named help\n")
+            file "home/notes/todo.md" text("todo\n")
+    call remote = interpret_address("  https://example.com/README.md ", "home", ".")
+    assert remote == AddressAction.Visit(
+        location: Location(kind: LocationKind.Remote, target: "https://example.com/README.md"),
+        address: "",
+    )
+    call file = interpret_address("docs/./guide.md", "home", ".")
+    assert file == AddressAction.Visit(
+        location: Location(kind: LocationKind.Local, target: "docs/guide.md"),
+        address: "docs/guide.md",
+    )
+    call tilde = interpret_address("~/notes/todo.md", "home", ".")
+    assert tilde == AddressAction.Visit(
+        location: Location(kind: LocationKind.Local, target: "home/notes/todo.md"),
+        address: "home/notes/todo.md",
+    )
+    call directory = interpret_address("docs", "home", ".")
+    assert directory == AddressAction.ChangeDirectory(path: "docs")
+    call shadowed = interpret_address("help", "home", ".")
+    assert shadowed == AddressAction.Visit(
+        location: Location(kind: LocationKind.Local, target: "help"),
+        address: "help",
+    )
+    call about = interpret_address("about", "home", ".")
+    assert about == AddressAction.ShowAbout
+    call history = interpret_address("h", "home", ".")
+    assert history == AddressAction.ShowPane(pane: Pane.History)
+    call quit = interpret_address("Q", "home", ".")
+    assert quit == AddressAction.Quit
+    call discord = interpret_address("discord", "home", ".")
+    assert discord == AddressAction.OpenExternally(target: "https://discord.gg/Enf6Z3qhVr")
+    call changelog = interpret_address("changelog", "home", ".")
+    assert changelog == AddressAction.ResolveForge(
+        forge: Forge.GitHub,
+        candidates: List(
+            "https://raw.githubusercontent.com/textualize/frogmouth/main/ChangeLog.md",
+            "https://raw.githubusercontent.com/textualize/frogmouth/master/ChangeLog.md",
+        ),
+    )
+    call forge = interpret_address("gl group/project:dev CHANGES.md", "home", ".")
+    assert forge == AddressAction.ResolveForge(
+        forge: Forge.GitLab,
+        candidates: List("https://gitlab.com/group/project/-/raw/dev/CHANGES.md"),
+    )
+    call bad_forge = interpret_address("gh lonely", "home", ".")
+    assert bad_forge == AddressAction.Ignore
+    call cd_home = interpret_address("cd", "home", ".")
+    assert cd_home == AddressAction.ChangeDirectory(path: "home")
+    call cd_missing = interpret_address("cd nowhere", "home", ".")
+    assert cd_missing == AddressAction.Failed(
+        failure: BrowserFailure.NoSuchDirectory(path: "nowhere"),
+    )
+    call cd_file = interpret_address("cd docs/guide.md", "home", ".")
+    assert cd_file == AddressAction.Failed(
+        failure: BrowserFailure.NotADirectory(path: "docs/guide.md"),
+    )
+    call no_vault = interpret_address("obs Personal", "home", ".")
+    assert no_vault == AddressAction.Ignore
+    call fallback = interpret_address(" missing.md ", "home", ".")
+    assert fallback == AddressAction.Visit(
+        location: Location(kind: LocationKind.Local, target: "missing.md"),
+        address: "missing.md",
+    )

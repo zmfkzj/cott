@@ -1,1 +1,4 @@
 Iterate CottList directly; Option via isinstance, with a direct final else.
+When a contract names rich 13.7.0, click 8.1.7 or prompt_toolkit 3.0.52 behavior, call those locked libraries directly instead of re-implementing them; never subclass their classes.
+The implementation audit only admits these standard-library roots: os, sys, re, json, io, time, datetime, gzip, bz2, tempfile, select, signal, subprocess, pathlib, functools, itertools, collections, math, warnings, unicodedata, string, codecs, contextlib, dataclasses, enum, typing, bisect, heapq, shlex, stat, errno, textwrap, shutil, array. Never import any other standard-library module (curses, mimetypes, webbrowser, difflib, locale, termios, tty and mmap are rejected).
+Pass behavior to library callbacks only through lambdas that call top-level private helpers; keep mutable state in local dicts or lists.

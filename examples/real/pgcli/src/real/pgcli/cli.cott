@@ -1,0 +1,335 @@
+module real.pgcli.cli
+
+use real.pgcli.config.{PgcliConfig}
+use real.pgcli.session.{SessionSettings}
+use real.pgcli.repl.{ReplSettings}
+
+const PGCLI_VERSION: Str = "4.7.1"
+
+doc """
+Exactly what upstream pgcli 4.7.1 prints for --help on an 80-column terminal
+(click 8 help formatting), including the final line feed.
+"""
+const PGCLI_HELP: Str = "Usage: pgcli [OPTIONS] [DBNAME] [USERNAME]\n\nOptions:\n  -h, --host TEXT          Host address of the postgres database.\n  -p, --port INTEGER       Port number at which the postgres instance is\n                           listening.\n  -U, --username TEXT      Username to connect to the postgres database.\n  -u, --user TEXT          Username to connect to the postgres database.\n  --timeout INTEGER        Seconds to wait for a connection before giving up\n                           (0 waits forever). Overrides the connection string\n                           and $PGCONNECT_TIMEOUT.\n  -W, --password           Force password prompt.\n  -w, --no-password        Never prompt for password.\n  --single-connection      Do not use a separate connection for completions.\n  -v, --version            Version of pgcli.\n  -d, --dbname TEXT        database name to connect to.\n  --pgclirc FILE           Location of pgclirc file.\n  -D, --dsn TEXT           Use DSN configured into the [alias_dsn] section of\n                           pgclirc file.\n  --list-dsn               list of DSN configured into the [alias_dsn] section\n                           of pgclirc file.\n  --row-limit INTEGER      Set threshold for row limit prompt. Use 0 to\n                           disable prompt.\n  --application-name TEXT  Application name for the connection.\n  --less-chatty            Skip intro on startup and goodbye on exit.\n  -t, --tuples-only        Print rows only: no column headers, no status\n                           footer and no timing, like psql.\n  --prompt TEXT            Prompt format (Default: \"\\u@\\h:\\d> \").\n  --prompt-dsn TEXT        Prompt format for connections using DSN aliases\n                           (Default: \"\\u@\\h:\\d> \").\n  -l, --list               list available databases, then exit.\n  --ping                   Check database connectivity, then exit.\n  --auto-vertical-output   Automatically switch to vertical output mode if the\n                           result is wider than the terminal width.\n  --warn TEXT              Warn before running a destructive query.\n  --ssh-tunnel TEXT        Open an SSH tunnel to the given address and connect\n                           to the database from it.\n  --log-file TEXT          Write all queries & output into a file, in addition\n                           to the normal output destination.\n  --init-command TEXT      SQL statement to execute after connecting.\n  -c, --command TEXT       run command (SQL or internal) and exit. Multiple -c\n                           options are allowed.\n  -y, --yes                Force destructive commands without confirmation\n                           prompt.\n  -f, --file FILE          execute commands from file, then exit. Multiple -f\n                           options are allowed.\n  --help                   Show this message and exit.\n"
+
+doc """
+The parsed command line of upstream cli(). Option-valued fields are Nothing
+when neither the option nor its environment fallback was given.
+port is -p/--port ($PGPORT), default 5432. pgclirc is --pgclirc ($PGCLIRC),
+default config directory + "config". dsn is -D/--dsn ($DSN), default "".
+row_limit is --row-limit ($PGROWLIMIT). application_name is
+--application-name ($PGAPPNAME), default "pgcli". dbname and username are the
+two optional positional arguments with $PGDATABASE and $PGUSER fallbacks.
+commands (-c, repeatable) and files (-f, repeatable) keep command-line order.
+"""
+struct CliOptions:
+    host: Str
+    port: I64
+    username_option: Option[Str]
+    timeout: Option[I64]
+    force_password_prompt: Bool
+    never_password_prompt: Bool
+    single_connection: Bool
+    version: Bool
+    dbname_option: Option[Str]
+    pgclirc: Str
+    dsn: Str
+    list_dsn: Bool
+    row_limit: Option[I64]
+    application_name: Str
+    less_chatty: Bool
+    tuples_only: Bool
+    prompt: Option[Str]
+    prompt_dsn: Option[Str]
+    list_databases: Bool
+    ping: Bool
+    auto_vertical_output: Bool
+    warn: Option[Str]
+    ssh_tunnel: Option[Str]
+    log_file: Option[Str]
+    init_command: Option[Str]
+    commands: List[Str]
+    force_destructive: Bool
+    files: List[Str]
+    dbname: Option[Str]
+    username: Option[Str]
+
+enum CliCommand:
+    ShowHelp(text: Str)
+    Launch(options: CliOptions)
+
+doc """
+A click usage error: text is everything click prints on standard error for
+it, for example "Usage: pgcli [OPTIONS] [DBNAME] [USERNAME]\nTry 'pgcli
+--help' for help.\n\nError: No such option '--bogus'. (Did you mean one of:
+'--host', '--user'?)\n". The process exits 2.
+"""
+enum CliError:
+    Usage(text: Str)
+
+doc """
+Process environment values read by session setup.
+"""
+struct SetupEnvironment:
+    home: Str
+    colorterm: Str
+
+fn parse_pgcli_arguments(
+    arguments: List[Str],
+    environment: Map[Str, Str],
+    default_pgclirc: Str,
+) -> Result[CliCommand, CliError]:
+    doc """
+    Parse arguments (without the program name) exactly as upstream's click
+    command "pgcli" does, using the lock-selected click to build and parse the
+    command so option syntax, clustering, "--opt=value", "--", error texts and
+    "Did you mean" suggestions match click. Parameters in declaration order:
+    -h/--host TEXT (default "", env PGHOST, "Host address of the postgres
+    database."); -p/--port INTEGER (default 5432, env PGPORT); -U/--username
+    TEXT and -u/--user TEXT (both set username_option); --timeout INTEGER;
+    -W/--password flag; -w/--no-password flag; --single-connection flag;
+    -v/--version flag; -d/--dbname TEXT; --pgclirc FILE (click.Path(dir_okay=
+    False), default default_pgclirc, env PGCLIRC); -D/--dsn TEXT (default "",
+    env DSN); --list-dsn flag; --row-limit INTEGER (env PGROWLIMIT);
+    --application-name TEXT (default "pgcli", env PGAPPNAME); --less-chatty
+    flag; -t/--tuples-only flag; --prompt TEXT; --prompt-dsn TEXT; -l/--list
+    flag; --ping flag; --auto-vertical-output flag; --warn TEXT; --ssh-tunnel
+    TEXT; --log-file TEXT; --init-command TEXT; -c/--command TEXT (multiple);
+    -y/--yes flag; -f/--file FILE (multiple, click.Path(exists=True,
+    readable=True, dir_okay=False)); arguments DBNAME (env PGDATABASE) and
+    USERNAME (env PGUSER), each optional (nargs=1, default None). Help texts
+    are those of PGCLI_HELP. Environment fallbacks come only from the given
+    environment map (never from os.environ); a fallback value is converted and
+    validated like a command-line value.
+    --help anywhere (processed eagerly like click's help option, before other
+    value conversion) gives ShowHelp(PGCLI_HELP). Every click UsageError
+    (unknown option, missing option value, bad integer, missing -f file,
+    extra argument) gives Usage(text) with the exact text click's standalone
+    mode writes: "Usage: pgcli [OPTIONS] [DBNAME] [USERNAME]\nTry 'pgcli
+    --help' for help.\n\nError: " + message + "\n" (click omits the usage
+    lines for some errors, e.g. "Error: Option '-p' requires an argument.\n";
+    reproduce whatever click 8 prints).
+    """
+
+    ensures Result.Ok(CliCommand.ShowHelp(text)) => text == PGCLI_HELP
+
+    error CliError.Usage
+
+    effects [file.read]
+
+fn obfuscate_process_title(title: Str) -> Str:
+    doc """
+    obfuscate_process_password on a process title: when the title contains
+    "://", re.sub(r":(.*):(.*)@", r":\1:xxxx@", title); else when it contains
+    "=", re.sub(r"password=(.+?)((\s[a-zA-Z]+=)|$)", r"password=xxxx\2",
+    title); otherwise unchanged.
+    """
+
+    effects []
+
+fn session_settings_from(
+    options: CliOptions,
+    config: PgcliConfig,
+    environment: SetupEnvironment,
+) -> SessionSettings:
+    doc """
+    PGCli.__init__'s settings: table_format = config table_format;
+    expanded_output = [main] expand; auto_expand = --auto-vertical-output or
+    [main] auto_expand; multi_line, multiline_mode (multi_line_mode), vi_mode
+    (vi), smart_completion, hide_named_query_text, verbose_errors from [main];
+    explain_mode false; output_file Nothing; log_file = Some(--log-file) when
+    given else Nothing; row_limit = --row-limit when given else [main]
+    row_limit; max_field_width, null_string, on_error from [main];
+    destructive_warning = real.pgcli.parseutils.parse_destructive_warning of
+    --warn when given (a --warn value containing "," is split on "," and used
+    as is without mapping; otherwise the one-item list) else of [main]
+    destructive_warning; destructive_warning_restarts_connection,
+    destructive_statements_require_transaction, auto_retry_closed_connection
+    from [main]; force_destructive = -y; tuples_only = -t; less_chatty =
+    --less-chatty or [main] less_chatty; decimal_format and float_format from
+    [data_formats]; column_date_formats from [column_date_formats];
+    case_column_headers from [main]; output_style = Some(OutputStyle with
+    header/odd_row/even_row/null from the [colors] keys output.header,
+    output.odd-row, output.even-row, output.null ("" when absent), base = the
+    Token style of pygments.styles.get_style_by_name(syntax_style) ("native"
+    when unknown), table_separator = [colors] Token.Output.TableSeparator or
+    "", true_color = "truecolor" in environment.colorterm lower-cased));
+    prompt_format = --prompt when given else [main] prompt; prompt_dsn_format =
+    --prompt-dsn; dsn_alias Nothing; scripted = commands or files were given;
+    completion_refreshing false.
+    """
+
+    ensures result.tuples_only == options.tuples_only
+    ensures result.force_destructive == options.force_destructive
+
+    effects []
+
+fn run(arguments: List[Str]) -> Never:
+    doc """
+    The pgcli command (upstream cli() and PGCli), arguments without the program
+    name. Everything printed in red/green/yellow uses click.secho with that fg
+    colour; "stderr" means err=True.
+    1. environment = os.environ. config directory =
+    real.pgcli.config.pgcli_config_directory(XDG_CONFIG_HOME when set, the
+    home directory). Parse with real.pgcli.cli.parse_pgcli_arguments(arguments,
+    environment, directory + "config"). Usage(text): write text to stderr, exit
+    2. ShowHelp(text): write text to stdout, exit 0.
+    2. -v: print "Version: 4.7.1", exit 0.
+    3. Create the config directory (without its trailing "/") when missing.
+    When ~/.pgclirc exists: move it to directory + "config" and print "Config
+    file (~/.pgclirc) moved to new location <path>" when that file does not
+    exist, else print "Config file is now located at <path>" and "Please move
+    the existing config file ~/.pgclirc to <path>".
+    4. --list-dsn: when the --pgclirc file does not exist exit 0 without
+    output; otherwise read it with configobj (interpolation=False, UTF-8) and
+    print "<alias> : <dsn>" for each [alias_dsn] entry, exit 0. A valid
+    config without an [alias_dsn] section has zero entries and exits 0
+    without output, not an error. A malformed [alias_dsn] section or any
+    read/parse failure prints in red on stderr 'Invalid DSNs found in the
+    config file. Please check the "[alias_dsn]" section in pgclirc.' and exits 1.
+    5. config = real.pgcli.config.load_pgcli_config(--pgclirc path); an error
+    prints its message in red on stderr and exits 1.
+    real.pgcli.config.configure_pgcli_logging([main] log_file, log_level,
+    directory). Pager: when [main] pager is nonempty set os.environ PAGER to it
+    (log 'Default pager found in config file: "<pager>"'), else keep PAGER
+    (log 'Default pager found in PAGER environment variable: "<pager>"' when
+    set, else log "No default pager found in environment. Using os default
+    pager"); set LESS to "-SRXF" when LESS is unset or empty. When
+    --log-file is given open it in "a+" mode once (an OSError prints in red on
+    stderr and exits 1). settings =
+    real.pgcli.cli.session_settings_from(options, config, SetupEnvironment(
+    home, COLORTERM or "")). special =
+    real.pgcli.session.create_special_handle(SpecialSetup(timing = [main]
+    timing and not -t, enable_pager, the --pgclirc path)).
+    6. Target: real.pgcli.connection.select_connect_target(TargetRequest(
+    -d, DBNAME, -U/-u, USERNAME, host, str(port), PGSERVICE when set, -l or
+    --ping, -D, [alias_dsn])); AliasMissing prints in red on stderr 'Could not
+    find a DSN with alias <name>. Please check the "[alias_dsn]" section in
+    pgclirc.' and exits 1. Alias(name, uri): dsn_alias = name and the spec is
+    real.pgcli.connection.connection_spec_from_uri(uri); Uri(uri): the same
+    without alias; Conninfo(dsn, user): spec(dsn, user); Service(service,
+    user): real.pgcli.connection.lookup_pg_service(service, PGSERVICEFILE,
+    PGSYSCONFDIR, home) gives dbname, host, user (the given user wins), port and
+    password; ServiceMissing prints in red on stderr "service '<service>' was
+    not found in <file>" and exits 1; Params(database, host, user, port): that
+    spec. Then real.pgcli.connection.open_executor(OpenRequest(spec,
+    application_name, -W, -w, [main] keyring, --timeout, [main]
+    connect_timeout, PGPASSWORD or "", PGCONNECT_TIMEOUT or "", dsn_alias,
+    --ssh-tunnel, [dsn ssh tunnels], [ssh tunnels])); a failure prints the
+    message in red on stderr and exits 1.
+    7. When [main] use_local_timezone: real.pgcli.connection.apply_local_timezone.
+    8. Init commands: every [init-commands] entry's commands in order, then
+    with a DSN alias the [alias_dsn.init-commands] entry named like the alias,
+    then --init-command. When there are any, print "Running init commands: " +
+    "; ".join(commands) and run them with
+    real.pgcli.session.run_init_commands; a failure prints in red on stderr and
+    exits 1.
+    9. -l: print the text of real.pgcli.session.database_listing and exit 0
+    (errors print in red on stderr, exit 1). --ping: print
+    "PONG" and exit 0 when real.pgcli.session.ping_database, else print in red
+    on stderr "Could not connect to the database. Please check that the
+    database is running." and exit 1.
+    10. Replace the process title (setproctitle) by
+    real.pgcli.cli.obfuscate_process_title of the current title.
+    11. -c commands, in order, each through real.pgcli.session.run_script_text
+    with TerminalSize from shutil.get_terminal_size() (upstream has no prompt
+    application in this mode and fails with "'NoneType' object has no
+    attribute 'output'" whenever auto-expand is on; this client uses the real
+    terminal size instead)
+    (stop at the first command whose run is not ok); a quit exits 0; any other
+    exception prints in red on stderr and exits 1. Without -f files exit 0.
+    Then each -f file in order: read it as UTF-8; when its content is not blank
+    run it through run_script_text, stopping at the first not-ok run; a quit
+    exits 0; exceptions print in red on stderr and exit 1; then exit 0.
+    12. Otherwise run real.pgcli.repl.run_pgcli_repl(Session(settings with
+    dsn_alias, executor, special,
+    real.pgcli.completion.empty_completion_catalog(), ""), ReplSettings(syntax_style, colors,
+    show_bottom_toolbar, wider_completion_menu, min_num_menu_lines,
+    multiline_continuation_char, auto_suggest, the history path (directory +
+    "history" when [main] history_file is "default", else the value with "~"
+    expanded), --single-connection or always_use_single_connection, completer
+    settings from [main] (keyword_casing, qualify_columns,
+    asterisk_column_order, search_path_filter, generate_aliases and the alias
+    map loaded with real.pgcli.completion.load_alias_map from alias_map_file
+    when nonempty, whose error prints in red on stderr and exits 1), refresh
+    settings (casing file = directory + "casing" when [main] casing_file is
+    "default", generate_casing_file))) and exit 0 when it returns.
+    Ctrl-C outside the prompt loop exits 1 after Python's usual
+    KeyboardInterrupt message is suppressed; a password is never printed.
+    """
+
+    effects [network, database.read, database.write, file.read, file.write, clock, process.exit]
+
+requirement RUN_DELEGATES_TO_FACADES for run:
+    text "run parses with parse_pgcli_arguments, loads configuration with load_pgcli_config, connects with open_executor, runs -c/-f text with run_script_text and the interactive session with run_pgcli_repl."
+
+scenario help_and_usage_errors:
+    fixtures:
+        fs work:
+            file "script.sql" text("select 1;")
+    call help = parse_pgcli_arguments(
+        List("-d", "sales", "--help"),
+        Map(),
+        "/home/ann/.config/pgcli/config",
+    )
+    assert help == Result.Ok(value: CliCommand.ShowHelp(text: PGCLI_HELP))
+    call bogus = parse_pgcli_arguments(List("--bogus"), Map(), "/home/ann/.config/pgcli/config")
+    assert bogus == Result.Err(
+        error: CliError.Usage(
+            text: "Usage: pgcli [OPTIONS] [DBNAME] [USERNAME]\nTry 'pgcli --help' for help.\n\nError: No such option '--bogus'. (Did you mean one of: '--host', '--user'?)\n",
+        ),
+    )
+    call dangling = parse_pgcli_arguments(List("-p"), Map(), "/home/ann/.config/pgcli/config")
+    assert dangling == Result.Err(
+        error: CliError.Usage(text: "Error: Option '-p' requires an argument.\n"),
+    )
+    call bad_port = parse_pgcli_arguments(List("-p", "x"), Map(), "/home/ann/.config/pgcli/config")
+    assert bad_port == Result.Err(
+        error: CliError.Usage(
+            text: "Usage: pgcli [OPTIONS] [DBNAME] [USERNAME]\nTry 'pgcli --help' for help.\n\nError: Invalid value for '-p' / '--port': 'x' is not a valid integer.\n",
+        ),
+    )
+    call extra = parse_pgcli_arguments(List("a", "b", "c"), Map(), "/home/ann/.config/pgcli/config")
+    assert extra == Result.Err(
+        error: CliError.Usage(
+            text: "Usage: pgcli [OPTIONS] [DBNAME] [USERNAME]\nTry 'pgcli --help' for help.\n\nError: Got unexpected extra argument (c)\n",
+        ),
+    )
+
+scenario options_and_environment:
+    fixtures:
+        fs work:
+            file "script.sql" text("select 1;")
+    call parsed = parse_pgcli_arguments(
+        List(
+            "-h",
+            "db",
+            "--port=6543",
+            "-U",
+            "ann",
+            "-c",
+            "select 1",
+            "-c",
+            "\\dt",
+            "-t",
+            "-y",
+            "sales",
+        ),
+        Map("PGAPPNAME": "reports", "PGDATABASE": "ignored", "PGUSER": "envuser"),
+        "/home/ann/.config/pgcli/config",
+    )
+    assert parsed matches Result.Ok(CliCommand.Launch(options)) => options.host == "db" and options.port == 6543 and options.username_option == Option.Some(value: "ann") and options.commands == List("select 1", "\\dt") and options.tuples_only and options.force_destructive and options.dbname == Option.Some(value: "sales") and options.username == Option.Some(value: "envuser") and options.application_name == "reports" and options.pgclirc == "/home/ann/.config/pgcli/config" and options.dsn == "" and options.files == List()
+    call env_port = parse_pgcli_arguments(
+        List(),
+        Map("PGPORT": "5499", "PGHOST": "/tmp/sock"),
+        "/c/config",
+    )
+    assert env_port matches Result.Ok(CliCommand.Launch(options)) => options.port == 5499 and options.host == "/tmp/sock" and options.dbname == Option.Nothing
+
+scenario process_title_hides_password:
+    call pairs = obfuscate_process_title("pgcli user=root password=top secret host=localhost")
+    assert pairs == "pgcli user=root password=xxxx host=localhost"
+    call trailing = obfuscate_process_title("pgcli user=root password=top secret")
+    assert trailing == "pgcli user=root password=xxxx"
+    call uri = obfuscate_process_title("pgcli postgres://root:secret@localhost/db")
+    assert uri == "pgcli postgres://root:xxxx@localhost/db"
