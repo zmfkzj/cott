@@ -853,12 +853,6 @@ impl PythonImportVisitor<'_> {
                             "contract evidence boundary: compiler-private `{name}` must not be referenced"
                         ),
                     );
-                } else if introspection_name(name) {
-                    self.push_evidence(
-                        node.range,
-                        EvidenceScope::Implementation,
-                        format!("runtime introspection `{name}` is not allowed"),
-                    );
                 }
             }
             ast::Expr::Attribute(node) => {
@@ -2398,9 +2392,6 @@ fn validate_source(
             }
             name if reflective_dunder(name) => {
                 add_error(format!("runtime reflection `{token}` is not allowed"))
-            }
-            name if introspection_name(name) => {
-                add_error(format!("runtime introspection `{token}` is not allowed"))
             }
             name if contract_evidence_api(name) => add_error(format!(
                 "contract evidence boundary: compiler-private `{token}` is not allowed"

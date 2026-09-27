@@ -2346,6 +2346,26 @@ fn accepts_generator_implementations_with_yield() {
 }
 
 #[test]
+fn accepts_local_data_named_like_introspection_modules() {
+    let fixture = fixture("module api.service\n\nfn run() -> I32\n");
+    let source = b"def run() -> int:\n    ctypes = [1, 2]\n    ctypes.append(3)\n    return ctypes[0] + len(ctypes)\n";
+    let diagnostics = audit_facade_file(
+        PathBuf::from("implementation.py").as_path(),
+        std::str::from_utf8(source).unwrap(),
+        PythonFileRole::DurableImplementation,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        source,
+    )
+    .expect("local data does not grant interpreter introspection authority");
+}
+
+#[test]
 fn retains_unsafe_source_rejections() {
     let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
     let cases: &[(&[u8], &str)] = &[
@@ -2367,6 +2387,10 @@ fn retains_unsafe_source_rejections() {
         ),
         (
             b"from _ctypes import PyObj_FromPtr as from_pointer\n\ndef run() -> object:\n    return from_pointer(0)\n",
+            "runtime introspection",
+        ),
+        (
+            b"import inspect as inspector\n\ndef run() -> object:\n    read_frame = inspector.currentframe\n    return read_frame()\n",
             "runtime introspection",
         ),
         (
