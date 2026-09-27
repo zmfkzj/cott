@@ -62,6 +62,17 @@ is exhausted. `cott requirements` reports the four requirements (`FIND_SEARCHES_
 Opaque values compare by identity, so scenarios check index contents through `line_location`,
 `find_line`, `locate_time` and `save_lines` rather than directly.
 
+The strict coverage policy selects 40 clauses across 25 callables: file opening,
+decompression, line/span reads, tailing, saving, index transitions, timestamps,
+search and highlighting, and viewer initialization. No unobserved, trust-declaration
+or unknown allowance is enabled. The latest `emit python` succeeded, but `verify`
+rejected `real.toolong.files.save_lines:error:2` (`WriteFailed`), which remains
+a trust declaration. Artifact certification was published; the one policy
+violation blocks deployment. Merge-order scenarios and the four requirements
+above remain separate evidence, not additional policy selectors.
+The current compiler can classify contract `proved` evidence as `observed`;
+policy selection and an observed status do not establish execution of every path.
+
 The viewer itself is exercised outside Cott evidence by driving the real program in a tmux
 pseudo-terminal: plain and highlighted logs, find, two tabs, a 300,000-line / 21 MB log (End,
 Home, PageDown, go to line 150000, find), the JSON panel, a 43-field-per-line JSON log (rendering

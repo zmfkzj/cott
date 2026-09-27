@@ -14,3 +14,171 @@ runtime_validation = "boundary"
 
 [generator]
 rules = "generator.rules"
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.parse_arguments"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.build_shortcut_url"
+clauses = ["ensures:1", "ensures:2", "ensures:3", "ensures:4", "ensures:5", "error:6", "error:7", "error:8"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.validate_workarounds"
+clauses = ["ensures:1", "error:3", "error:4"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.resolve_inputs"
+clauses = ["ensures:1", "error:2", "error:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.validate_network"
+clauses = ["ensures:1", "error:2", "error:3", "error:4", "error:5", "error:6", "error:7", "error:8", "error:9"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.resolve_authentication"
+clauses = ["ensures:1", "error:3", "error:4", "error:5"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.select_geo_route"
+clauses = ["ensures:1", "error:2", "error:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.choose_extractor"
+clauses = ["ensures:1", "error:2", "error:3", "error:4"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.extract_media"
+clauses = ["ensures:1", "error:2", "error:3", "error:4", "error:5", "error:6", "error:7"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.expand_playlist_ranges"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.select_playlist"
+clauses = ["ensures:1", "ensures:2", "error:3", "error:4", "error:5"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.resolve_live_media"
+clauses = ["ensures:1", "ensures:2", "error:4", "error:5", "error:6"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.filter_video"
+clauses = ["ensures:1", "error:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.filter_formats"
+clauses = ["ensures:1", "ensures:2", "error:3", "error:4", "error:5"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.sort_formats"
+clauses = ["ensures:1", "ensures:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.render_output_path"
+clauses = ["ensures:1", "error:2", "error:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.resolve_output_path"
+clauses = ["ensures:1", "error:2", "error:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.read_download_archive"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.plan_downloads"
+clauses = ["ensures:1", "ensures:2", "ensures:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.write_download_archive"
+clauses = ["ensures:2", "error:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.plan_fragments"
+clauses = ["ensures:1", "error:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.transfer_media"
+clauses = ["ensures:1", "ensures:2", "ensures:3", "ensures:4", "ensures:5", "error:6", "error:7", "error:8", "error:9", "error:10", "error:11", "error:12"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.transfer_fragments"
+clauses = ["ensures:1", "error:2", "error:3", "error:4", "error:5", "error:6", "error:7", "error:8"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.yt_dlp.execute"
+clauses = ["ensures:1", "ensures:2", "error:4", "error:5", "error:7", "error:8", "error:9", "error:11", "error:12", "error:13", "error:14", "error:15", "error:16", "error:17", "error:18", "error:19", "error:20", "error:21", "error:22", "error:23"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false

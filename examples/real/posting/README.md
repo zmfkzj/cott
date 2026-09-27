@@ -45,6 +45,14 @@ returned as a response, replacement decoding, a dropped connection and a read ti
 composed `execute` output and error propagation. `cott requirements` reports both `execute`
 requirements as `observed` for the current snapshot: bounded scenario evidence, not proof.
 
+The strict coverage policy selects all 23 formal clauses across the five callables.
+The latest `emit python` and `verify` run passed with `selected=23` and no policy
+violations; none of `unobserved`, `trust_declaration` or `unknown` is allowed.
+Selection does not establish execution: the current compiler also classifies
+contract `proved` evidence as `observed` (including `execute`'s argument-count
+error), and the non-GET/HEAD postconditions can hold vacuously in GET scenarios.
+This policy does not close the observation gaps listed below.
+
 Not observed by Cott evidence:
 
 - Anything the fixture cannot show: it answers only GET and does not echo requests, so the

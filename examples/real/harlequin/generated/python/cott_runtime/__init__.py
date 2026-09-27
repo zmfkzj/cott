@@ -782,17 +782,18 @@ def _cott_validate_abi_value(value: object, annotation: object, path: str, state
         normalized = _cott_normalize_scalar(value, annotation)
         return _cott_validate_abi(normalized, args[0], path=path, _state=state, _depth=depth + 1)
     if origin in (Union, _types.UnionType):
-        # The node limit bounds the value actually accepted: a rejected candidate's probe is
-        # rolled back, so a wide union costs only its matching branch. Probe work stays bounded
-        # by the union's static arity times the limit.
-        nodes = state.nodes
         for candidate in args:
+            nominal_candidate = _get_origin(candidate) or candidate
+            # Nominal dataclass branches accept exact types only. Dispatch mismatches without
+            # recursively probing them; do not refund work or memo entries from failed probes.
+            if isinstance(nominal_candidate, type) and _dataclasses.is_dataclass(nominal_candidate) and type(value) is not nominal_candidate:
+                continue
             try:
                 return _cott_validate_abi(value, candidate, path=path, _state=state, _depth=depth + 1)
             except _CottTraversalFailure:
                 raise
             except CottContractViolation:
-                state.nodes = nodes
+                pass
         raise CottContractViolation(f"{path} does not match ABI union", phase="validation")
     if origin is Dyn or annotation is Dyn:
         return _cott_validate_dyn(value, args[0] if args else None, path=path)
@@ -1551,6 +1552,9 @@ def _cott_validate_python_tools(tools: object) -> None:
         raise _cott_violation("Cott runtime ABI or version mismatch")
 
 
+import csv as _csv
+
+
 def _cott_import_module_name(path):
     if path.startswith("/") or "\\" in path:
         return None
@@ -1565,11 +1569,32 @@ def _cott_import_module_name(path):
     return module if module and all(part.isidentifier() for part in module.split(".")) else None
 
 
-def _cott_installed_import_owners():
+def _cott_installed_import_owners(modules=None):
     owners = {}
     for distribution in _metadata.distributions():
         by_module = {}
-        for relative in distribution.files or ():
+        record = distribution.read_text("RECORD") if modules is not None else None
+        if record:
+            # Only requested modules can be owners of this import. Avoid constructing and
+            # stat-ing unrelated distribution files, but re-read ownership and existence.
+            files = []
+            for row in _csv.reader(record.splitlines()):
+                if not 1 <= len(row) <= 3:
+                    raise ValueError("installed distribution RECORD row is malformed")
+                if len(row) > 1 and row[1]:
+                    _metadata.FileHash(row[1])
+                if len(row) > 2 and row[2]:
+                    int(row[2])
+                if not row[0].endswith((".py", ".so", ".pyd")):
+                    continue
+                relative = _Path(row[0])
+                module = _cott_import_module_name(relative.as_posix())
+                if module in modules and _Path(distribution.locate_file(relative)).exists():
+                    files.append(relative)
+        else:
+            # Let CPython resolve the legacy installed-files/SOURCES inventory semantics.
+            files = distribution.files or ()
+        for relative in files:
             module = _cott_import_module_name(relative.as_posix())
             if module is not None:
                 by_module.setdefault(module, []).append(relative)
@@ -1640,7 +1665,7 @@ def _cott_import_origin_trace(module):
     return trace
 
 
-def _cott_owned_external_imports(source, project_modules, owners=_cott_installed_import_owners):
+def _cott_owned_external_imports(source, project_modules, owners=None):
     imports = set()
     stdlib = set(_sys.stdlib_module_names) | {"cott_runtime", "_cott_impl"}
     for node in _ast.walk(_ast.parse(source)):
@@ -1655,8 +1680,12 @@ def _cott_owned_external_imports(source, project_modules, owners=_cott_installed
                 imports.add(child if _cott_import_origin_trace(child) is not None else module)
     if not imports:
         return []
-    # `owners` provides the ownership map only when an external import needs resolving.
-    owners = owners()
+    if owners is None:
+        modules = set()
+        for imported in imports:
+            parts = imported.split(".")
+            modules.update(".".join(parts[:end]) for end in range(1, len(parts) + 1))
+        owners = _cott_installed_import_owners(modules)
     resolved = []
     seen = set()
     for imported in sorted(imports):
@@ -1680,30 +1709,6 @@ def _cott_owned_external_imports(source, project_modules, owners=_cott_installed
     return resolved
 
 
-# Scanning every installed distribution's RECORD is expensive, so the ownership map is reused
-# while sys.path and the identity and mtime of each entry are unchanged. Like the load stamps,
-# this is a performance cache; dependency METADATA and origin hashes are still checked per load.
-_COTT_IMPORT_OWNERS: list[tuple[tuple[object, ...], dict[str, list[tuple[object, list[object]]]]]] = []
-
-
-def _cott_import_owners() -> dict[str, list[tuple[object, list[object]]]]:
-    stamps: list[object] = []
-    for entry in _sys.path:
-        try:
-            status = _os.stat(entry or ".")
-        except OSError:
-            stamps.append((entry, None))
-        else:
-            stamps.append((entry, status.st_dev, status.st_ino, status.st_mtime_ns, status.st_ctime_ns))
-    key = tuple(stamps)
-    with _COTT_LOAD_LOCK:
-        if _COTT_IMPORT_OWNERS and _COTT_IMPORT_OWNERS[0][0] == key:
-            return _COTT_IMPORT_OWNERS[0][1]
-    owners = _cott_installed_import_owners()
-    with _COTT_LOAD_LOCK:
-        _COTT_IMPORT_OWNERS[:] = [(key, owners)]
-    return owners
-
 
 def _cott_required_distributions(source: bytes, public_python_symbols: object) -> dict[str, set[str]]:
     if type(public_python_symbols) is not dict:
@@ -1715,7 +1720,7 @@ def _cott_required_distributions(source: bytes, public_python_symbols: object) -
         project_modules.update((module, f"{module}_types"))
     try:
         required: dict[str, set[str]] = {}
-        for _, name, _, origins in _cott_owned_external_imports(source, project_modules, _cott_import_owners):
+        for _, name, _, origins in _cott_owned_external_imports(source, project_modules):
             required.setdefault(name, set()).update(relative.as_posix() for relative in origins)
         return required
     except (SyntaxError, ValueError, OSError) as error:
@@ -2291,10 +2296,10 @@ def _cott_validate_generation(root: _Path, relative_path: str, digest: str, symb
         generation_id = _cott_validate_generation_identity(current)
         if current["project_version"] != PROJECT_VERSION:
             raise _cott_violation("generation project version mismatch")
-        _cott_validate_python_tools(current["tools"])
         _COTT_GENERATION_CACHE[record_digest] = (current, generation_id)
     else:
         current, generation_id = cached_generation
+    _cott_validate_python_tools(current["tools"])
     _cott_validate_dependencies(current["dependencies"], source, current["public_python_symbols"])
     implementations = current["implementations"]
     selected_origin = (("python/" if root.name == "python" else "") + relative_path)

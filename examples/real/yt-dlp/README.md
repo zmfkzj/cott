@@ -68,16 +68,28 @@ the rejected options above with one input per conditional rejection, playlist
 range expansion, format filtering and sorting, thumbnail/metadata/subtitle plans,
 output-path rendering and sanitization, archive planning, fragment and
 post-processing plans, JSON rendering and update channels. Automatic cases never
-run effectful functions, so `cott verify` reports the clauses of the effectful
-stages as `trust_declaration` or `unknown`, not as observed.
+run effectful functions. The current coverage classifier can still mark a clause
+`observed` from a contract satisfiability/reachability proof; that is not evidence
+that the implementation executed.
 
-The effectful stages use real files, HTTP and subprocesses, which Cott's scenario
-fixtures cannot back without changing the production code, so their duties are
-`requirement`s that remain `unverified`: log preparation, config and batch loading,
-declarative plugins, HEAD-only discovery, archive round trip, exact transfer bodies,
-post-processing order and verified update installation. So are the composition
-roots `execute` and `run`, whose `random` and `process.exit` effects have no
-scenario fixture backend.
+The strict policy selects 119 clauses across 24 callables, including selection,
+validation, output-path safety, extraction, archive persistence, both transfer
+APIs and `execute`. No `unobserved`, `trust_declaration` or `unknown` is allowed.
+The latest `emit python` succeeded, but `verify` rejected the policy with 51
+violations: 42 trust declarations, 8 unknown clauses and 1 unobserved clause.
+The artifact verification record is published with `verified=true` and
+`current == last_verified`; its policy is **failed**, so it is not deployable.
+The reported totals remain 89 observed, 70 trust declarations, 8 unknown and
+1 unobserved. Missing evidence is not waived to make the command pass.
+
+The effectful stages use real files, HTTP and subprocesses. Their duties currently
+have no `checked_by` linkage and remain `unverified`: log preparation, config and
+batch loading, declarative plugins, HEAD-only discovery, archive round trip,
+exact transfer bodies, post-processing order and verified update installation.
+The composition roots `execute` and `run` additionally include `random` and
+`process.exit` effects with no scenario fixture backend. New scenario evidence
+or fixture capabilities are needed where the current contract cannot observe a
+selected obligation; external regression results do not satisfy this policy.
 
 ```sh
 cott requirements --project examples/real/yt-dlp --format json

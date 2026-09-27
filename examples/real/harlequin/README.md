@@ -39,6 +39,17 @@ declarations, 0 unknown and 5 unobserved clauses. `cott requirements` reports
 linkage. The external retained-session regression exercises that behavior but
 does not turn it into Cott requirement evidence.
 
+The strict coverage policy selects 88 clauses across 43 callables, including
+connection/query/result handling, transaction and cancellation errors, retained
+session requests, history persistence, exports, file failures and core CLI/IDE
+transformations. No `unobserved`, `trust_declaration` or `unknown` is allowed.
+The latest `emit python` succeeded; `verify` rejected the policy with 42
+violations (38 trust declarations and 4 unobserved conditional errors).
+Artifact certification was published, but the failed policy blocks deployment.
+External SQLite/DuckDB regressions do not replace the missing Cott observations.
+The current compiler can also classify contract `proved` evidence as `observed`;
+neither that status nor policy selection establishes execution of every branch.
+
 ## Run
 
 ```sh

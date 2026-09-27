@@ -15,3 +15,192 @@ runtime_validation = "boundary"
 [generator]
 rules = "generator.rules"
 timeout_seconds = 3600
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.cli.parse_pgcli_arguments"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.cli.session_settings_from"
+clauses = ["ensures:1", "ensures:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.config.parse_pgcli_config"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.config.load_pgcli_config"
+clauses = ["ensures:1", "error:2", "error:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.connection.connection_spec_from_uri"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.connection.select_connect_target"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.connection.parse_pg_service"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.connection.lookup_pg_service"
+clauses = ["ensures:1", "error:2", "error:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.connection.open_executor"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.connection.reconnect_executor"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.connection.copy_executor"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.connection.transaction_indicator"
+clauses = ["ensures:1", "ensures:2", "ensures:3", "ensures:4", "ensures:5"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.session.evaluate_pgcli_command"
+clauses = ["ensures:1", "error:2", "error:3", "error:4", "error:5"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.session.execute_pgcli_command"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.session.run_init_commands"
+clauses = ["error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.session.database_listing"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.session.confirm_destructive_query"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.session.view_definition_sql"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.session.function_definition_sql"
+clauses = ["error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.session.should_limit_rows"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.parseutils.parse_destructive_warning"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.output.table_format_names"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.output.timing_report"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.completion.refresh_completion_metadata"
+clauses = ["ensures:1", "error:2", "error:3", "error:4"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.completion.completion_items"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.completion.completion_lines"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.pgcli.repl.buffer_should_submit"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false

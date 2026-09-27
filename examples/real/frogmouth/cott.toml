@@ -18,3 +18,83 @@ runtime_validation = "boundary"
 [generator]
 rules = "generator.rules"
 timeout_seconds = 1800
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.browser.navigate"
+clauses = ["ensures:1", "ensures:2", "ensures:3", "ensures:4", "ensures:5", "ensures:6"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.document.visit_location"
+clauses = ["ensures:1", "ensures:2", "ensures:3", "ensures:4", "ensures:5"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.document.load_local_document"
+clauses = ["ensures:2", "ensures:3", "ensures:4", "error:5"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.document.fetch_remote_document"
+clauses = ["ensures:2", "ensures:3", "ensures:4", "error:5"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.document.resolve_link"
+clauses = ["ensures:1", "ensures:2", "ensures:3"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.document.failure_dialog"
+clauses = ["ensures:10", "ensures:11", "ensures:13"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.locations.is_markdown_location"
+clauses = ["ensures:1", "ensures:2"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.omnibox.interpret_address"
+clauses = ["ensures:3", "ensures:4", "ensures:5"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.forge.locate_forge_file"
+clauses = ["ensures:2", "ensures:3", "error:4"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.history.remember_location"
+clauses = ["ensures:1", "ensures:2", "ensures:3"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.history.step_back"
+clauses = ["ensures:1", "ensures:2", "ensures:3"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.history.step_forward"
+clauses = ["ensures:1", "ensures:2", "ensures:3"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.history.delete_history_entry"
+clauses = ["ensures:1", "ensures:2", "ensures:3", "ensures:4"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.storage.load_config"
+clauses = ["ensures:2", "ensures:3", "ensures:4", "error:5", "error:6", "error:7"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.storage.save_config"
+clauses = ["ensures:2", "ensures:3", "error:4"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.storage.load_history"
+clauses = ["ensures:2", "ensures:3", "ensures:4", "error:5", "error:6"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.storage.save_history"
+clauses = ["ensures:2", "ensures:3", "error:4"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.storage.load_bookmarks"
+clauses = ["ensures:2", "ensures:3", "ensures:4", "error:5", "error:6"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.storage.save_bookmarks"
+clauses = ["ensures:2", "ensures:3", "error:4"]
+
+[[verification.coverage.rules]]
+symbol = "frogmouth.storage.storage_failure_dialog"
+clauses = ["ensures:1", "ensures:2", "ensures:3", "ensures:4", "ensures:5"]

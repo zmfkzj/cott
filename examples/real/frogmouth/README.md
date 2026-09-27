@@ -84,15 +84,19 @@ Textual rendering stays in authored code, as upstream renders with Textual too.
 
 ## Evidence
 
-`cott check`, `cott fmt --check`, `cott generate --agent omp --model
-anthropic/claude-opus-5-5 --target python -j 3`, and `cott verify` passed.
-The verified snapshot has `observed=173 trust_declaration=9 unknown=0
-unobserved=0` clause observations; coverage policy selects no clauses. Seven
-requirements have bounded scenario evidence and one, external desktop opening,
-is unverified because the fixture runner cannot invoke the desktop opener. The
-nine trust-declaration clauses include environment failures of loading and the
-desktop-opener precondition: no scenario exercised those branches. Artifact
-verification does not certify arbitrary user files or remote servers.
+The latest `cott check` and `emit python` succeeded. Artifact verification
+published a current snapshot with `observed=173 trust_declaration=9 unknown=0
+unobserved=0`, but `verify` rejected the strict coverage policy: 76 clauses
+across 20 callables are selected, and 8 remain trust declarations. These are
+the remote content-type hand-off and storage load/recovery failure branches.
+The policy covers navigation, document loading/link resolution, history and
+configuration/bookmark/history persistence, with no unobserved, trust-declaration
+or unknown allowance. Deployment remains blocked until the selected evidence
+meets the policy; artifact `verified=true` alone does not permit deployment.
+Seven requirements retain bounded scenario evidence and desktop opening remains
+unverified. The current compiler can classify contract `proved` evidence as
+`observed`; neither policy selection nor this status establishes all-branch
+execution or correctness for arbitrary user files and remote servers.
 
 The TUI was launched in a real tmux pty at `120×36` with scratch XDG directories.
 Observed: a local Guide document rendered; Ctrl+Y showed persisted history;

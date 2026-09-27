@@ -21,3 +21,304 @@ runtime_validation = "test-only"
 [generator]
 rules = "generator.rules"
 timeout_seconds = 3600
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.hsql.parse_hsql_arguments"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.hsql.parse_catalog_path"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.hsql.hsql_help"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.hsql.hsql_exit_status"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.hsql.hsql_error_line"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.hsql.stats_json"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.hsql.valid_session_name"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.hsql.execute_hsql_request"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.hsql.send_session_request"
+clauses = ["ensures:1", "error:2", "error:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.cli.parse_harlequin_arguments"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.cli.resolve_harlequin_settings"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.config.read_config_file"
+clauses = ["error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.config.merge_config_files"
+clauses = ["ensures:1", "ensures:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.config.select_profile"
+clauses = ["error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.config.interpolate_profile"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.config.write_profile"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.adapters.adapter_descriptors"
+clauses = ["ensures:1", "ensures:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.adapters.connect"
+clauses = ["ensures:1", "error:2", "error:3", "error:4"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.adapters.execute_statements"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.adapters.fetch_result"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.adapters.toggle_transaction_mode"
+clauses = ["ensures:1", "error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.adapters.commit_transaction"
+clauses = ["error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.adapters.rollback_transaction"
+clauses = ["error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.adapters.cancel_queries"
+clauses = ["error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.adapters.close_connection"
+clauses = ["error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.adapters.load_catalog"
+clauses = ["error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.adapters.load_catalog_children"
+clauses = ["error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.results.result_set_from_rows"
+clauses = ["ensures:1", "ensures:2", "ensures:3", "ensures:4", "ensures:5"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.results.render_grid"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.sqltext.selected_queries"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.sqltext.format_sql"
+clauses = ["error:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.history.record_query"
+clauses = ["ensures:1", "ensures:2", "error:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.history.update_query"
+clauses = ["ensures:2", "error:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.history.recent_queries"
+clauses = ["ensures:2", "error:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.export.export_formats"
+clauses = ["ensures:1"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.export.write_result"
+clauses = ["ensures:1", "error:2", "error:3", "error:4", "error:5"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.files.load_text_file"
+clauses = ["ensures:2", "ensures:3", "error:4", "error:5", "error:6", "error:7", "error:8"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.files.save_text_file"
+clauses = ["ensures:1", "ensures:2", "error:3", "error:4", "error:5"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.keymap.harlequin_actions"
+clauses = ["ensures:1", "ensures:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.keymap.bind_keymaps"
+clauses = ["ensures:1", "error:2", "error:3", "error:4"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.style.theme_palettes"
+clauses = ["ensures:1", "ensures:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.style.find_theme"
+clauses = ["ensures:1", "ensures:2", "error:3"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false
+
+[[verification.coverage.rules]]
+symbol = "real.harlequin.ide.initial_layout"
+clauses = ["ensures:1", "ensures:2"]
+allow_unobserved = false
+allow_trust_declaration = false
+allow_unknown = false

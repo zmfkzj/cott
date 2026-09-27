@@ -19,3 +19,103 @@ runtime_validation = "test-only"
 [generator]
 rules = "generator.rules"
 timeout_seconds = 2400
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.cli.plan_tabs"
+clauses = ["ensures:1"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.cli.sort_paths"
+clauses = ["ensures:1"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.files.open_source"
+clauses = ["ensures:1", "error:2", "error:3"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.files.decompress"
+clauses = ["ensures:1", "error:2"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.files.read_span"
+clauses = ["ensures:1", "ensures:2"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.files.read_lines"
+clauses = ["ensures:1"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.files.poll_source"
+clauses = ["ensures:1"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.files.scan_timestamps"
+clauses = ["ensures:1"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.files.line_timestamp"
+clauses = ["ensures:1"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.files.find_line"
+clauses = ["ensures:1", "ensures:2"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.files.locate_time"
+clauses = ["ensures:1"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.files.save_lines"
+clauses = ["ensures:1", "error:2"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.index.start_file_index"
+clauses = ["ensures:1", "ensures:2"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.index.add_scanned_breaks"
+clauses = ["ensures:1", "ensures:2"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.index.complete_file_scan"
+clauses = ["ensures:1", "ensures:2"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.index.add_tail_breaks"
+clauses = ["ensures:1", "ensures:2"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.index.file_line_count"
+clauses = ["ensures:1"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.timestamps.scan_timestamp"
+clauses = ["ensures:1", "ensures:2"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.timestamps.shift_timestamp"
+clauses = ["ensures:1"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.timestamps.compare_timestamps"
+clauses = ["ensures:1"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.text.decode_ansi"
+clauses = ["ensures:1"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.text.parse_line"
+clauses = ["ensures:1"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.text.line_matches"
+clauses = ["ensures:1", "ensures:2", "ensures:3"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.text.highlight_find"
+clauses = ["ensures:1", "ensures:2"]
+
+[[verification.coverage.rules]]
+symbol = "real.toolong.view.initial_viewer"
+clauses = ["ensures:1", "ensures:2"]
