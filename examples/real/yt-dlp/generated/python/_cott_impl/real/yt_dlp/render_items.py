@@ -9,9 +9,8 @@ def _item_dict(item: MediaItem) -> dict[str, str | int]:
 
 
 def render_items(items: CottList[MediaItem], mode: JsonMode) -> str:
-    objects: list[dict[str, str | int]] = [_item_dict(item) for item in items]
     match mode:
         case JsonMode_Lines():
-            return "\n".join(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) for obj in objects)
+            return "\n".join(json.dumps(_item_dict(item), ensure_ascii=False, separators=(",", ":")) for item in items)
         case JsonMode_Single():
-            return json.dumps(objects, ensure_ascii=False, separators=(",", ":"))
+            return json.dumps([_item_dict(item) for item in items], ensure_ascii=False, separators=(",", ":"))

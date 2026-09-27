@@ -1,7 +1,7 @@
 import os
 import pathlib
 
-from cott_runtime import CottList, Option, Some
+from cott_runtime import CottList, Option, Some, U64
 
 from real.harlequin.export import export_formats, format_for_path
 from real.harlequin.export_types import ExportDialog, ExportFocus, ExportFocus_Cancel, ExportFocus_Export, ExportFocus_Format, ExportFocus_Option, ExportFocus_Path, ExportFormatSpec, ExportOptionKind_Choice, ExportOptionKind_Flag, ExportOptionSpec, ExportOptionValue, ExportOutcome, ExportOutcome_Cancel, ExportOutcome_Export, ExportOutcome_Stay, ExportRequest, ExportStep
@@ -19,7 +19,7 @@ def _defaults(name: Option[str]) -> CottList[ExportOptionValue]:
     spec = _spec(name)
     if spec is None:
         return CottList(values=[])
-    return CottList(values=[ExportOptionValue(name=o.name, value=o.default) for o in spec.options])
+    return CottList(values=[ExportOptionValue(name=option.name, value=option.default) for option in spec.options])
 
 
 def _options(dialog: ExportDialog) -> list[ExportOptionSpec]:
@@ -27,7 +27,7 @@ def _options(dialog: ExportDialog) -> list[ExportOptionSpec]:
     return [] if spec is None else list(spec.options)
 
 
-def _with(path: str, cursor: int, fmt: Option[str], values: CottList[ExportOptionValue], focus: ExportFocus, message: str) -> ExportDialog:
+def _with(path: str, cursor: U64, fmt: Option[str], values: CottList[ExportOptionValue], focus: ExportFocus, message: str) -> ExportDialog:
     return ExportDialog(path=path, path_cursor=cursor, format=fmt, values=values, focus=focus, message=message)
 
 
@@ -37,7 +37,7 @@ def _stay(dialog: ExportDialog) -> ExportStep:
 
 def _focus_list(dialog: ExportDialog) -> list[ExportFocus]:
     items: list[ExportFocus] = [ExportFocus_Path(), ExportFocus_Format()]
-    items.extend(ExportFocus_Option(index=i) for i in range(len(_options(dialog))))
+    items.extend(ExportFocus_Option(index=index) for index in range(len(_options(dialog))))
     items.append(ExportFocus_Cancel())
     items.append(ExportFocus_Export())
     return items
@@ -46,9 +46,10 @@ def _focus_list(dialog: ExportDialog) -> list[ExportFocus]:
 def _move_focus(dialog: ExportDialog, delta: int) -> ExportDialog:
     items = _focus_list(dialog)
     current = 0
-    for i, item in enumerate(items):
+    for index, item in enumerate(items):
         if item == dialog.focus:
-            current = i
+            current = index
+            break
     focus = items[(current + delta) % len(items)]
     return _with(dialog.path, dialog.path_cursor, dialog.format, dialog.values, focus, dialog.message)
 
@@ -58,14 +59,14 @@ def _printable(key: str, text: str) -> bool:
 
 
 def _value_of(dialog: ExportDialog, name: str) -> str:
-    for v in dialog.values:
-        if v.name == name:
-            return v.value
+    for value in dialog.values:
+        if value.name == name:
+            return value.value
     return ""
 
 
 def _set_value(dialog: ExportDialog, name: str, value: str) -> ExportDialog:
-    values = CottList(values=[ExportOptionValue(name=v.name, value=value if v.name == name else v.value) for v in dialog.values])
+    values = CottList(values=[ExportOptionValue(name=item.name, value=value if item.name == name else item.value) for item in dialog.values])
     return _with(dialog.path, dialog.path_cursor, dialog.format, values, dialog.focus, "")
 
 
@@ -96,7 +97,7 @@ def _validate(dialog: ExportDialog) -> ExportStep:
                     message = f"{option.label} must be a number."
                     break
     if message != "" or not isinstance(fmt, Some):
-        return _stay(_with(dialog.path, dialog.path_cursor, dialog.format, dialog.values, dialog.focus, message))
+        return _stay(_with(dialog.path, dialog.path_cursor, fmt, dialog.values, dialog.focus, message))
     request = ExportRequest(path=pathlib.Path(os.path.expanduser(dialog.path)), format=fmt.value, options=dialog.values)
     outcome: ExportOutcome = ExportOutcome_Export(request=request)
     return ExportStep(dialog=dialog, outcome=outcome)
@@ -107,31 +108,29 @@ def _path_key(dialog: ExportDialog, key: str, text: str) -> ExportStep:
         return _validate(dialog)
     path = dialog.path
     cursor = min(dialog.path_cursor, len(path))
-    edited = True
-    if key == "backspace":
-        if cursor > 0:
-            path = path[: cursor - 1] + path[cursor:]
-            cursor -= 1
-    elif key == "delete":
-        path = path[:cursor] + path[cursor + 1 :]
-    elif key == "left":
+    if key == "left":
         cursor = max(0, cursor - 1)
-        edited = False
     elif key == "right":
         cursor = min(len(path), cursor + 1)
-        edited = False
     elif key == "home":
         cursor = 0
-        edited = False
     elif key == "end":
         cursor = len(path)
-        edited = False
+    elif key == "backspace":
+        if cursor == 0:
+            return _stay(dialog)
+        path = path[:cursor - 1] + path[cursor:]
+        cursor -= 1
+    elif key == "delete":
+        if cursor == len(path):
+            return _stay(dialog)
+        path = path[:cursor] + path[cursor + 1:]
     elif _printable(key, text):
         path = path[:cursor] + text + path[cursor:]
         cursor += len(text)
     else:
         return _stay(dialog)
-    if not edited:
+    if key in ("left", "right", "home", "end"):
         return _stay(_with(path, cursor, dialog.format, dialog.values, dialog.focus, dialog.message))
     fmt = dialog.format
     values = dialog.values
@@ -149,9 +148,10 @@ def _format_key(dialog: ExportDialog, key: str) -> ExportStep:
     current = -1
     fmt0 = dialog.format
     if isinstance(fmt0, Some):
-        for i, name in enumerate(names):
+        for index, name in enumerate(names):
             if name == fmt0.value:
-                current = i
+                current = index
+                break
     if current < 0:
         index = len(names) - 1 if key == "left" else 0
     else:
@@ -160,7 +160,7 @@ def _format_key(dialog: ExportDialog, key: str) -> ExportStep:
     return _stay(_with(dialog.path, dialog.path_cursor, fmt, _defaults(fmt), dialog.focus, ""))
 
 
-def _option_key(dialog: ExportDialog, index: int, key: str, text: str) -> ExportStep:
+def _option_key(dialog: ExportDialog, index: U64, key: str, text: str) -> ExportStep:
     options = _options(dialog)
     if index >= len(options):
         return _stay(dialog)
@@ -184,6 +184,8 @@ def _option_key(dialog: ExportDialog, index: int, key: str, text: str) -> Export
             new = (current + (-1 if key == "left" else 1)) % len(choices)
         return _stay(_set_value(dialog, option.name, choices[new]))
     if key == "backspace":
+        if value == "":
+            return _stay(dialog)
         return _stay(_set_value(dialog, option.name, value[:-1]))
     if _printable(key, text):
         return _stay(_set_value(dialog, option.name, value + text))

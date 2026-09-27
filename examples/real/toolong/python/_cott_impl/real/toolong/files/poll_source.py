@@ -1,15 +1,16 @@
 from typing import Final
 
-from cott_runtime import U64, Opaque
+from cott_runtime import Opaque, U64
 from real.toolong.files import read_span
 from real.toolong.files_types import TailChunk
 from real.toolong.model_types import ByteSpan, LogSource
 
 _CHUNK: Final[int] = 65536
+_MAX_U64: Final[int] = 18446744073709551615
 
 
 def poll_source(source: LogSource, position: U64) -> TailChunk:
-    data = read_span(source, ByteSpan(start=position, end=position + _CHUNK))
+    data = read_span(source, ByteSpan(start=position, end=min(position + _CHUNK, _MAX_U64)))
     breaks: list[int] = []
     index = data.find(b"\n")
     while index != -1:

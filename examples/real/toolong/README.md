@@ -52,9 +52,9 @@ prompt_toolkit style string), so a styled line costs four nodes per span.
 
 ## Evidence
 
-`cott verify` certifies the current snapshot with `observed=75 trust_declaration=4 unknown=1
-unobserved=0` clause observations from 28 scenarios. The trust declarations are the effectful
-`run_command_line`, `save_lines` failure and `run_viewer` clauses, which Cott does not execute;
+`cott verify` certifies the current snapshot with `observed=76 trust_declaration=3 unknown=1
+unobserved=0` clause observations from 29 scenarios. The remaining trust declarations are the
+effectful `run_command_line` and `run_viewer` clauses, which Cott does not execute;
 `render_find_dialog`'s row-count clause is unknown because the candidate node limit for `TabView`
 is exhausted. `cott requirements` reports the four requirements (`FIND_SEARCHES_RAW_LINES`,
 `TIME_NAVIGATION_SKIPS_TO_TARGET`, `ESCAPE_CANCELS_A_RUNNING_SCAN`,
@@ -65,11 +65,13 @@ Opaque values compare by identity, so scenarios check index contents through `li
 The strict coverage policy selects 40 clauses across 25 callables: file opening,
 decompression, line/span reads, tailing, saving, index transitions, timestamps,
 search and highlighting, and viewer initialization. No unobserved, trust-declaration
-or unknown allowance is enabled. The latest `emit python` succeeded, but `verify`
-rejected `real.toolong.files.save_lines:error:2` (`WriteFailed`), which remains
-a trust declaration. Artifact certification was published; the one policy
-violation blocks deployment. Merge-order scenarios and the four requirements
-above remain separate evidence, not additional policy selectors.
+or unknown allowance is enabled. The latest Sol regeneration and `verify` passed
+all 40 selected clauses, including the previously missing
+`real.toolong.files.save_lines:error:2` (`WriteFailed`) failure observation.
+The raw-line search scenario also checks that backward searches starting at or
+beyond the view's end return no result, including an empty view. The search doc
+now agrees with the unchanged formal result bound. Merge-order scenarios and the
+four requirements above remain separate evidence, not additional policy selectors.
 The current compiler can classify contract `proved` evidence as `observed`;
 policy selection and an observed status do not establish execution of every path.
 

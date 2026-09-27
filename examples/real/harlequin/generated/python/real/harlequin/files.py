@@ -30,7 +30,7 @@ Failed(path, message) with the OS error text."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/files/load_text_file.py", "18bd15d7d119136ada3328debcf1d53511deb9dd5f4d519c2f8ec1bd89144ecf", "load_text_file", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.files.load_text_file")
+        _implementation = _cott_load("_cott_impl/real/harlequin/files/load_text_file.py", "170fb737be48340a3617058047c6bf7fb8201ecde82e4b69d20619b2bd00068d", "load_text_file", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.files.load_text_file")
         _result = _implementation(path)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -109,7 +109,7 @@ failure is Failed(path, message)."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/files/save_text_file.py", "98f305263b71c24c60325c9e50f6569ff87f17652e14e62c20af2fb124a830ee", "save_text_file", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.files.save_text_file")
+        _implementation = _cott_load("_cott_impl/real/harlequin/files/save_text_file.py", "43ba6bce7e881baac995007d66728d7a9d33db189815aec44977d307521aed2f", "save_text_file", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.files.save_text_file")
         _result = _implementation(path, text)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

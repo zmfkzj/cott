@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 import json
 import re
 import textwrap
@@ -5,7 +6,6 @@ from typing import cast
 
 import click
 from cott_runtime import Err, Ok, Result, U32
-
 from real.pgcli.output_types import EXPLAIN_NODE_DESCRIPTIONS, FormattedOutput, OutputError, OutputError_Failed
 
 
@@ -26,15 +26,12 @@ def _dur(value: float) -> str:
 
 
 def _intcomma(value: object) -> str:
-    if isinstance(value, str):
-        result = value
-    else:
-        result = str(int(cast(int | float, value)))
+    result = value if isinstance(value, str) else str(int(cast(int | float, value)))
     while True:
-        next_result = re.sub(r"^(-?\d+)(\d{3})", r"\g<1>,\g<2>", result)
-        if next_result == result:
+        updated = re.sub(r"^(-?\d+)(\d{3})", r"\g<1>,\g<2>", result)
+        if updated == result:
             return result
-        result = next_result
+        result = updated
 
 
 def _wrap(text: str, cols: int) -> list[str]:
@@ -53,7 +50,11 @@ def _children(node: dict[object, object]) -> list[dict[object, object]]:
     value = node.get("Plans", [])
     if not isinstance(value, list):
         raise TypeError("Plans is not a list")
-    return [_map(child) for child in cast(list[object], value)]
+    children = cast(list[object], value)
+    for child in children:
+        if not isinstance(child, dict):
+            raise TypeError("plan entry is not an object")
+    return cast(list[dict[object, object]], children)
 
 
 def _number(node: dict[object, object], key: str) -> float:
@@ -88,7 +89,7 @@ def _process(node: dict[object, object], explain: dict[object, object]) -> None:
     node["__duration"] = duration
     node["__cost"] = cost
     for key, value in (("Max Rows", actual_rows), ("Max Cost", cost), ("Max Duration", duration), ("Total Cost", cost)):
-        if not explain.get(key) or cast(float, explain[key]) < value:
+        if not explain.get(key) or _number(explain, key) < value:
             explain[key] = value
     for child in children:
         _process(child, explain)
@@ -104,8 +105,8 @@ def _outliers(node: dict[object, object], explain: dict[object, object]) -> None
 
 def _node_lines(node: dict[object, object], explain: dict[object, object], descriptions: dict[object, object], prefix: str, width: int, last: bool, lines: list[str]) -> None:
     lines.append(_bb(prefix) + _bb("│"))
-    parts = [str(part) for part in (node.get("Scan Direction"), node.get("Strategy")) if part]
-    details = _bb(" [" + ", ".join(parts) + "]") if parts else ""
+    details_parts = [str(part) for part in (node.get("Scan Direction"), node.get("Strategy")) if part]
+    details = _bb(" [" + ", ".join(details_parts) + "]") if details_parts else ""
     tags: list[str] = []
     if node["__slowest"]:
         tags.append(click.style("slowest", fg="white", bg="red"))
@@ -162,11 +163,11 @@ def _render(plan_json: str, width: int) -> list[str]:
     descriptions = _map(cast(object, json.loads(EXPLAIN_NODE_DESCRIPTIONS)))
     decoded = cast(object, json.loads(plan_json))
     if isinstance(decoded, list):
-        elements = cast(list[object], decoded)
+        elements: Iterable[object] = cast(list[object], decoded)
     elif isinstance(decoded, dict):
-        elements = list(cast(dict[object, object], decoded))
+        elements = cast(dict[object, object], decoded)
     else:
-        raise TypeError("EXPLAIN JSON is not iterable")
+        elements = cast(Iterable[object], decoded)
     items: list[str] = []
     for element in elements:
         explain = _map(element)
@@ -188,5 +189,5 @@ def visualize_explain_plans(plan_json: str, terminal_width: U32) -> Result[Forma
     try:
         items = _render(plan_json, terminal_width)
     except Exception as error:
-        return Err(error=OutputError_Failed(message=str(error)))
+        return Err[OutputError](error=OutputError_Failed(message=str(error)))
     return Ok(value=FormattedOutput(text="\n".join(items), items=len(items)))

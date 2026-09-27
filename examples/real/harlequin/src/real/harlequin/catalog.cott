@@ -132,7 +132,11 @@ fn catalog_children(catalog: List[CatalogEntry], parent: Option[Str]) -> List[Ca
 
     effects []
 
-fn replace_children(catalog: List[CatalogEntry], parent: Str, children: List[CatalogEntry]) -> List[CatalogEntry]:
+fn replace_children(
+    catalog: List[CatalogEntry],
+    parent: Str,
+    children: List[CatalogEntry],
+) -> List[CatalogEntry]:
     doc """
     Replace the whole subtree below parent with children sorted by label
     (case-insensitive, then exact; Harlequin sorts loaded siblings
@@ -154,7 +158,12 @@ fn visible_entries(catalog: List[CatalogEntry], tree: TreeState) -> List[Catalog
 
     effects []
 
-fn move_tree_cursor(catalog: List[CatalogEntry], tree: TreeState, motion: TreeMotion, page_rows: U64) -> TreeState:
+fn move_tree_cursor(
+    catalog: List[CatalogEntry],
+    tree: TreeState,
+    motion: TreeMotion,
+    page_rows: U64,
+) -> TreeState:
     doc """
     Move the cursor over visible_entries: Up/Down by one row, PageUp/PageDown by
     max(page_rows, 1) rows, First to row 0, Last to the last row, Parent to the
@@ -189,7 +198,13 @@ fn tree_cursor_entry(catalog: List[CatalogEntry], tree: TreeState) -> Option[Cat
 
     effects []
 
-fn render_tree(catalog: List[CatalogEntry], tree: TreeState, width: U64, height: U64, focused: Bool) -> TreeFrame:
+fn render_tree(
+    catalog: List[CatalogEntry],
+    tree: TreeState,
+    width: U64,
+    height: U64,
+    focused: Bool,
+) -> TreeFrame:
     doc """
     Draw the visible rows into width x height cells. first_row is tree.first_row
     moved minimally so the cursor row is within [first_row, first_row + height).
@@ -207,7 +222,11 @@ fn render_tree(catalog: List[CatalogEntry], tree: TreeState, width: U64, height:
 
     effects []
 
-fn list_directory(path: Path, parent: Option[Str], depth: U64) -> Result[List[CatalogEntry], FileTreeError]:
+fn list_directory(
+    path: Path,
+    parent: Option[Str],
+    depth: U64,
+) -> Result[List[CatalogEntry], FileTreeError]:
     doc """
     The Data Catalog's Files tree entries for the direct contents of directory
     path, read lazily one level at a time like Harlequin's directory tree.
@@ -329,7 +348,12 @@ fn join_completion_sets(first: CompletionSet, second: CompletionSet) -> Completi
 
     effects []
 
-fn complete(candidates: CompletionSet, identifiers: List[Str], prefix: Str, limit: U64) -> List[Completion]:
+fn complete(
+    candidates: CompletionSet,
+    identifiers: List[Str],
+    prefix: Str,
+    limit: U64,
+) -> List[Completion]:
     doc """
     Harlequin's completion menu for the word before the cursor. candidates
     (a CompletionSet; its payload is a Python tuple of real.harlequin.catalog_types.Completion
@@ -399,7 +423,10 @@ scenario catalog_trees_expand_move_and_draw:
     call collapsed_rows = visible_entries(ordered, closed)
     assert collapsed_rows == List(db)
     call opened = toggle_tree_node(ordered, closed)
-    assert opened == TreeToggle(tree: TreeState(expanded: List("\"main\""), cursor: 0, first_row: 0), load_children: Option.Nothing)
+    assert opened == TreeToggle(
+        tree: TreeState(expanded: List("\"main\""), cursor: 0, first_row: 0),
+        load_children: Option.Nothing,
+    )
     call open_rows = visible_entries(ordered, opened.tree)
     assert open_rows == List(db, table)
     call down = move_tree_cursor(ordered, opened.tree, TreeMotion.Down, 10)
@@ -430,16 +457,42 @@ scenario catalog_trees_expand_move_and_draw:
     assert parent.cursor == 0
 
 scenario completions_rank_exact_prefix_and_member_matches:
-    data keyword: Completion = Completion(label: "select", value: "select", type_label: "kw", priority: 100, context: Option.Nothing)
-    data function: Completion = Completion(label: "sum", value: "sum", type_label: "agg", priority: 200, context: Option.Nothing)
-    data column: Completion = Completion(label: "status", value: "status", type_label: "s", priority: 502, context: Option.Some(value: "orders"))
+    data keyword: Completion = Completion(
+        label: "select",
+        value: "select",
+        type_label: "kw",
+        priority: 100,
+        context: Option.Nothing,
+    )
+    data function: Completion = Completion(
+        label: "sum",
+        value: "sum",
+        type_label: "agg",
+        priority: 200,
+        context: Option.Nothing,
+    )
+    data column: Completion = Completion(
+        label: "status",
+        value: "status",
+        type_label: "s",
+        priority: 502,
+        context: Option.Some(value: "orders"),
+    )
     call first = completion_set(List(function, keyword))
     call second = completion_set(List(column))
     call candidates = join_completion_sets(first, second)
     call plain = complete(candidates, List(), "s", 10)
     assert plain == List(keyword, function, column)
     call member = complete(candidates, List(), "Orders.st", 10)
-    assert member == List(Completion(label: "Orders.status", value: "Orders.status", type_label: "s", priority: 502, context: Option.Some(value: "orders")))
+    assert member == List(
+        Completion(
+            label: "Orders.status",
+            value: "Orders.status",
+            type_label: "s",
+            priority: 502,
+            context: Option.Some(value: "orders"),
+        ),
+    )
     call digits = complete(candidates, List(), "1s", 10)
     assert digits == List()
     call builtins = builtin_completions()

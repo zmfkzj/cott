@@ -14,16 +14,18 @@ def confirm_quit_with_transaction(session: Session, screen: TerminalSize) -> Qui
     status = executor_transaction_status(session.executor)
     if not isinstance(status, (TransactionStatus_Active, TransactionStatus_InTransaction)):
         return QuitDecision(session=session, quit=True)
+
     while True:
         try:
             answer = str(cast(object, click.prompt(_PROMPT, default="a"))).lower()
         except click.Abort:
             click.echo()
             answer = "a"
+
         if answer == "a":
             return QuitDecision(session=session, quit=False)
         if answer == "force":
             return QuitDecision(session=session, quit=True)
-        if answer == "c" or answer == "r":
+        if answer in ("c", "r"):
             outcome = execute_pgcli_command(session, "commit" if answer == "c" else "rollback", screen)
             return QuitDecision(session=outcome.session, quit=outcome.query.successful)

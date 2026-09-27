@@ -84,15 +84,15 @@ Textual rendering stays in authored code, as upstream renders with Textual too.
 
 ## Evidence
 
-The latest `cott check` and `emit python` succeeded. Artifact verification
-published a current snapshot with `observed=173 trust_declaration=9 unknown=0
-unobserved=0`, but `verify` rejected the strict coverage policy: 76 clauses
-across 20 callables are selected, and 8 remain trust declarations. These are
-the remote content-type hand-off and storage load/recovery failure branches.
+The latest `cott verify` certified the regenerated snapshot and passed the strict
+coverage policy: all 76 selected clauses across 20 callables meet the policy,
+with no violations. Overall evidence is `observed=181 trust_declaration=1
+unknown=0 unobserved=0`. The eight previously missing selected clauses now have
+evidence from the remote content-type and storage load/recovery scenarios.
 The policy covers navigation, document loading/link resolution, history and
 configuration/bookmark/history persistence, with no unobserved, trust-declaration
-or unknown allowance. Deployment remains blocked until the selected evidence
-meets the policy; artifact `verified=true` alone does not permit deployment.
+or unknown allowance. Deployment still requires unchanged inputs and managed
+bytes; no deployment was performed in this verification run.
 Seven requirements retain bounded scenario evidence and desktop opening remains
 unverified. The current compiler can classify contract `proved` evidence as
 `observed`; neither policy selection nor this status establishes all-branch

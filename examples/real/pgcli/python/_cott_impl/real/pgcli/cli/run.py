@@ -18,7 +18,7 @@ from real.pgcli.completion_types import CompleterSettings, MetadataRefreshReques
 from real.pgcli.config import configure_pgcli_logging, load_pgcli_config, pgcli_config_directory
 from real.pgcli.config_types import PgcliConfig
 from real.pgcli.connection import apply_local_timezone, connection_spec_from_uri, lookup_pg_service, open_executor, select_connect_target
-from real.pgcli.connection_types import ConnectError, ConnectError_AliasMissing, ConnectError_Failed, ConnectError_ServiceMissing, ConnectTarget_Alias, ConnectTarget_Conninfo, ConnectTarget_Service, ConnectTarget_Uri, ConnectionParam, ConnectionSpec, Executor, OpenRequest, TargetRequest
+from real.pgcli.connection_types import ConnectError, ConnectError_AliasMissing, ConnectError_Failed, ConnectTarget_Alias, ConnectTarget_Conninfo, ConnectTarget_Service, ConnectTarget_Uri, ConnectionParam, ConnectionSpec, Executor, OpenRequest, TargetRequest
 from real.pgcli.repl import run_pgcli_repl
 from real.pgcli.repl_types import ReplSettings
 from real.pgcli.session import create_special_handle, database_listing, ping_database, run_init_commands, run_script_text
@@ -26,7 +26,7 @@ from real.pgcli.session_types import EvaluateError, EvaluateError_ConnectionLost
 
 
 def _fail(message: str) -> Never:
-    click.secho(message, err=True, fg="red")
+    click.secho(message, fg="red", err=True)
     sys.exit(1)
 
 
@@ -34,7 +34,7 @@ def _connect_error_text(error: ConnectError) -> str:
     if isinstance(error, ConnectError_Failed):
         return error.message
     if isinstance(error, ConnectError_AliasMissing):
-        return "Could not find a DSN with alias " + error.name + '. Please check the "[alias_dsn]" section in pgclirc.'
+        return 'Could not find a DSN with alias ' + error.name + '. Please check the "[alias_dsn]" section in pgclirc.'
     return "service '" + error.service + "' was not found in " + error.file
 
 
@@ -69,12 +69,12 @@ def _list_dsn(pgclirc: str) -> Never:
         sys.exit(0)
     lines: list[str] = []
     try:
-        cfg: Any = configobj.ConfigObj(path, interpolation=False, encoding="utf-8")
-        if bool(cast(object, "alias_dsn" in cfg)):
-            section = cast(object, cfg["alias_dsn"])
-            if not isinstance(section, dict):
+        cfg: Any = configobj.ConfigObj(path, interpolation=False, encoding="utf-8", file_error=True)
+        raw = cast(object, cfg.get("alias_dsn"))
+        if raw is not None:
+            if not isinstance(raw, dict):
                 raise ValueError("alias_dsn")
-            for alias, dsn in cast(dict[object, object], section).items():
+            for alias, dsn in cast(dict[object, object], raw).items():
                 if isinstance(dsn, dict):
                     raise ValueError("alias_dsn")
                 lines.append(str(alias) + " : " + str(dsn))
@@ -102,8 +102,8 @@ def _configure_pager(config: PgcliConfig) -> None:
 
 
 def _connect(options: CliOptions, config: PgcliConfig, home: str) -> tuple[Executor, str | None]:
-    env = os.environ
-    pgservice = env.get("PGSERVICE")
+    environment = os.environ
+    pgservice = environment.get("PGSERVICE")
     target_result = select_connect_target(TargetRequest(
         dbname_option=options.dbname_option,
         dbname_argument=options.dbname,
@@ -121,6 +121,7 @@ def _connect(options: CliOptions, config: PgcliConfig, home: str) -> tuple[Execu
     target = target_result.value
     alias: str | None = None
     empty_extra: CottList[ConnectionParam] = CottList(values=[])
+    spec: ConnectionSpec
     if isinstance(target, (ConnectTarget_Alias, ConnectTarget_Uri)):
         if isinstance(target, ConnectTarget_Alias):
             alias = target.name
@@ -131,15 +132,15 @@ def _connect(options: CliOptions, config: PgcliConfig, home: str) -> tuple[Execu
     elif isinstance(target, ConnectTarget_Conninfo):
         spec = ConnectionSpec(database="", host="", user=target.user, port="", password="", dsn=target.dsn, extra=empty_extra)
     elif isinstance(target, ConnectTarget_Service):
-        service_file = env.get("PGSERVICEFILE", "")
-        sysconfdir = env.get("PGSYSCONFDIR", "")
+        service_file = environment.get("PGSERVICEFILE", "")
+        sysconfdir = environment.get("PGSYSCONFDIR", "")
         service_result = lookup_pg_service(target.service, service_file, sysconfdir, home)
         if isinstance(service_result, Err):
             _fail(_connect_error_text(service_result.error))
         found = service_result.value
         if not isinstance(found, Some):
             file = service_file or (sysconfdir + "/.pg_service.conf" if sysconfdir else home + "/.pg_service.conf")
-            _fail(_connect_error_text(ConnectError_ServiceMissing(service=target.service, file=file)))
+            _fail("service '" + target.service + "' was not found in " + file)
         values: dict[str, str] = {param.name: param.value for param in found.value}
         spec = ConnectionSpec(database=values.get("dbname", ""), host=values.get("host", ""), user=target.user or values.get("user", ""), port=values.get("port", ""), password=values.get("password", ""), dsn="", extra=empty_extra)
     else:
@@ -152,8 +153,8 @@ def _connect(options: CliOptions, config: PgcliConfig, home: str) -> tuple[Execu
         keyring_enabled=config.main.keyring,
         explicit_timeout=options.timeout,
         default_timeout=config.main.connect_timeout,
-        pgpassword=env.get("PGPASSWORD", ""),
-        pgconnect_timeout=env.get("PGCONNECT_TIMEOUT", ""),
+        pgpassword=environment.get("PGPASSWORD", ""),
+        pgconnect_timeout=environment.get("PGCONNECT_TIMEOUT", ""),
         dsn_alias=Some(value=alias) if alias is not None else Nothing(),
         explicit_tunnel=options.ssh_tunnel,
         dsn_tunnels=config.dsn_ssh_tunnels,
@@ -192,7 +193,7 @@ def _run_scripts(session: Session, options: CliOptions) -> Never:
                 break
     except Exception as error:
         _fail(str(error))
-    if not any(True for _ in options.files):
+    if len(options.files) == 0:
         sys.exit(0)
     try:
         for name in options.files:
@@ -310,10 +311,9 @@ def _run_body(arguments: CottList[str]) -> Never:
     setproctitle.setproctitle(obfuscate_process_title(setproctitle.getproctitle()))
     session_settings = dataclasses.replace(settings, dsn_alias=Some(value=alias) if alias is not None else Nothing())
     session = Session(settings=session_settings, executor=executor, special=special_result.value, catalog=empty_completion_catalog(), last_query="")
-    if any(True for _ in options.commands) or any(True for _ in options.files):
+    if len(options.commands) != 0 or len(options.files) != 0:
         _run_scripts(session, options)
-    repl_settings = _repl_settings(options, config, directory)
-    run_pgcli_repl(session, repl_settings)
+    run_pgcli_repl(session, _repl_settings(options, config, directory))
     sys.exit(0)
 
 

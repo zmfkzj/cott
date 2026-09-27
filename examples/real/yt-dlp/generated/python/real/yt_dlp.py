@@ -349,7 +349,7 @@ InvalidInput with a fixed descriptive message."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/parse_batch_urls.py", "ab6c55b7ab2a4eb91555049fa36e4ec001d0a58982116df7fd8f66a37032d337", "parse_batch_urls", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.parse_batch_urls")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/parse_batch_urls.py", "06283708eba6c6b974b0024964b1e39787d2caed13d047a14b57b52c6f3c0e0c", "parse_batch_urls", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.parse_batch_urls")
         _result = _implementation(batch, comment_prefixes)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -398,7 +398,7 @@ without file content."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/load_batch_urls.py", "f9ee673808ebcf0747e1c48085e60c2c11be81df295402f3354affd07fd16cbf", "load_batch_urls", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.load_batch_urls")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/load_batch_urls.py", "6f0a189613451ab1bb4c0589c599294f58bbdbfe5b24cbc175cef5ebe885ecba", "load_batch_urls", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.load_batch_urls")
         _result = _implementation(path, comment_prefixes)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -544,7 +544,7 @@ not an IPv4 or IPv6 address with an optional decimal prefix length of at most
         _expected_error_span = {"end_byte":18096,"end_column":147,"end_line":568,"start_byte":17954,"start_column":5,"start_line":568}
         _expected_error_clause = "error:8"
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/validate_network.py", "a94cb52453b83c4967708c4671256be04cfbaefcc1e219eae4110ae855debed0", "validate_network", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.validate_network")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/validate_network.py", "924512aba5ef0f152870220e7d1a7df5fd71721c2d37adb465e612061a81337e", "validate_network", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.validate_network")
         _result = _implementation(policy)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -606,7 +606,7 @@ contain the username, password or file paths."""
         _expected_error_span = {"end_byte":19246,"end_column":138,"end_line":589,"start_byte":19113,"start_column":5,"start_line":589}
         _expected_error_clause = "error:5"
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/resolve_authentication.py", "bd699804fea999ef5031281b6642dbef2022edc949f732c2eda85eecf1381222", "resolve_authentication", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.resolve_authentication")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/resolve_authentication.py", "6c9459a53bfb519f908e19b9ad6d71c6d0cd2d5a3750dcdd2ed6ec7a438c65d7", "resolve_authentication", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.resolve_authentication")
         _result = _implementation(request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -658,7 +658,7 @@ returns GeoRestricted. Messages are fixed text."""
         _expected_error_span = {"end_byte":20009,"end_column":81,"end_line":606,"start_byte":19933,"start_column":5,"start_line":606}
         _expected_error_clause = "error:2"
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/select_geo_route.py", "8514e583ce355bf1c19ee68198d11a8b44ef6e2deffe5a074e5a8b27819b53ac", "select_geo_route", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.select_geo_route")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/select_geo_route.py", "cdd2eeb5ea9c4870991da4ed0dba2e288ba480532a66df351ca517d8d0355dff", "select_geo_route", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.select_geo_route")
         _result = _implementation(policy)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -742,7 +742,7 @@ fixed descriptive category), with no partial result and no content in errors."""
         _expected_error_span = {"end_byte":21895,"end_column":60,"end_line":642,"start_byte":21840,"start_column":5,"start_line":642}
         _expected_error_clause = "error:2"
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/load_plugins.py", "b8d843b23090669aac3a571a5e8d20b9ed3a428b37b392ef80d9e9f999bcbee8", "load_plugins", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.load_plugins")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/load_plugins.py", "0500e3c1a224a2868da459ec1433c018870ce8f46eeaa6be724e47f76626be99", "load_plugins", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.load_plugins")
         _result = _implementation(paths)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -871,7 +871,7 @@ fixed message that contains no credentials or query strings."""
         _expected_error_span = {"end_byte":24825,"end_column":134,"end_line":702,"start_byte":24696,"start_column":5,"start_line":702}
         _expected_error_clause = "error:2"
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/extract_media.py", "c308c50c1283962fab81c9a99a581c7e920bf6ca5c81b1d602889e3d20308e63", "extract_media", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.extract_media")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/extract_media.py", "74ab3918d4b86ab275925ea86ebd17956f4b0080d5d9fcd0e4f776ff70c2897d", "extract_media", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.extract_media")
         _result = _implementation(url, extractor, authentication, network)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1134,7 +1134,7 @@ an advertisement. Otherwise return items unchanged."""
         _expected_error_span = {"end_byte":30085,"end_column":229,"end_line":808,"start_byte":29861,"start_column":5,"start_line":808}
         _expected_error_clause = "error:3"
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/filter_video.py", "36daf2581b16f3e73c8c343cb8760ce9d0fcc0395b0ec9788c01a33e9544a6fc", "filter_video", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.filter_video")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/filter_video.py", "72784983e9dfbd67e10f7ec50b366012e7296a8b6f592b2c89413a3339ff61d2", "filter_video", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.filter_video")
         _result = _implementation(items, request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1284,7 +1284,7 @@ language code returns SubtitleUnavailable(language="")."""
         _expected_error_span = {"end_byte":32821,"end_column":113,"end_line":864,"start_byte":32713,"start_column":5,"start_line":864}
         _expected_error_clause = "error:4"
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/select_subtitles.py", "082180e71338d8404f43603ac27eb7550440c719f411c2a85dec6068fc740ad7", "select_subtitles", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.select_subtitles")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/select_subtitles.py", "be368401b5b8350152456a31fa34f4f8f20243041ee31b847d5805c2c52d70cb", "select_subtitles", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.select_subtitles")
         _result = _implementation(item, request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1349,7 +1349,7 @@ Preserve duplicates. No other MediaItem field affects these names."""
     item = _cott_validate_abi(item, MediaItem, path="$.item")
     request = _cott_validate_abi(request, ThumbnailRequest, path="$.request")
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/plan_thumbnails.py", "9c1a8cfffd569c306703cd7576ca71f1a34f374d2d58189903c7509a4ec6123e", "plan_thumbnails", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.plan_thumbnails")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/plan_thumbnails.py", "2f550908c432819523eae305067c8e0cc4c750eb43845836f3dc022898046451", "plan_thumbnails", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.plan_thumbnails")
         _result = _implementation(item, request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1411,7 +1411,7 @@ playlist_index return InvalidTemplate."""
         _expected_error_span = {"end_byte":34926,"end_column":60,"end_line":911,"start_byte":34871,"start_column":5,"start_line":911}
         _expected_error_clause = "error:2"
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/render_output_path.py", "ea4739f6cb6c287a264ba280584236998041c545fabd45b8bdfc7df0349a3040", "render_output_path", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.render_output_path")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/render_output_path.py", "2e58cd7f4ef36cc847483f7667b3b3d7b74ff0510923fa8b5072b0c66be79ddd", "render_output_path", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.render_output_path")
         _result = _implementation(item, template, missing_placeholder)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1475,7 +1475,7 @@ and a fixed descriptive message, not raw exception text."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/resolve_output_path.py", "2d19c0f90e6ed62bd2418f29e6e960414d0f8167a72937cfbcc2311b8f0075c5", "resolve_output_path", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.resolve_output_path")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/resolve_output_path.py", "67f10a100a6d7ea734093fed1918fbb60a3a2e51eca56bff1d236c4adee3c462", "resolve_output_path", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.resolve_output_path")
         _result = _implementation(item, request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1529,7 +1529,7 @@ not this reader. No extractor key is invented and no content is executed."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/read_download_archive.py", "2da66b5985a258fe084c279ee01fac35a339004006638d2342143fdd49229c0b", "read_download_archive", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.read_download_archive")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/read_download_archive.py", "bef677977720191d8b7460a36f2bffcc44312eff590e2de313234277bfda196d", "read_download_archive", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.read_download_archive")
         _result = _implementation(request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1578,7 +1578,7 @@ holds every item and stopped_on_archive is false."""
     archive = _cott_validate_abi(archive, CottList[str], path="$.archive")
     break_on_existing = _cott_validate_abi(break_on_existing, bool, path="$.break_on_existing")
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/plan_downloads.py", "bf177f14d4cd6bdb09785bdff4eab1c2e3185cc1f82949aece57507b771ff2e5", "plan_downloads", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.plan_downloads")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/plan_downloads.py", "15e68b22f2d5b39669092e9371fc830e6136d1c69e2829f06f324050231fb3ac", "plan_downloads", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.plan_downloads")
         _result = _implementation(items, archive, break_on_existing)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1621,7 +1621,7 @@ Never emit a partial archive or infer an extractor from the URL."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/write_download_archive.py", "823aeed5aa224b6483e9f6a043b7f9e94352df5d5720c65575f3b72fcd46c131", "write_download_archive", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.write_download_archive")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/write_download_archive.py", "8b5021e92d744c98aa72aabf0f435a9c2034ae7f89af1691d27b819553f89897", "write_download_archive", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.write_download_archive")
         _result = _implementation(path, items)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1744,7 +1744,7 @@ response bodies or query strings."""
         _expected_error_span = {"end_byte":42333,"end_column":123,"end_line":1055,"start_byte":42215,"start_column":5,"start_line":1055}
         _expected_error_clause = "error:7"
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/transfer_media.py", "ef10faeabd760a4f28d3bbf4328d0b3c91722a60de4c452e71a406e4c3cf981f", "transfer_media", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.transfer_media")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/transfer_media.py", "8ddb6ebe4cc5f768d8847ca519b22355d7e4da0437f8ba63942f1aa8093206fb", "transfer_media", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.transfer_media")
         _result = _implementation(request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1863,7 +1863,7 @@ without response bodies or query strings."""
         _expected_error_span = {"end_byte":44897,"end_column":99,"end_line":1100,"start_byte":44803,"start_column":5,"start_line":1100}
         _expected_error_clause = "error:2"
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/transfer_fragments.py", "a5a600957a425147feec470ef57a9163a0f7503379768dd9e6661eee22276698", "transfer_fragments", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.transfer_fragments")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/transfer_fragments.py", "2fbf371e0178977e3607ba52ffc910a30ca3291cd9bf6bc6cf96b57a532fd6f6", "transfer_fragments", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.transfer_fragments")
         _result = _implementation(fragments, policy)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1920,7 +1920,7 @@ Do not invent a playlist envelope, rename keys, or sort/deduplicate items."""
     items = _cott_validate_abi(items, CottList[MediaItem], path="$.items")
     mode = _cott_validate_abi(mode, JsonMode, path="$.mode")
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/render_items.py", "1f788d92d60ad3cea529e983b7695c852bda037f606ee5f67bf66a40bb6c2053", "render_items", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.render_items")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/render_items.py", "17e00c3e76e276391938fc1eba832781b8e4bb19db287a441460f517388a98b4", "render_items", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.render_items")
         _result = _implementation(items, mode)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -1995,7 +1995,7 @@ the explicit external tool request already supplies the input and output."""
         _expected_error_span = {"end_byte":48029,"end_column":141,"end_line":1154,"start_byte":47893,"start_column":5,"start_line":1154}
         _expected_error_clause = "error:5"
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/plan_post_processing.py", "9cc615b451e8a4998c70ea91f20c2337be39c5bea659b6cd19e07264f811ec69", "plan_post_processing", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.plan_post_processing")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/plan_post_processing.py", "564a5523d0d4b19b6a48885819c016526f72e21c60eb1ec07e80de99d8395aa0", "plan_post_processing", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.plan_post_processing")
         _result = _implementation(item, request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -2056,7 +2056,7 @@ message=a fixed descriptive category)."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/run_post_processing.py", "06a262f88ba58f6b8b52230f914f00f3f262ddbf599a6ba00df43867c4ebd99d", "run_post_processing", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.run_post_processing")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/run_post_processing.py", "9343ff4f12a1256387f5e5cbb298d73187658c9032d6f0f552926a3c66aa3046", "run_post_processing", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.run_post_processing")
         _result = _implementation(requests)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -2244,7 +2244,7 @@ raw exception text that may contain secrets."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/apply_update.py", "65f5696ac3c65fcec6ac8f99cc2de45e43b163dc1f43473c6cf717a96638ec53", "apply_update", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.apply_update")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/apply_update.py", "aa56e7a6accc72161b164fc7f911b59a877301c42700371deb772090a06f0629", "apply_update", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.apply_update")
         _result = _implementation(request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -2483,7 +2483,7 @@ Do not run updater or download code outside the declared execute pipeline, and
 do not expand the argument grammar beyond the parse_arguments contract."""
     arguments = _cott_validate_abi(arguments, CottList[str], path="$.arguments")
     try:
-        _implementation = _cott_load("_cott_impl/real/yt_dlp/run.py", "78dd4ae6ad76cd511d984667ce21081a916c3020a395408f1f68eaf9b33e17f4", "run", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.run")
+        _implementation = _cott_load("_cott_impl/real/yt_dlp/run.py", "f2181506c5cc7d21f21f1a021c29db51d356752fb9e30e2193b03a8c32303b86", "run", expected_project_name="real-yt-dlp", expected_cott_symbol="real.yt_dlp.run")
         _result = _implementation(arguments)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

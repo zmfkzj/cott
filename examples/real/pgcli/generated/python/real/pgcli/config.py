@@ -104,7 +104,7 @@ writing or reading is Unreadable(path: the expanded path, message: str(error))."
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/config/load_pgcli_config.py", "ebb8eb32be035bcb6856dcd0659036b35426f61f6fce812e06088f29300d1a39", "load_pgcli_config", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.config.load_pgcli_config")
+        _implementation = _cott_load("_cott_impl/real/pgcli/config/load_pgcli_config.py", "94d3e177763f72abe510145ef2fc144465a281343da301a1fff065f32fca59aa", "load_pgcli_config", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.config.load_pgcli_config")
         _result = _implementation(path)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

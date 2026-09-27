@@ -1638,6 +1638,32 @@ scenario public_completion:
             table_formats: List(),
         ),
     )
+    call first_builtins = completion_items(builtins_list, 2)
+    assert first_builtins == List(
+        CompletionItem(
+            text: "MAKE_DATE",
+            start_position: -2,
+            display: "MAKE_DATE",
+            display_meta: "function",
+        ),
+        CompletionItem(
+            text: "MAKE_INTERVAL",
+            start_position: -2,
+            display: "MAKE_INTERVAL",
+            display_meta: "function",
+        ),
+    )
+    call signature_items = completion_items(signature_list, 5)
+    assert signature_items == List(
+        CompletionItem(
+            text: "set_returning_func(x integer, y integer)",
+            start_position: -7,
+            display: "set_returning_func(x integer, y integer)",
+            display_meta: "function",
+        ),
+    )
+    call no_items = completion_items(from_items_list, 0)
+    assert no_items == List()
 
 scenario cased_completion:
     call catalog = completion_catalog_from(cased_metadata)

@@ -225,7 +225,15 @@ fn effective_limit(bar: RunBar) -> Option[U64]:
 
     effects []
 
-fn render_run_bar(bar: RunBar, transaction: Option[TransactionMode], can_cancel: Bool, run_label: Str, runnable: Bool, focused: Bool, width: U16) -> StyledLine:
+fn render_run_bar(
+    bar: RunBar,
+    transaction: Option[TransactionMode],
+    can_cancel: Bool,
+    run_label: Str,
+    runnable: Bool,
+    focused: Bool,
+    width: U16,
+) -> StyledLine:
     doc """
     The one-line Run Query Bar. Left: when transaction is Some, "[Tx: {label}]"
     then " [🡅]" when can_commit and " [⮌]" when can_rollback, then a space. Then
@@ -281,7 +289,11 @@ fn notify(title: Option[Str], message: Str, severity: Severity, now_ms: U64) -> 
 
     effects []
 
-fn render_notifications(notifications: List[Notification], now_ms: U64, width: U64) -> List[StyledLine]:
+fn render_notifications(
+    notifications: List[Notification],
+    now_ms: U64,
+    width: U64,
+) -> List[StyledLine]:
     doc """
     The unexpired notifications (expires_at_ms > now_ms), newest last, each as
     its title line (when Some, bold via class:hq.dialog.title) and its message
@@ -525,7 +537,12 @@ scenario the_layout_follows_harlequin_focus_rules:
 
 scenario the_run_bar_limit_checks_itself:
     call unconfigured = new_run_bar(Option.Nothing)
-    assert unconfigured == RunBar(limit_enabled: false, limit_text: "500", limit_cursor: 3, running: false)
+    assert unconfigured == RunBar(
+        limit_enabled: false,
+        limit_text: "500",
+        limit_cursor: 3,
+        running: false,
+    )
     call none = effective_limit(unconfigured)
     assert none == Option.Nothing
     call configured = new_run_bar(Option.Some(value: 20))
@@ -533,7 +550,11 @@ scenario the_run_bar_limit_checks_itself:
     assert twenty == Option.Some(value: 20)
     call typed = run_bar_key(unconfigured, "0", "0")
     assert typed.bar.limit_text == "5000" and typed.bar.limit_enabled and not typed.submit
-    call erased = run_bar_key(RunBar(limit_enabled: true, limit_text: "5", limit_cursor: 1, running: false), "backspace", "")
+    call erased = run_bar_key(
+        RunBar(limit_enabled: true, limit_text: "5", limit_cursor: 1, running: false),
+        "backspace",
+        "",
+    )
     assert erased.bar.limit_text == "" and not erased.bar.limit_enabled
     call submitted = run_bar_key(configured, "enter", "")
     assert submitted.submit
@@ -546,17 +567,46 @@ scenario dialogs_scroll_copy_and_answer:
     call cell = cell_modal("", "a\nb")
     assert cell.title == "Cell Contents" and cell.lines == List("a", "b")
     call copied = text_modal_key(cell, "c", 5)
-    assert copied.outcome == TextModalOutcome.Copy(text: "a\nb", notice: "Cell value copied to clipboard.")
+    assert copied.outcome == TextModalOutcome.Copy(
+        text: "a\nb",
+        notice: "Cell value copied to clipboard.",
+    )
     call closed = text_modal_key(cell, "x", 5)
     assert closed.outcome == TextModalOutcome.Close
-    call yes = confirm_key(ConfirmModal(prompt: "Really drop table \"t\"?", yes_selected: false), "y")
+    call yes = confirm_key(
+        ConfirmModal(prompt: "Really drop table \"t\"?", yes_selected: false),
+        "y",
+    )
     assert yes.outcome == ConfirmOutcome.Yes
     call toggled = confirm_key(ConfirmModal(prompt: "p", yes_selected: false), "right")
     assert toggled.modal.yes_selected and toggled.outcome == ConfirmOutcome.Stay
     call goto = input_modal(InputPurpose.GoToLine, "")
-    call bad_line = input_key(InputModal(purpose: InputPurpose.GoToLine, title: "Go To Line", placeholder: "Line number", value: "x", cursor: 1, message: "", completions: List()), "enter", "")
-    assert bad_line.modal.message == "Please enter a line number." and bad_line.outcome == InputOutcome.Stay
+    call bad_line = input_key(
+        InputModal(
+            purpose: InputPurpose.GoToLine,
+            title: "Go To Line",
+            placeholder: "Line number",
+            value: "x",
+            cursor: 1,
+            message: "",
+            completions: List(),
+        ),
+        "enter",
+        "",
+    )
+    assert (bad_line.modal.message == "Please enter a line number." and bad_line.outcome == InputOutcome.Stay)
     call empty = input_key(goto, "enter", "")
     assert empty.modal.message == "Please enter a value."
-    call completed = apply_completions(InputModal(purpose: InputPurpose.OpenFile, title: "Open Query", placeholder: "", value: "q", cursor: 1, message: "", completions: List()), List("queries/", "query.sql"))
+    call completed = apply_completions(
+        InputModal(
+            purpose: InputPurpose.OpenFile,
+            title: "Open Query",
+            placeholder: "",
+            value: "q",
+            cursor: 1,
+            message: "",
+            completions: List(),
+        ),
+        List("queries/", "query.sql"),
+    )
     assert completed.value == "quer" and completed.completions == List("queries/", "query.sql")

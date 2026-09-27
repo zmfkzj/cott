@@ -22,7 +22,7 @@ def default_timestamp_order() -> CottList[U8]:
 indexes of the format table documented on
 real.toolong.timestamps.scan_timestamp in table order."""
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/timestamps/default_timestamp_order.py", "4cb1500d20c57f0a1ad1a14c2d95317a9c8482e91a8d189a0a88669ed670e3dd", "default_timestamp_order", expected_project_name="toolong", expected_cott_symbol="real.toolong.timestamps.default_timestamp_order")
+        _implementation = _cott_load("_cott_impl/real/toolong/timestamps/default_timestamp_order.py", "2e6d99f96c6cc3b5d397dbb801620a44bac27b4fba74eda2832e1f3a2c80dfbf", "default_timestamp_order", expected_project_name="toolong", expected_cott_symbol="real.toolong.timestamps.default_timestamp_order")
         _result = _implementation()
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -80,7 +80,7 @@ order is returned unchanged."""
     line = _cott_normalize_f32_abi(line, str, path="$.line")
     order = _cott_normalize_f32_abi(order, CottList[U8], path="$.order")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/timestamps/scan_timestamp.py", "c88e1f62badbcf815b5d3ed4d5ae27b27bc64b2badcad99922731c79c2469446", "scan_timestamp", expected_project_name="toolong", expected_cott_symbol="real.toolong.timestamps.scan_timestamp")
+        _implementation = _cott_load("_cott_impl/real/toolong/timestamps/scan_timestamp.py", "b151da1f3ea0da4f462f4479b4554799461d375e3bd1d84cc34569241f814c8f", "scan_timestamp", expected_project_name="toolong", expected_cott_symbol="real.toolong.timestamps.scan_timestamp")
         _result = _implementation(line, order)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

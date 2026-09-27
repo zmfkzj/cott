@@ -33,5 +33,7 @@ def _convert_cell(cell: Cell) -> object:
 
 
 def result_rows_from_cells(rows: CottList[CottList[Cell]]) -> ResultRows:
-    value: list[tuple[object, ...]] = [tuple(_convert_cell(cell) for cell in row) for row in rows]
+    value: list[tuple[object, ...]] = [
+        tuple(_convert_cell(cell) for cell in row) for row in rows
+    ]
     return Opaque(tag="pgcli.result-rows", value=value)

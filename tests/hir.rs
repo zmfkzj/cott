@@ -19,6 +19,84 @@ fn symbol(module: &ModuleId, name: &str) -> SymbolId {
 }
 
 #[test]
+fn scenario_calls_and_spawns_resolve_signatures_in_the_callable_module() {
+    let parsed = parse_project([
+        SourceFile::new(
+            "src/provider.cott",
+            "module provider\n\nstruct Request:\n    value: U8\n\nenum Failure:\n    Rejected\n\nfn run(request: Request) -> Result[U8, Failure]\nasync fn fetch(request: Request) -> Result[U8, Failure]\n",
+        ),
+        SourceFile::new(
+            "src/consumer.cott",
+            r#"module consumer
+
+use provider.{run, fetch}
+
+struct Request:
+    value: Bool
+
+enum Failure:
+    Other
+
+scenario imported_signatures:
+    call direct = run(provider.Request(value: 1))
+    spawn pending = fetch(provider.Request(value: 2))
+    await pending as fetched
+    assert direct == Result.Ok(value: 1)
+    assert fetched == Result.Ok(value: 2)
+"#,
+        ),
+    ])
+    .expect("cross-module scenario parses");
+    let project = lower(Path::new("src"), parsed).expect("callee-owned signature types resolve");
+    let consumer = project
+        .modules
+        .iter()
+        .find(|module| module.id.as_string() == "consumer")
+        .expect("consumer module");
+    let scenario = consumer
+        .declarations
+        .iter()
+        .find_map(|declaration| match declaration {
+            HirDeclaration::Scenario(scenario) => Some(scenario),
+            _ => None,
+        })
+        .expect("imported scenario");
+    let provider = ModuleId::new(vec!["provider".into()]);
+    for step in &scenario.steps[..2] {
+        let (parameters, return_type) = match step {
+            HirScenarioStep::Call {
+                parameters,
+                return_type,
+                ..
+            }
+            | HirScenarioStep::Spawn {
+                parameters,
+                return_type,
+                ..
+            } => (parameters, return_type),
+            _ => panic!("expected call or spawn"),
+        };
+        assert_eq!(
+            parameters,
+            &[HirType::Named {
+                symbol: symbol(&provider, "Request"),
+                args: vec![]
+            }]
+        );
+        assert_eq!(
+            return_type,
+            &HirType::Result {
+                ok: Box::new(HirType::Primitive(PrimitiveType::U8)),
+                error: Box::new(HirType::Named {
+                    symbol: symbol(&provider, "Failure"),
+                    args: vec![]
+                }),
+            }
+        );
+    }
+}
+
+#[test]
 fn owned_hir_preserves_trait_bounds_types_contract_order_and_pattern_identity() {
     let at = span();
     let module = ModuleId::new(vec!["api".into(), "service".into()]);

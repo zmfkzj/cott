@@ -1046,7 +1046,7 @@ with _runtime._cott_fixture_activate(
     root=_fixture_root,
     http_url=None,
     clock=17,
-    failures={{"clock.read": {{"occurrence": 2, "error": "clock stopped"}}}},
+    failures={{"clock.read": {{"occurrence": 2, "error": "timeout"}}}},
     transcript_limit=16,
 ):
     _runtime._cott_fixture_write(Path("nested/value"), b"old")
@@ -1056,13 +1056,14 @@ with _runtime._cott_fixture_activate(
     assert _runtime._cott_fixture_now() == 17
     try:
         _runtime._cott_fixture_now()
-    except OSError as error:
-        assert str(error) == "clock stopped"
+    except TimeoutError:
+        pass
     else:
         raise AssertionError("configured fixture failure did not fire")
     _events = _runtime._cott_fixture_transcript()
     assert [event["kind"] for event in _events] == ["filesystem.write", "filesystem.read", "filesystem.replace", "filesystem.read", "clock.read", "failure"]
     assert all(str(_fixture_root) not in repr(event) for event in _events)
+    assert _runtime._cott_fixture_now() == 17
     for unsafe_path in (Path("../escape"), Path("/etc/passwd")):
         try:
             _runtime._cott_fixture_read(unsafe_path)
@@ -1070,6 +1071,23 @@ with _runtime._cott_fixture_activate(
             assert error.phase == "fixture"
         else:
             raise AssertionError("Path ABI bypassed fixture confinement")
+for label, error_type in (("permission_denied", PermissionError), ("not_found", FileNotFoundError)):
+    with _runtime._cott_fixture_activate(
+        _runtime._cott_fixture_runner_token(),
+        root=_fixture_root,
+        http_url=None,
+        clock=None,
+        failures={{"file.read": {{"occurrence": 2, "error": label}}}},
+        transcript_limit=16,
+    ):
+        assert _runtime._cott_fixture_read("nested/value") == b"new"
+        try:
+            _runtime._cott_fixture_read("nested/value")
+        except error_type:
+            pass
+        else:
+            raise AssertionError("typed fixture failure did not fire")
+        assert _runtime._cott_fixture_read("nested/value") == b"new"
 with _runtime._cott_fixture_activate(
     _runtime._cott_fixture_runner_token(),
     root=_fixture_root,
@@ -1182,6 +1200,7 @@ fn fixture_file_adapters_raise_the_failures_the_output_rules_promise() {
     let temp = TempDir::new();
     write_runtime(&temp.path);
     let script = r#"
+import errno
 import os
 from pathlib import Path
 import cott_runtime as _runtime
@@ -1198,6 +1217,7 @@ for call in (
     lambda: _runtime._cott_fixture_read("inactive.txt"),
     lambda: _runtime._cott_fixture_write("inactive.txt", b"data"),
     lambda: _runtime._cott_fixture_replace("inactive.txt", b"data"),
+    lambda: _runtime._cott_fixture_remove("inactive.txt"),
     lambda: _runtime._cott_fixture_write(Path("/escape"), "not bytes"),
 ):
     error = raised(call)
@@ -1214,7 +1234,7 @@ def active(failures, action):
         root=root,
         http_url=None,
         clock=None,
-        failures={point: {"occurrence": 1, "error": "injected " + point} for point in failures},
+        failures={point: {"occurrence": 1, "error": "disk_full"} for point in failures},
         transcript_limit=64,
     ):
         return action()
@@ -1233,10 +1253,11 @@ for point, call in (
     ("file.read", lambda: _runtime._cott_fixture_read("value.txt")),
     ("file.write", lambda: _runtime._cott_fixture_write("value.txt", b"new")),
     ("file.write", lambda: _runtime._cott_fixture_replace("value.txt", b"new")),
+    ("file.write", lambda: _runtime._cott_fixture_remove("value.txt")),
 ):
     (root / "value.txt").write_bytes(b"old")
     injected = active((point,), lambda: raised(call))
-    assert type(injected) is OSError and str(injected) == "injected " + point, repr(injected)
+    assert type(injected) is OSError and injected.errno == errno.ENOSPC, repr(injected)
     assert (root / "value.txt").read_bytes() == b"old"
 
 for point, call, keeps_previous in (
@@ -1247,7 +1268,7 @@ for point, call, keeps_previous in (
     (root / "value.txt").write_bytes(b"old")
     wrapped = active((point,), lambda: raised(call))
     assert type(wrapped) is CottContractViolation, repr(wrapped)
-    assert type(wrapped.__cause__) is OSError and str(wrapped.__cause__) == "injected " + point, repr(wrapped.__cause__)
+    assert type(wrapped.__cause__) is OSError and wrapped.__cause__.errno == errno.ENOSPC, repr(wrapped.__cause__)
     if keeps_previous:
         assert (root / "value.txt").read_bytes() == b"old"
     assert [path.name for path in root.iterdir() if path.name.startswith(".")] == []
@@ -1260,6 +1281,44 @@ assert type(not_bytes) is CottContractViolation and not_bytes.__cause__ is None,
 active((), lambda: _runtime._cott_fixture_replace(Path("nested/deeper/value.txt"), b"replaced"))
 assert (root / "nested/deeper/value.txt").read_bytes() == b"replaced"
 assert [path.name for path in (root / "nested/deeper").iterdir()] == ["value.txt"]
+
+active((), lambda: _runtime._cott_fixture_remove(Path("nested/deeper/value.txt")))
+assert not (root / "nested/deeper/value.txt").exists()
+assert (root / "nested/deeper").is_dir()
+missing_remove = active((), lambda: raised(lambda: _runtime._cott_fixture_remove("nested/deeper/value.txt")))
+assert type(missing_remove) is CottContractViolation and type(missing_remove.__cause__) is FileNotFoundError
+outside = Path("outside.txt")
+outside.write_bytes(b"untouched")
+for unsafe_path in ("../outside.txt", outside.absolute()):
+    rejected = active((), lambda: raised(lambda: _runtime._cott_fixture_remove(unsafe_path)))
+    assert type(rejected) is CottContractViolation and rejected.__cause__ is None
+assert outside.read_bytes() == b"untouched"
+directory_remove = active((), lambda: raised(lambda: _runtime._cott_fixture_remove("nested")))
+assert type(directory_remove) is CottContractViolation and type(directory_remove.__cause__) is IsADirectoryError
+
+missing_parent = active((), lambda: raised(lambda: _runtime._cott_fixture_replace("absent/target", b"new", create_parents=False)))
+assert type(missing_parent) is CottContractViolation and type(missing_parent.__cause__) is FileNotFoundError
+assert not (root / "absent").exists()
+active((), lambda: _runtime._cott_fixture_replace("value.txt", b"strict", create_parents=False))
+assert (root / "value.txt").read_bytes() == b"strict"
+assert (root / "value.txt").stat().st_mode & 0o777 == 0o600
+(root / "leaf-link").symlink_to("value.txt")
+(root / "parent-link").symlink_to("nested", target_is_directory=True)
+for target in ("leaf-link", "parent-link/child", "nested"):
+    refused = active((), lambda: raised(lambda: _runtime._cott_fixture_replace(target, b"bad", create_parents=False)))
+    assert type(refused) is CottContractViolation, repr(refused)
+    if target == "nested":
+        assert type(refused.__cause__) is IsADirectoryError, repr(refused.__cause__)
+assert (root / "leaf-link").is_symlink()
+assert (root / "parent-link").is_symlink()
+assert not (root / "nested/child").exists()
+assert (root / "value.txt").read_bytes() == b"strict"
+reserved = root / ".value.txt.cott.tmp"
+reserved.write_bytes(b"not owned by the adapter")
+collision = active((), lambda: raised(lambda: _runtime._cott_fixture_replace("value.txt", b"bad", create_parents=False)))
+assert type(collision) is CottContractViolation and type(collision.__cause__) is FileExistsError
+assert reserved.read_bytes() == b"not owned by the adapter"
+assert (root / "value.txt").read_bytes() == b"strict"
 "#;
     let output = Command::new("python3")
         .arg("-c")

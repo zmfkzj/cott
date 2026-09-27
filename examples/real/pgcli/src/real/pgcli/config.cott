@@ -223,3 +223,28 @@ scenario invalid_config_is_reported:
     )
     call small_width = parse_pgcli_config("[main]\nmax_field_width = -2\n")
     assert small_width matches Result.Ok(config) => config.main.max_field_width == Option.Some(value: 3)
+
+scenario config_file_is_loaded_or_created:
+    fixtures:
+        fs home:
+            file "pgcli/config" text("[main]\nrow_limit = 25\non_error = resume\n")
+            file "bad/config" text("[main]\ntiming = maybe\n")
+    call existing = load_pgcli_config(home.path("pgcli/config"))
+    assert existing matches Result.Ok(config) => config.main.row_limit == 25 and config.main.on_error == "RESUME" and config.main.table_format == "psql" and config.main.timing
+    call created = load_pgcli_config(home.path("fresh/pgcli/config"))
+    assert created matches Result.Ok(config) => config.main.row_limit == 1000 and config.main.on_error == "STOP" and config.main.max_field_width == Option.Some(value: 500) and config.colors.len == 24
+    call invalid = load_pgcli_config(home.path("bad/config"))
+    assert invalid == Result.Err(
+        error: ConfigError.Invalid(message: "Value \"maybe\" is neither True nor False"),
+    )
+
+scenario unreadable_config_file_is_reported:
+    fixtures:
+        fs home:
+            file "pgcli/config" text("[main]\nrow_limit = 25\n")
+        failure denied:
+            point: file.read
+            occurrence: 1
+            error: permission_denied
+    call refused = load_pgcli_config(home.path("pgcli/config"))
+    assert refused matches Result.Err(ConfigError.Unreadable(path, message)) => path == "pgcli/config" and contains(message, "permission_denied")

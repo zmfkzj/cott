@@ -75,7 +75,12 @@ struct ConfigProblem:
     key: Option[Str]
     message: Str
 
-fn config_search_paths(explicit: Option[Path], cwd: Path, user_config_dir: Path, home: Path) -> List[Path]:
+fn config_search_paths(
+    explicit: Option[Path],
+    cwd: Path,
+    user_config_dir: Path,
+    home: Path,
+) -> List[Path]:
     doc """
     The config files Harlequin looks for, nearest (highest priority) first:
     explicit when given; then cwd/harlequin.toml, cwd/.harlequin.toml,
@@ -143,7 +148,10 @@ fn merge_config_files(files: List[ConfigFile]) -> MergedConfig:
 
     effects []
 
-fn select_profile(merged: MergedConfig, requested: Option[Str]) -> Result[Option[Profile], ConfigError]:
+fn select_profile(
+    merged: MergedConfig,
+    requested: Option[Str],
+) -> Result[Option[Profile], ConfigError]:
     doc """
     Choose the profile an invocation uses. requested Some("None") (exact case)
     means no profile: Ok(Nothing). requested Some(name) must be a profile of
@@ -160,7 +168,11 @@ fn select_profile(merged: MergedConfig, requested: Option[Str]) -> Result[Option
 
     effects []
 
-fn interpolate_profile(profile: Profile, environment: Map[Str, Str], source: Option[Str]) -> Result[Profile, ConfigError]:
+fn interpolate_profile(
+    profile: Profile,
+    environment: Map[Str, Str],
+    source: Option[Str],
+) -> Result[Profile, ConfigError]:
     doc """
     Substitute environment variables in every Text value of profile, recursing
     into Array and Table values (keys are never substituted). In a text,
@@ -178,13 +190,18 @@ fn interpolate_profile(profile: Profile, environment: Map[Str, Str], source: Opt
     profiles.prod.conn_str[1]).
     """
 
-    ensures Result.Ok(resolved) => resolved.name == profile.name and resolved.entries.len == profile.entries.len
+    ensures Result.Ok(resolved) => (resolved.name == profile.name and resolved.entries.len == profile.entries.len)
 
     error ConfigError.Invalid
 
     effects []
 
-fn validate_config_file(file: ConfigFile, options_of: List[AdapterOptionSet], command_keys: List[Str], builtin_keymaps: List[Str]) -> List[ConfigProblem]:
+fn validate_config_file(
+    file: ConfigFile,
+    options_of: List[AdapterOptionSet],
+    command_keys: List[Str],
+    builtin_keymaps: List[Str],
+) -> List[ConfigProblem]:
     doc """
     Every problem in one read config file, without stopping at the first, the
     way hsql --config validate reports them. options_of gives the declared
@@ -219,7 +236,11 @@ struct AdapterOptionSet:
     adapter: Str
     options: List[AdapterOption]
 
-fn write_profile(path: Path, profile: Profile, default_profile: Option[Str]) -> Result[Path, ConfigError]:
+fn write_profile(
+    path: Path,
+    profile: Profile,
+    default_profile: Option[Str],
+) -> Result[Path, ConfigError]:
     doc """
     Save profile into the config file at path with tomlkit, preserving comments,
     formatting, other profiles and every unrelated table of the existing file.
@@ -272,7 +293,12 @@ fn profile_toml(profile: Profile, secret_keys: List[Str]) -> Str:
 data near: ConfigFile = ConfigFile(
     path: "/work/.harlequin.toml",
     default_profile: Option.Some(value: "local"),
-    profiles: List(Profile(name: "local", entries: List(ConfigEntry(key: "adapter", value: ConfigValue.Text(value: "sqlite"))))),
+    profiles: List(
+        Profile(
+            name: "local",
+            entries: List(ConfigEntry(key: "adapter", value: ConfigValue.Text(value: "sqlite"))),
+        ),
+    ),
     keymaps: List(),
     defines_anything: true,
 )
@@ -281,17 +307,34 @@ data far: ConfigFile = ConfigFile(
     path: "/home/me/.harlequin.toml",
     default_profile: Option.Some(value: "prod"),
     profiles: List(
-        Profile(name: "local", entries: List(ConfigEntry(key: "adapter", value: ConfigValue.Text(value: "duckdb")))),
+        Profile(
+            name: "local",
+            entries: List(ConfigEntry(key: "adapter", value: ConfigValue.Text(value: "duckdb"))),
+        ),
         Profile(
             name: "prod",
             entries: List(
                 ConfigEntry(key: "adapter", value: ConfigValue.Text(value: "postgres")),
-                ConfigEntry(key: "conn_str", value: ConfigValue.Array(values: List(ConfigValue.Text(value: "postgresql://me:${PW}@${HOST:-localhost}/app")))),
+                ConfigEntry(
+                    key: "conn_str",
+                    value: ConfigValue.Array(
+                        values: List(
+                            ConfigValue.Text(value: "postgresql://me:${PW}@${HOST:-localhost}/app"),
+                        ),
+                    ),
+                ),
                 ConfigEntry(key: "limit", value: ConfigValue.Integer(value: 100)),
             ),
         ),
     ),
-    keymaps: List(KeyMap(name: "mine", bindings: List(KeyBinding(keys: "f5", action: "run_query", key_display: Option.Nothing)))),
+    keymaps: List(
+        KeyMap(
+            name: "mine",
+            bindings: List(
+                KeyBinding(keys: "f5", action: "run_query", key_display: Option.Nothing),
+            ),
+        ),
+    ),
     defines_anything: true,
 )
 
@@ -306,7 +349,14 @@ scenario configs_merge_nearest_first_and_select_profiles:
     )
     call defaulted = select_profile(merged, Option.Nothing)
     assert defaulted == Result.Ok(
-        value: Option.Some(value: Profile(name: "local", entries: List(ConfigEntry(key: "adapter", value: ConfigValue.Text(value: "sqlite"))))),
+        value: Option.Some(
+            value: Profile(
+                name: "local",
+                entries: List(
+                    ConfigEntry(key: "adapter", value: ConfigValue.Text(value: "sqlite")),
+                ),
+            ),
+        ),
     )
     call nothing = select_profile(merged, Option.Some(value: "None"))
     assert nothing == Result.Ok(value: Option.Nothing)
@@ -325,15 +375,37 @@ scenario profiles_read_the_environment:
     data profile: Profile = Profile(
         name: "prod",
         entries: List(
-            ConfigEntry(key: "conn_str", value: ConfigValue.Array(values: List(ConfigValue.Text(value: "postgresql://me:${PW}@${HOST:-localhost}/app $${literal}")))),
+            ConfigEntry(
+                key: "conn_str",
+                value: ConfigValue.Array(
+                    values: List(
+                        ConfigValue.Text(
+                            value: "postgresql://me:${PW}@${HOST:-localhost}/app $${literal}",
+                        ),
+                    ),
+                ),
+            ),
         ),
     )
-    call resolved = interpolate_profile(profile, Map("PW": "s3cret", "HOST": ""), Option.Some(value: "/home/me/.harlequin.toml"))
+    call resolved = interpolate_profile(
+        profile,
+        Map("PW": "s3cret", "HOST": ""),
+        Option.Some(value: "/home/me/.harlequin.toml"),
+    )
     assert resolved == Result.Ok(
         value: Profile(
             name: "prod",
             entries: List(
-                ConfigEntry(key: "conn_str", value: ConfigValue.Array(values: List(ConfigValue.Text(value: "postgresql://me:s3cret@localhost/app ${literal}")))),
+                ConfigEntry(
+                    key: "conn_str",
+                    value: ConfigValue.Array(
+                        values: List(
+                            ConfigValue.Text(
+                                value: "postgresql://me:s3cret@localhost/app ${literal}",
+                            ),
+                        ),
+                    ),
+                ),
             ),
         ),
     )
@@ -359,7 +431,50 @@ scenario config_files_parse_and_round_trip:
     assert absent == Result.Ok(value: Option.Nothing)
     call bad = read_config_file(cfg.path("bad.toml"))
     assert bad matches Result.Err(ConfigError.Invalid(title, _)) => title == "Harlequin couldn't load your config file."
-    call saved = write_profile(cfg.path("pyproject.toml"), Profile(name: "dev", entries: List(ConfigEntry(key: "adapter", value: ConfigValue.Text(value: "duckdb")))), Option.Some(value: "dev"))
+    call saved = write_profile(
+        cfg.path("pyproject.toml"),
+        Profile(
+            name: "dev",
+            entries: List(ConfigEntry(key: "adapter", value: ConfigValue.Text(value: "duckdb"))),
+        ),
+        Option.Some(value: "dev"),
+    )
     assert saved == Result.Ok(value: cfg.path("pyproject.toml"))
     call reread = read_config_file(cfg.path("pyproject.toml"))
     assert reread matches Result.Ok(Option.Some(file)) => file.default_profile == Option.Some(value: "dev") and file.profiles.len == 1
+
+scenario broken_config_files_are_refused_not_overwritten:
+    fixtures:
+        fs cfg:
+            file "broken.toml" text("[profiles\n")
+    call refused = write_profile(
+        cfg.path("broken.toml"),
+        Profile(
+            name: "dev",
+            entries: List(ConfigEntry(key: "adapter", value: ConfigValue.Text(value: "duckdb"))),
+        ),
+        Option.Some(value: "dev"),
+    )
+    assert refused matches Result.Err(ConfigError.Invalid(title, message)) => title == "Harlequin could not load the config file." and starts_with(message, "Attempted to load the config file at ") and contains(message, "broken.toml, but encountered an error:\n\n")
+    call still_broken = read_config_file(cfg.path("broken.toml"))
+    assert still_broken matches Result.Err(ConfigError.Invalid(title, _)) => title == "Harlequin could not load the config file."
+
+scenario a_failed_config_write_keeps_the_previous_profiles:
+    fixtures:
+        fs cfg:
+            file "harlequin.toml" text("default_profile = \"local\"\n\n[profiles.local]\nadapter = \"sqlite\"\n")
+        failure full:
+            point: file.write
+            occurrence: 1
+            error: disk_full
+    call failed = write_profile(
+        cfg.path("harlequin.toml"),
+        Profile(
+            name: "dev",
+            entries: List(ConfigEntry(key: "adapter", value: ConfigValue.Text(value: "duckdb"))),
+        ),
+        Option.Some(value: "dev"),
+    )
+    assert failed matches Result.Err(ConfigError.Invalid(title, _)) => title == "Harlequin could not create your configuration."
+    call kept = read_config_file(cfg.path("harlequin.toml"))
+    assert kept matches Result.Ok(Option.Some(file)) => file.default_profile == Option.Some(value: "local") and file.profiles == List(Profile(name: "local", entries: List(ConfigEntry(key: "adapter", value: ConfigValue.Text(value: "sqlite")))))

@@ -765,6 +765,7 @@ pub enum HirScenarioHttpOutcome {
         status: u16,
         body: HirScenarioData,
         encoding: String,
+        content_type: Option<String>,
     },
     Redirect {
         status: u16,
@@ -2502,7 +2503,7 @@ impl<'a> OwnedLower<'a> {
                     .or_else(|| method.default.as_ref().map(|target| (target, source_index)));
                 if let Some((target, owner_index)) = selected_source
                     && let Some(function_id) = self.resolve(owner_index, target, &target.span)
-                    && let Some(function) = scenario_function(self, &function_id)
+                    && let Some((_, function)) = scenario_function(self, &function_id)
                     && let FunctionBody::Clauses { clauses, .. } = &function.body
                 {
                     scenario_required_effects(clauses, required_effects);
@@ -9674,7 +9675,8 @@ impl<'a> OwnedLower<'a> {
                             let Some(symbol) = self.resolve(module, target, &target.span) else {
                                 continue;
                             };
-                            let Some(function) = scenario_function(self, &symbol) else {
+                            let Some((source_index, function)) = scenario_function(self, &symbol)
+                            else {
                                 self.error(
                                     module,
                                     target.span.clone(),
@@ -9688,10 +9690,10 @@ impl<'a> OwnedLower<'a> {
                                 .iter()
                                 .enumerate()
                                 .map(|(index, parameter)| {
-                                    self.parameter(module, parameter, &scope, index)
+                                    self.parameter(source_index, parameter, &scope, index)
                                 })
                                 .collect::<Vec<_>>();
-                            let return_type = self.ty(module, &function.return_type, &scope);
+                            let return_type = self.ty(source_index, &function.return_type, &scope);
                             let callable_kind = match function.callable_kind {
                                 ast::CallableKind::Sync => HirCallableKind::Sync,
                                 ast::CallableKind::Async => HirCallableKind::Async,
@@ -10356,11 +10358,13 @@ fn scenario_http_outcome(value: &ast::ScenarioHttpOutcome) -> HirScenarioHttpOut
             status,
             body,
             encoding,
+            content_type,
             ..
         } => HirScenarioHttpOutcome::Response {
             status: scenario_integer(status) as u16,
             body: scenario_data(body),
             encoding: encoding.clone(),
+            content_type: content_type.clone(),
         },
         ast::ScenarioHttpOutcome::Redirect {
             status, location, ..
@@ -10390,7 +10394,10 @@ fn scenario_required_effects(clauses: &[ast::Clause], required: &mut BTreeMap<St
     }
 }
 
-fn scenario_function(lower: &OwnedLower<'_>, symbol: &SymbolId) -> Option<ast::FunctionDecl> {
+fn scenario_function(
+    lower: &OwnedLower<'_>,
+    symbol: &SymbolId,
+) -> Option<(usize, ast::FunctionDecl)> {
     let module = lower
         .modules
         .iter()
@@ -10401,7 +10408,7 @@ fn scenario_function(lower: &OwnedLower<'_>, symbol: &SymbolId) -> Option<ast::F
         .iter()
         .find_map(|declaration| match declaration {
             Declaration::Function(function) if function.name == symbol.name => {
-                Some(function.clone())
+                Some((module, function.clone()))
             }
             _ => None,
         })

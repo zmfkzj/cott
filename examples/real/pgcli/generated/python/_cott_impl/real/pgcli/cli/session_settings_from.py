@@ -13,13 +13,6 @@ from real.pgcli.parseutils import parse_destructive_warning
 from real.pgcli.session_types import SessionSettings
 
 
-def _color(config: PgcliConfig, key: str) -> str:
-    for entry in config.colors:
-        if entry.name == key:
-            return entry.value
-    return ""
-
-
 def _base_style(name: str) -> str:
     try:
         style_obj = cast(object, pygments.styles.get_style_by_name(name))
@@ -27,7 +20,7 @@ def _base_style(name: str) -> str:
         style_obj = cast(object, pygments.styles.get_style_by_name("native"))
     style_cls = cast(type[pygments.style.Style], style_obj)
     styles = cast(dict[object, object], cast(object, style_cls.styles))
-    value = styles.get(cast(object, pygments.token.Token), "")
+    value = styles.get(pygments.token.Token, "")
     return value if isinstance(value, str) else ""
 
 
@@ -35,29 +28,30 @@ def session_settings_from(options: CliOptions, config: PgcliConfig, environment:
     main = config.main
     warn = options.warn
     if isinstance(warn, Some):
-        warn_value = warn.value
-        if "," in warn_value:
-            destructive = CottList(values=warn_value.split(","))
+        if "," in warn.value:
+            destructive = CottList(values=warn.value.split(","))
         else:
-            destructive = parse_destructive_warning(CottList(values=[warn_value]))
+            destructive = parse_destructive_warning(CottList(values=[warn.value]))
     else:
         destructive = parse_destructive_warning(main.destructive_warning)
+
     log_option = options.log_file
     log_file: Some[str] | Nothing = Some(value=log_option.value) if isinstance(log_option, Some) else Nothing()
     row_option = options.row_limit
     row_limit = row_option.value if isinstance(row_option, Some) else main.row_limit
     prompt_option = options.prompt
     prompt_format = prompt_option.value if isinstance(prompt_option, Some) else main.prompt
-    scripted = any(True for _ in options.commands) or any(True for _ in options.files)
+    colors = {entry.name: entry.value for entry in config.colors}
     output_style = OutputStyle(
         base=_base_style(main.syntax_style),
-        header=_color(config, "output.header"),
-        odd_row=_color(config, "output.odd-row"),
-        even_row=_color(config, "output.even-row"),
-        null=_color(config, "output.null"),
-        table_separator=_color(config, "Token.Output.TableSeparator"),
+        header=colors.get("output.header", ""),
+        odd_row=colors.get("output.odd-row", ""),
+        even_row=colors.get("output.even-row", ""),
+        null=colors.get("output.null", ""),
+        table_separator=colors.get("Token.Output.TableSeparator", ""),
         true_color="truecolor" in environment.colorterm.lower(),
     )
+
     return SessionSettings(
         table_format=main.table_format,
         expanded_output=main.expand,
@@ -90,6 +84,6 @@ def session_settings_from(options: CliOptions, config: PgcliConfig, environment:
         prompt_format=prompt_format,
         prompt_dsn_format=options.prompt_dsn,
         dsn_alias=Nothing(),
-        scripted=scripted,
+        scripted=any(True for _ in options.commands) or any(True for _ in options.files),
         completion_refreshing=False,
     )

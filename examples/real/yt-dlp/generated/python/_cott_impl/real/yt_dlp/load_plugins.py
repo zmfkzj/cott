@@ -16,62 +16,15 @@ def _reject(path: Path, message: str) -> Result[CottList[PluginDescriptor], Medi
     return Err(error=MediaError_PluginRejected(path=path, message=message))
 
 
-def _close_quiet(fd: int) -> bool:
-    try:
-        os.close(fd)
-    except OSError:
-        return False
-    return True
-
-
-def _open_nofollow(path: Path) -> Result[int, str]:
-    if os.name != "posix" or os.open not in os.supports_dir_fd or os.O_NOFOLLOW == 0:
-        return Err(error="platform lacks no-follow directory-fd operations")
-    raw: str = str(path)
-    name: str = path.name
-    if name in ("", ".", "..") or "\x00" in raw:
-        return Err(error="plugin manifest path does not name a file")
-    components: tuple[str, ...] = path.parts[1:-1] if path.is_absolute() else path.parts[:-1]
-    dir_flags: int = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-    try:
-        dfd: int = os.open("/" if path.is_absolute() else ".", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    except OSError:
-        return Err(error="plugin manifest base directory cannot be opened")
-    for component in components:
-        try:
-            next_fd: int = os.open(component, dir_flags, dir_fd=dfd)
-        except FileNotFoundError:
-            _close_quiet(dfd)
-            return Err(error="plugin manifest not found")
-        except OSError:
-            _close_quiet(dfd)
-            return Err(error="plugin manifest directory is a symlink or cannot be opened")
-        if not _close_quiet(dfd):
-            _close_quiet(next_fd)
-            return Err(error="plugin manifest directory close failed")
-        dfd = next_fd
-    try:
-        fd: int = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dfd)
-    except FileNotFoundError:
-        _close_quiet(dfd)
-        return Err(error="plugin manifest not found")
-    except OSError:
-        _close_quiet(dfd)
-        return Err(error="plugin manifest cannot be opened or is a symlink")
-    if not _close_quiet(dfd):
-        _close_quiet(fd)
-        return Err(error="plugin manifest directory close failed")
-    return Ok(value=fd)
-
-
 def _read_bounded(path: Path) -> Result[bytes, str]:
-    fd: int
-    match _open_nofollow(path):
-        case Err(error=open_message):
-            return Err(error=open_message)
-        case Ok(value=opened):
-            fd = opened
-    outcome: Result[bytes, str] = Err(error="plugin manifest read failed")
+    if os.name != "posix" or os.O_NOFOLLOW == 0:
+        return Err(error="platform cannot open plugin manifests without following symlinks")
+    try:
+        fd: int = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except (OSError, ValueError):
+        return Err(error="plugin manifest cannot be opened")
+
+    outcome: Result[bytes, str]
     try:
         info: os.stat_result = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
@@ -80,57 +33,52 @@ def _read_bounded(path: Path) -> Result[bytes, str]:
             outcome = Err(error="plugin manifest exceeds size limit")
         else:
             buffer: bytearray = bytearray()
-            oversized: bool = False
             while True:
-                chunk: bytes = os.read(fd, _CHUNK)
+                chunk: bytes = os.read(fd, min(_CHUNK, _MAX_BYTES + 1 - len(buffer)))
                 if not chunk:
                     break
                 buffer.extend(chunk)
                 if len(buffer) > _MAX_BYTES:
-                    oversized = True
                     break
-            if oversized:
+            if len(buffer) > _MAX_BYTES:
                 outcome = Err(error="plugin manifest exceeds size limit")
             else:
                 outcome = Ok(value=bytes(buffer))
     except OSError:
-        outcome = Err(error="plugin manifest read failed")
+        outcome = Err(error="plugin manifest cannot be read")
     try:
         os.close(fd)
     except OSError:
-        return Err(error="plugin manifest close failed")
+        return Err(error="plugin manifest cannot be closed")
     return outcome
 
 
 def _parse(path: Path, data: bytes) -> Result[PluginDescriptor, str]:
-    name: str = Path(path).stem
-    if name == "":
-        return Err(error="plugin manifest name is empty")
     try:
         text: str = data.decode("utf-8-sig")
     except UnicodeDecodeError:
         return Err(error="plugin manifest is not valid UTF-8")
     extractors: list[str] = []
     processors: list[str] = []
-    for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+    for raw_line in text.splitlines():
         line: str = raw_line.strip()
-        if line == "" or line.startswith("#"):
+        if not line or line.startswith("#"):
             continue
-        kind, sep, rest = line.partition(":")
-        entry: str = rest.strip()
-        if sep == "" or entry == "":
+        kind, sep, remainder = line.partition(":")
+        name: str = remainder.strip()
+        if not sep or not name:
             return Err(error="plugin manifest declaration is malformed")
-        if kind != "extractor" and kind != "postprocessor" and kind != "post_processor":
+        if kind not in ("extractor", "postprocessor", "post_processor"):
             return Err(error="plugin manifest declaration type is unknown")
         if len(extractors) + len(processors) >= _MAX_DECLARATIONS:
             return Err(error="plugin manifest exceeds declaration limit")
         if kind == "extractor":
-            extractors.append(entry)
+            extractors.append(name)
         else:
-            processors.append(entry)
-    if len(extractors) + len(processors) == 0:
+            processors.append(name)
+    if not extractors and not processors:
         return Err(error="plugin manifest declares no plugins")
-    return Ok(value=PluginDescriptor(name=name, path=path, extractor_names=CottList(values=extractors), post_processor_names=CottList(values=processors)))
+    return Ok(value=PluginDescriptor(name=path.stem, path=path, extractor_names=CottList(values=extractors), post_processor_names=CottList(values=processors)))
 
 
 def load_plugins(paths: CottList[Path]) -> Result[CottList[PluginDescriptor], MediaError]:
@@ -138,13 +86,15 @@ def load_plugins(paths: CottList[Path]) -> Result[CottList[PluginDescriptor], Me
         return _reject(paths[_MAX_PATHS], "too many plugin manifests")
     descriptors: list[PluginDescriptor] = []
     for path in paths:
-        match _read_bounded(Path(path)):
-            case Err(error=read_message):
-                return _reject(path, read_message)
+        if not path.stem:
+            return _reject(path, "plugin manifest name is empty")
+        match _read_bounded(path):
+            case Err(error=read_error):
+                return _reject(path, read_error)
             case Ok(value=data):
                 match _parse(path, data):
-                    case Err(error=parse_message):
-                        return _reject(path, parse_message)
+                    case Err(error=parse_error):
+                        return _reject(path, parse_error)
                     case Ok(value=descriptor):
                         descriptors.append(descriptor)
     return Ok(value=CottList(values=descriptors))

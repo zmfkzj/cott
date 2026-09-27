@@ -1,15 +1,16 @@
 import dataclasses
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Never, cast
+from typing import Any, Final, Never, cast
 
 import pyarrow
 import tomlkit
-from cott_runtime import CottList, FrozenMap, Nothing, Ok, Opaque, Some
+from cott_runtime import CottList, FrozenMap, I64, Nothing, Ok, Opaque, Some, U64
 
 from real.harlequin.adapters import close_connection, connect
 from real.harlequin.adapters_types import AdapterDescriptor, AdapterKind, AdapterKind_Adbc, AdapterKind_BigQuery, AdapterKind_Cassandra, AdapterKind_Chdb, AdapterKind_Databricks, AdapterKind_DuckDb, AdapterKind_MySql, AdapterKind_NebulaGraph, AdapterKind_Odbc, AdapterKind_Postgres, AdapterKind_Sqlite, AdapterKind_Trino, AdapterOption, AdapterSetting, ConnectionError_ReadOnlyUnsupported, ConnectionRequest, OptionKind, OptionKind_Choice, OptionKind_FilePath, OptionKind_Flag, OptionKind_Repeated, OptionKind_Text, SettingValue, SettingValue_Flag, SettingValue_Text, SettingValue_Values
@@ -18,7 +19,7 @@ from real.harlequin.cli_types import HARLEQUIN_VERSION, SshSettings
 from real.harlequin.config import config_search_paths, interpolate_profile, merge_config_files, read_config_file, select_profile, validate_config_file, write_profile
 from real.harlequin.config_types import AdapterOptionSet, ConfigEntry, ConfigError, ConfigFile, ConfigValue, ConfigValue_Array, ConfigValue_Boolean, ConfigValue_Integer, ConfigValue_Real, ConfigValue_Text, MergedConfig, Profile
 from real.harlequin.export import write_result
-from real.harlequin.export_types import ExportOptionValue, ExportRequest
+from real.harlequin.export_types import ExportError_InvalidOption, ExportError_PathIsDirectory, ExportError_WriteFailed, ExportOptionValue, ExportRequest
 from real.harlequin.history import harlequin_paths, recent_queries
 from real.harlequin.history_types import HistoryFilter, QueryStatus, QueryStatus_Error, QueryStatus_Ok
 from real.harlequin.hsql import execute_hsql_request, hsql_error_line, hsql_exit_status, hsql_help, layout_text, parse_hsql_arguments, send_session_request, serve_hsql_session
@@ -31,46 +32,7 @@ from real.harlequin.support import open_ssh_tunnel
 from real.harlequin.support_types import SshTunnel
 
 
-def _skill_text() -> str:
-    lines = [
-        "---",
-        "name: hsql",
-        "description: Run SQL against any database Harlequin can connect to, from the shell, and read the results as text, CSV, JSON or files.",
-        "---",
-        "",
-        "# hsql: Harlequin's headless CLI",
-        "",
-        "`hsql` runs SQL and exits. It uses the same adapters, config files and profiles as `harlequin`.",
-        "",
-        "## Run SQL",
-        "",
-        "- `hsql -c \"select 1\"` runs against an in-memory DuckDB database.",
-        "- `hsql my.db -c \"select * from t\"` opens a database file (DuckDB by default).",
-        "- `hsql -a sqlite app.db -f query.sql` picks an adapter and reads SQL from a file (`-f -` reads stdin).",
-        "- `hsql -P prod -c \"...\"` uses a profile from your Harlequin config.",
-        "",
-        "## Output",
-        "",
-        "- `--format table|markdown|vertical|csv|tsv|json|jsonl|parquet|orc|feather|arrow|none`",
-        "  (shorthands `--csv`, `--json`, `--jsonl`, `--markdown`, `-x`).",
-        "- `-o FILE` writes the output to a file; `-o DIR` writes one file per result.",
-        "- `--limit N` caps fetched rows (default 500, `-1` for all); `--display-rows N` caps printed rows.",
-        "- `-t` prints tuples only, `-A` unaligned, `--stats` adds a JSON summary on stderr.",
-        "",
-        "## Explore",
-        "",
-        "- `hsql --catalog --path 'main.*'` lists catalog entries; `--catalog-search TERM` searches them.",
-        "- `hsql --history` and `--history-search TERM` show recently run queries.",
-        "",
-        "## Warm sessions",
-        "",
-        "- `hsql --serve NAME ...` keeps a connection open; `hsql --session NAME -c ...` (or `HSQL_SESSION=NAME`) sends queries to it.",
-        "",
-        "## Exit status",
-        "",
-        "0 ok, 1 query error, 2 usage or config error, 3 connection error, 4 timeout, 130 interrupted, 70 internal bug.",
-    ]
-    return "\n".join(lines) + "\n"
+_SKILL: Final[str] = "---\nname: hsql\ndescription: Run SQL against a database and read the results without opening Harlequin's TUI.\n---\n\n# hsql: Harlequin's headless CLI\n\n`hsql` uses the same adapters, config files, and profiles as `harlequin`.\n\n## Run SQL\n\n- `hsql -c 'select 1'` uses an in-memory DuckDB database.\n- `hsql my.db -c 'select * from t'` opens a DuckDB file.\n- `hsql -a sqlite app.db -f query.sql` reads SQL from a file; `-f -` reads stdin.\n- `hsql -P prod -c 'select 1'` uses a saved profile.\n\n## Results\n\nUse `--format table|markdown|vertical|csv|tsv|json|jsonl|parquet|orc|feather|arrow|none`. `-o FILE` writes output; `-o DIR` writes one file per result. `--limit N` bounds fetched rows (default 500, -1 for unlimited); `--display-rows N` bounds text output. Use `--result last` or `--result N` for a single result set.\n\n## Explore and reuse\n\n`--catalog` and `--catalog-search TERM` inspect the catalog; `--path` selects a level. `--history` and `--history-search TERM` read query history. `--serve NAME` keeps a connection open; `--session NAME -c 'select 1'` or `HSQL_SESSION=NAME` sends it queries.\n\nExit statuses: 0 success, 1 query failure, 2 usage/config error, 3 connection failure, 4 timeout, 130 interruption, 70 internal error.\n"
 
 
 def _adapter_table() -> list[tuple[str, str, str, bool, bool, bool]]:
@@ -117,10 +79,7 @@ def _kind(name: str) -> AdapterKind:
 
 
 def _descriptors() -> list[AdapterDescriptor]:
-    result: list[AdapterDescriptor] = []
-    for name, display, dist, read_only, cancel, search in _adapter_table():
-        result.append(AdapterDescriptor(kind=_kind(name), name=name, display_name=display, distribution=dist, details=f"The {display} adapter, from the {dist} distribution.", implements_read_only=read_only, implements_cancel=cancel, implements_catalog_search=search, implements_validate_sql=False))
-    return result
+    return [AdapterDescriptor(kind=_kind(name), name=name, display_name=display, distribution=distribution, details=f"The {display} adapter, from the {distribution} distribution.", implements_read_only=read_only, implements_cancel=cancel, implements_catalog_search=search, implements_validate_sql=False) for name, display, distribution, read_only, cancel, search in _adapter_table()]
 
 
 def _option_specs(adapter: str) -> str:
@@ -141,19 +100,18 @@ def _option_specs(adapter: str) -> str:
     return specs.get(adapter, "")
 
 
-def _short_decls(adapter: str, name: str) -> list[str]:
-    if adapter != "duckdb":
-        return []
-    shorts: dict[str, list[str]] = {"init-path": ["-i", "-init"], "extension": ["-e"]}
-    return shorts.get(name, [])
-
-
 def _adapter_options(adapter: str) -> list[AdapterOption]:
+    defaults: dict[str, str] = {
+        "duckdb.init-path": "~/.duckdbrc", "sqlite.init-path": "~/.sqliterc",
+        "sqlite.lock-timeout": "5.0", "sqlite.cached-statements": "128", "sqlite.isolation-level": "DEFERRED",
+        "databricks.init-path": "~/.databricksrc", "cassandra.consistency-level": "LOCAL_ONE",
+        "chdb.catalog-search-limit": "100",
+    }
     options: list[AdapterOption] = []
     for spec in _option_specs(adapter).split():
-        raw_name, _, code = spec.partition(":")
-        secret = raw_name.endswith("!")
-        name = raw_name.rstrip("!")
+        raw, _, code = spec.partition(":")
+        secret = raw.endswith("!")
+        name = raw.removesuffix("!")
         kind: OptionKind
         if code == "f":
             kind = OptionKind_Flag()
@@ -165,8 +123,14 @@ def _adapter_options(adapter: str) -> list[AdapterOption]:
             kind = OptionKind_Choice(choices=CottList(values=code[2:].split("|")))
         else:
             kind = OptionKind_Text()
+        short: list[str] = []
+        if adapter == "duckdb" and name == "init-path":
+            short = ["-i", "-init"]
+        elif adapter == "duckdb" and name == "extension":
+            short = ["-e"]
+        default = defaults.get(f"{adapter}.{name}")
         label = name.replace("-", " ").replace("_", " ").title()
-        options.append(AdapterOption(name=name, short_decls=CottList(values=_short_decls(adapter, name)), kind=kind, label=label, description=f"{label} for the {adapter} adapter.", default=Nothing(), secret=secret))
+        options.append(AdapterOption(name=name, short_decls=CottList(values=short), kind=kind, label=label, description=f"{label} for the {adapter} adapter.", default=Some(value=default) if default is not None else Nothing(), secret=secret))
     return options
 
 
@@ -187,11 +151,10 @@ def _kind_name(kind: OptionKind) -> str:
 
 
 def _option_json(option: AdapterOption) -> dict[str, object]:
-    obj: dict[str, object] = {"name": option.name, "flags": [f"--{option.name}", *[d for d in option.short_decls]], "profile_key": _key(option), "kind": _kind_name(option.kind), "label": option.label, "description": option.description, "default": option.default.value if isinstance(option.default, Some) else None, "secret": option.secret}
-    kind = option.kind
-    if isinstance(kind, OptionKind_Choice):
-        obj["choices"] = [c for c in kind.choices]
-    return obj
+    row: dict[str, object] = {"name": option.name, "flags": [f"--{option.name}", *option.short_decls], "profile_key": _key(option), "kind": _kind_name(option.kind), "label": option.label, "description": option.description, "default": option.default.value if isinstance(option.default, Some) else None, "secret": option.secret}
+    if isinstance(option.kind, OptionKind_Choice):
+        row["choices"] = list(option.kind.choices)
+    return row
 
 
 def _option_schema(option: AdapterOption) -> dict[str, object]:
@@ -201,107 +164,62 @@ def _option_schema(option: AdapterOption) -> dict[str, object]:
     if isinstance(kind, OptionKind_Repeated):
         return {"type": "array", "items": {"type": "string"}, "description": option.description}
     if isinstance(kind, OptionKind_Choice):
-        return {"type": "string", "enum": [c for c in kind.choices], "description": option.description}
+        return {"type": "string", "enum": list(kind.choices), "description": option.description}
     return {"type": ["string", "number"], "description": option.description}
 
 
-def _hsql_option_rows() -> list[tuple[str, str, str]]:
-    return [
-        ("-a, --adapter", "NAME", "The adapter to connect with (default duckdb)."),
-        ("-c, --command", "TEXT", "SQL to run; repeatable, run in order."),
-        ("-f, --file", "PATH", "A SQL file to run ('-' reads stdin); repeatable."),
-        ("-o, --output", "PATH", "Write output to a file, or one file per result to a directory."),
-        ("--format", "NAME", "table, markdown, vertical, csv, tsv, json, jsonl, ndjson, parquet, orc, feather, arrow or none (default table)."),
-        ("--csv", "", "Shorthand for --format csv."),
-        ("--json", "", "Shorthand for --format json."),
-        ("--jsonl", "", "Shorthand for --format jsonl."),
-        ("--markdown", "", "Shorthand for --format markdown."),
-        ("-x, --vertical", "", "Shorthand for --format vertical."),
-        ("-t, --tuples-only", "", "Print rows only, without header or footer."),
-        ("-A, --no-align", "", "Unaligned text output."),
-        ("--no-header", "", "Omit the header."),
-        ("--no-footer", "", "Omit the row-count footer."),
-        ("--null-string", "TEXT", "How SQL NULL is printed (default NULL)."),
-        ("-P, --profile", "NAME", "A config profile to use ('None' for none)."),
-        ("--config-path", "PATH", "A config file to read first."),
-        ("-r, --read-only", "", "Open the connection read-only."),
-        ("--timeout", "SECONDS", "Cancel the run after this many seconds."),
-        ("--ssh-host", "TEXT", "Connect through an SSH tunnel to this host."),
-        ("--ssh-forward", "TEXT", "An ssh -L forward; repeatable."),
-        ("--ssh-batch-mode", "", "Never let ssh prompt."),
-        ("--ssh-allow-reuse", "", "Reuse a listener already bound to a forwarded port."),
-        ("--ssh-timeout", "SECONDS", "How long to wait for the tunnel."),
-        ("--catalog", "", "List the data catalog."),
-        ("--catalog-search", "TERM", "Search the data catalog."),
-        ("--path", "TEXT", "The catalog level to list or search."),
-        ("--history", "", "List recent queries."),
-        ("--history-search", "TERM", "Search recent queries."),
-        ("--config", "MODE", "show, list-profiles, validate, schema or init."),
-        ("--spec", "", "Print hsql's options and adapters as JSON."),
-        ("--info", "", "Print version, config and adapter information as JSON."),
-        ("--skill", "", "Print the hsql skill document."),
-        ("--limit", "N", "Rows to fetch per result (default 500; -1 for all)."),
-        ("--display-rows", "N", "Rows to print per result (-1 for all)."),
-        ("--result", "all|last|N", "Which results to write (default all)."),
-        ("--on-error", "stop|continue", "Whether to keep running after a failed statement (default stop)."),
-        ("--no-write-history", "", "Do not log queries to the shared history."),
-        ("--stats", "", "Print a JSON summary to stderr."),
-        ("--color", "auto|always|never", "Color text output (default never)."),
-        ("--serve", "NAME", "Keep a warm session open under this name."),
-        ("--session", "NAME", "Send the request to a warm session."),
-        ("--session-reset", "", "Reconnect a warm session."),
-        ("--session-status", "", "Describe a warm session."),
-        ("--queue-timeout", "SECONDS", "How long a session request waits for its turn."),
-        ("--idle-timeout", "SECONDS", "Stop a session after this idle time (default 1800)."),
-        ("--max-lifetime", "SECONDS", "Stop a session after this age (default 28800)."),
-        ("--help", "", "Show help and exit."),
-        ("--version", "", "Show the version and exit."),
-    ]
-
-
-def _session_route(args: list[str], env: dict[str, str]) -> tuple[str, bool] | None:
-    name: str | None = None
-    serve = False
-    i = 0
-    while i < len(args):
-        arg = args[i]
+def _session_route(args: list[str], environment: dict[str, str]) -> tuple[str, bool] | None:
+    session: str | None = None
+    serves = False
+    index = 0
+    while index < len(args):
+        arg = args[index]
         if arg == "--":
             break
-        if arg == "--session" and i + 1 < len(args):
-            name = args[i + 1]
-            i += 2
+        if arg == "--session" and index + 1 < len(args):
+            session = args[index + 1]
+            index += 2
             continue
         if arg.startswith("--session="):
-            name = arg[len("--session="):]
-        elif arg == "--serve" or arg.startswith("--serve="):
-            serve = True
-        i += 1
-    if name is not None:
-        return (name, False)
-    if serve:
+            session = arg[len("--session="):]
+        if arg == "--serve" or arg.startswith("--serve="):
+            serves = True
+        index += 1
+    if session is not None:
+        return session, False
+    if serves:
         return None
-    from_env = env.get("HSQL_SESSION", "")
-    if from_env != "":
-        return (from_env, True)
-    return None
+    name = environment.get("HSQL_SESSION", "")
+    return (name, True) if name else None
 
 
 def _wants_stdin(args: list[str]) -> bool:
-    for i, arg in enumerate(args):
+    for index, arg in enumerate(args):
         if arg == "--":
             break
         if arg in ("--file=-", "-f-"):
             return True
-        if arg in ("-f", "--file") and i + 1 < len(args) and args[i + 1] == "-":
+        if arg in ("-f", "--file") and index + 1 < len(args) and args[index + 1] == "-":
             return True
     return False
 
 
-def _config_failure(error: ConfigError) -> tuple[bytes, str, int]:
+def _typed(args: list[str], long_name: str, short_name: str) -> bool:
+    for arg in args:
+        if arg == "--":
+            break
+        if arg == long_name or arg.startswith(long_name + "="):
+            return True
+        if short_name and arg.startswith(short_name) and not arg.startswith("--"):
+            return True
+    return False
+
+
+def _config_failure(error: ConfigError) -> tuple[bytes, str, I64]:
     return b"", f"hsql: error: {error.title}\n{error.message}\n", 2
 
 
-def _usage(message: str) -> tuple[bytes, str, int]:
+def _usage(message: str) -> tuple[bytes, str, I64]:
     return b"", f"hsql: error: {message}\n", 2
 
 
@@ -325,7 +243,7 @@ def _truthy(value: ConfigValue | None) -> bool:
     if isinstance(value, ConfigValue_Boolean):
         return value.value
     if isinstance(value, ConfigValue_Text):
-        return value.value.lower() == "true"
+        return value.value.casefold() == "true"
     return False
 
 
@@ -336,30 +254,32 @@ def _setting(option: AdapterOption, value: ConfigValue) -> SettingValue | None:
             return SettingValue_Flag(value=_truthy(value))
         return None
     if isinstance(kind, OptionKind_Repeated):
-        if isinstance(value, (ConfigValue_Array, ConfigValue_Text)):
+        if isinstance(value, ConfigValue_Array):
             return SettingValue_Values(values=CottList(values=_texts(value)))
         return None
-    text = _text_value(value)
-    if text is None:
+    if isinstance(kind, OptionKind_Choice):
+        text = _text_value(value)
+        if text is not None:
+            for choice in kind.choices:
+                if choice.casefold() == text.casefold():
+                    return SettingValue_Text(value=choice)
         return None
-    return SettingValue_Text(value=text)
+    text = _text_value(value)
+    return SettingValue_Text(value=text) if text is not None else None
 
 
 def _plain(value: ConfigValue) -> object:
     if isinstance(value, ConfigValue_Text):
         return value.value
     if isinstance(value, ConfigValue_Integer):
-        return int(value.value)
+        return value.value
     if isinstance(value, ConfigValue_Real):
-        return float(value.value)
+        return value.value
     if isinstance(value, ConfigValue_Boolean):
         return value.value
     if isinstance(value, ConfigValue_Array):
         return [_plain(item) for item in value.values]
-    table: dict[str, object] = {}
-    for entry in value.entries:
-        table[entry.key] = _plain(entry.value)
-    return table
+    return {entry.key: _plain(entry.value) for entry in value.entries}
 
 
 def _masked(key: str, value: ConfigValue, secret_keys: set[str]) -> object:
@@ -373,11 +293,25 @@ def _masked(key: str, value: ConfigValue, secret_keys: set[str]) -> object:
     return _plain(value)
 
 
+def _connection_secrets(conn: list[str]) -> list[str]:
+    secrets: list[str] = []
+    for text in conn:
+        for match in re.finditer(r"://[^/?#@\s]*?:([^/?#@\s]+)@", text):
+            secrets.append(match.group(1))
+        for match in re.finditer(r"[\w.\-]*(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)[\w.\-]*\s*=\s*(?:'([^']*)'|\"([^\"]*)\"|([^&;\s]+))", text, re.IGNORECASE):
+            for group in (1, 2, 3):
+                secret = match.group(group)
+                if secret is not None:
+                    secrets.append(secret)
+                    break
+    return secrets
+
+
 def _guess_connection_id(adapter: str, conn: list[str], values: dict[str, ConfigValue]) -> str:
     if adapter in ("duckdb", "sqlite"):
-        if not conn or conn == [""] or conn == [":memory:"]:
+        if not conn or conn == [""] or conn == [":memory:"] or (adapter == "sqlite" and _text_value(values.get("mode")) == "memory"):
             return ""
-        return ",".join(sorted(Path(p).resolve().as_posix() for p in conn))
+        return ",".join(sorted(Path(path).resolve().as_posix() for path in conn))
     if adapter == "chdb":
         raw = conn[0] if conn else (_text_value(values.get("uri")) or _text_value(values.get("path")) or "")
         if raw in ("", ":memory:", "chdb://:memory:", "chdb::memory:"):
@@ -385,12 +319,12 @@ def _guess_connection_id(adapter: str, conn: list[str], values: dict[str, Config
         if "://" in raw or raw.startswith(("chdb:", "file:", "local:")):
             return raw
         return "file:" + Path(raw).resolve().as_posix()
-    if len(conn) == 1:
+    if len(conn) == 1 and adapter in ("postgres", "odbc", "adbc"):
         return conn[0]
     user = _text_value(values.get("user")) or _text_value(values.get("username")) or ""
     host = _text_value(values.get("host")) or _text_value(values.get("server_hostname")) or ""
     port = _text_value(values.get("port")) or ""
-    database = _text_value(values.get("dbname")) or _text_value(values.get("database")) or _text_value(values.get("catalog")) or _text_value(values.get("keyspace")) or ""
+    database = (_text_value(values.get("dbname")) or _text_value(values.get("database")) or _text_value(values.get("catalog")) or _text_value(values.get("keyspace")) or _text_value(values.get("project")) or _text_value(values.get("http_path")) or "")
     return f"{adapter}://{user}@{host}:{port}/{database}"
 
 
@@ -423,11 +357,18 @@ def _export_bytes(result_set: ResultSet, fmt: str, arguments: HsqlArguments) -> 
             try:
                 return path.read_bytes()
             except OSError as error:
-                return f"could not read the exported file: {error.strerror or error}"
-        return f"could not write {fmt} output: {written.error}"
+                return f"could not read the exported file: {error}"
+        failure = written.error
+        if isinstance(failure, ExportError_WriteFailed):
+            return f"{failure.title}\n{failure.message}"
+        if isinstance(failure, ExportError_InvalidOption):
+            return f"Invalid {failure.name}: {failure.message}"
+        if isinstance(failure, ExportError_PathIsDirectory):
+            return f"{failure.path} is a directory"
+        return f"Unknown output format: {failure.name}"
 
 
-def _emit(result_set: ResultSet, arguments: HsqlArguments, cwd: Path, context: HsqlContext) -> tuple[bytes, str, int]:
+def _emit(result_set: ResultSet, arguments: HsqlArguments, cwd: Path, context: HsqlContext) -> tuple[bytes, str, I64]:
     fmt = arguments.format
     notes = ""
     if result_set.truncated:
@@ -437,15 +378,15 @@ def _emit(result_set: ResultSet, arguments: HsqlArguments, cwd: Path, context: H
     output = arguments.output
     if fmt in ("table", "markdown", "md", "vertical"):
         display = arguments.display_rows
-        max_rows: Some[int] | Nothing
+        max_rows: Some[U64] | Nothing
         if isinstance(display, Some):
             max_rows = Nothing() if display.value < 0 else Some(value=display.value)
         else:
             max_rows = Some(value=10 if fmt == "vertical" else 40)
         color = arguments.color == "always" or (arguments.color == "auto" and context.stdout_tty and not context.no_color and not isinstance(output, Some))
         footer = not (arguments.tuples_only or arguments.no_footer)
-        options = LayoutOptions(header=not (arguments.tuples_only or arguments.no_header), footer=footer, aligned=not arguments.no_align, null_string=arguments.null_string, color=color, max_rows=max_rows)
-        data = layout_text(result_set, fmt, options).encode("utf-8")
+        layout_options = LayoutOptions(header=not (arguments.tuples_only or arguments.no_header), footer=footer, aligned=not arguments.no_align, null_string=arguments.null_string, color=color, max_rows=max_rows)
+        data = layout_text(result_set, fmt, layout_options).encode("utf-8")
         if not footer and isinstance(max_rows, Some) and result_set.fetched_row_count > max_rows.value:
             notes += f"note: printed {max_rows.value} of {result_set.fetched_row_count} rows; pass --display-rows -1 for all of them\n"
         suffix = ".md" if fmt in ("markdown", "md") else ".txt"
@@ -459,99 +400,113 @@ def _emit(result_set: ResultSet, arguments: HsqlArguments, cwd: Path, context: H
         suffix = "." + fmt
     if isinstance(output, Some):
         target = _resolve(cwd, output.value)
-        if target.is_dir():
+        directory = target.is_dir()
+        if directory:
             target = target / f"result-1{suffix}"
-            notes += f"note: wrote {target}\n"
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
         except OSError as error:
-            return b"", notes + f"hsql: error: could not write {target}: {error.strerror or error}\n", 2
+            return b"", notes + f"hsql: error: could not write {target}: {error}\n", 2
+        if directory:
+            notes += f"note: wrote {target}\n"
         return b"", notes, 0
     return data, notes, 0
 
 
-def _open_tunnel(values: dict[str, ConfigValue]) -> tuple[SshTunnel | None, str, str | None]:
-    host = _text_value(values.get("ssh_host"))
-    if host is None or host == "":
-        return None, "", None
-    timeout = 10.0
-    raw_timeout = _text_value(values.get("ssh_timeout"))
-    if raw_timeout is not None:
-        try:
-            timeout = float(raw_timeout)
-        except ValueError:
-            timeout = 10.0
-    settings = SshSettings(host=host, forwards=CottList(values=_texts(values.get("ssh_forward"))), batch_mode=_truthy(values.get("ssh_batch_mode")), allow_reuse=_truthy(values.get("ssh_allow_reuse")), timeout_seconds=timeout)
-    opened = open_ssh_tunnel(settings)
-    if isinstance(opened, Ok):
-        tunnel = opened.value
-        return tunnel, "".join(f"note: {warning}\n" for warning in tunnel.warnings), None
-    return None, "", opened.error.message
-
-
-def _stop_tunnel(tunnel: SshTunnel | None) -> None:
-    if tunnel is None:
-        return
-    handle = tunnel.process
-    if handle.tag != "harlequin.ssh_process":
-        return
-    process = cast(subprocess.Popen[str], handle.unwrap())
-    if process.poll() is None:
-        process.terminate()
-        try:
-            process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-
-
-def _history(arguments: HsqlArguments, cwd: Path, context: HsqlContext, connection_filter: Some[str] | Nothing, term: str) -> tuple[bytes, str, int]:
-    limit: Some[int] | Nothing = Nothing() if arguments.limit < 0 else Some(value=arguments.limit + 1)
+def _history(arguments: HsqlArguments, cwd: Path, context: HsqlContext, connection_filter: Some[str] | Nothing, term: str) -> tuple[bytes, str, I64]:
+    limit: Some[U64] | Nothing = Nothing() if arguments.limit < 0 else Some(value=arguments.limit + 1)
     found = recent_queries(context.query_log, HistoryFilter(connection=connection_filter, search=term, program=Nothing(), status=Nothing()), limit)
     if not isinstance(found, Ok):
         return b"", f"hsql: error: could not read the query log at {found.error.path}: {found.error.message}\n", 1
-    records = [record for record in found.value]
+    records = list(found.value)
     truncated = arguments.limit >= 0 and len(records) > arguments.limit
     if truncated:
-        records = records[: arguments.limit]
+        records = records[:arguments.limit]
     pa: Any = pyarrow
     table = cast(object, pa.table({
-        "run_at": pa.array([r.run_at for r in records], type=pa.string()),
-        "program": pa.array([r.program for r in records], type=pa.string()),
-        "profile": pa.array([r.profile.value if isinstance(r.profile, Some) else None for r in records], type=pa.string()),
-        "adapter": pa.array([r.adapter for r in records], type=pa.string()),
-        "status": pa.array([_status_name(r.status) for r in records], type=pa.string()),
-        "rows": pa.array([r.rows.value if isinstance(r.rows, Some) else None for r in records], type=pa.int64()),
-        "elapsed_ms": pa.array([r.elapsed_ms.value if isinstance(r.elapsed_ms, Some) else None for r in records], type=pa.float64()),
-        "sql": pa.array([r.sql for r in records], type=pa.string()),
+        "run_at": pa.array([record.run_at for record in records], type=pa.string()),
+        "program": pa.array([record.program for record in records], type=pa.string()),
+        "profile": pa.array([record.profile.value if isinstance(record.profile, Some) else None for record in records], type=pa.string()),
+        "adapter": pa.array([record.adapter for record in records], type=pa.string()),
+        "status": pa.array([_status_name(record.status) for record in records], type=pa.string()),
+        "rows": pa.array([record.rows.value if isinstance(record.rows, Some) else None for record in records], type=pa.int64()),
+        "elapsed_ms": pa.array([record.elapsed_ms.value if isinstance(record.elapsed_ms, Some) else None for record in records], type=pa.float64()),
+        "sql": pa.array([record.sql for record in records], type=pa.string()),
     }))
     labels = [("run_at", "s"), ("program", "s"), ("profile", "s"), ("adapter", "s"), ("status", "s"), ("rows", "##"), ("elapsed_ms", "#.#"), ("sql", "s")]
     count = len(records)
-    result_set = ResultSet(statement="", columns=CottList(values=[ColumnInfo(name=n, type_label=t) for n, t in labels]), data=Opaque(tag="harlequin.arrow_table", value=table), row_count=count, fetched_row_count=count, truncated=truncated, elapsed_ms=0)
+    result_set = ResultSet(statement="", columns=CottList(values=[ColumnInfo(name=name, type_label=label) for name, label in labels]), data=Opaque(tag="harlequin.arrow_table", value=table), row_count=count, fetched_row_count=count, truncated=truncated, elapsed_ms=0)
     return _emit(result_set, arguments, cwd, context)
 
 
-def _config_mode(mode_name: str, arguments: HsqlArguments, merged: MergedConfig, files: list[ConfigFile], names: list[str], adapter_name: str, adapter_typed: bool, config_path: Path | None, cwd: Path) -> tuple[bytes, str, int]:
+def _hsql_option_rows() -> list[tuple[str, str, str]]:
+    return [
+        ("-a, --adapter", "NAME", "The database adapter to use (default duckdb)."),
+        ("-c, --command", "TEXT", "Run this SQL; repeatable, in source order."),
+        ("-f, --file", "PATH", "Run SQL from this file; - reads stdin."),
+        ("-o, --output", "PATH", "Write results to a file or one per result to a directory."),
+        ("--format", "NAME", "table, markdown, md, vertical, csv, tsv, json, jsonl, ndjson, parquet, orc, feather, arrow or none (default table)."),
+        ("--csv", "", "Shorthand for --format csv."),
+        ("--json", "", "Shorthand for --format json."),
+        ("--jsonl", "", "Shorthand for --format jsonl."),
+        ("--markdown", "", "Shorthand for --format markdown."),
+        ("-x, --vertical", "", "Shorthand for --format vertical."),
+        ("-t, --tuples-only", "", "Omit headers and footers."),
+        ("-A, --no-align", "", "Unaligned text output."),
+        ("--no-header", "", "Omit the header."),
+        ("--no-footer", "", "Omit the row-count footer."),
+        ("--null-string", "TEXT", "Text to print for SQL NULL."),
+        ("-P, --profile", "NAME", "Use a config profile; None disables profiles."),
+        ("--config-path", "PATH", "Read this config file first."),
+        ("-r, --read-only", "", "Open read-only."),
+        ("--timeout", "SECONDS", "Cancel a query after this many seconds."),
+        ("--ssh-host", "TEXT", "Open an SSH tunnel to this host."),
+        ("--ssh-forward", "TEXT", "An SSH port forward; repeatable."),
+        ("--ssh-batch-mode", "", "Never prompt for SSH credentials."),
+        ("--ssh-allow-reuse", "", "Reuse an existing forwarded-port listener."),
+        ("--ssh-timeout", "SECONDS", "Seconds to wait for the tunnel."),
+        ("--catalog", "", "Print the database catalog."),
+        ("--catalog-search", "TERM", "Search the catalog."),
+        ("--path", "TEXT", "Select the catalog level."),
+        ("--history", "", "Print recent queries."),
+        ("--history-search", "TERM", "Search recent queries."),
+        ("--config", "MODE", "show, list-profiles, validate, schema or init."),
+        ("--spec", "", "Print the CLI specification as JSON."),
+        ("--info", "", "Print version, config and adapter information as JSON."),
+        ("--skill", "", "Print the hsql skill document."),
+        ("--limit", "N", "Rows fetched per result (default 500; -1 for unlimited)."),
+        ("--display-rows", "N", "Rows printed per result (-1 for unlimited)."),
+        ("--result", "all|last|N", "Choose results (default all)."),
+        ("--on-error", "stop|continue", "Stop or continue after a statement fails."),
+        ("--no-write-history", "", "Do not log queries."),
+        ("--stats", "", "Print JSON timing and result statistics."),
+        ("--color", "auto|always|never", "When to color text (default never)."),
+        ("--serve", "NAME", "Serve a persistent session."),
+        ("--session", "NAME", "Send a request to a session."),
+        ("--session-reset", "", "Reconnect a session."),
+        ("--session-status", "", "Describe a session."),
+        ("--queue-timeout", "SECONDS", "Maximum time to wait behind another request."),
+        ("--idle-timeout", "SECONDS", "Stop a served session after idle seconds (default 1800)."),
+        ("--max-lifetime", "SECONDS", "Stop a served session after this age (default 28800)."),
+        ("--help", "", "Show help and exit."),
+        ("--version", "", "Show the version and exit."),
+    ]
+
+
+def _config_mode(mode_name: str, arguments: HsqlArguments, raw_args: list[str], merged: MergedConfig, files: list[ConfigFile], names: list[str], adapter_name: str, adapter_typed: bool, config_path: Path | None, cwd: Path) -> tuple[bytes, str, I64]:
     if mode_name == "list-profiles":
-        return "".join(f"{p.name}\n" for p in merged.profiles).encode("utf-8"), "", 0
+        return "".join(f"{profile.name}\n" for profile in merged.profiles).encode("utf-8"), "", 0
     if mode_name == "show":
-        secret_keys: set[str] = {"password"}
+        secret_keys: set[str] = set()
         for name in names:
             for option in _adapter_options(name):
                 if option.secret:
                     secret_keys.add(_key(option))
-        doc: dict[str, object] = {}
-        default = merged.default_profile
-        if isinstance(default, Some):
-            doc["default_profile"] = default.value
-        profiles: dict[str, object] = {}
-        for profile in merged.profiles:
-            body: dict[str, object] = {}
-            for entry in profile.entries:
-                body[entry.key] = _masked(entry.key, entry.value, secret_keys)
-            profiles[profile.name] = body
-        doc["profiles"] = profiles
+        document: dict[str, object] = {}
+        if isinstance(merged.default_profile, Some):
+            document["default_profile"] = merged.default_profile.value
+        document["profiles"] = {profile.name: {entry.key: _masked(entry.key, entry.value, secret_keys) for entry in profile.entries} for profile in merged.profiles}
         keymaps: dict[str, object] = {}
         for keymap in merged.keymaps:
             bindings: list[object] = []
@@ -562,21 +517,21 @@ def _config_mode(mode_name: str, arguments: HsqlArguments, merged: MergedConfig,
                 bindings.append(item)
             keymaps[keymap.name] = bindings
         if keymaps:
-            doc["keymaps"] = keymaps
+            document["keymaps"] = keymaps
         if arguments.format == "json":
-            return (json.dumps(doc, indent=2) + "\n").encode("utf-8"), "", 0
+            return (json.dumps(document, indent=2) + "\n").encode("utf-8"), "", 0
         tk: Any = tomlkit
-        return str(cast(object, tk.dumps(doc))).encode("utf-8"), "", 0
+        return str(cast(object, tk.dumps(document))).encode("utf-8"), "", 0
     if mode_name == "validate":
-        option_sets = CottList(values=[AdapterOptionSet(adapter=n, options=CottList(values=_adapter_options(n))) for n in names])
+        option_sets = CottList(values=[AdapterOptionSet(adapter=name, options=CottList(values=_adapter_options(name))) for name in names])
         keymap_names = CottList(values=[keymap.name for keymap in builtin_keymaps()])
-        lines: list[str] = []
+        problems: list[str] = []
         for file in files:
             for problem in validate_config_file(file, option_sets, harlequin_option_names(), keymap_names):
-                where = problem.key
-                lines.append(f"{problem.path}: {where.value}: {problem.message}" if isinstance(where, Some) else f"{problem.path}: {problem.message}")
-        if lines:
-            return ("\n".join(lines) + "\n").encode("utf-8"), "", 2
+                key = problem.key
+                problems.append(f"{problem.path}: {key.value}: {problem.message}" if isinstance(key, Some) else f"{problem.path}: {problem.message}")
+        if problems:
+            return ("\n".join(problems) + "\n").encode("utf-8"), "", 2
         return b"config is valid\n", "", 0
     if mode_name == "schema":
         types: dict[str, object] = {
@@ -596,17 +551,7 @@ def _config_mode(mode_name: str, arguments: HsqlArguments, merged: MergedConfig,
             for option in _adapter_options(name):
                 properties.setdefault(_key(option), _option_schema(option))
         binding_schema: dict[str, object] = {"type": "object", "properties": {"keys": {"type": "string"}, "action": {"type": "string"}, "key_display": {"type": "string"}}, "required": ["keys", "action"], "additionalProperties": False}
-        schema: dict[str, object] = {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "title": "Harlequin configuration",
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "default_profile": {"type": "string"},
-                "profiles": {"type": "object", "additionalProperties": {"type": "object", "properties": properties}},
-                "keymaps": {"type": "object", "additionalProperties": {"type": "array", "items": binding_schema}},
-            },
-        }
+        schema: dict[str, object] = {"$schema": "https://json-schema.org/draft/2020-12/schema", "title": "Harlequin configuration", "type": "object", "additionalProperties": False, "properties": {"default_profile": {"type": "string"}, "profiles": {"type": "object", "additionalProperties": {"type": "object", "properties": properties}}, "keymaps": {"type": "object", "additionalProperties": {"type": "array", "items": binding_schema}}}}
         return (json.dumps(schema, indent=2) + "\n").encode("utf-8"), "", 0
     if mode_name == "init":
         requested = arguments.profile
@@ -615,16 +560,22 @@ def _config_mode(mode_name: str, arguments: HsqlArguments, merged: MergedConfig,
         if requested.value == "None":
             return _usage("'None' is not allowed as a profile name; pass another name with -P.")
         target = config_path if config_path is not None else cwd / "harlequin.toml"
-        entries: list[ConfigEntry] = []
+        entries: list[ConfigEntry] = list(arguments.explicit)
         if adapter_typed:
-            entries.append(ConfigEntry(key="adapter", value=ConfigValue_Text(value=adapter_name)))
+            entries.insert(0, ConfigEntry(key="adapter", value=ConfigValue_Text(value=adapter_name)))
+        if _typed(raw_args, "--limit", ""):
+            entries.append(ConfigEntry(key="limit", value=ConfigValue_Integer(value=arguments.limit)))
+        if _typed(raw_args, "--output", "-o") and isinstance(arguments.output, Some):
+            entries.append(ConfigEntry(key="output", value=ConfigValue_Text(value=arguments.output.value)))
+        if _typed(raw_args, "--no-write-history", ""):
+            entries.append(ConfigEntry(key="no_write_history", value=ConfigValue_Boolean(value=True)))
         if len(arguments.conn_str) > 0:
-            entries.append(ConfigEntry(key="conn_str", value=ConfigValue_Array(values=CottList(values=[ConfigValue_Text(value=c) for c in arguments.conn_str]))))
-        entries.extend(entry for entry in arguments.explicit)
-        default_profile: Some[str] | Nothing = Nothing()
+            entries.append(ConfigEntry(key="conn_str", value=ConfigValue_Array(values=CottList(values=[ConfigValue_Text(value=item) for item in arguments.conn_str]))))
         existing = read_config_file(target)
-        if isinstance(existing, Ok) and isinstance(existing.value, Some):
-            default_profile = existing.value.value.default_profile
+        if not isinstance(existing, Ok):
+            return _config_failure(existing.error)
+        previous = existing.value
+        default_profile: Some[str] | Nothing = previous.value.default_profile if isinstance(previous, Some) else Nothing()
         written = write_profile(target, Profile(name=requested.value, entries=CottList(values=entries)), default_profile)
         if not isinstance(written, Ok):
             return _config_failure(written.error)
@@ -632,7 +583,37 @@ def _config_mode(mode_name: str, arguments: HsqlArguments, merged: MergedConfig,
     return _usage(f"unknown --config mode {mode_name}")
 
 
-def _cold(args: list[str], env: dict[str, str], environment: FrozenMap[str, str], descriptors: list[AdapterDescriptor], pre_stdin: str | None) -> tuple[bytes, str, int]:
+def _open_tunnel(values: dict[str, ConfigValue]) -> tuple[SshTunnel | None, str, str | None]:
+    host = _text_value(values.get("ssh_host"))
+    if host is None or host == "":
+        return None, "", None
+    raw_timeout = _text_value(values.get("ssh_timeout"))
+    try:
+        timeout = float(raw_timeout) if raw_timeout is not None else 10.0
+    except ValueError:
+        return None, "", f"Invalid ssh_timeout value: {raw_timeout}"
+    settings = SshSettings(host=host, forwards=CottList(values=_texts(values.get("ssh_forward"))), batch_mode=_truthy(values.get("ssh_batch_mode")), allow_reuse=_truthy(values.get("ssh_allow_reuse")), timeout_seconds=timeout)
+    opened = open_ssh_tunnel(settings)
+    if isinstance(opened, Ok):
+        tunnel = opened.value
+        return tunnel, "".join(f"note: {warning}\n" for warning in tunnel.warnings), None
+    return None, "", opened.error.message
+
+
+def _stop_tunnel(tunnel: SshTunnel | None) -> None:
+    if tunnel is None or tunnel.process.tag != "harlequin.ssh_process":
+        return
+    process = cast(subprocess.Popen[str], tunnel.process.unwrap())
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+def _cold(args: list[str], env: dict[str, str], environment: FrozenMap[str, str], descriptors: list[AdapterDescriptor], pre_stdin: str | None) -> tuple[bytes, str, I64]:
     scanned = first_pass(CottList(values=args))
     home = Path.home()
     cwd = Path.cwd()
@@ -648,9 +629,8 @@ def _cold(args: list[str], env: dict[str, str], environment: FrozenMap[str, str]
         read = read_config_file(path)
         if not isinstance(read, Ok):
             return _config_failure(read.error)
-        found = read.value
-        if isinstance(found, Some):
-            files.append(found.value)
+        if isinstance(read.value, Some):
+            files.append(read.value.value)
     merged = merge_config_files(CottList(values=files))
     profile: Profile | None = None
     profile_error: ConfigError | None = None
@@ -662,6 +642,7 @@ def _cold(args: list[str], env: dict[str, str], environment: FrozenMap[str, str]
             for item in merged.sources:
                 if item.name == chosen.value.name:
                     source = Some(value=item.path)
+                    break
             interpolated = interpolate_profile(chosen.value, environment, source)
             if isinstance(interpolated, Ok):
                 profile = interpolated.value
@@ -669,34 +650,31 @@ def _cold(args: list[str], env: dict[str, str], environment: FrozenMap[str, str]
                 profile_error = interpolated.error
     else:
         profile_error = selected.error
-    names = [d.name for d in descriptors]
+    names = [descriptor.name for descriptor in descriptors]
     adapter_typed = isinstance(scanned.adapter, Some)
     adapter_name = "duckdb"
     if isinstance(scanned.adapter, Some):
         adapter_name = scanned.adapter.value
     elif profile is not None:
         for entry in profile.entries:
-            value = entry.value
-            if entry.key == "adapter" and isinstance(value, ConfigValue_Text):
-                adapter_name = value.value.lower()
+            if entry.key == "adapter" and isinstance(entry.value, ConfigValue_Text):
+                adapter_name = entry.value.value.lower()
     known = adapter_name in names
-    if not known and not adapter_typed:
-        return _usage(f"Profile sets adapter to '{adapter_name}', which is not an installed adapter.")
     options = _adapter_options(adapter_name) if known else []
     parsed = parse_hsql_arguments(CottList(values=args), CottList(values=names), CottList(values=options))
     if not isinstance(parsed, Ok):
         return b"", hsql_error_line(parsed.error), hsql_exit_status(parsed.error)
     arguments = parsed.value
-    if not known:
-        return _usage(f"'{adapter_name}' is not an installed adapter.")
-    descriptor = descriptors[names.index(adapter_name)]
+    descriptor = descriptors[names.index(adapter_name)] if known else descriptors[0]
     if arguments.show_help:
-        return hsql_help(CottList(values=descriptors), Some(value=descriptor), CottList(values=options)).encode("utf-8"), "", 0
+        selected_descriptor: Some[AdapterDescriptor] | Nothing = Some(value=descriptor) if known else Nothing()
+        return hsql_help(CottList(values=descriptors), selected_descriptor, CottList(values=options)).encode("utf-8"), "", 0
     if arguments.show_version:
         return f"hsql, version {HARLEQUIN_VERSION}\n".encode("utf-8"), "", 0
     mode = arguments.mode
-    is_init = isinstance(mode, HsqlMode_ConfigMode) and mode.name == "init"
-    if profile_error is not None and not is_init:
+    if not known and not isinstance(mode, (HsqlMode_ConfigMode, HsqlMode_Spec, HsqlMode_Info, HsqlMode_Skill)):
+        return _usage(f"Profile sets adapter to '{adapter_name}', which is not an installed adapter.")
+    if profile_error is not None and not isinstance(mode, (HsqlMode_ConfigMode, HsqlMode_Spec, HsqlMode_Skill)):
         return _config_failure(profile_error)
     values: dict[str, ConfigValue] = {}
     if profile is not None:
@@ -705,69 +683,72 @@ def _cold(args: list[str], env: dict[str, str], environment: FrozenMap[str, str]
                 values[entry.key] = entry.value
     for entry in arguments.explicit:
         values[entry.key] = entry.value
-    conn = [c for c in arguments.conn_str]
+    conn = list(arguments.conn_str)
     if not conn:
         conn = _texts(values.get("conn_str"))
     read_only = arguments.read_only or _truthy(values.get("read_only"))
-    limit_typed = any(a == "--limit" or a.startswith("--limit=") for a in args)
-    limit_value = values.get("limit")
-    if not limit_typed and isinstance(limit_value, ConfigValue_Integer) and limit_value.value >= -1:
-        arguments = dataclasses.replace(arguments, limit=limit_value.value)
+    if not _typed(args, "--limit", ""):
+        profile_limit = values.get("limit")
+        if isinstance(profile_limit, ConfigValue_Integer) and profile_limit.value >= -1:
+            arguments = dataclasses.replace(arguments, limit=profile_limit.value)
+    if not _typed(args, "--output", "-o"):
+        output = _text_value(values.get("output"))
+        if output is not None:
+            arguments = dataclasses.replace(arguments, output=Some(value=output))
     if _truthy(values.get("no_write_history")):
         arguments = dataclasses.replace(arguments, write_history=False)
     settings: list[AdapterSetting] = []
-    secrets: list[str] = []
+    secrets = _connection_secrets(conn)
     for option in options:
         key = _key(option)
-        if key not in values:
+        value = values.get(key)
+        if value is None:
             continue
-        setting = _setting(option, values[key])
+        setting = _setting(option, value)
         if setting is None:
             continue
         settings.append(AdapterSetting(name=key, value=setting))
         if option.secret:
-            text = _text_value(values[key])
-            if text is not None and text != "":
-                secrets.append(text)
+            secrets.extend(_texts(value) if isinstance(value, ConfigValue_Array) else [_text_value(value) or ""])
     request = ConnectionRequest(adapter=_kind(adapter_name), conn_str=CottList(values=conn), read_only=read_only, settings=CottList(values=settings))
-    context = HsqlContext(profile=Some(value=profile.name) if profile is not None else Nothing(), adapter_name=adapter_name, query_log=paths.query_log, stdout_tty=sys.stdout.isatty(), stderr_tty=sys.stderr.isatty(), no_color=env.get("NO_COLOR", "") != "", implements_cancel=descriptor.implements_cancel, implements_catalog_search=descriptor.implements_catalog_search, secrets=CottList(values=secrets))
-    if isinstance(mode, HsqlMode_History) or isinstance(mode, HsqlMode_HistorySearch):
+    context = HsqlContext(profile=Some(value=profile.name) if profile is not None else Nothing(), adapter_name=adapter_name, query_log=paths.query_log, stdout_tty=sys.stdout.isatty(), stderr_tty=sys.stderr.isatty(), no_color="NO_COLOR" in env, implements_cancel=descriptor.implements_cancel, implements_catalog_search=descriptor.implements_catalog_search, secrets=CottList(values=[secret for secret in secrets if secret]))
+    if isinstance(mode, (HsqlMode_History, HsqlMode_HistorySearch)):
         narrow = isinstance(scanned.profile, Some) or adapter_typed or len(arguments.conn_str) > 0
         connection_filter: Some[str] | Nothing = Some(value=_guess_connection_id(adapter_name, conn, values)) if narrow else Nothing()
         term = mode.term if isinstance(mode, HsqlMode_HistorySearch) else ""
-        return _history(arguments, cwd, context, connection_filter, term)
+        stdout, stderr, status = _history(arguments, cwd, context, connection_filter, term)
+        return stdout, redact_text(stderr, context.secrets), status
     if isinstance(mode, HsqlMode_ConfigMode):
-        return _config_mode(mode.name, arguments, merged, files, names, adapter_name, adapter_typed, config_path, cwd)
+        stdout, stderr, status = _config_mode(mode.name, arguments, args, merged, files, names, adapter_name, adapter_typed, config_path, cwd)
+        return stdout, redact_text(stderr, context.secrets), status
     if isinstance(mode, HsqlMode_Spec):
-        hsql_obj: dict[str, object] = {}
+        hsql_options: dict[str, object] = {}
         for flags, metavar, help_text in _hsql_option_rows():
-            hsql_obj[flags] = {"metavar": metavar, "help": help_text}
-        adapters_obj: dict[str, object] = {}
+            hsql_options[flags] = {"metavar": metavar, "help": help_text}
+        adapters: dict[str, object] = {}
         for name in names:
             if not adapter_typed or name == adapter_name:
-                adapters_obj[name] = [_option_json(o) for o in _adapter_options(name)]
-        return (json.dumps({"hsql": hsql_obj, "adapters": adapters_obj}, indent=2) + "\n").encode("utf-8"), "", 0
+                adapters[name] = [_option_json(option) for option in _adapter_options(name)]
+        return (json.dumps({"hsql": hsql_options, "adapters": adapters}, indent=2) + "\n").encode("utf-8"), "", 0
     if isinstance(mode, HsqlMode_Info):
         capabilities: dict[str, object] = {}
-        for d in descriptors:
-            capabilities[d.name] = {"display_name": d.display_name, "distribution": d.distribution, "read_only": d.implements_read_only, "cancel": d.implements_cancel, "catalog_search": d.implements_catalog_search, "validate_sql": d.implements_validate_sql}
-        info: dict[str, object] = {"version": HARLEQUIN_VERSION, "python": sys.version.split()[0], "config_files": [f.path for f in files], "profile": profile.name if profile is not None else None, "adapters": capabilities}
+        for item in descriptors:
+            capabilities[item.name] = {"display_name": item.display_name, "distribution": item.distribution, "read_only": item.implements_read_only, "cancel": item.implements_cancel, "catalog_search": item.implements_catalog_search, "validate_sql": item.implements_validate_sql}
+        info: dict[str, object] = {"version": HARLEQUIN_VERSION, "python": sys.version.split()[0], "config_files": [file.path for file in files], "profile": profile.name if profile is not None else None, "adapters": capabilities}
         return (json.dumps(info, indent=2) + "\n").encode("utf-8"), "", 0
     if isinstance(mode, HsqlMode_Skill):
-        output = arguments.output
-        skill = _skill_text()
-        if isinstance(output, Some):
-            target = _resolve(cwd, output.value)
-            if target.is_dir() or output.value.endswith(("/", os.sep)):
+        if isinstance(arguments.output, Some):
+            target = _resolve(cwd, arguments.output.value)
+            if target.is_dir() or arguments.output.value.endswith(("/", os.sep)):
                 target = target / "SKILL.md"
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(skill, encoding="utf-8")
+                target.write_text(_SKILL, encoding="utf-8")
             except OSError as error:
-                return b"", f"hsql: error: could not write {target}: {error.strerror or error}\n", 2
-            return b"", f"note: wrote {target}\n", 0
-        return skill.encode("utf-8"), "", 0
-    if isinstance(mode, HsqlMode_SessionReset) or isinstance(mode, HsqlMode_SessionStatus):
+                return b"", redact_text(f"hsql: error: could not write {target}: {error}\n", context.secrets), 2
+            return b"", redact_text(f"note: wrote {target}\n", context.secrets), 0
+        return _SKILL.encode("utf-8"), "", 0
+    if isinstance(mode, (HsqlMode_SessionReset, HsqlMode_SessionStatus)):
         return _usage("this option needs a running session: pass --session NAME or set HSQL_SESSION.")
     if isinstance(mode, HsqlMode_Execute) and len(arguments.sources) == 0:
         return _usage("no SQL to run. Pass -c/--command or -f/--file, or see 'hsql --help'.")
@@ -777,7 +758,7 @@ def _cold(args: list[str], env: dict[str, str], environment: FrozenMap[str, str]
     try:
         if isinstance(mode, HsqlMode_Serve):
             status = serve_hsql_session(mode.name, request, context, arguments, environment)
-            return b"", notes, status
+            return b"", redact_text(notes, context.secrets), status
         connected = connect(request)
         if not isinstance(connected, Ok):
             failure = connected.error
@@ -785,21 +766,21 @@ def _cold(args: list[str], env: dict[str, str], environment: FrozenMap[str, str]
                 message = f"Harlequin could not connect read-only.\nThe {failure.adapter} adapter does not support read-only connections."
             else:
                 message = f"{failure.title}\n{failure.message}"
-            return b"", notes + redact_text(f"hsql: error: {message}\n", context.secrets), 3
+            return b"", redact_text(notes + f"hsql: error: {message}\n", context.secrets), 3
         connection = connected.value
-        stdin_text: Some[str] | Nothing = Nothing()
-        if any(isinstance(s, SqlSource_SqlFile) and s.path == "-" for s in arguments.sources):
-            stdin_text = Some(value=pre_stdin if pre_stdin is not None else sys.stdin.read())
         try:
+            stdin_text: Some[str] | Nothing = Nothing()
+            if any(isinstance(source, SqlSource_SqlFile) and source.path == "-" for source in arguments.sources):
+                stdin_text = Some(value=pre_stdin if pre_stdin is not None else sys.stdin.read())
             response = execute_hsql_request(connection, arguments, cwd, stdin_text, context)
         finally:
             close_connection(connection)
-        return response.stdout, notes + response.stderr, response.status
+        return response.stdout, redact_text(notes + response.stderr, context.secrets), response.status
     finally:
         _stop_tunnel(tunnel)
 
 
-def _main(args: list[str]) -> tuple[bytes, str, int]:
+def _main(args: list[str]) -> tuple[bytes, str, I64]:
     env = dict(os.environ)
     environment = FrozenMap(values=env)
     descriptors = _descriptors()
@@ -822,13 +803,12 @@ def _main(args: list[str]) -> tuple[bytes, str, int]:
 
 
 def run_hsql(arguments: CottList[str]) -> Never:
-    args = [a for a in arguments]
     try:
-        stdout, stderr, status = _main(args)
+        stdout, stderr, status = _main(list(arguments))
     except KeyboardInterrupt:
         stdout, stderr, status = b"", hsql_error_line(HsqlError_Interrupted()), 130
-    except Exception as error:
-        stdout, stderr, status = b"", hsql_error_line(HsqlError_Crash(message=str(error) or repr(error))), 70
+    except Exception:
+        stdout, stderr, status = b"", hsql_error_line(HsqlError_Crash(message="An unexpected exception occurred.")), 70
     if stdout:
         sys.stdout.buffer.write(stdout)
     sys.stdout.flush()

@@ -12,7 +12,6 @@ from real.harlequin.keymap_types import KeyMap
 
 _LOAD_TITLE: Final[str] = "Harlequin could not load the config file."
 _CREATE_TITLE: Final[str] = "Harlequin could not create your configuration."
-_PYPROJECT: Final[str] = "pyproject.toml"
 
 
 def _invalid(title: str, message: str) -> Result[Path, ConfigError]:
@@ -61,14 +60,15 @@ def write_keymap(path: Path, keymap: KeyMap) -> Result[Path, ConfigError]:
     except TOMLKitError as error:
         return _load_error(path, error)
     root = cast(MutableMapping[str, object], document)
-    target: MutableMapping[str, object] | None = root
-    if path.name == _PYPROJECT:
+    target: MutableMapping[str, object] = root
+    if path.name == "pyproject.toml":
         tool = _subtable(root, "tool", True)
         if tool is None:
             return _invalid(_CREATE_TITLE, f"Expected `table` at tool in {path}.")
-        target = _subtable(tool, "harlequin", False)
-        if target is None:
+        harlequin = _subtable(tool, "harlequin", False)
+        if harlequin is None:
             return _invalid(_CREATE_TITLE, f"Expected `table` at tool.harlequin in {path}.")
+        target = harlequin
     keymaps = _subtable(target, "keymaps", True)
     if keymaps is None:
         return _invalid(_CREATE_TITLE, f"Expected `table` at keymaps in {path}.")

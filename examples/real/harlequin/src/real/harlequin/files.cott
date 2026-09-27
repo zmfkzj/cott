@@ -82,7 +82,9 @@ scenario text_files_round_trip_and_fail_cleanly:
     call reloaded = load_text_file(work.path("sub/new.sql"))
     assert reloaded == Result.Ok(value: "select 'é';")
     call undecodable = load_text_file(work.path("latin1.sql"))
-    assert undecodable == Result.Err(error: FileError.InvalidEncoding(path: work.path("latin1.sql")))
+    assert undecodable == Result.Err(
+        error: FileError.InvalidEncoding(path: work.path("latin1.sql")),
+    )
     call missing = load_text_file(work.path("absent.sql"))
     assert missing == Result.Err(error: FileError.NotFound(path: work.path("absent.sql")))
 
@@ -98,3 +100,49 @@ scenario a_failed_save_keeps_the_previous_file:
     assert failed matches Result.Err(FileError.Failed(_, _))
     call kept = load_text_file(work.path("query.sql"))
     assert kept == Result.Ok(value: "select 1;")
+
+scenario refusals_and_directories_are_reported_by_kind:
+    fixtures:
+        fs work:
+            file "query.sql" text("select 1;")
+            file "queries/a.sql" text("select 2;")
+        failure refused:
+            point: file.open
+            occurrence: 1
+            error: permission_denied
+    call denied = load_text_file(work.path("query.sql"))
+    assert denied == Result.Err(error: FileError.PermissionDenied(path: work.path("query.sql")))
+    call readable = load_text_file(work.path("query.sql"))
+    assert readable == Result.Ok(value: "select 1;")
+    call directory = load_text_file(work.path("queries"))
+    assert directory == Result.Err(error: FileError.IsADirectory(path: work.path("queries")))
+    call over_directory = save_text_file(work.path("queries"), "select 3;")
+    assert over_directory == Result.Err(error: FileError.IsADirectory(path: work.path("queries")))
+    call inside = load_text_file(work.path("queries/a.sql"))
+    assert inside == Result.Ok(value: "select 2;")
+
+scenario a_refused_save_keeps_the_previous_file:
+    fixtures:
+        fs work:
+            file "query.sql" text("select 1;")
+        failure refused:
+            point: file.open
+            occurrence: 1
+            error: permission_denied
+    call saved = save_text_file(work.path("query.sql"), "select 2;")
+    assert saved == Result.Err(error: FileError.PermissionDenied(path: work.path("query.sql")))
+    call kept = load_text_file(work.path("query.sql"))
+    assert kept == Result.Ok(value: "select 1;")
+
+scenario an_interrupted_read_is_a_plain_failure:
+    fixtures:
+        fs work:
+            file "query.sql" text("select 1;")
+        failure stalled:
+            point: file.read
+            occurrence: 1
+            error: timeout
+    call loaded = load_text_file(work.path("query.sql"))
+    assert loaded matches Result.Err(FileError.Failed(failed, _)) => failed == work.path("query.sql")
+    call retried = load_text_file(work.path("query.sql"))
+    assert retried == Result.Ok(value: "select 1;")

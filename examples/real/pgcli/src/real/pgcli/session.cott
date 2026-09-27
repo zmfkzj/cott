@@ -745,3 +745,29 @@ scenario row_limit_rules:
 scenario connect_arguments_keep_quotes:
     call args = change_db_arguments("\"my db\" ann")
     assert args == List("\"my db\"", "ann", "", "")
+
+scenario destructive_confirmation_without_terminal:
+    fixtures:
+        fs work:
+            file "queries.sql" text("drop table t;")
+    call harmless = confirm_destructive_query(
+        "select 1",
+        List("drop", "alter"),
+        Option.Some(value: "prod"),
+        true,
+    )
+    assert harmless == Option.Nothing
+    call forced = confirm_destructive_query(
+        "drop table t",
+        List("drop", "alter"),
+        Option.Some(value: "prod"),
+        true,
+    )
+    assert forced == Option.Some(value: true)
+    call unattended = confirm_destructive_query(
+        "drop table t",
+        List("drop", "alter"),
+        Option.Nothing,
+        false,
+    )
+    assert unattended == Option.Nothing

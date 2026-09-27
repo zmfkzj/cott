@@ -374,6 +374,7 @@ pub enum ScenarioHttpOutcome {
         status: ScenarioInteger,
         body: ScenarioData,
         encoding: String,
+        content_type: Option<String>,
     },
     Redirect {
         span: Span,

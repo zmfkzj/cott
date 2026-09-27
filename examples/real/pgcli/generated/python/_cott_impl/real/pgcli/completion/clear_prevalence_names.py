@@ -1,7 +1,6 @@
 from typing import cast
 
 from cott_runtime import Opaque
-
 from real.pgcli.completion_types import PrevalenceHandle
 
 

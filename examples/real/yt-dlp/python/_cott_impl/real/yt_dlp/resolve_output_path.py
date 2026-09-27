@@ -7,7 +7,7 @@ from real.yt_dlp_types import MediaError, MediaError_PathFailure, MediaItem, Out
 
 _RESTRICT_ALLOWED: Final[str] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 _WINDOWS_FORBIDDEN: Final[str] = "<>:\"\\|?*"
-_WINDOWS_RESERVED: Final[str] = "CON PRN AUX NUL COM1 COM2 COM3 COM4 COM5 COM6 COM7 COM8 COM9 LPT1 LPT2 LPT3 LPT4 LPT5 LPT6 LPT7 LPT8 LPT9"
+_WINDOWS_RESERVED: Final[str] = " CON PRN AUX NUL COM1 COM2 COM3 COM4 COM5 COM6 COM7 COM8 COM9 LPT1 LPT2 LPT3 LPT4 LPT5 LPT6 LPT7 LPT8 LPT9 "
 
 
 def _sanitize_component(component: str, restrict: bool, windows: bool) -> str:
@@ -17,11 +17,11 @@ def _sanitize_component(component: str, restrict: bool, windows: bool) -> str:
     if restrict:
         result = "".join(ch if ch in _RESTRICT_ALLOWED else "_" for ch in result)
     if windows:
-        result = "".join("_" if (ord(ch) < 0x20 or ord(ch) == 0x7F or ch in _WINDOWS_FORBIDDEN) else ch for ch in result)
+        result = "".join("_" if ord(ch) < 0x20 or ord(ch) == 0x7F or ch in _WINDOWS_FORBIDDEN else ch for ch in result)
         stripped: str = result.rstrip(" .")
         result = stripped + "_" * (len(result) - len(stripped))
         stem: str = result.split(".", 1)[0]
-        if stem.upper() in _WINDOWS_RESERVED.split(" "):
+        if f" {stem.upper()} " in _WINDOWS_RESERVED:
             result = "_" + result
     return result
 
@@ -31,8 +31,10 @@ def _truncate_utf8(text: str, limit: int) -> str:
 
 
 def _trim_filename(name: str, limit: int) -> str:
+    if limit == 0:
+        return name
     encoded: bytes = name.encode("utf-8")
-    if limit == 0 or len(encoded) <= limit:
+    if len(encoded) <= limit:
         return name
     dot: int = name.rfind(".")
     if dot > 0:
@@ -41,7 +43,7 @@ def _trim_filename(name: str, limit: int) -> str:
             stem: str = _truncate_utf8(name[:dot], limit - ext_len)
             if stem != "":
                 return stem + name[dot:]
-    return _truncate_utf8(name, limit)
+    return encoded[:limit].decode("utf-8", errors="ignore")
 
 
 def _failure(path: Path, message: str) -> Result[Path, MediaError]:
@@ -50,7 +52,7 @@ def _failure(path: Path, message: str) -> Result[Path, MediaError]:
 
 def _resolve_rendered(rendered: str, request: OutputRequest) -> Result[Path, MediaError]:
     if rendered == "" or "\x00" in rendered:
-        return _failure(Path(rendered.replace("\x00", "")), "rendered output path is empty or contains NUL")
+        return _failure(Path(rendered), "rendered output path is empty or contains NUL")
     components: list[str] = [_sanitize_component(part, request.restrict_filenames, request.windows_filenames) for part in rendered.split("/")]
     last: str = components[-1]
     if last in ("", ".", ".."):
@@ -61,6 +63,8 @@ def _resolve_rendered(rendered: str, request: OutputRequest) -> Result[Path, Med
         return _failure(Path(rendered), "output filename is not valid UTF-8")
     if trimmed == "":
         return _failure(Path(rendered), "trimmed output filename is empty")
+    if trimmed in (".", ".."):
+        return _failure(Path(rendered), "trimmed output path has no filename")
     components[-1] = trimmed
     relative: Path = Path("/".join(components))
     final: Path

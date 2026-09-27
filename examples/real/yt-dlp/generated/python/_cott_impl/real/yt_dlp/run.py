@@ -57,7 +57,7 @@ def run(arguments: CottList[str]) -> Never:
                     _fail()
                 case Ok(value=report):
                     rendered: str = report.rendered
-                    if len(rendered) > 0:
+                    if rendered:
                         sys.stdout.write(rendered + "\n")
                     sys.stdout.flush()
                     sys.exit(0)

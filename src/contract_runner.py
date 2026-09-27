@@ -1467,7 +1467,13 @@ class FixtureHttpServer:
             def log_message(self, *_):
                 pass
 
+            def do_HEAD(self):
+                self._respond(send_body=False)
+
             def do_GET(self):
+                self._respond(send_body=True)
+
+            def _respond(self, *, send_body):
                 outer.requests += 1
                 if outer.requests > outer.limits["http_requests"]:
                     self.send_error(429)
@@ -1497,10 +1503,11 @@ class FixtureHttpServer:
                 encoding = outcome["encoding"]
                 body = fixture_bytes(outcome["body"], encoding)
                 self.send_response(outcome["status"])
-                self.send_header("Content-Type", f"text/plain; charset={encoding}")
+                self.send_header("Content-Type", outcome.get("content_type", f"text/plain; charset={encoding}"))
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
-                self.wfile.write(body)
+                if send_body:
+                    self.wfile.write(body)
 
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -1576,7 +1583,7 @@ async def run_scenario(module_value, strategy, request):
         raise AssertionError(f"{scenario['id']}: step limit exceeds 64")
     if scenario["lifecycle_limit"] > 64:
         raise AssertionError(f"{scenario['id']}: lifecycle limit exceeds 64")
-    root_parent = pathlib.Path(request.get("fixture_root", os.environ.get("TMPDIR", ".")))
+    root_parent = pathlib.Path(request.get("fixture_root", os.environ.get("TMPDIR", "."))).absolute()
     root = root_parent / f"scenario-{len(request.get('strategies', ()))}-{scenario['id'].rsplit('.', 1)[-1]}"
     fixtures, failures, clock = prepare_scenario_fixtures(scenario, root)
     has_http = any(fixture["kind"] == "http" for fixture in scenario["fixtures"])
@@ -1602,8 +1609,10 @@ async def run_scenario(module_value, strategy, request):
     trace = []
     assertions = []
     ticks = 0
+    previous_cwd = os.getcwd()
     global _SCENARIO_FIXTURES
     try:
+        os.chdir(root)
         with activate(
             token_factory(),
             root=root,
@@ -1720,6 +1729,7 @@ async def run_scenario(module_value, strategy, request):
         pending = [worker["task"] for worker in workers.values() if not worker["task"].done()]
         if pending:
             await asyncio.wait(pending, timeout=0.1)
+        os.chdir(previous_cwd)
         if server is not None:
             server.close()
         __import__("shutil").rmtree(root, ignore_errors=True)

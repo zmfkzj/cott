@@ -251,3 +251,13 @@ scenario credentials_are_masked:
     assert sql == "create secret (type s3, key_id '********', secret '********')"
     call prose = redact_text("could not use hunter22 or pw", List("hunter22", "pw"))
     assert prose == "could not use ******** or pw"
+
+scenario formatting_follows_sqlfmt_and_reports_unparsable_text:
+    call formatted = format_sql("SELECT a,b FROM t")
+    assert formatted == Result.Ok(value: "select a, b from t\n")
+    call stable = format_sql("select 1\n")
+    assert stable == Result.Ok(value: "select 1\n")
+    call unbalanced = format_sql("select 1)")
+    assert unbalanced matches Result.Err(FormatError.Unformattable(message)) => starts_with(message, "sqlfmt encountered an error: ") and contains(message, "Closing bracket ')'")
+    call unterminated = format_sql("select 'abc")
+    assert unterminated matches Result.Err(FormatError.Unformattable(message)) => starts_with(message, "sqlfmt encountered an error: ")

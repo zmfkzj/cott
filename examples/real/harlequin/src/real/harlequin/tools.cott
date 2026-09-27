@@ -1,7 +1,23 @@
 module real.harlequin.tools
 
-use real.harlequin.adapters.{AdapterDescriptor, AdapterOption, AdapterSetting, OptionKind, SettingValue, adapter_options}
-use real.harlequin.config.{ConfigEntry, ConfigError, ConfigValue, Profile, profile_toml, read_config_file, write_keymap, write_profile}
+use real.harlequin.adapters.{
+    AdapterDescriptor,
+    AdapterOption,
+    AdapterSetting,
+    OptionKind,
+    SettingValue,
+    adapter_options,
+}
+use real.harlequin.config.{
+    ConfigEntry,
+    ConfigError,
+    ConfigValue,
+    Profile,
+    profile_toml,
+    read_config_file,
+    write_keymap,
+    write_profile,
+}
 use real.harlequin.keymap.{ActionSpec, KeyBinding, KeyMap, harlequin_actions, key_label}
 
 doc """
@@ -87,7 +103,12 @@ fn keymap_name_problem(name: Str, builtin_names: List[Str]) -> Option[Str]:
 
     effects []
 
-fn run_keys_app(save_path: Path, active: List[Str], builtin_names: List[Str], available: List[KeyMap]) -> I64:
+fn run_keys_app(
+    save_path: Path,
+    active: List[Str],
+    builtin_names: List[Str],
+    available: List[KeyMap],
+) -> I64:
     doc """
     The `harlequin --keys` editor as one full-screen lock-selected
     prompt_toolkit Application built without classes. The screen shows the
@@ -143,7 +164,13 @@ fn wizard_profile(answers: WizardAnswers, adapter_option_list: List[AdapterOptio
 
     effects []
 
-fn run_config_wizard(explicit_path: Option[Path], default_path: Path, descriptors: List[AdapterDescriptor], theme_names: List[Str], keymap_names: List[Str]) -> I64:
+fn run_config_wizard(
+    explicit_path: Option[Path],
+    default_path: Path,
+    descriptors: List[AdapterDescriptor],
+    theme_names: List[Str],
+    keymap_names: List[Str],
+) -> I64:
     doc """
     The `harlequin --config` wizard, with the lock-selected questionary.
     With explicit_path print "Updating the file at {path}:" and use it;

@@ -33,16 +33,16 @@ Interrupted 130, Crash 70."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.hsql_exit_status"
         if _error.span is None:
-            _error.span = {"end_byte":4578,"end_column":1,"end_line":166,"start_byte":4362,"start_column":1,"start_line":156}
+            _error.span = {"end_byte":4613,"end_column":1,"end_line":175,"start_byte":4397,"start_column":1,"start_line":165}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.hsql_exit_status", phase="implementation-call", span={"end_byte":4578,"end_column":1,"end_line":166,"start_byte":4362,"start_column":1,"start_line":156}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.hsql_exit_status", phase="implementation-call", span={"end_byte":4613,"end_column":1,"end_line":175,"start_byte":4397,"start_column":1,"start_line":165}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.hsql_exit_status", phase="implementation-call", span={"end_byte":4578,"end_column":1,"end_line":166,"start_byte":4362,"start_column":1,"start_line":156}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.hsql_exit_status", phase="implementation-call", span={"end_byte":4613,"end_column":1,"end_line":175,"start_byte":4397,"start_column":1,"start_line":165}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, I64, path="$.return")
     if _cott_test_context:
         if not (_cott_contract_condition(((_result >= 1)), "real.harlequin.hsql.hsql_exit_status", "ensures:1")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.hsql_exit_status", clause="ensures:1", phase="ensures", span={"end_byte":4560,"end_column":24,"end_line":162,"start_byte":4541,"start_column":5,"start_line":162}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.hsql_exit_status", clause="ensures:1", phase="ensures", span={"end_byte":4595,"end_column":24,"end_line":171,"start_byte":4576,"start_column":5,"start_line":171}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, I64, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -58,16 +58,16 @@ itself and could not finish the run.\\nnote: {message}\\n"."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.hsql_error_line"
         if _error.span is None:
-            _error.span = {"end_byte":4928,"end_column":1,"end_line":177,"start_byte":4578,"start_column":1,"start_line":166}
+            _error.span = {"end_byte":4963,"end_column":1,"end_line":186,"start_byte":4613,"start_column":1,"start_line":175}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.hsql_error_line", phase="implementation-call", span={"end_byte":4928,"end_column":1,"end_line":177,"start_byte":4578,"start_column":1,"start_line":166}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.hsql_error_line", phase="implementation-call", span={"end_byte":4963,"end_column":1,"end_line":186,"start_byte":4613,"start_column":1,"start_line":175}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.hsql_error_line", phase="implementation-call", span={"end_byte":4928,"end_column":1,"end_line":177,"start_byte":4578,"start_column":1,"start_line":166}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.hsql_error_line", phase="implementation-call", span={"end_byte":4963,"end_column":1,"end_line":186,"start_byte":4613,"start_column":1,"start_line":175}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, str, path="$.return")
     if _cott_test_context:
         if not (_cott_contract_condition((_cott_starts_with(_result, "hsql: error: ")), "real.harlequin.hsql.hsql_error_line", "ensures:1")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.hsql_error_line", clause="ensures:1", phase="ensures", span={"end_byte":4910,"end_column":51,"end_line":173,"start_byte":4864,"start_column":5,"start_line":173}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.hsql_error_line", clause="ensures:1", phase="ensures", span={"end_byte":4945,"end_column":51,"end_line":182,"start_byte":4899,"start_column":5,"start_line":182}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -116,18 +116,18 @@ be all, last, or a result number."."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/hsql/parse_hsql_arguments.py", "b0fdaedb9554e4460bccc4c95889318f184feca942342a2422cedbd09716c023", "parse_hsql_arguments", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.hsql.parse_hsql_arguments")
+        _implementation = _cott_load("_cott_impl/real/harlequin/hsql/parse_hsql_arguments.py", "44a4c725a22d5b74028974b9d50f55a13c101d67628bd069745baa561f94147a", "parse_hsql_arguments", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.hsql.parse_hsql_arguments")
         _result = _implementation(arguments, adapter_names, adapter_options)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.parse_hsql_arguments"
         if _error.span is None:
-            _error.span = {"end_byte":7809,"end_column":1,"end_line":223,"start_byte":4928,"start_column":1,"start_line":177}
+            _error.span = {"end_byte":7859,"end_column":1,"end_line":236,"start_byte":4963,"start_column":1,"start_line":186}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.parse_hsql_arguments", phase="implementation-call", span={"end_byte":7809,"end_column":1,"end_line":223,"start_byte":4928,"start_column":1,"start_line":177}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.parse_hsql_arguments", phase="implementation-call", span={"end_byte":7859,"end_column":1,"end_line":236,"start_byte":4963,"start_column":1,"start_line":186}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.parse_hsql_arguments", phase="implementation-call", span={"end_byte":7809,"end_column":1,"end_line":223,"start_byte":4928,"start_column":1,"start_line":177}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.parse_hsql_arguments", phase="implementation-call", span={"end_byte":7859,"end_column":1,"end_line":236,"start_byte":4963,"start_column":1,"start_line":186}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, Result[HsqlArguments, HsqlError], path="$.return")
     if _cott_test_context:
         if type(_result) is Err:
@@ -135,7 +135,7 @@ be all, last, or a result number."."""
                 if type(_result.error) is not _expected_error:
                     raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.hsql.parse_hsql_arguments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
             elif type(_result.error) not in (HsqlError_Usage,):
-                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.hsql.parse_hsql_arguments", phase="error", span={"end_byte":7809,"end_column":1,"end_line":223,"start_byte":4928,"start_column":1,"start_line":177}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.hsql.parse_hsql_arguments", phase="error", span={"end_byte":7859,"end_column":1,"end_line":236,"start_byte":4963,"start_column":1,"start_line":186}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
         elif _expected_error is not None:
             raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.hsql.parse_hsql_arguments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
         if _expected_error_clause is not None:
@@ -150,7 +150,7 @@ be all, last, or a result number."."""
             _cott_contract_condition((False), "real.harlequin.hsql.parse_hsql_arguments", "ensures:1:applicable")
             return True
         if not (_cott_match_ensures_1()):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.parse_hsql_arguments", clause="ensures:1", phase="ensures", span={"end_byte":7764,"end_column":52,"end_line":217,"start_byte":7717,"start_column":5,"start_line":217}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.parse_hsql_arguments", clause="ensures:1", phase="ensures", span={"end_byte":7814,"end_column":52,"end_line":230,"start_byte":7767,"start_column":5,"start_line":230}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[HsqlArguments, HsqlError], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -166,22 +166,22 @@ section "{display_name} Adapter Options:" with options."""
     selected = _cott_normalize_f32_abi(selected, Option[AdapterDescriptor], path="$.selected")
     options = _cott_normalize_f32_abi(options, CottList[AdapterOption], path="$.options")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/hsql/hsql_help.py", "79f410ef55241138116c643902a38df51f6bd057d9172c559e4366abb4eb38a6", "hsql_help", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.hsql.hsql_help")
+        _implementation = _cott_load("_cott_impl/real/harlequin/hsql/hsql_help.py", "8b39eb770c602c93e5270558e7261596a8ca79336fe793878c9f1fa4e37694b7", "hsql_help", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.hsql.hsql_help")
         _result = _implementation(descriptors, selected, options)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.hsql_help"
         if _error.span is None:
-            _error.span = {"end_byte":8554,"end_column":1,"end_line":238,"start_byte":7809,"start_column":1,"start_line":223}
+            _error.span = {"end_byte":8619,"end_column":1,"end_line":255,"start_byte":7859,"start_column":1,"start_line":236}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.hsql_help", phase="implementation-call", span={"end_byte":8554,"end_column":1,"end_line":238,"start_byte":7809,"start_column":1,"start_line":223}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.hsql_help", phase="implementation-call", span={"end_byte":8619,"end_column":1,"end_line":255,"start_byte":7859,"start_column":1,"start_line":236}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.hsql_help", phase="implementation-call", span={"end_byte":8554,"end_column":1,"end_line":238,"start_byte":7809,"start_column":1,"start_line":223}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.hsql_help", phase="implementation-call", span={"end_byte":8619,"end_column":1,"end_line":255,"start_byte":7859,"start_column":1,"start_line":236}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, str, path="$.return")
     if _cott_test_context:
         if not (_cott_contract_condition((_cott_starts_with(_result, "Usage: hsql [OPTIONS] [CONN_STR]...")), "real.harlequin.hsql.hsql_help", "ensures:1")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.hsql_help", clause="ensures:1", phase="ensures", span={"end_byte":8536,"end_column":73,"end_line":234,"start_byte":8468,"start_column":5,"start_line":234}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.hsql_help", clause="ensures:1", phase="ensures", span={"end_byte":8601,"end_column":73,"end_line":251,"start_byte":8533,"start_column":5,"start_line":251}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -216,12 +216,12 @@ header cells are wrapped in "\\u001b[1m...\\u001b[0m" and NULL cells in
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.layout_text"
         if _error.span is None:
-            _error.span = {"end_byte":10153,"end_column":1,"end_line":264,"start_byte":8554,"start_column":1,"start_line":238}
+            _error.span = {"end_byte":10218,"end_column":1,"end_line":281,"start_byte":8619,"start_column":1,"start_line":255}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.layout_text", phase="implementation-call", span={"end_byte":10153,"end_column":1,"end_line":264,"start_byte":8554,"start_column":1,"start_line":238}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.layout_text", phase="implementation-call", span={"end_byte":10218,"end_column":1,"end_line":281,"start_byte":8619,"start_column":1,"start_line":255}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.layout_text", phase="implementation-call", span={"end_byte":10153,"end_column":1,"end_line":264,"start_byte":8554,"start_column":1,"start_line":238}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.layout_text", phase="implementation-call", span={"end_byte":10218,"end_column":1,"end_line":281,"start_byte":8619,"start_column":1,"start_line":255}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
@@ -239,12 +239,12 @@ and md ".md", csv ".csv", tsv ".tsv", json ".json", jsonl ".jsonl", ndjson
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.format_suffix"
         if _error.span is None:
-            _error.span = {"end_byte":10507,"end_column":1,"end_line":274,"start_byte":10153,"start_column":1,"start_line":264}
+            _error.span = {"end_byte":10572,"end_column":1,"end_line":291,"start_byte":10218,"start_column":1,"start_line":281}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.format_suffix", phase="implementation-call", span={"end_byte":10507,"end_column":1,"end_line":274,"start_byte":10153,"start_column":1,"start_line":264}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.format_suffix", phase="implementation-call", span={"end_byte":10572,"end_column":1,"end_line":291,"start_byte":10218,"start_column":1,"start_line":281}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.format_suffix", phase="implementation-call", span={"end_byte":10507,"end_column":1,"end_line":274,"start_byte":10153,"start_column":1,"start_line":264}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.format_suffix", phase="implementation-call", span={"end_byte":10572,"end_column":1,"end_line":291,"start_byte":10218,"start_column":1,"start_line":281}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
@@ -268,18 +268,18 @@ the whole segment or none of it."."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/hsql/parse_catalog_path.py", "ddec8040f7020b58324b80c90cedc7bdab9b83c6c4fec5bf6ce242a29123c716", "parse_catalog_path", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.hsql.parse_catalog_path")
+        _implementation = _cott_load("_cott_impl/real/harlequin/hsql/parse_catalog_path.py", "fab2a1c4e1e5bea8467f5f152a04d0eda9db88340468dae59e94a362682abd8e", "parse_catalog_path", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.hsql.parse_catalog_path")
         _result = _implementation(path)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.parse_catalog_path"
         if _error.span is None:
-            _error.span = {"end_byte":11598,"end_column":1,"end_line":296,"start_byte":10507,"start_column":1,"start_line":274}
+            _error.span = {"end_byte":11663,"end_column":1,"end_line":313,"start_byte":10572,"start_column":1,"start_line":291}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.parse_catalog_path", phase="implementation-call", span={"end_byte":11598,"end_column":1,"end_line":296,"start_byte":10507,"start_column":1,"start_line":274}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.parse_catalog_path", phase="implementation-call", span={"end_byte":11663,"end_column":1,"end_line":313,"start_byte":10572,"start_column":1,"start_line":291}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.parse_catalog_path", phase="implementation-call", span={"end_byte":11598,"end_column":1,"end_line":296,"start_byte":10507,"start_column":1,"start_line":274}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.parse_catalog_path", phase="implementation-call", span={"end_byte":11663,"end_column":1,"end_line":313,"start_byte":10572,"start_column":1,"start_line":291}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, Result[CatalogPath, HsqlError], path="$.return")
     if _cott_test_context:
         if type(_result) is Err:
@@ -287,7 +287,7 @@ the whole segment or none of it."."""
                 if type(_result.error) is not _expected_error:
                     raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.hsql.parse_catalog_path", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
             elif type(_result.error) not in (HsqlError_Usage,):
-                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.hsql.parse_catalog_path", phase="error", span={"end_byte":11598,"end_column":1,"end_line":296,"start_byte":10507,"start_column":1,"start_line":274}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.hsql.parse_catalog_path", phase="error", span={"end_byte":11663,"end_column":1,"end_line":313,"start_byte":10572,"start_column":1,"start_line":291}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
         elif _expected_error is not None:
             raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.hsql.parse_catalog_path", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
         if _expected_error_clause is not None:
@@ -302,7 +302,7 @@ the whole segment or none of it."."""
             _cott_contract_condition((False), "real.harlequin.hsql.parse_catalog_path", "ensures:1:applicable")
             return True
         if not (_cott_match_ensures_1()):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.parse_catalog_path", clause="ensures:1", phase="ensures", span={"end_byte":11553,"end_column":74,"end_line":290,"start_byte":11484,"start_column":5,"start_line":290}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.parse_catalog_path", clause="ensures:1", phase="ensures", span={"end_byte":11618,"end_column":74,"end_line":307,"start_byte":11549,"start_column":5,"start_line":307}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CatalogPath, HsqlError], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -318,12 +318,12 @@ doubled) when it is empty, has leading or trailing whitespace, or contains
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.spell_catalog_label"
         if _error.span is None:
-            _error.span = {"end_byte":11887,"end_column":1,"end_line":305,"start_byte":11598,"start_column":1,"start_line":296}
+            _error.span = {"end_byte":11952,"end_column":1,"end_line":322,"start_byte":11663,"start_column":1,"start_line":313}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.spell_catalog_label", phase="implementation-call", span={"end_byte":11887,"end_column":1,"end_line":305,"start_byte":11598,"start_column":1,"start_line":296}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.spell_catalog_label", phase="implementation-call", span={"end_byte":11952,"end_column":1,"end_line":322,"start_byte":11663,"start_column":1,"start_line":313}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.spell_catalog_label", phase="implementation-call", span={"end_byte":11887,"end_column":1,"end_line":305,"start_byte":11598,"start_column":1,"start_line":296}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.spell_catalog_label", phase="implementation-call", span={"end_byte":11952,"end_column":1,"end_line":322,"start_byte":11663,"start_column":1,"start_line":313}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
@@ -345,16 +345,16 @@ spell_catalog_label) when any; else " It contains: {first five}" plus
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.missing_label_message"
         if _error.span is None:
-            _error.span = {"end_byte":12523,"end_column":1,"end_line":319,"start_byte":11887,"start_column":1,"start_line":305}
+            _error.span = {"end_byte":12588,"end_column":1,"end_line":336,"start_byte":11952,"start_column":1,"start_line":322}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.missing_label_message", phase="implementation-call", span={"end_byte":12523,"end_column":1,"end_line":319,"start_byte":11887,"start_column":1,"start_line":305}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.missing_label_message", phase="implementation-call", span={"end_byte":12588,"end_column":1,"end_line":336,"start_byte":11952,"start_column":1,"start_line":322}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.missing_label_message", phase="implementation-call", span={"end_byte":12523,"end_column":1,"end_line":319,"start_byte":11887,"start_column":1,"start_line":305}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.missing_label_message", phase="implementation-call", span={"end_byte":12588,"end_column":1,"end_line":336,"start_byte":11952,"start_column":1,"start_line":322}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, str, path="$.return")
     if _cott_test_context:
         if not (_cott_contract_condition((_cott_starts_with(_result, "There is no ")), "real.harlequin.hsql.missing_label_message", "ensures:1")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.missing_label_message", clause="ensures:1", phase="ensures", span={"end_byte":12505,"end_column":50,"end_line":315,"start_byte":12460,"start_column":5,"start_line":315}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.missing_label_message", clause="ensures:1", phase="ensures", span={"end_byte":12570,"end_column":50,"end_line":332,"start_byte":12525,"start_column":5,"start_line":332}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -379,16 +379,16 @@ followed by "\\n"."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.stats_json"
         if _error.span is None:
-            _error.span = {"end_byte":13114,"end_column":1,"end_line":332,"start_byte":12523,"start_column":1,"start_line":319}
+            _error.span = {"end_byte":13214,"end_column":1,"end_line":358,"start_byte":12588,"start_column":1,"start_line":336}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.stats_json", phase="implementation-call", span={"end_byte":13114,"end_column":1,"end_line":332,"start_byte":12523,"start_column":1,"start_line":319}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.stats_json", phase="implementation-call", span={"end_byte":13214,"end_column":1,"end_line":358,"start_byte":12588,"start_column":1,"start_line":336}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.stats_json", phase="implementation-call", span={"end_byte":13114,"end_column":1,"end_line":332,"start_byte":12523,"start_column":1,"start_line":319}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.stats_json", phase="implementation-call", span={"end_byte":13214,"end_column":1,"end_line":358,"start_byte":12588,"start_column":1,"start_line":336}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, str, path="$.return")
     if _cott_test_context:
         if not (_cott_contract_condition((_cott_starts_with(_result, "{\"status\":")), "real.harlequin.hsql.stats_json", "ensures:1")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.stats_json", clause="ensures:1", phase="ensures", span={"end_byte":13096,"end_column":50,"end_line":328,"start_byte":13051,"start_column":5,"start_line":328}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.stats_json", clause="ensures:1", phase="ensures", span={"end_byte":13196,"end_column":50,"end_line":354,"start_byte":13151,"start_column":5,"start_line":354}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -403,16 +403,16 @@ digit, "_" or "-"."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.valid_session_name"
         if _error.span is None:
-            _error.span = {"end_byte":13356,"end_column":1,"end_line":342,"start_byte":13114,"start_column":1,"start_line":332}
+            _error.span = {"end_byte":13456,"end_column":1,"end_line":368,"start_byte":13214,"start_column":1,"start_line":358}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.valid_session_name", phase="implementation-call", span={"end_byte":13356,"end_column":1,"end_line":342,"start_byte":13114,"start_column":1,"start_line":332}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.valid_session_name", phase="implementation-call", span={"end_byte":13456,"end_column":1,"end_line":368,"start_byte":13214,"start_column":1,"start_line":358}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.valid_session_name", phase="implementation-call", span={"end_byte":13356,"end_column":1,"end_line":342,"start_byte":13114,"start_column":1,"start_line":332}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.valid_session_name", phase="implementation-call", span={"end_byte":13456,"end_column":1,"end_line":368,"start_byte":13214,"start_column":1,"start_line":358}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, bool, path="$.return")
     if _cott_test_context:
         if not (_cott_contract_condition((((not _result) or ((len(name) >= 1) and (len(name) <= 64)))), "real.harlequin.hsql.valid_session_name", "ensures:1")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.valid_session_name", clause="ensures:1", phase="ensures", span={"end_byte":13338,"end_column":61,"end_line":338,"start_byte":13282,"start_column":5,"start_line":338}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.valid_session_name", clause="ensures:1", phase="ensures", span={"end_byte":13438,"end_column":61,"end_line":364,"start_byte":13382,"start_column":5,"start_line":364}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, bool, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -430,12 +430,12 @@ XDG_RUNTIME_DIR is set and nonempty in environment, else
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.session_socket_path"
         if _error.span is None:
-            _error.span = {"end_byte":13656,"end_column":1,"end_line":351,"start_byte":13356,"start_column":1,"start_line":342}
+            _error.span = {"end_byte":13756,"end_column":1,"end_line":377,"start_byte":13456,"start_column":1,"start_line":368}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.session_socket_path", phase="implementation-call", span={"end_byte":13656,"end_column":1,"end_line":351,"start_byte":13356,"start_column":1,"start_line":342}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.session_socket_path", phase="implementation-call", span={"end_byte":13756,"end_column":1,"end_line":377,"start_byte":13456,"start_column":1,"start_line":368}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.session_socket_path", phase="implementation-call", span={"end_byte":13656,"end_column":1,"end_line":351,"start_byte":13356,"start_column":1,"start_line":342}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.session_socket_path", phase="implementation-call", span={"end_byte":13756,"end_column":1,"end_line":377,"start_byte":13456,"start_column":1,"start_line":368}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, Path, path="$.return")
     _result = _cott_wrap_async_protocol(_result, Path, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
@@ -486,22 +486,22 @@ with context.secrets."""
     stdin_text = _cott_normalize_f32_abi(stdin_text, Option[str], path="$.stdin_text")
     context = _cott_normalize_f32_abi(context, HsqlContext, path="$.context")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/hsql/execute_hsql_request.py", "bfcedf809b3bc8aed086f3bba56dde057926cacb13aceeb1454bcf923275c25f", "execute_hsql_request", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.hsql.execute_hsql_request")
+        _implementation = _cott_load("_cott_impl/real/harlequin/hsql/execute_hsql_request.py", "58f1e25991c406144d464f16e7fbd487f243e3edfc95980d958b8839a84f3739", "execute_hsql_request", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.hsql.execute_hsql_request")
         _result = _implementation(connection, arguments, cwd, stdin_text, context)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.execute_hsql_request"
         if _error.span is None:
-            _error.span = {"end_byte":16905,"end_column":1,"end_line":398,"start_byte":13656,"start_column":1,"start_line":351}
+            _error.span = {"end_byte":17028,"end_column":1,"end_line":430,"start_byte":13756,"start_column":1,"start_line":377}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.execute_hsql_request", phase="implementation-call", span={"end_byte":16905,"end_column":1,"end_line":398,"start_byte":13656,"start_column":1,"start_line":351}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.execute_hsql_request", phase="implementation-call", span={"end_byte":17028,"end_column":1,"end_line":430,"start_byte":13756,"start_column":1,"start_line":377}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.execute_hsql_request", phase="implementation-call", span={"end_byte":16905,"end_column":1,"end_line":398,"start_byte":13656,"start_column":1,"start_line":351}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.execute_hsql_request", phase="implementation-call", span={"end_byte":17028,"end_column":1,"end_line":430,"start_byte":13756,"start_column":1,"start_line":377}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, HsqlResponse, path="$.return")
     if _cott_test_context:
         if not (_cott_contract_condition((((_result).status >= 0)), "real.harlequin.hsql.execute_hsql_request", "ensures:1")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.execute_hsql_request", clause="ensures:1", phase="ensures", span={"end_byte":16819,"end_column":31,"end_line":394,"start_byte":16793,"start_column":5,"start_line":394}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.execute_hsql_request", clause="ensures:1", phase="ensures", span={"end_byte":16942,"end_column":31,"end_line":426,"start_byte":16916,"start_column":5,"start_line":426}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, HsqlResponse, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -546,18 +546,18 @@ returning 0."""
     arguments = _cott_normalize_f32_abi(arguments, HsqlArguments, path="$.arguments")
     environment = _cott_normalize_f32_abi(environment, FrozenMap[str, str], path="$.environment")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/hsql/serve_hsql_session.py", "f789963ac771655987548cbde7ef090d5ffbbba2b96fb18ea03a4fecc6f951ac", "serve_hsql_session", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.hsql.serve_hsql_session")
+        _implementation = _cott_load("_cott_impl/real/harlequin/hsql/serve_hsql_session.py", "5aff67101f00a420289cd9cf15bb1d7f21a5ac5adc6fd6ac09b6f1f547d90419", "serve_hsql_session", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.hsql.serve_hsql_session")
         _result = _implementation(name, request, context, arguments, environment)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.serve_hsql_session"
         if _error.span is None:
-            _error.span = {"end_byte":19621,"end_column":1,"end_line":438,"start_byte":16905,"start_column":1,"start_line":398}
+            _error.span = {"end_byte":19767,"end_column":1,"end_line":476,"start_byte":17028,"start_column":1,"start_line":430}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.serve_hsql_session", phase="implementation-call", span={"end_byte":19621,"end_column":1,"end_line":438,"start_byte":16905,"start_column":1,"start_line":398}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.serve_hsql_session", phase="implementation-call", span={"end_byte":19767,"end_column":1,"end_line":476,"start_byte":17028,"start_column":1,"start_line":430}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.serve_hsql_session", phase="implementation-call", span={"end_byte":19621,"end_column":1,"end_line":438,"start_byte":16905,"start_column":1,"start_line":398}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.serve_hsql_session", phase="implementation-call", span={"end_byte":19767,"end_column":1,"end_line":476,"start_byte":17028,"start_column":1,"start_line":430}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, I64, path="$.return")
     _result = _cott_wrap_async_protocol(_result, I64, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
@@ -598,18 +598,18 @@ Err(Connection("session '{name}' closed the connection"))."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/hsql/send_session_request.py", "7c3daa27ea1120dece487b40cdaa662ddc6eec533e795e60fb5ed15b054d0b65", "send_session_request", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.hsql.send_session_request")
+        _implementation = _cott_load("_cott_impl/real/harlequin/hsql/send_session_request.py", "0e2647383f2c8fbe339a2683fd5842a1395a9347e8640db53b0f3a0317cd5173", "send_session_request", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.hsql.send_session_request")
         _result = _implementation(name, arguments, cwd, stdin_text, environment, stdout_tty, stderr_tty)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.send_session_request"
         if _error.span is None:
-            _error.span = {"end_byte":21671,"end_column":1,"end_line":472,"start_byte":19621,"start_column":1,"start_line":438}
+            _error.span = {"end_byte":21848,"end_column":1,"end_line":518,"start_byte":19767,"start_column":1,"start_line":476}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.send_session_request", phase="implementation-call", span={"end_byte":21671,"end_column":1,"end_line":472,"start_byte":19621,"start_column":1,"start_line":438}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.hsql.send_session_request", phase="implementation-call", span={"end_byte":21848,"end_column":1,"end_line":518,"start_byte":19767,"start_column":1,"start_line":476}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.send_session_request", phase="implementation-call", span={"end_byte":21671,"end_column":1,"end_line":472,"start_byte":19621,"start_column":1,"start_line":438}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.send_session_request", phase="implementation-call", span={"end_byte":21848,"end_column":1,"end_line":518,"start_byte":19767,"start_column":1,"start_line":476}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, Result[HsqlResponse, HsqlError], path="$.return")
     if _cott_test_context:
         if type(_result) is Err:
@@ -617,7 +617,7 @@ Err(Connection("session '{name}' closed the connection"))."""
                 if type(_result.error) is not _expected_error:
                     raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.hsql.send_session_request", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
             elif type(_result.error) not in (HsqlError_Connection, HsqlError_Interrupted,):
-                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.hsql.send_session_request", phase="error", span={"end_byte":21671,"end_column":1,"end_line":472,"start_byte":19621,"start_column":1,"start_line":438}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.hsql.send_session_request", phase="error", span={"end_byte":21848,"end_column":1,"end_line":518,"start_byte":19767,"start_column":1,"start_line":476}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
         elif _expected_error is not None:
             raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.hsql.send_session_request", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
         if _expected_error_clause is not None:
@@ -634,7 +634,7 @@ Err(Connection("session '{name}' closed the connection"))."""
             _cott_contract_condition((False), "real.harlequin.hsql.send_session_request", "ensures:1:applicable")
             return True
         if not (_cott_match_ensures_1()):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.send_session_request", clause="ensures:1", phase="ensures", span={"end_byte":21571,"end_column":56,"end_line":465,"start_byte":21520,"start_column":5,"start_line":465}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.hsql.send_session_request", clause="ensures:1", phase="ensures", span={"end_byte":21748,"end_column":56,"end_line":511,"start_byte":21697,"start_column":5,"start_line":511}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[HsqlResponse, HsqlError], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -686,18 +686,18 @@ hsql_error_line and exit hsql_exit_status; Ctrl-C exits 130; an
 unexpected exception exits 70."""
     arguments = _cott_normalize_f32_abi(arguments, CottList[str], path="$.arguments")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/hsql/run_hsql.py", "bbca76bf64fcc8a3bf23cc0c2d17f02154866b098188746e836c5ada4ce49d85", "run_hsql", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.hsql.run_hsql")
+        _implementation = _cott_load("_cott_impl/real/harlequin/hsql/run_hsql.py", "395bf37b4c464187ea191e576f7d8dfe37dfeaed22274939296c18420524b9b8", "run_hsql", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.hsql.run_hsql")
         _result = _implementation(arguments)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.hsql.run_hsql"
         if _error.span is None:
-            _error.span = {"end_byte":25133,"end_column":1,"end_line":522,"start_byte":21671,"start_column":1,"start_line":472}
+            _error.span = {"end_byte":25386,"end_column":1,"end_line":578,"start_byte":21848,"start_column":1,"start_line":518}
         raise
     except SystemExit:
         raise
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.run_hsql", phase="implementation-call", span={"end_byte":25133,"end_column":1,"end_line":522,"start_byte":21671,"start_column":1,"start_line":472}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
-    raise CottContractViolation("Never function returned", symbol="real.harlequin.hsql.run_hsql", phase="return", span={"end_byte":25133,"end_column":1,"end_line":522,"start_byte":21671,"start_column":1,"start_line":472}, expected="Never", actual=repr(_result))
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.hsql.run_hsql", phase="implementation-call", span={"end_byte":25386,"end_column":1,"end_line":578,"start_byte":21848,"start_column":1,"start_line":518}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+    raise CottContractViolation("Never function returned", symbol="real.harlequin.hsql.run_hsql", phase="return", span={"end_byte":25386,"end_column":1,"end_line":578,"start_byte":21848,"start_column":1,"start_line":518}, expected="Never", actual=repr(_result))
 
 __all__ = ["CatalogPath", "HSQL_PROTOCOL_VERSION", "HsqlArguments", "HsqlContext", "HsqlError", "HsqlError_Connection", "HsqlError_Crash", "HsqlError_Interrupted", "HsqlError_Query", "HsqlError_Timeout", "HsqlError_Usage", "HsqlMode", "HsqlMode_Catalog", "HsqlMode_CatalogSearch", "HsqlMode_ConfigMode", "HsqlMode_Execute", "HsqlMode_History", "HsqlMode_HistorySearch", "HsqlMode_Info", "HsqlMode_Serve", "HsqlMode_SessionReset", "HsqlMode_SessionStatus", "HsqlMode_Skill", "HsqlMode_Spec", "HsqlResponse", "LayoutOptions", "SqlSource", "SqlSource_Command", "SqlSource_SqlFile", "execute_hsql_request", "format_suffix", "hsql_error_line", "hsql_exit_status", "hsql_help", "layout_text", "missing_label_message", "parse_catalog_path", "parse_hsql_arguments", "run_hsql", "send_session_request", "serve_hsql_session", "session_socket_path", "spell_catalog_label", "stats_json", "valid_session_name"]

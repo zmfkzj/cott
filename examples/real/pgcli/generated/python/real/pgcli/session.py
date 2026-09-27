@@ -418,7 +418,7 @@ session carries the changed settings and executor and last_query = text."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/session/evaluate_pgcli_command.py", "8ce71a8dce1afc9acda7818a672d6e114b277bfeb7250b36623b919ee1c737dc", "evaluate_pgcli_command", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.evaluate_pgcli_command")
+        _implementation = _cott_load("_cott_impl/real/pgcli/session/evaluate_pgcli_command.py", "a5a32939e1431037b5eaac893ad3333177771c8be184f68be18345abf717b150", "evaluate_pgcli_command", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.evaluate_pgcli_command")
         _result = _implementation(session, text, screen)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -550,7 +550,7 @@ query record, refresh and quit."""
     text = _cott_validate_abi(text, str, path="$.text")
     screen = _cott_validate_abi(screen, TerminalSize, path="$.screen")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/session/execute_pgcli_command.py", "d9577e46561f54ebae37fcf7a744815806b3dae9f7828e3810dc7706337fcbe2", "execute_pgcli_command", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.execute_pgcli_command")
+        _implementation = _cott_load("_cott_impl/real/pgcli/session/execute_pgcli_command.py", "a9426074b08db38d1f113e9a7bbed343a7988d2f3c1357927b11e78911857556", "execute_pgcli_command", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.execute_pgcli_command")
         _result = _implementation(session, text, screen)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -585,7 +585,7 @@ the returned session's last_query is the executed query text."""
     text = _cott_validate_abi(text, str, path="$.text")
     screen = _cott_validate_abi(screen, TerminalSize, path="$.screen")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/session/watch_pgcli_command.py", "1feefe3359f1dc33d6a458e9fa61a756ddc89061e95cf642cd8b8ea3599783cc", "watch_pgcli_command", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.watch_pgcli_command")
+        _implementation = _cott_load("_cott_impl/real/pgcli/session/watch_pgcli_command.py", "04d9408d31e9ab35b36f584c796760d18d8de3adbe61d22a9ce8d6fe27dfecff", "watch_pgcli_command", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.watch_pgcli_command")
         _result = _implementation(session, text, screen)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -613,7 +613,7 @@ outcome stops the run with quit = true."""
     text = _cott_validate_abi(text, str, path="$.text")
     screen = _cott_validate_abi(screen, TerminalSize, path="$.screen")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/session/run_script_text.py", "2851af0e79e4b553f797bc2258ee6f3f8dfe832178ed798695d8d6da1d3e9ebf", "run_script_text", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.run_script_text")
+        _implementation = _cott_load("_cott_impl/real/pgcli/session/run_script_text.py", "4c341d557be16615c0c436a49c2699df9aa73431107fa3764a096313c1de3a3a", "run_script_text", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.run_script_text")
         _result = _implementation(session, text, screen)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -643,7 +643,7 @@ The returned session is the latest one."""
     session = _cott_validate_abi(session, Session, path="$.session")
     screen = _cott_validate_abi(screen, TerminalSize, path="$.screen")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/session/confirm_quit_with_transaction.py", "6761e880f28ad91b799f029ca8ff56c6631b4a3dad41d523458ae56637177dfe", "confirm_quit_with_transaction", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.confirm_quit_with_transaction")
+        _implementation = _cott_load("_cott_impl/real/pgcli/session/confirm_quit_with_transaction.py", "5a11aaef0f19acc76e3489efbb65ab2e779221fe592e6a886f4aae5f18f27ac2", "confirm_quit_with_transaction", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.confirm_quit_with_transaction")
         _result = _implementation(session, screen)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -676,7 +676,7 @@ Errors, including a format_output error, are Failed(str(error))."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/session/database_listing.py", "b44a007509e4d852c7d76872b21f1f7bb166af6c9b629a8f8ac8bbf0b779b3ee", "database_listing", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.database_listing")
+        _implementation = _cott_load("_cott_impl/real/pgcli/session/database_listing.py", "ec6509c434b60fddc2f199dcdbf1ec520981475695f95c2471bd248f3a927ea5", "database_listing", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.database_listing")
         _result = _implementation(executor)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -746,7 +746,7 @@ its rows are discarded. The first exception is Failed(str(error)) and stops."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/session/run_init_commands.py", "22686eccba52cb48042285d652f7108aa260cc301e74a9b6e37ad60f4304b97d", "run_init_commands", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.run_init_commands")
+        _implementation = _cott_load("_cott_impl/real/pgcli/session/run_init_commands.py", "dba71802b1c16c1a7f15ef6ed8d082a266318e643ea361ed309acd81fe613bf8", "run_init_commands", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.run_init_commands")
         _result = _implementation(executor, commands)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -803,7 +803,7 @@ REPLACE VIEW {name} AS \\n{stmt}", composed with psycopg.sql
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/session/view_definition_sql.py", "6b5e050890d35565970700f4a96a2ade502c333416a8ad235675a053be73b579", "view_definition_sql", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.view_definition_sql")
+        _implementation = _cott_load("_cott_impl/real/pgcli/session/view_definition_sql.py", "01c675fcfa87eaf112aff8e89b1fee05f1d1414c438c7f036be77025f44327d6", "view_definition_sql", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.view_definition_sql")
         _result = _implementation(executor, spec)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -852,7 +852,7 @@ Failed("Function <spec> does not exist.")."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/session/function_definition_sql.py", "9a976f285a6999c3bfe5f4f0fac52f9a72ee50b07590eeec2edbd53aca65947a", "function_definition_sql", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.function_definition_sql")
+        _implementation = _cott_load("_cott_impl/real/pgcli/session/function_definition_sql.py", "c9de2c11820bdff2a6d1892be4bb46decd02249d5e2a0283a6cc6a4a31d6bb07", "function_definition_sql", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.session.function_definition_sql")
         _result = _implementation(executor, spec)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

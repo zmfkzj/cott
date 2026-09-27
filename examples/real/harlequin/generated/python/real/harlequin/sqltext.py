@@ -174,7 +174,7 @@ unterminated string) is Unformattable(message) with the error's message."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/sqltext/format_sql.py", "955db1ba0c9b7e2dc89331c19b8691b712f79abae8d1560dd5c1a9b4ee98de52", "format_sql", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.sqltext.format_sql")
+        _implementation = _cott_load("_cott_impl/real/harlequin/sqltext/format_sql.py", "410942c4ca80be18c2f3af5d8092e64334ae03b6613382db0ca5195ac21c5dd6", "format_sql", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.sqltext.format_sql")
         _result = _implementation(text)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

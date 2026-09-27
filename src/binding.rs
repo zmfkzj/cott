@@ -236,6 +236,7 @@ struct PythonAudit {
     references: Vec<ImportReference>,
     evidence: Vec<EvidenceViolation>,
     from_imports: BTreeMap<String, BTreeSet<String>>,
+    keyword_labels: Vec<std::ops::Range<usize>>,
 }
 
 /// Parses one authored or materialized Python file and records every static or
@@ -255,6 +256,7 @@ fn inspect_python_source(source: &str) -> Result<PythonAudit, String> {
         references: Vec::new(),
         evidence: Vec::new(),
         from_imports: BTreeMap::new(),
+        keyword_labels: Vec::new(),
     };
     for statement in suite {
         visitor.visit_statement(&statement);
@@ -276,10 +278,14 @@ fn inspect_python_source(source: &str) -> Result<PythonAudit, String> {
         ))
     });
     visitor.evidence.dedup();
+    visitor
+        .keyword_labels
+        .sort_unstable_by_key(|range| range.start);
     Ok(PythonAudit {
         references: visitor.references,
         evidence: visitor.evidence,
         from_imports: visitor.from_imports,
+        keyword_labels: visitor.keyword_labels,
     })
 }
 
@@ -390,9 +396,18 @@ struct PythonImportVisitor<'a> {
     references: Vec<ImportReference>,
     evidence: Vec<EvidenceViolation>,
     from_imports: BTreeMap<String, BTreeSet<String>>,
+    keyword_labels: Vec<std::ops::Range<usize>>,
 }
 
 impl PythonImportVisitor<'_> {
+    fn visit_keyword(&mut self, keyword: &ast::Keyword) {
+        if let Some(name) = &keyword.arg {
+            let start = usize::from(keyword.range.start());
+            self.keyword_labels.push(start..start + name.as_str().len());
+        }
+        self.visit_expression(&keyword.value);
+    }
+
     fn push_literal(&mut self, range: ast::text_size::TextRange, form: ImportForm, target: &str) {
         self.references.push(ImportReference {
             range: target_range(self.source, range, target),
@@ -625,7 +640,7 @@ impl PythonImportVisitor<'_> {
                     .for_each(|base| self.visit_expression(base));
                 node.keywords
                     .iter()
-                    .for_each(|keyword| self.visit_expression(&keyword.value));
+                    .for_each(|keyword| self.visit_keyword(keyword));
                 node.decorator_list
                     .iter()
                     .for_each(|decorator| self.visit_expression(decorator));
@@ -778,7 +793,7 @@ impl PythonImportVisitor<'_> {
                     .for_each(|value| self.visit_expression(value));
                 node.keywords
                     .iter()
-                    .for_each(|keyword| self.visit_expression(&keyword.value));
+                    .for_each(|keyword| self.visit_keyword(keyword));
             }
             ast::Expr::BoolOp(node) => node
                 .values
@@ -2343,25 +2358,25 @@ fn validate_source(
     factory_imports: &BTreeMap<String, BTreeSet<String>>,
     locked_imports: &LockedImports,
 ) -> Result<(), String> {
-    let masked = mask_python(source);
     let mut errors = Vec::new();
     let mut add_error = |message: String| {
         if !errors.contains(&message) {
             errors.push(message);
         }
     };
-    let from_imports = match inspect_python_source(source) {
+    let (from_imports, keyword_labels) = match inspect_python_source(source) {
         Ok(audit) => {
             for violation in audit.evidence {
                 add_error(violation.message);
             }
-            audit.from_imports
+            (audit.from_imports, audit.keyword_labels)
         }
         Err(message) => {
             add_error(message);
-            BTreeMap::new()
+            (BTreeMap::new(), Vec::new())
         }
     };
+    let masked = mask_python(source, &keyword_labels);
 
     if !source.ends_with('\n') || source.ends_with("\n\n") {
         add_error("binding must end in exactly one newline".to_owned());
@@ -5164,7 +5179,7 @@ fn identifier_tokens(source: &str) -> Vec<String> {
     tokens
 }
 
-fn mask_python(source: &str) -> String {
+fn mask_python(source: &str, keyword_labels: &[std::ops::Range<usize>]) -> String {
     let input: Vec<char> = source.chars().collect();
     let mut output = input.clone();
     let mut index = 0;
@@ -5235,6 +5250,17 @@ fn mask_python(source: &str) -> String {
         }
         output[index] = ' ';
         index += 1;
+    }
+    // Keyword labels are syntax, not references to identically named builtins.
+    // Their values remain visible to the token audit, including aliases and calls.
+    let mut labels = keyword_labels.iter().peekable();
+    for (index, (byte, _)) in source.char_indices().enumerate() {
+        while labels.peek().is_some_and(|range| range.end <= byte) {
+            labels.next();
+        }
+        if labels.peek().is_some_and(|range| range.contains(&byte)) {
+            output[index] = ' ';
+        }
     }
     output.into_iter().collect()
 }

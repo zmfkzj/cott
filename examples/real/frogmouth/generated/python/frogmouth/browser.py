@@ -114,7 +114,7 @@ Except where stated above, the address is Nothing, and Idle keeps session."""
     request = _cott_validate_abi(request, NavigationRequest, path="$.request")
     context = _cott_validate_abi(context, BrowserContext, path="$.context")
     try:
-        _implementation = _cott_load("_cott_impl/frogmouth/browser/navigate.py", "cfd8b1c8d66a1009cdc5d96824877725585e6681cd69410f9b90e541de251575", "navigate", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.browser.navigate")
+        _implementation = _cott_load("_cott_impl/frogmouth/browser/navigate.py", "561dfa2d8e99773753e0c26e1d04d493485198399c9cc6da9fc35d5c00047d0b", "navigate", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.browser.navigate")
         _result = _implementation(session, request, context)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

@@ -30,7 +30,7 @@ from prompt_toolkit.shortcuts import CompleteStyle
 from prompt_toolkit.styles import BaseStyle, Style, merge_styles, style_from_pygments_cls
 from pygments.style import Style as PygmentsStyle
 
-from real.pgcli.completion import catalog_with_search_path, clear_prevalence_names, complete_sql_text, prevalence_from, refresh_completion_metadata, update_prevalence
+from real.pgcli.completion import catalog_with_search_path, clear_prevalence_names, complete_sql_text, empty_completion_catalog, prevalence_from, refresh_completion_metadata, update_prevalence
 from real.pgcli.completion_types import CompletionCatalog, CompletionRequest, PrevalenceHandle, SpecialCommandInfo
 from real.pgcli.connection import close_executor, copy_executor, executor_transaction_status, read_search_path, short_host_name, transaction_indicator
 from real.pgcli.connection_types import Executor, TransactionStatus_Active, TransactionStatus_InError, TransactionStatus_InTransaction
@@ -122,7 +122,7 @@ def _prevalence(cells: list[list[object]]) -> PrevalenceHandle:
 
 
 def _store_session(cells: list[list[object]], session: Session) -> None:
-    _put(cells, _SESSION, dataclasses.replace(session, catalog=_catalog(cells)))
+    _put(cells, _SESSION, dataclasses.replace(session, catalog=_catalog(cells), settings=dataclasses.replace(session.settings, completion_refreshing=bool(_get(cells, _REFRESHING)))))
 
 
 def _set_mode(cells: list[list[object]], name: str, value: bool) -> None:
@@ -162,17 +162,18 @@ def _refresh_once(cells: list[list[object]], settings: ReplSettings) -> None:
         executor = copied.value
     try:
         result = refresh_completion_metadata(executor, settings.refresh)
+        if not isinstance(result, Ok):
+            return
+        with _lock(cells):
+            prevalence = _prevalence(cells)
+            history = cast(FileHistory, _get(cells, _HISTORY))
+            for text in list(history.get_strings())[-100:]:
+                prevalence = update_prevalence(prevalence, text, True)
+            _put(cells, _PREVALENCE, prevalence)
     finally:
         if not settings.single_connection:
             close_executor(executor)
-    if not isinstance(result, Ok):
-        return
     with _lock(cells):
-        prevalence = _prevalence(cells)
-        history = cast(FileHistory, _get(cells, _HISTORY))
-        for text in list(history.get_strings())[-100:]:
-            prevalence = update_prevalence(prevalence, text, True)
-        _put(cells, _PREVALENCE, prevalence)
         _put(cells, _CATALOG, result.value)
         _store_session(cells, _session(cells))
     _invalidate(cells)
@@ -190,6 +191,8 @@ def _refresh_worker(cells: list[list[object]], settings: ReplSettings) -> None:
         with lock:
             if not _get(cells, _PENDING):
                 _put(cells, _REFRESHING, False)
+                session = _session(cells)
+                _put(cells, _SESSION, dataclasses.replace(session, settings=dataclasses.replace(session.settings, completion_refreshing=False)))
                 break
     _invalidate(cells)
 
@@ -200,13 +203,16 @@ def _start_refresh(cells: list[list[object]], settings: ReplSettings, reset: boo
     with _lock(cells):
         if reset:
             _put(cells, _PREVALENCE, clear_prevalence_names(_prevalence(cells)))
+            _put(cells, _CATALOG, empty_completion_catalog())
+            _store_session(cells, _session(cells))
         _put(cells, _PENDING, True)
         if _get(cells, _REFRESHING):
             return
         _put(cells, _REFRESHING, True)
+        session = _session(cells)
+        _put(cells, _SESSION, dataclasses.replace(session, settings=dataclasses.replace(session.settings, completion_refreshing=True)))
     worker: Callable[[], None] = lambda: _refresh_worker(cells, settings)
-    thread = threading.Thread(target=worker, name="completion_refresh", daemon=True)
-    thread.start()
+    threading.Thread(target=worker, name="completion_refresh", daemon=True).start()
 
 
 def _complete(cells: list[list[object]], settings: ReplSettings, document: Document, complete_event: CompleteEvent) -> Iterable[Completion]:
@@ -438,8 +444,7 @@ def run_pgcli_repl(session: Session, settings: ReplSettings) -> Session:
     ]
     _start_refresh(cells, settings, False)
     getter: Callable[[Document, CompleteEvent], Iterable[Completion]] = lambda document, complete_event: _complete(cells, settings, document, complete_event)
-    inner = types.SimpleNamespace(get_completions=getter)
-    completer = ThreadedCompleter(cast(Completer, inner))
+    completer = ThreadedCompleter(cast(Completer, types.SimpleNamespace(get_completions=getter)))
     kb = KeyBindings()
     h_f2: Callable[[KeyPressEvent], None] = lambda event: _on_f2(cells)
     h_f3: Callable[[KeyPressEvent], None] = lambda event: _on_f3(cells)

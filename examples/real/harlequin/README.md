@@ -33,8 +33,8 @@ local databases. Remote adapters, external SQL services, clipboard and SSH
 integrations have not been exercised. Neither class of external test becomes
 scenario evidence.
 
-The verified snapshot records 117 observed contract clauses, 81 trusted
-declarations, 0 unknown and 5 unobserved clauses. `cott requirements` reports
+The verified snapshot records 143 observed contract clauses, 59 trusted
+declarations, 0 unknown and 1 unobserved clause. `cott requirements` reports
 `CONNECT_RETAINS_A_LIVE_SESSION` as unverified because it has no `checked_by`
 linkage. The external retained-session regression exercises that behavior but
 does not turn it into Cott requirement evidence.
@@ -43,19 +43,28 @@ The strict coverage policy selects 88 clauses across 43 callables, including
 connection/query/result handling, transaction and cancellation errors, retained
 session requests, history persistence, exports, file failures and core CLI/IDE
 transformations. No `unobserved`, `trust_declaration` or `unknown` is allowed.
-The latest `emit python` succeeded; `verify` rejected the policy with 42
-violations (38 trust declarations and 4 unobserved conditional errors).
-Artifact certification was published, but the failed policy blocks deployment.
+Sol regeneration and actual `verify` resolved 24 of the previous 42 policy
+violations. The remaining 18 are trust declarations: 16 require a database
+fixture backend and two require a private Unix-socket peer and interruption
+control for `send_session_request`. The verifier certified the artifact snapshot
+but exited nonzero on those strict-policy violations; deployment remains blocked.
 External SQLite/DuckDB regressions do not replace the missing Cott observations.
 The current compiler can also classify contract `proved` evidence as `observed`;
 neither that status nor policy selection establishes execution of every branch.
+
+The export facade scenario now writes every fetched row through the real SDK.
+DuckDB export connections use `threads=1`: the default host-sized worker pool
+aborted under the runner's process/thread limit. The bounded connection passed
+the same sandbox constraints; no resource ceiling or coverage rule was relaxed.
+Generated callbacks use explicit `Callable` annotations to satisfy the pinned
+type checker without suppressions.
 
 ## Run
 
 ```sh
 project=examples/real/harlequin
 UV_PROJECT_ENVIRONMENT="$(pwd)/$project/.venv" uv sync --locked --project "$project/python"
-cott generate --agent omp --target python -j 4 --project "$project"
+cott generate --agent omp --model openai-codex/gpt-6-sol --target python -j 4 --project "$project"
 cott verify --project "$project"
 PYTHONPATH="$project/generated/python:$project/python" \
   "$project/.venv/bin/python" "$project/python/hsql_cli.py" \

@@ -1,9 +1,8 @@
-import contextlib
 import os
 import pathlib
 import tempfile
 
-from cott_runtime import U64, CottContractViolation, Err, Ok, Result, _cott_fixture_replace
+from cott_runtime import CottContractViolation, Err, Ok, Result, U64, _cott_fixture_replace
 from real.harlequin.files_types import FileError, FileError_Failed, FileError_IsADirectory, FileError_PermissionDenied
 
 
@@ -12,14 +11,14 @@ def _map_os_error(path: pathlib.Path, error: OSError) -> Err[FileError]:
         return Err(error=FileError_IsADirectory(path=path))
     if isinstance(error, PermissionError):
         return Err(error=FileError_PermissionDenied(path=path))
-    message = error.strerror if error.strerror else str(error)
-    return Err(error=FileError_Failed(path=path, message=message))
+    return Err(error=FileError_Failed(path=path, message=error.strerror or str(error)))
 
 
-def _remove_temp(temp_name: str | None) -> None:
-    if temp_name is not None:
-        with contextlib.suppress(OSError):
-            os.unlink(temp_name)
+def _discard_temp(name: str) -> None:
+    try:
+        os.unlink(name)
+    except OSError:
+        return
 
 
 def _save_host(path: pathlib.Path, data: bytes) -> Result[U64, FileError]:
@@ -29,8 +28,8 @@ def _save_host(path: pathlib.Path, data: bytes) -> Result[U64, FileError]:
             return Err(error=FileError_IsADirectory(path=path))
         parent = path.parent
         parent.mkdir(parents=True, exist_ok=True)
-        fd, temp_name = tempfile.mkstemp(".tmp", "." + path.name + ".", str(parent))
-        with os.fdopen(fd, "wb") as handle:
+        with tempfile.NamedTemporaryFile(mode="wb", prefix=".harlequin-", suffix=".tmp", dir=parent, delete=False) as handle:
+            temp_name = handle.name
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
@@ -38,13 +37,19 @@ def _save_host(path: pathlib.Path, data: bytes) -> Result[U64, FileError]:
         temp_name = None
     except OSError as error:
         return _map_os_error(path, error)
+    except ValueError as error:
+        return Err(error=FileError_Failed(path=path, message=str(error)))
     finally:
-        _remove_temp(temp_name)
+        if temp_name is not None:
+            _discard_temp(temp_name)
     return Ok(value=len(data))
 
 
 def save_text_file(path: pathlib.Path, text: str) -> Result[U64, FileError]:
-    data = text.encode("utf-8")
+    try:
+        data = text.encode("utf-8")
+    except UnicodeError as error:
+        return Err(error=FileError_Failed(path=path, message=str(error)))
     try:
         _cott_fixture_replace(path, data)
     except CottContractViolation as violation:

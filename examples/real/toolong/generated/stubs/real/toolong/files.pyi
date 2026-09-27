@@ -96,8 +96,8 @@ def scan_timestamps(source: LogSource, position: U64, first_line: U64, limit: U6
 
 """Toolong's advance_search while the find dialog is shown. Examine lines
 start, start + 1, ..., line_count - 1 when direction is positive, or start,
-start - 1, ..., 0 when it is not (no lines when start is negative or, going
-forward, not below line_count). For each line, locate it with
+start - 1, ..., 0 when it is not. In either direction, examine no lines
+when start is negative or start >= line_count. For each line, locate it with
 real.toolong.index.line_location, read its raw bytes with
 real.toolong.files.read_span from sources[location.file] (an empty string
 when that file is missing), decode them as UTF-8 with errors="replace"

@@ -362,6 +362,7 @@ scenario workflow for app.run:
       file "payload.bin" hex("00ff")
     http service:
       route "/ok"->response(status:200,body:bytes("ok"),encoding:"utf-8")
+      route "/typed"->response(status:200,body:text("# ok"),encoding:"utf-8",content_type:"text/markdown; charset=\"utf-8\"; q=1 ")
       route "/next"->redirect(status:302,location:"/ok")
       route "/slow"->delay(ms:25)
       route "/broken"->disconnect()
@@ -398,6 +399,7 @@ scenario workflow for app.run:
             file "payload.bin" hex("00ff")
         http service:
             route "/ok" -> response(status: 200, body: bytes("ok"), encoding: "utf-8")
+            route "/typed" -> response(status: 200, body: text("# ok"), encoding: "utf-8", content_type: "text/markdown; charset=\"utf-8\"; q=1 ")
             route "/next" -> redirect(status: 302, location: "/ok")
             route "/slow" -> delay(ms: 25)
             route "/broken" -> disconnect()

@@ -1174,6 +1174,7 @@ scenario complete for app.run:
             file "wire.bin" hex("00ff")
         http service:
             route "/ok" -> response(status: 200, body: text("ok"), encoding: "utf-8")
+            route "/typed" -> response(status: 200, body: text("# ok"), encoding: "utf-8", content_type: "text/markdown; charset=\"utf-8\"")
             route "/next" -> redirect(status: 302, location: "/ok")
             route "/slow" -> delay(ms: 25)
             route "/broken" -> disconnect()
@@ -1229,11 +1230,15 @@ scenario complete for app.run:
         cott::ast::ScenarioFixtureConfig::Http { routes, .. }
             if matches!(routes.iter().map(|route| &route.outcome).collect::<Vec<_>>().as_slice(),
                 [
-                    cott::ast::ScenarioHttpOutcome::Response { .. },
+                    cott::ast::ScenarioHttpOutcome::Response { content_type: None, .. },
+                    cott::ast::ScenarioHttpOutcome::Response {
+                        content_type: Some(content_type),
+                        ..
+                    },
                     cott::ast::ScenarioHttpOutcome::Redirect { .. },
                     cott::ast::ScenarioHttpOutcome::Delay { .. },
                     cott::ast::ScenarioHttpOutcome::Disconnect { .. },
-                ])
+                ] if content_type == "text/markdown; charset=\"utf-8\"")
     ));
     assert!(matches!(
         &scenario.fixtures[2].config,
@@ -1321,6 +1326,56 @@ fn rejects_closed_struct_and_scenario_escape_hatches_with_stable_spans() {
         ),
     ] {
         assert_syntax_error_at(source, message, token);
+    }
+
+    let content_type_route = |outcome: &str| {
+        format!(
+            "module bad\nscenario unsafe:\n    fixtures:\n        http service:\n            route \"/typed\" -> {outcome}\n    tick\n"
+        )
+    };
+    for literal in [
+        r#""""#,
+        r#"" text/plain""#,
+        r#""text/plain\n""#,
+        r#""text/plain\r\nSet-Cookie: session=stolen""#,
+        r#""\ntext/plain""#,
+        r#""text/\tplain""#,
+        r#""text/plain\u0000""#,
+        r#""text/plain\u007f""#,
+        r#""text/pl\u00e9in""#,
+    ] {
+        let source = content_type_route(&format!(
+            "response(status: 200, body: text(\"ok\"), encoding: \"utf-8\", content_type: {literal})"
+        ));
+        assert_syntax_error_at(
+            &source,
+            "content_type must be a nonempty printable ASCII header",
+            literal,
+        );
+    }
+    for (outcome, message, token) in [
+        (
+            "redirect(status: 302, location: \"/ok\", content_type: \"text/plain\")",
+            "expected `)` after redirect",
+            ", content_type",
+        ),
+        (
+            "delay(ms: 25, content_type: \"text/plain\")",
+            "expected `)` after delay",
+            ", content_type",
+        ),
+        (
+            "disconnect(content_type: \"text/plain\")",
+            "expected `)` after disconnect",
+            "content_type",
+        ),
+        (
+            "response(status: 200, body: text(\"ok\"), encoding: \"utf-8\", location: \"/ok\")",
+            "expected `content_type` fixture field",
+            "location",
+        ),
+    ] {
+        assert_syntax_error_at(&content_type_route(outcome), message, token);
     }
 }
 

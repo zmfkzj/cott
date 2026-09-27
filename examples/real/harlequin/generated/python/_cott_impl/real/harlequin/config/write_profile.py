@@ -1,23 +1,22 @@
 from collections.abc import MutableMapping
 from pathlib import Path
-from typing import Final, cast
+from typing import cast
+import os
+import tempfile
 
 import tomlkit
 from tomlkit.exceptions import TOMLKitError
-from cott_runtime import CottContractViolation, Err, Ok, Option, Result, Some, _cott_fixture_read, _cott_fixture_write
+
+from cott_runtime import CottContractViolation, Err, Ok, Option, Result, Some, _cott_fixture_read, _cott_fixture_replace
 from real.harlequin.config_types import ConfigError, ConfigError_Invalid, ConfigValue, ConfigValue_Array, ConfigValue_Boolean, ConfigValue_Integer, ConfigValue_Real, ConfigValue_Text, Profile
 
-_LOAD_TITLE: Final[str] = "Harlequin could not load the config file."
-_CREATE_TITLE: Final[str] = "Harlequin could not create your configuration."
-_INACTIVE: Final[str] = "fixture adapters are inactive"
+
+def _create_error(message: str) -> Err[ConfigError]:
+    return Err(error=ConfigError_Invalid(title="Harlequin could not create your configuration.", message=message))
 
 
-def _create_error(message: str) -> Result[Path, ConfigError]:
-    return Err(error=ConfigError_Invalid(title=_CREATE_TITLE, message=message))
-
-
-def _load_error(path: Path, error: Exception) -> Result[Path, ConfigError]:
-    return Err(error=ConfigError_Invalid(title=_LOAD_TITLE, message=f"Attempted to load the config file at {path}, but encountered an error:\n\n{error}"))
+def _load_error(path: Path, error: Exception) -> Err[ConfigError]:
+    return Err(error=ConfigError_Invalid(title="Harlequin could not load the config file.", message=f"Attempted to load the config file at {path}, but encountered an error:\n\n{error}"))
 
 
 def _violation_text(error: CottContractViolation) -> str:
@@ -31,9 +30,9 @@ def _plain(value: ConfigValue) -> object:
     if isinstance(value, ConfigValue_Text):
         return value.value
     if isinstance(value, ConfigValue_Integer):
-        return int(value.value)
+        return value.value
     if isinstance(value, ConfigValue_Real):
-        return float(value.value)
+        return value.value
     if isinstance(value, ConfigValue_Boolean):
         return value.value
     if isinstance(value, ConfigValue_Array):
@@ -53,33 +52,40 @@ def _child(parent: MutableMapping[str, object], key: str, super_table: bool) -> 
     return cast(MutableMapping[str, object], created)
 
 
+def _remove_temporary(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        return
+
+
 def write_profile(path: Path, profile: Profile, default_profile: Option[str]) -> Result[Path, ConfigError]:
     fixture = True
-    text: str | None = None
     try:
-        text = _cott_fixture_read(path).decode("utf-8")
+        raw: bytes | None = _cott_fixture_read(path)
     except CottContractViolation as error:
-        if error.message == _INACTIVE:
+        if error.message == "fixture adapters are inactive":
             fixture = False
+            try:
+                raw = path.read_bytes()
+            except FileNotFoundError:
+                raw = None
+            except OSError as read_error:
+                return _create_error(str(read_error))
         elif isinstance(error.__cause__, FileNotFoundError):
-            text = None
+            raw = None
         else:
             return _create_error(_violation_text(error))
+    except FileNotFoundError:
+        raw = None
     except OSError as error:
         return _create_error(str(error))
-    except UnicodeDecodeError as error:
-        return _load_error(path, error)
-    if not fixture:
-        try:
-            text = path.read_text(encoding="utf-8") if path.exists() else None
-        except OSError as error:
-            return _create_error(str(error))
-        except UnicodeDecodeError as error:
-            return _load_error(path, error)
+
     try:
-        document = tomlkit.parse(text) if text is not None else tomlkit.document()
-    except TOMLKitError as error:
+        document = tomlkit.parse(raw.decode("utf-8")) if raw is not None else tomlkit.document()
+    except (TOMLKitError, UnicodeDecodeError) as error:
         return _load_error(path, error)
+
     root = cast(MutableMapping[str, object], document)
     target = root
     if path.name == "pyproject.toml":
@@ -96,17 +102,28 @@ def write_profile(path: Path, profile: Profile, default_profile: Option[str]) ->
         del profiles[profile.name]
     profiles[profile.name] = table
     data = tomlkit.dumps(document).encode("utf-8")
+
     if fixture:
         try:
-            _cott_fixture_write(path, data)
+            _cott_fixture_replace(path, data)
         except CottContractViolation as error:
             return _create_error(_violation_text(error))
         except OSError as error:
             return _create_error(str(error))
         return Ok(value=path)
+
+    temporary: str | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
+            temporary = stream.name
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
     except OSError as error:
         return _create_error(str(error))
+    finally:
+        if temporary is not None:
+            _remove_temporary(temporary)
     return Ok(value=path)

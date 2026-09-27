@@ -41,46 +41,38 @@ def _close_tunnel(state: dict[str, object]) -> None:
             print(str(error), file=sys.stderr)
 
 
-def _run(state: dict[str, object]) -> int:
-    app_raw = state.get("app")
-    if not isinstance(app_raw, Application):
-        raise TypeError("The IDE session has no prompt_toolkit Application.")
-    app = cast(Application[object], app_raw)
-    result = app.run()
-    status = 0
-    if isinstance(result, int) and not isinstance(result, bool):
-        status = result
-    for raw_hook in _hooks(state, "on_exit"):
-        try:
-            cast(Callable[[], None], raw_hook)()
-        except Exception as error:
-            print(str(error), file=sys.stderr)
-    return status
-
-
 def run_ide_app(session: IdeSession) -> I64:
-    handle = session.handle
-    if handle.tag != _TAG:
-        print(_CRASH, file=sys.stderr)
-        print(_MALFORMED, file=sys.stderr)
-        return 1
-    raw = handle.unwrap()
-    if not isinstance(raw, dict):
-        print(_CRASH, file=sys.stderr)
-        print(_MALFORMED, file=sys.stderr)
-        return 1
-    state = cast(dict[str, object], raw)
+    state: dict[str, object] = {}
     try:
-        status = _run(state)
-    except Exception as error:
+        handle = session.handle
+        if handle.tag != _TAG:
+            raise TypeError(_MALFORMED)
+        raw = handle.unwrap()
+        if not isinstance(raw, dict):
+            raise TypeError(_MALFORMED)
+        state = cast(dict[str, object], raw)
+        app_raw = state.get("app")
+        if not isinstance(app_raw, Application):
+            raise TypeError("The IDE session has no prompt_toolkit Application.")
+        app = cast(Application[object], app_raw)
+        result = app.run()
+        if not isinstance(result, int) or isinstance(result, bool):
+            raise TypeError("The IDE application did not return an exit status.")
+        for raw_hook in _hooks(state, "on_exit"):
+            try:
+                cast(Callable[[], None], raw_hook)()
+            except BaseException as error:
+                print(str(error), file=sys.stderr)
+        return result
+    except BaseException as error:
         _restore_terminal()
         for raw_hook in _hooks(state, "on_crash"):
             try:
                 cast(Callable[[], None], raw_hook)()
-            except Exception as hook_error:
+            except BaseException as hook_error:
                 print(str(hook_error), file=sys.stderr)
         print(_CRASH, file=sys.stderr)
         print(str(error), file=sys.stderr)
-        status = 1
-    _close_tunnel(state)
-    return status
+        return 1
+    finally:
+        _close_tunnel(state)

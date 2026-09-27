@@ -1,16 +1,11 @@
 import datetime
 import pathlib
 import tomllib
-from typing import Final, cast
+from typing import cast
 
 from cott_runtime import CottContractViolation, CottList, Err, Nothing, Ok, Option, Result, Some, _cott_fixture_read
 from real.harlequin.config_types import ConfigEntry, ConfigError, ConfigError_Invalid, ConfigFile, ConfigValue, ConfigValue_Array, ConfigValue_Boolean, ConfigValue_Integer, ConfigValue_Real, ConfigValue_Table, ConfigValue_Text, Profile
 from real.harlequin.keymap_types import KeyBinding, KeyMap
-
-_TITLE: Final[str] = "Harlequin couldn't load your config file."
-_LOAD_TITLE: Final[str] = "Harlequin could not load the config file."
-_KEYMAP_TITLE: Final[str] = "Harlequin could not load your keymap."
-_INACTIVE: Final[str] = "fixture adapters are inactive"
 
 
 def _fail(title: str, message: str) -> Result[Option[ConfigFile], ConfigError]:
@@ -18,8 +13,6 @@ def _fail(title: str, message: str) -> Result[Option[ConfigFile], ConfigError]:
 
 
 def _type_name(value: object) -> str:
-    if value is None:
-        return "nothing"
     if isinstance(value, dict):
         return "table"
     if isinstance(value, str):
@@ -36,11 +29,13 @@ def _type_name(value: object) -> str:
         return "datetime"
     if isinstance(value, datetime.date):
         return "date"
-    return "time"
+    if isinstance(value, datetime.time):
+        return "time"
+    return "nothing"
 
 
 def _type_error(expected: str, value: object, key: str, path: str) -> Result[Option[ConfigFile], ConfigError]:
-    return _fail(_TITLE, f"Expected `{expected}`, got `{_type_name(value)}` at {key}.\nFound in the config file at {path}.")
+    return _fail("Harlequin couldn't load your config file.", f"Expected `{expected}`, got `{_type_name(value)}` at {key}.\nFound in the config file at {path}.")
 
 
 def _convert(value: object) -> ConfigValue:
@@ -63,29 +58,28 @@ def _convert(value: object) -> ConfigValue:
 
 
 def _entries(table: dict[str, object]) -> CottList[ConfigEntry]:
-    return CottList(values=[ConfigEntry(key=key, value=_convert(item)) for key, item in table.items()])
+    return CottList(values=[ConfigEntry(key=key, value=_convert(value)) for key, value in table.items()])
 
 
 def _read_bytes(path: pathlib.Path) -> Option[bytes]:
     try:
         return Some(value=_cott_fixture_read(path))
     except CottContractViolation as violation:
-        cause = violation.__cause__
-        if cause is None:
-            if violation.message != _INACTIVE:
-                raise
-        elif isinstance(cause, FileNotFoundError):
-            return Nothing()
-        elif isinstance(cause, OSError):
-            return Some(value=b"")
-        else:
+        if violation.message != "fixture adapters are inactive":
+            cause = violation.__cause__
+            if isinstance(cause, FileNotFoundError):
+                return Nothing()
+            if isinstance(cause, OSError):
+                return Some(value=b"")
             raise
+    except FileNotFoundError:
+        return Nothing()
     except OSError:
         return Some(value=b"")
-    if not path.exists():
-        return Nothing()
     try:
         return Some(value=path.read_bytes())
+    except FileNotFoundError:
+        return Nothing()
     except OSError:
         return Some(value=b"")
 
@@ -98,7 +92,7 @@ def read_config_file(path: pathlib.Path) -> Result[Option[ConfigFile], ConfigErr
     try:
         document = cast(dict[str, object], tomllib.loads(raw.value.decode("utf-8")))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
-        return _fail(_LOAD_TITLE, f"Attempted to load the config file at {text_path}, but encountered an error:\n\n{error}")
+        return _fail("Harlequin could not load the config file.", f"Attempted to load the config file at {text_path}, but encountered an error:\n\n{error}")
     config: dict[str, object] = document
     if path.name == "pyproject.toml":
         tool = document.get("tool")
@@ -106,7 +100,7 @@ def read_config_file(path: pathlib.Path) -> Result[Option[ConfigFile], ConfigErr
         config = cast(dict[str, object], section) if isinstance(section, dict) else {}
     for key in config:
         if key not in ("default_profile", "profiles", "keymaps"):
-            return _fail(_TITLE, f"Found unexpected key in config: {key}\nFound in the config file at {text_path}.")
+            return _fail("Harlequin couldn't load your config file.", f"Found unexpected key in config: {key}\nFound in the config file at {text_path}.")
     default: Option[str] = Nothing()
     if "default_profile" in config:
         value = config["default_profile"]
@@ -122,7 +116,7 @@ def read_config_file(path: pathlib.Path) -> Result[Option[ConfigFile], ConfigErr
             if not isinstance(body, dict):
                 return _type_error("table", body, f"profiles.{name}", text_path)
             if name == "None":
-                return _fail(_TITLE, f"Config file defines a profile named 'None', which is not allowed\nFound in the config file at {text_path}.")
+                return _fail("Harlequin couldn't load your config file.", f"Config file defines a profile named 'None', which is not allowed\nFound in the config file at {text_path}.")
             profiles.append(Profile(name=name, entries=_entries(cast(dict[str, object], body))))
     keymaps: list[KeyMap] = []
     if "keymaps" in config:
@@ -140,7 +134,7 @@ def read_config_file(path: pathlib.Path) -> Result[Option[ConfigFile], ConfigErr
                 fields = cast(dict[str, object], binding)
                 for prop in fields:
                     if prop not in ("keys", "action", "key_display"):
-                        return _fail(_KEYMAP_TITLE, f"Key bindings must be defined in config files with only three properties: `keys`, `action`, and `key_profile`. Got a binding in the map named {map_name} that tried to define a property: '{prop}'")
+                        return _fail("Harlequin could not load your keymap.", f"Key bindings must be defined in config files with only three properties: `keys`, `action`, and `key_profile`. Got a binding in the map named {map_name} that tried to define a property: '{prop}'")
                 keys = fields.get("keys")
                 action = fields.get("action")
                 if not isinstance(keys, str):

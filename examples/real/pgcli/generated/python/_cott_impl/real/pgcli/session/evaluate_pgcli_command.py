@@ -3,7 +3,7 @@ import os
 import pathlib
 import re
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any, Final, cast
 
 import click
@@ -13,8 +13,9 @@ import pgspecial.namedqueries
 import psycopg
 import psycopg.errors
 import sqlparse
-from cott_runtime import CottList, Err, Nothing, Ok, Opaque, Result, Some
+from pgspecial.main import CommandNotFound
 
+from cott_runtime import CottList, Err, Nothing, Ok, Opaque, Result, Some
 from real.pgcli.connection import executor_transaction_status, reconnect_executor
 from real.pgcli.connection_types import ConnectError_Failed, Executor, ReconnectRequest, TransactionStatus_Active, TransactionStatus_InTransaction
 from real.pgcli.output import format_output, table_format_names
@@ -23,408 +24,412 @@ from real.pgcli.parseutils import is_destructive
 from real.pgcli.session import change_db_arguments, classify_statement, confirm_destructive_query, should_limit_rows
 from real.pgcli.session_types import EvaluateError, EvaluateError_ConnectionLost, EvaluateError_Failed, EvaluateError_Interrupted, EvaluateError_NotImplemented, Evaluation, QueryOutcome, RefreshKind, RefreshKind_All, RefreshKind_Nothing, RefreshKind_Reset, RefreshKind_SearchPath, Session, SessionSettings, TerminalSize
 
-_OWN: Final[str] = "\\nq|\\ne|\\c|\\connect|use|USE|\\q|:q|quit|exit|\\#|\\refresh|\\i|\\o|\\log-file|\\conninfo|\\T|\\echo|\\qecho|\\v"
 _EXPLAIN: Final[str] = "EXPLAIN (ANALYZE, COSTS, VERBOSE, BUFFERS, FORMAT JSON) "
 
 
-def _conn(st: dict[str, Any]) -> psycopg.Connection[tuple[object, ...]]:
-    executor = cast(Executor, st["executor"])
+def _connection(state: dict[str, object]) -> psycopg.Connection[tuple[object, ...]]:
+    executor = cast(Executor, state["executor"])
     return cast(psycopg.Connection[tuple[object, ...]], executor.connection.unwrap())
 
 
-def _settings(st: dict[str, Any]) -> SessionSettings:
-    return cast(SessionSettings, st["settings"])
+def _settings(state: dict[str, object]) -> SessionSettings:
+    return cast(SessionSettings, state["settings"])
 
 
-def _set(st: dict[str, Any], changes: dict[str, Any]) -> None:
-    st["settings"] = dataclasses.replace(_settings(st), **changes)
+def _replace_settings(state: dict[str, object], changes: dict[str, object]) -> None:
+    state["settings"] = dataclasses.replace(_settings(state), **changes)
 
 
-def _split(text: str) -> list[str]:
-    sp: Any = sqlparse
-    text = text.strip()
-    if not text:
+def _split_statements(text: str) -> list[str]:
+    remaining = text.strip()
+    if not remaining:
         return []
     comments: list[str] = []
     while True:
-        m = re.match(r"^(/\*.*?\*/|--.*?)(?:\n|$)", text, re.DOTALL)
-        if m is None:
+        match = re.match(r"^(/\*.*?\*/|--.*?)(?:\n|$)", remaining, re.DOTALL)
+        if match is None:
             break
-        comments.append(m.group(0))
-        text = text[m.end():].lstrip()
-    raw: Any = sp.split(text)
-    pieces: list[str] = comments + [str(cast(object, p)) for p in raw]
-    out: list[str] = []
+        comments.append(match.group(0))
+        remaining = remaining[match.end():].lstrip()
+    raw_pieces = cast(object, sqlparse.split(remaining))
+    if not isinstance(raw_pieces, list):
+        raise TypeError("invalid statement list")
+    pieces = [str(piece) for piece in cast(list[object], raw_pieces)]
+    if comments:
+        if pieces:
+            pieces[0] = "".join(comments) + pieces[0]
+        else:
+            pieces = ["".join(comments)]
+    statements: list[str] = []
     for piece in pieces:
-        formatted: object = sp.format(piece, strip_comments=True)
-        s = str(formatted).strip().rstrip(";").strip()
-        if s:
-            out.append(s)
-    return out
+        sql = str(cast(object, sqlparse.format(piece, strip_comments=True))).strip().rstrip(";").strip()
+        if sql:
+            statements.append(sql)
+    return statements
 
 
-def _make(title: object, rows: object, headers: object, status: object, sql: str, success: bool, is_special: bool) -> dict[str, Any]:
-    types: list[str] = []
-    rowcount = -1
-    data: list[tuple[object, ...]] | None = None
-    source: psycopg.Cursor[tuple[object, ...]] | None = None
-    header_list: list[str] = []
-    if headers is not None:
-        hs: Any = headers
-        header_list = [str(cast(object, h)) for h in hs]
-    if isinstance(rows, psycopg.Cursor):
-        cur = cast(psycopg.Cursor[tuple[object, ...]], rows)
-        if cur.description is not None:
-            rowcount = cur.rowcount
-            for d in cur.description:
-                info = cur.adapters.types.get(d.type_code)
-                types.append(info.name if info is not None else "")
-            source = cur
-    elif rows is not None:
-        rs: Any = rows
-        data = []
-        for r in rs:
-            row: Any = r
-            data.append(tuple(cast(list[object], list(row))))
-        types = ["" for _ in header_list]
-    return {
-        "title": None if title is None else str(title),
-        "rows": data,
-        "headers": header_list,
-        "status": None if status is None else str(status),
-        "sql": sql,
-        "success": success,
-        "special": is_special,
-        "rowcount": rowcount,
-        "types": types,
-        "db_error": False,
-        "cursor": source,
-    }
+def _make_result(title: str | None, rows: object, headers: list[str], status: str | None, sql: str, successful: bool, special: bool, db_error: bool) -> dict[str, object]:
+    return {"title": title, "rows": rows, "headers": headers, "status": status, "sql": sql, "successful": successful, "special": special, "db_error": db_error}
 
 
-def _msg(message: str, sql: str, success: bool) -> dict[str, Any]:
-    return _make(None, None, None, message, sql, success, True)
+def _message(message: str, sql: str, successful: bool) -> dict[str, object]:
+    return _make_result(None, None, [], message, sql, successful, True, False)
 
 
-def _resolve(special: Any, command: str) -> str | None:
-    cmds: Any = special.commands
-    if command in cmds:
+def _optional_text(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
+def _headers(value: object) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, Iterable):
+        raise TypeError("headers are not iterable")
+    return [str(item) for item in cast(Iterable[object], value)]
+
+
+def _plain_rows(value: object) -> list[tuple[object, ...]]:
+    if not isinstance(value, Iterable):
+        raise TypeError("rows are not iterable")
+    rows: list[tuple[object, ...]] = []
+    for row in cast(Iterable[object], value):
+        if isinstance(row, tuple):
+            rows.append(cast(tuple[object, ...], row))
+        elif isinstance(row, Iterable):
+            rows.append(tuple(cast(Iterable[object], row)))
+        else:
+            raise TypeError("row is not iterable")
+    return rows
+
+
+def _resolve_command(special: Any, command: str) -> str | None:
+    raw = cast(object, special.commands)
+    if not isinstance(raw, dict):
+        raise TypeError("invalid special command registry")
+    commands = cast(dict[object, object], raw)
+    if command in commands:
         return command
-    low = command.lower()
-    if low in cmds:
-        entry: Any = cmds[low]
-        flag: object = entry.case_sensitive
-        if not bool(flag):
-            return low
-        return None
-    if command in _OWN.split("|"):
-        return command
+    lower = command.lower()
+    if lower in commands:
+        entry: Any = commands[lower]
+        if not bool(cast(object, entry.case_sensitive)):
+            return lower
     return None
 
 
-def _reconnect(st: dict[str, Any], request: ReconnectRequest) -> str | None:
-    result = reconnect_executor(cast(Executor, st["executor"]), request)
+def _reconnect(state: dict[str, object], request: ReconnectRequest) -> str | None:
+    result = reconnect_executor(cast(Executor, state["executor"]), request)
     if isinstance(result, Err):
         error = result.error
         return error.message if isinstance(error, ConnectError_Failed) else str(error)
-    st["executor"] = result.value
+    state["executor"] = result.value
     return None
 
 
-def _own(st: dict[str, Any], key: str, pattern: str, sql: str) -> Iterator[dict[str, Any]]:
-    settings = _settings(st)
-    executor = cast(Executor, st["executor"])
+def _own_command(state: dict[str, object], key: str, pattern: str, sql: str) -> Iterator[dict[str, object]]:
+    settings = _settings(state)
+    executor = cast(Executor, state["executor"])
     arg = pattern.strip()
     if key == "\\nq":
-        value = not settings.hide_named_query_text
-        _set(st, {"hide_named_query_text": value})
-        yield _msg("Named query quiet mode: " + ("ON" if value else "OFF"), sql, True)
+        quiet = not settings.hide_named_query_text
+        _replace_settings(state, {"hide_named_query_text": quiet})
+        yield _message("Named query quiet mode: " + ("ON" if quiet else "OFF"), sql, True)
     elif key == "\\ne":
         if not arg:
-            yield _msg("Usage: \\ne <name>", sql, True)
+            yield _message("Usage: \\ne <name>", sql, True)
             return
-        nq: Any = pgspecial.namedqueries.NamedQueries.instance
-        existing: object = nq.get(arg)
-        current = existing if isinstance(existing, str) else ""
+        named: Any = cast(Any, pgspecial.namedqueries.NamedQueries.instance)
+        existing = cast(object, named.get(arg))
         editor = os.environ.get("PSQL_EDITOR") or os.environ.get("EDITOR") or os.environ.get("VISUAL") or None
-        io: Any = pgspecial.iocommands
-        edited: Any = io.open_external_editor(sql=current, editor=editor)
-        query: object = edited[0]
-        message: object = edited[1]
+        edited = cast(object, pgspecial.iocommands.open_external_editor(sql=existing if isinstance(existing, str) else "", editor=editor))
+        if not isinstance(edited, tuple):
+            raise TypeError("editor did not return a query and message")
+        edit_parts = cast(tuple[object, ...], edited)
+        query, message = edit_parts[0], edit_parts[1]
         if message:
-            yield _msg(str(message), sql, True)
-        new = str(query).strip() if query is not None else ""
-        if not new:
-            yield _msg(arg + ": empty query, not saved.", sql, True)
-        elif isinstance(existing, str) and new == existing:
-            yield _msg(arg + ": no changes.", sql, True)
+            yield _message(str(message), sql, True)
+        new_query = str(query).strip() if query is not None else ""
+        if not new_query:
+            yield _message(arg + ": empty query, not saved.", sql, True)
+        elif isinstance(existing, str) and new_query == existing:
+            yield _message(arg + ": no changes.", sql, True)
         else:
-            nq.save(arg, new)
-            yield _msg(arg + (": Saved" if isinstance(existing, str) else ": Created"), sql, True)
+            named.save(arg, new_query)
+            yield _message(arg + (": Saved" if isinstance(existing, str) else ": Created"), sql, True)
     elif key in ("\\c", "\\connect", "use", "USE"):
         if arg:
-            args = [a for a in change_db_arguments(pattern)]
-            request = ReconnectRequest(database=args[0], user=args[1], host=args[2], port=args[3])
+            arguments = list(change_db_arguments(pattern))
+            request = ReconnectRequest(database=arguments[0], user=arguments[1], host=arguments[2], port=arguments[3])
         else:
             request = ReconnectRequest(database="", user="", host="", port="")
-        error = _reconnect(st, request)
-        if error is not None:
-            click.secho(error, err=True, fg="red")
+        failure = _reconnect(state, request)
+        if failure is not None:
+            click.secho(failure, err=True, fg="red")
             click.echo("Previous connection kept")
-        executor = cast(Executor, st["executor"])
-        yield _msg('You are now connected to database "' + executor.dbname + '" as user "' + executor.user + '"', sql, True)
+        executor = cast(Executor, state["executor"])
+        yield _message('You are now connected to database "' + executor.dbname + '" as user "' + executor.user + '"', sql, True)
     elif key in ("\\q", ":q", "quit", "exit"):
-        st["quit"] = True
+        state["quit"] = True
     elif key in ("\\#", "\\refresh"):
         if executor.virtual_database:
-            yield _msg("Auto-completion refresh can't be started.", sql, True)
+            yield _message("Auto-completion refresh can't be started.", sql, True)
         else:
-            st["refresh_all"] = True
-            if settings.completion_refreshing:
-                yield _msg("Auto-completion refresh restarted.", sql, True)
-            else:
-                yield _msg("Auto-completion refresh started in the background.", sql, True)
+            state["refresh_all"] = True
+            yield _message("Auto-completion refresh restarted." if settings.completion_refreshing else "Auto-completion refresh started in the background.", sql, True)
     elif key == "\\i":
         if not arg:
-            yield _msg("\\i: missing required argument", sql, False)
+            yield _message("\\i: missing required argument", sql, False)
             return
         try:
             with open(os.path.expanduser(arg), encoding="utf-8") as handle:
                 contents = handle.read()
         except OSError as error:
-            yield _msg(str(error), sql, False)
+            yield _message(str(error), sql, False)
             return
-        warning = settings.destructive_warning
-        if len([w for w in warning]) > 0:
+        if len(settings.destructive_warning) > 0:
             status = executor_transaction_status(executor)
             valid = isinstance(status, (TransactionStatus_Active, TransactionStatus_InTransaction))
-            if settings.destructive_statements_require_transaction and not valid and is_destructive(contents, warning):
-                yield _msg("Destructive statements must be run within a transaction. Command execution stopped.", sql, True)
+            if settings.destructive_statements_require_transaction and not valid and is_destructive(contents, settings.destructive_warning):
+                yield _message("Destructive statements must be run within a transaction. Command execution stopped.", sql, True)
                 return
-            answer = confirm_destructive_query(contents, warning, settings.dsn_alias, settings.force_destructive)
+            answer = confirm_destructive_query(contents, settings.destructive_warning, settings.dsn_alias, settings.force_destructive)
             if isinstance(answer, Some) and not answer.value:
-                yield _msg("Wise choice. Command execution stopped.", sql, True)
+                yield _message("Wise choice. Command execution stopped.", sql, True)
                 return
-        yield from _run(st, contents, True)
+        yield from _run_statements(state, contents)
     elif key == "\\o":
         if not arg:
-            _set(st, {"output_file": Nothing()})
-            yield _msg("File output disabled", sql, True)
+            _replace_settings(state, {"output_file": Nothing()})
+            yield _message("File output disabled", sql, True)
             return
         path = os.path.abspath(os.path.expanduser(arg))
         if not os.path.isfile(path):
             try:
                 open(path, "w", encoding="utf-8").close()
             except OSError as error:
-                _set(st, {"output_file": Nothing()})
-                yield _msg(str(error) + "\nFile output disabled", sql, False)
+                _replace_settings(state, {"output_file": Nothing()})
+                yield _message(str(error) + "\nFile output disabled", sql, False)
                 return
-        _set(st, {"output_file": Some(value=path)})
-        yield _msg('Writing to file "' + path + '"', sql, True)
+        _replace_settings(state, {"output_file": Some(value=path)})
+        yield _message('Writing to file "' + path + '"', sql, True)
     elif key == "\\log-file":
         if not arg:
-            _set(st, {"log_file": Nothing()})
-            yield _msg("Logfile capture disabled", sql, True)
+            _replace_settings(state, {"log_file": Nothing()})
+            yield _message("Logfile capture disabled", sql, True)
             return
-        log_path = pathlib.Path(arg).expanduser().absolute()
+        path = pathlib.Path(arg).expanduser().absolute()
         try:
-            open(log_path, "a+", encoding="utf-8").close()
+            open(path, "a+", encoding="utf-8").close()
         except OSError as error:
-            _set(st, {"log_file": Nothing()})
-            yield _msg(str(error) + "\nLogfile capture disabled", sql, False)
+            _replace_settings(state, {"log_file": Nothing()})
+            yield _message(str(error) + "\nLogfile capture disabled", sql, False)
             return
-        _set(st, {"log_file": Some(value=str(log_path))})
-        yield _msg('Writing to file "' + str(log_path) + '"', sql, True)
+        _replace_settings(state, {"log_file": Some(value=str(path))})
+        yield _message('Writing to file "' + str(path) + '"', sql, True)
     elif key == "\\conninfo":
         where = ('socket "' if executor.host.startswith("/") else 'host "') + executor.host + '"'
-        yield _msg('You are connected to database "' + executor.dbname + '" as user "' + executor.user + '" on ' + where + ' at port "' + executor.port + '".', sql, True)
+        yield _message('You are connected to database "' + executor.dbname + '" as user "' + executor.user + '" on ' + where + ' at port "' + executor.port + '".', sql, True)
     elif key == "\\T":
-        names = [n for n in table_format_names()]
+        names = table_format_names()
         if arg in names:
-            _set(st, {"table_format": arg})
-            yield _msg("Changed table format to " + arg, sql, True)
+            _replace_settings(state, {"table_format": arg})
+            yield _message("Changed table format to " + arg, sql, True)
         else:
-            text = "Table format " + arg + " not recognized. Allowed formats:"
-            for name in names:
-                text += "\n\t" + name
-            text += "\nCurrently set to: " + settings.table_format
-            yield _msg(text, sql, True)
+            yield _message("Table format " + arg + " not recognized. Allowed formats:" + "".join("\n\t" + name for name in names) + "\nCurrently set to: " + settings.table_format, sql, True)
     elif key in ("\\echo", "\\qecho"):
-        yield _msg(pattern, sql, True)
+        yield _message(pattern, sql, True)
     else:
-        if arg == "on":
-            verbose = True
-        elif arg == "off":
-            verbose = False
-        else:
-            verbose = not settings.verbose_errors
-        _set(st, {"verbose_errors": verbose})
-        yield _msg("Verbose errors on." if verbose else "off.", sql, True)
+        verbose = True if arg == "on" else False if arg == "off" else not settings.verbose_errors
+        _replace_settings(state, {"verbose_errors": verbose})
+        yield _message("Verbose errors on." if verbose else "off.", sql, True)
 
 
-def _notice(title: list[str], diag: psycopg.errors.Diagnostic) -> None:
-    title[0] += "\n" + str(diag.message_primary)
-    if diag.message_detail:
-        title[0] += "\n" + diag.message_detail
+def _notice(title: list[str], diagnostic: psycopg.errors.Diagnostic) -> None:
+    title[0] += "\n" + str(diagnostic.message_primary)
+    if diagnostic.message_detail:
+        title[0] += "\n" + diagnostic.message_detail
 
 
-def _statement(st: dict[str, Any], sql: str) -> Iterator[dict[str, Any]]:
-    special: Any = st["special"]
-    main: Any = pgspecial.main
-    parsed: Any = main.parse_special_command(sql)
-    command = str(cast(object, parsed[0]))
-    pattern = str(cast(object, parsed[2]))
-    key = _resolve(special, command)
-    if key is not None and key in _OWN.split("|"):
-        yield from _own(st, key, pattern, sql)
+def _database_error_text(state: dict[str, object], error: psycopg.DatabaseError) -> str:
+    message = str(error)
+    if not _settings(state).verbose_errors:
+        return message
+    diagnostic = error.diag
+    fields: list[tuple[str, object]] = [
+        ("Severity", diagnostic.severity),
+        ("Severity (non-localized)", diagnostic.severity_nonlocalized),
+        ("SQLSTATE code", diagnostic.sqlstate),
+        ("Message", diagnostic.message_primary),
+        ("Detail", diagnostic.message_detail),
+        ("Hint", diagnostic.message_hint),
+        ("Position", diagnostic.statement_position),
+        ("Internal position", diagnostic.internal_position),
+        ("Internal query", diagnostic.internal_query),
+        ("Where", diagnostic.context),
+        ("Schema name", diagnostic.schema_name),
+        ("Table name", diagnostic.table_name),
+        ("Column name", diagnostic.column_name),
+        ("Data type name", diagnostic.datatype_name),
+        ("Constraint name", diagnostic.constraint_name),
+        ("File", diagnostic.source_file),
+        ("Line", diagnostic.source_line),
+        ("Routine", diagnostic.source_function),
+    ]
+    return message + "\n" + "\n".join(label + ": " + str(value) for label, value in fields if value is not None)
+
+
+def _execute_statement(state: dict[str, object], sql: str) -> Iterator[dict[str, object]]:
+    special: Any = state["special"]
+    parsed = cast(object, pgspecial.main.parse_special_command(sql))
+    if not isinstance(parsed, tuple):
+        raise TypeError("invalid special command")
+    parts = cast(tuple[object, ...], parsed)
+    command = str(parts[0])
+    pattern = str(parts[2])
+    key = _resolve_command(special, command)
+    if key in ("\\nq", "\\ne", "\\c", "\\connect", "use", "USE", "\\q", ":q", "quit", "exit", "\\#", "\\refresh", "\\i", "\\o", "\\log-file", "\\conninfo", "\\T", "\\echo", "\\qecho", "\\v"):
+        yield from _own_command(state, cast(str, key), pattern, sql)
         return
     if key == "\\do":
-        st["not_impl"] = True
+        state["not_implemented"] = True
         return
-    conn = _conn(st)
-    executor = cast(Executor, st["executor"])
-    not_found: Any = main.CommandNotFound
-    special_results: list[dict[str, Any]] | None
+    connection = _connection(state)
+    executor = cast(Executor, state["executor"])
     try:
         try:
-            cur: object = conn.cursor()
+            special_cursor: object = connection.cursor()
         except Exception:
-            cur = None
-        results: Any = special.execute(cur, sql)
-        special_results = []
-        for item in results:
-            entry: Any = item
-            special_results.append(_make(cast(object, entry[0]), cast(object, entry[1]), cast(object, entry[2]), cast(object, entry[3]), sql, True, True))
+            special_cursor = None
+        raw_results = cast(object, special.execute(special_cursor, sql))
+        if not isinstance(raw_results, Iterable):
+            raise TypeError("invalid special results")
+        for raw in cast(Iterable[object], raw_results):
+            if not isinstance(raw, tuple):
+                raise TypeError("invalid special result")
+            title, rows, headers, status = cast(tuple[object, ...], raw)
+            yield _make_result(_optional_text(title), rows, _headers(headers), _optional_text(status), sql, True, True, False)
+    except CommandNotFound:
+        query = _EXPLAIN + sql if _settings(state).explain_mode else sql
     except psycopg.errors.ProtocolViolation as error:
         if not executor.virtual_database:
             raise
-        yield _msg(str(error), sql, False)
-        _reconnect(st, ReconnectRequest(database="", user="", host="", port=""))
+        _reconnect(state, ReconnectRequest(database="", user="", host="", port=""))
+        yield _message(str(error), sql, False)
         return
-    except Exception as error:
-        if not isinstance(error, not_found):
-            raise
-        special_results = None
-    if special_results is not None:
-        yield from special_results
+    else:
         return
-    query = (_EXPLAIN + sql) if _settings(st).explain_mode else sql
     if executor.virtual_database and "show help" in sql.lower():
-        res = conn.pgconn.exec_(query.encode("utf-8"))
-        cs = res.command_status
-        yield _make("", None, None, cs.decode() if cs is not None else None, sql, True, False)
+        pgresult = connection.pgconn.exec_(query.encode("utf-8"))
+        command_status = cast(object, pgresult.command_status)
+        status_text = command_status.decode() if isinstance(command_status, bytes) else None
+        yield _make_result("", None, [], status_text, sql, True, False, False)
         return
-    title = [""]
-    handler: Callable[[psycopg.errors.Diagnostic], None] = lambda diag: _notice(title, diag)
-    conn.add_notice_handler(handler)
+    title_cell = cast(list[str], state["notice_title"])
+    title_cell[0] = ""
+    handler: Callable[[psycopg.errors.Diagnostic], None] = lambda diagnostic: _notice(title_cell, diagnostic)
+    connection.add_notice_handler(handler)
     try:
-        cursor = conn.cursor()
+        cursor = connection.cursor()
         cursor.execute(query.encode("utf-8"))
     finally:
-        conn.remove_notice_handler(handler)
-    if cursor.description is not None:
-        names = [d.name for d in cursor.description]
-        yield _make(title[0], cursor, names, cursor.statusmessage, sql, True, False)
+        connection.remove_notice_handler(handler)
+    description = cursor.description
+    if description is not None:
+        yield _make_result(title_cell[0], cursor, [column.name for column in description], cursor.statusmessage, sql, True, False, False)
     else:
-        yield _make(title[0], None, None, cursor.statusmessage, sql, True, False)
+        yield _make_result(title_cell[0], None, [], cursor.statusmessage, sql, True, False, False)
 
 
-def _error_text(st: dict[str, Any], error: psycopg.DatabaseError) -> str:
-    text = str(error)
-    if not _settings(st).verbose_errors:
-        return text
-    d = error.diag
-    fields: list[tuple[str, object]] = [
-        ("Severity", d.severity), ("Severity (non-localized)", d.severity_nonlocalized), ("SQLSTATE code", d.sqlstate),
-        ("Message", d.message_primary), ("Detail", d.message_detail), ("Hint", d.message_hint),
-        ("Position", d.statement_position), ("Internal position", d.internal_position), ("Internal query", d.internal_query),
-        ("Where", d.context), ("Schema name", d.schema_name), ("Table name", d.table_name), ("Column name", d.column_name),
-        ("Data type name", d.datatype_name), ("Constraint name", d.constraint_name), ("File", d.source_file),
-        ("Line", d.source_line), ("Routine", d.source_function),
-    ]
-    lines = [label + ": " + str(value) for label, value in fields if value is not None]
-    return text + "\n" + "\n".join(lines)
-
-
-def _one(st: dict[str, Any], sql: str) -> Iterator[dict[str, Any]]:
-    special: Any = st["special"]
+def _one_statement(state: dict[str, object], statement: str) -> Iterator[dict[str, object]]:
+    special: Any = state["special"]
     restore = False
+    sql = statement
     if sql.endswith("\\G"):
-        expanded: object = special.expanded_output
-        if not bool(expanded):
+        if not bool(cast(object, special.expanded_output)):
             special.expanded_output = True
             restore = True
         sql = sql[:-2].strip()
     try:
-        yield from _statement(st, sql)
+        yield from _execute_statement(state, sql)
     except psycopg.DatabaseError as error:
-        if _conn(st).closed != 0:
+        if _connection(state).closed != 0:
             raise
-        res = _make(None, None, None, click.style(_error_text(st, error), fg="red"), sql, False, False)
-        res["db_error"] = True
-        yield res
+        yield _make_result(None, None, [], click.style(_database_error_text(state, error), fg="red"), sql, False, False, True)
     finally:
         if restore:
             special.expanded_output = False
 
 
-def _run(st: dict[str, Any], text: str, resume: bool) -> Iterator[dict[str, Any]]:
-    resume = resume or _settings(st).on_error == "RESUME"
-    for sql in _split(text):
-        if st["quit"] or st["not_impl"]:
+def _run_statements(state: dict[str, object], text: str) -> Iterator[dict[str, object]]:
+    for sql in _split_statements(text):
+        if state["quit"] or state["not_implemented"]:
             return
-        stop = False
-        for res in _one(st, sql):
-            yield res
-            if res["db_error"]:
-                stop = True
-        if stop and not resume:
+        failed_database = False
+        for result in _one_statement(state, sql):
+            yield result
+            if result["db_error"]:
+                failed_database = True
+        if failed_database and _settings(state).on_error != "RESUME":
             return
-
-
-def _results(st: dict[str, Any], text: str) -> Iterator[dict[str, Any]]:
-    if text.strip() == "":
-        yield _make(None, None, None, None, "", False, False)
-        return
-    yield from _run(st, text, False)
 
 
 def evaluate_pgcli_command(session: Session, text: str, screen: TerminalSize) -> Result[Evaluation, EvaluateError]:
     start = time.time()
-    special: Any = session.special.unwrap()
-    st: dict[str, Any] = {"settings": session.settings, "executor": session.executor, "special": special, "quit": False, "not_impl": False, "refresh_all": False}
-    texts: list[str] = []
-    items = 0
+    special: Any = cast(Any, session.special.unwrap())
+    state: dict[str, object] = {"settings": session.settings, "executor": session.executor, "special": special, "notice_title": [""], "quit": False, "not_implemented": False, "refresh_all": False}
+    output: list[str] = []
+    item_count = 0
     successful = True
-    mutated = meta = db = path = False
+    mutated = False
+    meta_changed = False
+    db_changed = False
+    path_changed = False
     is_special = False
-    execution = 0.0
-    total = 0.0
+    execution_time = 0.0
+    total_time = 0.0
     stripped = text.strip()
-    named = stripped.startswith("\\n ") and not stripped.startswith("\\ns ") and not stripped.startswith("\\nd ")
+    named_query = stripped.startswith("\\n ") and not stripped.startswith(("\\ns ", "\\nd "))
     try:
-        for res in _results(st, text):
-            execution = time.time() - start
-            settings = _settings(st)
-            rows = cast(list[tuple[object, ...]] | None, res["rows"])
-            status = cast(str | None, res["status"])
-            title = cast(str | None, res["title"])
-            rowcount = cast(int, res["rowcount"])
-            sql = cast(str, res["sql"])
-            source = cast(psycopg.Cursor[tuple[object, ...]] | None, res["cursor"])
-            if source is not None and rowcount >= 0 and should_limit_rows(sql, rowcount, settings.row_limit, settings.explain_mode):
-                limit = min(settings.row_limit, rowcount)
-                rows = [tuple(r) for r in source.fetchmany(limit)]
-                status = "SELECT " + str(limit)
-                rowcount = -1
-                click.secho("The result was limited to " + str(limit) + " rows", fg="red")
-            elif source is not None:
-                rows = [tuple(r) for r in source.fetchall()]
-            if settings.hide_named_query_text and named and res["success"] and res["special"] and title is not None and title.startswith("> "):
+        if stripped:
+            results = _run_statements(state, text)
+        else:
+            results = iter([_make_result(None, None, [], None, "", False, False, False)])
+        for result in results:
+            execution_time = time.time() - start
+            settings = _settings(state)
+            title = cast(str | None, result["title"])
+            status = cast(str | None, result["status"])
+            sql = cast(str, result["sql"])
+            headers = cast(list[str], result["headers"])
+            raw_rows = result["rows"]
+            rows: list[tuple[object, ...]] | None = None
+            rowcount = -1
+            type_names: list[str] = []
+            if isinstance(raw_rows, psycopg.Cursor):
+                cursor = cast(psycopg.Cursor[tuple[object, ...]], raw_rows)
+                rowcount = cursor.rowcount
+                if cursor.description is not None:
+                    for column in cursor.description:
+                        info = cursor.adapters.types.get(column.type_code)
+                        type_names.append(info.name if info is not None else "")
+                else:
+                    type_names = ["" for _ in headers]
+                if rowcount >= 0 and should_limit_rows(sql, rowcount, settings.row_limit, settings.explain_mode):
+                    limit = min(settings.row_limit, rowcount)
+                    rows = cursor.fetchmany(limit)
+                    status = "SELECT " + str(limit)
+                    rowcount = -1
+                    click.secho("The result was limited to " + str(limit) + " rows", fg="red")
+                else:
+                    rows = cursor.fetchall()
+            elif raw_rows is not None:
+                rows = _plain_rows(raw_rows)
+                type_names = ["" for _ in headers]
+            if settings.hide_named_query_text and named_query and result["successful"] and result["special"] and title is not None and title.startswith("> "):
                 title = None
-            result_set = Nothing() if rows is None else Some(value=ResultSet(columns=CottList(values=cast(list[str], res["headers"])), type_names=CottList(values=cast(list[str], res["types"])), rows=Opaque(tag="pgcli.result-rows", value=list(rows)), rowcount=rowcount))
-            sp_expanded: object = special.expanded_output
-            sp_auto: object = special.auto_expand
+            result_set = Nothing() if rows is None else Some(value=ResultSet(columns=CottList(values=headers), type_names=CottList(values=type_names), rows=Opaque(tag="pgcli.result-rows", value=rows), rowcount=rowcount))
+            expanded = bool(cast(object, special.expanded_output)) or settings.expanded_output
+            auto_expand = bool(cast(object, special.auto_expand)) or settings.auto_expand
             output_settings = OutputSettings(
                 table_format=settings.table_format,
                 column_date_formats=settings.column_date_formats,
@@ -432,8 +437,8 @@ def evaluate_pgcli_command(session: Session, text: str, screen: TerminalSize) ->
                 decimal_format=settings.decimal_format,
                 float_format=settings.float_format,
                 missing_value=settings.null_string,
-                expanded=bool(sp_expanded) or settings.expanded_output,
-                max_width=Some(value=screen.columns) if bool(sp_auto) or settings.auto_expand else Nothing(),
+                expanded=expanded,
+                max_width=Some(value=screen.columns) if auto_expand else Nothing(),
                 header_casing=Some(value=session.catalog) if settings.case_column_headers else Nothing(),
                 style=settings.output_style,
                 tuples_only=settings.tuples_only,
@@ -441,40 +446,39 @@ def evaluate_pgcli_command(session: Session, text: str, screen: TerminalSize) ->
             )
             formatted = format_output(Nothing() if title is None else Some(value=title), result_set, Nothing() if status is None else Some(value=status), output_settings, settings.explain_mode)
             if isinstance(formatted, Err):
-                return Err(error=EvaluateError_Failed(message=formatted.error.message))
-            out = formatted.value
-            if out.items > 0:
-                texts.append(out.text)
-                items += out.items
-            total = time.time() - start
-            if res["success"]:
+                return Err[EvaluateError](error=EvaluateError_Failed(message=formatted.error.message))
+            if formatted.value.items:
+                output.append(formatted.value.text)
+                item_count += formatted.value.items
+            total_time = time.time() - start
+            if result["successful"]:
                 changes = classify_statement(sql, status or "")
                 mutated = mutated or changes.mutated
-                meta = meta or changes.meta_changed
-                db = db or changes.db_changed
-                path = path or changes.path_changed
+                meta_changed = meta_changed or changes.meta_changed
+                db_changed = db_changed or changes.db_changed
+                path_changed = path_changed or changes.path_changed
             else:
                 successful = False
-            is_special = bool(res["special"])
+            is_special = bool(result["special"])
     except KeyboardInterrupt:
-        return Err(error=EvaluateError_Interrupted())
+        return Err[EvaluateError](error=EvaluateError_Interrupted())
     except psycopg.OperationalError as error:
-        if _conn(st).closed == 0:
-            return Err(error=EvaluateError_Failed(message=str(error)))
-        return Err(error=EvaluateError_ConnectionLost(message=str(error)))
+        if _connection(state).closed != 0:
+            return Err[EvaluateError](error=EvaluateError_ConnectionLost(message=str(error)))
+        return Err[EvaluateError](error=EvaluateError_Failed(message=str(error)))
     except Exception as error:
-        return Err(error=EvaluateError_Failed(message=str(error)))
-    if st["not_impl"]:
-        return Err(error=EvaluateError_NotImplemented())
+        return Err[EvaluateError](error=EvaluateError_Failed(message=str(error)))
+    if state["not_implemented"]:
+        return Err[EvaluateError](error=EvaluateError_NotImplemented())
     refresh: RefreshKind
-    if db:
+    if db_changed:
         refresh = RefreshKind_Reset()
-    elif meta or st["refresh_all"]:
+    elif meta_changed or state["refresh_all"]:
         refresh = RefreshKind_All()
-    elif path:
+    elif path_changed:
         refresh = RefreshKind_SearchPath()
     else:
         refresh = RefreshKind_Nothing()
-    query = QueryOutcome(query=text, successful=successful, total_time=total, execution_time=execution, meta_changed=meta, db_changed=db, path_changed=path, mutated=mutated, is_special=is_special)
-    new_session = dataclasses.replace(session, settings=_settings(st), executor=cast(Executor, st["executor"]), last_query=text)
-    return Ok(value=Evaluation(session=new_session, output="\n".join(texts), items=items, query=query, refresh=refresh, quit=bool(st["quit"])))
+    query_outcome = QueryOutcome(query=text, successful=successful, total_time=total_time, execution_time=execution_time, meta_changed=meta_changed, db_changed=db_changed, path_changed=path_changed, mutated=mutated, is_special=is_special)
+    updated = dataclasses.replace(session, settings=_settings(state), executor=cast(Executor, state["executor"]), last_query=text)
+    return Ok(value=Evaluation(session=updated, output="\n".join(output), items=item_count, query=query_outcome, refresh=refresh, quit=bool(state["quit"])))

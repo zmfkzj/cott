@@ -1,10 +1,13 @@
 import pathlib
+import shutil
+import tempfile
 from typing import Any, Final, cast
 
 import duckdb
+import pyarrow
 import pyarrow.feather
 import pyarrow.orc
-from cott_runtime import Err, Ok, Result
+from cott_runtime import CottContractViolation, Err, Ok, Result, _cott_fixture_write
 
 from real.harlequin.export_types import ExportError, ExportError_InvalidOption, ExportError_PathIsDirectory, ExportError_UnknownFormat, ExportError_WriteFailed, ExportReceipt, ExportRequest
 from real.harlequin.results_types import ResultSet
@@ -29,112 +32,101 @@ def _fail(title: str, exc: BaseException) -> Result[ExportReceipt, ExportError]:
 
 
 def _dedupe(names: list[str]) -> list[str]:
-    seen: dict[str, int] = {}
     used: set[str] = set()
-    out: list[str] = []
+    next_suffix: dict[str, int] = {}
+    result: list[str] = []
     for name in names:
         if name not in used:
             used.add(name)
-            seen[name] = 0
-            out.append(name)
+            next_suffix[name] = 0
+            result.append(name)
             continue
-        n = seen.get(name, 0)
-        candidate = f"{name}{n}"
+        suffix = next_suffix.get(name, 0)
+        candidate = f"{name}{suffix}"
         while candidate in used:
-            n += 1
-            candidate = f"{name}{n}"
-        seen[name] = n + 1
+            suffix += 1
+            candidate = f"{name}{suffix}"
+        next_suffix[name] = suffix + 1
         used.add(candidate)
-        out.append(candidate)
-    return out
+        result.append(candidate)
+    return result
 
 
-def _parse(request: ExportRequest, allowed: str) -> dict[str, object]:
-    keys = allowed.split(",")
-    opts: dict[str, object] = {}
-    for opt in request.options:
-        if opt.value == "" or opt.name not in keys:
+def _options(request: ExportRequest, keys: str) -> dict[str, object]:
+    allowed = keys.split(",")
+    parsed: dict[str, object] = {}
+    for option in request.options:
+        if option.name not in allowed or option.value == "":
             continue
-        low = opt.value.lower()
-        if low == "true":
-            opts[opt.name] = True
-        elif low == "false":
-            opts[opt.name] = False
+        lower = option.value.lower()
+        if lower == "true":
+            parsed[option.name] = True
+        elif lower == "false":
+            parsed[option.name] = False
         else:
-            opts[opt.name] = opt.value
-    return opts
+            parsed[option.name] = option.value
+    return parsed
 
 
 def _convert(opts: dict[str, object], ints: str, floats: str) -> ExportError | None:
-    for key in ints.split(","):
-        if key and key in opts:
+    for name in ints.split(","):
+        if name in opts:
             try:
-                opts[key] = int(str(opts[key]))
+                opts[name] = int(str(opts[name]))
             except ValueError as exc:
-                return ExportError_InvalidOption(name=key, message=str(exc))
-    for key in floats.split(","):
-        if key and key in opts:
+                return ExportError_InvalidOption(name=name, message=str(exc))
+    for name in floats.split(","):
+        if name in opts:
             try:
-                opts[key] = float(str(opts[key]))
+                opts[name] = float(str(opts[name]))
             except ValueError as exc:
-                return ExportError_InvalidOption(name=key, message=str(exc))
+                return ExportError_InvalidOption(name=name, message=str(exc))
     return None
 
 
-def write_result(result_set: ResultSet, request: ExportRequest) -> Result[ExportReceipt, ExportError]:
-    fmt = request.format.lower()
-    if fmt not in ("csv", "tsv", "json", "jsonl", "ndjson", "parquet", "orc", "feather", "arrow"):
-        return Err(error=ExportError_UnknownFormat(name=request.format))
-    target = pathlib.Path(request.path).expanduser()
-    if target.is_dir():
-        return Err(error=ExportError_PathIsDirectory(path=request.path))
+def _export_table(result_set: ResultSet) -> object:
     handle = result_set.data
     if handle.tag != _TAG:
         raise TypeError(f"ResultSet.data must be tagged {_TAG}, got {handle.tag}")
-    table: Any = handle.unwrap()
-    names = [str(n) for n in cast(list[object], table.column_names)]
-    deduped = _dedupe(names)
-    if deduped != names:
-        table = table.rename_columns(deduped)
-    receipt = ExportReceipt(path=request.path, rows=result_set.fetched_row_count)
-    file_name = str(target)
+    payload: object = handle.unwrap()
+    arrow: Any = pyarrow
+    if not isinstance(payload, arrow.Table):
+        raise TypeError("ResultSet.data must contain a pyarrow.Table")
+    table: Any = payload
+    raw_names: object = cast(object, table.column_names)
+    if not isinstance(raw_names, list):
+        raise TypeError("Arrow column names must be a list")
+    for name in cast(list[object], raw_names):
+        if not isinstance(name, str):
+            raise TypeError("Arrow column names must be strings")
+    names = cast(list[str], raw_names)
+    if len(set(names)) == len(names):
+        return payload
+    renamed: object = cast(object, table.rename_columns(_dedupe(names)))
+    if not isinstance(renamed, arrow.Table):
+        raise TypeError("Arrow rename must return a pyarrow.Table")
+    return renamed
 
+
+def _write_to_path(table: object, fmt: str, file_name: str, opts: dict[str, object]) -> None:
     if fmt in ("csv", "tsv"):
-        opts = _parse(request, _CSV_KEYS)
         header = opts.pop("header", True) is not False
         quoting = opts.pop("quoting", False)
+        if quoting is True:
+            opts["quoting"] = "ALL"
         if fmt == "tsv" and "sep" not in opts:
             opts["sep"] = "\t"
+        con = duckdb.connect(config={"threads": 1})
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            con = duckdb.connect()
-            try:
-                rel: Any = con.from_arrow(table)
-                rel.write_csv(
-                    file_name,
-                    header=header,
-                    sep=opts.get("sep"),
-                    na_rep=opts.get("na_rep"),
-                    quotechar=opts.get("quotechar"),
-                    escapechar=opts.get("escapechar"),
-                    date_format=opts.get("date_format"),
-                    timestamp_format=opts.get("timestamp_format"),
-                    quoting="ALL" if quoting is True else None,
-                    encoding=opts.get("encoding"),
-                    compression=opts.get("compression"),
-                )
-            finally:
-                con.close()
-        except Exception as exc:
-            return _fail(_CSV_TITLE, exc)
-        return Ok(value=receipt)
-
+            csv_relation: Any = con.from_arrow(table)
+            csv_relation.write_csv(file_name, header=header, **opts)
+        finally:
+            con.close()
+        return
     if fmt in ("json", "jsonl", "ndjson"):
-        opts = _parse(request, _JSON_KEYS)
-        array = fmt == "json" and opts.get("array") is True
         clauses = "FORMAT JSON"
         params: list[object] = [file_name]
-        if array:
+        if fmt == "json" and opts.get("array") is True:
             clauses += ", ARRAY TRUE"
         if "compression" in opts:
             clauses += ", COMPRESSION ?"
@@ -145,58 +137,82 @@ def write_result(result_set: ResultSet, request: ExportRequest) -> Result[Export
         if "timestamp_format" in opts:
             clauses += ", TIMESTAMPFORMAT ?"
             params.append(str(opts["timestamp_format"]))
+        con = duckdb.connect(config={"threads": 1})
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            con = duckdb.connect()
-            try:
-                con.register("data", table)
-                con.execute(f"COPY (select * from data) TO ? ({clauses})", params)
-            finally:
-                con.close()
-        except Exception as exc:
-            return _fail(_JSON_TITLE, exc)
-        return Ok(value=receipt)
-
+            con.register("data", table)
+            con.execute(f"COPY (select * from data) TO ? ({clauses})", params)
+        finally:
+            con.close()
+        return
     if fmt == "parquet":
-        opts = _parse(request, "compression")
+        con = duckdb.connect(config={"threads": 1})
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            con = duckdb.connect()
-            try:
-                prel: Any = con.from_arrow(table)
-                prel.write_parquet(file_name, compression=opts.get("compression"))
-            finally:
-                con.close()
-        except Exception as exc:
-            return _fail(_PARQUET_TITLE, exc)
-        return Ok(value=receipt)
-
+            parquet_relation: Any = con.from_arrow(table)
+            parquet_relation.write_parquet(file_name, **opts)
+        finally:
+            con.close()
+        return
     if fmt == "orc":
-        opts = _parse(request, _ORC_KEYS)
+        orc: Any = pyarrow.orc
+        orc.write_table(table, file_name, **opts)
+        return
+    feather: Any = pyarrow.feather
+    feather.write_feather(table, file_name, **opts)
+
+
+def write_result(result_set: ResultSet, request: ExportRequest) -> Result[ExportReceipt, ExportError]:
+    fmt = request.format.lower()
+    if fmt not in ("csv", "tsv", "json", "jsonl", "ndjson", "parquet", "orc", "feather", "arrow"):
+        return Err(error=ExportError_UnknownFormat(name=request.format))
+    target = request.path.expanduser()
+    if fmt in ("csv", "tsv"):
+        title = _CSV_TITLE
+        opts = _options(request, _CSV_KEYS)
+    elif fmt in ("json", "jsonl", "ndjson"):
+        title = _JSON_TITLE
+        opts = _options(request, _JSON_KEYS)
+    elif fmt == "parquet":
+        title = _PARQUET_TITLE
+        opts = _options(request, "compression")
+    elif fmt == "orc":
+        title = _ORC_TITLE
+        opts = _options(request, _ORC_KEYS)
         problem = _convert(opts, _ORC_INTS, _ORC_FLOATS)
         if problem is not None:
             return Err(error=problem)
         if "bloom_filter_columns" in opts:
-            raw_cols = str(opts["bloom_filter_columns"])
-            opts["bloom_filter_columns"] = [c.strip() for c in raw_cols.split(",") if c.strip()]
-        orc: Any = pyarrow.orc
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            orc.write_table(table, file_name, **opts)
-        except Exception as exc:
-            return _fail(_ORC_TITLE, exc)
-        return Ok(value=receipt)
+            opts["bloom_filter_columns"] = [part for column in str(opts["bloom_filter_columns"]).split(",") if (part := column.strip())]
+    else:
+        title = _FEATHER_TITLE
+        opts = _options(request, _FEATHER_KEYS)
+        problem = _convert(opts, _FEATHER_INTS, "")
+        if problem is not None:
+            return Err(error=problem)
+        if opts.get("version") == 1 and opts.get("compression") == "uncompressed":
+            opts["compression"] = None
 
-    opts = _parse(request, _FEATHER_KEYS)
-    problem = _convert(opts, _FEATHER_INTS, "")
-    if problem is not None:
-        return Err(error=problem)
-    if opts.get("version") == 1 and opts.get("compression") == "uncompressed":
-        opts["compression"] = None
-    feather: Any = pyarrow.feather
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        feather.write_feather(table, file_name, **opts)
+        table = _export_table(result_set)
+        with tempfile.TemporaryDirectory() as work:
+            temporary = pathlib.Path(work) / (target.name or "result")
+            _write_to_path(table, fmt, str(temporary), opts)
+            contents = temporary.read_bytes()
+            try:
+                _cott_fixture_write(request.path, contents)
+            except CottContractViolation as exc:
+                if exc.message == "fixture adapters are inactive":
+                    if target.is_dir():
+                        return Err(error=ExportError_PathIsDirectory(path=request.path))
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(temporary, target)
+                elif isinstance(exc.__cause__, IsADirectoryError):
+                    return Err(error=ExportError_PathIsDirectory(path=request.path))
+                elif exc.__cause__ is not None:
+                    return _fail(title, exc.__cause__)
+                else:
+                    return Err(error=ExportError_WriteFailed(title=title, message=exc.message))
+    except IsADirectoryError:
+        return Err(error=ExportError_PathIsDirectory(path=request.path))
     except Exception as exc:
-        return _fail(_FEATHER_TITLE, exc)
-    return Ok(value=receipt)
+        return _fail(title, exc)
+    return Ok(value=ExportReceipt(path=request.path, rows=result_set.fetched_row_count))

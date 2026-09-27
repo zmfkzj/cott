@@ -497,7 +497,7 @@ fn connect(request: ConnectionRequest) -> Result[Connection, ConnectionError]:
     Failed("Harlequin could not connect to chDB.", message).
     """
 
-    ensures Result.Ok(connection) => connection.adapter == request.adapter and connection.read_only == request.read_only
+    ensures Result.Ok(connection) => (connection.adapter == request.adapter and connection.read_only == request.read_only)
 
     error ConnectionError.ReadOnlyUnsupported
     error ConnectionError.InvalidOption
@@ -512,7 +512,12 @@ requirement CONNECT_RETAINS_A_LIVE_SESSION for connect:
     including a :memory: database or a temporary table, is visible to the next.
     """
 
-fn execute_statements(connection: Connection, statements: List[Str], limit: Option[U64], continue_on_error: Bool) -> List[ExecutedStatement]:
+fn execute_statements(
+    connection: Connection,
+    statements: List[Str],
+    limit: Option[U64],
+    continue_on_error: Bool,
+) -> List[ExecutedStatement]:
     doc """
     Run statements in order on the connection's retained driver, without
     fetching result rows, the way Harlequin executes before it fetches. Each
@@ -563,7 +568,12 @@ fn execute_statements(connection: Connection, statements: List[Str], limit: Opti
 
     effects [database.read, database.write, network]
 
-fn fetch_result(connection: Connection, executed: ExecutedStatement, limit: Option[U64], viewer_max_rows: Option[U64]) -> Result[ResultSet, QueryError]:
+fn fetch_result(
+    connection: Connection,
+    executed: ExecutedStatement,
+    limit: Option[U64],
+    viewer_max_rows: Option[U64],
+) -> Result[ResultSet, QueryError]:
     doc """
     Fetch the rows of one executed statement into a ResultSet whose data is a
     pyarrow.Table, as Harlequin fetches after execution. executed.cursor must be
@@ -585,7 +595,7 @@ fn fetch_result(connection: Connection, executed: ExecutedStatement, limit: Opti
     closed afterwards and removed from the session's "active" list.
     """
 
-    ensures Result.Ok(fetched) => fetched.statement == executed.sql and fetched.columns.len == executed.columns.len
+    ensures Result.Ok(fetched) => (fetched.statement == executed.sql and fetched.columns.len == executed.columns.len)
 
     error QueryError.Failed
 
@@ -661,7 +671,10 @@ fn load_catalog(connection: Connection) -> Result[List[CatalogEntry], QueryError
 
     effects [database.read, network]
 
-fn load_catalog_children(connection: Connection, parent: CatalogEntry) -> Result[List[CatalogEntry], QueryError]:
+fn load_catalog_children(
+    connection: Connection,
+    parent: CatalogEntry,
+) -> Result[List[CatalogEntry], QueryError]:
     doc """
     The direct children of one unloaded catalog entry (with their own children
     when the adapter loads them together), each naming parent.id as parent.
@@ -789,7 +802,7 @@ fn toggle_transaction_mode(connection: Connection) -> Result[Connection, QueryEr
     transaction mode.", message)).
     """
 
-    ensures Result.Ok(updated) => updated.adapter == connection.adapter and updated.connection_id == connection.connection_id
+    ensures Result.Ok(updated) => (updated.adapter == connection.adapter and updated.connection_id == connection.connection_id)
 
     error QueryError.Failed
 
@@ -873,7 +886,12 @@ fn catalog_interactions(adapter: AdapterKind, entry: CatalogEntry) -> List[Str]:
 
     effects []
 
-fn plan_interaction(adapter: AdapterKind, entry: CatalogEntry, label: Str, children: List[CatalogEntry]) -> Option[InteractionPlan]:
+fn plan_interaction(
+    adapter: AdapterKind,
+    entry: CatalogEntry,
+    label: Str,
+    children: List[CatalogEntry],
+) -> Option[InteractionPlan]:
     doc """
     What choosing a context-menu item does. "Insert Name at Cursor" is
     InsertText(entry.query_name) for every adapter. Otherwise (Nothing for a label

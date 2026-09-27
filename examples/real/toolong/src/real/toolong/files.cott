@@ -244,8 +244,8 @@ fn find_line(
     doc """
     Toolong's advance_search while the find dialog is shown. Examine lines
     start, start + 1, ..., line_count - 1 when direction is positive, or start,
-    start - 1, ..., 0 when it is not (no lines when start is negative or, going
-    forward, not below line_count). For each line, locate it with
+    start - 1, ..., 0 when it is not. In either direction, examine no lines
+    when start is negative or start >= line_count. For each line, locate it with
     real.toolong.index.line_location, read its raw bytes with
     real.toolong.files.read_span from sources[location.file] (an empty string
     when that file is missing), decode them as UTF-8 with errors="replace"
@@ -534,6 +534,24 @@ scenario timestamps_find_and_navigation_read_lines:
         FindQuery(text: "INFO", regex: false, case_sensitive: false),
     )
     assert before_start.line == Option.Nothing
+    call after_end = find_line(
+        List(timed_source),
+        TabIndex.Single(index: completed),
+        5,
+        5,
+        -1,
+        FindQuery(text: "", regex: false, case_sensitive: false),
+    )
+    assert after_end == FindResult(line: Option.Nothing, invalid_regex: false)
+    call empty_view = find_line(
+        List(timed_source),
+        TabIndex.Single(index: completed),
+        0,
+        0,
+        -1,
+        FindQuery(text: "", regex: false, case_sensitive: false),
+    )
+    assert empty_view == FindResult(line: Option.Nothing, invalid_regex: false)
     call untimed = line_timestamp(List(timed_source), TabIndex.Single(index: completed), 1, List())
     assert untimed == TimestampAt(timestamp: Option.Nothing, orders: List(order))
     call timed = line_timestamp(
@@ -675,6 +693,59 @@ scenario merge_orders_files_with_header_backfill:
     )
     call first_unsorted = line_location(TabIndex.Merged(index: partial_merge), 0)
     assert first_unsorted == LineLocation(file: 0, span: ByteSpan(start: 0, end: 7))
+
+scenario failed_merged_save_keeps_previous_output:
+    fixtures:
+        fs files:
+            file "app.log" text("boot ok\r\nERROR disk\n\tindented\n")
+            file "out/merged.log" text("previous\n")
+        failure disk_full:
+            point: file.write
+            occurrence: 1
+            error: disk_full
+    data previous_output: LogSource = LogSource(
+        path: files.path("out/merged.log"),
+        name: "merged.log",
+        compression: Compression.Uncompressed,
+        descriptor: Option.Nothing,
+        size: 9,
+        can_tail: true,
+    )
+    data merged_output: LogSource = LogSource(
+        path: files.path("out/merged.log"),
+        name: "merged.log",
+        compression: Compression.Uncompressed,
+        descriptor: Option.Nothing,
+        size: 32,
+        can_tail: true,
+    )
+    call breaks = scan_breaks(app_source, 0, 30)
+    call started = start_file_index(30)
+    call indexed = add_scanned_breaks(started, breaks, 0)
+    call done = complete_file_scan(indexed, 30, 0)
+    call count = file_line_count(done)
+    call failed = save_lines(
+        List(app_source),
+        TabIndex.Single(index: done),
+        count,
+        files.path("out/merged.log"),
+    )
+    assert failed matches Result.Err(SaveError.WriteFailed(_))
+    call kept = open_source(files.path("out/merged.log"))
+    assert kept == Result.Ok(value: previous_output)
+    call kept_lines = read_lines(previous_output, List(ByteSpan(start: 0, end: 9)))
+    assert kept_lines == List("previous")
+    call retried = save_lines(
+        List(app_source),
+        TabIndex.Single(index: done),
+        count,
+        files.path("out/merged.log"),
+    )
+    assert retried == Result.Ok(value: 3)
+    call rewritten = open_source(files.path("out/merged.log"))
+    assert rewritten == Result.Ok(value: merged_output)
+    call written = read_span(merged_output, ByteSpan(start: 0, end: 32))
+    assert written == Bytes("626f6f74206f6b0a4552524f52206469736b0a20202020696e64656e7465640a")
 
 requirement FIND_SEARCHES_RAW_LINES for find_line:
     text "Find navigation tests the raw bytes of each line, so a regular expression is anchored before the LF that starts every line after the first of a single file."

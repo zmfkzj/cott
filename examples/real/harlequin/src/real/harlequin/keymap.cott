@@ -459,14 +459,20 @@ scenario unknown_keymaps_and_actions_are_rejected:
         name: "mine",
         bindings: List(
             KeyBinding(keys: "ctrl+j", action: "run_query", key_display: Option.Nothing),
-            KeyBinding(keys: "F9, ctrl+t", action: "toggle_sidebar", key_display: Option.Some(value: "F9")),
+            KeyBinding(
+                keys: "F9, ctrl+t",
+                action: "toggle_sidebar",
+                key_display: Option.Some(value: "F9"),
+            ),
         ),
     )
     call missing = bind_keymaps(List(mine), List("vscode"))
     assert missing matches Result.Err(KeymapError.UnknownKeymap(name)) => name == "vscode"
     data broken: KeyMap = KeyMap(
         name: "broken",
-        bindings: List(KeyBinding(keys: "f1", action: "launch_rockets", key_display: Option.Nothing)),
+        bindings: List(
+            KeyBinding(keys: "f1", action: "launch_rockets", key_display: Option.Nothing),
+        ),
     )
     call unknown = bind_keymaps(List(broken), List("broken"))
     assert unknown matches Result.Err(KeymapError.UnknownAction(keymap, action)) => keymap == "broken" and action == "launch_rockets"
@@ -485,3 +491,10 @@ scenario terminal_keys_translate_textual_names:
     call label = key_label("ctrl+q")
     assert label == "^q"
 
+scenario blank_keys_in_a_binding_are_rejected:
+    data gappy: KeyMap = KeyMap(
+        name: "gappy",
+        bindings: List(KeyBinding(keys: "f5, ", action: "run_query", key_display: Option.Nothing)),
+    )
+    call blank = bind_keymaps(List(gappy), List("gappy"))
+    assert blank == Result.Err(error: KeymapError.EmptyKey(keymap: "gappy", action: "run_query"))

@@ -7,7 +7,7 @@ def _hsql_rows() -> list[tuple[str, str]]:
     return [
         ("-a, --adapter NAME", "The database adapter to use.  [default: duckdb]"),
         ("-c, --command TEXT", "Run this SQL. Repeatable; sources run in order."),
-        ("-f, --file PATH", "Run SQL from this file (\"-\" reads standard input). Repeatable."),
+        ("-f, --file PATH", 'Run SQL from this file ("-" reads standard input). Repeatable.'),
         ("-o, --output PATH", "Write results to this file instead of standard output."),
         ("--format NAME", "Output format: table, markdown, md, vertical, csv, tsv, json, jsonl, ndjson, parquet, orc, feather, arrow, none.  [default: table]"),
         ("--csv", "Shorthand for --format csv."),
@@ -59,69 +59,66 @@ def _hsql_rows() -> list[tuple[str, str]]:
 
 def _spellings(rows: list[tuple[str, str]]) -> set[str]:
     taken: set[str] = set()
-    for term, _help in rows:
+    for term, _description in rows:
         for part in term.split(", "):
             taken.add(part.split(" ", 1)[0])
     return taken
 
 
 def _format_rows(rows: list[tuple[str, str]]) -> list[str]:
-    width = min(max((len(r[0]) for r in rows), default=0), 30)
+    width = min(max((len(term) for term, _description in rows), default=0), 30)
     lines: list[str] = []
-    for term, help_text in rows:
-        if not help_text:
+    for term, description in rows:
+        if not description:
             lines.append(f"  {term}")
         elif len(term) <= width:
-            lines.append(f"  {term.ljust(width)}  {help_text}")
+            lines.append(f"  {term.ljust(width)}  {description}")
         else:
             lines.append(f"  {term}")
-            lines.append(f"  {' ' * width}  {help_text}")
+            lines.append(f"  {' ' * width}  {description}")
     return lines
 
 
 def _adapter_row(option: AdapterOption, taken: set[str]) -> tuple[str, str] | None:
-    decls = [str(d) for d in option.short_decls if str(d).startswith("-")]
-    spelled = [s for s in sorted(decls, key=len) + [f"--{option.name}"] if s not in taken]
-    if not spelled:
+    decls = [decl for decl in option.short_decls if decl.startswith("-")]
+    spellings = [decl for decl in sorted(decls, key=len) + [f"--{option.name}"] if decl not in taken]
+    if not spellings:
         return None
     kind = option.kind
     if isinstance(kind, OptionKind_Flag):
         metavar = ""
     elif isinstance(kind, OptionKind_Choice):
-        metavar = " [" + "|".join(str(c) for c in kind.choices) + "]"
+        metavar = " [" + "|".join(kind.choices) + "]"
     elif isinstance(kind, OptionKind_FilePath):
         metavar = " PATH"
     else:
         metavar = " TEXT"
-    help_text = option.description
+    description = option.description
     default = option.default
     if isinstance(default, Some):
-        help_text = f"{help_text}  [default: {default.value}]"
-    return (", ".join(spelled) + metavar, help_text)
+        description = f"{description}  [default: {default.value}]"
+    return (", ".join(spellings) + metavar, description)
 
 
 def hsql_help(descriptors: CottList[AdapterDescriptor], selected: Option[AdapterDescriptor], options: CottList[AdapterOption]) -> str:
-    names = ", ".join(d.name for d in descriptors)
     lines = [
         "Usage: hsql [OPTIONS] [CONN_STR]...",
         "",
         "  Run SQL against a database and exit. hsql is Harlequin's headless CLI.",
         "",
-        f"  Installed adapters: {names}",
+        "  Installed adapters: " + ", ".join(descriptor.name for descriptor in descriptors),
         "",
-        "Options:",
     ]
     rows = _hsql_rows()
     lines.extend(_format_rows(rows))
     if isinstance(selected, Some):
-        descriptor: AdapterDescriptor = selected.value
-        taken = _spellings(rows)
         adapter_rows: list[tuple[str, str]] = []
+        taken = _spellings(rows)
         for option in options:
             row = _adapter_row(option, taken)
             if row is not None:
                 adapter_rows.append(row)
         lines.append("")
-        lines.append(f"{descriptor.display_name} Adapter Options:")
+        lines.append(f"{selected.value.display_name} Adapter Options:")
         lines.extend(_format_rows(adapter_rows))
     return "\n".join(lines) + "\n"

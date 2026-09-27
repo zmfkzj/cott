@@ -57,19 +57,19 @@ reproduce whatever click 8 prints)."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.pgcli.cli.parse_pgcli_arguments"
         if _error.span is None:
-            _error.span = {"end_byte":7507,"end_column":1,"end_line":120,"start_byte":5092,"start_column":1,"start_line":77}
+            _error.span = {"end_byte":7570,"end_column":1,"end_line":121,"start_byte":5155,"start_column":1,"start_line":78}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.pgcli.cli.parse_pgcli_arguments", phase="implementation-call", span={"end_byte":7507,"end_column":1,"end_line":120,"start_byte":5092,"start_column":1,"start_line":77}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.pgcli.cli.parse_pgcli_arguments", phase="implementation-call", span={"end_byte":7570,"end_column":1,"end_line":121,"start_byte":5155,"start_column":1,"start_line":78}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.pgcli.cli.parse_pgcli_arguments", phase="implementation-call", span={"end_byte":7507,"end_column":1,"end_line":120,"start_byte":5092,"start_column":1,"start_line":77}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.pgcli.cli.parse_pgcli_arguments", phase="implementation-call", span={"end_byte":7570,"end_column":1,"end_line":121,"start_byte":5155,"start_column":1,"start_line":78}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, Result[CliCommand, CliError], path="$.return")
     if type(_result) is Err:
         if _expected_error is not None:
             if type(_result.error) is not _expected_error:
                 raise CottContractViolation("conditional error clause failed", symbol="real.pgcli.cli.parse_pgcli_arguments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
         elif type(_result.error) not in (CliError_Usage,):
-            raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.cli.parse_pgcli_arguments", phase="error", span={"end_byte":7507,"end_column":1,"end_line":120,"start_byte":5092,"start_column":1,"start_line":77}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+            raise CottContractViolation("returned error is not allowed", symbol="real.pgcli.cli.parse_pgcli_arguments", phase="error", span={"end_byte":7570,"end_column":1,"end_line":121,"start_byte":5155,"start_column":1,"start_line":78}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
     elif _expected_error is not None:
         raise CottContractViolation("expected conditional error was not returned", symbol="real.pgcli.cli.parse_pgcli_arguments", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
     if _expected_error_clause is not None:
@@ -84,7 +84,7 @@ reproduce whatever click 8 prints)."""
         _cott_contract_condition((False), "real.pgcli.cli.parse_pgcli_arguments", "ensures:1:applicable")
         return True
     if not (_cott_match_ensures_1()):
-        raise CottContractViolation("ensures clause failed", symbol="real.pgcli.cli.parse_pgcli_arguments", clause="ensures:1", phase="ensures", span={"end_byte":7454,"end_column":71,"end_line":114,"start_byte":7388,"start_column":5,"start_line":114}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.pgcli.cli.parse_pgcli_arguments", clause="ensures:1", phase="ensures", span={"end_byte":7517,"end_column":71,"end_line":115,"start_byte":7451,"start_column":5,"start_line":115}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CliCommand, CliError], path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -101,12 +101,12 @@ title); otherwise unchanged."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.pgcli.cli.obfuscate_process_title"
         if _error.span is None:
-            _error.span = {"end_byte":7850,"end_column":1,"end_line":130,"start_byte":7507,"start_column":1,"start_line":120}
+            _error.span = {"end_byte":7913,"end_column":1,"end_line":131,"start_byte":7570,"start_column":1,"start_line":121}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.pgcli.cli.obfuscate_process_title", phase="implementation-call", span={"end_byte":7850,"end_column":1,"end_line":130,"start_byte":7507,"start_column":1,"start_line":120}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.pgcli.cli.obfuscate_process_title", phase="implementation-call", span={"end_byte":7913,"end_column":1,"end_line":131,"start_byte":7570,"start_column":1,"start_line":121}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.pgcli.cli.obfuscate_process_title", phase="implementation-call", span={"end_byte":7850,"end_column":1,"end_line":130,"start_byte":7507,"start_column":1,"start_line":120}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.pgcli.cli.obfuscate_process_title", phase="implementation-call", span={"end_byte":7913,"end_column":1,"end_line":131,"start_byte":7570,"start_column":1,"start_line":121}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=_cott_validate_abi)
     return _result
@@ -140,23 +140,23 @@ completion_refreshing false."""
     config = _cott_validate_abi(config, PgcliConfig, path="$.config")
     environment = _cott_validate_abi(environment, SetupEnvironment, path="$.environment")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/cli/session_settings_from.py", "160545126ddb84d915aba188bdb38ac8936a82ab7016879c721ba59abc1752b3", "session_settings_from", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.cli.session_settings_from")
+        _implementation = _cott_load("_cott_impl/real/pgcli/cli/session_settings_from.py", "a0dd04bf6e1ffc12c6fa28a7e5cb03ad94ba9c58c33ba3a3cf6ca03a569f68d0", "session_settings_from", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.cli.session_settings_from")
         _result = _implementation(options, config, environment)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.pgcli.cli.session_settings_from"
         if _error.span is None:
-            _error.span = {"end_byte":9887,"end_column":1,"end_line":167,"start_byte":7850,"start_column":1,"start_line":130}
+            _error.span = {"end_byte":9950,"end_column":1,"end_line":168,"start_byte":7913,"start_column":1,"start_line":131}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.pgcli.cli.session_settings_from", phase="implementation-call", span={"end_byte":9887,"end_column":1,"end_line":167,"start_byte":7850,"start_column":1,"start_line":130}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.pgcli.cli.session_settings_from", phase="implementation-call", span={"end_byte":9950,"end_column":1,"end_line":168,"start_byte":7913,"start_column":1,"start_line":131}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.pgcli.cli.session_settings_from", phase="implementation-call", span={"end_byte":9887,"end_column":1,"end_line":167,"start_byte":7850,"start_column":1,"start_line":130}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.pgcli.cli.session_settings_from", phase="implementation-call", span={"end_byte":9950,"end_column":1,"end_line":168,"start_byte":7913,"start_column":1,"start_line":131}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = _cott_validate_abi(_result, SessionSettings, path="$.return")
     if not (_cott_contract_condition((((_result).tuples_only == (options).tuples_only)), "real.pgcli.cli.session_settings_from", "ensures:1")):
-        raise CottContractViolation("ensures clause failed", symbol="real.pgcli.cli.session_settings_from", clause="ensures:1", phase="ensures", span={"end_byte":9803,"end_column":54,"end_line":162,"start_byte":9754,"start_column":5,"start_line":162}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.pgcli.cli.session_settings_from", clause="ensures:1", phase="ensures", span={"end_byte":9866,"end_column":54,"end_line":163,"start_byte":9817,"start_column":5,"start_line":163}, expected="true", actual="false")
     if not (_cott_contract_condition((((_result).force_destructive == (options).force_destructive)), "real.pgcli.cli.session_settings_from", "ensures:2")):
-        raise CottContractViolation("ensures clause failed", symbol="real.pgcli.cli.session_settings_from", clause="ensures:2", phase="ensures", span={"end_byte":9869,"end_column":66,"end_line":163,"start_byte":9808,"start_column":5,"start_line":163}, expected="true", actual="false")
+        raise CottContractViolation("ensures clause failed", symbol="real.pgcli.cli.session_settings_from", clause="ensures:2", phase="ensures", span={"end_byte":9932,"end_column":66,"end_line":164,"start_byte":9871,"start_column":5,"start_line":164}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, SessionSettings, path="$.return", validator=_cott_validate_abi)
     return _result
 
@@ -253,18 +253,18 @@ Ctrl-C outside the prompt loop exits 1 after Python's usual
 KeyboardInterrupt message is suppressed; a password is never printed."""
     arguments = _cott_validate_abi(arguments, CottList[str], path="$.arguments")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/cli/run.py", "446f9bb9b2b7cc3f2c0f1877665828f632380c922db22797e8730bebf0338fac", "run", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.cli.run")
+        _implementation = _cott_load("_cott_impl/real/pgcli/cli/run.py", "85f0236861a1c300a27ae75c1008430e9d212910ebbd1c5b119976bf77e370d8", "run", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.cli.run")
         _result = _implementation(arguments)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.pgcli.cli.run"
         if _error.span is None:
-            _error.span = {"end_byte":16304,"end_column":1,"end_line":263,"start_byte":9887,"start_column":1,"start_line":167}
+            _error.span = {"end_byte":16367,"end_column":1,"end_line":264,"start_byte":9950,"start_column":1,"start_line":168}
         raise
     except SystemExit:
         raise
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.pgcli.cli.run", phase="implementation-call", span={"end_byte":16304,"end_column":1,"end_line":263,"start_byte":9887,"start_column":1,"start_line":167}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
-    raise CottContractViolation("Never function returned", symbol="real.pgcli.cli.run", phase="return", span={"end_byte":16304,"end_column":1,"end_line":263,"start_byte":9887,"start_column":1,"start_line":167}, expected="Never", actual=repr(_result))
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.pgcli.cli.run", phase="implementation-call", span={"end_byte":16367,"end_column":1,"end_line":264,"start_byte":9950,"start_column":1,"start_line":168}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+    raise CottContractViolation("Never function returned", symbol="real.pgcli.cli.run", phase="return", span={"end_byte":16367,"end_column":1,"end_line":264,"start_byte":9950,"start_column":1,"start_line":168}, expected="Never", actual=repr(_result))
 
 __all__ = ["CliCommand", "CliCommand_Launch", "CliCommand_ShowHelp", "CliError", "CliError_Usage", "CliOptions", "PGCLI_HELP", "PGCLI_VERSION", "SetupEnvironment", "obfuscate_process_title", "parse_pgcli_arguments", "run", "session_settings_from"]

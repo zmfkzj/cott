@@ -12,29 +12,30 @@ from sqlparse.sql import Token
 from real.pgcli.completion_types import PGLITERALS_JSON
 
 
-def _copy_counts(raw: object) -> dict[str, int]:
-    if not isinstance(raw, dict):
-        raise TypeError("Invalid prevalence counts")
-    counts: dict[str, int] = {}
-    for key, value in cast(dict[object, object], raw).items():
-        if not isinstance(key, str) or not isinstance(value, int):
-            raise TypeError("Invalid prevalence count")
-        counts[key] = value
-    return counts
-
-
 def update_prevalence(prevalence: Opaque[Literal["pgcli.prevalence"]], text: str, keywords_only: bool) -> Opaque[Literal["pgcli.prevalence"]]:
     state = prevalence.unwrap()
     if not isinstance(state, dict):
         raise TypeError("Invalid prevalence state")
     entries = cast(dict[object, object], state)
-    keyword_counts = _copy_counts(entries["keywords"])
-    name_counts = _copy_counts(entries["names"])
+    raw_keywords = entries["keywords"]
+    raw_names = entries["names"]
+    if not isinstance(raw_keywords, dict) or not isinstance(raw_names, dict):
+        raise TypeError("Invalid prevalence counts")
+    keyword_counts: dict[str, int] = {}
+    name_counts: dict[str, int] = {}
+    for key, value in cast(dict[object, object], raw_keywords).items():
+        if not isinstance(key, str) or not isinstance(value, int) or isinstance(value, bool):
+            raise TypeError("Invalid prevalence count")
+        keyword_counts[key] = value
+    for key, value in cast(dict[object, object], raw_names).items():
+        if not isinstance(key, str) or not isinstance(value, int) or isinstance(value, bool):
+            raise TypeError("Invalid prevalence count")
+        name_counts[key] = value
 
     literals = cast(object, json.loads(PGLITERALS_JSON))
     if not isinstance(literals, dict):
         raise TypeError("Invalid keyword literals")
-    keywords = cast(dict[object, object], literals)["keywords"]
+    keywords = cast(dict[object, object], literals).get("keywords")
     if not isinstance(keywords, dict):
         raise TypeError("Invalid keyword tree")
     for keyword in cast(dict[object, object], keywords):
@@ -49,8 +50,7 @@ def update_prevalence(prevalence: Opaque[Literal["pgcli.prevalence"]], text: str
         sqlparse.engine.grouping.MAX_GROUPING_DEPTH = None
         sqlparse.engine.grouping.MAX_GROUPING_TOKENS = None
         for statement in sqlparse.parse(text):
-            tokens = cast(Iterable[Token], statement.flatten())
-            for token in tokens:
+            for token in cast(Iterable[Token], statement.flatten()):
                 if token.ttype in sqlparse.tokens.Name:
                     name = str(cast(object, token.value))
                     name_counts[name] = name_counts.get(name, 0) + 1

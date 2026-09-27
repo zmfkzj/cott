@@ -870,12 +870,18 @@ fn render_scenario_outcome(json: &mut Json, outcome: &HirScenarioHttpOutcome) {
             status,
             body,
             encoding,
+            content_type,
         } => {
             json.key("kind");
             json.string("response");
             json.comma();
             json.key("body");
             render_scenario_data(json, body);
+            if let Some(content_type) = content_type {
+                json.comma();
+                json.key("content_type");
+                json.string(content_type);
+            }
             json.comma();
             json.key("encoding");
             json.string(encoding);

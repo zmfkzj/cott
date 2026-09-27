@@ -1,38 +1,46 @@
 import http.client
 import os
-import socket
+import re
 import ssl
 import stat
 import time
 from pathlib import Path
 from typing import Final
+from urllib.error import HTTPError
 from urllib.parse import urljoin, urlsplit
 
-from cott_runtime import CottList, Err, Ok, Result
+import cott_runtime
+from cott_runtime import CottList, Result
 from real.yt_dlp_types import FragmentPolicy, MediaError, MediaError_HttpStatus, MediaError_InvalidInput, MediaError_NetworkFailure, MediaError_OutputFailure, MediaError_RetryExhausted, MediaError_SizeLimit, TransferReceipt, TransferRequest
 
 _TIMEOUT: Final[float] = 30.0
 _MAX_REDIRECTS: Final[int] = 5
-_BACKOFF: Final[float] = 0.5
 _BACKOFF_CAP: Final[float] = 8.0
 
 
+def _network_failure() -> MediaError:
+    return MediaError_NetworkFailure(message="fragment network transfer failed")
+
+
+def _output_failure() -> MediaError:
+    return MediaError_OutputFailure(message="fragment output operation failed")
+
+
 def _url_ok(url: str) -> bool:
-    if url == "" or any(ord(c) < 0x21 or 0x7F <= ord(c) <= 0x9F or c.isspace() for c in url):
+    if any(character.isspace() or ord(character) < 32 or 127 <= ord(character) <= 159 for character in url):
         return False
     try:
-        parts = urlsplit(url)
-        _ = parts.port
+        parsed = urlsplit(url)
+        return parsed.scheme in ("http", "https") and bool(parsed.hostname) and (parsed.port is None or 0 < parsed.port <= 65535)
     except ValueError:
         return False
-    return parts.scheme in ("http", "https") and bool(parts.hostname)
 
 
-def _sleep_backoff(attempt: int) -> None:
-    time.sleep(min(_BACKOFF * (2 ** attempt), _BACKOFF_CAP))
+def _backoff(attempt: int) -> None:
+    time.sleep(min(0.5 * (2 ** min(attempt, 4)), _BACKOFF_CAP))
 
 
-def _close_quiet(fd: int) -> bool:
+def _close_fd(fd: int) -> bool:
     try:
         os.close(fd)
     except OSError:
@@ -40,346 +48,493 @@ def _close_quiet(fd: int) -> bool:
     return True
 
 
-def _open_parent(destination: Path) -> int | None:
-    absolute = destination.is_absolute()
-    components = destination.parts[1:-1] if absolute else destination.parts[:-1]
+def _close_response(connection: http.client.HTTPConnection, response: http.client.HTTPResponse) -> bool:
+    closed = True
     try:
-        dfd = os.open("/" if absolute else ".", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    except OSError:
-        return None
+        response.close()
+    except (OSError, ValueError, http.client.HTTPException):
+        closed = False
+    try:
+        connection.close()
+    except (OSError, ValueError, http.client.HTTPException):
+        closed = False
+    return closed
+
+
+def _filesystem_supported() -> bool:
+    try:
+        return (os.name == "posix" and bool(os.O_NOFOLLOW) and bool(os.O_DIRECTORY) and bool(os.O_CLOEXEC) and bool(os.O_NONBLOCK)
+                and os.open in os.supports_dir_fd and os.mkdir in os.supports_dir_fd
+                and os.stat in os.supports_dir_fd and os.stat in os.supports_follow_symlinks
+                and os.rename in os.supports_dir_fd and os.fsync is not None)
+    except (AttributeError, TypeError):
+        return False
+
+
+def _open_parent_once(destination: Path) -> Result[int, MediaError]:
+    if not _filesystem_supported():
+        return cott_runtime.Err(error=_output_failure())
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    try:
+        directory = os.open("/" if destination.is_absolute() else ".", flags)
+    except (OSError, ValueError):
+        return cott_runtime.Err(error=_output_failure())
+    components = destination.parts[1:-1] if destination.is_absolute() else destination.parts[:-1]
     for component in components:
         try:
-            next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dfd)
-        except OSError:
-            _close_quiet(dfd)
-            return None
-        _close_quiet(dfd)
-        dfd = next_fd
-    return dfd
+            child = os.open(component, flags, dir_fd=directory)
+        except FileNotFoundError:
+            try:
+                os.mkdir(component, 0o755, dir_fd=directory)
+            except (OSError, ValueError) as creation_error:
+                if not isinstance(creation_error, FileExistsError):
+                    _close_fd(directory)
+                    return cott_runtime.Err(error=_output_failure())
+            try:
+                child = os.open(component, flags, dir_fd=directory)
+            except (OSError, ValueError):
+                _close_fd(directory)
+                return cott_runtime.Err(error=_output_failure())
+        except (OSError, ValueError):
+            _close_fd(directory)
+            return cott_runtime.Err(error=_output_failure())
+        if not _close_fd(directory):
+            _close_fd(child)
+            return cott_runtime.Err(error=_output_failure())
+        directory = child
+    return cott_runtime.Ok(value=directory)
 
 
-def _open_file(dfd: int, name: str, append: bool, file_retries: int) -> Result[int, MediaError]:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK | (os.O_APPEND if append else os.O_TRUNC)
-    attempt = 0
-    while True:
-        try:
-            fd = os.open(name, flags, 0o644, dir_fd=dfd)
-        except OSError:
-            if attempt >= file_retries:
-                return Err(error=MediaError_OutputFailure(message="cannot open output file"))
-            _sleep_backoff(attempt)
-            attempt += 1
-            continue
-        try:
-            regular = stat.S_ISREG(os.fstat(fd).st_mode)
-        except OSError:
-            regular = False
-        if not regular:
-            _close_quiet(fd)
-            return Err(error=MediaError_OutputFailure(message="output is not a regular file"))
-        return Ok(value=fd)
+def _open_parent(destination: Path, retries: int) -> Result[int, MediaError]:
+    for attempt in range(retries + 1):
+        opened = _open_parent_once(destination)
+        if isinstance(opened, cott_runtime.Ok):
+            return opened
+        if attempt < retries:
+            _backoff(attempt)
+    return cott_runtime.Err(error=_output_failure())
 
 
-def _write_all(fd: int, chunk: bytes) -> bool:
-    view = memoryview(chunk)
+def _open_work_once(directory: int, name: str, resume: bool) -> Result[tuple[int, int], MediaError]:
+    flags = os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
     try:
-        while view:
-            written = os.write(fd, view)
-            if written <= 0:
+        fd = os.open(name, flags, dir_fd=directory)
+    except FileNotFoundError:
+        try:
+            fd = os.open(name, flags | os.O_CREAT | os.O_EXCL, 0o644, dir_fd=directory)
+        except FileExistsError:
+            try:
+                fd = os.open(name, flags, dir_fd=directory)
+            except (OSError, ValueError):
+                return cott_runtime.Err(error=_output_failure())
+        except (OSError, ValueError):
+            return cott_runtime.Err(error=_output_failure())
+    except (OSError, ValueError):
+        return cott_runtime.Err(error=_output_failure())
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            _close_fd(fd)
+            return cott_runtime.Err(error=_output_failure())
+    except OSError:
+        _close_fd(fd)
+        return cott_runtime.Err(error=_output_failure())
+    return cott_runtime.Ok(value=(fd, info.st_size if resume else 0))
+
+
+def _open_work(directory: int, name: str, resume: bool, retries: int) -> Result[tuple[int, int], MediaError]:
+    for attempt in range(retries + 1):
+        opened = _open_work_once(directory, name, resume)
+        if isinstance(opened, cott_runtime.Ok):
+            return opened
+        if attempt < retries:
+            _backoff(attempt)
+    return cott_runtime.Err(error=_output_failure())
+
+
+def _write_all(fd: int, data: bytes) -> bool:
+    remaining = memoryview(data)
+    try:
+        while remaining:
+            count = os.write(fd, remaining)
+            if count <= 0:
                 return False
-            view = view[written:]
+            remaining = remaining[count:]
     except OSError:
         return False
     return True
 
 
+def _decimal(text: str) -> int | None:
+    if not text or not text.isascii() or not text.isdecimal():
+        return None
+    digits = text.lstrip("0") or "0"
+    if len(digits) > 20:
+        return None
+    return int(digits)
+
+
+def _declared_length(response: http.client.HTTPResponse, base: int, limit: int) -> Result[int | None, MediaError]:
+    header = response.getheader("Content-Length")
+    if header is None:
+        return cott_runtime.Ok(value=None)
+    text = header.strip()
+    if not text or not text.isascii() or not text.isdecimal():
+        return cott_runtime.Err(error=_network_failure())
+    length = _decimal(text)
+    if length is None or base + length > limit:
+        return cott_runtime.Err(error=MediaError_SizeLimit())
+    return cott_runtime.Ok(value=length)
+
+
+def _partial_range(response: http.client.HTTPResponse, offset: int, limit: int, length: int | None) -> Result[int, MediaError]:
+    header = response.getheader("Content-Range") or ""
+    matched = re.fullmatch(r"bytes ([0-9]+)-([0-9]+)/([0-9]+)", header.strip())
+    if matched is None:
+        return cott_runtime.Err(error=_network_failure())
+    first = _decimal(matched.group(1))
+    last = _decimal(matched.group(2))
+    total = _decimal(matched.group(3))
+    if first is None or last is None or total is None:
+        return cott_runtime.Err(error=_network_failure())
+    if total > limit:
+        return cott_runtime.Err(error=MediaError_SizeLimit())
+    span = last - first + 1
+    if first != offset or span <= 0 or last + 1 != total or (length is not None and length != span):
+        return cott_runtime.Err(error=_network_failure())
+    return cott_runtime.Ok(value=span)
+
+
 def _connect(url: str, offset: int) -> Result[tuple[http.client.HTTPConnection, http.client.HTTPResponse], MediaError]:
+    try:
+        context = ssl.create_default_context()
+    except (OSError, ValueError):
+        return cott_runtime.Err(error=_network_failure())
     current = url
-    for _ in range(_MAX_REDIRECTS + 1):
+    for redirect in range(_MAX_REDIRECTS + 1):
         if not _url_ok(current):
-            return Err(error=MediaError_NetworkFailure(message="redirect to unsupported URL"))
-        parts = urlsplit(current)
-        host = parts.hostname or ""
-        target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
-        headers = {"User-Agent": "yt-dlp", "Accept-Encoding": "identity"}
-        if offset > 0:
-            headers["Range"] = f"bytes={offset}-"
-        connection: http.client.HTTPConnection
-        if parts.scheme == "https":
-            connection = http.client.HTTPSConnection(host, parts.port, timeout=_TIMEOUT, context=ssl.create_default_context())
-        else:
-            connection = http.client.HTTPConnection(host, parts.port, timeout=_TIMEOUT)
+            return cott_runtime.Err(error=_network_failure())
+        connection: http.client.HTTPConnection | None = None
         try:
+            parts = urlsplit(current)
+            host = parts.hostname or ""
+            target = (parts.path or "/") + ("?" + parts.query if parts.query else "")
+            if parts.scheme == "https":
+                connection = http.client.HTTPSConnection(host, parts.port, timeout=_TIMEOUT, context=context)
+            else:
+                connection = http.client.HTTPConnection(host, parts.port, timeout=_TIMEOUT)
+            headers = {"Accept-Encoding": "identity", "User-Agent": "yt-dlp"}
+            if offset > 0:
+                headers["Range"] = f"bytes={offset}-"
             connection.request("GET", target, headers=headers)
             response = connection.getresponse()
-        except (OSError, ValueError, http.client.HTTPException, socket.timeout):
-            connection.close()
-            return Err(error=MediaError_NetworkFailure(message="connection failure"))
-        if response.status in (301, 302, 303, 307, 308):
+            if response.status not in (301, 302, 303, 307, 308):
+                return cott_runtime.Ok(value=(connection, response))
             location = response.getheader("Location")
             status = response.status
-            connection.close()
-            if location is None or location.strip() == "":
-                return Err(error=MediaError_HttpStatus(status=status))
-            current = urljoin(current, location.strip())
-            continue
-        return Ok(value=(connection, response))
-    return Err(error=MediaError_NetworkFailure(message="too many redirects"))
+            if not _close_response(connection, response):
+                return cott_runtime.Err(error=_network_failure())
+            if redirect == _MAX_REDIRECTS:
+                return cott_runtime.Err(error=_network_failure())
+            if not location:
+                return cott_runtime.Err(error=MediaError_HttpStatus(status=status))
+            current = urljoin(current, location)
+        except (OSError, ValueError, http.client.HTTPException):
+            if connection is not None:
+                try:
+                    connection.close()
+                except (OSError, ValueError, http.client.HTTPException):
+                    return cott_runtime.Err(error=_network_failure())
+            return cott_runtime.Err(error=_network_failure())
+    return cott_runtime.Err(error=_network_failure())
 
 
-def _stream(response: http.client.HTTPResponse, fd: int, policy: FragmentPolicy, start_total: int, limit: int) -> Result[int, MediaError]:
-    read_size = policy.buffer_size if policy.chunk_size == 0 else min(policy.buffer_size, policy.chunk_size)
-    rate = policy.rate_limit_bytes_per_second
-    started = time.monotonic()
-    received = 0
-    total = start_total
-    while True:
-        try:
-            chunk = response.read(read_size)
-        except (OSError, ValueError, http.client.HTTPException, socket.timeout):
-            return Err(error=MediaError_NetworkFailure(message="connection failure while reading body"))
-        if not chunk:
-            break
-        total += len(chunk)
-        received += len(chunk)
-        if total > limit:
-            return Err(error=MediaError_SizeLimit())
-        if not _write_all(fd, chunk):
-            return Err(error=MediaError_OutputFailure(message="cannot write output file"))
-        if rate > 0:
-            ahead = received / rate - (time.monotonic() - started)
-            if ahead > 0:
-                time.sleep(ahead)
-    try:
-        os.fsync(fd)
-    except OSError:
-        return Err(error=MediaError_OutputFailure(message="cannot flush output file"))
-    return Ok(value=received)
-
-
-def _sync_existing(dfd: int, name: str, total: int) -> Result[int, MediaError]:
-    try:
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dfd)
-    except OSError:
-        return Err(error=MediaError_OutputFailure(message="cannot open existing output file"))
-    try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            return Err(error=MediaError_OutputFailure(message="output is not a regular file"))
-        if info.st_size != total:
-            return Err(error=MediaError_HttpStatus(status=416))
-        os.fsync(fd)
-    except OSError:
-        return Err(error=MediaError_OutputFailure(message="cannot flush output file"))
-    finally:
-        _close_quiet(fd)
-    return Ok(value=0)
-
-
-def _decimal(text: str) -> int:
-    return int(text) if text != "" and text.isascii() and text.isdigit() else -1
-
-
-def _range_complete(content_range: str, offset: int) -> bool:
-    unit, _, spec = content_range.strip().partition(" ")
-    unsat, _, total = spec.strip().partition("/")
-    return unit == "bytes" and unsat == "*" and _decimal(total) == offset
-
-
-def _partial_span(content_range: str, offset: int) -> tuple[int, int]:
-    unit, _, spec = content_range.strip().partition(" ")
-    span, _, total_text = spec.strip().partition("/")
-    first_text, dash, last_text = span.partition("-")
-    first = _decimal(first_text)
-    last = _decimal(last_text)
-    total = _decimal(total_text)
-    if unit != "bytes" or dash == "" or first != offset or last < first or total <= last:
-        return (-1, -1)
-    return (last - first + 1, total)
-
-
-def _consume(response: http.client.HTTPResponse, policy: FragmentPolicy, dfd: int, name: str, offset: int, limit: int, known_total: int) -> Result[int, MediaError]:
+def _stream(response: http.client.HTTPResponse, fd: int, offset: int, request: TransferRequest, policy: FragmentPolicy) -> Result[tuple[int, int, int], MediaError]:
     status = response.status
     if status == 416 and offset > 0:
-        if not _range_complete(response.getheader("Content-Range") or "", offset):
-            return Err(error=MediaError_HttpStatus(status=status))
-        return _sync_existing(dfd, name, offset)
-    if status < 200 or status > 299 or (status == 206 and offset == 0):
-        return Err(error=MediaError_HttpStatus(status=status))
-    append = status == 206
-    length = response.getheader("Content-Length")
-    expected = _decimal(length.strip() if length is not None else "")
-    if length is not None and expected < 0:
-        return Err(error=MediaError_NetworkFailure(message="malformed Content-Length"))
-    resource_total = -1
-    if append:
-        span, resource_total = _partial_span(response.getheader("Content-Range") or "", offset)
-        if span < 0 or (expected >= 0 and expected != span) or (known_total >= 0 and resource_total != known_total):
-            return Err(error=MediaError_NetworkFailure(message="unexpected partial content range"))
-        if resource_total > limit:
-            return Err(error=MediaError_SizeLimit())
-        expected = span
-    start_total = offset if append else 0
-    if expected >= 0 and start_total + expected > limit:
-        return Err(error=MediaError_SizeLimit())
-    streamed: Result[int, MediaError]
-    match _open_file(dfd, name, append, policy.file_access_retries):
-        case Err(error=open_error):
-            return Err(error=open_error)
-        case Ok(value=fd):
-            try:
-                streamed = _stream(response, fd, policy, start_total, limit)
-            finally:
-                _close_quiet(fd)
-    match streamed:
-        case Err(error=stream_error):
-            return Err(error=stream_error)
-        case Ok(value=received):
-            if expected >= 0 and received != expected:
-                return Err(error=MediaError_NetworkFailure(message="incomplete response body"))
-            if append and offset + received < resource_total:
-                return Ok(value=resource_total)
-            return Ok(value=0)
-
-
-def _existing_size(dfd: int, name: str) -> Result[int, MediaError]:
-    try:
-        info = os.stat(name, dir_fd=dfd, follow_symlinks=False)
-    except FileNotFoundError:
-        return Ok(value=0)
-    except OSError:
-        return Err(error=MediaError_OutputFailure(message="cannot inspect output file"))
-    if not stat.S_ISREG(info.st_mode):
-        return Err(error=MediaError_OutputFailure(message="output is not a regular file"))
-    return Ok(value=info.st_size)
-
-
-def _attempt(request: TransferRequest, policy: FragmentPolicy, dfd: int, name: str) -> Result[int, MediaError]:
-    resume = policy.continue_download
-    limit = request.max_bytes
-    known_total = -1
-    while True:
-        offset = 0
-        if resume:
-            match _existing_size(dfd, name):
-                case Err(error=size_error):
-                    return Err(error=size_error)
-                case Ok(value=size):
-                    offset = size
-        if offset > limit:
-            return Err(error=MediaError_SizeLimit())
-        outcome: Result[int, MediaError]
-        match _connect(request.url, offset):
-            case Err(error=connect_error):
-                return Err(error=connect_error)
-            case Ok(value=(connection, response)):
-                try:
-                    outcome = _consume(response, policy, dfd, name, offset, limit, known_total)
-                finally:
-                    response.close()
-                    connection.close()
-        match outcome:
-            case Ok(value=0):
-                return outcome
-            case Ok(value=total):
-                known_total = total
-                resume = True
-            case Err():
-                return outcome
-
-
-def _finish(request: TransferRequest, policy: FragmentPolicy, dfd: int, work: str, destination: Path) -> Result[TransferReceipt, MediaError]:
-    target = destination.name
-    if work != target:
-        tries = 0
-        while True:
-            try:
-                os.replace(work, target, src_dir_fd=dfd, dst_dir_fd=dfd)
-                break
-            except OSError:
-                if tries >= policy.file_access_retries:
-                    return Err(error=MediaError_OutputFailure(message="cannot rename part file"))
-                _sleep_backoff(tries)
-                tries += 1
         try:
-            os.fsync(dfd)
+            os.fsync(fd)
+            info = os.fstat(fd)
         except OSError:
-            return Err(error=MediaError_OutputFailure(message="cannot flush output directory"))
+            return cott_runtime.Err(error=_output_failure())
+        if not stat.S_ISREG(info.st_mode) or info.st_size != offset:
+            return cott_runtime.Err(error=_output_failure())
+        return cott_runtime.Ok(value=(offset, info.st_dev, info.st_ino))
+    if not 200 <= status < 300 or (status == 206 and offset == 0):
+        return cott_runtime.Err(error=MediaError_HttpStatus(status=status))
+    resumed = status == 206
+    base = offset if resumed else 0
+    declared = _declared_length(response, base, request.max_bytes)
+    if isinstance(declared, cott_runtime.Err):
+        return cott_runtime.Err(error=declared.error)
+    expected = declared.value
+    if resumed:
+        partial = _partial_range(response, offset, request.max_bytes, expected)
+        if isinstance(partial, cott_runtime.Err):
+            return cott_runtime.Err(error=partial.error)
+        expected = partial.value
     try:
-        info = os.stat(target, dir_fd=dfd, follow_symlinks=False)
+        if resumed:
+            if os.fstat(fd).st_size != offset:
+                return cott_runtime.Err(error=_output_failure())
+            os.lseek(fd, 0, os.SEEK_END)
+        else:
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
     except OSError:
-        return Err(error=MediaError_OutputFailure(message="cannot inspect output file"))
-    if not stat.S_ISREG(info.st_mode):
-        return Err(error=MediaError_OutputFailure(message="output is not a regular file"))
-    return Ok(value=TransferReceipt(url=request.url, destination=destination, bytes_written=info.st_size, simulated=False))
+        return cott_runtime.Err(error=_output_failure())
+    read_size = min(policy.buffer_size, policy.chunk_size) if policy.chunk_size else policy.buffer_size
+    started = time.monotonic()
+    received = 0
+    while True:
+        try:
+            block = response.read(min(read_size, request.max_bytes - base - received + 1))
+        except (OSError, ValueError, http.client.HTTPException):
+            return cott_runtime.Err(error=_network_failure())
+        if not block:
+            break
+        received += len(block)
+        if base + received > request.max_bytes:
+            return cott_runtime.Err(error=MediaError_SizeLimit())
+        if policy.rate_limit_bytes_per_second:
+            delay = received / policy.rate_limit_bytes_per_second - (time.monotonic() - started)
+            if delay > 0:
+                time.sleep(delay)
+        if not _write_all(fd, block):
+            return cott_runtime.Err(error=_output_failure())
+    if expected is not None and received != expected:
+        return cott_runtime.Err(error=_network_failure())
+    try:
+        os.fsync(fd)
+        info = os.fstat(fd)
+    except OSError:
+        return cott_runtime.Err(error=_output_failure())
+    if not stat.S_ISREG(info.st_mode) or info.st_size != base + received:
+        return cott_runtime.Err(error=_output_failure())
+    return cott_runtime.Ok(value=(info.st_size, info.st_dev, info.st_ino))
 
 
-def _transfer_in(request: TransferRequest, policy: FragmentPolicy, retries: int, dfd: int, destination: Path) -> Result[TransferReceipt, MediaError]:
-    work = destination.name + ".part" if policy.part_files else destination.name
+def _same_work(directory: int, name: str, size: int, device: int, inode: int) -> bool:
+    try:
+        info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    except (OSError, ValueError):
+        return False
+    return stat.S_ISREG(info.st_mode) and info.st_size == size and info.st_dev == device and info.st_ino == inode
+
+
+def _destination_regular(directory: int, name: str) -> bool:
+    try:
+        info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return stat.S_ISREG(info.st_mode)
+
+
+def _publish(directory: int, work: str, request: TransferRequest, policy: FragmentPolicy, saved: tuple[int, int, int]) -> Result[TransferReceipt, MediaError]:
+    size, device, inode = saved
+    name = request.destination.name
+    if not _same_work(directory, work, size, device, inode):
+        return cott_runtime.Err(error=_output_failure())
+    if work != name:
+        for attempt in range(policy.file_access_retries + 1):
+            if not _destination_regular(directory, name) or not _same_work(directory, work, size, device, inode):
+                return cott_runtime.Err(error=_output_failure())
+            try:
+                os.replace(work, name, src_dir_fd=directory, dst_dir_fd=directory)
+                break
+            except (OSError, ValueError):
+                if attempt == policy.file_access_retries:
+                    return cott_runtime.Err(error=_output_failure())
+                _backoff(attempt)
+    if not _same_work(directory, name, size, device, inode):
+        return cott_runtime.Err(error=_output_failure())
+    try:
+        os.fsync(directory)
+    except OSError:
+        return cott_runtime.Err(error=_output_failure())
+    return cott_runtime.Ok(value=TransferReceipt(url=request.url, destination=request.destination, bytes_written=size, simulated=False))
+
+
+def _host_attempt(request: TransferRequest, policy: FragmentPolicy, directory: int, work: str) -> Result[tuple[int, int, int], MediaError]:
+    opened = _open_work(directory, work, policy.continue_download, policy.file_access_retries)
+    if isinstance(opened, cott_runtime.Err):
+        return cott_runtime.Err(error=opened.error)
+    fd, offset = opened.value
+    if offset > request.max_bytes:
+        result: Result[tuple[int, int, int], MediaError] = cott_runtime.Err(error=MediaError_SizeLimit())
+    else:
+        fetched = _connect(request.url, offset)
+        if isinstance(fetched, cott_runtime.Err):
+            result = cott_runtime.Err(error=fetched.error)
+        else:
+            connection, response = fetched.value
+            try:
+                result = _stream(response, fd, offset, request, policy)
+            finally:
+                closed = _close_response(connection, response)
+            if not closed:
+                result = cott_runtime.Err(error=_network_failure())
+    if not _close_fd(fd):
+        return cott_runtime.Err(error=_output_failure())
+    return result
+
+
+def _retryable(error: MediaError) -> bool:
+    return isinstance(error, MediaError_NetworkFailure) or (isinstance(error, MediaError_HttpStatus) and (error.status == 429 or 500 <= error.status < 600))
+
+
+def _host_one(request: TransferRequest, policy: FragmentPolicy, retries: int) -> Result[TransferReceipt, MediaError]:
+    parent = _open_parent(request.destination, policy.file_access_retries)
+    if isinstance(parent, cott_runtime.Err):
+        return cott_runtime.Err(error=parent.error)
+    directory = parent.value
+    work = request.destination.name + ".part" if policy.part_files else request.destination.name
     attempt = 0
     while True:
-        # The work file only ever holds a contiguous verbatim body prefix: 200 truncates
-        # and rewrites from 0, 206 appends at the checked offset, and write/fsync errors
-        # are terminal OutputFailure. A retry therefore resumes from the file's actual size.
-        match _attempt(request, policy, dfd, work):
-            case Ok(value=_):
-                return _finish(request, policy, dfd, work, destination)
-            case Err(error=error):
-                retryable = isinstance(error, MediaError_NetworkFailure) or (isinstance(error, MediaError_HttpStatus) and (error.status >= 500 or error.status == 429))
-                if not retryable:
-                    return Err(error=error)
-                if attempt >= retries:
-                    if retries == 0:
-                        return Err(error=error)
-                    return Err(error=MediaError_RetryExhausted(attempts=attempt + 1))
-                _sleep_backoff(attempt)
-                attempt += 1
+        transferred = _host_attempt(request, policy, directory, work)
+        if isinstance(transferred, cott_runtime.Ok):
+            outcome: Result[TransferReceipt, MediaError] = _publish(directory, work, request, policy, transferred.value)
+            break
+        if not _retryable(transferred.error):
+            outcome = cott_runtime.Err(error=transferred.error)
+            break
+        if attempt >= retries:
+            if retries:
+                outcome = cott_runtime.Err(error=MediaError_RetryExhausted(attempts=attempt + 1))
+            else:
+                outcome = cott_runtime.Err(error=transferred.error)
+            break
+        _backoff(attempt)
+        attempt += 1
+    if not _close_fd(directory):
+        return cott_runtime.Err(error=_output_failure())
+    return outcome
 
 
-def _transfer_one(request: TransferRequest, policy: FragmentPolicy, retries: int) -> Result[TransferReceipt, MediaError]:
-    destination = Path(request.destination)
-    if request.simulate:
-        return Ok(value=TransferReceipt(url=request.url, destination=destination, bytes_written=0, simulated=True))
-    if os.name != "posix" or not (os.O_NOFOLLOW and os.O_DIRECTORY and os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd and os.rename in os.supports_dir_fd):
-        return Err(error=MediaError_OutputFailure(message="platform lacks descriptor-relative file operations"))
-    dfd = _open_parent(destination)
-    if dfd is None:
-        return Err(error=MediaError_OutputFailure(message="cannot open output directory without following symlinks"))
+def _fixture_fetch(url: str) -> Result[bytes, MediaError] | None:
     try:
-        return _transfer_in(request, policy, retries, dfd, destination)
-    finally:
-        _close_quiet(dfd)
+        return cott_runtime.Ok(value=cott_runtime._cott_fixture_http(url))
+    except HTTPError as error:
+        return cott_runtime.Err(error=MediaError_HttpStatus(status=error.code))
+    except cott_runtime.CottContractViolation as error:
+        if error.message == "fixture adapters are inactive":
+            return None
+        cause = error.__cause__
+        if isinstance(cause, HTTPError):
+            return cott_runtime.Err(error=MediaError_HttpStatus(status=cause.code))
+        matched = re.search(r"(?:HTTP |status[ =])([1-5][0-9][0-9])\b", error.message)
+        if matched is not None:
+            return cott_runtime.Err(error=MediaError_HttpStatus(status=int(matched.group(1))))
+        return cott_runtime.Err(error=_network_failure())
+    except (OSError, ValueError, http.client.HTTPException):
+        return cott_runtime.Err(error=_network_failure())
+
+
+def _fixture_write(path: Path, body: bytes, retries: int, replace: bool) -> bool:
+    for attempt in range(retries + 1):
+        try:
+            if replace:
+                cott_runtime._cott_fixture_replace(path, body)
+            else:
+                cott_runtime._cott_fixture_write(path, body)
+            return True
+        except cott_runtime.CottContractViolation as error:
+            cause = error.__cause__
+            if not isinstance(cause, (FileNotFoundError, NotADirectoryError, PermissionError)) or attempt == retries:
+                return False
+        except (FileNotFoundError, NotADirectoryError, PermissionError):
+            if attempt == retries:
+                return False
+        except OSError:
+            return False
+        _backoff(attempt)
+    return False
+
+
+def _fixture_finish(request: TransferRequest, policy: FragmentPolicy, body: bytes, write_work: bool) -> Result[TransferReceipt, MediaError]:
+    destination = request.destination
+    work = destination.with_name(destination.name + ".part") if policy.part_files else destination
+    if policy.rate_limit_bytes_per_second and body:
+        time.sleep(len(body) / policy.rate_limit_bytes_per_second)
+    if write_work and not _fixture_write(work, body, policy.file_access_retries, False):
+        return cott_runtime.Err(error=_output_failure())
+    if policy.part_files:
+        if not _fixture_write(destination, body, policy.file_access_retries, True):
+            return cott_runtime.Err(error=_output_failure())
+        try:
+            cott_runtime._cott_fixture_remove(work)
+        except (cott_runtime.CottContractViolation, OSError):
+            return cott_runtime.Err(error=_output_failure())
+    return cott_runtime.Ok(value=TransferReceipt(url=request.url, destination=destination, bytes_written=len(body), simulated=False))
+
+
+def _fixture_complete(request: TransferRequest, policy: FragmentPolicy) -> Result[TransferReceipt, MediaError]:
+    work = request.destination.with_name(request.destination.name + ".part") if policy.part_files else request.destination
+    try:
+        body = cott_runtime._cott_fixture_read(work)
+    except cott_runtime.CottContractViolation as error:
+        if isinstance(error.__cause__, FileNotFoundError):
+            return cott_runtime.Err(error=MediaError_HttpStatus(status=416))
+        return cott_runtime.Err(error=_output_failure())
+    except FileNotFoundError:
+        return cott_runtime.Err(error=MediaError_HttpStatus(status=416))
+    except OSError:
+        return cott_runtime.Err(error=_output_failure())
+    if not body:
+        return cott_runtime.Err(error=MediaError_HttpStatus(status=416))
+    if len(body) > request.max_bytes:
+        return cott_runtime.Err(error=MediaError_SizeLimit())
+    return _fixture_finish(request, policy, body, False)
+
+
+def _fixture_one(request: TransferRequest, policy: FragmentPolicy, retries: int, first: Result[bytes, MediaError]) -> Result[TransferReceipt, MediaError]:
+    attempt = 0
+    while True:
+        fetched = first if attempt == 0 else _fixture_fetch(request.url)
+        if fetched is None:
+            return cott_runtime.Err(error=_network_failure())
+        if isinstance(fetched, cott_runtime.Ok):
+            body = fetched.value
+            if len(body) > request.max_bytes:
+                return cott_runtime.Err(error=MediaError_SizeLimit())
+            return _fixture_finish(request, policy, body, True)
+        if isinstance(fetched.error, MediaError_HttpStatus) and fetched.error.status == 416 and policy.continue_download:
+            return _fixture_complete(request, policy)
+        if not _retryable(fetched.error):
+            return cott_runtime.Err(error=fetched.error)
+        if attempt >= retries:
+            if retries:
+                return cott_runtime.Err(error=MediaError_RetryExhausted(attempts=attempt + 1))
+            return cott_runtime.Err(error=fetched.error)
+        _backoff(attempt)
+        attempt += 1
 
 
 def transfer_fragments(fragments: CottList[TransferRequest], policy: FragmentPolicy) -> Result[CottList[TransferReceipt], MediaError]:
-    if policy.concurrent_fragments == 0:
-        return Err(error=MediaError_InvalidInput(message="concurrent_fragments must be positive"))
-    if policy.buffer_size == 0:
-        return Err(error=MediaError_InvalidInput(message="buffer_size must be positive"))
-    seen: set[str] = set()
-    requests: list[TransferRequest] = []
+    if policy.concurrent_fragments == 0 or policy.buffer_size == 0:
+        return cott_runtime.Err(error=MediaError_InvalidInput(message="fragment concurrency and buffer size must be positive"))
+    destinations: set[str] = set()
     for fragment in fragments:
         if not _url_ok(fragment.url):
-            return Err(error=MediaError_InvalidInput(message="invalid fragment URL"))
-        destination = Path(fragment.destination)
-        if destination.name in ("", ".", ".."):
-            return Err(error=MediaError_InvalidInput(message="destination has no file name"))
+            return cott_runtime.Err(error=MediaError_InvalidInput(message="invalid fragment URL"))
+        destination = fragment.destination
+        if destination.name in ("", ".", "..") or "\x00" in str(destination):
+            return cott_runtime.Err(error=MediaError_InvalidInput(message="fragment destination must name a file"))
         key = os.path.abspath(destination)
-        if key in seen:
-            return Err(error=MediaError_InvalidInput(message="duplicate fragment destination"))
-        seen.add(key)
-        requests.append(fragment)
-    retries = policy.fragment_retries if len(requests) > 1 else policy.retries
+        if key in destinations:
+            return cott_runtime.Err(error=MediaError_InvalidInput(message="duplicate fragment destination"))
+        destinations.add(key)
+    retries = policy.fragment_retries if len(fragments) > 1 else policy.retries
     receipts: list[TransferReceipt] = []
-    for request in requests:
-        outcome: Result[TransferReceipt, MediaError]
-        try:
-            outcome = _transfer_one(request, policy, retries)
-        except Exception:
-            outcome = Err(error=MediaError_OutputFailure(message="unexpected failure transferring fragment"))
-        match outcome:
-            case Err(error=failure):
-                return Err(error=failure)
-            case Ok(value=receipt):
-                receipts.append(receipt)
-    return Ok(value=CottList(values=receipts))
+    for fragment in fragments:
+        if fragment.simulate:
+            receipts.append(TransferReceipt(url=fragment.url, destination=fragment.destination, bytes_written=0, simulated=True))
+            continue
+        fixture = _fixture_fetch(fragment.url)
+        outcome = _host_one(fragment, policy, retries) if fixture is None else _fixture_one(fragment, policy, retries, fixture)
+        if isinstance(outcome, cott_runtime.Err):
+            return cott_runtime.Err(error=outcome.error)
+        receipts.append(outcome.value)
+    return cott_runtime.Ok(value=CottList(values=receipts))

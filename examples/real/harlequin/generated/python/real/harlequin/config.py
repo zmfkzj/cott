@@ -39,16 +39,16 @@ deduplication is performed."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.config.config_search_paths"
         if _error.span is None:
-            _error.span = {"end_byte":2638,"end_column":1,"end_line":92,"start_byte":2082,"start_column":1,"start_line":78}
+            _error.span = {"end_byte":2657,"end_column":1,"end_line":97,"start_byte":2082,"start_column":1,"start_line":78}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.config_search_paths", phase="implementation-call", span={"end_byte":2638,"end_column":1,"end_line":92,"start_byte":2082,"start_column":1,"start_line":78}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.config_search_paths", phase="implementation-call", span={"end_byte":2657,"end_column":1,"end_line":97,"start_byte":2082,"start_column":1,"start_line":78}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.config_search_paths", phase="implementation-call", span={"end_byte":2638,"end_column":1,"end_line":92,"start_byte":2082,"start_column":1,"start_line":78}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.config_search_paths", phase="implementation-call", span={"end_byte":2657,"end_column":1,"end_line":97,"start_byte":2082,"start_column":1,"start_line":78}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, CottList[Path], path="$.return")
     if _cott_test_context:
         if not (_cott_contract_condition(((len(_result) >= 9)), "real.harlequin.config.config_search_paths", "ensures:1")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.config_search_paths", clause="ensures:1", phase="ensures", span={"end_byte":2620,"end_column":28,"end_line":88,"start_byte":2597,"start_column":5,"start_line":88}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.config_search_paths", clause="ensures:1", phase="ensures", span={"end_byte":2639,"end_column":28,"end_line":93,"start_byte":2616,"start_column":5,"start_line":93}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, CottList[Path], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -89,18 +89,18 @@ Errors are Invalid(title, message):
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/config/read_config_file.py", "f787853d63ec63feb35f44fa34048d793818995c5e5e802abea9e21fda0b503c", "read_config_file", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.config.read_config_file")
+        _implementation = _cott_load("_cott_impl/real/harlequin/config/read_config_file.py", "ffb4b887e3269ed907cdc5b68990ae33c7bb085b7e5c974ac00e5ed9c0d2fa6b", "read_config_file", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.config.read_config_file")
         _result = _implementation(path)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.config.read_config_file"
         if _error.span is None:
-            _error.span = {"end_byte":4853,"end_column":1,"end_line":132,"start_byte":2638,"start_column":1,"start_line":92}
+            _error.span = {"end_byte":4872,"end_column":1,"end_line":137,"start_byte":2657,"start_column":1,"start_line":97}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.read_config_file", phase="implementation-call", span={"end_byte":4853,"end_column":1,"end_line":132,"start_byte":2638,"start_column":1,"start_line":92}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.read_config_file", phase="implementation-call", span={"end_byte":4872,"end_column":1,"end_line":137,"start_byte":2657,"start_column":1,"start_line":97}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.read_config_file", phase="implementation-call", span={"end_byte":4853,"end_column":1,"end_line":132,"start_byte":2638,"start_column":1,"start_line":92}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.read_config_file", phase="implementation-call", span={"end_byte":4872,"end_column":1,"end_line":137,"start_byte":2657,"start_column":1,"start_line":97}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, Result[Option[ConfigFile], ConfigError], path="$.return")
     if _cott_test_context:
         if type(_result) is Err:
@@ -108,7 +108,7 @@ Errors are Invalid(title, message):
                 if type(_result.error) is not _expected_error:
                     raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.config.read_config_file", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
             elif type(_result.error) not in (ConfigError_Invalid,):
-                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.config.read_config_file", phase="error", span={"end_byte":4853,"end_column":1,"end_line":132,"start_byte":2638,"start_column":1,"start_line":92}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.config.read_config_file", phase="error", span={"end_byte":4872,"end_column":1,"end_line":137,"start_byte":2657,"start_column":1,"start_line":97}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
         elif _expected_error is not None:
             raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.config.read_config_file", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
         if _expected_error_clause is not None:
@@ -123,7 +123,7 @@ Errors are Invalid(title, message):
             _cott_contract_condition((False), "real.harlequin.config.read_config_file", "ensures:1:applicable")
             return True
         if not (_cott_match_ensures_1()):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.read_config_file", clause="ensures:1", phase="ensures", span={"end_byte":4795,"end_column":37,"end_line":126,"start_byte":4763,"start_column":5,"start_line":126}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.read_config_file", clause="ensures:1", phase="ensures", span={"end_byte":4814,"end_column":37,"end_line":131,"start_byte":4782,"start_column":5,"start_line":131}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[Option[ConfigFile], ConfigError], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -141,18 +141,18 @@ and sources records the supplying file of each profile."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.config.merge_config_files"
         if _error.span is None:
-            _error.span = {"end_byte":5434,"end_column":1,"end_line":146,"start_byte":4853,"start_column":1,"start_line":132}
+            _error.span = {"end_byte":5453,"end_column":1,"end_line":151,"start_byte":4872,"start_column":1,"start_line":137}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.merge_config_files", phase="implementation-call", span={"end_byte":5434,"end_column":1,"end_line":146,"start_byte":4853,"start_column":1,"start_line":132}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.merge_config_files", phase="implementation-call", span={"end_byte":5453,"end_column":1,"end_line":151,"start_byte":4872,"start_column":1,"start_line":137}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.merge_config_files", phase="implementation-call", span={"end_byte":5434,"end_column":1,"end_line":146,"start_byte":4853,"start_column":1,"start_line":132}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.merge_config_files", phase="implementation-call", span={"end_byte":5453,"end_column":1,"end_line":151,"start_byte":4872,"start_column":1,"start_line":137}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, MergedConfig, path="$.return")
     if _cott_test_context:
         if not (_cott_contract_condition((_cott_unique_by((_result).profiles, "name")), "real.harlequin.config.merge_config_files", "ensures:1")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.merge_config_files", clause="ensures:1", phase="ensures", span={"end_byte":5365,"end_column":53,"end_line":141,"start_byte":5317,"start_column":5,"start_line":141}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.merge_config_files", clause="ensures:1", phase="ensures", span={"end_byte":5384,"end_column":53,"end_line":146,"start_byte":5336,"start_column":5,"start_line":146}, expected="true", actual="false")
         if not (_cott_contract_condition((_cott_unique_by((_result).keymaps, "name")), "real.harlequin.config.merge_config_files", "ensures:2")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.merge_config_files", clause="ensures:2", phase="ensures", span={"end_byte":5416,"end_column":51,"end_line":142,"start_byte":5370,"start_column":5,"start_line":142}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.merge_config_files", clause="ensures:2", phase="ensures", span={"end_byte":5435,"end_column":51,"end_line":147,"start_byte":5389,"start_column":5,"start_line":147}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, MergedConfig, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -177,12 +177,12 @@ files.". A broken default_profile is only an error when it is used."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.config.select_profile"
         if _error.span is None:
-            _error.span = {"end_byte":6179,"end_column":1,"end_line":163,"start_byte":5434,"start_column":1,"start_line":146}
+            _error.span = {"end_byte":6209,"end_column":1,"end_line":171,"start_byte":5453,"start_column":1,"start_line":151}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.select_profile", phase="implementation-call", span={"end_byte":6179,"end_column":1,"end_line":163,"start_byte":5434,"start_column":1,"start_line":146}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.select_profile", phase="implementation-call", span={"end_byte":6209,"end_column":1,"end_line":171,"start_byte":5453,"start_column":1,"start_line":151}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.select_profile", phase="implementation-call", span={"end_byte":6179,"end_column":1,"end_line":163,"start_byte":5434,"start_column":1,"start_line":146}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.select_profile", phase="implementation-call", span={"end_byte":6209,"end_column":1,"end_line":171,"start_byte":5453,"start_column":1,"start_line":151}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, Result[Option[Profile], ConfigError], path="$.return")
     if _cott_test_context:
         if type(_result) is Err:
@@ -190,7 +190,7 @@ files.". A broken default_profile is only an error when it is used."""
                 if type(_result.error) is not _expected_error:
                     raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.config.select_profile", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
             elif type(_result.error) not in (ConfigError_Invalid,):
-                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.config.select_profile", phase="error", span={"end_byte":6179,"end_column":1,"end_line":163,"start_byte":5434,"start_column":1,"start_line":146}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.config.select_profile", phase="error", span={"end_byte":6209,"end_column":1,"end_line":171,"start_byte":5453,"start_column":1,"start_line":151}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
         elif _expected_error is not None:
             raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.config.select_profile", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
         if _expected_error_clause is not None:
@@ -205,7 +205,7 @@ files.". A broken default_profile is only an error when it is used."""
             _cott_contract_condition((False), "real.harlequin.config.select_profile", "ensures:1:applicable")
             return True
         if not (_cott_match_ensures_1()):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.select_profile", clause="ensures:1", phase="ensures", span={"end_byte":6130,"end_column":40,"end_line":157,"start_byte":6095,"start_column":5,"start_line":157}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.select_profile", clause="ensures:1", phase="ensures", span={"end_byte":6160,"end_column":40,"end_line":165,"start_byte":6125,"start_column":5,"start_line":165}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[Option[Profile], ConfigError], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -238,12 +238,12 @@ profiles.prod.conn_str[1])."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.config.interpolate_profile"
         if _error.span is None:
-            _error.span = {"end_byte":7494,"end_column":1,"end_line":187,"start_byte":6179,"start_column":1,"start_line":163}
+            _error.span = {"end_byte":7541,"end_column":1,"end_line":199,"start_byte":6209,"start_column":1,"start_line":171}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.interpolate_profile", phase="implementation-call", span={"end_byte":7494,"end_column":1,"end_line":187,"start_byte":6179,"start_column":1,"start_line":163}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.interpolate_profile", phase="implementation-call", span={"end_byte":7541,"end_column":1,"end_line":199,"start_byte":6209,"start_column":1,"start_line":171}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.interpolate_profile", phase="implementation-call", span={"end_byte":7494,"end_column":1,"end_line":187,"start_byte":6179,"start_column":1,"start_line":163}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.interpolate_profile", phase="implementation-call", span={"end_byte":7541,"end_column":1,"end_line":199,"start_byte":6209,"start_column":1,"start_line":171}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, Result[Profile, ConfigError], path="$.return")
     if _cott_test_context:
         if type(_result) is Err:
@@ -251,7 +251,7 @@ profiles.prod.conn_str[1])."""
                 if type(_result.error) is not _expected_error:
                     raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.config.interpolate_profile", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
             elif type(_result.error) not in (ConfigError_Invalid,):
-                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.config.interpolate_profile", phase="error", span={"end_byte":7494,"end_column":1,"end_line":187,"start_byte":6179,"start_column":1,"start_line":163}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.config.interpolate_profile", phase="error", span={"end_byte":7541,"end_column":1,"end_line":199,"start_byte":6209,"start_column":1,"start_line":171}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
         elif _expected_error is not None:
             raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.config.interpolate_profile", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
         if _expected_error_clause is not None:
@@ -266,7 +266,7 @@ profiles.prod.conn_str[1])."""
             _cott_contract_condition((False), "real.harlequin.config.interpolate_profile", "ensures:1:applicable")
             return True
         if not (_cott_match_ensures_1()):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.interpolate_profile", clause="ensures:1", phase="ensures", span={"end_byte":7445,"end_column":113,"end_line":181,"start_byte":7337,"start_column":5,"start_line":181}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.interpolate_profile", clause="ensures:1", phase="ensures", span={"end_byte":7492,"end_column":115,"end_line":193,"start_byte":7382,"start_column":5,"start_line":193}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[Profile, ConfigError], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -304,12 +304,12 @@ the implementation audit reserves for Python reflection."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.config.validate_config_file"
         if _error.span is None:
-            _error.span = {"end_byte":9375,"end_column":1,"end_line":215,"start_byte":7494,"start_column":1,"start_line":187}
+            _error.span = {"end_byte":9441,"end_column":1,"end_line":232,"start_byte":7541,"start_column":1,"start_line":199}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.validate_config_file", phase="implementation-call", span={"end_byte":9375,"end_column":1,"end_line":215,"start_byte":7494,"start_column":1,"start_line":187}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.validate_config_file", phase="implementation-call", span={"end_byte":9441,"end_column":1,"end_line":232,"start_byte":7541,"start_column":1,"start_line":199}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.validate_config_file", phase="implementation-call", span={"end_byte":9375,"end_column":1,"end_line":215,"start_byte":7494,"start_column":1,"start_line":187}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.validate_config_file", phase="implementation-call", span={"end_byte":9441,"end_column":1,"end_line":232,"start_byte":7541,"start_column":1,"start_line":199}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, CottList[ConfigProblem], path="$.return")
     _result = _cott_wrap_async_protocol(_result, CottList[ConfigProblem], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
@@ -334,18 +334,18 @@ configuration." and the OS error text. Returns path."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/config/write_profile.py", "d465c1472fd562be1da8c0b103a8af4393de8bfdf528c3417af35eb5b84a39d5", "write_profile", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.config.write_profile")
+        _implementation = _cott_load("_cott_impl/real/harlequin/config/write_profile.py", "d8aa56860294859375a67ab44f3bf0429f68a3651b0ca352ff0fc87cefd3e13f", "write_profile", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.config.write_profile")
         _result = _implementation(path, profile, default_profile)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.config.write_profile"
         if _error.span is None:
-            _error.span = {"end_byte":10593,"end_column":1,"end_line":243,"start_byte":9525,"start_column":1,"start_line":222}
+            _error.span = {"end_byte":10674,"end_column":1,"end_line":264,"start_byte":9591,"start_column":1,"start_line":239}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.write_profile", phase="implementation-call", span={"end_byte":10593,"end_column":1,"end_line":243,"start_byte":9525,"start_column":1,"start_line":222}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.write_profile", phase="implementation-call", span={"end_byte":10674,"end_column":1,"end_line":264,"start_byte":9591,"start_column":1,"start_line":239}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.write_profile", phase="implementation-call", span={"end_byte":10593,"end_column":1,"end_line":243,"start_byte":9525,"start_column":1,"start_line":222}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.write_profile", phase="implementation-call", span={"end_byte":10674,"end_column":1,"end_line":264,"start_byte":9591,"start_column":1,"start_line":239}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, Result[Path, ConfigError], path="$.return")
     if _cott_test_context:
         if type(_result) is Err:
@@ -353,7 +353,7 @@ configuration." and the OS error text. Returns path."""
                 if type(_result.error) is not _expected_error:
                     raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.config.write_profile", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
             elif type(_result.error) not in (ConfigError_Invalid,):
-                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.config.write_profile", phase="error", span={"end_byte":10593,"end_column":1,"end_line":243,"start_byte":9525,"start_column":1,"start_line":222}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.config.write_profile", phase="error", span={"end_byte":10674,"end_column":1,"end_line":264,"start_byte":9591,"start_column":1,"start_line":239}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
         elif _expected_error is not None:
             raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.config.write_profile", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
         if _expected_error_clause is not None:
@@ -368,7 +368,7 @@ configuration." and the OS error text. Returns path."""
             _cott_contract_condition((False), "real.harlequin.config.write_profile", "ensures:1:applicable")
             return True
         if not (_cott_match_ensures_1()):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.write_profile", clause="ensures:1", phase="ensures", span={"end_byte":10523,"end_column":50,"end_line":237,"start_byte":10478,"start_column":5,"start_line":237}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.write_profile", clause="ensures:1", phase="ensures", span={"end_byte":10604,"end_column":50,"end_line":258,"start_byte":10559,"start_column":5,"start_line":258}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[Path, ConfigError], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -386,18 +386,18 @@ Returns path."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/config/write_keymap.py", "1d241f51f11bf5c2ecc8a6ebdd7f19ca8d37bf1c52f1ad12a265e3141c74f5c2", "write_keymap", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.config.write_keymap")
+        _implementation = _cott_load("_cott_impl/real/harlequin/config/write_keymap.py", "09cb2cb6ed021f9cbcae41580bd2bb35dec21752949a0beb1bd566ef6e19483b", "write_keymap", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.config.write_keymap")
         _result = _implementation(path, keymap)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.config.write_keymap"
         if _error.span is None:
-            _error.span = {"end_byte":11201,"end_column":1,"end_line":259,"start_byte":10593,"start_column":1,"start_line":243}
+            _error.span = {"end_byte":11282,"end_column":1,"end_line":280,"start_byte":10674,"start_column":1,"start_line":264}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.write_keymap", phase="implementation-call", span={"end_byte":11201,"end_column":1,"end_line":259,"start_byte":10593,"start_column":1,"start_line":243}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.write_keymap", phase="implementation-call", span={"end_byte":11282,"end_column":1,"end_line":280,"start_byte":10674,"start_column":1,"start_line":264}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.write_keymap", phase="implementation-call", span={"end_byte":11201,"end_column":1,"end_line":259,"start_byte":10593,"start_column":1,"start_line":243}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.write_keymap", phase="implementation-call", span={"end_byte":11282,"end_column":1,"end_line":280,"start_byte":10674,"start_column":1,"start_line":264}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, Result[Path, ConfigError], path="$.return")
     if _cott_test_context:
         if type(_result) is Err:
@@ -405,7 +405,7 @@ Returns path."""
                 if type(_result.error) is not _expected_error:
                     raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.config.write_keymap", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
             elif type(_result.error) not in (ConfigError_Invalid,):
-                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.config.write_keymap", phase="error", span={"end_byte":11201,"end_column":1,"end_line":259,"start_byte":10593,"start_column":1,"start_line":243}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.config.write_keymap", phase="error", span={"end_byte":11282,"end_column":1,"end_line":280,"start_byte":10674,"start_column":1,"start_line":264}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
         elif _expected_error is not None:
             raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.config.write_keymap", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
         if _expected_error_clause is not None:
@@ -420,7 +420,7 @@ Returns path."""
             _cott_contract_condition((False), "real.harlequin.config.write_keymap", "ensures:1:applicable")
             return True
         if not (_cott_match_ensures_1()):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.write_keymap", clause="ensures:1", phase="ensures", span={"end_byte":11131,"end_column":50,"end_line":253,"start_byte":11086,"start_column":5,"start_line":253}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.config.write_keymap", clause="ensures:1", phase="ensures", span={"end_byte":11212,"end_column":50,"end_line":274,"start_byte":11167,"start_column":5,"start_line":274}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[Path, ConfigError], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -441,12 +441,12 @@ applied to each string."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.config.profile_toml"
         if _error.span is None:
-            _error.span = {"end_byte":11790,"end_column":1,"end_line":272,"start_byte":11201,"start_column":1,"start_line":259}
+            _error.span = {"end_byte":11871,"end_column":1,"end_line":293,"start_byte":11282,"start_column":1,"start_line":280}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.profile_toml", phase="implementation-call", span={"end_byte":11790,"end_column":1,"end_line":272,"start_byte":11201,"start_column":1,"start_line":259}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.config.profile_toml", phase="implementation-call", span={"end_byte":11871,"end_column":1,"end_line":293,"start_byte":11282,"start_column":1,"start_line":280}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.profile_toml", phase="implementation-call", span={"end_byte":11790,"end_column":1,"end_line":272,"start_byte":11201,"start_column":1,"start_line":259}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.config.profile_toml", phase="implementation-call", span={"end_byte":11871,"end_column":1,"end_line":293,"start_byte":11282,"start_column":1,"start_line":280}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result

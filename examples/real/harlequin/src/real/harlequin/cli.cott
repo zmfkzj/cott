@@ -100,7 +100,11 @@ fn harlequin_option_names() -> List[Str]:
 
     effects []
 
-fn parse_harlequin_arguments(arguments: List[Str], adapter_names: List[Str], adapter_options: List[AdapterOption]) -> Result[CliArguments, CliError]:
+fn parse_harlequin_arguments(
+    arguments: List[Str],
+    adapter_names: List[Str],
+    adapter_options: List[AdapterOption],
+) -> Result[CliArguments, CliError]:
     doc """
     Parse the harlequin command line like Harlequin's click command.
     Core options (spellings | profile key | kind):
@@ -185,7 +189,12 @@ fn harlequin_help(descriptors: List[AdapterDescriptor]) -> Str:
 
     effects []
 
-fn resolve_harlequin_settings(profile: Option[Profile], arguments: CliArguments, descriptor: AdapterDescriptor, options: List[AdapterOption]) -> Result[HarlequinSettings, ConfigError]:
+fn resolve_harlequin_settings(
+    profile: Option[Profile],
+    arguments: CliArguments,
+    descriptor: AdapterDescriptor,
+    options: List[AdapterOption],
+) -> Result[HarlequinSettings, ConfigError]:
     doc """
     Combine the selected (already interpolated) profile with the command line
     the way Harlequin does, for the adapter descriptor (the adapter typed with
@@ -265,7 +274,20 @@ scenario the_command_line_parses_like_click:
         secret: false,
     )
     call parsed = parse_harlequin_arguments(
-        List("-r", "--limit=10", "a.db", "-e", "httpfs", "--keymap-name", "vscode", "-e", "json", "b.db", "--init-path", "setup.sql"),
+        List(
+            "-r",
+            "--limit=10",
+            "a.db",
+            "-e",
+            "httpfs",
+            "--keymap-name",
+            "vscode",
+            "-e",
+            "json",
+            "b.db",
+            "--init-path",
+            "setup.sql",
+        ),
         List("duckdb", "sqlite"),
         List(init_option, extension),
     )
@@ -277,8 +299,19 @@ scenario the_command_line_parses_like_click:
             explicit: List(
                 ConfigEntry(key: "read_only", value: ConfigValue.Boolean(value: true)),
                 ConfigEntry(key: "limit", value: ConfigValue.Integer(value: 10)),
-                ConfigEntry(key: "extension", value: ConfigValue.Array(values: List(ConfigValue.Text(value: "httpfs"), ConfigValue.Text(value: "json")))),
-                ConfigEntry(key: "keymap_name", value: ConfigValue.Array(values: List(ConfigValue.Text(value: "vscode")))),
+                ConfigEntry(
+                    key: "extension",
+                    value: ConfigValue.Array(
+                        values: List(
+                            ConfigValue.Text(value: "httpfs"),
+                            ConfigValue.Text(value: "json"),
+                        ),
+                    ),
+                ),
+                ConfigEntry(
+                    key: "keymap_name",
+                    value: ConfigValue.Array(values: List(ConfigValue.Text(value: "vscode"))),
+                ),
                 ConfigEntry(key: "init_path", value: ConfigValue.Text(value: "setup.sql")),
             ),
             run_config_wizard: false,
@@ -296,11 +329,17 @@ scenario the_command_line_parses_like_click:
         ),
     )
     call range = parse_harlequin_arguments(List("--limit", "-2"), List("duckdb"), List())
-    assert range == Result.Err(error: CliError.Usage(message: "Invalid value for '--limit': -2 is not in the range x>=-1."))
+    assert range == Result.Err(
+        error: CliError.Usage(
+            message: "Invalid value for '--limit': -2 is not in the range x>=-1.",
+        ),
+    )
     call missing = parse_harlequin_arguments(List("--theme"), List("duckdb"), List())
-    assert missing == Result.Err(error: CliError.Usage(message: "Option '--theme' requires an argument."))
+    assert missing == Result.Err(
+        error: CliError.Usage(message: "Option '--theme' requires an argument."),
+    )
     call version = harlequin_version_text(List("sqlite", "duckdb"))
-    assert version == "harlequin, version 0.1.0\n\nInstalled Adapters:\n  - duckdb, version 0.1.0\n  - sqlite, version 0.1.0\n"
+    assert (version == "harlequin, version 0.1.0\n\nInstalled Adapters:\n  - duckdb, version 0.1.0\n  - sqlite, version 0.1.0\n")
 
 scenario command_lines_override_profiles:
     data duckdb: AdapterDescriptor = AdapterDescriptor(
@@ -345,7 +384,12 @@ scenario command_lines_override_profiles:
         show_version: false,
         show_help: false,
     )
-    call settings = resolve_harlequin_settings(Option.Some(value: profile), typed, duckdb, List(no_init))
+    call settings = resolve_harlequin_settings(
+        Option.Some(value: profile),
+        typed,
+        duckdb,
+        List(no_init),
+    )
     assert settings == Result.Ok(
         value: HarlequinSettings(
             profile_name: Option.Some(value: "dev"),
@@ -353,7 +397,9 @@ scenario command_lines_override_profiles:
                 adapter: AdapterKind.DuckDb,
                 conn_str: List("dev.db"),
                 read_only: true,
-                settings: List(AdapterSetting(name: "no_init", value: SettingValue.Flag(value: true))),
+                settings: List(
+                    AdapterSetting(name: "no_init", value: SettingValue.Flag(value: true)),
+                ),
             ),
             theme: "nord",
             keymap_names: List("vscode"),
@@ -368,8 +414,16 @@ scenario command_lines_override_profiles:
             ssh: Option.Nothing,
         ),
     )
-    data typo: Profile = Profile(name: "dev", entries: List(ConfigEntry(key: "no_inti", value: ConfigValue.Boolean(value: true))))
-    call misspelled = resolve_harlequin_settings(Option.Some(value: typo), typed, duckdb, List(no_init))
+    data typo: Profile = Profile(
+        name: "dev",
+        entries: List(ConfigEntry(key: "no_inti", value: ConfigValue.Boolean(value: true))),
+    )
+    call misspelled = resolve_harlequin_settings(
+        Option.Some(value: typo),
+        typed,
+        duckdb,
+        List(no_init),
+    )
     assert misspelled == Result.Err(
         error: ConfigError.Invalid(
             title: "Harlequin couldn't load your config file.",

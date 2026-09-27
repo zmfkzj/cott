@@ -115,7 +115,10 @@ fn save_buffer_cache(path: Path, cache: BufferCache) -> Result[Unit, CacheError]
 
     effects [file.read, file.write]
 
-fn adopt_recovery(cache_dir: Path, now_epoch_seconds: F64) -> Result[Option[BufferCache], CacheError]:
+fn adopt_recovery(
+    cache_dir: Path,
+    now_epoch_seconds: F64,
+) -> Result[Option[BufferCache], CacheError]:
     doc """
     Find buffers a previous session left behind when it ended unexpectedly, the
     way Harlequin adopts them: candidates in cache_dir are recovered-*.json files
@@ -312,7 +315,13 @@ fn close_ssh_tunnel(tunnel: SshTunnel) -> Unit:
 
     effects [subprocess]
 
-fn crash_report_text(context: CrashContext, error_summary: Str, traceback_text: Str, reported_at: Str, environment_lines: List[Str]) -> Str:
+fn crash_report_text(
+    context: CrashContext,
+    error_summary: Str,
+    traceback_text: Str,
+    reported_at: Str,
+    environment_lines: List[Str],
+) -> Str:
     doc """
     The plain-text crash report Harlequin writes: a header "Harlequin crash report,
     {reported_at}" and the paragraph "Review and redact as necessary before
@@ -365,13 +374,25 @@ scenario buffer_caches_round_trip:
             file "old.json" text("{\"version\": 0}")
     call saved = save_buffer_cache(
         cache.path("harlequin/buffers-1.json"),
-        BufferCache(focus_index: 1, buffers: List(BufferState(text: "select 1", anchor: 0, cursor: 8), BufferState(text: "select 2", anchor: 7, cursor: 7))),
+        BufferCache(
+            focus_index: 1,
+            buffers: List(
+                BufferState(text: "select 1", anchor: 0, cursor: 8),
+                BufferState(text: "select 2", anchor: 7, cursor: 7),
+            ),
+        ),
     )
     assert saved == Result.Ok(value: ())
     call loaded = load_buffer_cache(cache.path("harlequin/buffers-1.json"))
     assert loaded == Result.Ok(
         value: Option.Some(
-            value: BufferCache(focus_index: 1, buffers: List(BufferState(text: "select 1", anchor: 0, cursor: 8), BufferState(text: "select 2", anchor: 7, cursor: 7))),
+            value: BufferCache(
+                focus_index: 1,
+                buffers: List(
+                    BufferState(text: "select 1", anchor: 0, cursor: 8),
+                    BufferState(text: "select 2", anchor: 7, cursor: 7),
+                ),
+            ),
         ),
     )
     call foreign = load_buffer_cache(cache.path("old.json"))
@@ -386,11 +407,39 @@ scenario editors_and_tunnels_are_resolved_safely:
     assert fallback == Result.Ok(value: List("vim"))
     call none = resolve_editor(Map())
     assert none == Result.Err(error: ExternalEditorError.NoEditor)
-    call command = ssh_command(SshSettings(host: "me@bastion", forwards: List("5433:db:5432"), batch_mode: true, allow_reuse: false, timeout_seconds: 60.0))
-    assert command == Result.Ok(value: List("ssh", "-N", "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes", "-L", "5433:db:5432", "me@bastion"))
-    call unsafe = ssh_command(SshSettings(host: "-oProxyCommand=x", forwards: List(), batch_mode: false, allow_reuse: false, timeout_seconds: 60.0))
+    call command = ssh_command(
+        SshSettings(
+            host: "me@bastion",
+            forwards: List("5433:db:5432"),
+            batch_mode: true,
+            allow_reuse: false,
+            timeout_seconds: 60.0,
+        ),
+    )
+    assert command == Result.Ok(
+        value: List(
+            "ssh",
+            "-N",
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-o",
+            "BatchMode=yes",
+            "-L",
+            "5433:db:5432",
+            "me@bastion",
+        ),
+    )
+    call unsafe = ssh_command(
+        SshSettings(
+            host: "-oProxyCommand=x",
+            forwards: List(),
+            batch_mode: false,
+            allow_reuse: false,
+            timeout_seconds: 60.0,
+        ),
+    )
     assert unsafe matches Result.Err(SshError.Invalid(_))
     call clip = osc52_sequence("hi")
     assert clip == "\u001b]52;c;aGk=\u0007"
     call message = crash_message("ValueError: boom", true, Option.Nothing)
-    assert message == "Harlequin encountered an unexpected error and had to quit.\n\nValueError: boom\n\nYour buffers have been saved, and Harlequin will offer them back the next time you start it.\n\nPlease report this bug at https://github.com/tconbeer/harlequin/issues/new?template=crash_report.md."
+    assert (message == "Harlequin encountered an unexpected error and had to quit.\n\nValueError: boom\n\nYour buffers have been saved, and Harlequin will offer them back the next time you start it.\n\nPlease report this bug at https://github.com/tconbeer/harlequin/issues/new?template=crash_report.md.")

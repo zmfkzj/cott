@@ -4,6 +4,8 @@ from cott_runtime import CottList, Opaque
 
 
 def catalog_with_search_path(catalog: Opaque[Literal["pgcli.completion-catalog"]], search_path: CottList[str]) -> Opaque[Literal["pgcli.completion-catalog"]]:
-    data = dict(cast(dict[str, object], catalog.unwrap()))
-    data["search_path"] = [s for s in search_path]
+    payload = catalog.unwrap()
+    assert isinstance(payload, dict)
+    data = dict(cast(dict[str, object], payload))
+    data["search_path"] = list(search_path)
     return Opaque(tag="pgcli.completion-catalog", value=data)

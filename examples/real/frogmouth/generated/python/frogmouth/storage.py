@@ -44,7 +44,7 @@ otherwise the host file system."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/frogmouth/storage/load_config.py", "0c2e53b6ce556171afb0135a3aa5565a5eda94db32a2779765742d21783f5010", "load_config", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.storage.load_config")
+        _implementation = _cott_load("_cott_impl/frogmouth/storage/load_config.py", "5a3c52826f4a9b82004aa80a98b07700c1dc07f088104c658fa3602a3b586c0d", "load_config", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.storage.load_config")
         _result = _implementation(config_directory)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -119,7 +119,7 @@ and every failure is WriteFailed carrying the file path."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/frogmouth/storage/save_config.py", "d01a9425c2da05448a8de9a7c6d018d060bb93d4953f2bf72c5ad782e1b389c4", "save_config", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.storage.save_config")
+        _implementation = _cott_load("_cott_impl/frogmouth/storage/save_config.py", "9e03a706d7b33c09efe12920ca0304805bb71639173e3e08c91c247a10711f81", "save_config", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.storage.save_config")
         _result = _implementation(config_directory, config)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -187,7 +187,7 @@ otherwise the host file system."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/frogmouth/storage/load_history.py", "365ea4f77b3d47fc7f7c27ba1f7aa8f04f89d24dcf559106520f31a1bae97a60", "load_history", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.storage.load_history")
+        _implementation = _cott_load("_cott_impl/frogmouth/storage/load_history.py", "3b92d731b580bec5980c02df627fd81f37f9b33a3272ea36c6d2fd2893d8b6d5", "load_history", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.storage.load_history")
         _result = _implementation(data_directory)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -259,7 +259,7 @@ carrying the file path."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/frogmouth/storage/save_history.py", "b7f0fda1bb9af969daeab9b667ae9c40d3b5c3f35b3acf76f5ae0ffeae901958", "save_history", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.storage.save_history")
+        _implementation = _cott_load("_cott_impl/frogmouth/storage/save_history.py", "b811f7f1b9e007d8b4a64e6b9af1e6f61c8737b78703f2873d03d09fa52d6352", "save_history", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.storage.save_history")
         _result = _implementation(data_directory, locations)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -399,7 +399,7 @@ failure is WriteFailed carrying the file path."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/frogmouth/storage/save_bookmarks.py", "346e95e945fc167716fcd3a24fd6d7e7228b173d48623f5db6cc29d368751983", "save_bookmarks", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.storage.save_bookmarks")
+        _implementation = _cott_load("_cott_impl/frogmouth/storage/save_bookmarks.py", "a5ac76f89eeb9725e55e4bfbb8bea7ad3ec63246ba9c1962a54bf86ad1d366ea", "save_bookmarks", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.storage.save_bookmarks")
         _result = _implementation(data_directory, bookmarks)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

@@ -228,7 +228,13 @@ fn move_grid(grid: ResultsGrid, motion: GridMotion, extend: Bool, page_rows: U64
 
     effects []
 
-fn render_grid(grid: ResultsGrid, width: U64, height: U64, focused: Bool, number_format: NumberFormat) -> GridFrame:
+fn render_grid(
+    grid: ResultsGrid,
+    width: U64,
+    height: U64,
+    focused: Bool,
+    number_format: NumberFormat,
+) -> GridFrame:
     doc """
     Draw one frame of the results table into width x height character cells.
     Values come from grid.result.data rows [first_row, ...) via pyarrow
@@ -320,7 +326,11 @@ scenario results_grid_moves_selects_and_draws:
         5,
     )
     assert sample.row_count == 2 and sample.fetched_row_count == 3 and not sample.truncated
-    data grouped: NumberFormat = NumberFormat(thousands_separator: ",", decimal_point: ".", grouping: List(3))
+    data grouped: NumberFormat = NumberFormat(
+        thousands_separator: ",",
+        decimal_point: ".",
+        grouping: List(3),
+    )
     call title = results_title(sample, grouped)
     assert title == "Query Results (Showing 2 of 3 Records)"
     call grid = new_grid(sample)
@@ -337,7 +347,10 @@ scenario results_grid_moves_selects_and_draws:
             StyledLine(
                 spans: List(
                     StyledSpan(style: "class:hq.rownumber", text: " 1 "),
-                    StyledSpan(style: "class:hq.cell class:hq.cell.number class:hq.cursor", text: "     1 "),
+                    StyledSpan(
+                        style: "class:hq.cell class:hq.cell.number class:hq.cursor",
+                        text: "     1 ",
+                    ),
                     StyledSpan(style: "class:hq.cell", text: " a      "),
                 ),
             ),
@@ -367,10 +380,17 @@ scenario results_grid_moves_selects_and_draws:
     assert everything.anchor == GridPosition(row: 0, column: 0) and everything.cursor == GridPosition(row: 1, column: 1)
 
 scenario numbers_follow_the_locale_and_harlequin_display_rules:
-    data grouped: NumberFormat = NumberFormat(thousands_separator: ",", decimal_point: ".", grouping: List(3))
+    data grouped: NumberFormat = NumberFormat(
+        thousands_separator: ",",
+        decimal_point: ".",
+        grouping: List(3),
+    )
     call big = format_number_text("-1234567.25", grouped)
     assert big == "-1,234,567.25"
-    call plain = format_number_text("1234567", NumberFormat(thousands_separator: "", decimal_point: ".", grouping: List()))
+    call plain = format_number_text(
+        "1234567",
+        NumberFormat(thousands_separator: "", decimal_point: ".", grouping: List()),
+    )
     assert plain == "1234567"
     call id_value = display_value_text(CellValue.Integer(value: 1234), grouped, true)
     assert id_value == "1234"

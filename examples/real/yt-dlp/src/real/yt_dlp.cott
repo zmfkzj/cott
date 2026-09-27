@@ -1601,6 +1601,47 @@ data direct_media_request: ExecutionRequest = ExecutionRequest(
     ),
 )
 
+data generic_http_extractor: ExtractorDescriptor = ExtractorDescriptor(
+    name: "generic",
+    urls: List("http://", "https://"),
+    enabled: true,
+    requires_login: false,
+)
+
+data anonymous_access: Authentication = Authentication(
+    kind: AuthenticationKind.Anonymous,
+    username: "",
+    password: "",
+    netrc_location: files.path("netrc"),
+    cookie_file: files.path("netrc"),
+    browser: "",
+    profile: "",
+)
+
+data direct_network: NetworkPolicy = NetworkPolicy(
+    proxy_mode: ProxyMode.Direct,
+    proxy: "",
+    socket_timeout_ms: 5000,
+    source_address: "",
+    force_ipv4: false,
+    force_ipv6: false,
+    geo_mode: GeoBypassMode.Default,
+    geo_country: "",
+    geo_ip_block: "",
+)
+
+data small_buffer_fragments: FragmentPolicy = FragmentPolicy(
+    concurrent_fragments: 1,
+    buffer_size: 4,
+    chunk_size: 0,
+    rate_limit_bytes_per_second: 0,
+    retries: 0,
+    fragment_retries: 0,
+    file_access_retries: 0,
+    continue_download: false,
+    part_files: true,
+)
+
 scenario nested_request_values:
     fixtures:
         fs files:
@@ -2173,3 +2214,709 @@ scenario update_channels_map_to_official_repositories:
     assert wrong_case matches Result.Err(MediaError.UpdateUnavailable(_))
     call forced = resolve_update_repository(UpdatePolicy.Master, "not-a-channel")
     assert forced == Result.Ok(value: "yt-dlp/yt-dlp-master-builds")
+
+scenario discovery_reads_final_head_response:
+    fixtures:
+        fs files:
+            file "netrc" text("")
+        http service:
+            route "/media/clip.mp4" -> response(status: 200, body: text("never downloaded"), encoding: "utf-8")
+            route "/watch" -> redirect(status: 302, location: "/media/Clip-One.MP4")
+            route "/media/Clip-One.MP4" -> response(status: 200, body: text("never downloaded"), encoding: "utf-8")
+            route "/stream" -> response(status: 200, body: text("never downloaded"), encoding: "utf-8")
+            route "/missing.mp4" -> response(status: 404, body: text("gone"), encoding: "utf-8")
+            route "/private.mp4" -> response(status: 401, body: text("login required"), encoding: "utf-8")
+            route "/blocked.mp4" -> response(status: 451, body: text("unavailable here"), encoding: "utf-8")
+            route "/loop" -> redirect(status: 302, location: "/loop")
+    call direct = extract_media(service.url("/media/clip.mp4"), generic_http_extractor, anonymous_access, direct_network)
+    assert direct == Result.Ok(
+        value: List(
+            MediaItem(
+                url: service.url("/media/clip.mp4"),
+                id: "clip",
+                title: "clip.mp4",
+                ext: "mp4",
+                playlist_index: 1,
+            ),
+        ),
+    )
+    call redirected = extract_media(service.url("/watch"), generic_http_extractor, anonymous_access, direct_network)
+    assert redirected == Result.Ok(
+        value: List(
+            MediaItem(
+                url: service.url("/media/Clip-One.MP4"),
+                id: "Clip-One",
+                title: "Clip-One.MP4",
+                ext: "mp4",
+                playlist_index: 1,
+            ),
+        ),
+    )
+    call extensionless = extract_media(service.url("/stream"), generic_http_extractor, anonymous_access, direct_network)
+    assert extensionless == Result.Ok(
+        value: List(
+            MediaItem(
+                url: service.url("/stream"),
+                id: "stream",
+                title: "stream",
+                ext: "plain",
+                playlist_index: 1,
+            ),
+        ),
+    )
+    call missing = extract_media(service.url("/missing.mp4"), generic_http_extractor, anonymous_access, direct_network)
+    assert missing == Result.Err(error: MediaError.HttpStatus(status: 404))
+    call anonymous_private = extract_media(service.url("/private.mp4"), generic_http_extractor, anonymous_access, direct_network)
+    assert anonymous_private == Result.Err(error: MediaError.HttpStatus(status: 401))
+    call rejected_login = extract_media(
+        service.url("/private.mp4"),
+        generic_http_extractor,
+        Authentication(
+            kind: AuthenticationKind.Credentials,
+            username: "viewer",
+            password: "secret",
+            netrc_location: files.path("netrc"),
+            cookie_file: files.path("netrc"),
+            browser: "",
+            profile: "",
+        ),
+        direct_network,
+    )
+    assert rejected_login matches Result.Err(MediaError.AuthenticationFailed(_))
+    call unavailable = extract_media(service.url("/blocked.mp4"), generic_http_extractor, anonymous_access, direct_network)
+    assert unavailable matches Result.Err(MediaError.GeoRestricted(_))
+    call looping = extract_media(service.url("/loop"), generic_http_extractor, anonymous_access, direct_network)
+    assert looping matches Result.Err(MediaError.NetworkFailure(_))
+
+scenario discovery_rejects_before_any_request:
+    fixtures:
+        fs files:
+            file "netrc" text("")
+        http service:
+            route "/media/clip.mp4" -> response(status: 200, body: text("never downloaded"), encoding: "utf-8")
+    call disabled = extract_media(
+        service.url("/media/clip.mp4"),
+        ExtractorDescriptor(
+            name: "generic",
+            urls: List("http://", "https://"),
+            enabled: false,
+            requires_login: false,
+        ),
+        anonymous_access,
+        direct_network,
+    )
+    assert disabled == Result.Err(error: MediaError.UnsupportedUrl)
+    call unmatched = extract_media(
+        service.url("/media/clip.mp4"),
+        ExtractorDescriptor(
+            name: "tls-only",
+            urls: List("https://"),
+            enabled: true,
+            requires_login: false,
+        ),
+        anonymous_access,
+        direct_network,
+    )
+    assert unmatched == Result.Err(error: MediaError.UnsupportedUrl)
+    call login_required = extract_media(
+        service.url("/media/clip.mp4"),
+        ExtractorDescriptor(
+            name: "members",
+            urls: List("http://"),
+            enabled: true,
+            requires_login: true,
+        ),
+        anonymous_access,
+        direct_network,
+    )
+    assert login_required matches Result.Err(MediaError.AuthenticationFailed(_))
+    call netrc = extract_media(
+        service.url("/media/clip.mp4"),
+        generic_http_extractor,
+        Authentication(
+            kind: AuthenticationKind.Netrc,
+            username: "",
+            password: "",
+            netrc_location: files.path("netrc"),
+            cookie_file: files.path("netrc"),
+            browser: "",
+            profile: "",
+        ),
+        direct_network,
+    )
+    assert netrc matches Result.Err(MediaError.AuthenticationFailed(_))
+    call socks = extract_media(
+        service.url("/media/clip.mp4"),
+        generic_http_extractor,
+        anonymous_access,
+        NetworkPolicy(
+            proxy_mode: ProxyMode.Socks,
+            proxy: "socks5://proxy.invalid:1080",
+            socket_timeout_ms: 5000,
+            source_address: "",
+            force_ipv4: false,
+            force_ipv6: false,
+            geo_mode: GeoBypassMode.Default,
+            geo_country: "",
+            geo_ip_block: "",
+        ),
+    )
+    assert socks matches Result.Err(MediaError.NetworkFailure(_))
+    call country = extract_media(
+        service.url("/media/clip.mp4"),
+        generic_http_extractor,
+        anonymous_access,
+        NetworkPolicy(
+            proxy_mode: ProxyMode.Direct,
+            proxy: "",
+            socket_timeout_ms: 5000,
+            source_address: "",
+            force_ipv4: false,
+            force_ipv6: false,
+            geo_mode: GeoBypassMode.Country,
+            geo_country: "US",
+            geo_ip_block: "",
+        ),
+    )
+    assert country matches Result.Err(MediaError.GeoRestricted(_))
+
+scenario media_transfer_publishes_exact_body:
+    fixtures:
+        fs files:
+            file "downloads/clip.mp4" text("stale partial\n")
+        http service:
+            route "/media/clip.mp4" -> response(status: 200, body: text("one\ntwo\n"), encoding: "utf-8")
+    call simulated = transfer_media(
+        TransferRequest(
+            url: service.url("/media/clip.mp4"),
+            destination: files.path("simulated/clip.mp4"),
+            simulate: true,
+            max_bytes: 16,
+        ),
+    )
+    assert simulated == Result.Ok(
+        value: TransferReceipt(
+            url: service.url("/media/clip.mp4"),
+            destination: files.path("simulated/clip.mp4"),
+            bytes_written: 0,
+            simulated: true,
+        ),
+    )
+    call not_written = read_download_archive(
+        ArchiveRequest(
+            path: files.path("simulated/clip.mp4"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert not_written matches Result.Err(MediaError.ArchiveFailure(_, _))
+    call replaced = transfer_media(
+        TransferRequest(
+            url: service.url("/media/clip.mp4"),
+            destination: files.path("downloads/clip.mp4"),
+            simulate: false,
+            max_bytes: 16,
+        ),
+    )
+    assert replaced == Result.Ok(
+        value: TransferReceipt(
+            url: service.url("/media/clip.mp4"),
+            destination: files.path("downloads/clip.mp4"),
+            bytes_written: 8,
+            simulated: false,
+        ),
+    )
+    call replaced_body = read_download_archive(
+        ArchiveRequest(
+            path: files.path("downloads/clip.mp4"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert replaced_body == Result.Ok(value: List("one", "two"))
+    call nested = transfer_media(
+        TransferRequest(
+            url: service.url("/media/clip.mp4"),
+            destination: files.path("downloads/new/clip.mp4"),
+            simulate: false,
+            max_bytes: 8,
+        ),
+    )
+    assert nested == Result.Ok(
+        value: TransferReceipt(
+            url: service.url("/media/clip.mp4"),
+            destination: files.path("downloads/new/clip.mp4"),
+            bytes_written: 8,
+            simulated: false,
+        ),
+    )
+    call nested_body = read_download_archive(
+        ArchiveRequest(
+            path: files.path("downloads/new/clip.mp4"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert nested_body == Result.Ok(value: List("one", "two"))
+
+scenario media_transfer_failures_keep_destination:
+    fixtures:
+        fs files:
+            file "downloads/kept.mp4" text("previous\n")
+            file "blocker" text("regular file, not a directory")
+        http service:
+            route "/media/clip.mp4" -> response(status: 200, body: text("one\ntwo\n"), encoding: "utf-8")
+            route "/missing.mp4" -> response(status: 404, body: text("gone"), encoding: "utf-8")
+            route "/large.mp4" -> response(status: 200, body: text("0123456789"), encoding: "utf-8")
+            route "/drop.mp4" -> disconnect()
+    call unsupported_scheme = transfer_media(
+        TransferRequest(
+            url: "ftp://example.invalid/clip.mp4",
+            destination: files.path("downloads/kept.mp4"),
+            simulate: false,
+            max_bytes: 16,
+        ),
+    )
+    assert unsupported_scheme == Result.Err(error: MediaError.UnsupportedUrl)
+    call hostless = transfer_media(
+        TransferRequest(
+            url: "http:///clip.mp4",
+            destination: files.path("downloads/kept.mp4"),
+            simulate: false,
+            max_bytes: 16,
+        ),
+    )
+    assert hostless == Result.Err(error: MediaError.UnsupportedUrl)
+    call missing = transfer_media(
+        TransferRequest(
+            url: service.url("/missing.mp4"),
+            destination: files.path("downloads/kept.mp4"),
+            simulate: false,
+            max_bytes: 16,
+        ),
+    )
+    assert missing == Result.Err(error: MediaError.HttpStatus(status: 404))
+    call oversized = transfer_media(
+        TransferRequest(
+            url: service.url("/large.mp4"),
+            destination: files.path("downloads/kept.mp4"),
+            simulate: false,
+            max_bytes: 4,
+        ),
+    )
+    assert oversized == Result.Err(error: MediaError.SizeLimit)
+    call dropped = transfer_media(
+        TransferRequest(
+            url: service.url("/drop.mp4"),
+            destination: files.path("downloads/kept.mp4"),
+            simulate: false,
+            max_bytes: 16,
+        ),
+    )
+    assert dropped matches Result.Err(MediaError.NetworkFailure(_))
+    call kept = read_download_archive(
+        ArchiveRequest(
+            path: files.path("downloads/kept.mp4"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert kept == Result.Ok(value: List("previous"))
+    call unwritable = transfer_media(
+        TransferRequest(
+            url: service.url("/media/clip.mp4"),
+            destination: files.path("blocker/clip.mp4"),
+            simulate: false,
+            max_bytes: 16,
+        ),
+    )
+    assert unwritable matches Result.Err(MediaError.OutputFailure(_))
+
+scenario fragments_publish_exact_bodies:
+    fixtures:
+        fs files:
+            file "fragments/two.ts.part" text("stale partial bytes")
+        http service:
+            route "/frag/one.ts" -> response(status: 200, body: text("alpha\n"), encoding: "utf-8")
+            route "/frag/two.ts" -> response(status: 200, body: text("beta\ngamma\n"), encoding: "utf-8")
+        clock clock:
+            start_ms: 1000
+            tick_ms: 1
+    call fetched = transfer_fragments(
+        List(
+            TransferRequest(
+                url: service.url("/frag/one.ts"),
+                destination: files.path("fragments/one.ts"),
+                simulate: false,
+                max_bytes: 64,
+            ),
+            TransferRequest(
+                url: service.url("/frag/two.ts"),
+                destination: files.path("fragments/two.ts"),
+                simulate: false,
+                max_bytes: 64,
+            ),
+            TransferRequest(
+                url: service.url("/frag/three.ts"),
+                destination: files.path("fragments/three.ts"),
+                simulate: true,
+                max_bytes: 64,
+            ),
+        ),
+        small_buffer_fragments,
+    )
+    assert fetched == Result.Ok(
+        value: List(
+            TransferReceipt(
+                url: service.url("/frag/one.ts"),
+                destination: files.path("fragments/one.ts"),
+                bytes_written: 6,
+                simulated: false,
+            ),
+            TransferReceipt(
+                url: service.url("/frag/two.ts"),
+                destination: files.path("fragments/two.ts"),
+                bytes_written: 11,
+                simulated: false,
+            ),
+            TransferReceipt(
+                url: service.url("/frag/three.ts"),
+                destination: files.path("fragments/three.ts"),
+                bytes_written: 0,
+                simulated: true,
+            ),
+        ),
+    )
+    call one = read_download_archive(
+        ArchiveRequest(
+            path: files.path("fragments/one.ts"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert one == Result.Ok(value: List("alpha"))
+    call two = read_download_archive(
+        ArchiveRequest(
+            path: files.path("fragments/two.ts"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert two == Result.Ok(value: List("beta", "gamma"))
+    call one_part = read_download_archive(
+        ArchiveRequest(
+            path: files.path("fragments/one.ts.part"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert one_part matches Result.Err(MediaError.ArchiveFailure(_, _))
+    call two_part = read_download_archive(
+        ArchiveRequest(
+            path: files.path("fragments/two.ts.part"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert two_part matches Result.Err(MediaError.ArchiveFailure(_, _))
+    call three = read_download_archive(
+        ArchiveRequest(
+            path: files.path("fragments/three.ts"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert three matches Result.Err(MediaError.ArchiveFailure(_, _))
+
+scenario fragment_failures_are_classified:
+    fixtures:
+        fs files:
+            file "blocker" text("regular file, not a directory")
+        http service:
+            route "/frag/one.ts" -> response(status: 200, body: text("alpha\n"), encoding: "utf-8")
+            route "/frag/missing.ts" -> response(status: 404, body: text("gone"), encoding: "utf-8")
+            route "/frag/large.ts" -> response(status: 200, body: text("0123456789"), encoding: "utf-8")
+            route "/frag/drop.ts" -> disconnect()
+            route "/frag/busy.ts" -> response(status: 503, body: text("busy"), encoding: "utf-8")
+        clock clock:
+            start_ms: 1000
+            tick_ms: 1
+    call duplicate = transfer_fragments(
+        List(
+            TransferRequest(
+                url: service.url("/frag/one.ts"),
+                destination: files.path("out.ts"),
+                simulate: false,
+                max_bytes: 64,
+            ),
+            TransferRequest(
+                url: service.url("/frag/one.ts"),
+                destination: files.path("out.ts"),
+                simulate: false,
+                max_bytes: 64,
+            ),
+        ),
+        small_buffer_fragments,
+    )
+    assert duplicate matches Result.Err(MediaError.InvalidInput(_))
+    call unsupported_scheme = transfer_fragments(
+        List(
+            TransferRequest(
+                url: "ftp://example.invalid/one.ts",
+                destination: files.path("out.ts"),
+                simulate: false,
+                max_bytes: 64,
+            ),
+        ),
+        small_buffer_fragments,
+    )
+    assert unsupported_scheme matches Result.Err(MediaError.InvalidInput(_))
+    call not_started = read_download_archive(
+        ArchiveRequest(
+            path: files.path("out.ts"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert not_started matches Result.Err(MediaError.ArchiveFailure(_, _))
+    call missing = transfer_fragments(
+        List(
+            TransferRequest(
+                url: service.url("/frag/missing.ts"),
+                destination: files.path("missing.ts"),
+                simulate: false,
+                max_bytes: 64,
+            ),
+        ),
+        small_buffer_fragments,
+    )
+    assert missing == Result.Err(error: MediaError.HttpStatus(status: 404))
+    call dropped = transfer_fragments(
+        List(
+            TransferRequest(
+                url: service.url("/frag/drop.ts"),
+                destination: files.path("dropped.ts"),
+                simulate: false,
+                max_bytes: 64,
+            ),
+        ),
+        small_buffer_fragments,
+    )
+    assert dropped matches Result.Err(MediaError.NetworkFailure(_))
+    call unwritable = transfer_fragments(
+        List(
+            TransferRequest(
+                url: service.url("/frag/one.ts"),
+                destination: files.path("blocker/one.ts"),
+                simulate: false,
+                max_bytes: 64,
+            ),
+        ),
+        small_buffer_fragments,
+    )
+    assert unwritable matches Result.Err(MediaError.OutputFailure(_))
+    call exhausted = transfer_fragments(
+        List(
+            TransferRequest(
+                url: service.url("/frag/busy.ts"),
+                destination: files.path("busy.ts"),
+                simulate: false,
+                max_bytes: 64,
+            ),
+        ),
+        FragmentPolicy(
+            concurrent_fragments: 1,
+            buffer_size: 4,
+            chunk_size: 0,
+            rate_limit_bytes_per_second: 0,
+            retries: 1,
+            fragment_retries: 0,
+            file_access_retries: 0,
+            continue_download: false,
+            part_files: true,
+        ),
+    )
+    assert exhausted == Result.Err(error: MediaError.RetryExhausted(attempts: 2))
+    call oversized = transfer_fragments(
+        List(
+            TransferRequest(
+                url: service.url("/frag/large.ts"),
+                destination: files.path("large.ts"),
+                simulate: false,
+                max_bytes: 4,
+            ),
+        ),
+        small_buffer_fragments,
+    )
+    assert oversized == Result.Err(error: MediaError.SizeLimit)
+
+scenario download_archive_round_trips:
+    fixtures:
+        fs files:
+            file "archive.txt" text("old\n")
+    call saved = write_download_archive(
+        files.path("archive.txt"),
+        List(clip_two, clip_one, clip_two),
+    )
+    assert saved == Result.Ok(value: ())
+    call reread = read_download_archive(
+        ArchiveRequest(
+            path: files.path("archive.txt"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert reread == Result.Ok(value: List("two", "one", "two"))
+    call refused = write_download_archive(
+        files.path("archive.txt"),
+        List(
+            clip_three,
+            MediaItem(
+                url: "https://example.invalid/pad.mp4",
+                id: " padded",
+                title: "pad.mp4",
+                ext: "mp4",
+                playlist_index: 4,
+            ),
+        ),
+    )
+    assert refused matches Result.Err(MediaError.ArchiveFailure(failed, _)) => failed == files.path("archive.txt")
+    call kept = read_download_archive(
+        ArchiveRequest(
+            path: files.path("archive.txt"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert kept == Result.Ok(value: List("two", "one", "two"))
+    call emptied = write_download_archive(files.path("archive.txt"), List())
+    assert emptied == Result.Ok(value: ())
+    call empty = read_download_archive(
+        ArchiveRequest(
+            path: files.path("archive.txt"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert empty == Result.Ok(value: List())
+
+scenario download_archive_rejects_unusable_files:
+    fixtures:
+        fs files:
+            file "archive.txt" text("﻿one\r\n  two  \n\nthree\none\n")
+            file "invalid.txt" hex("6f6e650aff0a")
+            file "blocker" text("regular file, not a directory")
+            file "entries/keep.txt" text("")
+    call read = read_download_archive(
+        ArchiveRequest(
+            path: files.path("archive.txt"),
+            break_on_existing: true,
+            force_write_archive: true,
+        ),
+    )
+    assert read == Result.Ok(value: List("one", "two", "three", "one"))
+    call missing = read_download_archive(
+        ArchiveRequest(
+            path: files.path("absent.txt"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert missing matches Result.Err(MediaError.ArchiveFailure(failed, _)) => failed == files.path("absent.txt")
+    call undecodable = read_download_archive(
+        ArchiveRequest(
+            path: files.path("invalid.txt"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert undecodable matches Result.Err(MediaError.ArchiveFailure(failed, _)) => failed == files.path("invalid.txt")
+    call directory = read_download_archive(
+        ArchiveRequest(
+            path: files.path("entries"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert directory matches Result.Err(MediaError.ArchiveFailure(failed, _)) => failed == files.path("entries")
+    call unsafe_parent = write_download_archive(files.path("blocker/archive.txt"), List(clip_one))
+    assert unsafe_parent matches Result.Err(MediaError.ArchiveFailure(failed, _)) => failed == files.path("blocker/archive.txt")
+    call missing_parent = write_download_archive(files.path("absent/archive.txt"), List(clip_one))
+    assert missing_parent matches Result.Err(MediaError.ArchiveFailure(failed, _)) => failed == files.path("absent/archive.txt")
+    call not_created = read_download_archive(
+        ArchiveRequest(
+            path: files.path("absent/archive.txt"),
+            break_on_existing: false,
+            force_write_archive: false,
+        ),
+    )
+    assert not_created matches Result.Err(MediaError.ArchiveFailure(_, _))
+    call directory_leaf = write_download_archive(files.path("entries"), List(clip_one))
+    assert directory_leaf matches Result.Err(MediaError.ArchiveFailure(failed, _)) => failed == files.path("entries")
+
+scenario output_paths_reject_unusable_names:
+    fixtures:
+        fs files:
+            file "out/keep.txt" text("")
+    call collision = resolve_output_path(
+        clip_two,
+        OutputRequest(
+            template: "%(id)s.%(ext)s",
+            home: files.path("home"),
+            temp: files.path("out/two.webm"),
+            output: files.path("out"),
+            missing_placeholder: "NA",
+            restrict_filenames: false,
+            windows_filenames: false,
+            trim_filename_bytes: 0,
+        ),
+    )
+    assert collision matches Result.Err(MediaError.PathFailure(failed, _)) => failed == files.path("out/two.webm")
+    call directory_only = resolve_output_path(
+        clip_two,
+        OutputRequest(
+            template: "%(id)s/",
+            home: files.path("home"),
+            temp: files.path("tmp"),
+            output: files.path("out"),
+            missing_placeholder: "NA",
+            restrict_filenames: false,
+            windows_filenames: false,
+            trim_filename_bytes: 0,
+        ),
+    )
+    assert directory_only matches Result.Err(MediaError.PathFailure(_, _))
+    call trimmed_away = resolve_output_path(
+        MediaItem(
+            url: "https://example.invalid/e.mp4",
+            id: "é",
+            title: "é",
+            ext: "",
+            playlist_index: 1,
+        ),
+        OutputRequest(
+            template: "%(title)s",
+            home: files.path("home"),
+            temp: files.path("tmp"),
+            output: files.path("out"),
+            missing_placeholder: "NA",
+            restrict_filenames: false,
+            windows_filenames: false,
+            trim_filename_bytes: 1,
+        ),
+    )
+    assert trimmed_away matches Result.Err(MediaError.PathFailure(_, _))
+    call unnamed = resolve_output_path(
+        clip_two,
+        OutputRequest(
+            template: "%(uploader)s",
+            home: files.path("home"),
+            temp: files.path("tmp"),
+            output: files.path("out"),
+            missing_placeholder: "",
+            restrict_filenames: false,
+            windows_filenames: false,
+            trim_filename_bytes: 0,
+        ),
+    )
+    assert unnamed matches Result.Err(MediaError.PathFailure(_, _))

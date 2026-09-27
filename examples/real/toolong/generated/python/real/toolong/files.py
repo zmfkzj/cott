@@ -30,7 +30,7 @@ take the new final suffix. Then an ext of exactly ".gz" (case sensitive)
 is Gzip, exactly ".bz2" is Bzip2, and anything else is Uncompressed."""
     name = _cott_normalize_f32_abi(name, str, path="$.name")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/files/detect_compression.py", "b867da8ea775dfacf78910e93339b0d49b576aab5e0f57ecea7b4323c951fc2b", "detect_compression", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.detect_compression")
+        _implementation = _cott_load("_cott_impl/real/toolong/files/detect_compression.py", "092e0168022ae9c949a1f3ee8602badc081a319f0419b804653588e22a52004b", "detect_compression", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.detect_compression")
         _result = _implementation(name)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -58,7 +58,7 @@ the exception, for example "Not a gzipped file (b'no')"."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/files/decompress.py", "920f42d14cd09e35ba412f2a5cd1ea3d5c6c915240fa42d534a417fb0269366a", "decompress", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.decompress")
+        _implementation = _cott_load("_cott_impl/real/toolong/files/decompress.py", "d5473e098246ce71e40e3e98b93053f137be0b0c256580f3055a9fccc244cba2", "decompress", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.decompress")
         _result = _implementation(data, compression)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -126,7 +126,7 @@ cause), or the DecompressError.Corrupt message."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/files/open_source.py", "277dd3e62b350d5463584c14e311fdf2b04d4a65143129f935c7311c071ad083", "open_source", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.open_source")
+        _implementation = _cott_load("_cott_impl/real/toolong/files/open_source.py", "e7ddbb33552f32f2b43f203a2edf1cd3b135187bfdfda36ddbb7a5fa3172159b", "open_source", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.open_source")
         _result = _implementation(path)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -196,7 +196,7 @@ says, and slice. Read failures give empty bytes."""
     source = _cott_normalize_f32_abi(source, LogSource, path="$.source")
     span = _cott_normalize_f32_abi(span, ByteSpan, path="$.span")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/files/read_span.py", "332b580f96bcd4ee738ffbffaa52146de84a61c4fc2a85bc0719dd670d3a4b17", "read_span", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.read_span")
+        _implementation = _cott_load("_cott_impl/real/toolong/files/read_span.py", "eebf48dd3ebbcdcf19121968e2bfce6a9454222929f67c75d5154b9cf24f1822", "read_span", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.read_span")
         _result = _implementation(source, span)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -253,7 +253,7 @@ use the fixture content as real.toolong.files.read_span does."""
     start = _cott_normalize_f32_abi(start, U64, path="$.start")
     end = _cott_normalize_f32_abi(end, U64, path="$.end")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/files/scan_breaks.py", "c9bd90448dcb5ac0f86801a0ed3ea364b0b3b7a6caa59a02287ccc175e068430", "scan_breaks", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.scan_breaks")
+        _implementation = _cott_load("_cott_impl/real/toolong/files/scan_breaks.py", "1d743759cc4423b8077dedcf1de1d5f70cffe929e8b5bc30c4ba0e43b8803c8f", "scan_breaks", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.scan_breaks")
         _result = _implementation(source, start, end)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -279,7 +279,7 @@ shrank below position (truncation) is not detected, exactly as upstream."""
     source = _cott_normalize_f32_abi(source, LogSource, path="$.source")
     position = _cott_normalize_f32_abi(position, U64, path="$.position")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/files/poll_source.py", "c997820d7f87c4cdf062e30550170dfc0edd08985a793619e54b5188fd598e4e", "poll_source", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.poll_source")
+        _implementation = _cott_load("_cott_impl/real/toolong/files/poll_source.py", "84ddeb76d4d321744a9ce1aba3a0c60e7165d04ebc0f9baaad6289b0108771df", "poll_source", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.poll_source")
         _result = _implementation(source, position)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -317,7 +317,7 @@ a 10000-line batch is safe across the facade boundary."""
     limit = _cott_normalize_f32_abi(limit, U64, path="$.limit")
     order = _cott_normalize_f32_abi(order, CottList[U8], path="$.order")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/files/scan_timestamps.py", "626764a096835245bef835014d0404f78b12d370ba98875c565afe45bec64dbd", "scan_timestamps", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.scan_timestamps")
+        _implementation = _cott_load("_cott_impl/real/toolong/files/scan_timestamps.py", "d5444e2c8a62025a3e4471b4e5e65be43d8069c63ecc9cba6283df1082cf6acf", "scan_timestamps", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.scan_timestamps")
         _result = _implementation(source, position, first_line, limit, order)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -339,8 +339,8 @@ a 10000-line batch is safe across the facade boundary."""
 def find_line(sources: CottList[LogSource], index: TabIndex, line_count: U64, start: I64, direction: I8, query: FindQuery) -> FindResult:
     """Toolong's advance_search while the find dialog is shown. Examine lines
 start, start + 1, ..., line_count - 1 when direction is positive, or start,
-start - 1, ..., 0 when it is not (no lines when start is negative or, going
-forward, not below line_count). For each line, locate it with
+start - 1, ..., 0 when it is not. In either direction, examine no lines
+when start is negative or start >= line_count. For each line, locate it with
 real.toolong.index.line_location, read its raw bytes with
 real.toolong.files.read_span from sources[location.file] (an empty string
 when that file is missing), decode them as UTF-8 with errors="replace"
@@ -356,18 +356,18 @@ expression."""
     direction = _cott_normalize_f32_abi(direction, I8, path="$.direction")
     query = _cott_normalize_f32_abi(query, FindQuery, path="$.query")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/files/find_line.py", "657ede7be7916f1f98be69d1043265520797a9a95b154bc929287a73ae02d47f", "find_line", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.find_line")
+        _implementation = _cott_load("_cott_impl/real/toolong/files/find_line.py", "32830c0e1a49ee95b2b36f3666654fec0689c2dee510228c0f421885d057338b", "find_line", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.find_line")
         _result = _implementation(sources, index, line_count, start, direction, query)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.toolong.files.find_line"
         if _error.span is None:
-            _error.span = {"end_byte":9573,"end_column":1,"end_line":264,"start_byte":8416,"start_column":1,"start_line":236}
+            _error.span = {"end_byte":9584,"end_column":1,"end_line":264,"start_byte":8416,"start_column":1,"start_line":236}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.files.find_line", phase="implementation-call", span={"end_byte":9573,"end_column":1,"end_line":264,"start_byte":8416,"start_column":1,"start_line":236}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.files.find_line", phase="implementation-call", span={"end_byte":9584,"end_column":1,"end_line":264,"start_byte":8416,"start_column":1,"start_line":236}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.files.find_line", phase="implementation-call", span={"end_byte":9573,"end_column":1,"end_line":264,"start_byte":8416,"start_column":1,"start_line":236}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.files.find_line", phase="implementation-call", span={"end_byte":9584,"end_column":1,"end_line":264,"start_byte":8416,"start_column":1,"start_line":236}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, FindResult, path="$.return")
     if _cott_test_context:
         def _cott_match_ensures_1() -> bool:
@@ -378,7 +378,7 @@ expression."""
             _cott_contract_condition((False), "real.toolong.files.find_line", "ensures:1:applicable")
             return True
         if not (_cott_match_ensures_1()):
-            raise CottContractViolation("ensures clause failed", symbol="real.toolong.files.find_line", clause="ensures:1", phase="ensures", span={"end_byte":9481,"end_column":73,"end_line":259,"start_byte":9413,"start_column":5,"start_line":259}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.toolong.files.find_line", clause="ensures:1", phase="ensures", span={"end_byte":9492,"end_column":73,"end_line":259,"start_byte":9424,"start_column":5,"start_line":259}, expected="true", actual="false")
         def _cott_match_ensures_2() -> bool:
             _cott_match_value = (_result).line
             if type(_cott_match_value) is Some and True:
@@ -387,7 +387,7 @@ expression."""
             _cott_contract_condition((False), "real.toolong.files.find_line", "ensures:2:applicable")
             return True
         if not (_cott_match_ensures_2()):
-            raise CottContractViolation("ensures clause failed", symbol="real.toolong.files.find_line", clause="ensures:2", phase="ensures", span={"end_byte":9546,"end_column":65,"end_line":260,"start_byte":9486,"start_column":5,"start_line":260}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.toolong.files.find_line", clause="ensures:2", phase="ensures", span={"end_byte":9557,"end_column":65,"end_line":260,"start_byte":9497,"start_column":5,"start_line":260}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, FindResult, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -405,22 +405,22 @@ the (filled) orders with that file's order replaced by the scan's order."""
     line = _cott_normalize_f32_abi(line, U64, path="$.line")
     orders = _cott_normalize_f32_abi(orders, CottList[CottList[U8]], path="$.orders")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/files/line_timestamp.py", "63f664d831451209f4870b629fd21e0cfea520eb7241c1f26f0edcd439044daf", "line_timestamp", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.line_timestamp")
+        _implementation = _cott_load("_cott_impl/real/toolong/files/line_timestamp.py", "6f11e41a73df2710e1ed34d7b76501d9f53e859db44690a53ba44d24e671d727", "line_timestamp", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.line_timestamp")
         _result = _implementation(sources, index, line, orders)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.toolong.files.line_timestamp"
         if _error.span is None:
-            _error.span = {"end_byte":10360,"end_column":1,"end_line":285,"start_byte":9573,"start_column":1,"start_line":264}
+            _error.span = {"end_byte":10371,"end_column":1,"end_line":285,"start_byte":9584,"start_column":1,"start_line":264}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.files.line_timestamp", phase="implementation-call", span={"end_byte":10360,"end_column":1,"end_line":285,"start_byte":9573,"start_column":1,"start_line":264}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.files.line_timestamp", phase="implementation-call", span={"end_byte":10371,"end_column":1,"end_line":285,"start_byte":9584,"start_column":1,"start_line":264}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.files.line_timestamp", phase="implementation-call", span={"end_byte":10360,"end_column":1,"end_line":285,"start_byte":9573,"start_column":1,"start_line":264}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.files.line_timestamp", phase="implementation-call", span={"end_byte":10371,"end_column":1,"end_line":285,"start_byte":9584,"start_column":1,"start_line":264}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, TimestampAt, path="$.return")
     if _cott_test_context:
         if not (_cott_contract_condition(((len((_result).orders) >= len(orders))), "real.toolong.files.line_timestamp", "ensures:1")):
-            raise CottContractViolation("ensures clause failed", symbol="real.toolong.files.line_timestamp", clause="ensures:1", phase="ensures", span={"end_byte":10333,"end_column":44,"end_line":281,"start_byte":10294,"start_column":5,"start_line":281}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.toolong.files.line_timestamp", clause="ensures:1", phase="ensures", span={"end_byte":10344,"end_column":44,"end_line":281,"start_byte":10305,"start_column":5,"start_line":281}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, TimestampAt, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -451,18 +451,18 @@ line_count or 0)."""
     unit = _cott_normalize_f32_abi(unit, TimeUnit, path="$.unit")
     orders = _cott_normalize_f32_abi(orders, CottList[CottList[U8]], path="$.orders")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/files/locate_time.py", "b1af573e4e41ee1e0af34eb4fbd1b323884609222145ce08fbbc9ce7cdef2ace", "locate_time", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.locate_time")
+        _implementation = _cott_load("_cott_impl/real/toolong/files/locate_time.py", "a4c83678b44ea73c7ffa62c6d6416348f876e98d6e543df63a17af343a076f5f", "locate_time", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.locate_time")
         _result = _implementation(sources, index, line_count, from_line, steps, unit, orders)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.toolong.files.locate_time"
         if _error.span is None:
-            _error.span = {"end_byte":11785,"end_column":1,"end_line":319,"start_byte":10360,"start_column":1,"start_line":285}
+            _error.span = {"end_byte":11796,"end_column":1,"end_line":319,"start_byte":10371,"start_column":1,"start_line":285}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.files.locate_time", phase="implementation-call", span={"end_byte":11785,"end_column":1,"end_line":319,"start_byte":10360,"start_column":1,"start_line":285}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.files.locate_time", phase="implementation-call", span={"end_byte":11796,"end_column":1,"end_line":319,"start_byte":10371,"start_column":1,"start_line":285}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.files.locate_time", phase="implementation-call", span={"end_byte":11785,"end_column":1,"end_line":319,"start_byte":10360,"start_column":1,"start_line":285}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.files.locate_time", phase="implementation-call", span={"end_byte":11796,"end_column":1,"end_line":319,"start_byte":10371,"start_column":1,"start_line":285}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, TimeJump, path="$.return")
     if _cott_test_context:
         def _cott_match_ensures_1() -> bool:
@@ -473,7 +473,7 @@ line_count or 0)."""
             _cott_contract_condition((False), "real.toolong.files.locate_time", "ensures:1:applicable")
             return True
         if not (_cott_match_ensures_1()):
-            raise CottContractViolation("ensures clause failed", symbol="real.toolong.files.locate_time", clause="ensures:1", phase="ensures", span={"end_byte":11758,"end_column":74,"end_line":315,"start_byte":11689,"start_column":5,"start_line":315}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.toolong.files.locate_time", clause="ensures:1", phase="ensures", span={"end_byte":11769,"end_column":74,"end_line":315,"start_byte":11700,"start_column":5,"start_line":315}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, TimeJump, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -497,18 +497,18 @@ failures)."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/files/save_lines.py", "a66356344ac044c835457e5a0b132fa96fbe81646285a1b7428241acfa49f442", "save_lines", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.save_lines")
+        _implementation = _cott_load("_cott_impl/real/toolong/files/save_lines.py", "98794ee3330d75d0cfe6f82bde0cb4676f8b6b8a7683cffa9b8cf731ba7bfe43", "save_lines", expected_project_name="toolong", expected_cott_symbol="real.toolong.files.save_lines")
         _result = _implementation(sources, index, line_count, path)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.toolong.files.save_lines"
         if _error.span is None:
-            _error.span = {"end_byte":12760,"end_column":1,"end_line":344,"start_byte":11785,"start_column":1,"start_line":319}
+            _error.span = {"end_byte":12771,"end_column":1,"end_line":344,"start_byte":11796,"start_column":1,"start_line":319}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.files.save_lines", phase="implementation-call", span={"end_byte":12760,"end_column":1,"end_line":344,"start_byte":11785,"start_column":1,"start_line":319}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.toolong.files.save_lines", phase="implementation-call", span={"end_byte":12771,"end_column":1,"end_line":344,"start_byte":11796,"start_column":1,"start_line":319}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.files.save_lines", phase="implementation-call", span={"end_byte":12760,"end_column":1,"end_line":344,"start_byte":11785,"start_column":1,"start_line":319}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.toolong.files.save_lines", phase="implementation-call", span={"end_byte":12771,"end_column":1,"end_line":344,"start_byte":11796,"start_column":1,"start_line":319}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, Result[U64, SaveError], path="$.return")
     if _cott_test_context:
         if type(_result) is Err:
@@ -516,7 +516,7 @@ failures)."""
                 if type(_result.error) is not _expected_error:
                     raise CottContractViolation("conditional error clause failed", symbol="real.toolong.files.save_lines", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
             elif type(_result.error) not in (SaveError_WriteFailed,):
-                raise CottContractViolation("returned error is not allowed", symbol="real.toolong.files.save_lines", phase="error", span={"end_byte":12760,"end_column":1,"end_line":344,"start_byte":11785,"start_column":1,"start_line":319}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+                raise CottContractViolation("returned error is not allowed", symbol="real.toolong.files.save_lines", phase="error", span={"end_byte":12771,"end_column":1,"end_line":344,"start_byte":11796,"start_column":1,"start_line":319}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
         elif _expected_error is not None:
             raise CottContractViolation("expected conditional error was not returned", symbol="real.toolong.files.save_lines", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
         if _expected_error_clause is not None:
@@ -531,7 +531,7 @@ failures)."""
             _cott_contract_condition((False), "real.toolong.files.save_lines", "ensures:1:applicable")
             return True
         if not (_cott_match_ensures_1()):
-            raise CottContractViolation("ensures clause failed", symbol="real.toolong.files.save_lines", clause="ensures:1", phase="ensures", span={"end_byte":12688,"end_column":56,"end_line":338,"start_byte":12637,"start_column":5,"start_line":338}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.toolong.files.save_lines", clause="ensures:1", phase="ensures", span={"end_byte":12699,"end_column":56,"end_line":338,"start_byte":12648,"start_column":5,"start_line":338}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[U64, SaveError], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 

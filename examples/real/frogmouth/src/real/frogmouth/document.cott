@@ -277,6 +277,15 @@ scenario remote_documents_are_fetched:
     call broken = fetch_remote_document(service.url("/broken.md"))
     assert broken matches Result.Err(LoadError.RemoteFailed(_, message)) => starts_with(message, "Server error '500 Internal Server Error' for url 'http://")
 
+scenario remote_content_type_decides_markdown:
+    fixtures:
+        http service:
+            route "/page.md" -> response(status: 200, body: text("# Page\n"), encoding: "utf-8", content_type: "text/html; charset=utf-8")
+    call page = fetch_remote_document(service.url("/page.md"))
+    assert page == Result.Ok(
+        value: RemoteDocument.NotMarkdown(content_type: "text/html; charset=utf-8"),
+    )
+
 scenario locations_are_visited:
     fixtures:
         fs files:

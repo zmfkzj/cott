@@ -4,7 +4,7 @@ from real.yt_dlp_types import MediaError, MediaError_InvalidTemplate, MediaItem
 
 def _field_value(item: MediaItem, name: str, conversion: str, missing_placeholder: str) -> str | None:
     if name == "playlist_index":
-        return f"{item.playlist_index:d}"
+        return str(item.playlist_index)
     if conversion != "s":
         return None
     if name == "id":
@@ -17,15 +17,14 @@ def _field_value(item: MediaItem, name: str, conversion: str, missing_placeholde
 
 
 def render_output_path(item: MediaItem, template: str, missing_placeholder: str) -> Result[str, MediaError]:
-    size: int = len(template)
-    if size == 0:
+    if not template:
         return Err(error=MediaError_InvalidTemplate())
     pieces: list[str] = []
     index: int = 0
+    size: int = len(template)
     while index < size:
-        ch: str = template[index]
-        if ch != "%":
-            pieces.append(ch)
+        if template[index] != "%":
+            pieces.append(template[index])
             index += 1
             continue
         if index + 1 < size and template[index + 1] == "%":
@@ -39,7 +38,7 @@ def render_output_path(item: MediaItem, template: str, missing_placeholder: str)
             return Err(error=MediaError_InvalidTemplate())
         name: str = template[index + 2 : close]
         conversion: str = template[close + 1]
-        if len(name) == 0 or "%" in name or "(" in name or conversion not in ("s", "d"):
+        if not name or "%" in name or "(" in name or conversion not in ("s", "d"):
             return Err(error=MediaError_InvalidTemplate())
         value: str | None = _field_value(item, name, conversion, missing_placeholder)
         if value is None:

@@ -33,7 +33,7 @@ def _rank(value: object) -> int:
     return 5
 
 
-def _column_types(rows: list[tuple[object, ...]]) -> list[type]:
+def _column_types(rows: list[tuple[object, ...]]) -> list[type[object]]:
     ranks: list[int] = []
     for row in rows:
         for index, value in enumerate(row):
@@ -42,7 +42,7 @@ def _column_types(rows: list[tuple[object, ...]]) -> list[type]:
                 ranks.append(rank)
             elif rank > ranks[index]:
                 ranks[index] = rank
-    types: dict[int, type] = {0: type(None), 2: int, 3: decimal.Decimal, 4: bytes, 5: str}
+    types: dict[int, type[object]] = {0: type(None), 2: int, 3: decimal.Decimal, 4: bytes, 5: str}
     return [types[rank] for rank in ranks]
 
 
@@ -212,7 +212,7 @@ def _plan_text(value: object) -> str:
     raise TypeError("the JSON object must be str, bytes or bytearray, not " + kind)
 
 
-def _failed(message: str) -> Result[FormattedOutput, OutputError]:
+def _failed(message: str) -> Err[OutputError]:
     return Err(error=OutputError_Failed(message=message))
 
 

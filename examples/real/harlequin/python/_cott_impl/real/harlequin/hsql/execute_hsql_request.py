@@ -5,11 +5,10 @@ import tempfile
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, Final, cast
+from typing import Any, cast
 
 import pyarrow
-from cott_runtime import U64, CottList, Nothing, Ok, Opaque, Some
-
+from cott_runtime import CottList, I64, Nothing, Ok, Opaque, Some, U64
 from real.harlequin.adapters import cancel_queries, execute_statements, fetch_result, load_catalog, load_catalog_children, search_catalog
 from real.harlequin.adapters_types import Connection
 from real.harlequin.catalog import catalog_children, normalize_catalog, replace_children
@@ -23,10 +22,8 @@ from real.harlequin.hsql_types import HsqlArguments, HsqlContext, HsqlError, Hsq
 from real.harlequin.results_types import ColumnInfo, ResultSet
 from real.harlequin.sqltext import redact_sql, redact_text, split_statements
 
-_CANCELED_TITLE: Final[str] = "Query canceled"
 
-
-def _status_of(error: HsqlError) -> int:
+def _status(error: HsqlError) -> I64:
     if isinstance(error, HsqlError_Usage):
         return 2
     if isinstance(error, HsqlError_Query):
@@ -40,27 +37,16 @@ def _status_of(error: HsqlError) -> int:
     return 70
 
 
-def _fail(error: HsqlError) -> tuple[bytes, str, int]:
-    return b"", hsql_error_line(error), _status_of(error)
-
-
-def _fire_timeout(cells: dict[str, bool], connection: Connection) -> None:
-    cells["timed_out"] = True
-    cancel_queries(connection)
-
-
 def _resolve(cwd: pathlib.Path, path: str) -> pathlib.Path:
     target = pathlib.Path(path).expanduser()
-    if target.is_absolute():
-        return target
-    return cwd / target
+    return target if target.is_absolute() else cwd / target
 
 
-def _os_reason(error: OSError) -> str:
+def _reason(error: OSError) -> str:
     return error.strerror if error.strerror else str(error)
 
 
-def _read_sources(arguments: HsqlArguments, cwd: pathlib.Path, stdin_text: Some[str] | Nothing) -> list[str] | HsqlError:
+def _sources(arguments: HsqlArguments, cwd: pathlib.Path, stdin_text: Some[str] | Nothing) -> list[str] | HsqlError:
     statements: list[str] = []
     for source in arguments.sources:
         if isinstance(source, SqlSource_Command):
@@ -69,32 +55,30 @@ def _read_sources(arguments: HsqlArguments, cwd: pathlib.Path, stdin_text: Some[
             text = stdin_text.value if isinstance(stdin_text, Some) else ""
         else:
             try:
-                text = _resolve(cwd, source.path).read_text(encoding="utf-8")
-            except OSError as error:
-                return HsqlError_Usage(message=f"could not read {source.path}: {_os_reason(error)}")
-            except UnicodeDecodeError as error:
-                return HsqlError_Usage(message=f"could not read {source.path}: {error}")
+                text = _resolve(cwd, source.path).read_bytes().decode("utf-8")
+            except (OSError, UnicodeDecodeError) as error:
+                reason = _reason(error) if isinstance(error, OSError) else str(error)
+                return HsqlError_Usage(message=f"could not read {source.path}: {reason}")
         statements.extend(split_statements(text))
     return statements
 
 
-def _statement_error(cells: dict[str, bool], timeout: Some[float] | Nothing, title: str, message: str) -> HsqlError:
-    if cells["timed_out"] and isinstance(timeout, Some):
-        return HsqlError_Timeout(message=f"timed out after {timeout.value:g}s")
-    return HsqlError_Query(message=f"{title}\n{message}")
+def _timeout(cells: dict[str, bool], guard: threading.Lock, connection: Connection) -> None:
+    with guard:
+        if not cells["running"]:
+            return
+        cells["timed_out"] = True
+    cancel_queries(connection)
 
 
-def _begin_log(connection: Connection, context: HsqlContext, sql: str) -> int | None:
-    run_at = datetime.now(timezone.utc).isoformat()
-    record = QueryRecord(run_at=run_at, program="hsql", connection=connection.connection_id, profile=context.profile, adapter=context.adapter_name, sql=redact_sql(sql, context.secrets), status=QueryStatus_Ok(), rows=Nothing(), truncated=Nothing(), elapsed_ms=Nothing(), error_text=Nothing())
-    recorded = record_query(context.query_log, record)
-    return recorded.value if isinstance(recorded, Ok) else None
+def _log_start(connection: Connection, context: HsqlContext, sql: str, run_at: str) -> int | None:
+    logged = record_query(context.query_log, QueryRecord(run_at=run_at, program="hsql", connection=connection.connection_id, profile=context.profile, adapter=context.adapter_name, sql=redact_sql(sql, context.secrets), status=QueryStatus_Ok(), rows=Nothing(), truncated=Nothing(), elapsed_ms=Nothing(), error_text=Nothing()))
+    return logged.value if isinstance(logged, Ok) else None
 
 
-def _log(context: HsqlContext, row: int | None, status: QueryStatus, rows: Some[int] | Nothing, truncated: Some[bool] | Nothing, elapsed_ms: Some[float] | Nothing, error_text: Some[str] | Nothing) -> None:
+def _log_end(context: HsqlContext, row: int | None, status: QueryStatus, result: ResultSet | None, failure: str | None) -> None:
     if row is not None:
-        redacted: Some[str] | Nothing = Some(value=redact_text(error_text.value, context.secrets)) if isinstance(error_text, Some) else Nothing()
-        update_query(context.query_log, row, status, rows, truncated, elapsed_ms, redacted)
+        update_query(context.query_log, row, status, Some(value=result.fetched_row_count) if result is not None else Nothing(), Some(value=result.truncated) if result is not None else Nothing(), Some(value=float(result.elapsed_ms)) if result is not None else Nothing(), Some(value=redact_text(failure, context.secrets)) if failure is not None else Nothing())
 
 
 def _select(results: list[ResultSet], choice: str) -> tuple[list[ResultSet], HsqlError | None]:
@@ -111,38 +95,6 @@ def _select(results: list[ResultSet], choice: str) -> tuple[list[ResultSet], Hsq
     return [results[number - 1]], None
 
 
-def _write_file(path: pathlib.Path, data: bytes) -> HsqlError | None:
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
-    except OSError as error:
-        return HsqlError_Usage(message=f"could not write {path}: {_os_reason(error)}")
-    return None
-
-
-def _render_layout(result_set: ResultSet, fmt: str, arguments: HsqlArguments, context: HsqlContext, to_file: bool) -> tuple[str, str]:
-    display = arguments.display_rows
-    max_rows: Some[U64] | Nothing
-    if isinstance(display, Some):
-        max_rows = Nothing() if display.value < 0 else Some(value=display.value)
-    else:
-        max_rows = Some(value=10 if fmt == "vertical" else 40)
-    if arguments.color == "always":
-        color = True
-    elif arguments.color == "auto":
-        color = context.stdout_tty and not context.no_color and not to_file
-    else:
-        color = False
-    footer = not (arguments.tuples_only or arguments.no_footer)
-    options = LayoutOptions(header=not (arguments.tuples_only or arguments.no_header), footer=footer, aligned=not arguments.no_align, null_string=arguments.null_string, color=color, max_rows=max_rows)
-    text = layout_text(result_set, fmt, options)
-    note = ""
-    total = result_set.fetched_row_count
-    if not footer and isinstance(max_rows, Some) and total > max_rows.value:
-        note = f"note: printed {max_rows.value} of {total} rows; pass --display-rows -1 for all of them\n"
-    return text, note
-
-
 def _suffix(fmt: str) -> str:
     if fmt in ("table", "vertical"):
         return ".txt"
@@ -151,7 +103,16 @@ def _suffix(fmt: str) -> str:
     return "." + fmt
 
 
-def _export(result_set: ResultSet, fmt: str, arguments: HsqlArguments) -> bytes | HsqlError:
+def _write(path: pathlib.Path, data: bytes) -> HsqlError | None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    except OSError as error:
+        return HsqlError_Usage(message=f"could not write {path}: {_reason(error)}")
+    return None
+
+
+def _export(result: ResultSet, fmt: str, arguments: HsqlArguments) -> bytes | HsqlError:
     options: list[ExportOptionValue] = []
     if fmt in ("csv", "tsv"):
         null = arguments.null_string
@@ -162,148 +123,147 @@ def _export(result_set: ResultSet, fmt: str, arguments: HsqlArguments) -> bytes 
         options.append(ExportOptionValue(name="array", value="true"))
     with tempfile.TemporaryDirectory() as folder:
         path = pathlib.Path(folder) / ("result" + _suffix(fmt))
-        written = write_result(result_set, ExportRequest(path=path, format=fmt, options=CottList(values=options)))
+        written = write_result(result, ExportRequest(path=path, format=fmt, options=CottList(values=options)))
         if isinstance(written, Ok):
             try:
                 return path.read_bytes()
             except OSError as error:
-                return HsqlError_Query(message=f"could not read the exported file: {_os_reason(error)}")
-        error = written.error
-        if isinstance(error, ExportError_UnknownFormat):
-            return HsqlError_Usage(message=f"unknown format {error.name}")
-        if isinstance(error, ExportError_InvalidOption):
-            return HsqlError_Usage(message=f"invalid {error.name} option: {error.message}")
-        if isinstance(error, ExportError_PathIsDirectory):
-            return HsqlError_Query(message=f"{error.path} is a directory")
-        return HsqlError_Query(message=f"{error.title}\n{error.message}")
+                return HsqlError_Query(message=f"could not read the exported file: {_reason(error)}")
+        failure = written.error
+        if isinstance(failure, ExportError_UnknownFormat):
+            return HsqlError_Usage(message=f"unknown format {failure.name}")
+        if isinstance(failure, ExportError_InvalidOption):
+            return HsqlError_Usage(message=f"invalid {failure.name} option: {failure.message}")
+        if isinstance(failure, ExportError_PathIsDirectory):
+            return HsqlError_Query(message=f"{failure.path} is a directory")
+        return HsqlError_Query(message=f"{failure.title}\n{failure.message}")
 
 
 def _emit(results: list[ResultSet], arguments: HsqlArguments, cwd: pathlib.Path, context: HsqlContext) -> tuple[bytes, list[str], HsqlError | None]:
     fmt = arguments.format
-    notes: list[str] = []
     layouts = ("table", "markdown", "md", "vertical")
-    single = ("csv", "tsv", "json", "parquet", "orc", "feather", "arrow")
-    selected, selection_error = _select(results, arguments.result)
-    if selection_error is not None:
-        return b"", notes, selection_error
-    out_dir: pathlib.Path | None = None
-    out_file: pathlib.Path | None = None
-    output = arguments.output
-    if isinstance(output, Some):
-        target = _resolve(cwd, output.value)
-        if target.is_dir() or output.value.endswith(("/", os.sep)):
-            out_dir = target
+    single = ("csv", "tsv", "json", "jsonl", "ndjson", "parquet", "orc", "feather", "arrow")
+    selected, error = _select(results, arguments.result)
+    notes: list[str] = []
+    if error is not None:
+        return b"", notes, error
+    directory: pathlib.Path | None = None
+    output_file: pathlib.Path | None = None
+    if isinstance(arguments.output, Some):
+        target = _resolve(cwd, arguments.output.value)
+        if target.is_dir() or arguments.output.value.endswith(os.sep):
+            directory = target
         else:
-            out_file = target
+            output_file = target
     if fmt not in layouts and isinstance(arguments.display_rows, Some):
         notes.append("note: --display-rows only applies to text layouts; use --limit to fetch fewer rows.\n")
-    if fmt in single and len(selected) > 1 and out_dir is None:
+    if fmt in single and len(selected) > 1 and directory is None:
         return b"", notes, HsqlError_Usage(message=f"{len(selected)} result sets, but {fmt} holds one; use --result last, --result N, or -o DIR for one file each")
-    if fmt == "none":
-        return b"", notes, None
     chunks: list[bytes] = []
-    truncated = False
-    for index, result_set in enumerate(selected, 1):
-        truncated = truncated or result_set.truncated
-        if fmt in layouts:
-            text, note = _render_layout(result_set, fmt, arguments, context, out_dir is not None or out_file is not None)
-            if note:
-                notes.append(note)
-            data = text.encode("utf-8")
-        else:
-            exported = _export(result_set, fmt, arguments)
-            if not isinstance(exported, bytes):
-                return (b"".join(chunks) if out_file is None else b""), notes, exported
-            data = exported
-        if out_dir is not None:
-            path = out_dir / f"result-{index}{_suffix(fmt)}"
-            failure = _write_file(path, data)
-            if failure is not None:
-                return b"", notes, failure
-            notes.append(f"note: wrote {path}\n")
-        else:
-            chunks.append(data)
-    if truncated:
+    if fmt != "none":
+        for index, result in enumerate(selected, 1):
+            if fmt in layouts:
+                display = arguments.display_rows
+                cap: Some[U64] | Nothing = Nothing() if isinstance(display, Some) and display.value < 0 else Some(value=display.value if isinstance(display, Some) else 10 if fmt == "vertical" else 40)
+                footer = not (arguments.tuples_only or arguments.no_footer)
+                options = LayoutOptions(header=not (arguments.tuples_only or arguments.no_header), footer=footer, aligned=not arguments.no_align, null_string=arguments.null_string, color=arguments.color == "always" or (arguments.color == "auto" and context.stdout_tty and not context.no_color and directory is None and output_file is None), max_rows=cap)
+                data = layout_text(result, fmt, options).encode("utf-8")
+                if not footer and isinstance(cap, Some) and result.fetched_row_count > cap.value:
+                    notes.append(f"note: printed {cap.value} of {result.fetched_row_count} rows; pass --display-rows -1 for all of them\n")
+            else:
+                exported = _export(result, fmt, arguments)
+                if not isinstance(exported, bytes):
+                    return b"" if output_file is not None else b"".join(chunks), notes, exported
+                data = exported
+            if directory is not None:
+                path = directory / f"result-{index}{_suffix(fmt)}"
+                failure = _write(path, data)
+                if failure is not None:
+                    return b"", notes, failure
+                notes.append(f"note: wrote {path}\n")
+            else:
+                chunks.append(data)
+    if any(result.truncated for result in results):
         notes.append(f"note: results truncated at --limit {arguments.limit}; pass --limit -1 for all rows\n")
     body = b"\n".join(chunks) if fmt in layouts else b"".join(chunks)
-    if out_file is not None:
-        failure = _write_file(out_file, body)
-        return b"", notes, failure
+    if output_file is not None and fmt != "none":
+        return b"", notes, _write(output_file, body)
     return body, notes, None
 
 
-def _run_execute(connection: Connection, arguments: HsqlArguments, cwd: pathlib.Path, stdin_text: Some[str] | Nothing, context: HsqlContext) -> tuple[bytes, str, int]:
-    read = _read_sources(arguments, cwd, stdin_text)
+def _failed(arguments: HsqlArguments, started: float, error: HsqlError) -> tuple[bytes, str, I64]:
+    status = _status(error)
+    line = hsql_error_line(error)
+    if arguments.stats:
+        limit: Some[U64] | Nothing = Some(value=arguments.limit) if arguments.limit >= 0 else Nothing()
+        line += stats_json("timeout" if status == 4 else "error", 0, 0, False, limit, int((time.monotonic() - started) * 1000), CottList(values=[]), Some(value=line.removeprefix("hsql: error: ").rstrip("\n")))
+    return b"", line, status
+
+
+def _execute(connection: Connection, arguments: HsqlArguments, cwd: pathlib.Path, stdin_text: Some[str] | Nothing, context: HsqlContext) -> tuple[bytes, str, I64]:
+    started = time.monotonic()
+    read = _sources(arguments, cwd, stdin_text)
     if not isinstance(read, list):
-        return _fail(read)
-    statements = read
+        return _failed(arguments, started, read)
     limit: Some[U64] | Nothing = Some(value=arguments.limit) if arguments.limit >= 0 else Nothing()
-    cells: dict[str, bool] = {"timed_out": False}
+    cells = {"running": True, "timed_out": False}
+    guard = threading.Lock()
     timeout = arguments.timeout_seconds
     timer: threading.Timer | None = None
     if isinstance(timeout, Some):
-        timer = threading.Timer(timeout.value, lambda: _fire_timeout(cells, connection))
+        timer = threading.Timer(timeout.value, lambda: _timeout(cells, guard, connection))
         timer.daemon = True
         timer.start()
-    started = time.monotonic()
     results: list[ResultSet] = []
     errors: list[HsqlError] = []
+    count = 0
+    run_at = datetime.now(timezone.utc).isoformat()
     try:
-        executed_list = execute_statements(connection, CottList(values=statements), limit, arguments.continue_on_error)
-        for executed in executed_list:
-            row = _begin_log(connection, context, executed.sql) if arguments.write_history else None
+        for executed in execute_statements(connection, CottList(values=read), limit, arguments.continue_on_error):
+            count += 1
+            row = _log_start(connection, context, executed.sql, run_at) if arguments.write_history else None
             failure = executed.failure
-            problem_title: str | None = None
-            problem_message = ""
+            title: str | None = None
+            message = ""
             if isinstance(failure, Some):
-                problem_title = failure.value.title
-                problem_message = failure.value.message
+                title, message = failure.value.title, failure.value.message
             elif isinstance(executed.cursor, Some):
                 fetched = fetch_result(connection, executed, limit, Nothing())
                 if isinstance(fetched, Ok):
-                    result_set = fetched.value
-                    results.append(result_set)
-                    _log(context, row, QueryStatus_Ok(), Some(value=result_set.fetched_row_count), Some(value=result_set.truncated), Some(value=round(float(result_set.elapsed_ms), 3)), Nothing())
+                    results.append(fetched.value)
+                    _log_end(context, row, QueryStatus_Ok(), fetched.value, None)
                 else:
-                    problem_title = fetched.error.title
-                    problem_message = fetched.error.message
+                    title, message = fetched.error.title, fetched.error.message
             else:
-                _log(context, row, QueryStatus_Ok(), Nothing(), Nothing(), Nothing(), Nothing())
-            if problem_title is not None:
-                errors.append(_statement_error(cells, timeout, problem_title, problem_message))
-                status: QueryStatus = QueryStatus_Canceled() if problem_title == _CANCELED_TITLE or cells["timed_out"] else QueryStatus_Error()
-                _log(context, row, status, Nothing(), Nothing(), Nothing(), Some(value=f"{problem_title}\n{problem_message}"))
+                _log_end(context, row, QueryStatus_Ok(), None, None)
+            if title is not None:
+                if cells["timed_out"] and isinstance(timeout, Some):
+                    errors.append(HsqlError_Timeout(message=f"timed out after {timeout.value:g}s"))
+                else:
+                    errors.append(HsqlError_Query(message=f"{title}\n{message}"))
+                _log_end(context, row, QueryStatus_Canceled() if title == "Query canceled" or cells["timed_out"] else QueryStatus_Error(), None, f"{title}\n{message}")
     finally:
+        with guard:
+            cells["running"] = False
         if timer is not None:
             timer.cancel()
-    if cells["timed_out"] and isinstance(timeout, Some) and not errors:
+            timer.join()
+    if cells["timed_out"] and isinstance(timeout, Some) and not any(isinstance(error, HsqlError_Timeout) for error in errors):
         errors.append(HsqlError_Timeout(message=f"timed out after {timeout.value:g}s"))
-    elapsed = int((time.monotonic() - started) * 1000)
     stdout, notes, write_error = _emit(results, arguments, cwd, context)
-    stderr = "".join(notes)
-    status_code = 0
-    first_failure: HsqlError | None = None
-    for error in errors:
-        stderr += hsql_error_line(error)
-        if first_failure is None:
-            first_failure = error
-            status_code = _status_of(error)
     if write_error is not None:
-        stderr += hsql_error_line(write_error)
-        if first_failure is None:
-            first_failure = write_error
-            status_code = _status_of(write_error)
+        errors.append(write_error)
+    timed_out = next((error for error in errors if isinstance(error, HsqlError_Timeout)), None)
+    reported = timed_out if timed_out is not None else errors[0] if errors else None
+    status = _status(reported) if reported is not None else 0
+    stderr = "".join(notes) + "".join(hsql_error_line(error) for error in errors)
     if arguments.stats:
-        label = "ok" if status_code == 0 else ("timeout" if status_code == 4 else "error")
-        columns: CottList[ColumnInfo] = results[-1].columns if results else CottList(values=[])
-        failure_text: Some[str] | Nothing = Nothing()
-        if first_failure is not None:
-            failure_text = Some(value=hsql_error_line(first_failure).removeprefix("hsql: error: ").rstrip("\n"))
-        stderr += stats_json(label, len(statements), sum(result.fetched_row_count for result in results), any(result.truncated for result in results), limit, elapsed, columns, failure_text)
-    return stdout, stderr, status_code
+        first = Some(value=hsql_error_line(reported).removeprefix("hsql: error: ").rstrip("\n")) if reported is not None else Nothing()
+        stderr += stats_json("ok" if status == 0 else "timeout" if status == 4 else "error", count, sum(result.fetched_row_count for result in results), any(result.truncated for result in results), limit, int((time.monotonic() - started) * 1000), results[-1].columns if results else CottList(values=[]), first)
+    return stdout, stderr, status
 
 
-def _kind_name(kind: CatalogKind) -> str:
+def _kind(kind: CatalogKind) -> str:
     if isinstance(kind, CatalogKind_Database):
         return "database"
     if isinstance(kind, CatalogKind_Schema):
@@ -329,106 +289,112 @@ def _kind_name(kind: CatalogKind) -> str:
     return "other"
 
 
-def _catalog_result(rows: list[tuple[str, CatalogEntry]], elapsed_ms: int) -> ResultSet:
+def _catalog_result(rows: list[tuple[str, CatalogEntry]], elapsed: U64) -> ResultSet:
     pa: Any = pyarrow
     names = ["path", "name", "query_name", "type", "type_label"]
-    values: list[list[str]] = [[path for path, _ in rows], [entry.label for _, entry in rows], [entry.query_name for _, entry in rows], [_kind_name(entry.kind) for _, entry in rows], [entry.type_label for _, entry in rows]]
-    arrays = [pa.array(column, type=pa.string()) for column in values]
-    table = cast(object, pa.table(arrays, names=names))
+    values = [[path for path, _ in rows], [entry.label for _, entry in rows], [entry.query_name for _, entry in rows], [_kind(entry.kind) for _, entry in rows], [entry.type_label for _, entry in rows]]
+    arrays: list[object] = [cast(object, pa.array(column, type=pa.string())) for column in values]
+    raw = cast(object, pa.Table.from_arrays(arrays, names=names))
+    if not isinstance(raw, pyarrow.Table):
+        raise TypeError("catalog results are not an Arrow table")
     count = len(rows)
-    columns = CottList(values=[ColumnInfo(name=name, type_label="s") for name in names])
-    return ResultSet(statement="", columns=columns, data=Opaque(tag="harlequin.arrow_table", value=table), row_count=count, fetched_row_count=count, truncated=False, elapsed_ms=elapsed_ms)
+    return ResultSet(statement="", columns=CottList(values=[ColumnInfo(name=name, type_label="s") for name in names]), data=Opaque(tag="harlequin.arrow_table", value=raw), row_count=count, fetched_row_count=count, truncated=False, elapsed_ms=elapsed)
 
 
-def _label_chain(entry: CatalogEntry, by_id: dict[str, CatalogEntry]) -> list[str]:
-    labels: list[str] = [entry.label]
+def _walk(connection: Connection, segments: list[str]) -> tuple[CottList[CatalogEntry], list[str], str | None] | HsqlError:
+    loaded = load_catalog(connection)
+    if not isinstance(loaded, Ok):
+        return HsqlError_Query(message=f"{loaded.error.title}\n{loaded.error.message}")
+    catalog = normalize_catalog(loaded.value)
+    parent_id: str | None = None
+    spelled: list[str] = []
+    for segment in segments:
+        kids = catalog_children(catalog, Some(value=parent_id) if parent_id is not None else Nothing())
+        match: CatalogEntry | None = None
+        for kid in kids:
+            if kid.label == segment:
+                match = kid
+                break
+        if match is None:
+            return HsqlError_Usage(message=missing_label_message(segment, Some(value=".".join(spelled)) if spelled else Nothing(), CottList(values=[kid.label for kid in kids])))
+        spelled.append(spell_catalog_label(segment))
+        parent_id = match.id
+        if match.expandable and not match.loaded:
+            children = load_catalog_children(connection, match)
+            if not isinstance(children, Ok):
+                return HsqlError_Query(message=f"{children.error.title}\n{children.error.message}")
+            catalog = replace_children(catalog, match.id, children.value)
+    return catalog, spelled, parent_id
+
+
+def _chain(entry: CatalogEntry, by_id: dict[str, CatalogEntry]) -> list[str]:
+    labels = [entry.label]
     current = entry
-    while True:
-        parent = current.parent
-        if not isinstance(parent, Some) or parent.value not in by_id:
-            break
-        current = by_id[parent.value]
+    while isinstance(current.parent, Some) and current.parent.value in by_id:
+        current = by_id[current.parent.value]
         labels.append(current.label)
     labels.reverse()
     return labels
 
 
-def _run_catalog(connection: Connection, arguments: HsqlArguments, cwd: pathlib.Path, context: HsqlContext) -> tuple[bytes, str, int]:
+def _catalog(connection: Connection, arguments: HsqlArguments, cwd: pathlib.Path, context: HsqlContext) -> tuple[bytes, str, I64]:
     started = time.monotonic()
-    raw_path = arguments.catalog_path
-    parsed = parse_catalog_path(raw_path.value if isinstance(raw_path, Some) else "")
+    parsed = parse_catalog_path(arguments.catalog_path.value if isinstance(arguments.catalog_path, Some) else "")
     if not isinstance(parsed, Ok):
-        return _fail(parsed.error)
-    scope = parsed.value
-    segments = [segment for segment in scope.segments]
-    pattern = scope.pattern
+        return _failed(arguments, started, parsed.error)
+    segments = [segment for segment in parsed.value.segments]
+    pattern = parsed.value.pattern
     rows: list[tuple[str, CatalogEntry]] = []
     mode = arguments.mode
     if isinstance(mode, HsqlMode_CatalogSearch):
+        if segments:
+            walked = _walk(connection, segments)
+            if not isinstance(walked, tuple):
+                return _failed(arguments, started, walked)
         found = search_catalog(connection, mode.term)
         if not isinstance(found, Ok):
-            return _fail(HsqlError_Query(message=f"{found.error.title}\n{found.error.message}"))
+            return _failed(arguments, started, HsqlError_Query(message=f"{found.error.title}\n{found.error.message}"))
         entries = normalize_catalog(found.value)
-        by_id: dict[str, CatalogEntry] = {entry.id: entry for entry in entries}
+        by_id = {entry.id: entry for entry in entries}
         depth = len(segments)
         for entry in entries:
-            labels = _label_chain(entry, by_id)
+            labels = _chain(entry, by_id)
             if len(labels) <= depth or labels[:depth] != segments:
                 continue
             if isinstance(pattern, Some) and not fnmatch.fnmatchcase(labels[depth], pattern.value):
                 continue
             rows.append((".".join(spell_catalog_label(label) for label in labels), entry))
     else:
-        loaded = load_catalog(connection)
-        if not isinstance(loaded, Ok):
-            return _fail(HsqlError_Query(message=f"{loaded.error.title}\n{loaded.error.message}"))
-        catalog = normalize_catalog(loaded.value)
-        parent_id: str | None = None
-        spelled: list[str] = []
-        for segment in segments:
-            kids = catalog_children(catalog, Some(value=parent_id) if parent_id is not None else Nothing())
-            match: CatalogEntry | None = None
-            for kid in kids:
-                if kid.label == segment:
-                    match = kid
-                    break
-            if match is None:
-                parent_text: Some[str] | Nothing = Some(value=".".join(spelled)) if spelled else Nothing()
-                return _fail(HsqlError_Usage(message=missing_label_message(segment, parent_text, CottList(values=[kid.label for kid in kids]))))
-            spelled.append(spell_catalog_label(segment))
-            parent_id = match.id
-            if match.expandable and not match.loaded:
-                children = load_catalog_children(connection, match)
-                if not isinstance(children, Ok):
-                    return _fail(HsqlError_Query(message=f"{children.error.title}\n{children.error.message}"))
-                catalog = replace_children(catalog, match.id, children.value)
-        listed = catalog_children(catalog, Some(value=parent_id) if parent_id is not None else Nothing())
-        for entry in listed:
+        walked = _walk(connection, segments)
+        if not isinstance(walked, tuple):
+            return _failed(arguments, started, walked)
+        catalog, spelled, parent_id = walked
+        for entry in catalog_children(catalog, Some(value=parent_id) if parent_id is not None else Nothing()):
             if isinstance(pattern, Some) and not fnmatch.fnmatchcase(entry.label, pattern.value):
                 continue
             rows.append((".".join([*spelled, spell_catalog_label(entry.label)]), entry))
-    result_set = _catalog_result(rows, int((time.monotonic() - started) * 1000))
-    stdout, notes, write_error = _emit([result_set], arguments, cwd, context)
-    stderr = "".join(notes)
-    if write_error is not None:
-        return stdout, stderr + hsql_error_line(write_error), _status_of(write_error)
-    return stdout, stderr, 0
-
-
-def _serve(connection: Connection, arguments: HsqlArguments, cwd: pathlib.Path, stdin_text: Some[str] | Nothing, context: HsqlContext) -> tuple[bytes, str, int]:
-    mode = arguments.mode
-    if isinstance(mode, HsqlMode_Execute):
-        return _run_execute(connection, arguments, cwd, stdin_text, context)
-    if isinstance(mode, HsqlMode_Catalog) or isinstance(mode, HsqlMode_CatalogSearch):
-        return _run_catalog(connection, arguments, cwd, context)
-    return _fail(HsqlError_Usage(message="this mode does not run SQL on a connection"))
+    result = _catalog_result(rows, int((time.monotonic() - started) * 1000))
+    stdout, notes, error = _emit([result], arguments, cwd, context)
+    status = _status(error) if error is not None else 0
+    stderr = "".join(notes) + (hsql_error_line(error) if error is not None else "")
+    if arguments.stats:
+        limit: Some[U64] | Nothing = Some(value=arguments.limit) if arguments.limit >= 0 else Nothing()
+        failure: Some[str] | Nothing = Some(value=hsql_error_line(error).removeprefix("hsql: error: ").rstrip("\n")) if error is not None else Nothing()
+        stderr += stats_json("ok" if status == 0 else "error", 0, len(rows), False, limit, int((time.monotonic() - started) * 1000), result.columns, failure)
+    return stdout, stderr, status
 
 
 def execute_hsql_request(connection: Connection, arguments: HsqlArguments, cwd: pathlib.Path, stdin_text: Some[str] | Nothing, context: HsqlContext) -> HsqlResponse:
+    started = time.monotonic()
     try:
-        stdout, stderr, status = _serve(connection, arguments, cwd, stdin_text, context)
+        if isinstance(arguments.mode, HsqlMode_Execute):
+            stdout, stderr, status = _execute(connection, arguments, cwd, stdin_text, context)
+        elif isinstance(arguments.mode, (HsqlMode_Catalog, HsqlMode_CatalogSearch)):
+            stdout, stderr, status = _catalog(connection, arguments, cwd, context)
+        else:
+            stdout, stderr, status = _failed(arguments, started, HsqlError_Usage(message="this mode does not run SQL on a connection"))
     except KeyboardInterrupt:
-        stdout, stderr, status = b"", hsql_error_line(HsqlError_Interrupted()), 130
+        stdout, stderr, status = _failed(arguments, started, HsqlError_Interrupted())
     except Exception as error:
-        stdout, stderr, status = b"", hsql_error_line(HsqlError_Crash(message=str(error))), 70
+        stdout, stderr, status = _failed(arguments, started, HsqlError_Crash(message=str(error)))
     return HsqlResponse(stdout=stdout, stderr=redact_text(stderr, context.secrets), status=status)

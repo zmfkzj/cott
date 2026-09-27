@@ -1,21 +1,20 @@
 from pathlib import Path
 
-from cott_runtime import CottContractViolation, CottList, Err, Ok, Result, U64, _cott_fixture_write
+from cott_runtime import CottContractViolation, CottList, Err, Ok, Result, U64, _cott_fixture_replace
 from real.toolong.files import read_lines
-from real.toolong.index import line_location
 from real.toolong.files_types import SaveError, SaveError_WriteFailed
+from real.toolong.index import line_location
 from real.toolong.model_types import LogSource, TabIndex
 
 
-def _line_text(sources: CottList[LogSource], index: TabIndex, line: int) -> str:
+def _line_text(sources: CottList[LogSource], index: TabIndex, line: U64) -> str:
     location = line_location(index, line)
     position = 0
     for source in sources:
         if position == location.file:
-            text = ""
-            for item in read_lines(source, CottList(values=[location.span])):
-                text = item
-            return text
+            for text in read_lines(source, CottList(values=[location.span])):
+                return text
+            return ""
         position += 1
     return ""
 
@@ -28,14 +27,14 @@ def _failure_message(error: CottContractViolation) -> str:
 
 
 def save_lines(sources: CottList[LogSource], index: TabIndex, line_count: U64, path: Path) -> Result[U64, SaveError]:
-    texts: list[str] = []
+    lines: list[str] = []
     for line in range(line_count):
         text = _line_text(sources, index, line)
         if text:
-            texts.append(text)
-    content = "".join(text + "\n" for text in texts)
+            lines.append(text + "\n")
+    content = "".join(lines)
     try:
-        _cott_fixture_write(path, content.encode("utf-8"))
+        _cott_fixture_replace(path, content.encode("utf-8"))
     except CottContractViolation as error:
         if error.message != "fixture adapters are inactive":
             return Err(error=SaveError_WriteFailed(message=_failure_message(error)))
@@ -46,4 +45,4 @@ def save_lines(sources: CottList[LogSource], index: TabIndex, line_count: U64, p
             return Err(error=SaveError_WriteFailed(message=str(host_error)))
     except (OSError, UnicodeError) as error:
         return Err(error=SaveError_WriteFailed(message=str(error)))
-    return Ok(value=len(texts))
+    return Ok(value=len(lines))

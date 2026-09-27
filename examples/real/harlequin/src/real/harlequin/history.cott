@@ -131,7 +131,15 @@ fn record_query(log_path: Path, record: QueryRecord) -> Result[I64, HistoryError
 
     effects [file.read, file.write]
 
-fn update_query(log_path: Path, row: I64, status: QueryStatus, rows: Option[I64], truncated: Option[Bool], elapsed_ms: Option[F64], failure: Option[Str]) -> Result[Unit, HistoryError]:
+fn update_query(
+    log_path: Path,
+    row: I64,
+    status: QueryStatus,
+    rows: Option[I64],
+    truncated: Option[Bool],
+    elapsed_ms: Option[F64],
+    failure: Option[Str],
+) -> Result[Unit, HistoryError]:
     doc """
     Fill in the outcome of a logged statement once it is known: set status,
     rows, truncated, elapsed_ms (rounded to 3 decimals) and error_text (from failure) of the row
@@ -146,7 +154,11 @@ fn update_query(log_path: Path, row: I64, status: QueryStatus, rows: Option[I64]
 
     effects [file.read, file.write]
 
-fn recent_queries(log_path: Path, filter: HistoryFilter, limit: Option[U64]) -> Result[List[QueryRecord], HistoryError]:
+fn recent_queries(
+    log_path: Path,
+    filter: HistoryFilter,
+    limit: Option[U64],
+) -> Result[List[QueryRecord], HistoryError]:
     doc """
     Read the log at log_path newest first (descending id), keeping rows that
     match filter, at most limit rows (all rows for Nothing). The search is a
@@ -202,7 +214,12 @@ fn open_history_screen(connection: Str) -> HistoryScreen:
 
     effects []
 
-fn history_key(screen: HistoryScreen, records: List[QueryRecord], key: Str, text: Str) -> HistoryStep:
+fn history_key(
+    screen: HistoryScreen,
+    records: List[QueryRecord],
+    key: Str,
+    text: Str,
+) -> HistoryStep:
     doc """
     Apply one key to the History screen, as Harlequin's history screen reacts.
     key is a normalized Textual key name; text is the printable character the key
@@ -234,7 +251,13 @@ fn history_key(screen: HistoryScreen, records: List[QueryRecord], key: Str, text
 
     effects []
 
-fn render_history(screen: HistoryScreen, records: List[QueryRecord], width: U64, height: U64, timezone_offset_minutes: I64) -> List[StyledLine]:
+fn render_history(
+    screen: HistoryScreen,
+    records: List[QueryRecord],
+    width: U64,
+    height: U64,
+    timezone_offset_minutes: I64,
+) -> List[StyledLine]:
     doc """
     Draw the History screen body into width x height cells.
     Line 1: the title "Query History" styled "class:hq.dialog.title" followed by
@@ -313,10 +336,99 @@ scenario history_screen_filters_and_selects:
     assert picked.outcome == HistoryOutcome.Select(sql: "select 1;")
     call typed = history_key(screen, List(newer, older), "s", "s")
     assert typed.screen.filters_visible and typed.screen.focus == HistoryFocus.Search
-    assert typed.outcome == HistoryOutcome.Reload(filter: HistoryFilter(connection: Option.Some(value: "c1"), search: "s", program: Option.Nothing, status: Option.Nothing))
+    assert typed.outcome == HistoryOutcome.Reload(
+        filter: HistoryFilter(
+            connection: Option.Some(value: "c1"),
+            search: "s",
+            program: Option.Nothing,
+            status: Option.Nothing,
+        ),
+    )
     call cleared = history_key(typed.screen, List(), "escape", "")
     assert cleared.screen.filter.search == "" and cleared.screen.filters_visible
     call hidden = history_key(cleared.screen, List(), "escape", "")
     assert not hidden.screen.filters_visible
     call closed = history_key(hidden.screen, List(), "escape", "")
     assert closed.outcome == HistoryOutcome.Close
+
+scenario the_query_log_round_trips_in_the_fixture:
+    fixtures:
+        fs history_files:
+            file "home/readme.txt" text("home")
+    data everything: HistoryFilter = HistoryFilter(
+        connection: Option.Nothing,
+        search: "",
+        program: Option.Nothing,
+        status: Option.Nothing,
+    )
+    call recorded = record_query(history_files.path("state/history.db"), older)
+    assert recorded == Result.Ok(value: 1)
+    call listed = recent_queries(history_files.path("state/history.db"), everything, Option.Nothing)
+    assert listed == Result.Ok(value: List(older))
+    call updated = update_query(
+        history_files.path("state/history.db"),
+        1,
+        QueryStatus.Error,
+        Option.Nothing,
+        Option.Nothing,
+        Option.Some(value: 3.14159),
+        Option.Some(value: "boom"),
+    )
+    assert updated matches Result.Ok(_)
+    call failures = recent_queries(
+        history_files.path("state/history.db"),
+        HistoryFilter(
+            connection: Option.Some(value: "c1"),
+            search: "SELECT",
+            program: Option.Nothing,
+            status: Option.Some(value: QueryStatus.Error),
+        ),
+        Option.Some(value: 5),
+    )
+    assert failures == Result.Ok(
+        value: List(
+            QueryRecord(
+                run_at: "2026-01-02T03:04:05.000000+00:00",
+                program: "harlequin",
+                connection: "c1",
+                profile: Option.Nothing,
+                adapter: "sqlite",
+                sql: "select 1;",
+                status: QueryStatus.Error,
+                rows: Option.Nothing,
+                truncated: Option.Nothing,
+                elapsed_ms: Option.Some(value: 3.142),
+                error_text: Option.Some(value: "boom"),
+            ),
+        ),
+    )
+    call absent = recent_queries(history_files.path("missing/history.db"), everything, Option.Nothing)
+    assert absent == Result.Ok(value: List())
+
+scenario a_log_path_that_is_a_directory_is_unavailable:
+    fixtures:
+        fs history_files:
+            file "home/readme.txt" text("home")
+    call recorded = record_query(history_files.path("home"), older)
+    assert recorded matches Result.Err(HistoryError.Unavailable(path, _)) => path == history_files.path("home")
+    call updated = update_query(
+        history_files.path("home"),
+        1,
+        QueryStatus.Error,
+        Option.Nothing,
+        Option.Nothing,
+        Option.Nothing,
+        Option.Some(value: "boom"),
+    )
+    assert updated matches Result.Err(HistoryError.Unavailable(path, _)) => path == history_files.path("home")
+    call listed = recent_queries(
+        history_files.path("home"),
+        HistoryFilter(
+            connection: Option.Nothing,
+            search: "",
+            program: Option.Nothing,
+            status: Option.Nothing,
+        ),
+        Option.Nothing,
+    )
+    assert listed matches Result.Err(HistoryError.Unavailable(path, _)) => path == history_files.path("home")

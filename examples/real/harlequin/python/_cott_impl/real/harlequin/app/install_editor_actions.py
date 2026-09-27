@@ -9,11 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final, cast
 
-from cott_runtime import UNIT, CottList, Err, Ok, Some, Unit
+from cott_runtime import CottList, Err, Ok, Some, UNIT, Unit
 from prompt_toolkit.application import Application, run_in_terminal
 from prompt_toolkit.buffer import Buffer
-from prompt_toolkit.completion import CompleteEvent, Completer, ThreadedCompleter
-from prompt_toolkit.completion import Completion as PtCompletion
+from prompt_toolkit.completion import CompleteEvent, Completer, Completion, ThreadedCompleter
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import to_filter
 from prompt_toolkit.selection import SelectionState
@@ -30,7 +29,7 @@ from real.harlequin.sqltext_types import TextRange
 from real.harlequin.support import adopt_recovery, copy_to_clipboard, edit_externally, load_buffer_cache, osc52_sequence, paste_from_clipboard, remove_file, resolve_editor, save_buffer_cache
 from real.harlequin.support_types import BufferCache, BufferState, ExternalEditorError_NoEditor
 
-_MOVES: Final[str] = "up,down,left,right,word_left,word_right,line_start,line_end,doc_start,doc_end,page_up,page_down"
+_MOVES: Final[str] = "up,down,left,right,word_left,word_right,line_start,line_end,doc_start,doc_end"
 _DELETES: Final[str] = "delete_left,delete_right,delete_word_left,delete_word_right,delete_line,delete_to_start_of_line,delete_to_end_of_line"
 _MALFORMED: Final[str] = "The IDE session handle is malformed."
 
@@ -52,7 +51,8 @@ def _context(s: dict[str, object]) -> IdeContext:
 
 
 def _invalidate(s: dict[str, object]) -> None:
-    cast(Application[object], s["app"]).invalidate()
+    app = cast(Application[object], s["app"])
+    app.invalidate()
 
 
 def _notify(s: dict[str, object], title: str | None, message: str, severity: str) -> None:
@@ -73,28 +73,46 @@ def _anchor(buffer: Buffer) -> int:
 
 
 def _set(buffer: Buffer, text: str, anchor: int, cursor: int) -> None:
-    anchor = max(0, min(anchor, len(text)))
-    cursor = max(0, min(cursor, len(text)))
-    buffer.set_document(Document(text, cursor), bypass_readonly=True)
-    buffer.selection_state = SelectionState(original_cursor_position=anchor) if anchor != cursor else None
+    a = max(0, min(anchor, len(text)))
+    c = max(0, min(cursor, len(text)))
+    buffer.set_document(Document(text, c), bypass_readonly=True)
+    buffer.selection_state = SelectionState(original_cursor_position=a) if a != c else None
 
 
-def _complete(s: dict[str, object], document: Document, complete_event: CompleteEvent) -> Iterable[PtCompletion]:
+def _word_before_cursor(document: Document) -> str:
     before = document.text_before_cursor
     start = len(before)
-    while start and (before[start - 1].isalnum() or before[start - 1] in "_$.:\"'`"):
-        start -= 1
-    prefix = before[start:]
+    quote = ""
+    while start:
+        char = before[start - 1]
+        if quote:
+            start -= 1
+            if char == quote:
+                quote = ""
+        elif char in "\"'`":
+            quote = char
+            start -= 1
+        elif char.isalnum() or char in "_$.:":
+            start -= 1
+        else:
+            break
+    return before[start:]
+
+
+def _complete(s: dict[str, object], document: Document, complete_event: CompleteEvent) -> Iterable[Completion]:
+    prefix = _word_before_cursor(document)
+    if not prefix:
+        return []
     with _lock(s):
         candidates = cast(CompletionSet, s["completions"])
     if candidates.tag != "harlequin.completions":
         return []
     matches = complete(candidates, buffer_identifiers(document.text), prefix, 50)
-    return [PtCompletion(text=item.value, start_position=-len(prefix), display=item.label, display_meta=item.type_label) for item in matches]
+    return [Completion(text=item.value, start_position=-len(prefix), display=item.label, display_meta=item.type_label) for item in matches]
 
 
 def _completer(s: dict[str, object]) -> Completer:
-    get_completions: Callable[[Document, CompleteEvent], Iterable[PtCompletion]] = lambda document, complete_event: _complete(s, document, complete_event)
+    get_completions: Callable[[Document, CompleteEvent], Iterable[Completion]] = lambda document, complete_event: _complete(s, document, complete_event)
     return ThreadedCompleter(cast(Completer, types.SimpleNamespace(get_completions=get_completions)))
 
 
@@ -104,8 +122,9 @@ def _new(s: dict[str, object], text: str) -> None:
         _set(buffer, text, len(text), len(text))
         counter = cast(int, s["tab_counter"]) + 1
         s["tab_counter"] = counter
-        _entries(s).append({"title": f"Tab {counter}", "buffer": buffer})
-        s["active"] = len(_entries(s)) - 1
+        entries = _entries(s)
+        entries.append({"title": f"Tab {counter}", "buffer": buffer})
+        s["active"] = len(entries) - 1
     _focus(s)
     _invalidate(s)
 
@@ -113,11 +132,16 @@ def _new(s: dict[str, object], text: str) -> None:
 def _close(s: dict[str, object]) -> None:
     with _lock(s):
         entries = _entries(s)
+        index = cast(int, s["active"])
         if len(entries) == 1:
-            _active(s).save_to_undo_stack()
-            _set(_active(s), "", 0, 0)
+            buffer = _active(s)
+            if buffer.text:
+                buffer.save_to_undo_stack()
+                _set(buffer, "", 0, 0)
+            else:
+                buffer.exit_selection()
+                buffer.cursor_position = 0
         else:
-            index = cast(int, s["active"])
             entries.pop(index)
             s["active"] = index % len(entries)
     _focus(s)
@@ -126,9 +150,10 @@ def _close(s: dict[str, object]) -> None:
 
 def _next(s: dict[str, object]) -> None:
     with _lock(s):
-        if len(_entries(s)) < 2:
+        entries = _entries(s)
+        if len(entries) < 2:
             return
-        s["active"] = (cast(int, s["active"]) + 1) % len(_entries(s))
+        s["active"] = (cast(int, s["active"]) + 1) % len(entries)
     _focus(s)
     _invalidate(s)
 
@@ -153,27 +178,24 @@ def _comment(s: dict[str, object]) -> None:
     with _lock(s):
         buffer = _active(s)
         anchor, cursor = _anchor(buffer), buffer.cursor_position
-        edit = toggle_comment(buffer.text, TextRange(start=min(anchor, cursor), end=max(anchor, cursor)))
-        buffer.save_to_undo_stack()
-        forward = anchor <= cursor
-        _set(buffer, edit.text, edit.anchor if forward else edit.cursor, edit.cursor if forward else edit.anchor)
+        edited = toggle_comment(buffer.text, TextRange(start=min(anchor, cursor), end=max(anchor, cursor)))
+        if edited.text != buffer.text:
+            buffer.save_to_undo_stack()
+            if anchor <= cursor:
+                _set(buffer, edited.text, edited.anchor, edited.cursor)
+            else:
+                _set(buffer, edited.text, edited.cursor, edited.anchor)
     _invalidate(s)
 
 
-def _target(s: dict[str, object], document: Document, op: str) -> int:
+def _target(document: Document, op: str) -> int:
     position = document.cursor_position
-    if op == "up":
-        return position + document.get_cursor_up_position()
-    if op == "down":
-        return position + document.get_cursor_down_position()
-    if op == "left":
-        return position + document.get_cursor_left_position()
-    if op == "right":
-        return position + document.get_cursor_right_position()
     if op == "word_left":
-        return position + (document.find_previous_word_beginning() or -position)
+        offset = document.find_previous_word_beginning()
+        return position + offset if offset is not None else 0
     if op == "word_right":
-        return position + (document.find_next_word_ending() or len(document.text) - position)
+        offset = document.find_next_word_ending(include_current_position=True)
+        return position + offset if offset is not None else len(document.text)
     if op == "line_start":
         return position + document.get_start_of_line_position()
     if op == "line_end":
@@ -182,21 +204,57 @@ def _target(s: dict[str, object], document: Document, op: str) -> int:
         return 0
     if op == "doc_end":
         return len(document.text)
-    rows = cast(Callable[[], tuple[int, int]], s["size"])()[1]
-    count = max(rows - 8, 1)
-    return position + (document.get_cursor_up_position(count=count) if op == "page_up" else document.get_cursor_down_position(count=count))
+    return position
 
 
 def _move(s: dict[str, object], op: str, select: bool) -> None:
     with _lock(s):
         buffer = _active(s)
-        target = _target(s, buffer.document, op)
         if select:
             if buffer.selection_state is None:
                 buffer.start_selection()
         else:
             buffer.exit_selection()
-        buffer.cursor_position = max(0, min(target, len(buffer.text)))
+        if op == "up":
+            buffer.cursor_up()
+        elif op == "down":
+            buffer.cursor_down()
+        elif op == "left":
+            buffer.cursor_left()
+        elif op == "right":
+            buffer.cursor_right()
+        elif op in ("page_up", "page_down"):
+            app = cast(Application[object], s["app"])
+            info = app.layout.current_window.render_info
+            rows = info.window_height if info is not None else cast(Callable[[], tuple[int, int]], s["size"])()[1]
+            count = max(rows - 1, 1)
+            if op == "page_up":
+                buffer.cursor_up(count=count)
+            else:
+                buffer.cursor_down(count=count)
+        else:
+            buffer.cursor_position = _target(buffer.document, op)
+    _invalidate(s)
+
+
+def _scroll(s: dict[str, object], down: bool) -> None:
+    with _lock(s):
+        window = cast(Application[object], s["app"]).layout.current_window
+        info = window.render_info
+        if info is None:
+            return
+        buffer = _active(s)
+        if down:
+            if window.vertical_scroll < info.content_height - info.window_height:
+                if info.cursor_position.y <= info.configured_scroll_offsets.top:
+                    buffer.cursor_down()
+                window.vertical_scroll += 1
+        elif window.vertical_scroll > 0:
+            first_height = info.get_height_for_line(info.first_visible_line())
+            cursor_up = info.cursor_position.y - (info.window_height - 1 - first_height - info.configured_scroll_offsets.bottom)
+            for _ in range(max(0, cursor_up)):
+                buffer.cursor_up()
+            window.vertical_scroll -= 1
     _invalidate(s)
 
 
@@ -210,19 +268,19 @@ def _select(s: dict[str, object], scope: str) -> None:
             left, right = document.find_boundaries_of_current_word()
             start, end = document.cursor_position + left, document.cursor_position + right
         else:
-            start, end = _target(s, document, "line_start"), _target(s, document, "line_end")
-        _set(buffer, buffer.text, start, end)
+            start, end = _target(document, "line_start"), _target(document, "line_end")
+        buffer.cursor_position = end
+        buffer.selection_state = SelectionState(original_cursor_position=start) if start != end else None
     _invalidate(s)
 
 
 def _delete(s: dict[str, object], op: str) -> None:
     with _lock(s):
         buffer = _active(s)
-        buffer.save_to_undo_stack()
-        if buffer.selection_state is not None and op in ("delete_left", "delete_right"):
+        if buffer.selection_state is not None:
+            buffer.save_to_undo_stack()
             buffer.cut_selection()
         else:
-            buffer.exit_selection()
             document = buffer.document
             start = end = document.cursor_position
             if op == "delete_left":
@@ -230,21 +288,24 @@ def _delete(s: dict[str, object], op: str) -> None:
             elif op == "delete_right":
                 end = min(len(buffer.text), end + 1)
             elif op == "delete_word_left":
-                start = _target(s, document, "word_left")
+                start = _target(document, "word_left")
             elif op == "delete_word_right":
-                end = _target(s, document, "word_right")
+                end = _target(document, "word_right")
             elif op == "delete_to_start_of_line":
-                start = _target(s, document, "line_start")
+                start = _target(document, "line_start")
             elif op == "delete_to_end_of_line":
-                end = _target(s, document, "line_end")
+                end = _target(document, "line_end")
             else:
-                start = _target(s, document, "line_start")
-                end = _target(s, document, "line_end")
+                start = _target(document, "line_start")
+                end = _target(document, "line_end")
                 if end < len(buffer.text):
                     end += 1
                 elif start:
                     start -= 1
-            _set(buffer, buffer.text[:start] + buffer.text[end:], start, start)
+            if start != end:
+                buffer.save_to_undo_stack()
+                buffer.cursor_position = end
+                buffer.delete_before_cursor(count=end - start)
     _invalidate(s)
 
 
@@ -266,21 +327,29 @@ def _input(s: dict[str, object], purpose: InputPurpose) -> None:
 
 
 def _find(s: dict[str, object], cells: dict[str, object]) -> None:
-    query = cast(str, cells["search"])
-    if not query:
-        _input(s, InputPurpose_Find())
-        return
     with _lock(s):
+        query = cast(str, cells["search"])
+        if not query:
+            _input(s, InputPurpose_Find())
+            return
         buffer = _active(s)
-        offset = min(buffer.cursor_position + 1, len(buffer.text))
-        match = re.search(re.escape(query), buffer.text[offset:], re.IGNORECASE)
+        anchor, cursor = _anchor(buffer), buffer.cursor_position
+        offset = max(anchor, cursor) if anchor != cursor else cursor + 1
+        first: re.Match[str] | None = None
+        match: re.Match[str] | None = None
+        for found in re.finditer(re.escape(query), buffer.text, re.IGNORECASE):
+            if first is None:
+                first = found
+            if found.start() >= offset:
+                match = found
+                break
         if match is None:
-            offset = 0
-            match = re.search(re.escape(query), buffer.text, re.IGNORECASE)
+            match = first
         if match is None:
             _notify(s, None, f"No matches found for {query!r}.", "warning")
         else:
-            _set(buffer, buffer.text, offset + match.start(), offset + match.end())
+            buffer.cursor_position = match.end()
+            buffer.selection_state = SelectionState(original_cursor_position=match.start())
     _focus(s)
     _invalidate(s)
 
@@ -294,8 +363,8 @@ def _submit(s: dict[str, object], cells: dict[str, object], modal: InputModal, v
         buffer = _active(s)
         if isinstance(modal.purpose, InputPurpose_GoToLine):
             row = min(max(int(value) - 1, 0), buffer.document.line_count - 1)
-            position = buffer.document.translate_row_col_to_index(row, 0)
-            _set(buffer, buffer.text, position, position)
+            buffer.exit_selection()
+            buffer.cursor_position = buffer.document.translate_row_col_to_index(row, 0)
         else:
             path = expand_path(value, Path.home(), Path.cwd())
             if isinstance(modal.purpose, InputPurpose_SaveFile):
@@ -336,7 +405,7 @@ def _input_key(s: dict[str, object], cells: dict[str, object], key: str, text: s
     _invalidate(s)
 
 
-def _run_editor(s: dict[str, object], buffer: Buffer, text: str, command: CottList[str]) -> None:
+def _run_editor(s: dict[str, object], app: Application[object], buffer: Buffer, text: str, command: CottList[str]) -> None:
     result = edit_externally(text, command)
     with _lock(s):
         if isinstance(result, Err):
@@ -346,10 +415,12 @@ def _run_editor(s: dict[str, object], buffer: Buffer, text: str, command: CottLi
             position = buffer.cursor_position
             buffer.save_to_undo_stack()
             _set(buffer, result.value.text.value, position, position)
-    _invalidate(s)
+        else:
+            _notify(s, "Editor Error", f"External editor exited with status {result.value.returncode}.", "error")
+    app.invalidate()
 
 
-def _external(s: dict[str, object]) -> None:
+def _external(s: dict[str, object], app: Application[object]) -> None:
     resolved = resolve_editor(_context(s).environment)
     if isinstance(resolved, Err):
         error = resolved.error
@@ -360,8 +431,7 @@ def _external(s: dict[str, object]) -> None:
     with _lock(s):
         buffer = _active(s)
         text = buffer.text
-    command = resolved.value
-    run_in_terminal(lambda: _run_editor(s, buffer, text, command))
+    run_in_terminal(lambda: _run_editor(s, app, buffer, text, resolved.value))
 
 
 def _copy(s: dict[str, object], cut: bool) -> None:
@@ -385,8 +455,10 @@ def _copy(s: dict[str, object], cut: bool) -> None:
 def _insert(s: dict[str, object], text: str) -> None:
     with _lock(s):
         buffer = _active(s)
-        buffer.save_to_undo_stack()
-        buffer.insert_text(text)
+        buffer.exit_selection()
+        if text:
+            buffer.save_to_undo_stack()
+            buffer.insert_text(text)
     _focus(s)
     _invalidate(s)
 
@@ -427,27 +499,28 @@ def _snapshot(s: dict[str, object]) -> BufferCache:
 def _checkpoint(s: dict[str, object], cells: dict[str, object], stop: threading.Event) -> None:
     while not stop.wait(60.0):
         with _lock(s):
-            if stop.is_set():
-                return
             cache = _snapshot(s)
-            key = (cache.focus_index, tuple((b.text, b.anchor, b.cursor) for b in cache.buffers))
-            if not any(b.text.strip() for b in cache.buffers) or key == cells["last"]:
+            key = (cache.focus_index, tuple((item.text, item.anchor, item.cursor) for item in cache.buffers))
+            if not any(item.text.strip() for item in cache.buffers) or key == cells["last"]:
                 continue
-            saved = save_buffer_cache(cast(Path, cells["recovery"]), cache)
-            if isinstance(saved, Ok):
+        saved = save_buffer_cache(cast(Path, cells["recovery"]), cache)
+        if isinstance(saved, Ok):
+            with _lock(s):
                 cells["last"] = key
 
 
-def _finish(s: dict[str, object], cells: dict[str, object], stop: threading.Event, crash: bool) -> None:
+def _finish(s: dict[str, object], cells: dict[str, object], stop: threading.Event, worker: threading.Thread, crash: bool) -> None:
     stop.set()
+    worker.join()
     with _lock(s):
         cache = _snapshot(s)
         paths = _context(s).paths
-        if crash:
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-            save_buffer_cache(paths.cache_dir / f"recovered-{stamp}-{os.getpid()}.json", cache)
-        else:
-            save_buffer_cache(paths.buffer_cache, cache)
+    if crash:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        save_buffer_cache(paths.cache_dir / f"recovered-{stamp}-{os.getpid()}.json", cache)
+    else:
+        saved = save_buffer_cache(paths.buffer_cache, cache)
+        if isinstance(saved, Ok):
             remove_file(cast(Path, cells["recovery"]))
 
 
@@ -458,7 +531,7 @@ def _restore(s: dict[str, object], cache: BufferCache) -> None:
         _set(buffer, state.text, state.anchor, state.cursor)
         entries.append({"title": f"Tab {len(entries) + 1}", "buffer": buffer})
     if entries:
-        _entries(s)[:] = entries
+        s["buffers"] = entries
         s["tab_counter"] = len(entries)
         s["active"] = min(max(cache.focus_index, 0), len(entries) - 1)
 
@@ -471,9 +544,9 @@ def _load(s: dict[str, object]) -> None:
         _notify(s, "Buffers recovered", "Recovered buffers from a session that ended unexpectedly.", "information")
         return
     loaded = load_buffer_cache(paths.buffer_cache)
-    if isinstance(loaded, Err):
+    if isinstance(recovered, Err) or isinstance(loaded, Err):
         _notify(s, None, "Harlequin could not load its cache.", "warning")
-    elif isinstance(loaded.value, Some):
+    if isinstance(loaded, Ok) and isinstance(loaded.value, Some):
         _restore(s, loaded.value.value)
 
 
@@ -496,8 +569,10 @@ def install_editor_actions(session: IdeSession) -> Unit:
     if not isinstance(s.get("context"), IdeContext) or not isinstance(s.get("lock"), contextlib.AbstractContextManager):
         raise ValueError(_MALFORMED)
     stop = threading.Event()
+    cells: dict[str, object] = {"search": "", "last": None, "recovery": _context(s).paths.cache_dir / f"recovery-{os.getpid()}.json"}
+    worker = threading.Thread(target=lambda: _checkpoint(s, cells, stop), daemon=True)
     with _lock(s):
-        cells: dict[str, object] = {"search": "", "last": None, "recovery": _context(s).paths.cache_dir / f"recovery-{os.getpid()}.json"}
+        app = cast(Application[object], s["app"])
         for entry in _entries(s):
             buffer = cast(Buffer, entry["buffer"])
             buffer.completer = _completer(s)
@@ -514,7 +589,7 @@ def install_editor_actions(session: IdeSession) -> Unit:
         handlers["code_editor.find"] = lambda: _input(s, InputPurpose_Find())
         handlers["code_editor.find_next"] = lambda: _find(s, cells)
         handlers["code_editor.goto_line"] = lambda: _input(s, InputPurpose_GoToLine())
-        handlers["code_editor.launch_external_editor"] = lambda: _external(s)
+        handlers["code_editor.launch_external_editor"] = lambda: _external(s, app)
         handlers["code_editor.copy"] = lambda: _copy(s, False)
         handlers["code_editor.cut"] = lambda: _copy(s, True)
         handlers["code_editor.paste"] = lambda: _paste(s)
@@ -523,22 +598,25 @@ def install_editor_actions(session: IdeSession) -> Unit:
         handlers["code_editor.select_all"] = lambda: _select(s, "all")
         handlers["code_editor.select_line"] = lambda: _select(s, "line")
         handlers["code_editor.select_word"] = lambda: _select(s, "word")
-        handlers["code_editor.scroll_up_one"] = lambda: _move(s, "up", False)
-        handlers["code_editor.scroll_down_one"] = lambda: _move(s, "down", False)
+        handlers["code_editor.scroll_up_one"] = lambda: _scroll(s, False)
+        handlers["code_editor.scroll_down_one"] = lambda: _scroll(s, True)
+        handlers["code_editor.cursor_page_up"] = lambda: _move(s, "page_up", False)
+        handlers["code_editor.cursor_page_down"] = lambda: _move(s, "page_down", False)
         for op in _MOVES.split(","):
             _register_move(s, handlers, op)
         for op in _DELETES.split(","):
             _register_delete(s, handlers, op)
-        cast(dict[str, Callable[[str, str], None]], s["dialog_keys"])["input"] = lambda key, text: _input_key(s, cells, key, text)
+        dialog_key: Callable[[str, str], None] = lambda key, text: _input_key(s, cells, key, text)
+        cast(dict[str, Callable[[str, str], None]], s["dialog_keys"])["input"] = dialog_key
         new_buffer: Callable[[str], None] = lambda text: _new(s, text)
         insert_text: Callable[[str], None] = lambda text: _insert(s, text)
         selection: Callable[[], tuple[str, int, int]] = lambda: _selection(s)
         s["new_buffer"] = new_buffer
         s["insert_text"] = insert_text
         s["selection"] = selection
-        cast(list[Callable[[], None]], s["on_exit"]).append(lambda: _finish(s, cells, stop, False))
-        cast(list[Callable[[], None]], s["on_crash"]).append(lambda: _finish(s, cells, stop, True))
-    threading.Thread(target=lambda: _checkpoint(s, cells, stop), daemon=True).start()
+        cast(list[Callable[[], None]], s["on_exit"]).append(lambda: _finish(s, cells, stop, worker, False))
+        cast(list[Callable[[], None]], s["on_crash"]).append(lambda: _finish(s, cells, stop, worker, True))
+    worker.start()
     _focus(s)
     _invalidate(s)
     return UNIT

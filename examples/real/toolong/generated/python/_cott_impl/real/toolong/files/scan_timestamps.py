@@ -1,6 +1,6 @@
 from typing import Final
 
-from cott_runtime import U8, U64, CottList, Opaque, Some
+from cott_runtime import CottList, Opaque, Some, U8, U64
 from real.toolong.files import read_span
 from real.toolong.files_types import TimestampBatch
 from real.toolong.model_types import ByteSpan, LogSource, TimestampEntry
@@ -13,26 +13,40 @@ def scan_timestamps(source: LogSource, position: U64, first_line: U64, limit: U6
     entries: list[TimestampEntry] = []
     current = order
     offset = position
-    buffer = b""
-    start = 0
     read_to = position
     size = source.size
+    buffer = b""
+    start = 0
+    fragments: list[bytes] = []
+
     while len(entries) < limit and offset < size:
-        newline = buffer.find(b"\n", start)
-        if newline < 0 and read_to < size:
-            chunk = read_span(source, ByteSpan(start=read_to, end=min(size, read_to + _CHUNK)))
-            if not chunk:
+        if start == len(buffer) and read_to < size:
+            buffer = read_span(source, ByteSpan(start=read_to, end=min(size, read_to + _CHUNK)))
+            start = 0
+            read_to += len(buffer)
+            if not buffer:
                 size = read_to
+
+        newline = buffer.find(b"\n", start)
+        if newline < 0:
+            if start < len(buffer):
+                fragments.append(buffer[start:])
+                start = len(buffer)
+            if read_to < size:
+                continue
+            if not fragments:
+                break
+            line = b"".join(fragments)
+            fragments.clear()
+        else:
+            if fragments:
+                fragments.append(buffer[start:newline + 1])
+                line = b"".join(fragments)
+                fragments.clear()
             else:
-                buffer = buffer[start:] + chunk
-                start = 0
-                read_to += len(chunk)
-            continue
-        cut = len(buffer) if newline < 0 else newline + 1
-        if cut <= start:
-            break
-        line = buffer[start:cut]
-        start = cut
+                line = buffer[start:newline + 1]
+            start = newline + 1
+
         offset += len(line)
         scan = scan_timestamp(line.decode("utf-8", errors="replace"), current)
         current = scan.order
@@ -42,4 +56,5 @@ def scan_timestamps(source: LogSource, position: U64, first_line: U64, limit: U6
         else:
             seconds = 0.0
         entries.append(TimestampEntry(line=first_line + len(entries), end=offset, seconds=seconds))
+
     return TimestampBatch(entries=Opaque(tag="timestamp_entries", value=tuple(entries)), position=offset, order=current)

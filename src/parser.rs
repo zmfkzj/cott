@@ -958,6 +958,22 @@ impl Parser {
                 let body = self.parse_scenario_data_argument("body")?;
                 self.expect(TokenKind::Comma, "expected `,` after response body")?;
                 let encoding = self.parse_scenario_string_argument("encoding")?;
+                let content_type = if self.at(&TokenKind::Comma) {
+                    self.bump();
+                    let (value, span) = self.parse_scenario_string_argument_span("content_type")?;
+                    if value.is_empty()
+                        || value.starts_with(' ')
+                        || !value.bytes().all(|byte| (b' '..=b'~').contains(&byte))
+                    {
+                        self.error(
+                            "content_type must be a nonempty printable ASCII header",
+                            span,
+                        );
+                    }
+                    Some(value)
+                } else {
+                    None
+                };
                 let end = self
                     .expect(TokenKind::RParen, "expected `)` after response")?
                     .span;
@@ -966,6 +982,7 @@ impl Parser {
                     status,
                     body,
                     encoding,
+                    content_type,
                 }
             }
             "redirect" => {

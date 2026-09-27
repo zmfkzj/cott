@@ -42,21 +42,24 @@ UV_PROJECT_ENVIRONMENT="$(pwd)/$project/.venv" uv sync --locked --project "$proj
 cott check --project "$project"
 cott fmt --check --project "$project"
 cott emit python --project "$project"
-cott generate --agent omp --model anthropic/claude-opus-5-5 --target python -j 4 --project "$project"
+cott generate --agent omp --model openai-codex/gpt-6-sol --target python -j 4 --project "$project"
 cott verify --project "$project"
 cott requirements --project "$project"
 PYTHONPATH="$project/generated/python:$project/python" "$project/.venv/bin/python" "$project/python/pgcli_cli.py" --help
 ```
 
-The current `generated/generation.json` snapshot is verified with `current == last_verified`, 85 bound implementations and zero unresolved symbols. `cott verify` reports **35 observed, 36 trust_declaration, 2 unknown and 3 unobserved** semantic clauses. The three requirements remain `unverified` because they have no `checked_by` links; the external regression is separate evidence, not Cott scenario evidence. The external program regression in `tests/pgcli_program.rs` and `tests/support/pgcli_program.py` passed **13/13** checks against a scratch PostgreSQL 16 server using a verified deployment. Prerequisites of the ignored Rust regression test: `COTT_POSTGRES_BIN=/tmp/cott-pg/root/usr/lib/postgresql/16/bin` (or another PostgreSQL 16 binary directory), OpenSSH's `/usr/sbin/sshd` and `/usr/bin/ssh-keygen`, the locked `.venv`, and the compiler's Linux sandbox, whose private network namespace supplies the loopback for PostgreSQL's TCP listener and sshd (nothing binds a host port). A missing sshd fails `database.ssh_tunnel` (`openssh_missing`) instead of skipping it. The upstream comparison and pyte PTY drivers used for this verification are retained in the durable drafts under `/home/arthur/.cache/cott-real-drafts/pgcli/scripts/`.
+The current `generated/generation.json` snapshot is verified with `current == last_verified`, 85 bound implementations and zero unresolved symbols. `cott verify` reports **47 observed, 29 trust_declaration, 0 unknown and 0 unobserved** semantic clauses after regenerating 34 implementations with `openai-codex/gpt-6-sol`. The three requirements remain `unverified` because they have no `checked_by` links; the external regression is separate evidence, not Cott scenario evidence. The external program regression in `tests/pgcli_program.rs` and `tests/support/pgcli_program.py` previously passed **13/13** checks against a scratch PostgreSQL 16 server using a verified deployment. Prerequisites of the ignored Rust regression test: `COTT_POSTGRES_BIN=/tmp/cott-pg/root/usr/lib/postgresql/16/bin` (or another PostgreSQL 16 binary directory), OpenSSH's `/usr/sbin/sshd` and `/usr/bin/ssh-keygen`, the locked `.venv`, and the compiler's Linux sandbox, whose private network namespace supplies the loopback for PostgreSQL's TCP listener and sshd (nothing binds a host port). A missing sshd fails `database.ssh_tunnel` (`openssh_missing`) instead of skipping it. The upstream comparison and pyte PTY drivers used for that verification are retained in the durable drafts under `/home/arthur/.cache/cott-real-drafts/pgcli/scripts/`.
 
 The strict coverage policy selects 53 clauses across 27 callables, including
 connection/reconnection, SQL execution and destructive-query confirmation,
 configuration, completion, URI/service resolution and CLI/output boundaries.
 No `unobserved`, `trust_declaration` or `unknown` is allowed. The latest
-`emit python` succeeded; `verify` rejected the policy with 32 violations:
-27 trust declarations, 2 unknown clauses and 3 unobserved clauses. The published
-artifact certification is not policy approval; deployment remains blocked.
+`emit python` succeeded; `verify` resolved 12 of the previous 32 violations but
+still rejected the policy for 20 database-effect trust declarations. A real
+PostgreSQL 16.15 binary is available at the documented path; the missing
+capability is compiler-owned database fixture authorization and lifecycle,
+not permission to substitute fake connections or use an ambient server.
+Artifact certification is not policy approval; deployment remains blocked.
 The PostgreSQL regression result above is historical and is not Cott scenario
 evidence. The current compiler can classify contract `proved` evidence as
 `observed`, so even selected observed clauses do not establish execution.

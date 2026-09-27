@@ -520,6 +520,90 @@ fn scenario_schema_closes_initializer_receiver_method_and_nested_dyn() {
     }
 }
 
+#[test]
+fn scenario_outcome_schemas_admit_only_printable_response_content_types() {
+    let ir_schema: Value =
+        serde_json::from_str(include_str!("../schemas/canonical-ir.schema.json"))
+            .expect("IR schema");
+    let strategy_schema: Value =
+        serde_json::from_str(include_str!("../schemas/contract-test.schema.json"))
+            .expect("strategy schema");
+    let response = json!({
+        "kind": "response", "status": 200,
+        "body": {"kind": "text", "value": "ok"}, "encoding": "utf-8"
+    });
+
+    for (schema, outcome_definition) in [
+        (&ir_schema, "scenario_outcome"),
+        (&strategy_schema, "outcome"),
+    ] {
+        let outcome_schema = json!({
+            "$defs": schema["$defs"], "$ref": format!("#/$defs/{outcome_definition}")
+        });
+        let validator = jsonschema::validator_for(&outcome_schema).expect("outcome schema");
+        assert!(
+            validator.is_valid(&response),
+            "{outcome_definition}: header is optional"
+        );
+
+        for header in [
+            "text/markdown; charset=\"utf-8\"",
+            "application/octet-stream",
+            "x",
+            "text/plain; q=1 ",
+        ] {
+            let mut valid = response.clone();
+            valid["content_type"] = json!(header);
+            assert!(
+                validator.is_valid(&valid),
+                "{outcome_definition}: rejected printable header {header:?}"
+            );
+        }
+
+        for header in [
+            "",
+            " text/plain",
+            "text/plain\n",
+            "text/plain\r\n",
+            "text/plain\r\nSet-Cookie: session=stolen",
+            "text/plain\nX-Injected: 1",
+            "\ntext/plain",
+            "text/\tplain",
+            "text/plain\u{0}",
+            "text/plain\u{7f}",
+            "text/pl\u{e9}in",
+            "text/plain\u{2028}",
+        ] {
+            let mut invalid = response.clone();
+            invalid["content_type"] = json!(header);
+            assert!(
+                !validator.is_valid(&invalid),
+                "{outcome_definition}: accepted non-printable header {header:?}"
+            );
+        }
+        let mut invalid = response.clone();
+        invalid["content_type"] = json!(["text/plain"]);
+        assert!(!validator.is_valid(&invalid));
+
+        for outcome in [
+            json!({"kind": "redirect", "status": 302, "location": "/ok"}),
+            json!({"kind": "delay", "milliseconds": 25}),
+            json!({"kind": "disconnect"}),
+        ] {
+            assert!(
+                validator.is_valid(&outcome),
+                "{outcome_definition}: {outcome}"
+            );
+            let mut invalid = outcome.clone();
+            invalid["content_type"] = json!("text/plain");
+            assert!(
+                !validator.is_valid(&invalid),
+                "{outcome_definition}: accepted content_type on {outcome}"
+            );
+        }
+    }
+}
+
 fn generation_snapshot() -> Value {
     json!({
         "generation_id": format!("sha256:{}", "0".repeat(64)),

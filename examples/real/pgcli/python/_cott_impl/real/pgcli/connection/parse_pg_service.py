@@ -20,14 +20,17 @@ def parse_pg_service(text: str, service: str) -> Result[Option[CottList[Connecti
         if re.match(r"\s*\[", line):
             first = index
             break
-    # Blank skipped lines so configobj error line numbers still count them.
+
+    # Blank the skipped prefix so ConfigObj's error lines retain file positions.
     kept = [""] * first + lines[first:]
     try:
         config: Any = configobj.ConfigObj(kept)
     except configobj.ConfigObjError as error:
         return Err(error=ConnectError_Failed(message=str(error)))
-    if not bool(cast(object, service in config)):
+
+    if service == "" or not bool(cast(object, service in config)):
         return Ok(value=Nothing())
+
     section: Any = config[service]
     params: list[ConnectionParam] = []
     for key in cast(list[object], list(section.keys())):

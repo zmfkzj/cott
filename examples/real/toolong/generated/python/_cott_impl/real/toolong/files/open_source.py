@@ -5,8 +5,7 @@ import pathlib
 import tempfile
 from typing import Final
 
-from cott_runtime import CottContractViolation, Err, Nothing, Ok, Result, Some
-from cott_runtime import _cott_fixture_read
+from cott_runtime import CottContractViolation, Err, I32, Nothing, Ok, Result, Some, U64, _cott_fixture_read
 from real.toolong.files import decompress, detect_compression
 from real.toolong.files_types import SourceError, SourceError_NotFound, SourceError_OpenFailed
 from real.toolong.model_types import Compression, Compression_Gzip, Compression_Uncompressed, LogSource
@@ -21,24 +20,27 @@ def _fail(name: str, error: BaseException) -> Result[LogSource, SourceError]:
     return Err(error=SourceError_OpenFailed(name=name, message=str(error)))
 
 
-def _copy_to_temp(stream: gzip.GzipFile | bz2.BZ2File) -> tuple[int, int]:
+def _copy_to_temp(stream: gzip.GzipFile | bz2.BZ2File) -> tuple[I32, U64]:
     size = 0
-    temp = tempfile.TemporaryFile()
+    fd = -1
     try:
-        while True:
-            chunk = stream.read(_CHUNK)
-            if not chunk:
-                break
-            temp.write(chunk)
-            size += len(chunk)
-        temp.flush()
-        fd = os.dup(temp.fileno())
-    finally:
-        temp.close()
+        with tempfile.TemporaryFile() as temp:
+            while True:
+                chunk = stream.read(_CHUNK)
+                if not chunk:
+                    break
+                temp.write(chunk)
+                size += len(chunk)
+            temp.flush()
+            fd = os.dup(temp.fileno())
+    except BaseException:
+        if fd != -1:
+            os.close(fd)
+        raise
     return fd, size
 
 
-def _open_plain(path: pathlib.Path) -> tuple[int, int]:
+def _open_plain(path: pathlib.Path) -> tuple[I32, U64]:
     fd = os.open(path, os.O_RDONLY)
     try:
         size = os.lseek(fd, 0, os.SEEK_END)
@@ -49,19 +51,26 @@ def _open_plain(path: pathlib.Path) -> tuple[int, int]:
 
 
 def _open_host(path: pathlib.Path, name: str, compression: Compression) -> Result[LogSource, SourceError]:
+    fd = -1
     try:
         if isinstance(compression, Compression_Uncompressed):
             fd, size = _open_plain(path)
-            return Ok(value=LogSource(path=path, name=name, compression=compression, descriptor=Some(value=fd), size=size, can_tail=True))
-        if isinstance(compression, Compression_Gzip):
-            with gzip.open(path, "rb") as gz_stream:
-                fd, size = _copy_to_temp(gz_stream)
+            can_tail = True
         else:
-            with bz2.open(path, "rb") as bz_stream:
-                fd, size = _copy_to_temp(bz_stream)
-        return Ok(value=LogSource(path=path, name=name, compression=compression, descriptor=Some(value=fd), size=size, can_tail=False))
-    except Exception as error:
-        return _fail(name, error)
+            if isinstance(compression, Compression_Gzip):
+                with gzip.open(path, "rb") as stream:
+                    fd, size = _copy_to_temp(stream)
+            else:
+                with bz2.open(path, "rb") as stream:
+                    fd, size = _copy_to_temp(stream)
+            can_tail = False
+        return Ok(value=LogSource(path=path, name=name, compression=compression, descriptor=Some(value=fd), size=size, can_tail=can_tail))
+    except BaseException as error:
+        if fd != -1:
+            os.close(fd)
+        if isinstance(error, Exception):
+            return _fail(name, error)
+        raise
 
 
 def open_source(path: pathlib.Path) -> Result[LogSource, SourceError]:
@@ -86,5 +95,4 @@ def open_source(path: pathlib.Path) -> Result[LogSource, SourceError]:
             return Err(error=SourceError_OpenFailed(name=name, message=result.error.message))
         else:
             content = result.value
-    can_tail = isinstance(compression, Compression_Uncompressed)
-    return Ok(value=LogSource(path=path, name=name, compression=compression, descriptor=Nothing(), size=len(content), can_tail=can_tail))
+    return Ok(value=LogSource(path=path, name=name, compression=compression, descriptor=Nothing(), size=len(content), can_tail=isinstance(compression, Compression_Uncompressed)))

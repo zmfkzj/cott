@@ -4,7 +4,8 @@ import stat
 import subprocess
 from pathlib import Path
 
-from cott_runtime import UNIT, CottList, Err, Ok, Result, Unit
+import cott_runtime
+from cott_runtime import UNIT, CottList, Result, Unit
 from real.yt_dlp_types import ExternalToolRequest, MediaError, MediaError_ExternalToolMissing, MediaError_PostProcessFailed
 
 
@@ -36,38 +37,46 @@ def _run_one(request: ExternalToolRequest) -> Result[Unit, MediaError]:
     name: str = request.executable
     resolved: str | None = _resolve_executable(name)
     if resolved is None:
-        return Err(error=MediaError_ExternalToolMissing(name=name))
-    if not _is_regular(Path(request.input)):
-        return Err(error=MediaError_PostProcessFailed(name=name, message="input file is missing or not a regular file"))
+        return cott_runtime.Err(error=MediaError_ExternalToolMissing(name=name))
+    if not _is_regular(request.input):
+        return cott_runtime.Err(error=MediaError_PostProcessFailed(name=name, message="input file is missing or not a regular file"))
     command: list[str] = [resolved]
     for argument in request.arguments:
         command.append(argument)
     timeout: float | None = request.timeout_ms / 1000.0 if request.timeout_ms > 0 else None
     try:
-        completed: subprocess.CompletedProcess[bytes] = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout, check=False, shell=False)
+        completed: subprocess.CompletedProcess[bytes] = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+            check=False,
+            shell=False,
+        )
     except subprocess.TimeoutExpired:
-        return Err(error=MediaError_PostProcessFailed(name=name, message="tool timed out"))
+        return cott_runtime.Err(error=MediaError_PostProcessFailed(name=name, message="tool timed out"))
     except (FileNotFoundError, PermissionError):
-        return Err(error=MediaError_ExternalToolMissing(name=name))
+        return cott_runtime.Err(error=MediaError_ExternalToolMissing(name=name))
     except (OSError, ValueError, subprocess.SubprocessError):
-        return Err(error=MediaError_PostProcessFailed(name=name, message="tool could not be started"))
+        return cott_runtime.Err(error=MediaError_PostProcessFailed(name=name, message="tool could not be started"))
     if completed.returncode != 0:
-        return Err(error=MediaError_PostProcessFailed(name=name, message="tool exited with nonzero status"))
+        return cott_runtime.Err(error=MediaError_PostProcessFailed(name=name, message="tool exited with nonzero status"))
     try:
-        produced: bool = os.path.lexists(Path(request.output))
+        produced: bool = os.path.lexists(request.output)
     except (OSError, ValueError):
         produced = False
     if not produced:
-        return Err(error=MediaError_PostProcessFailed(name=name, message="tool did not produce output"))
-    return Ok(value=UNIT)
+        return cott_runtime.Err(error=MediaError_PostProcessFailed(name=name, message="tool did not produce output"))
+    return cott_runtime.Ok(value=UNIT)
 
 
 def run_post_processing(requests: CottList[ExternalToolRequest]) -> Result[Unit, MediaError]:
     for request in requests:
         outcome: Result[Unit, MediaError] = _run_one(request)
         match outcome:
-            case Err(error=failure):
-                return Err(error=failure)
-            case Ok():
+            case cott_runtime.Err(error=failure):
+                return cott_runtime.Err(error=failure)
+            case cott_runtime.Ok():
                 continue
-    return Ok(value=UNIT)
+    return cott_runtime.Ok(value=UNIT)

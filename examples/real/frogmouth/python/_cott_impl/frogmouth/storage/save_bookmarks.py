@@ -28,18 +28,23 @@ def _host_replace(directory: str, path: str, data: bytes) -> None:
         raise
 
 
+def _store(directory: str, path: str, data: bytes) -> None:
+    try:
+        _cott_fixture_replace(path, data)
+        return
+    except CottContractViolation as violation:
+        if violation.message != "fixture adapters are inactive":
+            raise
+    _host_replace(directory, path, data)
+
+
 def save_bookmarks(data_directory: str, bookmarks: CottList[Bookmark]) -> Result[StoredFile, StoreError]:
     directory = data_directory
     path = directory + "/bookmarks.json"
     document = [[bookmark.title, bookmark.location.target] for bookmark in bookmarks]
     data = json.dumps(document, indent=4).encode("utf-8")
     try:
-        try:
-            _cott_fixture_replace(path, data)
-        except CottContractViolation as violation:
-            if violation.message != "fixture adapters are inactive":
-                raise
-            _host_replace(directory, path, data)
-    except (OSError, CottContractViolation) as error:
+        _store(directory, path, data)
+    except (OSError, ValueError, CottContractViolation) as error:
         return Err(error=StoreError_WriteFailed(path=path, message=str(error)))
     return Ok(value=StoredFile(path=path, bytes_written=len(data)))

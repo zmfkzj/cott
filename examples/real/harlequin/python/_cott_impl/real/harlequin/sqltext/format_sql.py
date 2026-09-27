@@ -16,11 +16,7 @@ def format_sql(text: str) -> Result[str, FormatError]:
     try:
         formatted = cast(object, api.format_string(text, mode_module.Mode()))
     except error_type as error:
-        return _unformattable(str(error))
+        return Err(error=FormatError_Unformattable(message=str(error)))
     if not isinstance(formatted, str):
-        return _unformattable("sqlfmt returned a non-string result")
+        return Err(error=FormatError_Unformattable(message="sqlfmt returned a non-string result"))
     return Ok(value=formatted)
-
-
-def _unformattable(message: str) -> Result[str, FormatError]:
-    return Err(error=FormatError_Unformattable(message=message))

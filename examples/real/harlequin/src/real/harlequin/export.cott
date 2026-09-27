@@ -1,6 +1,7 @@
 module real.harlequin.export
 
-use real.harlequin.results.{ResultSet}
+use real.harlequin.files.{load_text_file}
+use real.harlequin.results.{CellValue, ColumnInfo, ResultSet, result_set_from_rows}
 use real.harlequin.style.{StyledLine, StyledSpan}
 
 enum ExportOptionKind:
@@ -201,7 +202,10 @@ fn render_export_dialog(dialog: ExportDialog, width: U64) -> List[StyledLine]:
 
     effects []
 
-fn write_result(result_set: ResultSet, request: ExportRequest) -> Result[ExportReceipt, ExportError]:
+fn write_result(
+    result_set: ResultSet,
+    request: ExportRequest,
+) -> Result[ExportReceipt, ExportError]:
     doc """
     Write every fetched row of result_set (result_set.data, not capped by the viewer)
     to request.path as Harlequin's exporter does, creating missing parent
@@ -227,7 +231,7 @@ fn write_result(result_set: ResultSet, request: ExportRequest) -> Result[ExportR
     an ORC file." or "... to a Feather file.") and the error text.
     """
 
-    ensures Result.Ok(receipt) => receipt.path == request.path and receipt.rows == result_set.fetched_row_count
+    ensures Result.Ok(receipt) => (receipt.path == request.path and receipt.rows == result_set.fetched_row_count)
 
     error ExportError.UnknownFormat
     error ExportError.InvalidOption
@@ -249,14 +253,90 @@ scenario the_export_dialog_infers_formats_and_validates:
     assert exported.outcome matches ExportOutcome.Export(request) => request.format == "json" and request.options == dialog.values
     call blank = new_export_dialog(Option.Nothing)
     call refused = export_dialog_key(blank, "enter", "")
-    assert refused.outcome == ExportOutcome.Stay and refused.dialog.message == "A file path is required."
+    assert (refused.outcome == ExportOutcome.Stay and refused.dialog.message == "A file path is required.")
     call typed = export_dialog_key(blank, "x", "x")
     assert typed.dialog.path == "x" and typed.dialog.format == Option.Nothing
     call unformatted = export_dialog_key(typed.dialog, "enter", "")
-    assert unformatted.dialog.message == "Must select format. Supported formats: CSV, Parquet, JSON, ORC, Feather"
+    assert (unformatted.dialog.message == "Must select format. Supported formats: CSV, Parquet, JSON, ORC, Feather")
     call dismissed = export_dialog_key(dialog, "escape", "")
     assert dismissed.outcome == ExportOutcome.Cancel
     call inferred = format_for_path("results.pq")
     assert inferred == Option.Some(value: "parquet")
     call formats = export_formats()
     assert formats.len == 5
+
+scenario exports_refuse_bad_requests_before_writing:
+    fixtures:
+        fs out:
+            file "home/readme.txt" text("home")
+    call sample = result_set_from_rows(
+        "select id, name from t",
+        List(ColumnInfo(name: "id", type_label: "##"), ColumnInfo(name: "name", type_label: "s")),
+        List(List(CellValue.Integer(value: 1), CellValue.Text(value: "a"))),
+        Option.Nothing,
+        3,
+    )
+    call unknown = write_result(
+        sample,
+        ExportRequest(path: out.path("out.xlsx"), format: "xlsx", options: List()),
+    )
+    assert unknown == Result.Err(error: ExportError.UnknownFormat(name: "xlsx"))
+    call bad_option = write_result(
+        sample,
+        ExportRequest(
+            path: out.path("out.orc"),
+            format: "orc",
+            options: List(ExportOptionValue(name: "batch_size", value: "many")),
+        ),
+    )
+    assert bad_option matches Result.Err(ExportError.InvalidOption(name, _)) => name == "batch_size"
+    call directory = write_result(
+        sample,
+        ExportRequest(path: out.path("home"), format: "csv", options: List()),
+    )
+    assert directory == Result.Err(error: ExportError.PathIsDirectory(path: out.path("home")))
+    call untouched = load_text_file(out.path("home/readme.txt"))
+    assert untouched == Result.Ok(value: "home")
+    call refused_codec = write_result(
+        sample,
+        ExportRequest(
+            path: out.path("out.feather"),
+            format: "feather",
+            options: List(
+                ExportOptionValue(name: "compression", value: "brotli"),
+                ExportOptionValue(name: "version", value: "2"),
+            ),
+        ),
+    )
+    assert refused_codec matches Result.Err(ExportError.WriteFailed(title, message)) => title == "Arrow raised an error when writing your data to a Feather file." and starts_with(message, "compression=\"brotli\" not supported")
+
+scenario exports_write_every_fetched_row:
+    fixtures:
+        fs out:
+            file "exports/readme.txt" text("exports")
+    call sample = result_set_from_rows(
+        "select id, name from t",
+        List(ColumnInfo(name: "id", type_label: "##"), ColumnInfo(name: "name", type_label: "s")),
+        List(
+            List(CellValue.Integer(value: 1), CellValue.Text(value: "a")),
+            List(CellValue.Integer(value: 2), CellValue.Null),
+        ),
+        Option.Some(value: 1),
+        3,
+    )
+    call csv = write_result(
+        sample,
+        ExportRequest(path: out.path("exports/nested/result.csv"), format: "csv", options: List()),
+    )
+    assert csv == Result.Ok(
+        value: ExportReceipt(path: out.path("exports/nested/result.csv"), rows: 2),
+    )
+    call csv_text = load_text_file(out.path("exports/nested/result.csv"))
+    assert csv_text == Result.Ok(value: "id,name\n1,a\n2,\n")
+    call lines = write_result(
+        sample,
+        ExportRequest(path: out.path("exports/result.jsonl"), format: "jsonl", options: List()),
+    )
+    assert lines == Result.Ok(value: ExportReceipt(path: out.path("exports/result.jsonl"), rows: 2))
+    call lines_text = load_text_file(out.path("exports/result.jsonl"))
+    assert lines_text == Result.Ok(value: "{\"id\":1,\"name\":\"a\"}\n{\"id\":2,\"name\":null}\n")

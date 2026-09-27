@@ -1,99 +1,230 @@
 import http.client
+import os
+import re
+import secrets
 import ssl
-import urllib.parse
-import uuid
 from pathlib import Path
-from typing import BinaryIO, Final
+from typing import Final
+from urllib.error import HTTPError
+from urllib.parse import urljoin, urlsplit
 
+import cott_runtime
 from cott_runtime import Err, Ok, Result, U64
 from real.yt_dlp_types import MediaError, MediaError_HttpStatus, MediaError_InvalidInput, MediaError_NetworkFailure, MediaError_OutputFailure, MediaError_SizeLimit, MediaError_UnsupportedUrl, TransferReceipt, TransferRequest
 
 _CHUNK_SIZE: Final[int] = 65536
 _TIMEOUT_SECONDS: Final[float] = 30.0
 _MAX_REDIRECTS: Final[int] = 5
+_INACTIVE_FIXTURE: Final[str] = "fixture adapters are inactive"
+_NETWORK_ERROR: Final[str] = "media network transfer failed"
+_OUTPUT_ERROR: Final[str] = "media output operation failed"
 
 
 def _valid_url(url: str) -> bool:
-    if not (url.startswith("http://") or url.startswith("https://")):
+    if not url.startswith(("http://", "https://")):
+        return False
+    if any(character.isspace() or ord(character) < 32 or 127 <= ord(character) <= 159 for character in url):
         return False
     try:
-        parsed = urllib.parse.urlsplit(url)
+        parts = urlsplit(url)
+        host = parts.hostname
+        port = parts.port
     except ValueError:
         return False
-    return parsed.scheme in ("http", "https") and bool(parsed.hostname)
+    return bool(host) and (port is None or port > 0)
 
 
-def _connect(url: str) -> http.client.HTTPConnection | MediaError:
+def _close_response(connection: http.client.HTTPConnection, response: http.client.HTTPResponse) -> bool:
+    closed = True
     try:
-        parsed = urllib.parse.urlsplit(url)
-        host: str | None = parsed.hostname
-        port: int | None = parsed.port
-    except ValueError:
-        return MediaError_NetworkFailure(message="invalid redirect target")
-    if host is None:
-        return MediaError_NetworkFailure(message="invalid redirect target")
-    if parsed.scheme == "https":
-        return http.client.HTTPSConnection(host, port, timeout=_TIMEOUT_SECONDS, context=ssl.create_default_context())
-    return http.client.HTTPConnection(host, port, timeout=_TIMEOUT_SECONDS)
+        response.close()
+    except (OSError, http.client.HTTPException, ValueError):
+        closed = False
+    try:
+        connection.close()
+    except (OSError, http.client.HTTPException, ValueError):
+        closed = False
+    return closed
 
 
-def _open(url: str) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse] | MediaError:
-    current: str = url
-    redirects: int = 0
+def _open_response(url: str, context: ssl.SSLContext) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse] | MediaError:
+    current = url
+    redirects = 0
     while True:
-        conn = _connect(current)
-        if not isinstance(conn, http.client.HTTPConnection):
-            return conn
-        parsed = urllib.parse.urlsplit(current)
-        target: str = parsed.path or "/"
-        if parsed.query:
-            target = target + "?" + parsed.query
+        if not _valid_url(current):
+            return MediaError_NetworkFailure(message=_NETWORK_ERROR)
+        connection: http.client.HTTPConnection | None = None
         try:
-            conn.request("GET", target)
-            response: http.client.HTTPResponse = conn.getresponse()
-        except ssl.SSLError:
-            conn.close()
-            return MediaError_NetworkFailure(message="TLS handshake or certificate verification failed")
-        except TimeoutError:
-            conn.close()
-            return MediaError_NetworkFailure(message="connection timed out")
-        except (OSError, http.client.HTTPException, ValueError):
-            conn.close()
-            return MediaError_NetworkFailure(message="connection failed")
-        if response.status in (301, 302, 303, 307, 308):
-            location: str | None = response.getheader("Location")
-            conn.close()
-            if location is None:
-                return MediaError_NetworkFailure(message="redirect without location")
-            redirects = redirects + 1
-            if redirects > _MAX_REDIRECTS:
-                return MediaError_NetworkFailure(message="too many redirects")
-            next_url: str = urllib.parse.urljoin(current, location)
-            if not _valid_url(next_url):
-                return MediaError_NetworkFailure(message="invalid redirect target")
-            current = next_url
-            continue
-        return (conn, response)
+            parts = urlsplit(current)
+            host = parts.hostname
+            if host is None:
+                return MediaError_NetworkFailure(message=_NETWORK_ERROR)
+            if parts.scheme == "https":
+                connection = http.client.HTTPSConnection(host, parts.port, timeout=_TIMEOUT_SECONDS, context=context)
+            else:
+                connection = http.client.HTTPConnection(host, parts.port, timeout=_TIMEOUT_SECONDS)
+            target = parts.path or "/"
+            if parts.query:
+                target += "?" + parts.query
+            connection.request("GET", target, headers={"Accept-Encoding": "identity"})
+            response = connection.getresponse()
+            if response.status in (301, 302, 303, 307, 308):
+                location = response.getheader("Location")
+                if not _close_response(connection, response):
+                    return MediaError_NetworkFailure(message=_NETWORK_ERROR)
+                if not location or redirects >= _MAX_REDIRECTS:
+                    return MediaError_NetworkFailure(message=_NETWORK_ERROR)
+                current = urljoin(current, location)
+                redirects += 1
+                continue
+            return (connection, response)
+        except (OSError, http.client.HTTPException, ValueError, UnicodeError):
+            if connection is not None:
+                try:
+                    connection.close()
+                except (OSError, http.client.HTTPException, ValueError):
+                    return MediaError_NetworkFailure(message=_NETWORK_ERROR)
+            return MediaError_NetworkFailure(message=_NETWORK_ERROR)
 
 
-def _stream(response: http.client.HTTPResponse, handle: BinaryIO, max_bytes: int) -> int | MediaError:
-    written: int = 0
-    while True:
+def _declared_length(response: http.client.HTTPResponse, max_bytes: U64) -> tuple[U64 | None, MediaError | None]:
+    try:
+        header = response.getheader("Content-Length")
+    except (OSError, http.client.HTTPException, ValueError):
+        return (None, MediaError_NetworkFailure(message=_NETWORK_ERROR))
+    if header is None:
+        return (None, None)
+    digits = header.strip()
+    if not digits or not digits.isascii() or not digits.isdecimal():
+        return (None, MediaError_NetworkFailure(message=_NETWORK_ERROR))
+    significant = digits.lstrip("0") or "0"
+    bound = str(max_bytes)
+    if len(significant) > len(bound) or (len(significant) == len(bound) and significant > bound):
+        return (None, MediaError_SizeLimit())
+    return (int(significant), None)
+
+
+def _write_all(fd: int, block: bytes) -> bool:
+    view = memoryview(block)
+    offset = 0
+    while offset < len(view):
         try:
-            chunk: bytes = response.read(_CHUNK_SIZE)
-        except TimeoutError:
-            return MediaError_NetworkFailure(message="read timed out")
-        except (OSError, http.client.HTTPException, ValueError):
-            return MediaError_NetworkFailure(message="failed to read response body")
-        if not chunk:
-            return written
-        if written + len(chunk) > max_bytes:
-            return MediaError_SizeLimit()
-        try:
-            handle.write(chunk)
+            written = os.write(fd, view[offset:])
         except OSError:
-            return MediaError_OutputFailure(message="failed to write temporary file")
-        written = written + len(chunk)
+            return False
+        if written <= 0:
+            return False
+        offset += written
+    return True
+
+
+def _stream(response: http.client.HTTPResponse, fd: int, max_bytes: U64, declared: U64 | None) -> U64 | MediaError:
+    written = 0
+    while True:
+        try:
+            block = response.read(min(_CHUNK_SIZE, max_bytes - written + 1))
+        except (OSError, http.client.HTTPException, ValueError):
+            return MediaError_NetworkFailure(message=_NETWORK_ERROR)
+        if not block:
+            break
+        if written + len(block) > max_bytes:
+            return MediaError_SizeLimit()
+        if not _write_all(fd, block):
+            return MediaError_OutputFailure(message=_OUTPUT_ERROR)
+        written += len(block)
+    if declared is not None and written != declared:
+        return MediaError_NetworkFailure(message=_NETWORK_ERROR)
+    return written
+
+
+def _remove_temp(path: Path) -> bool:
+    try:
+        path.unlink()
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _save_response(request: TransferRequest, response: http.client.HTTPResponse, declared: U64 | None) -> tuple[Path, U64] | MediaError:
+    destination = request.destination
+    if not destination.name:
+        return MediaError_OutputFailure(message=_OUTPUT_ERROR)
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temp = destination.parent / ("." + destination.name + "." + secrets.token_hex(16) + ".tmp")
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except (OSError, ValueError, AttributeError):
+        return MediaError_OutputFailure(message=_OUTPUT_ERROR)
+    outcome = _stream(response, fd, request.max_bytes, declared)
+    if isinstance(outcome, int):
+        try:
+            os.fsync(fd)
+        except OSError:
+            outcome = MediaError_OutputFailure(message=_OUTPUT_ERROR)
+    try:
+        os.close(fd)
+    except OSError:
+        outcome = MediaError_OutputFailure(message=_OUTPUT_ERROR)
+    if not isinstance(outcome, int):
+        if not _remove_temp(temp):
+            return MediaError_OutputFailure(message=_OUTPUT_ERROR)
+        return outcome
+    return (temp, outcome)
+
+
+def _transfer_host(request: TransferRequest) -> Result[TransferReceipt, MediaError]:
+    try:
+        context = ssl.create_default_context()
+    except (OSError, ValueError):
+        return Err(error=MediaError_NetworkFailure(message=_NETWORK_ERROR))
+    opened = _open_response(request.url, context)
+    if not isinstance(opened, tuple):
+        return Err(error=opened)
+    connection, response = opened
+    if not 200 <= response.status < 300:
+        status = response.status
+        _close_response(connection, response)
+        return Err(error=MediaError_HttpStatus(status=status))
+    declared, header_error = _declared_length(response, request.max_bytes)
+    if header_error is not None:
+        _close_response(connection, response)
+        return Err(error=header_error)
+    saved = _save_response(request, response, declared)
+    closed = _close_response(connection, response)
+    if not isinstance(saved, tuple):
+        return Err(error=saved)
+    temp, written = saved
+    if not closed:
+        if not _remove_temp(temp):
+            return Err(error=MediaError_OutputFailure(message=_OUTPUT_ERROR))
+        return Err(error=MediaError_NetworkFailure(message=_NETWORK_ERROR))
+    try:
+        os.replace(temp, request.destination)
+    except (OSError, ValueError):
+        if not _remove_temp(temp):
+            return Err(error=MediaError_OutputFailure(message=_OUTPUT_ERROR))
+        return Err(error=MediaError_OutputFailure(message=_OUTPUT_ERROR))
+    return Ok(value=TransferReceipt(url=request.url, destination=request.destination, bytes_written=written, simulated=False))
+
+
+def _fixture_http_error(violation: cott_runtime.CottContractViolation) -> MediaError:
+    cause = violation.__cause__
+    if isinstance(cause, HTTPError):
+        return MediaError_HttpStatus(status=cause.code)
+    status = re.fullmatch(r"HTTP(?: response)?(?: status)?[ :]+([0-9]{3})", violation.message, re.IGNORECASE)
+    if status is not None:
+        return MediaError_HttpStatus(status=int(status.group(1)))
+    return MediaError_NetworkFailure(message=_NETWORK_ERROR)
+
+
+def _transfer_fixture(request: TransferRequest, body: bytes) -> Result[TransferReceipt, MediaError]:
+    if len(body) > request.max_bytes:
+        return Err(error=MediaError_SizeLimit())
+    try:
+        cott_runtime._cott_fixture_replace(request.destination, body)
+    except (cott_runtime.CottContractViolation, OSError):
+        return Err(error=MediaError_OutputFailure(message=_OUTPUT_ERROR))
+    return Ok(value=TransferReceipt(url=request.url, destination=request.destination, bytes_written=len(body), simulated=False))
 
 
 def transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaError]:
@@ -103,45 +234,14 @@ def transfer_media(request: TransferRequest) -> Result[TransferReceipt, MediaErr
         return Err(error=MediaError_UnsupportedUrl())
     if request.simulate:
         return Ok(value=TransferReceipt(url=request.url, destination=request.destination, bytes_written=0, simulated=True))
-    destination: Path = Path(request.destination)
-    opened = _open(request.url)
-    if not isinstance(opened, tuple):
-        return Err(error=opened)
-    conn, response = opened
     try:
-        status: int = response.status
-        if status < 200 or status >= 300:
-            return Err(error=MediaError_HttpStatus(status=status))
-        declared: str | None = response.getheader("Content-Length")
-        if declared is not None and declared.strip().isdigit() and int(declared.strip()) > request.max_bytes:
-            return Err(error=MediaError_SizeLimit())
-        temp_path: Path = destination.parent / f".{destination.name}.{uuid.uuid4().hex}.part"
-        try:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            return Err(error=MediaError_OutputFailure(message="failed to create destination directory"))
-        try:
-            handle: BinaryIO = temp_path.open("xb")
-        except OSError:
-            return Err(error=MediaError_OutputFailure(message="failed to open temporary file"))
-        outcome: int | MediaError
-        try:
-            with handle:
-                outcome = _stream(response, handle, request.max_bytes)
-        except OSError:
-            outcome = MediaError_OutputFailure(message="failed to write temporary file")
-        if isinstance(outcome, int):
-            try:
-                temp_path.replace(destination)
-            except OSError:
-                outcome = MediaError_OutputFailure(message="failed to replace destination")
-        if not isinstance(outcome, int):
-            try:
-                temp_path.unlink(missing_ok=True)
-            except OSError:
-                return Err(error=MediaError_OutputFailure(message="failed to remove temporary file"))
-            return Err(error=outcome)
-        written: U64 = outcome
-        return Ok(value=TransferReceipt(url=request.url, destination=request.destination, bytes_written=written, simulated=False))
-    finally:
-        conn.close()
+        body = cott_runtime._cott_fixture_http(request.url)
+    except cott_runtime.CottContractViolation as violation:
+        if violation.message == _INACTIVE_FIXTURE:
+            return _transfer_host(request)
+        return Err(error=_fixture_http_error(violation))
+    except HTTPError as error:
+        return Err(error=MediaError_HttpStatus(status=error.code))
+    except OSError:
+        return Err(error=MediaError_NetworkFailure(message=_NETWORK_ERROR))
+    return _transfer_fixture(request, body)

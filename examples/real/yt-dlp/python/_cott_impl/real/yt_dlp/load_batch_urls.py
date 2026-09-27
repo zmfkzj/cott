@@ -17,19 +17,35 @@ def _failure(path: Path, message: str) -> Result[CottList[str], MediaError]:
 
 def load_batch_urls(path: Path, comment_prefixes: CottList[str]) -> Result[CottList[str], MediaError]:
     try:
-        fd: int = os.open(Path(path), os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        raw: bytes = cott_runtime._cott_fixture_read(path)
+    except cott_runtime.CottContractViolation as violation:
+        if violation.message != "fixture adapters are inactive":
+            cause: BaseException | None = violation.__cause__
+            if isinstance(cause, (FileNotFoundError, NotADirectoryError)):
+                return _failure(path, "batch file not found")
+            if isinstance(cause, IsADirectoryError):
+                return _failure(path, "batch path is not a regular file")
+            return _failure(path, "cannot read batch file")
+        try:
+            fd: int = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        except (FileNotFoundError, NotADirectoryError):
+            return _failure(path, "batch file not found")
+        except (OSError, ValueError):
+            return _failure(path, "cannot open batch file")
+        try:
+            with open(fd, "rb", closefd=True) as handle:
+                status: os.stat_result = os.fstat(handle.fileno())
+                if not stat.S_ISREG(status.st_mode):
+                    return _failure(path, "batch path is not a regular file")
+                if status.st_size > _MAX_BYTES:
+                    return _failure(path, "batch file exceeds 16 MiB")
+                raw = handle.read(_MAX_BYTES + 1)
+        except (OSError, ValueError):
+            return _failure(path, "cannot read batch file")
     except (FileNotFoundError, NotADirectoryError):
         return _failure(path, "batch file not found")
-    except (OSError, ValueError):
-        return _failure(path, "cannot open batch file")
-    try:
-        with open(fd, "rb", closefd=True) as handle:
-            status: os.stat_result = os.fstat(handle.fileno())
-            if not stat.S_ISREG(status.st_mode):
-                return _failure(path, "batch path is not a regular file")
-            if status.st_size > _MAX_BYTES:
-                return _failure(path, "batch file exceeds 16 MiB")
-            raw: bytes = handle.read(_MAX_BYTES + 1)
+    except IsADirectoryError:
+        return _failure(path, "batch path is not a regular file")
     except OSError:
         return _failure(path, "cannot read batch file")
     if len(raw) > _MAX_BYTES:

@@ -7,6 +7,6 @@ _UNSUPPORTED: Final[str] = "unsupported video filter: media items carry no date,
 
 
 def filter_video(items: CottList[MediaItem], request: VideoFilterRequest) -> Result[CottList[MediaItem], MediaError]:
-    if len(request.date_after) > 0 or len(request.date_before) > 0 or len(request.match_filter) > 0 or request.min_views > 0 or request.max_views > 0 or request.age_limit > 0 or request.reject_live:
+    if request.date_after or request.date_before or request.match_filter or request.min_views > 0 or request.max_views > 0 or request.age_limit > 0 or request.reject_live:
         return Err(error=MediaError_InvalidInput(message=_UNSUPPORTED))
     return Ok(value=items)

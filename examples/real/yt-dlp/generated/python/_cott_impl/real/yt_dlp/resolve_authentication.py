@@ -8,7 +8,7 @@ def resolve_authentication(request: Authentication) -> Result[Authentication, Me
         case AuthenticationKind_Anonymous():
             return cott_runtime.Ok(value=request)
         case AuthenticationKind_Credentials():
-            if len(request.username) == 0 or len(request.password) == 0:
+            if not request.username or not request.password:
                 return cott_runtime.Err(error=MediaError_AuthenticationFailed(message="credentials require a nonempty username and password"))
             return cott_runtime.Ok(value=request)
         case AuthenticationKind_Netrc():

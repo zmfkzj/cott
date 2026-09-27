@@ -400,3 +400,88 @@ scenario storage_failures_become_dialogs:
         title: "Unable to save application data",
         message: "/data/\\[x]/bookmarks.json\n\ndisk full.",
     )
+
+scenario unreadable_configuration_is_reported_and_kept:
+    fixtures:
+        fs files:
+            file "config/configuration.json" text("{\"light_mode\": true}")
+            file "misplaced/configuration.json/backup.json" text("{}")
+        failure unreadable:
+            point: file.open
+            occurrence: 1
+            error: permission_denied
+    call denied = load_config("config")
+    assert denied matches Result.Err(StoreError.ReadFailed(path, _)) => path == "config/configuration.json"
+    call recovered = load_config("config")
+    assert recovered == Result.Ok(
+        value: LoadedConfig(
+            path: "config/configuration.json",
+            config: Config(
+                theme: Theme.Light,
+                markdown_extensions: List(".md", ".markdown"),
+                navigation_dock: Dock.Left,
+            ),
+        ),
+    )
+    call misplaced = load_config("misplaced")
+    assert misplaced matches Result.Err(StoreError.ReadFailed(path, _)) => path == "misplaced/configuration.json"
+
+scenario failed_default_configuration_save_is_returned:
+    fixtures:
+        fs files:
+            file "stored/configuration.json" text("{\"navigation_left\": false}")
+        failure disk_full:
+            point: file.replace
+            occurrence: 1
+            error: disk_full
+    call stored = load_config("stored")
+    assert stored matches Result.Ok(loaded) => loaded.config.navigation_dock == Dock.Right
+    call failed = load_config("fresh")
+    assert failed matches Result.Err(StoreError.WriteFailed(path, _)) => path == "fresh/configuration.json"
+    call retried = load_config("fresh")
+    assert retried == Result.Ok(
+        value: LoadedConfig(
+            path: "fresh/configuration.json",
+            config: Config(
+                theme: Theme.Dark,
+                markdown_extensions: List(".md", ".markdown"),
+                navigation_dock: Dock.Left,
+            ),
+        ),
+    )
+    call reread = load_config("fresh")
+    assert reread == retried
+
+scenario unreadable_history_is_reported:
+    fixtures:
+        fs files:
+            file "data/history.json" text("[\"/notes/guide.md\"]")
+            file "misplaced/history.json/backup.json" text("[]")
+        failure unreadable:
+            point: file.open
+            occurrence: 1
+            error: permission_denied
+    call denied = load_history("data")
+    assert denied matches Result.Err(StoreError.ReadFailed(path, _)) => path == "data/history.json"
+    call recovered = load_history("data")
+    assert recovered == Result.Ok(value: History(locations: List(guide), current: 0))
+    call misplaced = load_history("misplaced")
+    assert misplaced matches Result.Err(StoreError.ReadFailed(path, _)) => path == "misplaced/history.json"
+
+scenario unreadable_bookmarks_are_reported:
+    fixtures:
+        fs files:
+            file "data/bookmarks.json" text("[[\"readme\", \"/src/README.md\"]]")
+            file "misplaced/bookmarks.json/backup.json" text("[]")
+        failure unreadable:
+            point: file.open
+            occurrence: 1
+            error: permission_denied
+    call denied = load_bookmarks("data")
+    assert denied matches Result.Err(StoreError.ReadFailed(path, _)) => path == "data/bookmarks.json"
+    call recovered = load_bookmarks("data")
+    assert recovered == Result.Ok(
+        value: LoadedBookmarks(path: "data/bookmarks.json", bookmarks: List(readme)),
+    )
+    call misplaced = load_bookmarks("misplaced")
+    assert misplaced matches Result.Err(StoreError.ReadFailed(path, _)) => path == "misplaced/bookmarks.json"

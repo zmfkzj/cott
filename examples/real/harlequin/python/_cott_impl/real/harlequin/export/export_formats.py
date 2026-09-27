@@ -11,7 +11,7 @@ def _text(name: str, label: str, description: str, default: str, placeholder: st
 
 
 def _choice(name: str, label: str, description: str, pairs: list[tuple[str, str]], default: str) -> ExportOptionSpec:
-    kind = ExportOptionKind_Choice(values=CottList(values=[v for _, v in pairs]), labels=CottList(values=[lbl for lbl, _ in pairs]))
+    kind = ExportOptionKind_Choice(values=CottList(values=[value for _, value in pairs]), labels=CottList(values=[label for label, _ in pairs]))
     return ExportOptionSpec(name=name, label=label, description=description, kind=kind, default=default, placeholder="", integer=False, number=False, allow_empty=False)
 
 

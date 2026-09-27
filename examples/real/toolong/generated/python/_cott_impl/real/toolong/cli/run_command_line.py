@@ -11,7 +11,7 @@ from real.toolong.model_types import PipeFeed, TabPlan, ViewerSetup
 from real.toolong.tui import run_viewer
 
 
-def _write_interrupt() -> None:
+def _write_interrupt(signum: int, frame: object) -> None:
     sys.stderr.write("^C")
 
 
@@ -30,11 +30,10 @@ def _close_descriptor(fd: int) -> None:
 
 
 def _run_piped() -> I32:
-    signal.signal(signal.SIGINT, lambda signum, frame: _write_interrupt())
-    signal.signal(signal.SIGTERM, lambda signum, frame: _write_interrupt())
-    temp = tempfile.NamedTemporaryFile(mode="w+b", buffering=0, prefix="tl_")
-    try:
-        fd = os.dup(0)
+    signal.signal(signal.SIGINT, lambda signum, frame: _write_interrupt(signum, frame))
+    signal.signal(signal.SIGTERM, lambda signum, frame: _write_interrupt(signum, frame))
+    with tempfile.NamedTemporaryFile(mode="w+b", buffering=0, prefix="tl_") as temporary:
+        descriptor = os.dup(0)
         try:
             try:
                 tty = os.open("/dev/tty", os.O_RDWR)
@@ -45,14 +44,16 @@ def _run_piped() -> I32:
                 os.dup2(tty, 0)
             finally:
                 _close_descriptor(tty)
-            path = Path(temp.name)
-            tab = TabPlan(title=temp.name, paths=CottList(values=[path]), merged=False)
-            setup = ViewerSetup(tabs=CottList(values=[tab]), save_merge=Nothing(), pipe=Some(value=PipeFeed(descriptor=fd, path=path)))
+            path = Path(temporary.name)
+            tab = TabPlan(title=temporary.name, paths=CottList(values=[path]), merged=False)
+            setup = ViewerSetup(
+                tabs=CottList(values=[tab]),
+                save_merge=Nothing(),
+                pipe=Some(value=PipeFeed(descriptor=descriptor, path=path)),
+            )
             _run_setup(setup)
         finally:
-            _close_descriptor(fd)
-    finally:
-        temp.close()
+            _close_descriptor(descriptor)
     return 0
 
 

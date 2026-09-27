@@ -564,6 +564,77 @@ scenario connect_target_selection:
     )
     assert conninfo == Result.Ok(value: ConnectTarget.Conninfo(dsn: "host=h dbname=d", user: "u"))
 
+scenario alias_and_service_targets:
+    data aliases: List[real.pgcli.config.ConfigEntry] = List(
+        real.pgcli.config.ConfigEntry(name: "dev", value: "postgresql://localhost/dev"),
+        real.pgcli.config.ConfigEntry(name: "prod", value: "postgresql://ann@db.example.com/sales"),
+        real.pgcli.config.ConfigEntry(name: "prod", value: "postgresql://other.example.com/shadow"),
+    )
+    call selected_alias = select_connect_target(
+        TargetRequest(
+            dbname_option: Option.Nothing,
+            dbname_argument: Option.Some(value: "postgresql://u@h/d"),
+            username_option: Option.Nothing,
+            username_argument: Option.Nothing,
+            host: "",
+            port: "5432",
+            pgservice: Option.Nothing,
+            list_or_ping: false,
+            dsn_alias: "prod",
+            alias_dsn: aliases,
+        ),
+    )
+    assert selected_alias == Result.Ok(
+        value: ConnectTarget.Alias(name: "prod", uri: "postgresql://ann@db.example.com/sales"),
+    )
+    call unknown_alias = select_connect_target(
+        TargetRequest(
+            dbname_option: Option.Nothing,
+            dbname_argument: Option.Nothing,
+            username_option: Option.Nothing,
+            username_argument: Option.Nothing,
+            host: "",
+            port: "5432",
+            pgservice: Option.Nothing,
+            list_or_ping: false,
+            dsn_alias: "staging",
+            alias_dsn: aliases,
+        ),
+    )
+    assert unknown_alias == Result.Err(error: ConnectError.AliasMissing(name: "staging"))
+    call service = select_connect_target(
+        TargetRequest(
+            dbname_option: Option.Some(value: "service=reports"),
+            dbname_argument: Option.Nothing,
+            username_option: Option.Some(value: "ann"),
+            username_argument: Option.Nothing,
+            host: "",
+            port: "5432",
+            pgservice: Option.Some(value: "ignored"),
+            list_or_ping: false,
+            dsn_alias: "",
+            alias_dsn: no_aliases,
+        ),
+    )
+    assert service == Result.Ok(value: ConnectTarget.Service(service: "reports", user: "ann"))
+    call listing = select_connect_target(
+        TargetRequest(
+            dbname_option: Option.Nothing,
+            dbname_argument: Option.Nothing,
+            username_option: Option.Nothing,
+            username_argument: Option.Nothing,
+            host: "db",
+            port: "6543",
+            pgservice: Option.Nothing,
+            list_or_ping: true,
+            dsn_alias: "",
+            alias_dsn: no_aliases,
+        ),
+    )
+    assert listing == Result.Ok(
+        value: ConnectTarget.Params(database: "postgres", host: "db", user: "", port: "6543"),
+    )
+
 scenario uri_becomes_spec:
     call spec = connection_spec_from_uri("postgresql://ann:pw@db.example.com:6543/sales?sslmode=require")
     assert spec == Result.Ok(
@@ -593,6 +664,63 @@ scenario service_file_parsing:
     )
     call absent = parse_pg_service("[myservice]\nhost=a\n", "unknown")
     assert absent == Result.Ok(value: Option.Nothing)
+    call malformed = parse_pg_service("[myservice]\nhost=a\nnot a pair\n", "myservice")
+    assert malformed == Result.Err(
+        error: ConnectError.Failed(
+            message: "Invalid line ('not a pair') (matched as neither section nor keyword) at line 3.",
+        ),
+    )
+
+scenario service_file_lookup:
+    fixtures:
+        fs services:
+            file "svc/explicit.conf" text("[myservice]\nhost=a_host\nport=5433\ndbname=a_dbname\n")
+            file "svc/broken.conf" text("[myservice]\nhost=a\nnot a pair\n")
+            file "etc/.pg_service.conf" text("[sysservice]\nhost=sys_host\n")
+            file "home/ann/.pg_service.conf" text("[homeservice]\nuser=home_user\n")
+    call explicit = lookup_pg_service("myservice", "svc/explicit.conf", "etc", "home/ann")
+    assert explicit == Result.Ok(
+        value: Option.Some(
+            value: List(
+                ConnectionParam(name: "host", value: "a_host"),
+                ConnectionParam(name: "port", value: "5433"),
+                ConnectionParam(name: "dbname", value: "a_dbname"),
+            ),
+        ),
+    )
+    call sysconf = lookup_pg_service("sysservice", "", "etc", "home/ann")
+    assert sysconf == Result.Ok(
+        value: Option.Some(value: List(ConnectionParam(name: "host", value: "sys_host"))),
+    )
+    call home = lookup_pg_service("homeservice", "", "", "home/ann")
+    assert home == Result.Ok(
+        value: Option.Some(value: List(ConnectionParam(name: "user", value: "home_user"))),
+    )
+    call no_section = lookup_pg_service("nosuch", "svc/explicit.conf", "", "home/ann")
+    assert no_section == Result.Err(
+        error: ConnectError.ServiceMissing(service: "nosuch", file: "svc/explicit.conf"),
+    )
+    call no_file = lookup_pg_service("myservice", "", "", "nohome")
+    assert no_file == Result.Err(
+        error: ConnectError.ServiceMissing(service: "myservice", file: "nohome/.pg_service.conf"),
+    )
+    call broken = lookup_pg_service("myservice", "svc/broken.conf", "", "home/ann")
+    assert broken == Result.Err(
+        error: ConnectError.Failed(
+            message: "Invalid line ('not a pair') (matched as neither section nor keyword) at line 3.",
+        ),
+    )
+
+scenario service_file_read_failure:
+    fixtures:
+        fs services:
+            file "svc/explicit.conf" text("[myservice]\nhost=a_host\n")
+        failure denied:
+            point: file.read
+            occurrence: 1
+            error: permission_denied
+    call denied_read = lookup_pg_service("myservice", "svc/explicit.conf", "", "home/ann")
+    assert denied_read matches Result.Err(ConnectError.Failed(message)) => contains(message, "permission_denied")
 
 scenario timeout_precedence:
     call explicit = choose_connect_timeout(

@@ -20,7 +20,7 @@ each cell converted as Null -> None, Text -> str, Integer -> int, Float -> float
 (recursive), Other -> str."""
     rows = _cott_validate_abi(rows, CottList[CottList[Cell]], path="$.rows")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/output/result_rows_from_cells.py", "f5be5bcfab26e75701b39c222e286d9fc347d235946e009e7eb3f05e3ddb9548", "result_rows_from_cells", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.output.result_rows_from_cells")
+        _implementation = _cott_load("_cott_impl/real/pgcli/output/result_rows_from_cells.py", "be735e615fed5180c5cd458eeb0cd05db6c7aa93947ab4253793a9dff39960d5", "result_rows_from_cells", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.output.result_rows_from_cells")
         _result = _implementation(rows)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -168,7 +168,7 @@ mode."""
     settings = _cott_validate_abi(settings, OutputSettings, path="$.settings")
     explain_mode = _cott_validate_abi(explain_mode, bool, path="$.explain_mode")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/output/format_output.py", "3f4159633cc21d98482dd8fbddbad9d1dbd4b1ee4d38d199eb5d79815190d1df", "format_output", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.output.format_output")
+        _implementation = _cott_load("_cott_impl/real/pgcli/output/format_output.py", "c81eaa3a8202b31ff693d04742294b2ad41966b62bad77fe421c1554bce2ae4c", "format_output", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.output.format_output")
         _result = _implementation(title, result_set, status, settings, explain_mode)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -315,7 +315,7 @@ child) for each child in order. Values are inserted with str() ("%s")."""
     plan_json = _cott_validate_abi(plan_json, str, path="$.plan_json")
     terminal_width = _cott_validate_abi(terminal_width, U32, path="$.terminal_width")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/output/visualize_explain_plans.py", "8f7f37d6b078c4ec2bd294fef7122f047d52d81e61eafafa15dd30edf88898e4", "visualize_explain_plans", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.output.visualize_explain_plans")
+        _implementation = _cott_load("_cott_impl/real/pgcli/output/visualize_explain_plans.py", "b9c313b67474dc28d45c7d48fb5354d78fdaa9cff1109b925cd1cbe211976455", "visualize_explain_plans", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.output.visualize_explain_plans")
         _result = _implementation(plan_json, terminal_width)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

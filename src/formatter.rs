@@ -823,13 +823,22 @@ impl<'a> Printer<'a> {
                 status,
                 body,
                 encoding,
+                content_type,
                 ..
-            } => format!(
-                "response(status: {}, body: {}, encoding: {})",
-                status.value,
-                self.scenario_data(body),
-                serde_json::to_string(encoding).unwrap()
-            ),
+            } => {
+                let mut rendered = format!(
+                    "response(status: {}, body: {}, encoding: {}",
+                    status.value,
+                    self.scenario_data(body),
+                    serde_json::to_string(encoding).unwrap()
+                );
+                if let Some(content_type) = content_type {
+                    rendered.push_str(", content_type: ");
+                    rendered.push_str(&serde_json::to_string(content_type).unwrap());
+                }
+                rendered.push(')');
+                rendered
+            }
             ScenarioHttpOutcome::Redirect {
                 status, location, ..
             } => format!(

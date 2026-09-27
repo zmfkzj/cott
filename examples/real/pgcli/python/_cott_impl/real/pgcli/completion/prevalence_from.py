@@ -1,6 +1,6 @@
 from typing import Literal
 
-from cott_runtime import U64, FrozenMap, Opaque
+from cott_runtime import FrozenMap, Opaque, U64
 
 
 def prevalence_from(keyword_counts: FrozenMap[str, U64], name_counts: FrozenMap[str, U64]) -> Opaque[Literal["pgcli.prevalence"]]:

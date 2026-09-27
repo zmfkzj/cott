@@ -24,7 +24,7 @@ any LF offset, so for a non-empty file breaks is an opaque tuple containing
 size; an empty file has no breaks. scan_start is size and scanned_size is 0."""
     size = _cott_normalize_f32_abi(size, U64, path="$.size")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/index/start_file_index.py", "9a78f7b655e65f602e7bce49184f9d6a571d909d981b475ba3fd7047e77453a4", "start_file_index", expected_project_name="toolong", expected_cott_symbol="real.toolong.index.start_file_index")
+        _implementation = _cott_load("_cott_impl/real/toolong/index/start_file_index.py", "7796a61b7def81d6a53a0f9abba1e4261a0a8b46bd73484d37dab585b739b156", "start_file_index", expected_project_name="toolong", expected_cott_symbol="real.toolong.index.start_file_index")
         _result = _implementation(size)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -54,7 +54,7 @@ scanned_size is unchanged."""
     breaks = _cott_normalize_f32_abi(breaks, Opaque[Literal["file_breaks"]], path="$.breaks")
     position = _cott_normalize_f32_abi(position, U64, path="$.position")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/index/add_scanned_breaks.py", "8835848b1037ccc3b3f5374d6fbbadf0196945979538cd9c2c2e61bf3e8f2799", "add_scanned_breaks", expected_project_name="toolong", expected_cott_symbol="real.toolong.index.add_scanned_breaks")
+        _implementation = _cott_load("_cott_impl/real/toolong/index/add_scanned_breaks.py", "d621d3b82d5836a9e3cf371b7169bb43a50c6c51e2c3adf8a305d3feb674c52c", "add_scanned_breaks", expected_project_name="toolong", expected_cott_symbol="real.toolong.index.add_scanned_breaks")
         _result = _implementation(index, breaks, position)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -113,7 +113,7 @@ and size. scan_start is unchanged."""
     breaks = _cott_normalize_f32_abi(breaks, Opaque[Literal["file_breaks"]], path="$.breaks")
     size = _cott_normalize_f32_abi(size, U64, path="$.size")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/index/add_tail_breaks.py", "35f07fd061fe687020d6be339ed4a165043b0f2419a181e279c053352fe9050a", "add_tail_breaks", expected_project_name="toolong", expected_cott_symbol="real.toolong.index.add_tail_breaks")
+        _implementation = _cott_load("_cott_impl/real/toolong/index/add_tail_breaks.py", "6e6b58874b8d4ed27d73bcfbcef96fc62a7ec0d1135dec1754b68a8b77fcd37a", "add_tail_breaks", expected_project_name="toolong", expected_cott_symbol="real.toolong.index.add_tail_breaks")
         _result = _implementation(index, breaks, size)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -139,7 +139,7 @@ def file_line_count(index: FileIndex) -> U64:
 at least 1."""
     index = _cott_normalize_f32_abi(index, FileIndex, path="$.index")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/index/file_line_count.py", "52193ff9cb548a8bd8571010ea2ba2b5bce71c3c7d96970ace3ab0dfb619ab08", "file_line_count", expected_project_name="toolong", expected_cott_symbol="real.toolong.index.file_line_count")
+        _implementation = _cott_load("_cott_impl/real/toolong/index/file_line_count.py", "4d6c209e6fd32fe678f1a8382be14d33f7e064b90914ede65da5971ec02df5fe", "file_line_count", expected_project_name="toolong", expected_cott_symbol="real.toolong.index.file_line_count")
         _result = _implementation(index)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -184,7 +184,7 @@ recursively traversed facade value."""
     files = _cott_normalize_f32_abi(files, CottList[FileTimestamps], path="$.files")
     complete = _cott_normalize_f32_abi(complete, bool, path="$.complete")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/index/merge_timestamps.py", "11b095ed6c85aac7188e5d18fb62ec47dd501b72e866dc412aa6b3061cd626ff", "merge_timestamps", expected_project_name="toolong", expected_cott_symbol="real.toolong.index.merge_timestamps")
+        _implementation = _cott_load("_cott_impl/real/toolong/index/merge_timestamps.py", "46789e25638306caa5a4f51c738d050c4bf05887e96d589a8177bb30ee3f4aef", "merge_timestamps", expected_project_name="toolong", expected_cott_symbol="real.toolong.index.merge_timestamps")
         _result = _implementation(files, complete)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -221,7 +221,7 @@ callable runs once for each visible row and each search candidate."""
     index = _cott_normalize_f32_abi(index, TabIndex, path="$.index")
     line = _cott_normalize_f32_abi(line, U64, path="$.line")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/index/line_location.py", "789780ddb648b86e9450712dee792d3b3a34bc8dccdca24726798e6f169f0ec3", "line_location", expected_project_name="toolong", expected_cott_symbol="real.toolong.index.line_location")
+        _implementation = _cott_load("_cott_impl/real/toolong/index/line_location.py", "f28f8d77efd88c12fc3e918ea2c65ae53fa67eb4a9a529f21064e2e12eefbec8", "line_location", expected_project_name="toolong", expected_cott_symbol="real.toolong.index.line_location")
         _result = _implementation(index, line)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

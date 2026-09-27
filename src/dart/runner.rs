@@ -630,24 +630,27 @@ final class _ScenarioWorker<T> {
 }
 
 final class _ScenarioRoute {
-  const _ScenarioRoute.response(this.status, this.body)
+  const _ScenarioRoute.response(this.status, this.body, this.contentType)
       : kind = 'response',
         location = null,
         delay = Duration.zero;
   const _ScenarioRoute.redirect(this.status, this.location)
       : kind = 'redirect',
         body = const <int>[],
+        contentType = null,
         delay = Duration.zero;
   const _ScenarioRoute.delay(this.delay)
       : kind = 'delay',
         status = 204,
         body = const <int>[],
+        contentType = null,
         location = null;
 
   final String kind;
   final int status;
   final List<int> body;
   final String? location;
+  final String? contentType;
   final Duration delay;
 }
 
@@ -735,7 +738,11 @@ final class _ScenarioHttpFixture {
             throw StateError('HTTP fixture response body limit exceeded');
           }
           request.response.statusCode = route.status;
-          request.response.add(route.body);
+          if (route.contentType != null) {
+            request.response.headers.set(HttpHeaders.contentTypeHeader, route.contentType!);
+          }
+          request.response.contentLength = route.body.length;
+          if (request.method != 'HEAD') request.response.add(route.body);
           break;
         case 'redirect':
           _redirects += 1;
@@ -3271,8 +3278,13 @@ fn render_http_route(
                 ));
             }
             Ok(format!(
-                "_ScenarioRoute.response({status}, {})",
-                render_fixture_bytes(body)?
+                "_ScenarioRoute.response({status}, {}, {})",
+                render_fixture_bytes(body)?,
+                outcome
+                    .get("content_type")
+                    .and_then(Value::as_str)
+                    .map(dart_string)
+                    .unwrap_or_else(|| "null".to_owned())
             ))
         }
         Some("redirect") => {

@@ -8,11 +8,13 @@ def move_grid(grid: ResultsGrid, motion: GridMotion, extend: bool, page_rows: U6
     columns = len(grid.result.columns)
     if rows == 0 or columns == 0:
         return grid
+
     last_row = rows - 1
     last_column = columns - 1
     row = min(grid.cursor.row, last_row)
     column = min(grid.cursor.column, last_column)
     page = max(page_rows, 1)
+
     if isinstance(motion, GridMotion_SelectAll):
         return ResultsGrid(result=grid.result, cursor=GridPosition(row=last_row, column=last_column), anchor=GridPosition(row=0, column=0), first_row=grid.first_row, first_column=grid.first_column)
     if isinstance(motion, GridMotion_Up):
@@ -53,6 +55,7 @@ def move_grid(grid: ResultsGrid, motion: GridMotion, extend: bool, page_rows: U6
     else:
         row = last_row
         column = last_column
+
     cursor = GridPosition(row=row, column=column)
     anchor = grid.anchor if extend else cursor
     return ResultsGrid(result=grid.result, cursor=cursor, anchor=anchor, first_row=grid.first_row, first_column=grid.first_column)

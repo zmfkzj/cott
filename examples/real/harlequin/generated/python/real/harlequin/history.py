@@ -74,7 +74,7 @@ the error text; logging never raises."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/history/record_query.py", "77c2be9ca6e3d775d11e7da40f9925e45ca13c42914d2950f5c987e432682c8a", "record_query", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.history.record_query")
+        _implementation = _cott_load("_cott_impl/real/harlequin/history/record_query.py", "9badcab25b53a1d0275e45f02d58acd497bd56ab5aec10100f73fd918bd376cc", "record_query", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.history.record_query")
         _result = _implementation(log_path, record)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -138,18 +138,18 @@ failure is Unavailable(log_path, message)."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/history/update_query.py", "3dbd29091b7144fd3c1bb721ce7913fc72ec5a2dcbdf39ced7d9fa498da74fc3", "update_query", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.history.update_query")
+        _implementation = _cott_load("_cott_impl/real/harlequin/history/update_query.py", "e48ec2a7c972aea05914e7e8f7e1c378c6065201b79d8f6727e7eb68a8065be6", "update_query", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.history.update_query")
         _result = _implementation(log_path, row, status, rows, truncated, elapsed_ms, failure)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.history.update_query"
         if _error.span is None:
-            _error.span = {"end_byte":5425,"end_column":1,"end_line":149,"start_byte":4729,"start_column":1,"start_line":134}
+            _error.span = {"end_byte":5456,"end_column":1,"end_line":157,"start_byte":4729,"start_column":1,"start_line":134}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.history.update_query", phase="implementation-call", span={"end_byte":5425,"end_column":1,"end_line":149,"start_byte":4729,"start_column":1,"start_line":134}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.history.update_query", phase="implementation-call", span={"end_byte":5456,"end_column":1,"end_line":157,"start_byte":4729,"start_column":1,"start_line":134}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.history.update_query", phase="implementation-call", span={"end_byte":5425,"end_column":1,"end_line":149,"start_byte":4729,"start_column":1,"start_line":134}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.history.update_query", phase="implementation-call", span={"end_byte":5456,"end_column":1,"end_line":157,"start_byte":4729,"start_column":1,"start_line":134}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, Result[Unit, HistoryError], path="$.return")
     if _cott_test_context:
         if type(_result) is Err:
@@ -157,7 +157,7 @@ failure is Unavailable(log_path, message)."""
                 if type(_result.error) is not _expected_error:
                     raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.history.update_query", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
             elif type(_result.error) not in (HistoryError_Unavailable,):
-                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.history.update_query", phase="error", span={"end_byte":5425,"end_column":1,"end_line":149,"start_byte":4729,"start_column":1,"start_line":134}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.history.update_query", phase="error", span={"end_byte":5456,"end_column":1,"end_line":157,"start_byte":4729,"start_column":1,"start_line":134}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
         elif _expected_error is not None:
             raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.history.update_query", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
         if _expected_error_clause is not None:
@@ -172,7 +172,7 @@ failure is Unavailable(log_path, message)."""
             _cott_contract_condition((False), "real.harlequin.history.update_query", "ensures:1:applicable")
             return True
         if not (_cott_match_ensures_1()):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.update_query", clause="ensures:1", phase="ensures", span={"end_byte":5272,"end_column":42,"end_line":142,"start_byte":5235,"start_column":5,"start_line":142}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.update_query", clause="ensures:1", phase="ensures", span={"end_byte":5303,"end_column":42,"end_line":150,"start_byte":5266,"start_column":5,"start_line":150}, expected="true", actual="false")
         def _cott_match_ensures_2() -> bool:
             _cott_match_value = _result
             if type(_cott_match_value) is Err and type(_cott_match_value.error) is HistoryError_Unavailable and True and True:
@@ -181,7 +181,7 @@ failure is Unavailable(log_path, message)."""
             _cott_contract_condition((False), "real.harlequin.history.update_query", "ensures:2:applicable")
             return True
         if not (_cott_match_ensures_2()):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.update_query", clause="ensures:2", phase="ensures", span={"end_byte":5350,"end_column":78,"end_line":143,"start_byte":5277,"start_column":5,"start_line":143}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.update_query", clause="ensures:2", phase="ensures", span={"end_byte":5381,"end_column":78,"end_line":151,"start_byte":5308,"start_column":5,"start_line":151}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[Unit, HistoryError], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -201,18 +201,18 @@ message). Rows with a status other than ok/error/canceled are skipped."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/history/recent_queries.py", "fa56d7a3b0507d989b1aa56ea8ea17d5e4ef7075d69e54648dbd4c277b5d070d", "recent_queries", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.history.recent_queries")
+        _implementation = _cott_load("_cott_impl/real/harlequin/history/recent_queries.py", "79d40ed51f63c2289bc64c408631c86ba704eb62fec40806753a9e6691f0308d", "recent_queries", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.history.recent_queries")
         _result = _implementation(log_path, filter, limit)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.history.recent_queries"
         if _error.span is None:
-            _error.span = {"end_byte":6282,"end_column":1,"end_line":167,"start_byte":5425,"start_column":1,"start_line":149}
+            _error.span = {"end_byte":6328,"end_column":1,"end_line":179,"start_byte":5456,"start_column":1,"start_line":157}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.history.recent_queries", phase="implementation-call", span={"end_byte":6282,"end_column":1,"end_line":167,"start_byte":5425,"start_column":1,"start_line":149}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.history.recent_queries", phase="implementation-call", span={"end_byte":6328,"end_column":1,"end_line":179,"start_byte":5456,"start_column":1,"start_line":157}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.history.recent_queries", phase="implementation-call", span={"end_byte":6282,"end_column":1,"end_line":167,"start_byte":5425,"start_column":1,"start_line":149}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.history.recent_queries", phase="implementation-call", span={"end_byte":6328,"end_column":1,"end_line":179,"start_byte":5456,"start_column":1,"start_line":157}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, Result[CottList[QueryRecord], HistoryError], path="$.return")
     if _cott_test_context:
         if type(_result) is Err:
@@ -220,7 +220,7 @@ message). Rows with a status other than ok/error/canceled are skipped."""
                 if type(_result.error) is not _expected_error:
                     raise CottContractViolation("conditional error clause failed", symbol="real.harlequin.history.recent_queries", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result.error).__name__)
             elif type(_result.error) not in (HistoryError_Unavailable,):
-                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.history.recent_queries", phase="error", span={"end_byte":6282,"end_column":1,"end_line":167,"start_byte":5425,"start_column":1,"start_line":149}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
+                raise CottContractViolation("returned error is not allowed", symbol="real.harlequin.history.recent_queries", phase="error", span={"end_byte":6328,"end_column":1,"end_line":179,"start_byte":5456,"start_column":1,"start_line":157}, expected="declared unconditional error variant", actual=type(_result.error).__name__)
         elif _expected_error is not None:
             raise CottContractViolation("expected conditional error was not returned", symbol="real.harlequin.history.recent_queries", clause=_expected_error_clause, phase="error", span=_expected_error_span, expected=_expected_error.__name__, actual=type(_result).__name__)
         if _expected_error_clause is not None:
@@ -235,7 +235,7 @@ message). Rows with a status other than ok/error/canceled are skipped."""
             _cott_contract_condition((False), "real.harlequin.history.recent_queries", "ensures:1:applicable")
             return True
         if not (_cott_match_ensures_1()):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.recent_queries", clause="ensures:1", phase="ensures", span={"end_byte":6141,"end_column":39,"end_line":160,"start_byte":6107,"start_column":5,"start_line":160}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.recent_queries", clause="ensures:1", phase="ensures", span={"end_byte":6187,"end_column":39,"end_line":172,"start_byte":6153,"start_column":5,"start_line":172}, expected="true", actual="false")
         def _cott_match_ensures_2() -> bool:
             _cott_match_value = _result
             if type(_cott_match_value) is Err and type(_cott_match_value.error) is HistoryError_Unavailable and True and True:
@@ -244,7 +244,7 @@ message). Rows with a status other than ok/error/canceled are skipped."""
             _cott_contract_condition((False), "real.harlequin.history.recent_queries", "ensures:2:applicable")
             return True
         if not (_cott_match_ensures_2()):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.recent_queries", clause="ensures:2", phase="ensures", span={"end_byte":6219,"end_column":78,"end_line":161,"start_byte":6146,"start_column":5,"start_line":161}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.recent_queries", clause="ensures:2", phase="ensures", span={"end_byte":6265,"end_column":78,"end_line":173,"start_byte":6192,"start_column":5,"start_line":173}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, Result[CottList[QueryRecord], HistoryError], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -266,12 +266,12 @@ A run_at that does not parse as ISO-8601 is shown verbatim."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.history.history_label"
         if _error.span is None:
-            _error.span = {"end_byte":6974,"end_column":1,"end_line":181,"start_byte":6282,"start_column":1,"start_line":167}
+            _error.span = {"end_byte":7020,"end_column":1,"end_line":193,"start_byte":6328,"start_column":1,"start_line":179}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.history.history_label", phase="implementation-call", span={"end_byte":6974,"end_column":1,"end_line":181,"start_byte":6282,"start_column":1,"start_line":167}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.history.history_label", phase="implementation-call", span={"end_byte":7020,"end_column":1,"end_line":193,"start_byte":6328,"start_column":1,"start_line":179}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.history.history_label", phase="implementation-call", span={"end_byte":6974,"end_column":1,"end_line":181,"start_byte":6282,"start_column":1,"start_line":167}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.history.history_label", phase="implementation-call", span={"end_byte":7020,"end_column":1,"end_line":193,"start_byte":6328,"start_column":1,"start_line":179}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
@@ -288,16 +288,16 @@ is the number of lines not shown."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.history.history_preview"
         if _error.span is None:
-            _error.span = {"end_byte":7278,"end_column":1,"end_line":192,"start_byte":6974,"start_column":1,"start_line":181}
+            _error.span = {"end_byte":7324,"end_column":1,"end_line":204,"start_byte":7020,"start_column":1,"start_line":193}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.history.history_preview", phase="implementation-call", span={"end_byte":7278,"end_column":1,"end_line":192,"start_byte":6974,"start_column":1,"start_line":181}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.history.history_preview", phase="implementation-call", span={"end_byte":7324,"end_column":1,"end_line":204,"start_byte":7020,"start_column":1,"start_line":193}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.history.history_preview", phase="implementation-call", span={"end_byte":7278,"end_column":1,"end_line":192,"start_byte":6974,"start_column":1,"start_line":181}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.history.history_preview", phase="implementation-call", span={"end_byte":7324,"end_column":1,"end_line":204,"start_byte":7020,"start_column":1,"start_line":193}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, CottList[str], path="$.return")
     if _cott_test_context:
         if not (_cott_contract_condition(((len(_result) <= 8)), "real.harlequin.history.history_preview", "ensures:1")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.history_preview", clause="ensures:1", phase="ensures", span={"end_byte":7260,"end_column":28,"end_line":188,"start_byte":7237,"start_column":5,"start_line":188}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.history_preview", clause="ensures:1", phase="ensures", span={"end_byte":7306,"end_column":28,"end_line":200,"start_byte":7283,"start_column":5,"start_line":200}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, CottList[str], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -313,12 +313,12 @@ hidden; focus List; everything else 0."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.history.open_history_screen"
         if _error.span is None:
-            _error.span = {"end_byte":7725,"end_column":1,"end_line":205,"start_byte":7278,"start_column":1,"start_line":192}
+            _error.span = {"end_byte":7771,"end_column":1,"end_line":217,"start_byte":7324,"start_column":1,"start_line":204}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.history.open_history_screen", phase="implementation-call", span={"end_byte":7725,"end_column":1,"end_line":205,"start_byte":7278,"start_column":1,"start_line":192}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.history.open_history_screen", phase="implementation-call", span={"end_byte":7771,"end_column":1,"end_line":217,"start_byte":7324,"start_column":1,"start_line":204}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.history.open_history_screen", phase="implementation-call", span={"end_byte":7725,"end_column":1,"end_line":205,"start_byte":7278,"start_column":1,"start_line":192}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.history.open_history_screen", phase="implementation-call", span={"end_byte":7771,"end_column":1,"end_line":217,"start_byte":7324,"start_column":1,"start_line":204}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, HistoryScreen, path="$.return")
     if _cott_test_context:
         def _cott_match_ensures_1() -> bool:
@@ -329,11 +329,11 @@ hidden; focus List; everything else 0."""
             _cott_contract_condition((False), "real.harlequin.history.open_history_screen", "ensures:1:applicable")
             return True
         if not (_cott_match_ensures_1()):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.open_history_screen", clause="ensures:1", phase="ensures", span={"end_byte":7635,"end_column":89,"end_line":199,"start_byte":7551,"start_column":5,"start_line":199}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.open_history_screen", clause="ensures:1", phase="ensures", span={"end_byte":7681,"end_column":89,"end_line":211,"start_byte":7597,"start_column":5,"start_line":211}, expected="true", actual="false")
         if not (_cott_contract_condition(((not (_result).filters_visible)), "real.harlequin.history.open_history_screen", "ensures:2")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.open_history_screen", clause="ensures:2", phase="ensures", span={"end_byte":7674,"end_column":39,"end_line":200,"start_byte":7640,"start_column":5,"start_line":200}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.open_history_screen", clause="ensures:2", phase="ensures", span={"end_byte":7720,"end_column":39,"end_line":212,"start_byte":7686,"start_column":5,"start_line":212}, expected="true", actual="false")
         if not (_cott_contract_condition((((_result).selected == 0)), "real.harlequin.history.open_history_screen", "ensures:3")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.open_history_screen", clause="ensures:3", phase="ensures", span={"end_byte":7707,"end_column":33,"end_line":201,"start_byte":7679,"start_column":5,"start_line":201}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.open_history_screen", clause="ensures:3", phase="ensures", span={"end_byte":7753,"end_column":33,"end_line":213,"start_byte":7725,"start_column":5,"start_line":213}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, HistoryScreen, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -375,12 +375,12 @@ the records."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.history.history_key"
         if _error.span is None:
-            _error.span = {"end_byte":9544,"end_column":1,"end_line":237,"start_byte":7725,"start_column":1,"start_line":205}
+            _error.span = {"end_byte":9609,"end_column":1,"end_line":254,"start_byte":7771,"start_column":1,"start_line":217}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.history.history_key", phase="implementation-call", span={"end_byte":9544,"end_column":1,"end_line":237,"start_byte":7725,"start_column":1,"start_line":205}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.history.history_key", phase="implementation-call", span={"end_byte":9609,"end_column":1,"end_line":254,"start_byte":7771,"start_column":1,"start_line":217}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.history.history_key", phase="implementation-call", span={"end_byte":9544,"end_column":1,"end_line":237,"start_byte":7725,"start_column":1,"start_line":205}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.history.history_key", phase="implementation-call", span={"end_byte":9609,"end_column":1,"end_line":254,"start_byte":7771,"start_column":1,"start_line":217}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, HistoryStep, path="$.return")
     _result = _cott_wrap_async_protocol(_result, HistoryStep, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
@@ -422,18 +422,18 @@ proportional to empty terminal space."""
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.history.render_history"
         if _error.span is None:
-            _error.span = {"end_byte":11563,"end_column":1,"end_line":270,"start_byte":9544,"start_column":1,"start_line":237}
+            _error.span = {"end_byte":11651,"end_column":1,"end_line":293,"start_byte":9609,"start_column":1,"start_line":254}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.history.render_history", phase="implementation-call", span={"end_byte":11563,"end_column":1,"end_line":270,"start_byte":9544,"start_column":1,"start_line":237}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.history.render_history", phase="implementation-call", span={"end_byte":11651,"end_column":1,"end_line":293,"start_byte":9609,"start_column":1,"start_line":254}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.history.render_history", phase="implementation-call", span={"end_byte":11563,"end_column":1,"end_line":270,"start_byte":9544,"start_column":1,"start_line":237}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.history.render_history", phase="implementation-call", span={"end_byte":11651,"end_column":1,"end_line":293,"start_byte":9609,"start_column":1,"start_line":254}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, CottList[StyledLine], path="$.return")
     if _cott_test_context:
         if not (_cott_contract_condition(((len(_result) <= height)), "real.harlequin.history.render_history", "ensures:1")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.render_history", clause="ensures:1", phase="ensures", span={"end_byte":11497,"end_column":33,"end_line":265,"start_byte":11469,"start_column":5,"start_line":265}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.render_history", clause="ensures:1", phase="ensures", span={"end_byte":11585,"end_column":33,"end_line":288,"start_byte":11557,"start_column":5,"start_line":288}, expected="true", actual="false")
         if not (_cott_contract_condition((((not (len(records) == 0)) or (len(_result) <= 4))), "real.harlequin.history.render_history", "ensures:2")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.render_history", clause="ensures:2", phase="ensures", span={"end_byte":11545,"end_column":48,"end_line":266,"start_byte":11502,"start_column":5,"start_line":266}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.history.render_history", clause="ensures:2", phase="ensures", span={"end_byte":11633,"end_column":48,"end_line":289,"start_byte":11590,"start_column":5,"start_line":289}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, CottList[StyledLine], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 

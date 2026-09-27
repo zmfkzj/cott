@@ -1,57 +1,56 @@
 from typing import Literal
 
 from cott_runtime import CottList, Opaque, Option, Some
-
 from real.pgcli.completion_types import CompletionMetadata, FunctionMetadata, RelationMetadata
 
 
 def _relations(rows: CottList[RelationMetadata]) -> list[tuple[str, str, list[tuple[str, str, bool, str | None]]]]:
-    out: list[tuple[str, str, list[tuple[str, str, bool, str | None]]]] = []
-    for r in rows:
-        cols: list[tuple[str, str, bool, str | None]] = []
-        for c in r.columns:
-            d = c.default
-            cols.append((c.name, c.datatype, c.has_default, d.value if isinstance(d, Some) else None))
-        out.append((r.schema, r.name, cols))
-    return out
+    result: list[tuple[str, str, list[tuple[str, str, bool, str | None]]]] = []
+    for relation in rows:
+        columns: list[tuple[str, str, bool, str | None]] = []
+        for column in relation.columns:
+            default = column.default
+            columns.append((column.name, column.datatype, column.has_default, default.value if isinstance(default, Some) else None))
+        result.append((relation.schema, relation.name, columns))
+    return result
 
 
-def _opt_list(value: Option[CottList[str]]) -> list[str] | None:
+def _optional_list(value: Option[CottList[str]]) -> list[str] | None:
     if isinstance(value, Some):
-        return [x for x in value.value]
+        return list(value.value)
     return None
 
 
-def _function_row(f: FunctionMetadata) -> tuple[str, str, list[str] | None, list[str] | None, list[str] | None, str, bool, bool, bool, bool, str | None]:
-    d = f.arg_defaults
+def _function_row(function: FunctionMetadata) -> tuple[str, str, list[str] | None, list[str] | None, list[str] | None, str, bool, bool, bool, bool, str | None]:
+    defaults = function.arg_defaults
     return (
-        f.schema_name,
-        f.func_name,
-        _opt_list(f.arg_names),
-        _opt_list(f.arg_types),
-        _opt_list(f.arg_modes),
-        f.return_type,
-        f.is_aggregate,
-        f.is_window,
-        f.is_set_returning,
-        f.is_extension,
-        d.value if isinstance(d, Some) else None,
+        function.schema_name,
+        function.func_name,
+        _optional_list(function.arg_names),
+        _optional_list(function.arg_types),
+        _optional_list(function.arg_modes),
+        function.return_type,
+        function.is_aggregate,
+        function.is_window,
+        function.is_set_returning,
+        function.is_extension,
+        defaults.value if isinstance(defaults, Some) else None,
     )
 
 
 def completion_catalog_from(metadata: CompletionMetadata) -> Opaque[Literal["pgcli.completion-catalog"]]:
     value: dict[str, object] = {
-        "schemata": [s for s in metadata.schemata],
+        "schemata": list(metadata.schemata),
         "tables": _relations(metadata.tables),
         "views": _relations(metadata.views),
-        "functions": [_function_row(f) for f in metadata.functions],
-        "datatypes": [(t.schema, t.name) for t in metadata.datatypes],
+        "functions": [_function_row(function) for function in metadata.functions],
+        "datatypes": [(datatype.schema, datatype.name) for datatype in metadata.datatypes],
         "foreign_keys": [
-            (k.parent_schema, k.parent_table, k.parent_column, k.child_schema, k.child_table, k.child_column)
-            for k in metadata.foreign_keys
+            (key.parent_schema, key.parent_table, key.parent_column, key.child_schema, key.child_table, key.child_column)
+            for key in metadata.foreign_keys
         ],
-        "databases": [s for s in metadata.databases],
-        "search_path": [s for s in metadata.search_path],
-        "casing": [s for s in metadata.casing],
+        "databases": list(metadata.databases),
+        "search_path": list(metadata.search_path),
+        "casing": list(metadata.casing),
     }
     return Opaque(tag="pgcli.completion-catalog", value=value)

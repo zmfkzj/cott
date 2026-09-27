@@ -322,7 +322,7 @@ payload with opaque tag "harlequin.bound_keys"; count is its tuple length."""
         _expected_error_span = None
         _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/keymap/bind_keymaps.py", "ffcf736a49d0278cb9c2c26aa0d142615d6e4596915d84fd975bf1da7807606d", "bind_keymaps", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.keymap.bind_keymaps")
+        _implementation = _cott_load("_cott_impl/real/harlequin/keymap/bind_keymaps.py", "72ff537bd0926230aeaf0a8e479a65cb1b4fd943cc1cd1b9093ba7bc6940e5f0", "bind_keymaps", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.keymap.bind_keymaps")
         _result = _implementation(available, names)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

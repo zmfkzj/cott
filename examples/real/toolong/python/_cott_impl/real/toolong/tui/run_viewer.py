@@ -150,8 +150,6 @@ def _request(state: dict[str, object], request: ViewerRequest) -> None:
             if word is not None:
                 words.move_to_end(key)
                 suggestion = target.value.start + word
-        else:
-            suggestion = ""
         _event(state, ViewerEvent_Suggestion(value=request.value, suggestion=suggestion))
 
 
@@ -166,7 +164,7 @@ def _cancel_scan(state: dict[str, object], index: int) -> None:
         files = list(_completed(tab))
         for file_index in range(len(files), len(sources)):
             present = _opened(tab)[file_index]
-            partial = list(_entries(tab)) if file_index == _number(tab, "file") and present else []
+            partial = _entries(tab) if file_index == _number(tab, "file") and present else []
             files.append(_file_stamps(present, sources[file_index].size if present else 0, partial))
         merged = merge_timestamps(CottList(values=files), False)
         tab["index"] = TabIndex_Merged(index=merged)
@@ -235,7 +233,7 @@ def _scan_merged(state: dict[str, object], index: int) -> None:
     _event(state, ViewerEvent_Progress(tab=index, message=f"Merging {source.name} - ESCAPE to cancel", progress=progress))
     if tab["phase"] != "scan":
         return
-    if len(entries) == 0 or batch.position >= source.size:
+    if not entries or batch.position >= source.size:
         _completed(tab).append(_file_stamps(True, source.size, _entries(tab)))
         tab["earlier"] = _number(tab, "earlier") + source.size
         tab["file"] = file_index + 1
@@ -249,14 +247,11 @@ def _save_merge(state: dict[str, object], index: int, count: int) -> None:
     target = setup.save_merge
     if isinstance(target, Some):
         path = target.value
-        tab = _tabs(state)[index]
-        result = save_lines(CottList(values=_sources(tab)), _index(tab), count, path)
+        result = save_lines(CottList(values=_sources(_tabs(state)[index])), _index(_tabs(state)[index]), count, path)
         if isinstance(result, Ok):
             _event(state, ViewerEvent_Notify(title="", message=f"Saved merged log files to {str(path)!r}", severity=Severity_Information()))
         else:
             _event(state, ViewerEvent_Notify(title="", message=f"Failed to save {str(path)!r}; {result.error.message}", severity=Severity_Error()))
-    else:
-        return
 
 
 def _tail(state: dict[str, object], index: int) -> None:
@@ -440,8 +435,6 @@ def _on_keys(state: dict[str, object], event: KeyPressEvent) -> None:
         decoded = decode_key(TerminalInput_KeyPress(name=name, data=press.data))
         if isinstance(decoded, Some):
             _apply(state, handle_key(_viewer(state), decoded.value))
-        else:
-            continue
 
 
 def _on_mouse(state: dict[str, object], event: PtMouseEvent) -> object:
@@ -467,12 +460,17 @@ def _fragments(state: dict[str, object]) -> StyleAndTextTuples:
     fragments: list[tuple[str, str, Callable[[PtMouseEvent], object]]] = []
     rows = cast(tuple[ScreenRow, ...], frame.rows.unwrap())
     for number, row in enumerate(rows):
-        if number > 0:
+        if number:
             fragments.append(("", "\n", mouse_handler))
-        runs: list[StyledRun] = [run for run in row.runs]
-        for begin in range(0, len(runs), _RUN_GROUP):
-            group = ScreenRow(runs=CottList(values=runs[begin:begin + _RUN_GROUP]))
-            for piece in frame_fragments(group):
+        group: list[StyledRun] = []
+        for run in row.runs:
+            group.append(run)
+            if len(group) == _RUN_GROUP:
+                for piece in frame_fragments(ScreenRow(runs=CottList(values=group))):
+                    fragments.append((piece.style, piece.text, mouse_handler))
+                group = []
+        if group:
+            for piece in frame_fragments(ScreenRow(runs=CottList(values=group))):
                 fragments.append((piece.style, piece.text, mouse_handler))
     return cast(StyleAndTextTuples, fragments)
 
@@ -571,8 +569,6 @@ def run_viewer(setup: ViewerSetup) -> Result[Unit, ViewerFailure]:
     feed = setup.pipe
     if isinstance(feed, Some):
         state["pipe"] = (feed.value.descriptor, feed.value.path)
-    else:
-        state["pipe"] = None
     try:
         pending = _open_tabs(state, setup)
         try:

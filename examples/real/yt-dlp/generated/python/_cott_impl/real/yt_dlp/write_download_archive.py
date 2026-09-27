@@ -4,172 +4,200 @@ import stat
 from pathlib import Path
 from typing import Final
 
-from cott_runtime import UNIT, CottList, Err, Ok, Result, Unit
+import cott_runtime
+from cott_runtime import CottContractViolation, CottList, Err, Ok, Result, UNIT, Unit
 from real.yt_dlp_types import MediaError, MediaError_ArchiveFailure, MediaItem
 
 _MAX_ITEMS: Final[int] = 100000
 _MAX_BYTES: Final[int] = 16777216
 
 
-def _fail(path: Path, message: str) -> Result[Unit, MediaError]:
-    return Err(error=MediaError_ArchiveFailure(path=path, message=message))
+def _archive_error(path: Path, message: str) -> MediaError:
+    return MediaError_ArchiveFailure(path=path, message=message)
+
+
+def _encode(path: Path, items: CottList[MediaItem]) -> Result[bytes, MediaError]:
+    if len(items) > _MAX_ITEMS:
+        return Err(error=_archive_error(path, "archive has too many entries"))
+    data: bytearray = bytearray()
+    for item in items:
+        identifier: str = item.id
+        if identifier == "" or identifier != identifier.strip() or "\r" in identifier or "\n" in identifier:
+            return Err(error=_archive_error(path, "invalid archive identifier"))
+        if len(data) + len(identifier) + 1 > _MAX_BYTES:
+            return Err(error=_archive_error(path, "archive exceeds size limit"))
+        try:
+            encoded: bytes = identifier.encode("utf-8")
+        except UnicodeEncodeError:
+            return Err(error=_archive_error(path, "archive identifier is not valid UTF-8"))
+        if len(data) + len(encoded) + 1 > _MAX_BYTES:
+            return Err(error=_archive_error(path, "archive exceeds size limit"))
+        data.extend(encoded)
+        data.append(10)
+    return Ok(value=bytes(data))
 
 
 def _platform_safe() -> bool:
-    if os.name != "posix":
+    try:
+        return (
+            os.name == "posix"
+            and bool(os.O_NOFOLLOW)
+            and bool(os.O_DIRECTORY)
+            and bool(os.O_CLOEXEC)
+            and os.open in os.supports_dir_fd
+            and os.stat in os.supports_dir_fd
+            and os.stat in os.supports_follow_symlinks
+            and os.rename in os.supports_dir_fd
+            and os.unlink in os.supports_dir_fd
+            and os.fchmod is not None
+            and os.fsync is not None
+        )
+    except (AttributeError, TypeError):
         return False
-    return (
-        os.O_NOFOLLOW != 0
-        and os.O_DIRECTORY != 0
-        and os.open in os.supports_dir_fd
-        and os.stat in os.supports_dir_fd
-        and os.rename in os.supports_dir_fd
-        and os.unlink in os.supports_dir_fd
-        and os.stat in os.supports_follow_symlinks
-    )
-
-
-def _encode(items: CottList[MediaItem]) -> bytes | None:
-    if len(items) > _MAX_ITEMS:
-        return None
-    out: bytearray = bytearray()
-    for item in items:
-        ident: str = item.id
-        if ident == "" or ident != ident.strip() or "\r" in ident or "\n" in ident:
-            return None
-        try:
-            encoded: bytes = ident.encode("utf-8")
-        except UnicodeEncodeError:
-            return None
-        out.extend(encoded)
-        out.extend(b"\n")
-        if len(out) > _MAX_BYTES:
-            return None
-    return bytes(out)
 
 
 def _close(fd: int) -> bool:
     try:
         os.close(fd)
-    except OSError:
+    except (OSError, AttributeError, TypeError, RuntimeError):
         return False
     return True
 
 
-def _open_parent(path: Path) -> int | None:
-    parts: tuple[str, ...] = path.parts[:-1]
-    start: str = "/" if path.is_absolute() else "."
-    components: tuple[str, ...] = parts[1:] if path.is_absolute() else parts
+def _open_parent(path: Path) -> Result[int, MediaError]:
     flags: int = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     try:
-        dfd: int = os.open(start, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    except OSError:
-        return None
+        directory: int = os.open("/" if path.is_absolute() else ".", flags)
+    except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
+        return Err(error=_archive_error(path, "cannot open archive base directory"))
+    components: tuple[str, ...] = path.parts[1:-1] if path.is_absolute() else path.parts[:-1]
     for component in components:
         try:
-            next_fd: int = os.open(component, flags, dir_fd=dfd)
-        except OSError:
-            _close(dfd)
-            return None
-        if not _close(dfd):
-            _close(next_fd)
-            return None
-        dfd = next_fd
-    return dfd
+            child: int = os.open(component, flags, dir_fd=directory)
+        except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
+            _close(directory)
+            return Err(error=_archive_error(path, "unsafe or inaccessible archive parent directory"))
+        if not _close(directory):
+            _close(child)
+            return Err(error=_archive_error(path, "cannot close archive parent directory"))
+        directory = child
+    return Ok(value=directory)
+
+
+def _leaf_identity(directory: int, name: str, path: Path) -> Result[tuple[int, int, int] | None, MediaError]:
+    try:
+        info: os.stat_result = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return Ok(value=None)
+    except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
+        return Err(error=_archive_error(path, "cannot inspect archive leaf"))
+    if not stat.S_ISREG(info.st_mode):
+        return Err(error=_archive_error(path, "archive leaf is not a regular file"))
+    return Ok(value=(info.st_dev, info.st_ino, info.st_size))
 
 
 def _write_all(fd: int, data: bytes) -> bool:
     view: memoryview = memoryview(data)
-    try:
-        while view:
-            written: int = os.write(fd, view)
-            if written <= 0:
-                return False
-            view = view[written:]
-    except OSError:
-        return False
+    offset: int = 0
+    while offset < len(view):
+        try:
+            written: int = os.write(fd, view[offset:])
+        except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
+            return False
+        if written <= 0:
+            return False
+        offset += written
     return True
 
 
-def _leaf_ok(dfd: int, name: str) -> bool | None:
+def _abort(directory: int, temp_name: str, path: Path, error: MediaError) -> Result[Unit, MediaError]:
     try:
-        current: os.stat_result = os.stat(name, dir_fd=dfd, follow_symlinks=False)
-    except FileNotFoundError:
-        return True
-    except OSError:
-        return None
-    return stat.S_ISREG(current.st_mode)
+        os.unlink(temp_name, dir_fd=directory)
+    except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
+        return Err(error=_archive_error(path, "cannot clean up temporary archive file"))
+    return Err(error=error)
 
 
-def _flush(fd: int) -> bool:
+def _publish(directory: int, name: str, data: bytes, path: Path) -> Result[Unit, MediaError]:
+    initial: Result[tuple[int, int, int] | None, MediaError] = _leaf_identity(directory, name, path)
+    if isinstance(initial, Err):
+        return Err(error=initial.error)
     try:
-        os.fchmod(fd, 0o600)
-        os.fsync(fd)
-    except OSError:
-        return False
-    return True
+        temp_name: str = ".archive-" + secrets.token_hex(16)
+        fd: int = os.open(
+            temp_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=directory,
+        )
+    except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
+        return Err(error=_archive_error(path, "cannot create temporary archive file"))
 
-
-def _publish(dfd: int, name: str, data: bytes, path: Path) -> Result[Unit, MediaError]:
-    initial: bool | None = _leaf_ok(dfd, name)
-    if initial is None:
-        return _fail(path, "cannot inspect archive target")
-    if not initial:
-        return _fail(path, "archive target is not a regular file")
-    temp_name: str = f".{name}.archive-{secrets.token_hex(16)}"
-    try:
-        fd: int = os.open(temp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=dfd)
-    except OSError:
-        return _fail(path, "cannot create temporary archive file")
-    committed: bool = False
-    outcome: Result[Unit, MediaError] = Ok(value=UNIT)
+    failure: MediaError | None = None
+    temp_identity: tuple[int, int, int] | None = None
     try:
         if not _write_all(fd, data):
-            outcome = _fail(path, "cannot write temporary archive file")
-        elif not _flush(fd):
-            outcome = _fail(path, "cannot flush temporary archive file")
-        elif _leaf_ok(dfd, name) is not True:
-            outcome = _fail(path, "archive target changed during write")
+            failure = _archive_error(path, "cannot write temporary archive file")
         else:
-            try:
-                os.replace(temp_name, name, src_dir_fd=dfd, dst_dir_fd=dfd)
-                committed = True
-            except OSError:
-                outcome = _fail(path, "atomic archive replacement failed")
-    finally:
-        if not _close(fd) and not committed:
-            outcome = _fail(path, "cannot close temporary archive file")
-        if not committed:
-            try:
-                os.unlink(temp_name, dir_fd=dfd)
-            except OSError:
-                outcome = _fail(path, "cannot clean up temporary archive file")
-    if committed:
-        try:
-            os.fsync(dfd)
-        except OSError:
-            return _fail(path, "archive directory fsync failed")
+            os.fchmod(fd, 0o600)
+            os.fsync(fd)
+            info: os.stat_result = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size != len(data):
+                failure = _archive_error(path, "temporary archive file is incomplete or not regular")
+            else:
+                temp_identity = (info.st_dev, info.st_ino, info.st_size)
+    except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
+        failure = _archive_error(path, "cannot set mode or sync temporary archive file")
+    if not _close(fd):
+        failure = _archive_error(path, "cannot close temporary archive file")
+    if failure is not None:
+        return _abort(directory, temp_name, path, failure)
+
+    staged: Result[tuple[int, int, int] | None, MediaError] = _leaf_identity(directory, temp_name, path)
+    if isinstance(staged, Err):
+        return _abort(directory, temp_name, path, staged.error)
+    current: Result[tuple[int, int, int] | None, MediaError] = _leaf_identity(directory, name, path)
+    if isinstance(current, Err):
+        return _abort(directory, temp_name, path, current.error)
+    if staged.value != temp_identity or current.value != initial.value:
+        return _abort(directory, temp_name, path, _archive_error(path, "archive target or temporary file changed"))
+    try:
+        os.replace(temp_name, name, src_dir_fd=directory, dst_dir_fd=directory)
+    except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
+        return _abort(directory, temp_name, path, _archive_error(path, "cannot atomically replace archive"))
+    try:
+        os.fsync(directory)
+    except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
+        return Err(error=_archive_error(path, "cannot sync archive parent directory"))
+    return Ok(value=UNIT)
+
+
+def _write_host(path: Path, data: bytes) -> Result[Unit, MediaError]:
+    if not _platform_safe():
+        return Err(error=_archive_error(path, "safe archive filesystem operations are unavailable"))
+    opened: Result[int, MediaError] = _open_parent(path)
+    if isinstance(opened, Err):
+        return Err(error=opened.error)
+    directory: int = opened.value
+    outcome: Result[Unit, MediaError] = _publish(directory, path.name, data, path)
+    if not _close(directory):
+        return Err(error=_archive_error(path, "cannot close archive parent directory"))
     return outcome
 
 
 def write_download_archive(path: Path, items: CottList[MediaItem]) -> Result[Unit, MediaError]:
-    data: bytes | None = _encode(items)
-    if data is None:
-        return _fail(path, "invalid archive entries or size limit exceeded")
-    target: Path = Path(path)
-    shown: str = str(target)
-    name: str = target.name
-    if shown in ("", ".", "/") or name in ("", ".", "..") or "\x00" in shown:
-        return _fail(path, "invalid archive path")
-    if not _platform_safe():
-        return _fail(path, "platform lacks safe filesystem primitives")
-    dfd: int | None = _open_parent(target)
-    if dfd is None:
-        return _fail(path, "unsafe or inaccessible archive directory")
+    shown: str = str(path)
+    if shown in ("", ".", "/") or path.name in ("", ".", "..") or "\x00" in shown or path.anchor not in ("", "/"):
+        return Err(error=_archive_error(path, "invalid archive path"))
+    encoded: Result[bytes, MediaError] = _encode(path, items)
+    if isinstance(encoded, Err):
+        return Err(error=encoded.error)
     try:
-        outcome: Result[Unit, MediaError] = _publish(dfd, name, data, path)
-    finally:
-        closed: bool = _close(dfd)
-    if not closed:
-        return _fail(path, "cannot close archive directory")
-    return outcome
+        cott_runtime._cott_fixture_replace(path, encoded.value, create_parents=False)
+    except CottContractViolation as violation:
+        if violation.message == "fixture adapters are inactive":
+            return _write_host(path, encoded.value)
+        return Err(error=_archive_error(path, "cannot publish archive in fixture"))
+    except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
+        return Err(error=_archive_error(path, "cannot publish archive in fixture"))
+    return Ok(value=UNIT)

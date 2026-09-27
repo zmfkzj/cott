@@ -519,7 +519,7 @@ fixture       = "fs", identifier, ":", NEWLINE, INDENT, { "file", string_literal
               | "failure", identifier, ":", NEWLINE, INDENT, "point", ":", failure_point, NEWLINE,
                 "occurrence", ":", integer, NEWLINE, "error", ":", failure_error, NEWLINE, DEDENT ;
 scenario_data = ("text" | "bytes" | "hex"), "(", string_literal, ")" ;
-http_outcome  = "response(status:", integer, ", body:", scenario_data, ", encoding:", string_literal, ")"
+http_outcome  = "response(status:", integer, ", body:", scenario_data, ", encoding:", string_literal, [ ", content_type:", string_literal ], ")"
               | "redirect(status:", integer, ", location:", string_literal, ")" | "delay(ms:", integer, ")" | "disconnect()" ;
 failure_point = "file.open" | "file.read" | "file.write" | "file.flush" | "file.replace"
               | "http.connect" | "http.read" | "clock.read" ;
@@ -1097,7 +1097,13 @@ worker에 한 번만, value/cancelled await는 terminal outcome에 한 번만 �
 `asyncio.sleep(0)`, Kotlin은 `kotlinx.coroutines.yield()`를 사용한다. bounded join과 OS resource
 limit은 containment이지 ordering evidence가 아니다.
 
+다른 모듈의 free function을 `call` 또는 `spawn`할 때 parameter·return type 이름은 함수 선언을 소유한 모듈에서 resolve한다. 호출 인자와 scenario-local binding은 scenario 모듈에서 resolve하며, 같은 이름의 caller type이 callee signature를 바꾸지 않는다.
+
 `fixtures:` 안의 closed kind는 `fs`, `http`, `clock`, `failure`뿐이다. filesystem은 normalized relative POSIX path와 inline `text`/`bytes` file만, HTTP는 normalized `/path`와 `response(status, body, encoding)`·relative `redirect(status, location)`·`delay(ms)`·`disconnect()`만, clock은 unsigned `start_ms`/`tick_ms`만 가진다. failure는 `file.open|read|write|flush|replace`, `http.connect|read`, `clock.read`의 정확히 한 occurrence와 `permission_denied|not_found|disk_full|timeout|connection_reset`만 가진다. source/manifest/IR에는 host path, socket address, remote URL, script, plugin 또는 monkeypatch name이 없다. HIR은 target/argument/result/fixture reference를 resolve하고 required effect union과 fixture authority의 exact match를 강제한다. custom/database/random/process effect는 fixture backend가 없으므로 observed scenario가 될 수 없다.
+
+HTTP response의 선택적 `content_type`은 response에만 허용하며, 비어 있지 않은 printable ASCII이고 첫 글자는 공백이 아니어야 한다. 생략하면 `text/plain; charset=<encoding>`을 사용한다. Python fixture listener의 `HEAD`는 `GET`과 같은 status·Content-Type·Content-Length를 보내되 body는 보내지 않는다. Content-Length는 encoding 적용 후 실제 byte 길이다.
+
+Python scenario runner는 각 scenario의 private filesystem root를 실행 중 작업 디렉터리로 사용하고, 성공·실패 모두 원래 디렉터리로 복원한다. root는 디렉터리를 바꾸기 전에 절대 경로로 고정하므로 상대 `fixture_root`와 기본 `.`도 같은 root의 activation·감사·정리를 사용한다. 이는 SDK의 상대 경로 I/O를 private root에 두기 위한 것이며, SDK의 임의 I/O에 adapter failure를 주입하거나 추가 effect를 허용하지 않는다.
 
 scenario strategy는 source order, stable IDs/spans, resolved facade/callable identity, typed steps, required effects, closed fixtures, effective limits를 v6 JSON으로 serialize한다. scratch root, port, PID, host time은 strategy/evidence에 serialize하지 않는다. init·method_call도 public facade로 실행하며 실제 경계·contract observation만 해당 callable의 clause evidence다. trace는 source order `{step_id, operation, facade?, worker?, outcome, value_binding?}`와 ABI type/assertion boolean만 기록하며 arbitrary/opaque value와 host exception text는 기록하지 않는다. successful scenario evidence는 bounds, cleanup outcome, referenced fixture event IDs를 가진 `test observation`; unavailable execution capability는 `unobserved`다. facade를 호출했다는 사실만으로 unrelated clause evidence를 credit하지 않는다.
 
@@ -1567,7 +1573,7 @@ generated/
 `cott_runtime` ABI **7**는 numeric alias `I8`…`U64`·`F32`·`F64`, `Option`·`Result`, `Ok`·`Err`·`Some`·`Nothing`, `Unit`·`UNIT`, `Opaque`, `Dyn`, `CottList`·`CottSet`·`FrozenMap`·`CottArray`·`CottBuffer`, numeric metadata, `JsonValue` union·variant와 `CottContractViolation`의 유일한 runtime identity 원본이다. ABI 7은 canonical struct construction/invariant와 fixture adapter activation을 유지하며 새 loader는 closed v8 generation reference envelope를 검증한다. `Any`는 `typing.Any`, `Unknown`은 `object`, iterator protocol은 기존 direct Python typing projection을 쓴다. runtime ABI value가 expected ABI 7와 다르면 facade load는 실패한다.
 
 Python의 compiler-private fixture 파일 adapter `_cott_fixture_read`, `_cott_fixture_write`,
-`_cott_fixture_replace`는 활성 fixture root 안의 상대 `pathlib.Path` 또는 `str`을 받는다.
+`_cott_fixture_replace`, `_cott_fixture_remove`는 활성 fixture root 안의 상대 `pathlib.Path` 또는 `str`을 받는다.
 `read`와 `_cott_fixture_http`의 반환은 bytes이고 write/replace의 data도 bytes다. 텍스트 인코딩은
 callable의 계약에 따라 구현이 명시적으로 수행한다. Path ABI 값을 받더라도 절대 경로와 root
 탈출은 거부한다. `_cott_fixture_now()`는 설정된 `start_ms`의 밀리초 값을 돌려주므로 nanosecond
@@ -1575,18 +1581,34 @@ callable의 계약에 따라 구현이 명시적으로 수행한다. Path ABI �
 정확히 `"fixture adapters are inactive"`인 `CottContractViolation`(`phase="fixture"`)을 던지고 다른
 effect를 남기지 않는다. 활성 fixture 안의 실제 filesystem 오류는 `__cause__`가 원래 `OSError`
 (누락 file은 `FileNotFoundError`, 권한 거부는 `PermissionError`)인 `CottContractViolation`이다.
-scenario가 주입한 failure는 설정된 error text를 가진 plain `OSError`이며 `file.open`·`file.read`·
-`file.write` 지점에서는 그대로 전파되고 `file.flush`·`file.replace` 지점에서는 위
+scenario가 주입한 failure는 닫힌 error label을 errno에 매핑한 `OSError`다:
+`permission_denied` → `PermissionError(EACCES)`, `not_found` → `FileNotFoundError(ENOENT)`,
+`disk_full` → `OSError(ENOSPC)`, `timeout` → `TimeoutError(ETIMEDOUT)`,
+`connection_reset` → `ConnectionResetError(ECONNRESET)`. 설정된 occurrence에서 한 번만 발생하며
+다음 호출은 정상 경로로 돌아간다. `file.open`·`file.read`·`file.write` 지점에서는 그대로
+전파되고 `file.flush`·`file.replace` 지점에서는 위
 `CottContractViolation`의 `__cause__`가 된다. unsafe path와 bytes가 아닌 data는 `__cause__` 없는
-`CottContractViolation`이다. write와 replace는 누락된 parent directory를 만든다. replace는 같은
-directory의 temporary file에 쓰고 flush·fsync한 뒤 `os.replace`하며, 실패하면 temporary file을
-지우고 기존 file을 그대로 둔다. 구현은 fixture file을 standard-library I/O로 읽거나 쓰지 않는다.
+`CottContractViolation`이다. write는 누락된 parent directory를 만든다.
+`_cott_fixture_replace(path, data, *, create_parents=True)`는 descriptor-relative no-follow
+directory traversal로 symlink component와 기존 nonregular leaf를 거부한다. 기본값은 parent를
+만들지만 `create_parents=False`이면 누락 parent를 만들지 않고 실패한다. 같은 directory에
+mode 0600의 exclusive temporary file을 만들고 flush·fsync 후 원자적으로 target을 교체하며
+parent directory도 fsync한다. precommit 실패는 이 호출이 만든 temporary만 정리하고 기존
+target을 보존한다. 교체 후 parent fsync 실패는 새 target을 유지한 채 오류를 보고한다.
+필요한 no-follow·directory-fd primitive가 없으면 fail closed한다. 구현은 fixture file을
+standard-library I/O로 읽거나 쓰지 않는다.
 scenario 대상 계약이 Cott scenario 밖에서는 host file system을 사용한다고 기술하면 구현은 먼저 adapter를
 호출하고 inactive violation일 때만 host standard-library I/O를 선택한다. 이 호출은 활성 fixture 밖에서
 허용되는 유일한 adapter 호출(활성 여부 확인)이며 권한을 부여하지 않는다. 그 밖의 adapter 결과는 오류를
 포함해 활성 fixture에 속하므로 계약대로 매핑하고 host로 재시도하지 않는다. 이 ABI 정보는 scenario가
 포함된 Python OUTPUT RULES에도 제공하며, adapter는 compiler-owned fixture가 활성화되지 않은 상태에서
 권한을 부여하지 않는다.
+
+`_cott_fixture_remove(path)`는 기존 file 하나를 unlink하고 `None`을 반환한다. 디렉터리는 지우지
+않고 parent를 만들지 않으며, 누락 file은 `FileNotFoundError` cause를 가진 violation이다.
+기존 `file.write` failure point를 삭제 전에 방문하므로 주입 실패는 기존 file을 보존한다.
+성공한 삭제는 상대 path만 가진 `filesystem.remove` fixture event로 기록한다. 이 private adapter
+추가는 source fixture kind·failure label·공개 target ABI를 바꾸지 않는다.
 
 Python environment 하나에는 generated cott project 하나만 설치한다. `cott_runtime`과 각 facade는 normalized `[project].name`, `[project].version`, runtime ABI 7를 embed하고 서로 다르면 import를 거부한다. `generated/python`은 public cott module, runtime과 verified local implementation copy를 함께 담는 단일 runtime/package root이며 `<module>_types.py`는 user type·constant만 정의한다.
 
@@ -1996,6 +2018,8 @@ Implementation introspection 감사는 금지된 module/member의 import와 attr
 `ctypes`처럼 해당 이름과 같은 일반 지역 변수는 interpreter 권한이 아니므로 이름만으로
 거부하지 않는다. Alias import도 원래 import 대상에서 검사하며, compiler-private evidence 이름,
 동적 import와 reflection 금지는 그대로 적용한다.
+AST의 keyword argument label은 builtin 참조가 아니다. 예를 들어 `TemporaryDirectory(dir=".")`는
+허용하지만 값으로 사용한 `dir=dir()` 또는 `dir=dir`의 reflection은 계속 거부한다.
 
 ### 16.8 Fixture sandbox와 관찰 경계
 
@@ -3467,7 +3491,7 @@ v1.0은 다음을 모두 자동 검증할 때 완료다.
 9. fixture transcript/atomic replace/encoding/redirect/failure occurrence/cleanup evidence는 bounded deterministic logical data만 기록한다.
 10. `COTT-K101`은 exact doc/directive span과 formal-evidence suppression만 사용하고 ordinary prompt prose, semantic proof와 command exit을 바꾸지 않는다.
 11. authored/deployed Python tree는 facade allow/deny matrix, exact generated implementation role/hash, no-follow/single-link rule과 all-violation diagnostic ordering을 통과한다.
-12. semantic coverage는 IR inventory와 runner evidence만 join하여 `observed|unobserved|trust_declaration|unknown`을 만들고 policy-selected clause만 gate한다.
+12. semantic coverage는 IR inventory와 기록된 runner/proof evidence를 join하여 `observed|unobserved|trust_declaration|unknown`을 만들고 policy-selected clause만 gate한다. 현재 `proved`도 observed로 분류하는 §16.9의 한계 때문에 이 상태가 실제 구현 실행 관찰을 보장하지 않는다.
 13. artifact verification은 policy 전 evidence와 `verified=true` snapshot을 atomic publish하며 policy failure(Python exit `3`, Kotlin/Dart exit `8`)에도 runtime loader의 artifact trust와 `last_verified` baseline을 되돌리지 않는다.
 14. `cott diff`는 project API version만 비교하고 compiler/package/wire version은 compatibility reader/writer boundary에서만 비교한다. example project public version은 `0.1.0`으로 유지한다.
 15. agent/binding/implementation provenance, strict type checking, exact verified loader, transaction recovery, diagnostics v1, formatter idempotence와 init atomicity의 기존 guarantees를 보존한다.

@@ -13,20 +13,24 @@ def _statements(text: str) -> list[str]:
     text = text.strip()
     if not text:
         return []
-    pieces: list[str] = []
+    comments: list[str] = []
     while True:
         match = re.match(r"^(/\*.*?\*/|--.*?)(?:\n|$)", text, re.DOTALL)
         if match is None:
             break
-        pieces.append(match.group(0))
+        comments.append(match.group(0))
         text = text[match.end():].lstrip()
-    pieces.extend(str(piece) for piece in sqlparse.split(text))
-    result: list[str] = []
+    pieces: list[str] = sqlparse.split(text)
+    if comments and pieces:
+        pieces[0] = "".join(comments) + pieces[0]
+    elif comments:
+        pieces = ["".join(comments)]
+    statements: list[str] = []
     for piece in pieces:
-        formatted = str(sqlparse.format(piece, strip_comments=True)).strip().rstrip(";").strip()
-        if formatted:
-            result.append(formatted)
-    return result
+        sql = sqlparse.format(piece, strip_comments=True).strip().rstrip(";").strip()
+        if sql:
+            statements.append(sql)
+    return statements
 
 
 def run_init_commands(executor: Executor, commands: CottList[str]) -> Result[Unit, EvaluateError]:
@@ -37,5 +41,5 @@ def run_init_commands(executor: Executor, commands: CottList[str]) -> Result[Uni
                 with connection.cursor() as cursor:
                     cursor.execute(sql.encode("utf-8"))
     except Exception as error:
-        return Err(error=EvaluateError_Failed(message=str(error)))
+        return Err[EvaluateError](error=EvaluateError_Failed(message=str(error)))
     return Ok(value=UNIT)

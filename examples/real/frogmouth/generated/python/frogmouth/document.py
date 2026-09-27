@@ -188,7 +188,7 @@ of "file://" followed by PATH."""
     location = _cott_validate_abi(location, Location, path="$.location")
     context = _cott_validate_abi(context, BrowserContext, path="$.context")
     try:
-        _implementation = _cott_load("_cott_impl/frogmouth/document/visit_location.py", "4cb83032d99c7bffbb7eafc9b1bb54a140bacc40fb34464e2692277daa546513", "visit_location", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.document.visit_location")
+        _implementation = _cott_load("_cott_impl/frogmouth/document/visit_location.py", "f62515680f29c8a509ba2c748db3a989caf000c244d252f534795fe90afe3c21", "visit_location", expected_project_name="frogmouth", expected_cott_symbol="frogmouth.document.visit_location")
         _result = _implementation(location, context)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

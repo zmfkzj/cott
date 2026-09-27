@@ -2,8 +2,9 @@ import datetime
 import decimal
 from typing import Any, cast
 
-from cott_runtime import Nothing, Option, Some
+import pyarrow
 
+from cott_runtime import Nothing, Option, Some
 from real.harlequin.results_types import CellView, ResultsGrid
 
 
@@ -21,7 +22,7 @@ def _full_text(value: object) -> str:
     if isinstance(value, (datetime.datetime, datetime.time)):
         text = value.isoformat(timespec="milliseconds")
         if text.endswith("+00:00"):
-            text = text[: -len("+00:00")] + "Z"
+            return text[:-6] + "Z"
         return text
     if isinstance(value, datetime.date):
         return value.isoformat()
@@ -36,21 +37,19 @@ def _full_text(value: object) -> str:
 
 def cursor_cell(grid: ResultsGrid) -> Option[CellView]:
     result = grid.result
-    columns = list(result.columns)
+    if result.row_count == 0 or len(result.columns) == 0:
+        return Nothing()
     row = grid.cursor.row
     column = grid.cursor.column
-    if result.row_count == 0 or len(columns) == 0:
-        return Nothing()
-    if row >= result.row_count or column >= len(columns):
+    if row >= result.row_count or column >= len(result.columns):
         return Nothing()
     handle = result.data
     if handle.tag != "harlequin.arrow_table":
         return Nothing()
-    table: Any = handle.unwrap()
-    rows = cast(object, table.slice(row, 1).column(column).to_pylist())
-    if not isinstance(rows, list):
+    payload = handle.unwrap()
+    arrow: Any = pyarrow
+    if not isinstance(payload, arrow.Table):
         return Nothing()
-    values = cast(list[object], rows)
-    if len(values) == 0:
-        return Nothing()
-    return Some(value=CellView(column=columns[column].name, text=_full_text(values[0])))
+    table: Any = payload
+    value: object = cast(object, table.column(column)[row].as_py())
+    return Some(value=CellView(column=result.columns[column].name, text=_full_text(value)))

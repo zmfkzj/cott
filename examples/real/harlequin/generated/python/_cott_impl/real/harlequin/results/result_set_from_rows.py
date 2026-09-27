@@ -3,7 +3,6 @@ from typing import Any, cast
 import pyarrow
 
 from cott_runtime import CottList, Opaque, Option, Some, U64
-
 from real.harlequin.results_types import CellValue, CellValue_Blob, CellValue_Boolean, CellValue_Integer, CellValue_Null, CellValue_Real, CellValue_Text, ColumnInfo, ResultSet
 
 
@@ -36,11 +35,12 @@ def _payload(value: CellValue) -> object:
     return blob.value
 
 
-def _dedupe(names: list[str]) -> list[str]:
+def _dedupe(columns: CottList[ColumnInfo]) -> list[str]:
     used: set[str] = set()
     counters: dict[str, int] = {}
-    result: list[str] = []
-    for name in names:
+    names: list[str] = []
+    for column in columns:
+        name = column.name
         unique = name
         if unique in used:
             counter = counters.get(name, 0)
@@ -50,42 +50,68 @@ def _dedupe(names: list[str]) -> list[str]:
                 unique = f"{name}{counter}"
             counters[name] = counter + 1
         used.add(unique)
-        result.append(unique)
-    return result
+        names.append(unique)
+    return names
 
 
 def result_set_from_rows(statement: str, columns: CottList[ColumnInfo], rows: CottList[CottList[CellValue]], viewer_max_rows: Option[U64], elapsed_ms: U64) -> ResultSet:
     pa: Any = pyarrow
-    infos = list(columns)
-    width = len(infos)
-    grid: list[list[CellValue]] = []
+    names = _dedupe(columns)
+    width = len(names)
+    values_by_column: list[list[object]] = [[] for _ in range(width)]
+    kinds = ["null"] * width
+    mixed = [False] * width
     for row in rows:
-        cells = list(row)[:width]
-        while len(cells) < width:
-            cells.append(CellValue_Null())
-        grid.append(cells)
-    arrays: list[object] = []
-    for index in range(width):
-        kind = "null"
-        for cells in grid:
-            candidate = _kind(cells[index])
-            if candidate != "null":
-                kind = candidate
+        seen = 0
+        for index, cell in enumerate(row):
+            if index >= width:
                 break
-        mixed = any(_kind(cells[index]) not in ("null", kind) for cells in grid)
-        values: list[object] = []
-        for cells in grid:
-            raw = _payload(cells[index])
-            values.append(str(raw) if mixed and raw is not None else raw)
-        if mixed:
-            kind = "string"
-        arrow_types = {"null": pa.null(), "bool": pa.bool_(), "int64": pa.int64(), "float64": pa.float64(), "string": pa.string(), "binary": pa.binary()}
-        arrays.append(cast(object, pa.array(values, type=arrow_types[kind])))
-    names = _dedupe([info.name for info in infos])
-    table = cast(object, pa.Table.from_arrays(arrays, names=names))
-    fetched = len(grid)
-    row_count = fetched
-    if isinstance(viewer_max_rows, Some):
-        row_count = min(fetched, viewer_max_rows.value)
-    out_columns = [ColumnInfo(name=name, type_label=info.type_label) for name, info in zip(names, infos)]
+            kind = _kind(cell)
+            if kind != "null" and not mixed[index]:
+                if kinds[index] == "null":
+                    kinds[index] = kind
+                elif kinds[index] != kind:
+                    mixed[index] = True
+            values_by_column[index].append(_payload(cell))
+            seen += 1
+        for index in range(seen, width):
+            values_by_column[index].append(None)
+
+    arrays: list[object] = []
+    for index, values in enumerate(values_by_column):
+        if mixed[index]:
+            for offset, value in enumerate(values):
+                if value is not None:
+                    values[offset] = str(value)
+            arrow_type: object = cast(object, pa.string())
+        elif kinds[index] == "null":
+            arrow_type = cast(object, pa.null())
+        elif kinds[index] == "bool":
+            arrow_type = cast(object, pa.bool_())
+        elif kinds[index] == "int64":
+            arrow_type = cast(object, pa.int64())
+        elif kinds[index] == "float64":
+            arrow_type = cast(object, pa.float64())
+        elif kinds[index] == "string":
+            arrow_type = cast(object, pa.string())
+        else:
+            arrow_type = cast(object, pa.binary())
+        array: object = cast(object, pa.array(values, type=arrow_type))
+        if not isinstance(array, pa.Array):
+            raise TypeError("pyarrow did not return an Array")
+        arrays.append(array)
+
+    fetched = len(rows)
+    if width:
+        table: object = cast(object, pa.Table.from_arrays(arrays, names=names))
+    else:
+        struct_array: object = cast(object, pa.StructArray.from_buffers(pa.struct([]), fetched, [None], null_count=0, children=[]))
+        if not isinstance(struct_array, pa.StructArray):
+            raise TypeError("pyarrow did not return a StructArray")
+        table = cast(object, pa.Table.from_struct_array(struct_array))
+    if not isinstance(table, pa.Table):
+        raise TypeError("pyarrow did not return a Table")
+
+    row_count = min(fetched, viewer_max_rows.value) if isinstance(viewer_max_rows, Some) else fetched
+    out_columns = [ColumnInfo(name=name, type_label=column.type_label) for name, column in zip(names, columns)]
     return ResultSet(statement=statement, columns=CottList(values=out_columns), data=Opaque(tag="harlequin.arrow_table", value=table), row_count=row_count, fetched_row_count=fetched, truncated=False, elapsed_ms=elapsed_ms)

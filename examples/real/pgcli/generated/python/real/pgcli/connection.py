@@ -138,7 +138,7 @@ counts the skipped lines too."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/connection/parse_pg_service.py", "21019254aa8df5072e4e132af2d43d5d5e6665baa9986e53d2740fc47193a968", "parse_pg_service", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.connection.parse_pg_service")
+        _implementation = _cott_load("_cott_impl/real/pgcli/connection/parse_pg_service.py", "16d027e34baba1a9bc6ab71988232c599f7b79fa68ed148982168f367be5ffb4", "parse_pg_service", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.connection.parse_pg_service")
         _result = _implementation(text, service)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -191,7 +191,7 @@ file). Read failures are Failed(message: str(error))."""
     _expected_error_span = None
     _expected_error_clause = None
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/connection/lookup_pg_service.py", "b9e9cdad69e093b19624192b4e00b94b46f5dc0b7e388684626d006234a29e95", "lookup_pg_service", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.connection.lookup_pg_service")
+        _implementation = _cott_load("_cott_impl/real/pgcli/connection/lookup_pg_service.py", "049e413496bee2a432f3d1f122a81ca969f4740b10ee4992353f4bfc0dc6f1a3", "lookup_pg_service", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.connection.lookup_pg_service")
         _result = _implementation(service, service_file, sysconfdir, home)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

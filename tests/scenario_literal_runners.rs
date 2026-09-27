@@ -124,6 +124,41 @@ fn python_runner_fails_wrong_json_payloads_and_named_buffer_lengths() {
     assert!(stderr.contains("CottContractViolation"), "{stderr}");
 }
 
+#[test]
+fn python_runner_resolves_relative_file_io_inside_the_scenario() {
+    let source = r#"module demo
+
+fn read_file(path: Path) -> Str:
+    effects [file.read]
+
+scenario relative_file:
+    fixtures:
+        fs files:
+            file "nested/input.txt" text("scenario-private")
+    call content = read_file(files.path("nested/input.txt"))
+    assert content == "scenario-private"
+"#;
+    let implementation = "from pathlib import Path\n\ndef read_file(path: Path) -> str:\n    return path.read_text()\n";
+    let Some(output) = run_scenario(
+        source,
+        &[("demo.read_file", implementation)],
+        "demo.scenario.relative_file",
+    ) else {
+        return;
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("runner JSON");
+    assert_eq!(report["scenarios"][0]["grade"], "test observation");
+    assert_eq!(
+        report["scenarios"][0]["assertions"][0]["assertion_id"],
+        "assert:1"
+    );
+}
+
 /// Emit boundary-mode Python facades for manifest-bound free functions and
 /// run the compiler's contract runner on one scenario.
 fn run_scenario(source: &str, implementations: &[(&str, &str)], scenario: &str) -> Option<Output> {

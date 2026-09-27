@@ -60,14 +60,14 @@ def prepare_harlequin(arguments: CottList[str]) -> LaunchPlan:
     environment = FrozenMap(values=dict(os.environ))
     home = Path.home()
     paths = harlequin_paths(sys.platform, home, environment)
-    search_explicit: Option[Path] = Nothing()
+    explicit_path: Option[Path] = Nothing()
     if isinstance(scanned.config_path, Some):
-        search_explicit = Some(value=Path(scanned.config_path.value))
+        explicit_path = Some(value=Path(scanned.config_path.value))
     else:
         env_path = os.environ.get("HARLEQUIN_CONFIG_PATH")
         if env_path:
-            search_explicit = Some(value=Path(env_path))
-    search_paths = config_search_paths(search_explicit, Path.cwd(), paths.config_dir, home)
+            explicit_path = Some(value=Path(env_path))
+    search_paths = config_search_paths(explicit_path, Path.cwd(), paths.config_dir, home)
     files: list[ConfigFile] = []
     first_existing: Path | None = None
     for path in search_paths:
@@ -110,6 +110,7 @@ def prepare_harlequin(arguments: CottList[str]) -> LaunchPlan:
     if parsed.show_help:
         sys.stdout.write(harlequin_help(descriptors))
         return LaunchPlan_Exit(status=0)
+
     base_keymaps = builtin_keymaps()
     builtin_names = CottList(values=[keymap.name for keymap in base_keymaps])
     available = CottList(values=[*base_keymaps, *merged.keymaps])
@@ -124,6 +125,7 @@ def prepare_harlequin(arguments: CottList[str]) -> LaunchPlan:
             CottList(values=[palette.name for palette in theme_palettes()]),
             CottList(values=[keymap.name for keymap in available]),
         ))
+
     selected = select_profile(merged, parsed.profile)
     if isinstance(selected, Err):
         return _error(selected.error.title, selected.error.message)
@@ -138,6 +140,7 @@ def prepare_harlequin(arguments: CottList[str]) -> LaunchPlan:
         if isinstance(interpolated, Err):
             return _error(interpolated.error.title, interpolated.error.message)
         profile = Some(value=interpolated.value)
+
     if parsed.run_keys_app:
         save_path = first_existing if first_existing is not None else paths.config_dir / "config.toml"
         if isinstance(typed_path, Some):
@@ -147,6 +150,7 @@ def prepare_harlequin(arguments: CottList[str]) -> LaunchPlan:
             active = _keymap_names(profile.value.entries)
         active_names = active.value if isinstance(active, Some) else CottList(values=["vscode"])
         return LaunchPlan_Exit(status=run_keys_app(save_path, active_names, builtin_names, available))
+
     resolved = resolve_harlequin_settings(profile, parsed, descriptor, options)
     if isinstance(resolved, Err):
         return _error(resolved.error.title, resolved.error.message)

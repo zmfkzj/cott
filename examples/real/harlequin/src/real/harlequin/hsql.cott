@@ -16,7 +16,16 @@ use real.harlequin.adapters.{
 }
 use real.harlequin.catalog.{CatalogEntry}
 use real.harlequin.cli.{first_pass}
-use real.harlequin.config.{ConfigEntry, config_search_paths, interpolate_profile, merge_config_files, read_config_file, select_profile, validate_config_file, write_profile}
+use real.harlequin.config.{
+    ConfigEntry,
+    config_search_paths,
+    interpolate_profile,
+    merge_config_files,
+    read_config_file,
+    select_profile,
+    validate_config_file,
+    write_profile,
+}
 use real.harlequin.history.{harlequin_paths}
 use real.harlequin.support.{open_ssh_tunnel, close_ssh_tunnel}
 use real.harlequin.export.{ExportRequest, write_result}
@@ -174,7 +183,11 @@ fn hsql_error_line(failure: HsqlError) -> Str:
 
     effects []
 
-fn parse_hsql_arguments(arguments: List[Str], adapter_names: List[Str], adapter_options: List[AdapterOption]) -> Result[HsqlArguments, HsqlError]:
+fn parse_hsql_arguments(
+    arguments: List[Str],
+    adapter_names: List[Str],
+    adapter_options: List[AdapterOption],
+) -> Result[HsqlArguments, HsqlError]:
     doc """
     Parse `hsql [OPTIONS] [CONN_STR]...` (arguments without the program name)
     with the click grammar of real.harlequin.cli.parse_harlequin_arguments
@@ -220,7 +233,11 @@ fn parse_hsql_arguments(arguments: List[Str], adapter_names: List[Str], adapter_
 
     effects []
 
-fn hsql_help(descriptors: List[AdapterDescriptor], selected: Option[AdapterDescriptor], options: List[AdapterOption]) -> Str:
+fn hsql_help(
+    descriptors: List[AdapterDescriptor],
+    selected: Option[AdapterDescriptor],
+    options: List[AdapterOption],
+) -> Str:
     doc """
     The hsql help text in click's layout: "Usage: hsql [OPTIONS] [CONN_STR]...",
     a blank line, the description "  Run SQL against a database and exit.
@@ -316,7 +333,16 @@ fn missing_label_message(segment: Str, parent: Option[Str], siblings: List[Str])
 
     effects []
 
-fn stats_json(status: Str, statements: U64, rows: U64, truncated: Bool, limit: Option[U64], elapsed_ms: U64, columns: List[ColumnInfo], failure_text: Option[Str]) -> Str:
+fn stats_json(
+    status: Str,
+    statements: U64,
+    rows: U64,
+    truncated: Bool,
+    limit: Option[U64],
+    elapsed_ms: U64,
+    columns: List[ColumnInfo],
+    failure_text: Option[Str],
+) -> Str:
     doc """
     The --stats line: compact JSON (separators "," and ":") with keys in this
     order: "status", "statements", "rows", "truncated", "limit" (null when
@@ -348,7 +374,13 @@ fn session_socket_path(name: Str, environment: Map[Str, Str], uid: I64) -> Path:
 
     effects []
 
-fn execute_hsql_request(connection: Connection, arguments: HsqlArguments, cwd: Path, stdin_text: Option[Str], context: HsqlContext) -> HsqlResponse:
+fn execute_hsql_request(
+    connection: Connection,
+    arguments: HsqlArguments,
+    cwd: Path,
+    stdin_text: Option[Str],
+    context: HsqlContext,
+) -> HsqlResponse:
     doc """
     Serve one connected hsql request (the Execute, Catalog and CatalogSearch
     modes) on connection, as a cold run and a warm session both do.
@@ -395,7 +427,13 @@ fn execute_hsql_request(connection: Connection, arguments: HsqlArguments, cwd: P
 
     effects [file.read, file.write, database.read, database.write, network, clock]
 
-fn serve_hsql_session(name: Str, request: ConnectionRequest, context: HsqlContext, arguments: HsqlArguments, environment: Map[Str, Str]) -> I64:
+fn serve_hsql_session(
+    name: Str,
+    request: ConnectionRequest,
+    context: HsqlContext,
+    arguments: HsqlArguments,
+    environment: Map[Str, Str],
+) -> I64:
     doc """
     `hsql --serve NAME`: validate name with valid_session_name (Usage
     "invalid session name '{name}': use 1 to 64 letters, digits, _ or -"),
@@ -435,7 +473,15 @@ fn serve_hsql_session(name: Str, request: ConnectionRequest, context: HsqlContex
 
     effects [file.read, file.write, database.read, database.write, network, clock]
 
-fn send_session_request(name: Str, arguments: List[Str], cwd: Path, stdin_text: Option[Str], environment: Map[Str, Str], stdout_tty: Bool, stderr_tty: Bool) -> Result[HsqlResponse, HsqlError]:
+fn send_session_request(
+    name: Str,
+    arguments: List[Str],
+    cwd: Path,
+    stdin_text: Option[Str],
+    environment: Map[Str, Str],
+    stdout_tty: Bool,
+    stderr_tty: Bool,
+) -> Result[HsqlResponse, HsqlError]:
     doc """
     The warm-session client of the serve_hsql_session wire protocol: connect an
     AF_UNIX stream socket to session_socket_path(name, environment,
@@ -484,7 +530,7 @@ fn run_hsql(arguments: List[Str]) -> Never:
     files come from real.harlequin.config.config_search_paths (explicit path,
     else HARLEQUIN_CONFIG_PATH) read with real.harlequin.config.read_config_file  and merged with
     real.harlequin.config.merge_config_files;; the profile is real.harlequin.config.select_profile  + real.harlequin.config.interpolate_profile
-
+    
     (-P None means no profile); the adapter is -a, else the profile's
     adapter, else duckdb; parse_hsql_arguments with that adapter's options;
     --help prints hsql_help to stdout (exit 0); --version prints "hsql,
@@ -518,4 +564,139 @@ fn run_hsql(arguments: List[Str]) -> Never:
     unexpected exception exits 70.
     """
 
-    effects [file.read, file.write, database.read, database.write, network, clock, subprocess, process.exit]
+    effects [
+        file.read,
+        file.write,
+        database.read,
+        database.write,
+        network,
+        clock,
+        subprocess,
+        process.exit,
+    ]
+
+scenario hsql_command_lines_parse_like_click_and_refuse_conflicts:
+    call parsed = parse_hsql_arguments(
+        List("-tAc", "select 1", "--limit", "10", "app.db"),
+        List("duckdb", "sqlite"),
+        List(),
+    )
+    assert parsed matches Result.Ok(arguments) => arguments.conn_str == List("app.db") and arguments.sources == List(SqlSource.Command(sql: "select 1")) and arguments.limit == 10 and arguments.tuples_only and arguments.no_align and arguments.mode == HsqlMode.Execute
+    call unknown = parse_hsql_arguments(List("--bogus"), List("duckdb", "sqlite"), List())
+    assert unknown == Result.Err(error: HsqlError.Usage(message: "No such option: --bogus"))
+    call two_modes = parse_hsql_arguments(
+        List("--catalog", "--history"),
+        List("duckdb", "sqlite"),
+        List(),
+    )
+    assert two_modes == Result.Err(
+        error: HsqlError.Usage(message: "--catalog and --history can't be used together."),
+    )
+    call mode_with_sql = parse_hsql_arguments(
+        List("--history", "-c", "select 1"),
+        List("duckdb", "sqlite"),
+        List(),
+    )
+    assert mode_with_sql == Result.Err(
+        error: HsqlError.Usage(
+            message: "--history doesn't run SQL, so it can't be combined with -c/--command or -f/--file.",
+        ),
+    )
+    call two_formats = parse_hsql_arguments(
+        List("--csv", "--json"),
+        List("duckdb", "sqlite"),
+        List(),
+    )
+    assert two_formats == Result.Err(
+        error: HsqlError.Usage(
+            message: "--csv and --json both choose an output format; pass only one.",
+        ),
+    )
+    call stray_path = parse_hsql_arguments(
+        List("--path", "db.main", "-c", "select 1"),
+        List("duckdb", "sqlite"),
+        List(),
+    )
+    assert stray_path == Result.Err(
+        error: HsqlError.Usage(message: "--path only applies to --catalog and --catalog-search."),
+    )
+    call blank_search = parse_hsql_arguments(
+        List("--catalog-search", " "),
+        List("duckdb", "sqlite"),
+        List(),
+    )
+    assert blank_search == Result.Err(
+        error: HsqlError.Usage(message: "--catalog-search needs a term to search for."),
+    )
+    call bad_result = parse_hsql_arguments(
+        List("--result", "zero", "-c", "select 1"),
+        List("duckdb", "sqlite"),
+        List(),
+    )
+    assert bad_result == Result.Err(
+        error: HsqlError.Usage(message: "--result must be all, last, or a result number."),
+    )
+
+scenario catalog_paths_parse_quotes_and_wildcards:
+    call root = parse_catalog_path("")
+    assert root == Result.Ok(value: CatalogPath(segments: List(), pattern: Option.Nothing))
+    call walked = parse_catalog_path("db.main")
+    assert walked == Result.Ok(
+        value: CatalogPath(segments: List("db", "main"), pattern: Option.Nothing),
+    )
+    call quoted = parse_catalog_path("\"a.b\".t*")
+    assert quoted == Result.Ok(
+        value: CatalogPath(segments: List("a.b"), pattern: Option.Some(value: "t*")),
+    )
+    call empty_segment = parse_catalog_path("db..main")
+    assert empty_segment == Result.Err(
+        error: HsqlError.Usage(
+            message: "'db..main' has an empty segment. Separate labels with one dot, and quote a label that contains a dot, like \"my.table\".",
+        ),
+    )
+    call trailing_dot = parse_catalog_path("main.")
+    assert trailing_dot == Result.Err(
+        error: HsqlError.Usage(
+            message: "'main.' has an empty segment. Separate labels with one dot, and quote a label that contains a dot, like \"my.table\".",
+        ),
+    )
+    call inner_wildcard = parse_catalog_path("d*.t")
+    assert inner_wildcard == Result.Err(
+        error: HsqlError.Usage(
+            message: "'d*' contains a wildcard in the middle of a path, which is not supported. A wildcard is only allowed in the last path segment.",
+        ),
+    )
+    call unclosed = parse_catalog_path("\"open")
+    assert unclosed == Result.Err(
+        error: HsqlError.Usage(
+            message: "The quoted segment starting at \"open never closes. Write a literal quote as \"\".",
+        ),
+    )
+    call mixed = parse_catalog_path("\"a\"b.c")
+    assert mixed == Result.Err(
+        error: HsqlError.Usage(
+            message: "'\"a\"b' mixes quoted and bare text. Quote the whole segment or none of it.",
+        ),
+    )
+
+scenario a_session_that_is_not_running_is_a_connection_error:
+    fixtures:
+        fs work:
+            file "project/query.sql" text("select 1;")
+            file "run/hsql/readme.txt" text("no socket here")
+        http service:
+            route "/not-a-session" -> response(status: 404, body: text("no hsql session here"), encoding: "utf-8")
+    call missing = send_session_request(
+        "idle",
+        List("-c", "select 1"),
+        work.path("project"),
+        Option.Nothing,
+        Map("XDG_RUNTIME_DIR": "run"),
+        false,
+        false,
+    )
+    assert missing == Result.Err(
+        error: HsqlError.Connection(
+            message: "no session named 'idle' is running. Start one with `hsql --serve idle ...`.",
+        ),
+    )

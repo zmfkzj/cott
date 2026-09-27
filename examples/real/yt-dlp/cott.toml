@@ -14,6 +14,7 @@ runtime_validation = "boundary"
 
 [generator]
 rules = "generator.rules"
+timeout_seconds = 3600
 
 [[verification.coverage.rules]]
 symbol = "real.yt_dlp.parse_arguments"

@@ -6,25 +6,24 @@ from frogmouth.model_types import BrowserContext, Location, LocationKind_Remote,
 
 
 def visit_location(location: Location, context: BrowserContext) -> VisitOutcome:
-    is_remote = isinstance(location.kind, LocationKind_Remote)
-    if is_markdown_location(location, context.markdown_extensions):
-        if is_remote:
-            match fetch_remote_document(location.target):
-                case Ok(value=RemoteDocument_Markdown(document=document)):
-                    return VisitOutcome_Loaded(document=document)
-                case Ok():
-                    return VisitOutcome_OpenExternally(target=location.target)
-                case Err(error=error):
-                    return VisitOutcome_Failed(failure=BrowserFailure_Load(cause=error))
-        path = resolve_local_path(location.target, context.home, context.working_directory)
+    is_markdown = is_markdown_location(location, context.markdown_extensions)
+    if isinstance(location.kind, LocationKind_Remote):
+        if not is_markdown:
+            return VisitOutcome_OpenExternally(target=location.target)
+        match fetch_remote_document(location.target):
+            case Ok(value=RemoteDocument_Markdown(document=document)):
+                return VisitOutcome_Loaded(document=document)
+            case Ok():
+                return VisitOutcome_OpenExternally(target=location.target)
+            case Err(error=error):
+                return VisitOutcome_Failed(failure=BrowserFailure_Load(cause=error))
+    path = resolve_local_path(location.target, context.home, context.working_directory)
+    if is_markdown:
         match load_local_document(path):
             case Ok(value=document):
                 return VisitOutcome_Loaded(document=document)
             case Err(error=error):
                 return VisitOutcome_Failed(failure=BrowserFailure_Load(cause=error))
-    if is_remote:
-        return VisitOutcome_OpenExternally(target=location.target)
-    path = resolve_local_path(location.target, context.home, context.working_directory)
     if isinstance(inspect_local_path(path), PathKind_Missing):
         return VisitOutcome_Failed(failure=BrowserFailure_DoesNotExist(path=location.target))
     return VisitOutcome_OpenExternally(target="file://" + path)

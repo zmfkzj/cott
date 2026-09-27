@@ -7,6 +7,7 @@ import dataclasses as _dataclasses
 import ast as _ast
 import contextlib as _contextlib
 import contextvars as _contextvars
+import errno as _errno
 import hashlib as _hashlib
 import importlib.metadata as _metadata
 import importlib.machinery as _machinery
@@ -1052,7 +1053,16 @@ def _cott_fixture_maybe_fail(state: _CottFixtureState, point: str) -> None:
         return
     state.failures[point] = (0, error)
     _cott_fixture_record(state, "failure", point=point, error=error)
-    raise OSError(error)
+    code = {
+        "permission_denied": _errno.EACCES,
+        "not_found": _errno.ENOENT,
+        "disk_full": _errno.ENOSPC,
+        "timeout": _errno.ETIMEDOUT,
+        "connection_reset": _errno.ECONNRESET,
+    }.get(error)
+    if code is None:
+        raise CottContractViolation("unknown fixture failure error", phase="fixture")
+    raise OSError(code, error)
 
 
 @_contextlib.contextmanager
@@ -1160,31 +1170,76 @@ def _cott_fixture_write(path: object, data: bytes) -> None:
     _cott_fixture_record(state, "filesystem.write", path=relative, bytes=len(data))
 
 
-def _cott_fixture_replace(path: object, data: bytes) -> None:
+def _cott_fixture_replace(path: object, data: bytes, *, create_parents: bool = True) -> None:
     state = _cott_fixture_state()
-    relative, target = _cott_fixture_path(state, path)
-    if type(data) is not bytes:
-        raise CottContractViolation("fixture replacement data must be bytes", phase="fixture")
+    relative, _ = _cott_fixture_path(state, path)
+    if type(data) is not bytes or type(create_parents) is not bool:
+        raise CottContractViolation("fixture replacement requires bytes and a boolean parent policy", phase="fixture")
     _cott_fixture_maybe_fail(state, "file.open")
     _cott_fixture_maybe_fail(state, "file.write")
-    temporary = target.with_name(f".{target.name}.cott.tmp")
+    parts = relative.split("/")
+    leaf = parts[-1]
+    temporary = f".{leaf}.cott.tmp"
+    parent = None
+    temporary_owned = False
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = _os.open(temporary, _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL, 0o600)
-        with _os.fdopen(descriptor, "wb") as output:
-            output.write(data)
-            output.flush()
-            _cott_fixture_maybe_fail(state, "file.flush")
-            _os.fsync(output.fileno())
-        _cott_fixture_maybe_fail(state, "file.replace")
-        _os.replace(temporary, target)
-    except OSError as error:
         try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+            directory_flags = _os.O_RDONLY | _os.O_DIRECTORY | _os.O_NOFOLLOW
+            parent = _os.open(state.root, directory_flags)
+            for component in parts[:-1]:
+                if create_parents:
+                    try:
+                        _os.mkdir(component, mode=0o700, dir_fd=parent)
+                    except FileExistsError:
+                        pass
+                child = _os.open(component, directory_flags, dir_fd=parent)
+                _os.close(parent)
+                parent = child
+            try:
+                existing = _os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                existing = None
+            if existing is not None and not _stat.S_ISREG(existing.st_mode):
+                if _stat.S_ISDIR(existing.st_mode):
+                    raise IsADirectoryError(_errno.EISDIR, "fixture replacement target is a directory")
+                raise OSError(_errno.EINVAL, "fixture replacement target is not a regular file")
+            descriptor = _os.open(
+                temporary, _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL | _os.O_NOFOLLOW,
+                0o600, dir_fd=parent,
+            )
+            temporary_owned = True
+            with _os.fdopen(descriptor, "wb") as output:
+                output.write(data)
+                output.flush()
+                _cott_fixture_maybe_fail(state, "file.flush")
+                _os.fsync(output.fileno())
+            _cott_fixture_maybe_fail(state, "file.replace")
+            _os.replace(temporary, leaf, src_dir_fd=parent, dst_dir_fd=parent)
+            temporary_owned = False
+            _os.fsync(parent)
+        finally:
+            try:
+                if temporary_owned:
+                    _os.unlink(temporary, dir_fd=parent)
+            finally:
+                if parent is not None:
+                    _os.close(parent)
+    except (AttributeError, NotImplementedError) as error:
+        raise CottContractViolation("fixture replacement safety primitives are unavailable", phase="fixture") from error
+    except OSError as error:
         raise CottContractViolation(f"fixture replacement failed: {error}", phase="fixture") from error
     _cott_fixture_record(state, "filesystem.replace", path=relative, bytes=len(data))
+
+
+def _cott_fixture_remove(path: object) -> None:
+    state = _cott_fixture_state()
+    relative, target = _cott_fixture_path(state, path)
+    _cott_fixture_maybe_fail(state, "file.write")
+    try:
+        target.unlink()
+    except OSError as error:
+        raise CottContractViolation(f"fixture removal failed: {error}", phase="fixture") from error
+    _cott_fixture_record(state, "filesystem.remove", path=relative)
 
 
 def _cott_fixture_http(url: object) -> bytes:

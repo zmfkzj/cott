@@ -2366,6 +2366,33 @@ fn accepts_local_data_named_like_introspection_modules() {
 }
 
 #[test]
+fn keyword_labels_do_not_grant_reflection_authority() {
+    let fixture = fixture("module api.service\n\nfn run() -> Unit:\n    effects [file.write]\n");
+    validate_candidate(
+        &fixture.config,
+        &fixture.paths,
+        &fixture.plan,
+        "api.service.run",
+        b"import tempfile\n\ndef run() -> object:\n    with tempfile.TemporaryDirectory(dir=\".\"):\n        return None\n",
+    )
+    .expect("a temporary-directory keyword is not a reference to builtin dir");
+    for source in [
+        b"import tempfile\n\ndef run() -> object:\n    return tempfile.TemporaryDirectory(dir=dir())\n".as_slice(),
+        b"import tempfile\n\ndef run() -> object:\n    return tempfile.TemporaryDirectory(dir=dir)\n".as_slice(),
+    ] {
+        let error = validate_candidate(
+            &fixture.config,
+            &fixture.paths,
+            &fixture.plan,
+            "api.service.run",
+            source,
+        )
+        .expect_err("keyword values must still reject reflection calls and aliases");
+        assert!(error.contains("runtime reflection `dir` is not allowed"), "{error}");
+    }
+}
+
+#[test]
 fn retains_unsafe_source_rejections() {
     let fixture = fixture("module api.service\n\nfn run() -> Unit\n");
     let cases: &[(&[u8], &str)] = &[

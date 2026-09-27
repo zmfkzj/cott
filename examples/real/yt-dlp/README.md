@@ -12,7 +12,7 @@ and the CLI accepts only URLs, `-a`/`--batch-file` and `--config-locations`.
 ```sh
 project=examples/real/yt-dlp
 UV_PROJECT_ENVIRONMENT="$(pwd)/$project/.venv" uv sync --locked --project "$project/python"
-cott generate --agent omp --model anthropic/claude-opus-5-5 --target python --project "$project"
+cott generate --agent omp --model openai-codex/gpt-6-sol --target python --project "$project"
 cott verify --project "$project"
 PYTHONPATH="$project/generated/python:$project/python" "$project/.venv/bin/python" "$project/python/app.py" URL
 ```
@@ -75,12 +75,20 @@ that the implementation executed.
 The strict policy selects 119 clauses across 24 callables, including selection,
 validation, output-path safety, extraction, archive persistence, both transfer
 APIs and `execute`. No `unobserved`, `trust_declaration` or `unknown` is allowed.
-The latest `emit python` succeeded, but `verify` rejected the policy with 51
-violations: 42 trust declarations, 8 unknown clauses and 1 unobserved clause.
-The artifact verification record is published with `verified=true` and
-`current == last_verified`; its policy is **failed**, so it is not deployable.
-The reported totals remain 89 observed, 70 trust declarations, 8 unknown and
-1 unobserved. Missing evidence is not waived to make the command pass.
+Sol regeneration completed and real `verify` resolved 29 of the previous 51
+violations. The remaining 22 are trust declarations on `execute` (20) and
+`select_playlist` (2), whose random effect still lacks a scenario fixture backend.
+The artifact verification record has `verified=true` and `current == last_verified`,
+but its strict policy remains **failed**, so it is not deployable.
+Totals are 119 observed, 49 trust declarations, 0 unknown and 0 unobserved.
+Missing evidence is not waived to make the command pass.
+
+The facade scenario `fragments_publish_exact_bodies` now records actual
+`filesystem.remove` events after publishing fragment bodies, including cleanup
+of pre-existing `.part` files. Archive writing uses the compiler-owned
+descriptor-relative no-follow replacement adapter with `create_parents=False`.
+Fixture failure and symlink tests preserve existing targets and unrelated
+temporary files; successful publication fsyncs both the file and parent directory.
 
 The effectful stages use real files, HTTP and subprocesses. Their duties currently
 have no `checked_by` linkage and remain `unverified`: log preparation, config and

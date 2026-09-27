@@ -1,25 +1,23 @@
 from typing import cast
 
 from cott_runtime import FrozenMap, U64
-
 from real.pgcli.completion_types import Prevalence, PrevalenceHandle
 
 
-def _counts(value: object) -> dict[str, U64]:
-    result: dict[str, U64] = {}
-    if isinstance(value, dict):
-        for key, count in cast(dict[object, object], value).items():
-            if isinstance(key, str) and isinstance(count, int) and not isinstance(count, bool):
-                result[key] = count
-    return result
+def _counts(value: object) -> FrozenMap[str, U64]:
+    if not isinstance(value, dict):
+        raise TypeError("Invalid prevalence counts")
+    counts: dict[str, U64] = {}
+    for key, count in cast(dict[object, object], value).items():
+        if not isinstance(key, str) or not isinstance(count, int) or isinstance(count, bool) or not 0 <= count < 2**64:
+            raise TypeError("Invalid prevalence counts")
+        counts[key] = count
+    return FrozenMap(values=counts)
 
 
 def prevalence_counts(prevalence: PrevalenceHandle) -> Prevalence:
-    data = prevalence.unwrap()
-    keywords: object = None
-    names: object = None
-    if isinstance(data, dict):
-        payload = cast(dict[object, object], data)
-        keywords = payload.get("keywords")
-        names = payload.get("names")
-    return Prevalence(keyword_counts=FrozenMap(values=_counts(keywords)), name_counts=FrozenMap(values=_counts(names)))
+    payload = prevalence.unwrap()
+    if not isinstance(payload, dict):
+        raise TypeError("Invalid prevalence payload")
+    data = cast(dict[object, object], payload)
+    return Prevalence(keyword_counts=_counts(data.get("keywords")), name_counts=_counts(data.get("names")))

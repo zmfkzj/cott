@@ -65,9 +65,13 @@
         "kind": {"enum": ["response", "redirect", "delay", "disconnect"]},
         "body": {"$ref": "#/$defs/data"},
         "encoding": {"enum": ["utf-8", "utf8", "ascii", "latin-1"]},
+        "content_type": {"type": "string", "pattern": "^[!-~]", "not": {"pattern": "[^ -~]"}},
         "status": {"type": "integer", "minimum": 100, "maximum": 599},
         "location": {"type": "string", "pattern": "^/[A-Za-z0-9._/-]*$"},
         "milliseconds": {"type": "integer", "minimum": 0}
+      },
+      "dependentSchemas": {
+        "content_type": {"properties": {"kind": {"const": "response"}}}
       }
     },
     "file": {

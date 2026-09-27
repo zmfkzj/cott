@@ -76,7 +76,7 @@ variable `builtins` when binding the builtin keymaps: that identifier is
 reserved by the implementation audit for reflection; use base_keymaps."""
     arguments = _cott_normalize_f32_abi(arguments, CottList[str], path="$.arguments")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/main/prepare_harlequin.py", "d77d4c263e1377bdd02b8e0ad4ec7bcd874b14adbe996737c07623a3cc33d864", "prepare_harlequin", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.main.prepare_harlequin")
+        _implementation = _cott_load("_cott_impl/real/harlequin/main/prepare_harlequin.py", "34135c513cb6e39d8f2ea78f3f5c1802bfbd9a5a09639ec9490b80c7391f8c38", "prepare_harlequin", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.main.prepare_harlequin")
         _result = _implementation(arguments)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

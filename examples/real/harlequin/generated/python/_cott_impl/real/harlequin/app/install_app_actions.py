@@ -3,12 +3,26 @@ import platform
 import threading
 import time
 from collections.abc import Callable
-from pathlib import Path
-from typing import Any, Final, cast
+from typing import Final, cast
 
-from cott_runtime import UNIT, CottList, Ok, Some, Unit
+from cott_runtime import UNIT, CottList, Ok, Option, Some, U64, Unit
+from prompt_toolkit.application import Application
 
-from real.harlequin.adapters_types import Connection
+from real.harlequin.adapters_types import (
+    AdapterKind,
+    AdapterKind_Adbc,
+    AdapterKind_BigQuery,
+    AdapterKind_Cassandra,
+    AdapterKind_Databricks,
+    AdapterKind_DuckDb,
+    AdapterKind_MySql,
+    AdapterKind_NebulaGraph,
+    AdapterKind_Odbc,
+    AdapterKind_Postgres,
+    AdapterKind_Sqlite,
+    AdapterKind_Trino,
+    Connection,
+)
 from real.harlequin.app_types import IdeContext, IdeSession
 from real.harlequin.cli_types import HarlequinSettings
 from real.harlequin.history import history_key, open_history_screen, recent_queries
@@ -21,245 +35,304 @@ from real.harlequin.support import copy_to_clipboard, ssh_tunnel_alive
 from real.harlequin.support_types import SshTunnel
 
 _TAG: Final[str] = "harlequin.ide"
-_FOCUS_ACTIONS: Final[str] = "toggle_sidebar,toggle_full_screen,focus_query_editor,focus_results_viewer,focus_data_catalog,focus_next,focus_previous"
-_PANE_FOCUS: Final[str] = "code_editor.focus_results_viewer,code_editor.focus_data_catalog,data_catalog.focus_query_editor,data_catalog.focus_results_viewer,results_viewer.focus_query_editor,results_viewer.focus_data_catalog"
 _HISTORY_LIMIT: Final[int] = 500
 _TUNNEL_INTERVAL_S: Final[float] = 5.0
 _HARLEQUIN_VERSION: Final[str] = "2.15.0"
 
 
-def _lock(s: dict[str, object]) -> contextlib.AbstractContextManager[object]:
-    return cast(contextlib.AbstractContextManager[object], s["lock"])
+def _state_lock(state: dict[str, object]) -> contextlib.AbstractContextManager[object]:
+    return cast(contextlib.AbstractContextManager[object], state["lock"])
 
 
-def _invalidate(s: dict[str, object]) -> None:
-    cast(Callable[[], None], s["invalidate"])()
+def _handlers(state: dict[str, object]) -> dict[str, Callable[[], None]]:
+    return cast(dict[str, Callable[[], None]], state["handlers"])
 
 
-def _notify(s: dict[str, object], title: str | None, message: str, severity: str) -> None:
-    cast(Callable[[str | None, str, str], None], s["notify"])(title, message, severity)
+def _dialog_keys(state: dict[str, object]) -> dict[str, Callable[[str, str], None]]:
+    return cast(dict[str, Callable[[str, str], None]], state["dialog_keys"])
 
 
-def _open_dialog(s: dict[str, object], kind: str, model: object) -> None:
-    cast(Callable[[str, object], None], s["open_dialog"])(kind, model)
+def _context(state: dict[str, object]) -> IdeContext:
+    return cast(IdeContext, state["context"])
 
 
-def _close_dialog(s: dict[str, object]) -> None:
-    cast(Callable[[], None], s["close_dialog"])()
+def _connection(state: dict[str, object]) -> Connection | None:
+    value = state["connection"]
+    return value if isinstance(value, Connection) else None
 
 
-def _handlers(s: dict[str, object]) -> dict[str, Callable[[], None]]:
-    return cast(dict[str, Callable[[], None]], s["handlers"])
+def _notify(state: dict[str, object], title: str | None, message: str, severity: str) -> None:
+    with _state_lock(state):
+        cast(Callable[[str | None, str, str], None], state["notify"])(title, message, severity)
+        app = cast(Application[int], state["app"])
+    app.invalidate()
 
 
-def _dialog_keys(s: dict[str, object]) -> dict[str, Callable[[str, str], None]]:
-    return cast(dict[str, Callable[[str, str], None]], s["dialog_keys"])
+def _open_dialog(state: dict[str, object], kind: str, model: object) -> None:
+    with _state_lock(state):
+        cast(Callable[[str, object], None], state["open_dialog"])(kind, model)
+        app = cast(Application[int], state["app"])
+    app.invalidate()
 
 
-def _context(s: dict[str, object]) -> IdeContext:
-    return cast(IdeContext, s["context"])
+def _quit(state: dict[str, object]) -> None:
+    cast(Application[int], state["app"]).exit(result=0)
 
 
-def _connection(s: dict[str, object]) -> Connection | None:
-    raw = s.get("connection")
-    if isinstance(raw, Connection):
-        return raw
-    return None
+def _focus(state: dict[str, object], action: str) -> None:
+    cast(Callable[[str], None], state["focus"])(action)
 
 
-def _quit(s: dict[str, object]) -> None:
-    app: Any = s["app"]
-    app.exit(result=0)
+def _register_focus(state: dict[str, object], name: str, action: str) -> None:
+    _handlers(state)[name] = lambda: _focus(state, action)
 
 
-def _focus(s: dict[str, object], action: str) -> None:
-    cast(Callable[[str], None], s["focus"])(action)
+def _show_help(state: dict[str, object]) -> None:
+    with _state_lock(state):
+        bound = cast(BoundKeySet, state["bound_handle"])
+    _open_dialog(state, "text", help_modal(help_lines(bound)))
 
 
-def _register_focus(s: dict[str, object], name: str, action: str) -> None:
-    _handlers(s)[name] = lambda: _focus(s, action)
+def _kind_name(kind: AdapterKind) -> str:
+    if isinstance(kind, AdapterKind_DuckDb):
+        return "DuckDb"
+    if isinstance(kind, AdapterKind_Sqlite):
+        return "Sqlite"
+    if isinstance(kind, AdapterKind_Postgres):
+        return "Postgres"
+    if isinstance(kind, AdapterKind_MySql):
+        return "MySql"
+    if isinstance(kind, AdapterKind_Odbc):
+        return "Odbc"
+    if isinstance(kind, AdapterKind_BigQuery):
+        return "BigQuery"
+    if isinstance(kind, AdapterKind_Trino):
+        return "Trino"
+    if isinstance(kind, AdapterKind_Databricks):
+        return "Databricks"
+    if isinstance(kind, AdapterKind_Adbc):
+        return "Adbc"
+    if isinstance(kind, AdapterKind_Cassandra):
+        return "Cassandra"
+    if isinstance(kind, AdapterKind_NebulaGraph):
+        return "NebulaGraph"
+    return "Chdb"
 
 
-def _visible_lines(s: dict[str, object]) -> int:
-    size = s.get("size")
-    if size is None:
-        return 20
-    dims = cast(Callable[[], tuple[int, int]], size)()
-    return max(dims[1] - 8, 1)
-
-
-def _show_help(s: dict[str, object]) -> None:
-    with _lock(s):
-        bound = cast(BoundKeySet, s["bound_handle"])
-    modal = help_modal(help_lines(bound))
-    _open_dialog(s, "text", modal)
-    _invalidate(s)
-
-
-def _option_text(value: object) -> str:
+def _option_text(value: Option[U64] | Option[str]) -> str:
     if isinstance(value, Some):
-        return str(cast(Some[object], value).value)
+        return str(value.value)
     return "None"
 
 
 def _settings_lines(settings: HarlequinSettings) -> list[str]:
     return [
         f"Theme: {settings.theme}",
-        f"Keymaps: {', '.join(name for name in settings.keymap_names)}",
+        f"Keymaps: {', '.join(settings.keymap_names)}",
         f"Limit: {_option_text(settings.limit)}",
         f"Viewer Max Rows: {_option_text(settings.viewer_max_rows)}",
         f"Locale: {_option_text(settings.locale)}",
     ]
 
 
-def _show_debug(s: dict[str, object]) -> None:
-    with _lock(s):
-        descriptor = _context(s).descriptor
-        connection = _connection(s)
-        settings = cast(HarlequinSettings, s["settings"])
-    harlequin = DebugSection(title="Harlequin", body=CottList(values=[f"Version: {_HARLEQUIN_VERSION}", f"Python: {platform.python_version()}", f"Platform: {platform.platform()}"]))
-    adapter = DebugSection(
-        title="Adapter",
-        body=CottList(values=[
-            f"Name: {descriptor.name}",
-            f"Display Name: {descriptor.display_name}",
-            f"Distribution: {descriptor.distribution}",
-            f"Details: {descriptor.details}",
-            f"Implements Read-Only: {descriptor.implements_read_only}",
-            f"Implements Cancel: {descriptor.implements_cancel}",
-            f"Implements Catalog Search: {descriptor.implements_catalog_search}",
-            f"Implements Validate SQL: {descriptor.implements_validate_sql}",
-        ]),
-    )
+def _show_debug(state: dict[str, object]) -> None:
+    with _state_lock(state):
+        descriptor = _context(state).descriptor
+        connection = _connection(state)
+        settings = cast(HarlequinSettings, state["settings"])
+    harlequin = DebugSection(title="Harlequin", body=CottList(values=[
+        f"Version: {_HARLEQUIN_VERSION}",
+        f"Python: {platform.python_version()}",
+        f"Platform: {platform.platform()}",
+    ]))
+    adapter = DebugSection(title="Adapter", body=CottList(values=[
+        f"Kind: {_kind_name(descriptor.kind)}",
+        f"Name: {descriptor.name}",
+        f"Display Name: {descriptor.display_name}",
+        f"Distribution: {descriptor.distribution}",
+        f"Details: {descriptor.details}",
+        f"Implements Read-Only: {descriptor.implements_read_only}",
+        f"Implements Cancel: {descriptor.implements_cancel}",
+        f"Implements Catalog Search: {descriptor.implements_catalog_search}",
+        f"Implements Validate SQL: {descriptor.implements_validate_sql}",
+    ]))
     if connection is None:
         connection_lines = ["Not connected."]
     else:
         mode = connection.transaction_mode
-        mode_label = mode.value.label if isinstance(mode, Some) else "None"
-        connection_lines = [f"Connection ID: {connection.connection_id}", f"Driver Details: {connection.driver_details}", f"Transaction Mode: {mode_label}"]
-    connection_section = DebugSection(title="Connection", body=CottList(values=connection_lines))
-    settings_section = DebugSection(title="Settings", body=CottList(values=_settings_lines(settings)))
-    modal = debug_modal(CottList(values=[harlequin, adapter, connection_section, settings_section]))
-    _open_dialog(s, "text", modal)
-    _invalidate(s)
+        label = mode.value.label if isinstance(mode, Some) else "None"
+        connection_lines = [
+            f"Connection ID: {connection.connection_id}",
+            f"Driver Details: {connection.driver_details}",
+            f"Transaction Mode: {label}",
+        ]
+    sections = CottList(values=[
+        harlequin,
+        adapter,
+        DebugSection(title="Connection", body=CottList(values=connection_lines)),
+        DebugSection(title="Settings", body=CottList(values=_settings_lines(settings))),
+    ])
+    _open_dialog(state, "text", debug_modal(sections))
 
 
-def _text_key(s: dict[str, object], key: str, text: str) -> None:
-    visible = _visible_lines(s)
-    with _lock(s):
-        dialog = s.get("dialog")
-        if not isinstance(dialog, tuple):
+def _visible_lines(state: dict[str, object]) -> U64:
+    with _state_lock(state):
+        _, rows = cast(Callable[[], tuple[int, int]], state["size"])()
+    return max(rows - 8, 1)
+
+
+def _text_key(state: dict[str, object], key: str, _text: str) -> None:
+    visible_lines = _visible_lines(state)
+    with _state_lock(state):
+        raw = state["dialog"]
+        if not isinstance(raw, tuple):
             return
-        kind, model = cast(tuple[object, object], dialog)
-        if kind != "text" or not isinstance(model, TextModal):
+        dialog = cast(tuple[object, ...], raw)
+        if len(dialog) != 2 or dialog[0] != "text" or not isinstance(dialog[1], TextModal):
             return
-        step = text_modal_key(model, key, visible)
-        outcome = step.outcome
-        if isinstance(outcome, TextModalOutcome_Close):
-            _close_dialog(s)
+        step = text_modal_key(dialog[1], key, visible_lines)
+        if isinstance(step.outcome, TextModalOutcome_Close):
+            cast(Callable[[], None], state["close_dialog"])()
         else:
-            s["dialog"] = ("text", step.modal)
-    if isinstance(outcome, TextModalOutcome_Copy):
-        copied = copy_to_clipboard(outcome.text)
+            state["dialog"] = ("text", step.modal)
+        app = cast(Application[int], state["app"])
+    app.invalidate()
+    if isinstance(step.outcome, TextModalOutcome_Copy):
+        copied = copy_to_clipboard(step.outcome.text)
         if isinstance(copied, Ok):
-            _notify(s, None, outcome.notice, "information")
+            _notify(state, None, step.outcome.notice, "information")
         else:
-            _notify(s, "Clipboard Error", copied.error.message, "error")
-    _invalidate(s)
+            _notify(state, "Clipboard Error", copied.error.message, "error")
 
 
-def _history_worker(s: dict[str, object], screen: HistoryScreen, opening: bool) -> None:
-    with _lock(s):
-        log_path = Path(_context(s).paths.query_log)
+def _history_worker(state: dict[str, object], generation: list[int], ticket: int, screen: HistoryScreen, opening: bool) -> None:
+    with _state_lock(state):
+        log_path = _context(state).paths.query_log
     result = recent_queries(log_path, screen.filter, Some(value=_HISTORY_LIMIT))
-    with _lock(s):
+    changed = False
+    warning = False
+    with _state_lock(state):
+        if generation[0] != ticket:
+            return
         if isinstance(result, Ok):
-            records = [record for record in result.value]
             if opening:
-                _open_dialog(s, "history", (screen, records))
+                if state["dialog"] is None:
+                    cast(Callable[[str, object], None], state["open_dialog"])("history", (screen, list(result.value)))
+                    changed = True
             else:
-                dialog = s.get("dialog")
-                if isinstance(dialog, tuple) and cast(tuple[object, object], dialog)[0] == "history":
-                    s["dialog"] = ("history", (screen, records))
+                raw = state["dialog"]
+                if isinstance(raw, tuple):
+                    dialog = cast(tuple[object, ...], raw)
+                    if len(dialog) == 2 and dialog[0] == "history":
+                        state["dialog"] = ("history", (screen, list(result.value)))
+                        changed = True
         else:
-            _notify(s, "Query History", "Harlequin could not read your query history.", "warning")
-    _invalidate(s)
+            warning = True
+        app = cast(Application[int], state["app"])
+    if changed:
+        app.invalidate()
+    if warning:
+        _notify(state, "Query History", "Harlequin could not read your query history.", "warning")
 
 
-def _start_history(s: dict[str, object], screen: HistoryScreen, opening: bool) -> None:
-    threading.Thread(target=lambda: _history_worker(s, screen, opening), daemon=True).start()
+def _start_history(state: dict[str, object], generation: list[int], ticket: int, screen: HistoryScreen, opening: bool) -> None:
+    threading.Thread(target=lambda: _history_worker(state, generation, ticket, screen, opening), daemon=True).start()
 
 
-def _show_history(s: dict[str, object]) -> None:
-    with _lock(s):
-        connection = _connection(s)
+def _show_history(state: dict[str, object], generation: list[int]) -> None:
+    with _state_lock(state):
+        connection = _connection(state)
+        generation[0] += 1
+        ticket = generation[0]
     connection_id = connection.connection_id if connection is not None else ""
-    _start_history(s, open_history_screen(connection_id), True)
+    _start_history(state, generation, ticket, open_history_screen(connection_id), True)
 
 
-def _history_dialog_key(s: dict[str, object], key: str, text: str) -> None:
+def _history_dialog_key(state: dict[str, object], generation: list[int], key: str, text: str) -> None:
     selected_sql: str | None = None
-    with _lock(s):
-        dialog = s.get("dialog")
-        if not isinstance(dialog, tuple):
+    reload_screen: HistoryScreen | None = None
+    ticket = 0
+    with _state_lock(state):
+        raw = state["dialog"]
+        if not isinstance(raw, tuple):
             return
-        kind, model = cast(tuple[object, object], dialog)
-        if kind != "history" or not isinstance(model, tuple):
+        dialog = cast(tuple[object, ...], raw)
+        if len(dialog) != 2 or dialog[0] != "history" or not isinstance(dialog[1], tuple):
             return
-        screen_raw, records_raw = cast(tuple[object, object], model)
-        if not isinstance(screen_raw, HistoryScreen) or not isinstance(records_raw, list):
+        model = cast(tuple[object, ...], dialog[1])
+        if len(model) != 2 or not isinstance(model[0], HistoryScreen) or not isinstance(model[1], list):
             return
-        records = [item for item in cast(list[object], records_raw) if isinstance(item, QueryRecord)]
-        step = history_key(screen_raw, CottList(values=records), key, text)
+        records = cast(list[QueryRecord], model[1])
+        step = history_key(model[0], CottList(values=records), key, text)
         outcome = step.outcome
         if isinstance(outcome, HistoryOutcome_Close):
-            _close_dialog(s)
+            generation[0] += 1
+            cast(Callable[[], None], state["close_dialog"])()
         elif isinstance(outcome, HistoryOutcome_Select):
-            _close_dialog(s)
+            generation[0] += 1
+            cast(Callable[[], None], state["close_dialog"])()
             selected_sql = outcome.sql
+        elif isinstance(outcome, HistoryOutcome_Reload):
+            state["dialog"] = ("history", (step.screen, []))
+            generation[0] += 1
+            ticket = generation[0]
+            reload_screen = step.screen
         else:
-            s["dialog"] = ("history", (step.screen, records))
-    if isinstance(outcome, HistoryOutcome_Reload):
-        _start_history(s, step.screen, False)
+            state["dialog"] = ("history", (step.screen, records))
+        app = cast(Application[int], state["app"])
+    app.invalidate()
+    if reload_screen is not None:
+        _start_history(state, generation, ticket, reload_screen, False)
     if selected_sql is not None:
-        new_buffer = s.get("new_buffer")
+        with _state_lock(state):
+            new_buffer = state.get("new_buffer")
         if new_buffer is not None:
             cast(Callable[[str], None], new_buffer)(selected_sql)
-    _invalidate(s)
 
 
-def _watch_tunnel(s: dict[str, object], tunnel: SshTunnel) -> None:
+def _watch_tunnel(state: dict[str, object], tunnel: SshTunnel) -> None:
     while True:
         time.sleep(_TUNNEL_INTERVAL_S)
         if not ssh_tunnel_alive(tunnel):
-            _notify(s, None, f"The SSH tunnel to {tunnel.host} closed.", "error")
-            _invalidate(s)
+            _notify(state, None, f"The SSH tunnel to {tunnel.host} closed.", "error")
             return
 
 
 def install_app_actions(session: IdeSession) -> Unit:
-    handle = session.handle
-    if handle.tag != _TAG:
+    if session.handle.tag != _TAG:
         raise ValueError("The IDE session handle is malformed.")
-    raw = handle.unwrap()
+    raw = session.handle.unwrap()
     if not isinstance(raw, dict):
         raise ValueError("The IDE session handle is malformed.")
-    s = cast(dict[str, object], raw)
-    with _lock(s):
-        handlers = _handlers(s)
-        handlers["quit"] = lambda: _quit(s)
-        for action in _FOCUS_ACTIONS.split(","):
-            _register_focus(s, action, action)
-        for name in _PANE_FOCUS.split(","):
-            _register_focus(s, name, name.split(".", 1)[1])
-        handlers["help"] = lambda: _show_help(s)
-        handlers["show_debug_info"] = lambda: _show_debug(s)
-        handlers["show_query_history"] = lambda: _show_history(s)
-        keys = _dialog_keys(s)
-        keys["text"] = lambda key, text: _text_key(s, key, text)
-        keys["history"] = lambda key, text: _history_dialog_key(s, key, text)
-        tunnel = _context(s).tunnel
+    state = cast(dict[str, object], raw)
+    generation = [0]
+    with _state_lock(state):
+        handlers = _handlers(state)
+        handlers["quit"] = lambda: _quit(state)
+        for action in (
+            "toggle_sidebar", "toggle_full_screen", "focus_query_editor",
+            "focus_results_viewer", "focus_data_catalog", "focus_next", "focus_previous",
+        ):
+            _register_focus(state, action, action)
+        for name, action in (
+            ("code_editor.focus_results_viewer", "focus_results_viewer"),
+            ("code_editor.focus_data_catalog", "focus_data_catalog"),
+            ("data_catalog.focus_query_editor", "focus_query_editor"),
+            ("data_catalog.focus_results_viewer", "focus_results_viewer"),
+            ("results_viewer.focus_query_editor", "focus_query_editor"),
+            ("results_viewer.focus_data_catalog", "focus_data_catalog"),
+        ):
+            _register_focus(state, name, action)
+        handlers["help"] = lambda: _show_help(state)
+        handlers["show_debug_info"] = lambda: _show_debug(state)
+        handlers["show_query_history"] = lambda: _show_history(state, generation)
+        keys = _dialog_keys(state)
+        text_handler: Callable[[str, str], None] = lambda key, text: _text_key(state, key, text)
+        history_handler: Callable[[str, str], None] = lambda key, text: _history_dialog_key(state, generation, key, text)
+        keys["text"] = text_handler
+        keys["history"] = history_handler
+        tunnel = _context(state).tunnel
     if isinstance(tunnel, Some):
-        watched = tunnel.value
-        threading.Thread(target=lambda: _watch_tunnel(s, watched), daemon=True).start()
+        active_tunnel = tunnel.value
+        threading.Thread(target=lambda: _watch_tunnel(state, active_tunnel), daemon=True).start()
     return UNIT

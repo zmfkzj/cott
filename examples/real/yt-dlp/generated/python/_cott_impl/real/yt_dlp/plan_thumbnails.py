@@ -9,9 +9,9 @@ def plan_thumbnails(item: MediaItem, request: ThumbnailRequest) -> CottList[str]
             names.append(item.id + ".thumbnail")
         else:
             for fmt in request.formats:
-                if len(fmt) > 0:
+                if fmt:
                     names.append(item.id + "." + fmt)
-    if len(request.convert_format) > 0:
+    if request.convert_format:
         names.append(item.id + "." + request.convert_format)
     if request.embed:
         names.append("embed:" + item.id)

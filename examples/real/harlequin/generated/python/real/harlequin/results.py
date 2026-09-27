@@ -35,7 +35,7 @@ viewer_max_rows when Some, truncated is false."""
     viewer_max_rows = _cott_normalize_f32_abi(viewer_max_rows, Option[U64], path="$.viewer_max_rows")
     elapsed_ms = _cott_normalize_f32_abi(elapsed_ms, U64, path="$.elapsed_ms")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/results/result_set_from_rows.py", "2931303c47935ca752e60814dee53bf4a0c97e2ce0ef0b5690889cb5af665369", "result_set_from_rows", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.results.result_set_from_rows")
+        _implementation = _cott_load("_cott_impl/real/harlequin/results/result_set_from_rows.py", "f407bd8f3e27b5b7df767e09ee3e17a6301cfadcd08581b0de33ae160167f656", "result_set_from_rows", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.results.result_set_from_rows")
         _result = _implementation(statement, columns, rows, viewer_max_rows, elapsed_ms)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -170,7 +170,7 @@ def new_grid(result: ResultSet) -> ResultsGrid:
 and no scroll."""
     result = _cott_normalize_f32_abi(result, ResultSet, path="$.result")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/results/new_grid.py", "5cccfeb56a90dae231666aea5a36acac99eee0250ee1cbcf913d4f24cc54911e", "new_grid", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.results.new_grid")
+        _implementation = _cott_load("_cott_impl/real/harlequin/results/new_grid.py", "344d81d113546e494179e31ea2c0ea9952ade902f59098056556de4ea9e5771c", "new_grid", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.results.new_grid")
         _result = _implementation(result)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -213,7 +213,7 @@ result, first_row and first_column are unchanged."""
     extend = _cott_normalize_f32_abi(extend, bool, path="$.extend")
     page_rows = _cott_normalize_f32_abi(page_rows, U64, path="$.page_rows")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/results/move_grid.py", "db9048438a48bd1e9565093857a8e6a255c4520f160381e923d5b815711af835", "move_grid", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.results.move_grid")
+        _implementation = _cott_load("_cott_impl/real/harlequin/results/move_grid.py", "a3498c2b3f33d0159a710196b61c87ba30f1b6f1984169f6bba52cace2206e5a", "move_grid", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.results.move_grid")
         _result = _implementation(grid, motion, extend, page_rows)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -280,22 +280,22 @@ draws the single line "Query returned no columns" styled "class:hq.muted"."""
     focused = _cott_normalize_f32_abi(focused, bool, path="$.focused")
     number_format = _cott_normalize_f32_abi(number_format, NumberFormat, path="$.number_format")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/results/render_grid.py", "85e85b9c45d3d6df235a7c254452e502efe6f68fc9e837c3132800aacd0bd2b8", "render_grid", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.results.render_grid")
+        _implementation = _cott_load("_cott_impl/real/harlequin/results/render_grid.py", "0c629857e2a268a29f0544809dec180bd4fdbd1bab8ecddd9380b5cc77e169b9", "render_grid", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.results.render_grid")
         _result = _implementation(grid, width, height, focused, number_format)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.results.render_grid"
         if _error.span is None:
-            _error.span = {"end_byte":11228,"end_column":1,"end_line":278,"start_byte":8150,"start_column":1,"start_line":231}
+            _error.span = {"end_byte":11251,"end_column":1,"end_line":284,"start_byte":8150,"start_column":1,"start_line":231}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.results.render_grid", phase="implementation-call", span={"end_byte":11228,"end_column":1,"end_line":278,"start_byte":8150,"start_column":1,"start_line":231}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.results.render_grid", phase="implementation-call", span={"end_byte":11251,"end_column":1,"end_line":284,"start_byte":8150,"start_column":1,"start_line":231}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.results.render_grid", phase="implementation-call", span={"end_byte":11228,"end_column":1,"end_line":278,"start_byte":8150,"start_column":1,"start_line":231}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.results.render_grid", phase="implementation-call", span={"end_byte":11251,"end_column":1,"end_line":284,"start_byte":8150,"start_column":1,"start_line":231}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, GridFrame, path="$.return")
     if _cott_test_context:
         if not (_cott_contract_condition(((len((_result).lines) <= height)), "real.harlequin.results.render_grid", "ensures:1")):
-            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.results.render_grid", clause="ensures:1", phase="ensures", span={"end_byte":11210,"end_column":39,"end_line":274,"start_byte":11176,"start_column":5,"start_line":274}, expected="true", actual="false")
+            raise CottContractViolation("ensures clause failed", symbol="real.harlequin.results.render_grid", clause="ensures:1", phase="ensures", span={"end_byte":11233,"end_column":39,"end_line":280,"start_byte":11199,"start_column":5,"start_line":280}, expected="true", actual="false")
     _result = _cott_wrap_async_protocol(_result, GridFrame, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
 
@@ -306,18 +306,18 @@ rows joined by LF. A value is Python str() of the value pyarrow returns
 (so SQL NULL is "None"). An empty result copies ""."""
     grid = _cott_normalize_f32_abi(grid, ResultsGrid, path="$.grid")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/results/selection_text.py", "dbd6cfe47863a14c149658745350ebe626106705c440b8174566c45a320a8f51", "selection_text", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.results.selection_text")
+        _implementation = _cott_load("_cott_impl/real/harlequin/results/selection_text.py", "34fcd78a2a547fe6b6c1793bb1823b5d793a9db35c208c670de29d17623f3af8", "selection_text", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.results.selection_text")
         _result = _implementation(grid)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.results.selection_text"
         if _error.span is None:
-            _error.span = {"end_byte":11600,"end_column":1,"end_line":288,"start_byte":11228,"start_column":1,"start_line":278}
+            _error.span = {"end_byte":11623,"end_column":1,"end_line":294,"start_byte":11251,"start_column":1,"start_line":284}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.results.selection_text", phase="implementation-call", span={"end_byte":11600,"end_column":1,"end_line":288,"start_byte":11228,"start_column":1,"start_line":278}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.results.selection_text", phase="implementation-call", span={"end_byte":11623,"end_column":1,"end_line":294,"start_byte":11251,"start_column":1,"start_line":284}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.results.selection_text", phase="implementation-call", span={"end_byte":11600,"end_column":1,"end_line":288,"start_byte":11228,"start_column":1,"start_line":278}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.results.selection_text", phase="implementation-call", span={"end_byte":11623,"end_column":1,"end_line":294,"start_byte":11251,"start_column":1,"start_line":284}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
@@ -329,18 +329,18 @@ values as render_grid formats them but without first-line truncation and
 without localization). Nothing when the result has no rows or no columns."""
     grid = _cott_normalize_f32_abi(grid, ResultsGrid, path="$.grid")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/results/cursor_cell.py", "9186906aaca8b29874c6ef874d0d792750000909d5b7a94da91c640e41ac99e9", "cursor_cell", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.results.cursor_cell")
+        _implementation = _cott_load("_cott_impl/real/harlequin/results/cursor_cell.py", "80440a2a99aa3297e80620f7e1b6e03cb23b729c6d282d039216bd71a955cd17", "cursor_cell", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.results.cursor_cell")
         _result = _implementation(grid)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.results.cursor_cell"
         if _error.span is None:
-            _error.span = {"end_byte":12009,"end_column":1,"end_line":298,"start_byte":11600,"start_column":1,"start_line":288}
+            _error.span = {"end_byte":12032,"end_column":1,"end_line":304,"start_byte":11623,"start_column":1,"start_line":294}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.results.cursor_cell", phase="implementation-call", span={"end_byte":12009,"end_column":1,"end_line":298,"start_byte":11600,"start_column":1,"start_line":288}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.results.cursor_cell", phase="implementation-call", span={"end_byte":12032,"end_column":1,"end_line":304,"start_byte":11623,"start_column":1,"start_line":294}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.results.cursor_cell", phase="implementation-call", span={"end_byte":12009,"end_column":1,"end_line":298,"start_byte":11600,"start_column":1,"start_line":288}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.results.cursor_cell", phase="implementation-call", span={"end_byte":12032,"end_column":1,"end_line":304,"start_byte":11623,"start_column":1,"start_line":294}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, Option[CellView], path="$.return")
     _result = _cott_wrap_async_protocol(_result, Option[CellView], path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result
@@ -355,18 +355,18 @@ with counts localized by format_number_text:
     result = _cott_normalize_f32_abi(result, ResultSet, path="$.result")
     number_format = _cott_normalize_f32_abi(number_format, NumberFormat, path="$.number_format")
     try:
-        _implementation = _cott_load("_cott_impl/real/harlequin/results/results_title.py", "8ab493d1c8492ca419b5d9c6864718d38b5f22f652202a27acfa2fdd570d1bf9", "results_title", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.results.results_title")
+        _implementation = _cott_load("_cott_impl/real/harlequin/results/results_title.py", "f9048783e68b6694d9acf9214d50591ed878b4fb90ac74cccee2c2e6adf58182", "results_title", expected_project_name="harlequin", expected_cott_symbol="real.harlequin.results.results_title")
         _result = _implementation(result, number_format)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
             _error.symbol = "real.harlequin.results.results_title"
         if _error.span is None:
-            _error.span = {"end_byte":12580,"end_column":1,"end_line":310,"start_byte":12009,"start_column":1,"start_line":298}
+            _error.span = {"end_byte":12603,"end_column":1,"end_line":316,"start_byte":12032,"start_column":1,"start_line":304}
         raise
     except SystemExit as _error:
-        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.results.results_title", phase="implementation-call", span={"end_byte":12580,"end_column":1,"end_line":310,"start_byte":12009,"start_column":1,"start_line":298}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
+        raise CottContractViolation("implementation raised SystemExit", symbol="real.harlequin.results.results_title", phase="implementation-call", span={"end_byte":12603,"end_column":1,"end_line":316,"start_byte":12032,"start_column":1,"start_line":304}, expected="ordinary return or declared Never process.exit", actual="SystemExit") from _error
     except Exception as _error:
-        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.results.results_title", phase="implementation-call", span={"end_byte":12580,"end_column":1,"end_line":310,"start_byte":12009,"start_column":1,"start_line":298}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
+        raise CottContractViolation("implementation raised an undeclared exception", symbol="real.harlequin.results.results_title", phase="implementation-call", span={"end_byte":12603,"end_column":1,"end_line":316,"start_byte":12032,"start_column":1,"start_line":304}, expected="declared Result error or ordinary return", actual=type(_error).__name__) from _error
     _result = (_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi)(_result, str, path="$.return")
     _result = _cott_wrap_async_protocol(_result, str, path="$.return", validator=(_cott_validate_abi if _cott_test_context else _cott_normalize_f32_abi))
     return _result

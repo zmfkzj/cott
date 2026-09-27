@@ -1,16 +1,15 @@
 from typing import Final
 
-from cott_runtime import CottList, Err, Nothing, Ok, Result, Some
+from cott_runtime import CottList, Err, F64, I64, Nothing, Ok, Result, Some
 
 from real.harlequin.adapters_types import AdapterOption, OptionKind_Choice, OptionKind_Flag, OptionKind_Repeated
 from real.harlequin.config_types import ConfigEntry, ConfigValue, ConfigValue_Array, ConfigValue_Boolean, ConfigValue_Real, ConfigValue_Text
 from real.harlequin.hsql_types import HsqlArguments, HsqlError, HsqlError_Usage, HsqlMode, HsqlMode_Catalog, HsqlMode_CatalogSearch, HsqlMode_ConfigMode, HsqlMode_Execute, HsqlMode_History, HsqlMode_HistorySearch, HsqlMode_Info, HsqlMode_Serve, HsqlMode_SessionReset, HsqlMode_SessionStatus, HsqlMode_Skill, HsqlMode_Spec, SqlSource, SqlSource_Command, SqlSource_SqlFile
 
 _VALUE_KINDS: Final[str] = "adapter command file text format float_pos float_nonneg int choice array entry_text entry_float entry_choice mode_value"
-_MODES: Final[str] = "--catalog --catalog-search --history --history-search --config --spec --info --skill --serve --session-reset --session-status"
-_PER_REQUEST: Final[str] = "--session --output --format --csv --json --jsonl --markdown --vertical --tuples-only --no-align --no-header --no-footer --null-string --timeout --limit --display-rows --result --on-error --stats --queue-timeout"
-_SERVER_ONLY: Final[str] = "--idle-timeout --max-lifetime"
 _FORMATS: Final[str] = "table markdown md vertical csv tsv json jsonl ndjson parquet orc feather arrow none"
+_PER_REQUEST: Final[str] = "session output format csv json jsonl markdown vertical tuples_only no_align no_header no_footer null_string timeout limit display_rows result on_error stats queue_timeout"
+_SERVER_ONLY: Final[str] = "idle_timeout max_lifetime"
 
 
 def _usage(message: str) -> Result[HsqlArguments, HsqlError]:
@@ -18,11 +17,12 @@ def _usage(message: str) -> Result[HsqlArguments, HsqlError]:
 
 
 def _names(spec: tuple[list[str], str, str, list[str]]) -> str:
-    return " / ".join(f"'{n}'" for n in spec[0])
+    return " / ".join(f"'{name}'" for name in spec[0])
 
 
 def _core_specs(adapter_names: list[str]) -> list[tuple[list[str], str, str, list[str]]]:
-    formats: list[str] = [str(f) for f in _FORMATS.split()]
+    formats: list[str] = []
+    formats.extend(_FORMATS.split())
     specs: list[tuple[list[str], str, str, list[str]]] = [
         (["--adapter", "-a"], "adapter", "adapter", adapter_names),
         (["--command", "-c"], "", "command", []),
@@ -78,7 +78,13 @@ def _core_specs(adapter_names: list[str]) -> list[tuple[list[str], str, str, lis
 
 
 def _adapter_spec(option: AdapterOption, taken: set[str]) -> tuple[list[str], str, str, list[str]]:
-    names = [n for n in [f"--{option.name}"] + [str(d) for d in option.short_decls] if n not in taken]
+    long_name = f"--{option.name}"
+    names: list[str] = []
+    if long_name not in taken:
+        names.append(long_name)
+    for declaration in option.short_decls:
+        if declaration not in taken and declaration not in names:
+            names.append(declaration)
     key = option.name.replace("-", "_")
     kind = option.kind
     if isinstance(kind, OptionKind_Flag):
@@ -86,7 +92,7 @@ def _adapter_spec(option: AdapterOption, taken: set[str]) -> tuple[list[str], st
     if isinstance(kind, OptionKind_Repeated):
         return (names, key, "array", [])
     if isinstance(kind, OptionKind_Choice):
-        return (names, key, "entry_choice", [str(c) for c in kind.choices])
+        return (names, key, "entry_choice", list(kind.choices))
     return (names, key, "entry_text", [])
 
 
@@ -111,12 +117,25 @@ def _mode_of(key: str, value: str) -> HsqlMode:
         return HsqlMode_Serve(name=value)
     if key == "session_reset":
         return HsqlMode_SessionReset()
-    return HsqlMode_SessionStatus()
+    if key == "session_status":
+        return HsqlMode_SessionStatus()
+    raise ValueError(f"Unknown hsql mode: {key}")
+
+
+def _result_value(value: str) -> str | None:
+    normalized = value.strip().lower()
+    if normalized == "all" or normalized == "last":
+        return normalized
+    if normalized.isascii() and normalized.isdecimal():
+        positive = normalized.lstrip("0")
+        if positive:
+            return positive
+    return None
 
 
 def parse_hsql_arguments(arguments: CottList[str], adapter_names: CottList[str], adapter_options: CottList[AdapterOption]) -> Result[HsqlArguments, HsqlError]:
-    specs = _core_specs([str(n) for n in adapter_names])
-    taken: set[str] = {name for spec in specs for name in spec[0]}
+    specs = _core_specs(list(adapter_names))
+    taken = {name for spec in specs for name in spec[0]}
     for option in adapter_options:
         spec = _adapter_spec(option, taken)
         if spec[0]:
@@ -125,188 +144,198 @@ def parse_hsql_arguments(arguments: CottList[str], adapter_names: CottList[str],
     table: dict[str, int] = {}
     for index, spec in enumerate(specs):
         for name in spec[0]:
-            if name not in table:
-                table[name] = index
+            table[name] = index
+
     value_kinds = _VALUE_KINDS.split()
-    args = [str(a) for a in arguments]
+    per_request = _PER_REQUEST.split()
+    server_only = _SERVER_ONLY.split()
+    args = list(arguments)
     occurrences: list[tuple[int, str, str]] = []
+    typed: dict[int, None] = {}
     conn_str: list[str] = []
+    sources: list[SqlSource] = []
+    mode: HsqlMode = HsqlMode_Execute()
+    first_mode_index: int | None = None
+    first_mode_spelling: str | None = None
+    first_format_index: int | None = None
+    first_format_spelling: str | None = None
+    first_format_kind = ""
+    adapter: str | None = None
+    format_name = "table"
+    result = "all"
+    read_only = False
+    texts: dict[str, str] = {}
+    bools: set[str] = set()
+    floats: dict[str, F64] = {}
+    ints: dict[str, I64] = {}
+    entry_values: dict[int, ConfigValue] = {}
+    entry_arrays: dict[int, list[str]] = {}
+    explicit_order: dict[int, None] = {}
     i = 0
-    n = len(args)
-    while i < n:
+    while i < len(args):
         arg = args[i]
         i += 1
         if arg == "--":
             conn_str.extend(args[i:])
             break
-        if not (arg.startswith("-") and len(arg) > 1):
+        if len(arg) <= 1 or not arg.startswith("-"):
             conn_str.append(arg)
             continue
-        if "=" in arg and arg.startswith("--"):
-            name, explicit_value = arg.split("=", 1)
-            has_explicit = True
+
+        occurrences.clear()
+        if arg.startswith("--"):
+            name, separator, attached = arg.partition("=")
         else:
-            name, explicit_value, has_explicit = arg, "", False
+            name, separator, attached = arg, "", ""
         if name in table:
             index = table[name]
             if specs[index][2] in value_kinds:
-                if has_explicit:
-                    value = explicit_value
-                elif i < n:
+                if separator:
+                    value = attached
+                elif i < len(args):
                     value = args[i]
                     i += 1
                 else:
                     return _usage(f"Option '{name}' requires an argument.")
                 occurrences.append((index, value, name))
             else:
-                if has_explicit:
+                if separator:
                     return _usage(f"Option '{name}' does not take a value.")
                 occurrences.append((index, "", name))
-            continue
-        if arg.startswith("--"):
+        elif arg.startswith("--"):
             return _usage(f"No such option: {name}")
-        j = 1
-        while j < len(arg):
-            opt = "-" + arg[j]
-            if opt not in table:
-                return _usage(f"No such option: {opt}")
-            index = table[opt]
-            if specs[index][2] in value_kinds:
-                rest = arg[j + 1:]
-                if rest:
-                    value = rest
-                elif i < n:
-                    value = args[i]
-                    i += 1
-                else:
-                    return _usage(f"Option '{opt}' requires an argument.")
-                occurrences.append((index, value, opt))
-                break
-            occurrences.append((index, "", opt))
-            j += 1
-
-    grouped: dict[int, list[str]] = {}
-    for index, value, _spelling in occurrences:
-        grouped.setdefault(index, []).append(value)
-
-    adapter: str | None = None
-    texts: dict[str, str] = {}
-    bools: set[str] = set()
-    floats: dict[str, float] = {}
-    ints: dict[str, int] = {}
-    format_name = "table"
-    explicit: list[ConfigEntry] = []
-    for index, values in grouped.items():
-        spec = specs[index]
-        key = spec[1]
-        kind = spec[2]
-        last = values[-1]
-        if kind == "command" or kind == "file":
-            continue
-        if kind in ("choice", "format", "adapter", "entry_choice") or (kind == "mode_value" and spec[3]):
-            match = [c for c in spec[3] if c.casefold() == last.casefold()]
-            if not match:
-                choices = ", ".join(f"'{c}'" for c in spec[3])
-                return _usage(f"Invalid value for {_names(spec)}: '{last}' is not one of {choices}.")
-            last = match[0]
-        if kind in ("float_pos", "float_nonneg", "entry_float"):
-            try:
-                real = float(last)
-            except ValueError:
-                return _usage(f"Invalid value for {_names(spec)}: '{last}' is not a valid float.")
-            if kind == "float_nonneg":
-                if not real >= 0:
-                    return _usage(f"Invalid value for {_names(spec)}: {real} is not in the range x>=0.")
-            elif not real > 0:
-                return _usage(f"Invalid value for {_names(spec)}: {real} is not in the range x>0.")
-            if kind == "entry_float":
-                explicit.append(ConfigEntry(key=key, value=ConfigValue_Real(value=real)))
-            else:
-                floats[key] = real
-            continue
-        if kind == "int":
-            try:
-                number = int(last)
-            except ValueError:
-                return _usage(f"Invalid value for {_names(spec)}: '{last}' is not a valid integer.")
-            if number < -1:
-                return _usage(f"Invalid value for {_names(spec)}: {number} is not in the range x>=-1.")
-            ints[key] = number
-            continue
-        converted: ConfigValue
-        if kind == "adapter":
-            adapter = last.lower()
-        elif kind == "format":
-            format_name = last.lower()
-        elif kind == "shorthand":
-            format_name = key
-        elif kind in ("bool", "mode"):
-            bools.add(key)
-        elif kind in ("text", "mode_value", "choice"):
-            texts[key] = last
-        elif kind == "entry_flag":
-            converted = ConfigValue_Boolean(value=True)
-            explicit.append(ConfigEntry(key=key, value=converted))
-        elif kind == "array":
-            converted = ConfigValue_Array(values=CottList(values=[ConfigValue_Text(value=v) for v in values]))
-            explicit.append(ConfigEntry(key=key, value=converted))
         else:
-            explicit.append(ConfigEntry(key=key, value=ConfigValue_Text(value=last)))
+            j = 1
+            while j < len(arg):
+                name = "-" + arg[j]
+                if name not in table:
+                    return _usage(f"No such option: {name}")
+                index = table[name]
+                if specs[index][2] in value_kinds:
+                    if j + 1 < len(arg):
+                        value = arg[j + 1:]
+                    elif i < len(args):
+                        value = args[i]
+                        i += 1
+                    else:
+                        return _usage(f"Option '{name}' requires an argument.")
+                    occurrences.append((index, value, name))
+                    break
+                occurrences.append((index, "", name))
+                j += 1
 
-    sources: list[SqlSource] = []
-    mode: HsqlMode = HsqlMode_Execute()
-    first_mode: str | None = None
-    first_format: str | None = None
-    first_format_kind = ""
-    has_source = False
-    typed: list[str] = []
-    for index, value, spelling in occurrences:
-        spec = specs[index]
-        long_name = spec[0][0]
-        if long_name not in typed:
-            typed.append(long_name)
-        if spec[2] == "command":
-            sources.append(SqlSource_Command(sql=value))
-            has_source = True
-        elif spec[2] == "file":
-            sources.append(SqlSource_SqlFile(path=value))
-            has_source = True
-        if long_name in _MODES.split() and spec[2] in ("mode", "mode_value"):
-            if first_mode is not None and first_mode != spelling:
-                return _usage(f"{first_mode} and {spelling} can't be used together.")
-            first_mode = spelling
-            mode = _mode_of(spec[1], texts.get(spec[1], ""))
-        if spec[2] in ("format", "shorthand"):
-            if first_format is None:
-                first_format = spelling
-                first_format_kind = spec[2]
-            elif first_format != spelling and (spec[2] == "shorthand" or first_format_kind == "shorthand"):
-                return _usage(f"{first_format} and {spelling} both choose an output format; pass only one.")
-    if first_mode is not None and has_source:
-        return _usage(f"{first_mode} doesn't run SQL, so it can't be combined with -c/--command or -f/--file.")
+        for index, value, spelling in occurrences:
+            spec = specs[index]
+            key = spec[1]
+            kind = spec[2]
+            typed[index] = None
+            if kind in ("choice", "format", "adapter", "entry_choice") or (kind == "mode_value" and spec[3]):
+                match = next((choice for choice in spec[3] if choice.casefold() == value.casefold()), None)
+                if match is None:
+                    choices = ", ".join(f"'{choice}'" for choice in spec[3])
+                    return _usage(f"Invalid value for {_names(spec)}: '{value}' is not one of {choices}.")
+                value = match
+            if kind == "int":
+                try:
+                    number = int(value)
+                except ValueError:
+                    return _usage(f"Invalid value for {_names(spec)}: '{value}' is not a valid integer.")
+                if number < -1:
+                    return _usage(f"Invalid value for {_names(spec)}: {number} is not in the range x>=-1.")
+                ints[key] = number
+                continue
+            if kind in ("float_pos", "float_nonneg", "entry_float"):
+                try:
+                    real = float(value)
+                except ValueError:
+                    return _usage(f"Invalid value for {_names(spec)}: '{value}' is not a valid float.")
+                if kind == "float_nonneg":
+                    if not real >= 0:
+                        return _usage(f"Invalid value for {_names(spec)}: {real} is not in the range x>=0.")
+                elif not real > 0:
+                    return _usage(f"Invalid value for {_names(spec)}: {real} is not in the range x>0.")
+                if kind == "entry_float":
+                    explicit_order[index] = None
+                    entry_values[index] = ConfigValue_Real(value=real)
+                else:
+                    floats[key] = real
+                continue
+            if kind == "command" or kind == "file":
+                if first_mode_spelling is not None:
+                    return _usage(f"{first_mode_spelling} doesn't run SQL, so it can't be combined with -c/--command or -f/--file.")
+                if kind == "command":
+                    sources.append(SqlSource_Command(sql=value))
+                else:
+                    sources.append(SqlSource_SqlFile(path=value))
+                continue
+            if kind == "mode" or kind == "mode_value":
+                if first_mode_index is not None and first_mode_index != index:
+                    return _usage(f"{first_mode_spelling} and {spelling} can't be used together.")
+                if sources:
+                    return _usage(f"{spelling} doesn't run SQL, so it can't be combined with -c/--command or -f/--file.")
+                if key == "catalog_search" and not value.strip():
+                    return _usage("--catalog-search needs a term to search for.")
+                if key == "history_search" and not value.strip():
+                    return _usage("--history-search needs a term to search for.")
+                if first_mode_index is None:
+                    first_mode_index = index
+                    first_mode_spelling = spelling
+                mode = _mode_of(key, value)
+                continue
+            if kind == "format" or kind == "shorthand":
+                if first_format_index is not None and first_format_index != index and (kind == "shorthand" or first_format_kind == "shorthand"):
+                    return _usage(f"{first_format_spelling} and {spelling} both choose an output format; pass only one.")
+                if first_format_index is None:
+                    first_format_index = index
+                    first_format_spelling = spelling
+                    first_format_kind = kind
+                format_name = value.lower() if kind == "format" else key
+                continue
+            if kind == "adapter":
+                adapter = value.lower()
+            elif kind == "bool":
+                bools.add(key)
+            elif kind == "text" or kind == "choice":
+                if key == "result":
+                    normalized = _result_value(value)
+                    if normalized is None:
+                        return _usage("--result must be all, last, or a result number.")
+                    result = normalized
+                else:
+                    texts[key] = value
+            elif kind == "entry_flag":
+                explicit_order[index] = None
+                entry_values[index] = ConfigValue_Boolean(value=True)
+                if key == "read_only":
+                    read_only = True
+            elif kind == "array":
+                explicit_order[index] = None
+                if index not in entry_arrays:
+                    entry_arrays[index] = []
+                entry_arrays[index].append(value)
+            elif kind == "entry_text" or kind == "entry_choice":
+                explicit_order[index] = None
+                entry_values[index] = ConfigValue_Text(value=value)
+
     if "path" in texts and not isinstance(mode, (HsqlMode_Catalog, HsqlMode_CatalogSearch)):
         return _usage("--path only applies to --catalog and --catalog-search.")
-    if isinstance(mode, HsqlMode_CatalogSearch) and not mode.term.strip():
-        return _usage("--catalog-search needs a term to search for.")
-    if isinstance(mode, HsqlMode_HistorySearch) and not mode.term.strip():
-        return _usage("--history-search needs a term to search for.")
     if isinstance(mode, HsqlMode_Serve):
-        for long_name in typed:
-            if long_name in _PER_REQUEST.split():
-                return _usage(f"{long_name} is a per-request option; pass it with each --session request, not to --serve.")
+        for index in typed:
+            if specs[index][1] in per_request:
+                return _usage(f"{specs[index][0][0]} is a per-request option; pass it with each --session request, not to --serve.")
     else:
-        for long_name in typed:
-            if long_name in _SERVER_ONLY.split():
-                return _usage(f"{long_name} only applies to --serve.")
-    result = texts.get("result", "all")
-    lowered = result.strip().lower()
-    if lowered in ("all", "last"):
-        result = lowered
-    elif lowered.isdigit() and int(lowered) >= 1:
-        result = str(int(lowered))
-    else:
-        return _usage("--result must be all, last, or a result number.")
+        for index in typed:
+            if specs[index][1] in server_only:
+                return _usage(f"{specs[index][0][0]} only applies to --serve.")
 
+    explicit: list[ConfigEntry] = []
+    for index in explicit_order:
+        if index in entry_arrays:
+            items: list[ConfigValue] = [ConfigValue_Text(value=item) for item in entry_arrays[index]]
+            converted: ConfigValue = ConfigValue_Array(values=CottList(values=items))
+        else:
+            converted = entry_values[index]
+        explicit.append(ConfigEntry(key=specs[index][1], value=converted))
     output = texts.get("output")
     null_string = texts.get("null_string")
     profile = texts.get("profile")
@@ -330,7 +359,7 @@ def parse_hsql_arguments(arguments: CottList[str], adapter_names: CottList[str],
         null_string=Some(value=null_string) if null_string is not None else Nothing(),
         profile=Some(value=profile) if profile is not None else Nothing(),
         config_path=Some(value=config_path) if config_path is not None else Nothing(),
-        read_only=any(e.key == "read_only" for e in explicit),
+        read_only=read_only,
         timeout_seconds=Some(value=timeout) if timeout is not None else Nothing(),
         catalog_path=Some(value=catalog_path) if catalog_path is not None else Nothing(),
         limit=ints.get("limit", 500),

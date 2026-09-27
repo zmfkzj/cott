@@ -83,7 +83,7 @@ that is already lower case can match. Example: with casing ["Users",
     catalog = _cott_validate_abi(catalog, Opaque[Literal["pgcli.completion-catalog"]], path="$.catalog")
     word = _cott_validate_abi(word, str, path="$.word")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/completion/apply_identifier_casing.py", "9598291a2a59ce39e7668f0ad6b9542059ae7556136fbc57c9d05fd40e12b6d7", "apply_identifier_casing", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.apply_identifier_casing")
+        _implementation = _cott_load("_cott_impl/real/pgcli/completion/apply_identifier_casing.py", "e9f8c167b26a0432838245c87f2f0ccded3d3159858c76362c7863862f3c1686", "apply_identifier_casing", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.apply_identifier_casing")
         _result = _implementation(catalog, word)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -134,7 +134,7 @@ Signature; no arguments give "()" in every usage."""
     usage = _cott_validate_abi(usage, ArgumentListUsage, path="$.usage")
     casing = _cott_validate_abi(casing, CottList[str], path="$.casing")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/completion/function_argument_list.py", "086383e0a425caf6bd525a250721fa56e226dea7797308a0022be881c71fd2b7", "function_argument_list", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.function_argument_list")
+        _implementation = _cott_load("_cott_impl/real/pgcli/completion/function_argument_list.py", "efb5dea547faa503ebf47766b2280cc19df84152ea7a9cf872784ee924f3b5e6", "function_argument_list", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.function_argument_list")
         _result = _implementation(function, usage, casing)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -162,7 +162,7 @@ None; "datatypes" holds (schema, name); "foreign_keys" holds the six
 ForeignKeyMetadata fields in order. Every list keeps the input order."""
     metadata = _cott_validate_abi(metadata, CompletionMetadata, path="$.metadata")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/completion/completion_catalog_from.py", "b45430e7fb409198d28816f8aa11559e0aefe7b7ccbba4cc58a87e01a8d67277", "completion_catalog_from", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.completion_catalog_from")
+        _implementation = _cott_load("_cott_impl/real/pgcli/completion/completion_catalog_from.py", "017ff7ab79dd9a260bfe10a2dca484ff348fcf62ad5f9eb92e4492c11e191a86", "completion_catalog_from", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.completion_catalog_from")
         _result = _implementation(metadata)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -184,7 +184,7 @@ only "search_path" replaced by list(search_path) in order."""
     catalog = _cott_validate_abi(catalog, Opaque[Literal["pgcli.completion-catalog"]], path="$.catalog")
     search_path = _cott_validate_abi(search_path, CottList[str], path="$.search_path")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/completion/catalog_with_search_path.py", "35e5518d940b5c2c65323b1b93113f90e71fc6364426a11934e6ffdbecd87777", "catalog_with_search_path", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.catalog_with_search_path")
+        _implementation = _cott_load("_cott_impl/real/pgcli/completion/catalog_with_search_path.py", "0981069ef50244f150ad676ecafe24ffd38c01479af30419e6acd5e300c0641d", "catalog_with_search_path", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.catalog_with_search_path")
         _result = _implementation(catalog, search_path)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -228,7 +228,7 @@ the state of a new upstream PrevalenceCounter."""
     keyword_counts = _cott_validate_abi(keyword_counts, FrozenMap[str, U64], path="$.keyword_counts")
     name_counts = _cott_validate_abi(name_counts, FrozenMap[str, U64], path="$.name_counts")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/completion/prevalence_from.py", "83be6a80f6ee4596e589a573f37f5b1f78e718c7da05946043b853fba543be24", "prevalence_from", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.prevalence_from")
+        _implementation = _cott_load("_cott_impl/real/pgcli/completion/prevalence_from.py", "4bf12504bc12b070eb1eacde6205acac1b455b746732dbce2c1aab0465138174", "prevalence_from", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.prevalence_from")
         _result = _implementation(keyword_counts, name_counts)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -251,7 +251,7 @@ prevalence.value["names"], same keys and counts (for inspection of small
 counters)."""
     prevalence = _cott_validate_abi(prevalence, Opaque[Literal["pgcli.prevalence"]], path="$.prevalence")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/completion/prevalence_counts.py", "74dfde8e87581b2ddfd2a71e8b9e8538e766cb25be4b1b31f5d082e103ec07f6", "prevalence_counts", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.prevalence_counts")
+        _implementation = _cott_load("_cott_impl/real/pgcli/completion/prevalence_counts.py", "11456c4a68941889706733a2a20674efb5edaa29598aa0fa5f74fed78e052736", "prevalence_counts", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.prevalence_counts")
         _result = _implementation(prevalence)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -272,7 +272,7 @@ def clear_prevalence_names(prevalence: Opaque[Literal["pgcli.prevalence"]]) -> O
 of the keyword counts and no name counts."""
     prevalence = _cott_validate_abi(prevalence, Opaque[Literal["pgcli.prevalence"]], path="$.prevalence")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/completion/clear_prevalence_names.py", "42a48ea7a1ca306b664b53ac253308c4b74b19325138825d3bf63c470dc14eef", "clear_prevalence_names", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.clear_prevalence_names")
+        _implementation = _cott_load("_cott_impl/real/pgcli/completion/clear_prevalence_names.py", "fed15f0bf6edeebe2574459174db5eee6138181364c24ce042fe5e88e570fee8", "clear_prevalence_names", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.clear_prevalence_names")
         _result = _implementation(prevalence)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -296,7 +296,7 @@ c.display_meta_text) of each prompt_toolkit Completion c."""
     completions = _cott_validate_abi(completions, Opaque[Literal["pgcli.completions"]], path="$.completions")
     limit = _cott_validate_abi(limit, U64, path="$.limit")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/completion/completion_items.py", "87d93b4ab0ebb5f0e2d8cc13081a6181f6875a317e05053fd1aa4b6c78353159", "completion_items", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.completion_items")
+        _implementation = _cott_load("_cott_impl/real/pgcli/completion/completion_items.py", "c1583185fa5070f9f3d5bb383a6d7ced5361addf27eaa9486ccc1e583b81bf6f", "completion_items", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.completion_items")
         _result = _implementation(completions, limit)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -322,7 +322,7 @@ c.display_text + " | " + c.display_meta_text."""
     completions = _cott_validate_abi(completions, Opaque[Literal["pgcli.completions"]], path="$.completions")
     limit = _cott_validate_abi(limit, U64, path="$.limit")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/completion/completion_lines.py", "35fc142ff354b791f78224d3dc12a56c4645333b56757b8f2b173727e556f42f", "completion_lines", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.completion_lines")
+        _implementation = _cott_load("_cott_impl/real/pgcli/completion/completion_lines.py", "e65655367c880925c6ecfd057224bb70dfeba4cb45d2a7c10d1cdec2a19df3c8", "completion_lines", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.completion_lines")
         _result = _implementation(completions, limit)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -786,7 +786,7 @@ any other exception, gives an empty list (upstream crashes)."""
     if not (_cott_contract_condition((((request).cursor <= len((request).text))), "real.pgcli.completion.complete_sql_text", "requires:1")):
         raise CottContractViolation("requires clause failed", symbol="real.pgcli.completion.complete_sql_text", clause="requires:1", phase="requires", span={"end_byte":67728,"end_column":48,"end_line":978,"start_byte":67685,"start_column":5,"start_line":978}, expected="true", actual="false")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/completion/complete_sql_text.py", "3debafd9ac032ebc6a19bf36c466566dadc64c75f76c6e7d25aac6a966628c57", "complete_sql_text", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.complete_sql_text")
+        _implementation = _cott_load("_cott_impl/real/pgcli/completion/complete_sql_text.py", "8b69d052feefd4584b5f26b16cdc6a9cedceae75313b44addb6b306fe5c54c7e", "complete_sql_text", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.complete_sql_text")
         _result = _implementation(request)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":
@@ -823,7 +823,7 @@ mutated).
     text = _cott_validate_abi(text, str, path="$.text")
     keywords_only = _cott_validate_abi(keywords_only, bool, path="$.keywords_only")
     try:
-        _implementation = _cott_load("_cott_impl/real/pgcli/completion/update_prevalence.py", "78fa172db8dfb02ac2fc555129f40de29267e1807ed1fa9faa5aed04923d0f5a", "update_prevalence", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.update_prevalence")
+        _implementation = _cott_load("_cott_impl/real/pgcli/completion/update_prevalence.py", "a3268edf55c98033046a6275c1f89afaa0a8d12a7cd9015a30330f2cd5345c1a", "update_prevalence", expected_project_name="real-pgcli", expected_cott_symbol="real.pgcli.completion.update_prevalence")
         _result = _implementation(prevalence, text, keywords_only)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

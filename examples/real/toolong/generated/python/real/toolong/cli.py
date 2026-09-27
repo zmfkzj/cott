@@ -196,7 +196,7 @@ is written to stderr and 1 is returned."""
     arguments = _cott_normalize_f32_abi(arguments, CottList[str], path="$.arguments")
     program = _cott_normalize_f32_abi(program, str, path="$.program")
     try:
-        _implementation = _cott_load("_cott_impl/real/toolong/cli/run_command_line.py", "14aed1e63174aada6822a31b317284eb7b220571aaf9b5060202cc7db09eff26", "run_command_line", expected_project_name="toolong", expected_cott_symbol="real.toolong.cli.run_command_line")
+        _implementation = _cott_load("_cott_impl/real/toolong/cli/run_command_line.py", "0fe2c88338b8048da6046625a96ac5c807f6f420d9039ba1b6cc947b13c4b5df", "run_command_line", expected_project_name="toolong", expected_cott_symbol="real.toolong.cli.run_command_line")
         _result = _implementation(arguments, program)
     except CottContractViolation as _error:
         if _error.symbol is None or _error.symbol == "_cott_load":

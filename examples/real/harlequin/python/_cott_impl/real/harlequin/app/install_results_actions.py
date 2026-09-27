@@ -1,160 +1,162 @@
 import contextlib
+import dataclasses
 import threading
 import typing
 from collections.abc import Callable
-from typing import Final, cast
 
-from cott_runtime import UNIT, Err, Some, Unit
 from prompt_toolkit.application import Application
 
+from cott_runtime import Err, Some, UNIT, Unit
 from real.harlequin.app_types import IdeSession
 from real.harlequin.cli_types import HarlequinSettings
 from real.harlequin.export import export_dialog_key, new_export_dialog, write_result
-from real.harlequin.export_types import ExportDialog, ExportError, ExportError_InvalidOption, ExportError_PathIsDirectory, ExportError_UnknownFormat, ExportOutcome_Cancel, ExportOutcome_Export, ExportRequest
+from real.harlequin.export_types import (
+    ExportDialog,
+    ExportError,
+    ExportError_InvalidOption,
+    ExportError_PathIsDirectory,
+    ExportError_UnknownFormat,
+    ExportOutcome_Cancel,
+    ExportOutcome_Export,
+    ExportRequest,
+)
 from real.harlequin.ide import cell_modal, error_modal, text_modal_key
-from real.harlequin.ide_types import TextModal, TextModalOutcome_Close, TextModalOutcome_Copy
+from real.harlequin.ide_types import LayoutState, Pane_Results, TextModal, TextModalOutcome_Close, TextModalOutcome_Copy
 from real.harlequin.results import cursor_cell, move_grid, selection_text
-from real.harlequin.results_types import GridMotion, GridMotion_ColumnEnd, GridMotion_ColumnStart, GridMotion_Down, GridMotion_Left, GridMotion_NextCell, GridMotion_PageDown, GridMotion_PageUp, GridMotion_PreviousCell, GridMotion_Right, GridMotion_RowEnd, GridMotion_RowStart, GridMotion_SelectAll, GridMotion_TableEnd, GridMotion_TableStart, GridMotion_Up, ResultSet, ResultsGrid
+from real.harlequin.results_types import (
+    GridMotion,
+    GridMotion_ColumnEnd,
+    GridMotion_ColumnStart,
+    GridMotion_Down,
+    GridMotion_Left,
+    GridMotion_NextCell,
+    GridMotion_PageDown,
+    GridMotion_PageUp,
+    GridMotion_PreviousCell,
+    GridMotion_Right,
+    GridMotion_RowEnd,
+    GridMotion_RowStart,
+    GridMotion_SelectAll,
+    GridMotion_TableEnd,
+    GridMotion_TableStart,
+    GridMotion_Up,
+    ResultSet,
+    ResultsGrid,
+)
 from real.harlequin.support import copy_to_clipboard
 
-_TAG: Final[str] = "harlequin.ide"
-_PREFIX: Final[str] = "results_viewer."
-_MOTIONS: Final[str] = "cursor_up,cursor_down,cursor_left,cursor_right,cursor_row_start,cursor_row_end,cursor_column_start,cursor_column_end,cursor_next_cell,cursor_previous_cell,cursor_page_up,cursor_page_down,cursor_table_start,cursor_table_end"
-_SELECT_ALL: Final[int] = 14
+
+def _grid(shared: dict[str, object]) -> ResultsGrid | None:
+    grids = typing.cast(list[ResultsGrid], shared["grids"])
+    index = typing.cast(int, shared["result_index"])
+    return grids[index] if 0 <= index < len(grids) else None
 
 
-def _motion(code: int) -> GridMotion:
-    if code == 0:
-        return GridMotion_Up()
-    if code == 1:
-        return GridMotion_Down()
-    if code == 2:
-        return GridMotion_Left()
-    if code == 3:
-        return GridMotion_Right()
-    if code == 4:
-        return GridMotion_RowStart()
-    if code == 5:
-        return GridMotion_RowEnd()
-    if code == 6:
-        return GridMotion_ColumnStart()
-    if code == 7:
-        return GridMotion_ColumnEnd()
-    if code == 8:
-        return GridMotion_NextCell()
-    if code == 9:
-        return GridMotion_PreviousCell()
-    if code == 10:
-        return GridMotion_PageUp()
-    if code == 11:
-        return GridMotion_PageDown()
-    if code == 12:
-        return GridMotion_TableStart()
-    if code == 13:
-        return GridMotion_TableEnd()
-    return GridMotion_SelectAll()
+def _page_rows(shared: dict[str, object]) -> int:
+    layout = typing.cast(LayoutState, shared["layout"])
+    if isinstance(layout.focus, Pane_Results):
+        window = typing.cast(Application[object], shared["app"]).layout.current_window
+        rendered = window.render_info
+        if rendered is not None:
+            return max(rendered.window_height, 1)
+    height = typing.cast(Callable[[], tuple[int, int]], shared["size"])()[1]
+    if layout.full_screen and isinstance(layout.focus, Pane_Results):
+        return max(height - 3, 1)
+    return max((height - 4) // 2, 1)
 
 
-def _lock(shared: dict[str, object]) -> contextlib.AbstractContextManager[object]:
-    return cast(contextlib.AbstractContextManager[object], shared["lock"])
-
-
-def _current_grid(shared: dict[str, object]) -> ResultsGrid | None:
-    grids = cast(list[ResultsGrid], shared["grids"])
-    index = cast(int, shared["result_index"])
-    if 0 <= index < len(grids):
-        return grids[index]
-    return None
-
-
-def _results_height(shared: dict[str, object]) -> int:
-    app = cast(Application[object], shared["app"])
-    info = app.layout.current_window.render_info
-    if info is not None:
-        return max(info.window_height, 1)
-    return max(typing.cast(Callable[[], tuple[int, int]], shared["size"])()[1], 1)
-
-
-def _move(shared: dict[str, object], code: int, extend: bool) -> None:
-    page = _results_height(shared)
-    with _lock(shared):
-        grid = _current_grid(shared)
+def _move(shared: dict[str, object], motion: GridMotion, extend: bool) -> None:
+    with typing.cast(contextlib.AbstractContextManager[object], shared["lock"]):
+        grid = _grid(shared)
         if grid is None:
             return
-        grids = cast(list[ResultsGrid], shared["grids"])
-        grids[cast(int, shared["result_index"])] = move_grid(grid, _motion(code), extend, page)
-    typing.cast(Callable[[], None], shared["invalidate"])()
+        index = typing.cast(int, shared["result_index"])
+        typing.cast(list[ResultsGrid], shared["grids"])[index] = move_grid(grid, motion, extend, _page_rows(shared))
+        typing.cast(Callable[[], None], shared["invalidate"])()
 
 
-def _cycle_tab(shared: dict[str, object], step: int) -> None:
-    with _lock(shared):
-        count = len(cast(list[ResultsGrid], shared["grids"]))
+def _register_motion(shared: dict[str, object], handlers: dict[str, Callable[[], None]], motion: GridMotion, cursor_name: str, select_name: str) -> None:
+    handlers["results_viewer." + cursor_name] = lambda: _move(shared, motion, False)
+    if select_name:
+        handlers["results_viewer." + select_name] = lambda: _move(shared, motion, True)
+
+
+def _select_cursor(shared: dict[str, object]) -> None:
+    with typing.cast(contextlib.AbstractContextManager[object], shared["lock"]):
+        grid = _grid(shared)
+        if grid is None or grid.anchor == grid.cursor:
+            return
+        typing.cast(list[ResultsGrid], shared["grids"])[typing.cast(int, shared["result_index"])] = dataclasses.replace(grid, anchor=grid.cursor)
+        typing.cast(Callable[[], None], shared["invalidate"])()
+
+
+def _cycle(shared: dict[str, object], direction: int) -> None:
+    with typing.cast(contextlib.AbstractContextManager[object], shared["lock"]):
+        count = len(typing.cast(list[ResultsGrid], shared["grids"]))
         if count == 0:
             return
-        shared["result_index"] = (cast(int, shared["result_index"]) + step) % count
-    typing.cast(Callable[[], None], shared["invalidate"])()
+        shared["result_index"] = (typing.cast(int, shared["result_index"]) + direction) % count
+        typing.cast(Callable[[], None], shared["invalidate"])()
 
 
 def _copy(shared: dict[str, object], text: str, notice: str) -> None:
     copied = copy_to_clipboard(text)
-    with _lock(shared):
+    with typing.cast(contextlib.AbstractContextManager[object], shared["lock"]):
         if isinstance(copied, Err):
             typing.cast(Callable[[str | None, str, str], None], shared["notify"])(None, copied.error.message, "error")
         else:
             typing.cast(Callable[[str | None, str, str], None], shared["notify"])(None, notice, "information")
-    typing.cast(Callable[[], None], shared["invalidate"])()
+        typing.cast(Callable[[], None], shared["invalidate"])()
 
 
 def _copy_selection(shared: dict[str, object]) -> None:
-    with _lock(shared):
-        grid = _current_grid(shared)
-    if grid is None:
-        return
-    _copy(shared, selection_text(grid), "Selected data copied to clipboard.")
+    with typing.cast(contextlib.AbstractContextManager[object], shared["lock"]):
+        grid = _grid(shared)
+        if grid is None:
+            return
+        text = selection_text(grid)
+    _copy(shared, text, "Selected data copied to clipboard.")
 
 
 def _view_cell(shared: dict[str, object]) -> None:
-    with _lock(shared):
-        grid = _current_grid(shared)
-    if grid is None:
-        return
-    cell = cursor_cell(grid)
-    if isinstance(cell, Some):
-        typing.cast(Callable[[str, object], None], shared["open_dialog"])("text", cell_modal(cell.value.column, cell.value.text))
-        typing.cast(Callable[[], None], shared["invalidate"])()
+    with typing.cast(contextlib.AbstractContextManager[object], shared["lock"]):
+        grid = _grid(shared)
+        if grid is None:
+            return
+        cell = cursor_cell(grid)
+        if isinstance(cell, Some):
+            typing.cast(Callable[[str, object], None], shared["open_dialog"])("text", cell_modal(cell.value.column, cell.value.text))
+            typing.cast(Callable[[], None], shared["invalidate"])()
 
 
 def _text_key(shared: dict[str, object], key: str) -> None:
-    with _lock(shared):
+    visible_lines = max(typing.cast(Callable[[], tuple[int, int]], shared["size"])()[1] - 2, 1)
+    with typing.cast(contextlib.AbstractContextManager[object], shared["lock"]):
         dialog = shared["dialog"]
-    if not isinstance(dialog, tuple):
-        return
-    pair = cast(tuple[object, object], dialog)
-    model = pair[1]
-    if pair[0] != "text" or not isinstance(model, TextModal):
-        return
-    visible = max(typing.cast(Callable[[], tuple[int, int]], shared["size"])()[1] - 2, 1)
-    step = text_modal_key(model, key, visible)
-    outcome = step.outcome
-    if isinstance(outcome, TextModalOutcome_Close):
-        typing.cast(Callable[[], None], shared["close_dialog"])()
-        typing.cast(Callable[[], None], shared["invalidate"])()
-        return
-    with _lock(shared):
-        shared["dialog"] = ("text", step.modal)
+        if not isinstance(dialog, tuple):
+            return
+        pair = typing.cast(tuple[object, ...], dialog)
+        if len(pair) != 2 or pair[0] != "text" or not isinstance(pair[1], TextModal):
+            return
+        step = text_modal_key(pair[1], key, visible_lines)
+        outcome = step.outcome
+        if isinstance(outcome, TextModalOutcome_Close):
+            typing.cast(Callable[[], None], shared["close_dialog"])()
+        else:
+            shared["dialog"] = ("text", step.modal)
+        if not isinstance(outcome, TextModalOutcome_Copy):
+            typing.cast(Callable[[], None], shared["invalidate"])()
     if isinstance(outcome, TextModalOutcome_Copy):
         _copy(shared, outcome.text, outcome.notice)
-    typing.cast(Callable[[], None], shared["invalidate"])()
 
 
 def _show_exporter(shared: dict[str, object]) -> None:
-    with _lock(shared):
-        count = len(cast(list[ResultSet], shared["results"]))
-        settings = cast(HarlequinSettings, shared["settings"])
-    if count == 0:
-        return
-    typing.cast(Callable[[str, object], None], shared["open_dialog"])("export", new_export_dialog(settings.export_path))
-    typing.cast(Callable[[], None], shared["invalidate"])()
+    with typing.cast(contextlib.AbstractContextManager[object], shared["lock"]):
+        if not typing.cast(list[ResultSet], shared["results"]):
+            return
+        settings = typing.cast(HarlequinSettings, shared["settings"])
+        typing.cast(Callable[[str, object], None], shared["open_dialog"])("export", new_export_dialog(settings.export_path))
+        typing.cast(Callable[[], None], shared["invalidate"])()
 
 
 def _error_text(error: ExportError) -> str:
@@ -169,72 +171,82 @@ def _error_text(error: ExportError) -> str:
 
 def _export_worker(shared: dict[str, object], result: ResultSet, request: ExportRequest) -> None:
     written = write_result(result, request)
-    if isinstance(written, Err):
-        modal = error_modal("Export Data Error", "Harlequin encountered an error while exporting your data.", _error_text(written.error))
-        with _lock(shared):
-            typing.cast(Callable[[str, object], None], shared["open_dialog"])("text", modal)
-    else:
-        with _lock(shared):
+    with typing.cast(contextlib.AbstractContextManager[object], shared["lock"]):
+        if isinstance(written, Err):
+            typing.cast(Callable[[str, object], None], shared["open_dialog"])(
+                "text",
+                error_modal("Export Data Error", "Harlequin encountered an error while exporting your data.", _error_text(written.error)),
+            )
+        else:
             typing.cast(Callable[[str | None, str, str], None], shared["notify"])(None, f"Data exported to {written.value.path}.", "information")
-    typing.cast(Callable[[], None], shared["invalidate"])()
+        typing.cast(Callable[[], None], shared["invalidate"])()
 
 
 def _export_key(shared: dict[str, object], key: str, text: str) -> None:
-    with _lock(shared):
+    export_job: tuple[ResultSet, ExportRequest] | None = None
+    with typing.cast(contextlib.AbstractContextManager[object], shared["lock"]):
         dialog = shared["dialog"]
-    if not isinstance(dialog, tuple):
-        return
-    pair = cast(tuple[object, object], dialog)
-    model = pair[1]
-    if pair[0] != "export" or not isinstance(model, ExportDialog):
-        return
-    step = export_dialog_key(model, key, text)
-    outcome = step.outcome
-    if isinstance(outcome, ExportOutcome_Cancel):
-        typing.cast(Callable[[], None], shared["close_dialog"])()
+        if not isinstance(dialog, tuple):
+            return
+        pair = typing.cast(tuple[object, ...], dialog)
+        if len(pair) != 2 or pair[0] != "export" or not isinstance(pair[1], ExportDialog):
+            return
+        step = export_dialog_key(pair[1], key, text)
+        outcome = step.outcome
+        if isinstance(outcome, ExportOutcome_Cancel):
+            typing.cast(Callable[[], None], shared["close_dialog"])()
+        elif isinstance(outcome, ExportOutcome_Export):
+            results = typing.cast(list[ResultSet], shared["results"])
+            index = typing.cast(int, shared["result_index"])
+            if 0 <= index < len(results):
+                export_job = (results[index], outcome.request)
+            typing.cast(Callable[[], None], shared["close_dialog"])()
+        else:
+            shared["dialog"] = ("export", step.dialog)
         typing.cast(Callable[[], None], shared["invalidate"])()
-        return
-    if isinstance(outcome, ExportOutcome_Export):
-        with _lock(shared):
-            results = cast(list[ResultSet], shared["results"])
-            index = cast(int, shared["result_index"])
-            result = results[index] if 0 <= index < len(results) else None
-        typing.cast(Callable[[], None], shared["close_dialog"])()
-        if result is not None:
-            request = outcome.request
-            threading.Thread(target=lambda: _export_worker(shared, result, request), daemon=True).start()
-        typing.cast(Callable[[], None], shared["invalidate"])()
-        return
-    with _lock(shared):
-        shared["dialog"] = ("export", step.dialog)
-    typing.cast(Callable[[], None], shared["invalidate"])()
-
-
-def _register_motion(shared: dict[str, object], handlers: dict[str, Callable[[], None]], name: str, code: int) -> None:
-    handlers[_PREFIX + name] = lambda: _move(shared, code, False)
-    if name not in ("cursor_next_cell", "cursor_previous_cell"):
-        handlers[_PREFIX + "select_" + name.removeprefix("cursor_")] = lambda: _move(shared, code, True)
+    if export_job is not None:
+        result, request = export_job
+        threading.Thread(target=lambda: _export_worker(shared, result, request), daemon=True).start()
 
 
 def install_results_actions(session: IdeSession) -> Unit:
     handle = session.handle
-    if handle.tag != _TAG:
+    if handle.tag != "harlequin.ide":
         raise ValueError("The IDE handle is malformed.")
     raw = handle.unwrap()
     if not isinstance(raw, dict):
         raise ValueError("The IDE handle is malformed.")
-    shared = cast(dict[str, object], raw)
-    with _lock(shared):
-        handlers = cast(dict[str, Callable[[], None]], shared["handlers"])
-        dialog_keys = cast(dict[str, Callable[[str, str], None]], shared["dialog_keys"])
-        for code, name in enumerate(_MOTIONS.split(",")):
-            _register_motion(shared, handlers, name, code)
-        handlers[_PREFIX + "select_all"] = lambda: _move(shared, _SELECT_ALL, False)
-        handlers[_PREFIX + "next_tab"] = lambda: _cycle_tab(shared, 1)
-        handlers[_PREFIX + "previous_tab"] = lambda: _cycle_tab(shared, -1)
-        handlers[_PREFIX + "copy_selection"] = lambda: _copy_selection(shared)
-        handlers[_PREFIX + "view_cell"] = lambda: _view_cell(shared)
+    shared = typing.cast(dict[str, object], raw)
+    with typing.cast(contextlib.AbstractContextManager[object], shared["lock"]):
+        handlers = typing.cast(dict[str, Callable[[], None]], shared["handlers"])
+        dialog_keys = typing.cast(dict[str, Callable[[str, str], None]], shared["dialog_keys"])
+        motions: tuple[tuple[GridMotion, str, str], ...] = (
+            (GridMotion_Up(), "cursor_up", "select_up"),
+            (GridMotion_Down(), "cursor_down", "select_down"),
+            (GridMotion_Left(), "cursor_left", "select_left"),
+            (GridMotion_Right(), "cursor_right", "select_right"),
+            (GridMotion_RowStart(), "cursor_row_start", "select_row_start"),
+            (GridMotion_RowEnd(), "cursor_row_end", "select_row_end"),
+            (GridMotion_ColumnStart(), "cursor_column_start", "select_column_start"),
+            (GridMotion_ColumnEnd(), "cursor_column_end", "select_column_end"),
+            (GridMotion_NextCell(), "cursor_next_cell", ""),
+            (GridMotion_PreviousCell(), "cursor_previous_cell", ""),
+            (GridMotion_PageUp(), "cursor_page_up", "select_page_up"),
+            (GridMotion_PageDown(), "cursor_page_down", "select_page_down"),
+            (GridMotion_TableStart(), "cursor_table_start", "select_table_start"),
+            (GridMotion_TableEnd(), "cursor_table_end", "select_table_end"),
+            (GridMotion_SelectAll(), "select_all", ""),
+        )
+        for motion, cursor_name, select_name in motions:
+            _register_motion(shared, handlers, motion, cursor_name, select_name)
+        handlers["results_viewer.select_cursor"] = lambda: _select_cursor(shared)
+        handlers["results_viewer.next_tab"] = lambda: _cycle(shared, 1)
+        handlers["results_viewer.previous_tab"] = lambda: _cycle(shared, -1)
+        handlers["results_viewer.copy_selection"] = lambda: _copy_selection(shared)
+        handlers["results_viewer.view_cell"] = lambda: _view_cell(shared)
         handlers["show_data_exporter"] = lambda: _show_exporter(shared)
-        dialog_keys["text"] = lambda key, text: _text_key(shared, key)
-        dialog_keys["export"] = lambda key, text: _export_key(shared, key, text)
+        text_keys: Callable[[str, str], None] = lambda key, text: _text_key(shared, key)
+        export_keys: Callable[[str, str], None] = lambda key, text: _export_key(shared, key, text)
+        dialog_keys["text"] = text_keys
+        dialog_keys["export"] = export_keys
     return UNIT

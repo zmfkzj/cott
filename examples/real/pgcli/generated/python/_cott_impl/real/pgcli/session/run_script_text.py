@@ -5,17 +5,19 @@ from real.pgcli.session_types import ScriptOutcome, Session, TerminalSize
 
 
 def _split_script(text: str) -> list[str]:
-    pieces: list[str] = [str(p) for p in sqlparse.split(text)]
+    pending = list(sqlparse.split(text))
     statements: list[str] = []
-    while pieces:
-        stripped = pieces.pop(0).strip()
-        if not stripped:
+    while pending:
+        piece = pending.pop(0).strip()
+        if not piece:
             continue
-        if stripped.startswith("\\") and "\n" in stripped:
-            first, rest = stripped.split("\n", 1)
-            pieces = [str(p) for p in sqlparse.split(rest)] + pieces
-            stripped = first.strip()
-        statements.append(stripped)
+        if piece.startswith("\\") and "\n" in piece:
+            first, rest = piece.split("\n", 1)
+            pending = list(sqlparse.split(rest)) + pending
+            piece = first.strip()
+            if not piece:
+                continue
+        statements.append(piece)
     return statements
 
 
