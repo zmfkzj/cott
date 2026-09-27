@@ -1992,6 +1992,11 @@ Runtime import ownership is recomputed from current distribution inventories and
 
 검사는 static import, `from`/alias, literal dynamic import와 unknown dynamic target을 rustpython AST/source range로 분류한다. comment/string은 대상이 아니며 first failure에서 멈추지 않는다. 모든 violation은 normalized path, source range, kind 순으로 정렬해 반환한다. `cott_bindings`는 authored binding location일 뿐 public package가 아니고 `_cott_impl`은 loader-only implementation storage다. generated facade는 path/hash verified loader를 사용하며 implementation module을 import/re-export하지 않는다. staged artifact에는 generation record가 허용한 exact runtime origin/hash 이외의 `_cott_impl` 또는 어떤 `cott_bindings`도 존재할 수 없다.
 
+Implementation introspection 감사는 금지된 module/member의 import와 attribute 접근을 검사한다.
+`ctypes`처럼 해당 이름과 같은 일반 지역 변수는 interpreter 권한이 아니므로 이름만으로
+거부하지 않는다. Alias import도 원래 import 대상에서 검사하며, compiler-private evidence 이름,
+동적 import와 reflection 금지는 그대로 적용한다.
+
 ### 16.8 Fixture sandbox와 관찰 경계
 
 fixture scenario는 fresh compiler-owned scratch 하나에서 serial로 실행한다. fixture setup 전에 facade import를 막고 authorization을 설치하며, setup → local endpoint start → facade invocation → clause/assertion observation → task/server stop → root inspection → delete/absence check 순서를 항상 지킨다. import root와 locked distribution은 read-only이고 fixture root만 writable이다. audit hook은 fixture root 밖 filesystem, active endpoint 외 socket/DNS, subprocess, process exit, dynamic code를 거부한다. direct time read는 CPython audit event가 아니므로 runtime clock adapter 밖의 clock access는 observed evidence가 아니라 bypass/unsupported diagnostic이다.
@@ -2002,11 +2007,11 @@ network mode는 `Disabled` 또는 `IsolatedLoopback`이다. 후자는 host netwo
 
 ### 16.9 Semantic coverage 정책
 
-`verified`는 artifact/type/runtime/proof/runner verification이 성공하여 snapshot을 certify했음을 뜻하고, semantic coverage CI policy와 별개다. Canonical IR clause inventory `(symbol, kind:clause_id, span)`와 runner contract evidence의 one-to-one join만 coverage truth source다. normalized status는 positive valid-case `test observation`의 `observed`, `unobserved`, `trust declaration`, 그리고 missing/duplicate/contradictory/unrecognized evidence의 `unknown` 네 가지뿐이다. doc, generator rule, log, proof outcome, rerun은 `unknown`을 repair하거나 grade를 승격할 수 없다.
+`verified`는 artifact/type/runtime/proof/runner verification이 성공하여 snapshot을 certify했음을 뜻하고, semantic coverage CI policy와 별개다. Canonical IR clause inventory `(symbol, kind:clause_id, span)`와 기록된 evidence를 join하여 `observed`, `unobserved`, `trust_declaration`, `unknown`을 분류한다. 현재 `src/cli.rs::coverage_status`는 `test observation`/`runtime check` grade뿐 아니라 `status = "proved"`도 `observed`로 분류한다. 따라서 계약의 satisfiability/reachability proof만 있는 조항도 observed일 수 있으며, 이 값은 실제 구현 실행 관찰이나 모든 branch 실행을 보장하지 않는다. 정책은 이 분류 결과를 gate하므로 실행 보장을 판단하려면 개별 raw evidence와 scenario를 확인해야 한다. 이 구현상 한계는 proof와 실행 관찰을 분리해야 한다는 보증 목표를 충족한 것으로 해석하지 않는다.
 
 `[[verification.coverage.rules]]`는 exact canonical callable `symbol`, nonempty sorted-unique `clauses=["ensures:2","error:5"]`, 그리고 `allow_unobserved`, `allow_trust_declaration`, `allow_unknown` boolean만 가진 deny-unknown policy다. duplicate `(symbol, clause)` selection, invalid selector/qname와 empty clause list는 manifest error다. rule이 없으면 selected clause도 gate도 없다. selected clause는 manifest allowance가 없을 때 해당 status로 deterministic violation이 되고 unselected clause는 gate하지 않는다.
 
-verify는 모든 evidence를 먼저 finalize하고 `.snapshots[.current].verified=true`, closed `semantic_coverage={clauses,summary,policy}`를 가진 blob과 같은 `current`·`last_verified` 참조를 atomic publish한다. 그 뒤 policy violation이면 verification certification을 되돌리지 않고 sorted violation과 coverage summary를 출력하여 distinct exit code `8`로 실패한다. policy passed이면 ordinary verify success다. runtime loader는 artifact `verified`만 보고 project coverage policy를 재평가하지 않는다. 따라서 policy-failed yet artifact-verified snapshot도 loadable이며 policy를 runtime의 두 번째 truth boundary로 만들지 않는다.
+verify는 모든 evidence를 먼저 finalize하고 `.snapshots[.current].verified=true`, closed `semantic_coverage={clauses,summary,policy}`를 가진 blob과 같은 `current`·`last_verified` 참조를 atomic publish한다. 그 뒤 policy violation이면 verification certification을 되돌리지 않고 실패한다. 현재 Python CLI의 policy failure는 exit `3`이며 Kotlin/Dart는 exit `8`이다. policy passed이면 ordinary verify success다. runtime loader는 artifact `verified`만 보고 project coverage policy를 재평가하지 않는다. 따라서 policy-failed yet artifact-verified snapshot도 loadable이며 policy를 runtime의 두 번째 truth boundary로 만들지 않는다.
 
 ### 16.10 유지 example generation-first policy
 
@@ -2911,7 +2916,7 @@ start snapshot drift는 hard failure다. Current facade에 없는 old implementa
 않는다. Verify는 source/managed file을 고치지 않고 artifact verification이 성공한 뒤
 `generation.json`만 journal transaction으로 갱신해 complete evidence/`semantic_coverage`와
 `.snapshots[.current].verified = true`를 가진 blob 및 같은 `current`·`last_verified` 참조를 publish한다.
-Selected coverage policy 위반은 certified record를 되돌리지 않고 exit `8`로 gate만 실패시킨다.
+Selected coverage policy 위반은 certified record를 되돌리지 않고 현재 Python CLI에서 exit `3`으로 gate만 실패시킨다. Kotlin/Dart의 해당 exit code는 `8`이다.
 
 위 bullet은 Python target의 세부 verification inventory다. Kotlin verify는 16A.3의 별도
 generation-2/runtime-1 pipeline으로 expected Kotlin source를 byte-compare하고 exact
@@ -3030,12 +3035,12 @@ cott lsp
 | `0` | 요청한 범위 성공 |
 | `1` | formatter 비멱등성을 포함한 internal compiler error |
 | `2` | CLI 사용법, init tool/name/path, manifest 구성 또는 diff baseline 오류 |
-| `3` | Cott 문법, 이름, 타입 또는 계약 오류 |
+| `3` | Cott 문법, 이름, 타입 또는 계약 오류; Python semantic coverage policy gate 실패 |
 | `4` | target 구현 누락·불일치, provenance drift 또는 verify 실패 |
 | `5` | agent 또는 Python init uv 실행·probe 실패, timeout 또는 취소 |
 | `6` | init filesystem/cleanup/atomic rename, lock, concurrent mutation, sandbox 또는 apply 실패 |
 | `7` | `cott diff --exit-code`에서 breaking contract 발견 |
-| `8` | certified semantic coverage policy gate 실패 또는 Kotlin `cott fmt --check` mismatch |
+| `8` | Kotlin/Dart certified semantic coverage policy gate 실패 또는 Kotlin `cott fmt --check` mismatch |
 | `9` | Python `cott fmt --check` format mismatch |
 
 `cott diff`는 기본적으로 차이를 출력하고 0을 반환하며 `--exit-code`에서만 breaking change를 7로 반환한다. `cott emit`의 미구현 진단과 `verified = false`는 emitter 자체가 성공했다면 0이지만 배포 성공을 뜻하지 않는다. policy-failed verify는 generic `verified` success line을 출력하지 않지만 record는 publication되어 diff/provenance가 policy failure를 관찰할 수 있다.
@@ -3463,7 +3468,7 @@ v1.0은 다음을 모두 자동 검증할 때 완료다.
 10. `COTT-K101`은 exact doc/directive span과 formal-evidence suppression만 사용하고 ordinary prompt prose, semantic proof와 command exit을 바꾸지 않는다.
 11. authored/deployed Python tree는 facade allow/deny matrix, exact generated implementation role/hash, no-follow/single-link rule과 all-violation diagnostic ordering을 통과한다.
 12. semantic coverage는 IR inventory와 runner evidence만 join하여 `observed|unobserved|trust_declaration|unknown`을 만들고 policy-selected clause만 gate한다.
-13. artifact verification은 policy 전 evidence와 `verified=true` snapshot을 atomic publish하며 policy failure를 exit `8`로 반환해도 runtime loader의 artifact trust와 `last_verified` baseline을 되돌리지 않는다.
+13. artifact verification은 policy 전 evidence와 `verified=true` snapshot을 atomic publish하며 policy failure(Python exit `3`, Kotlin/Dart exit `8`)에도 runtime loader의 artifact trust와 `last_verified` baseline을 되돌리지 않는다.
 14. `cott diff`는 project API version만 비교하고 compiler/package/wire version은 compatibility reader/writer boundary에서만 비교한다. example project public version은 `0.1.0`으로 유지한다.
 15. agent/binding/implementation provenance, strict type checking, exact verified loader, transaction recovery, diagnostics v1, formatter idempotence와 init atomicity의 기존 guarantees를 보존한다.
 16. Kotlin verification은 JVM17 module JAR와 coroutine runtime dependency를 실제 compile/run하고,
